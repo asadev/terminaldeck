@@ -216,20 +216,13 @@
   color: var(--text-secondary);
 }
 
-/* The path is the point — it is the user's real config, so never truncate it
-   to something that could be mistaken for a different file, and never set it
-   in the muted tier, which does not clear AA on this surface. */
-.hooks-file {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--t-footnote);
-  line-height: var(--lh-body);
-  overflow-wrap: anywhere;
-  color: var(--text-secondary);
-}
+/* `.hooks-file` was here, in monospace, under every agent's name: the absolute
+   path of that agent's settings file, standing on the row as if it were the
+   row's identity. It is on the hover of the button that writes it now — see the
+   note in `HooksPanel.tsx`. `.hooks-backup` went the same way, into the removal
+   confirmation. */
 
-.hooks-foreign,
-.hooks-backup {
+.hooks-foreign {
   max-width: 78ch;
   margin: 0;
   font-size: var(--t-callout);

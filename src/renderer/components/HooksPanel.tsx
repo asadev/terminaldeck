@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { panelSpec } from '../shell/panels'
+import { sectionMeta } from '../settings/settings-schema'
 import { PageEmpty, PageNote } from './PageEmpty'
 import './HooksPanel.css'
 
@@ -55,6 +56,19 @@ export interface HooksPanelProps {
 
 /* ---------------------------------------------------------------- helpers -- */
 
+/**
+ * What Settings calls the pane that lists the coding assistants, read from the
+ * schema rather than written here.
+ *
+ * This page's whole job is to point at that pane and say "the list of your
+ * assistants is over there, this is one switch about them" — so a hardcoded
+ * name is a sentence that goes stale the moment somebody renames a rail entry,
+ * which happened the same night this was written: the section was called Agents
+ * and became **Assistants**, because *"'Agents' is the wrong name for that
+ * section"*. A cross-reference that names the wrong pane is worse than none.
+ */
+const ASSISTANTS_SECTION = sectionMeta('agents').label
+
 const BRIDGE_METHODS = ['hooksStatus', 'installHooks', 'removeHooks', 'hookServerInfo'] as const
 
 /**
@@ -88,12 +102,36 @@ export function bridgeCalls(bridge: HooksBridge): {
   }
 }
 
+/**
+ * The row's state, said as what it means for the reader.
+ *
+ * It used to read Installed / Not installed / Incomplete — the state of a
+ * *file*, which is the vocabulary that made this page look like a second copy
+ * of the CLI list. Asad, on this page: *"Do you think hooks and CLIs are the
+ * same thing? Because this is a hooks folder and we see CLI here."*
+ *
+ * They are not the same thing, and the page has to be the thing that says so.
+ * The Assistants pane in Settings answers *which coding assistants do I have,
+ * and who is each signed in as*. This page answers exactly one question about
+ * each of them — *can a tab tell me what it is doing* — so every word on a row
+ * is about that, and the assistant's name is the subject of a sentence rather
+ * than the row's identity.
+ */
 export const STATE_LABEL: Record<HookInstallState, string> = {
-  complete: 'Installed',
-  stale: 'Needs reinstalling',
-  partial: 'Incomplete',
-  none: 'Not installed',
-  error: 'Cannot read',
+  complete: 'Reporting',
+  stale: 'Out of date',
+  partial: 'Half set up',
+  none: 'Not reporting',
+  error: 'Cannot read its settings',
+}
+
+/** The consequence of that state, in one line, so the button has a reason. */
+export const STATE_CONSEQUENCE: Record<HookInstallState, string> = {
+  complete: 'Its tabs show working, waiting for you, or done.',
+  stale: 'It is reporting to an address this app no longer listens on.',
+  partial: 'Some steps report and some do not, so a tab can go quiet mid-run.',
+  none: 'Its tabs cannot tell whether it is working or waiting for you.',
+  error: 'Its settings file could not be read, so nothing here will write to it.',
 }
 
 /**
@@ -106,17 +144,19 @@ export const STATE_LABEL: Record<HookInstallState, string> = {
 export function primaryAction(state: HookInstallState): { label: string; enabled: boolean } {
   switch (state) {
     case 'complete':
-      return { label: 'Reinstall', enabled: true }
+      return { label: 'Set up again', enabled: true }
     case 'stale':
-      return { label: 'Reinstall', enabled: true }
+      return { label: 'Fix it', enabled: true }
     case 'partial':
-      return { label: 'Repair', enabled: true }
+      return { label: 'Fix it', enabled: true }
     case 'error':
       // The file could not be parsed; writing to it would be the one genuinely
-      // damaging thing this panel can do.
-      return { label: 'Install', enabled: false }
+      // damaging thing this panel can do. Disabled *with a reason on the row* —
+      // `STATE_CONSEQUENCE.error` says the settings file could not be read,
+      // which is why the button is off and what would have to change.
+      return { label: 'Turn on', enabled: false }
     default:
-      return { label: 'Install', enabled: true }
+      return { label: 'Turn on', enabled: true }
   }
 }
 
@@ -207,25 +247,43 @@ export function HookRow({ status, busy, result, onInstall, onRemove }: HookRowPr
           <span className="hooks-dot" aria-hidden="true" />
           <span className="hooks-provider">{status.label}</span>
           <span className="hooks-state">{STATE_LABEL[status.state]}</span>
-          {status.state === 'complete' || status.state === 'stale' ? (
-            <span className="hooks-count">
-              {status.installedEvents.length + status.staleEvents.length} events
-            </span>
-          ) : null}
         </div>
 
-        <p className="hooks-message">{status.message}</p>
-        <p className="hooks-file" title={status.file}>
-          {status.file}
+        {/*
+          What that state means for the reader, and nothing about files.
+
+          This row used to carry `status.message` — prose written for whoever
+          was reading a settings file — and, on its own line, the absolute path
+          of that file. *"For important parts of the application we don't need
+          to give folders and file paths."* The path is still one hover away, on
+          the button that writes it, which is the moment it is worth knowing.
+
+          `status.message` survives only where it is the more specific answer:
+          a row this app could not read, where the generic sentence would hide
+          what actually went wrong.
+        */}
+        <p className="hooks-message">
+          {status.state === 'error' ? status.message : STATE_CONSEQUENCE[status.state]}
         </p>
 
         {foreign ? <p className="hooks-foreign">{foreign}</p> : null}
 
-        {status.backupPath ? (
-          <p className="hooks-backup">Original kept at {status.backupPath}</p>
-        ) : null}
+        {/*
+          The backup path, at the moment it reassures rather than clutters.
 
-        {confirming ? <p className="hooks-confirm">{removalPromise(status.file)}</p> : null}
+          It stood on every row as "Original kept at
+          /Users/…/hook-backups/claude-.claude-settings.json.bak" — a second
+          absolute path per row, on a page whose rows are meant to be sentences
+          about an agent. Nobody needs to know where a backup is until they are
+          about to undo something, so it appears with the confirmation, which is
+          exactly that moment.
+        */}
+        {confirming ? (
+          <p className="hooks-confirm">
+            {removalPromise(status.file)}
+            {status.backupPath ? ` The original is still at ${status.backupPath}.` : ''}
+          </p>
+        ) : null}
 
         {result ? (
           <p className="hooks-result" data-ok={result.ok}>
@@ -250,7 +308,7 @@ export function HookRow({ status, busy, result, onInstall, onRemove }: HookRowPr
               onRemove(status.id)
             }}
           >
-            {confirming ? 'Yes, remove' : 'Remove'}
+            {confirming ? 'Yes, turn it off' : 'Turn off'}
           </button>
         ) : null}
         <button
@@ -261,6 +319,8 @@ export function HookRow({ status, busy, result, onInstall, onRemove }: HookRowPr
             setConfirming(false)
             onInstall(status.id)
           }}
+          // The path, at the moment it is worth knowing: this button is about to
+          // write somebody's own configuration file, and the hover says which.
           title={`Writes ${status.file}`}
         >
           {busy ? 'Working…' : action.label}
@@ -368,9 +428,27 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
           {/* Visually hidden — see `.hooks-heading`. The toolbar says "Hooks"
               in the title voice already; this is here for anything reading the
               structure rather than looking at it. */}
-          <h2 className="hooks-heading">Provider hooks</h2>
+          <h2 className="hooks-heading">Session updates</h2>
+          {/*
+            The sentence that answers the question he asked on this page.
+
+            *"Do you think hooks and CLIs are the same thing? Because this is a
+            hooks folder and we see CLI here."* — a fair question about a page
+            that listed the same three agent names as Settings → Agents, with a
+            settings-file path under each. It is not a second list of your
+            agents. It is one switch, per agent, for one thing: whether a tab
+            can tell you what that agent is doing. So the page says which of the
+            two it is, in the first line, in the words a reader would use.
+          */}
+          {/*
+            The toolbar above this already says what the page does — its blurb
+            in `shell/panels.ts` reads "Whether a tab can tell you an agent is
+            working, waiting or done." So this line does not say it again; it
+            says the *other* half, which is the half he asked about.
+          */}
           <p className="hooks-sub">
-            Lets this app follow a session without reading its terminal output.
+            One switch per assistant. Which assistants you have, and who each is signed in as, is
+            in Settings → {ASSISTANTS_SECTION}.
           </p>
         </div>
         <button type="button" className="hooks-refresh" onClick={() => void refresh()}>
@@ -378,9 +456,19 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
         </button>
       </header>
 
-      <p className="hooks-endpoint" data-running={server?.running ?? false}>
-        {endpointLine(server)}
-      </p>
+      {/*
+        The endpoint line, but only when it is bad news.
+
+        Running, it said "Listening on /Users/…/hooks.sock" — an implementation
+        detail and a file path, at the top of the page, above everything a
+        reader came for. Not running is a different matter: it is the reason
+        every row underneath will look inert, so it stays and says so.
+      */}
+      {!server?.running && (
+        <p className="hooks-endpoint" data-running={false}>
+          {endpointLine(server)}
+        </p>
+      )}
 
       {error ? <p className="hooks-error">{error}</p> : null}
 
@@ -411,8 +499,17 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
           page's header, and two buttons with the same word on one screen is
           the redundancy the rules call out. */}
       {statuses !== null && statuses.length === 0 && !error ? (
-        <PageEmpty icon={panelSpec('hooks').icon} title="No agent CLIs on this machine">
-          Install Claude Code, Codex or Gemini CLI, then press Refresh.
+        /*
+          The empty state is where the two pages were most easily confused, so
+          it is where the distinction is stated most plainly: there is nothing
+          to switch on because there is no agent to switch it on *for*, and the
+          place agents are installed is named. No specific tool is named here —
+          *"you should not mention in any settings or any pop-up a specific tool
+          or LLM, because they can use some other also."*
+        */
+        <PageEmpty icon={panelSpec('hooks').icon} title="Nothing to report on yet">
+          This is a setting for the coding assistants you have installed, and there are none on
+          this machine yet. Install one from Settings → {ASSISTANTS_SECTION}, then press Refresh.
         </PageEmpty>
       ) : null}
     </section>

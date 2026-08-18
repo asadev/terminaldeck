@@ -428,7 +428,23 @@ describe('the config the copilot session is launched with', () => {
     }
 
     expect(launches).toHaveLength(1)
-    expect(launches[0]).toEqual(['--mcp-config', handle.configPath, '--strict-mcp-config'])
+    /*
+     * The MCP pair, then the copilot's own layer.
+     *
+     * The layer flag is asserted here rather than only in `copilot-session`'s
+     * own tests because this file is about *what the copilot is actually
+     * launched with*, and the two flags travel together through one seam. The
+     * layer is what tells it it is the copilot — see `copilot-layer.ts` for why
+     * that is a command-line argument rather than a file in its folder.
+     */
+    const { copilotPaths: pathsOf } = await import('../copilot-home')
+    expect(launches[0]).toEqual([
+      '--mcp-config',
+      handle.configPath,
+      '--strict-mcp-config',
+      '--append-system-prompt-file',
+      pathsOf(ROOT).layer.composed,
+    ])
     // `--strict-mcp-config` is not decoration and is asserted separately from
     // the array above so that dropping it reads as its own failure: without it
     // the copilot also inherits whatever MCP servers are in the person's own
@@ -477,7 +493,13 @@ describe('the config the copilot session is launched with', () => {
       resetCopilot()
     }
 
-    expect(launches[0]).toEqual([])
+    // No MCP flags at all — and the layer still handed over, because that is
+    // the copilot's identity rather than one of its tools.
+    const { copilotPaths: pathsFor } = await import('../copilot-home')
+    expect(launches[0]).toEqual([
+      '--append-system-prompt-file',
+      pathsFor(ROOT).layer.composed,
+    ])
     // And the log says which of the two happened, because a copilot with no
     // tools and a copilot whose every tool call is refused look identical from
     // the outside.

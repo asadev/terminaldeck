@@ -471,6 +471,7 @@
    button beside them, and a line above or below one line of text is noise. */
 .bw-error,
 .bw-hint,
+.bw-said,
 .bw-shot {
   display: flex;
   align-items: center;
@@ -488,7 +489,12 @@
 }
 
 .bw-hint,
-.bw-shot {
+.bw-shot,
+/* Saved, cleared, copied. Deliberately not `.bw-error`, which is the critical
+   colour: a confirmation printed in red is read as a failure, and this one is
+   the answer to "did it keep my password" — the worst sentence in this feature
+   to be ambiguous about. */
+.bw-said {
   color: var(--text-secondary);
 }
 
@@ -599,45 +605,200 @@
   text-align: center;
 }
 
-/* ---------------------------------------------------------------- bottom -- */
+/* ------------------------------------------------------- bands and menus -- */
 
-/* Back on the chrome's ground, so the stage between the two bands is the only
-   thing wearing the page colour. That is the separation; there is no rule.
+/*
+   There is no band under the stage any more, and that is the change.
 
-   Stated here rather than inherited from `.bw`, because this band is the one
-   place a reader looking for "what colour is the bottom panel" will look. What
-   matters is that it is the *same token* as `.bw`: it was `--bg-secondary`
-   while the top band moved to `--tab-active`, and two spellings of one ground
-   is exactly how the two ends of this panel end up two levels apart. */
-.bw-bottom {
+   *"Remove everything from the bottom. I need a clear view of the websites.
+   Whatever is required should be on the top right corner."* What lived there —
+   a heading, the recorded flow, the draw controls and "Set as start page" —
+   went three ways: the flow is a popup anchored to the toolbar, the start page
+   is a row in the More menu, and the draw controls are the strip below, which
+   only ever appears when there is no website on screen to keep clear.
+
+   Everything here is therefore *above* the stage. Each one is a block in the
+   flow rather than a layer over the page, for the reason `overlay-watch.ts` is
+   the standing essay on: a browser page is a native view composited above this
+   entire renderer, so a band that tried to float would be painted behind the
+   website. As blocks they shrink the page's rectangle, so the site reflows once
+   when one appears and stays visible underneath it.
+*/
+
+.bw-strip {
   display: flex;
-  flex-direction: column;
   flex-shrink: 0;
-  max-height: 46%;
-  overflow-y: auto;
+  align-items: center;
   background: var(--tab-active);
 }
 
-.bw-bottom-tabs {
+/* The two account bands. Same geometry, different reason for existing, so the
+   shared shape is written once and only the tint differs below. */
+.bw-signin,
+.bw-offer {
   display: flex;
   align-items: center;
-  gap: var(--sp-05);
+  gap: var(--sp-2);
   flex-shrink: 0;
-  padding: var(--sp-2) var(--sp-3) 0;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--fill-quaternary);
+  font-size: var(--t-callout);
 }
 
-/* Was one of two tabs, and is now the only thing down here — so it is a heading
-   rather than a control. A tab strip with one tab in it is a label that invites
-   a click that does nothing. */
-.bw-bottom-title {
+/* A refusal is a status, not a decoration, so it keeps its meaningful colour —
+   the one place in this sheet where colour is allowed to carry meaning. A
+   warning that Google *might* refuse does not, because it usually still works
+   and a red band would teach people to ignore the one that means it. */
+.bw-signin[data-kind='refused'] {
+  background: color-mix(in srgb, var(--color-critical) 12%, var(--fill-quaternary));
+}
+
+.bw-signin-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.bw-signin-text strong {
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.bw-signin-text span {
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+}
+
+.bw-signin-outcome {
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------- the menu -- */
+
+/* Inside `.bw-popup`, which already wears the app's glass. Only the list
+   geometry is here — a menu that painted its own surface would be a second
+   material a centimetre from the first one. */
+/* Narrower than `.bw-popup`'s own width, which is sized for the send box in the
+   capture and flow popups. A menu of six short rows in a 26rem box is mostly
+   empty space with a close button floating in it. */
+.bw-popup:has(.bw-menu) {
+  width: min(19rem, calc(100vw - 2 * var(--sp-4)));
+}
+
+.bw-menu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.bw-menu-head {
   display: flex;
   align-items: center;
+  gap: var(--sp-1);
+}
+
+.bw-menu-title {
+  margin: var(--sp-1) 0 0;
+  padding: 0 var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+}
+
+/* No rule between rows and none under the heading. "A lot of separations is not
+   a good idea, it's not Apple style" — space first, then a tint on hover, and
+   never a line. */
+.bw-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bw-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.bw-menu-item,
+.bw-menu-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1;
+  min-width: 0;
   height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  text-align: left;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.bw-menu-item:hover:not(:disabled),
+.bw-menu-choice:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.bw-menu-item:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* A fixed column so the names line up whether or not a row is the active one. A
+   tick that shifted the label would make the list appear to jump on every
+   switch. */
+.bw-menu-tick {
+  display: inline-block;
+  width: 1em;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.bw-menu-choice[data-on] {
+  font-weight: var(--w-medium);
+}
+
+.bw-menu-label {
+  overflow: hidden;
+  min-width: 0;
   padding: 0 var(--sp-2);
   color: var(--text-primary);
   font-size: var(--t-callout);
-  font-weight: var(--w-medium);
   white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bw-menu-note {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+}
+
+.bw-menu-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
 }
 
 .bw-panel {

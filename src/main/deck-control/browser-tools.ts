@@ -1,5 +1,10 @@
 import type { BrowserDrive, StepVerb } from '../browser-driver'
-import { DriveRefused, PRESSABLE_KEYS } from '../browser-driver'
+import {
+  DEFAULT_OUTLINE_TEXT_CHARS,
+  DriveRefused,
+  MAX_OUTLINE_TEXT_CHARS,
+  PRESSABLE_KEYS,
+} from '../browser-driver'
 import { HANDOVER_WINDOW_MS } from '../browser-drive'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { Refused, type Tier } from './surface'
@@ -151,6 +156,12 @@ const READ_SCHEMA: JsonSchema = {
     selector: { type: 'string', description: 'CSS selector. Omit for the whole page.' },
     waitFor: { type: 'string', description: 'CSS selector to wait for before reading.' },
     timeoutMs: { type: 'number', description: 'How long to wait. Default 10000.' },
+    textChars: {
+      type: 'integer',
+      description:
+        `How much of the page's text to return, from the top. Default ${DEFAULT_OUTLINE_TEXT_CHARS}, ` +
+        `max ${MAX_OUTLINE_TEXT_CHARS}. Raise it only when \`textTruncated\` was true and you need the rest.`,
+    },
   },
   additionalProperties: false,
 }
@@ -223,9 +234,9 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
     title: 'Open a page',
     description:
       'Point your one browser tab at a URL, opening it if you have none. You get exactly one tab and this ' +
-      'is it — there is no tab id, and you can never touch a tab the person opened. Needs a browser open in ' +
-      'the app; if there is none it says so, and the person opens one from the sidebar. Follow with ' +
-      'browser.read to see what is on the page.',
+      'is it — there is no tab id, and you can never touch a tab the person opened. If the app has no ' +
+      'browser page open it opens one, in the tab strip where they can see and close it, so you do not ' +
+      'need them to press anything first. Follow with browser.read to see what is on the page.',
     inputSchema: OPEN_SCHEMA,
     precheck: (args, context) => {
       local(context, 'browser.open')
@@ -251,11 +262,14 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
     tier: 'read',
     title: 'Read the page',
     description:
-      'What is on the page you opened. With no selector: the url, the title, and every element you can act ' +
-      'on — role, label, and the selector to name it in browser.step. `secret: true` marks a password, ' +
-      'one-time-code or file field: it is listed so you know it is there, its value is never readable, and ' +
-      'nothing will type into it. With a selector: the text at that selector. Use waitFor instead of ' +
-      'calling this repeatedly.',
+      'What is on the page you opened. With no selector: the url, the title, `text` — the page\'s own words ' +
+      'as they are rendered, which is what to quote and what to answer questions about — and every element ' +
+      'you can act on, with the selector to name it in browser.step. Check `textTruncated`; raise ' +
+      '`textChars` if you need the rest. `secret: true` marks a password, one-time-code or file field: it ' +
+      'is listed so you know it is there, its value is never readable, and nothing will type into it. ' +
+      'With a selector: the text at that selector — for one exact value, once the outline has shown you ' +
+      'that the element exists. Do not guess selectors to find text; read the page and the text is there. ' +
+      'Use waitFor instead of calling this repeatedly.',
     inputSchema: READ_SCHEMA,
     precheck: (args, context) => {
       local(context, 'browser.read')
@@ -286,10 +300,20 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
             summary: { selector, chars: text.text.length },
           }
         }
-        const outline = await drive.outline(60)
+        const outline = await drive.outline(
+          60,
+          optInt(args, 'textChars', DEFAULT_OUTLINE_TEXT_CHARS, 200, MAX_OUTLINE_TEXT_CHARS),
+        )
         return {
           value: outline,
-          summary: { url: outline.url, elements: outline.elements.length },
+          summary: {
+            url: outline.url,
+            elements: outline.elements.length,
+            // In the action log as a length, never as the text. A page is
+            // somebody's browsing, and `actions.jsonl` is a list to be skimmed
+            // rather than a second copy of every page the copilot looked at.
+            textChars: outline.text.length,
+          },
         }
       }),
   }
@@ -437,7 +461,7 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
     description:
       'Hand the page over and wait. Use it for anything you must not do: signing in, a password, a ' +
       'one-time code, a payment, a CAPTCHA. While they have it you cannot read the page, photograph it, ' +
-      'click it or type in it — nothing you can see records what they type. It returns after about 90 ' +
+      'click it or type in it — nothing you can see records what they type. It returns after about 45 ' +
       'seconds; `resumed: false` with `still-waiting` means they are not finished, which is normal. Call it ' +
       'again to keep waiting, or say something to them. It has not failed.',
     inputSchema: HANDOVER_SCHEMA,

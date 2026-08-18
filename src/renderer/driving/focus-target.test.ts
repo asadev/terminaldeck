@@ -89,7 +89,7 @@ describe('anchors are a closed set with no selector escape hatch', () => {
     expect(anchorId({ at: 'message', messageId: 'agent:abc' })).toBe('message:agent:abc')
     expect(anchorId({ at: 'session-row', sessionId: 's1' })).toBe('session-row:s1')
     expect(anchorId({ at: 'alert', alertId: 'a1' })).toBe('alert:a1')
-    expect(anchorId({ at: 'usage-strip', sessionId: 's1' })).toBe('usage-strip:s1')
+    expect(anchorId({ at: 'usage', sessionId: 's1' })).toBe('usage:s1')
     // Keyed on the project folder, not a session: one working tree per folder,
     // however many sessions are open in it. See `DriveAnchor`.
     expect(anchorId({ at: 'git-file', cwd: '/w/proj', path: 'src/a.ts' })).toBe(

@@ -61,7 +61,7 @@
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, hostname } from 'node:os'
 import { resolve } from 'node:path'
 import { RemoteAuth } from '../src/main/remote/device-auth'
 import { loadHostIdentity } from '../src/main/remote/host-identity'
@@ -201,6 +201,27 @@ const fanout = new SessionFanout({
   },
   resize: (id, cols, rows) => ptys.resize(id, cols, rows),
   scrollback: (id) => ptys.scrollback(id),
+  /*
+   * Ending a session, which this host has to do for real.
+   *
+   * Supplying the method is what makes this process advertise the `close`
+   * capability, so a client draws its Close button and the whole path can be
+   * exercised without Electron — the same reason `uploadsDir` and `openUrl` are
+   * above. It is a genuine `kill` rather than a boolean, for the same reason
+   * this file is not a stand-in for the code under test: a host that reported a
+   * close it had not performed would let a Close button be "verified" against a
+   * row that quietly stayed alive.
+   *
+   * The membership test is here rather than in `PtyManager` because `kill`
+   * returns void, and the difference between "gone" and "there was no such
+   * session" is what the device is told.
+   */
+  close: (id) => {
+    if (!ptys.list().some((session) => session.id === id)) return false
+    ptys.kill(id)
+    log(`closed       ${id}`)
+    return true
+  },
   create: remoteSessionCreator({
     folders: () => [...PROJECTS, ...ptys.list().map((session) => session.cwd)],
     home: () => homedir(),
@@ -274,6 +295,20 @@ const server = createRemoteServer({
   // Passing it at all is what makes this host advertise the `upload` capability,
   // which is the thing the phone gates its Send File button on.
   uploadsDir: UPLOADS,
+  /*
+   * "Open it on the machine", for a host with no machine to open it on.
+   *
+   * Supplying this is what makes the harness advertise the `web` capability, so
+   * the web client draws its Open button and the whole path can be exercised
+   * without Electron. It logs and answers true rather than pretending to open
+   * anything: this process has no window, and the one thing it must not do is
+   * report an open that did not happen — so what it reports is exactly what
+   * happened, which is that a device asked and this host wrote it down.
+   */
+  openUrl: (url: string): boolean => {
+    log(`web.open     ${url}`)
+    return true
+  },
   relay: link,
   // No Tailscale in this process. The relay is the only way in, which is also
   // the path the phone client uses in the field.
@@ -310,9 +345,34 @@ function pairingUri(token: string): string {
   return `terminaldeck://pair?${params.toString()}`
 }
 
-function mint(): string {
-  const uri = pairingUri(desk.create().token)
+/**
+ * Mint a code, and **publish it** so six digits alone can find this host.
+ *
+ * `desk.create()` was enough while the only client that pairs with this harness
+ * was iOS, which is handed the whole `terminaldeck://pair?…` URI and never needs
+ * to look anything up. The web client has no such door: it is six digits typed
+ * into a field, looked up at the relay's rendezvous, which is exactly what
+ * `desk.show(offer)` claims a slot for and `desk.create()` does not.
+ *
+ * So a harness that only ever called `create` could not be paired with from a
+ * browser at all, and the symptom was a client that said "Connecting…" against a
+ * host whose device list stayed empty — a lookup that found nothing, reported by
+ * neither side, because neither side was wrong.
+ *
+ * Awaited, because `show` returns once the slot is claimed and a code handed out
+ * before that is a code the relay does not know yet.
+ */
+async function mint(): Promise<string> {
+  const shown = await desk.show({
+    relayUrl,
+    hostId: identity.hostId,
+    publicKey: identity.keys.publicKey.toString('base64'),
+    name: hostname(),
+    platform: process.platform,
+  })
+  const uri = pairingUri(shown.code.token)
   writeFileSync(resolve(STORAGE, 'pairing.txt'), `${uri}\n`)
+  if (!shown.findable) log('pair         the relay did not take the code; only the URI will work')
   return uri
 }
 
@@ -450,7 +510,7 @@ const control = createServer((request, response) => {
         .catch((error: unknown) => answer({ ok: false, error: String(error) }))
     }
     case '/pair':
-      return answer({ uri: mint() })
+      return void mint().then((uri) => answer({ uri }))
     case '/approve': {
       const approved = auth.listDevices().filter((device) => !device.approved).map((device) => device.id)
       for (const id of approved) auth.approveDevice(id)
@@ -477,7 +537,7 @@ control.listen(CONTROL_PORT, '127.0.0.1')
 log(`host id      ${identity.hostId}`)
 log(`key          ${identity.fingerprint}`)
 log(`control      http://127.0.0.1:${CONTROL_PORT}/state`)
-log(`pair with    ${mint()}`)
+log(`pair with    ${await mint()}`)
 
 const shutdown = (): void => {
   void server.stop().then(() => relay?.close()).then(() => process.exit(0))

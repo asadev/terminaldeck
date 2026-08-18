@@ -251,17 +251,34 @@ describe('the sections that are not settings', () => {
     expect(html).toContain('Interrupt the agent')
   })
 
-  it('offers the popover and the website from the rail, not from the rail list', () => {
+  it('offers the popover from the rail footer, not from the rail list', () => {
     const html = render('general')
     expect(html).toContain('aria-label="Keyboard shortcuts"')
-    // Neither is a tab: a button inside the tab list would be walked onto by
-    // the arrow keys that move between sections.
+    // Not a tab: a button inside the tab list would be walked onto by the arrow
+    // keys that move between sections.
     expect(html).not.toContain('data-section="shortcuts"')
-    expect(html).not.toContain('data-section="help"')
+  })
+
+  it('puts Help back in the rail list, where he asked for it', () => {
+    /*
+     * The reverse of what this file used to assert, and deliberately so.
+     *
+     * Help was a footer link out to the marketing site, on his earlier
+     * instruction. The later one wins: *"we should have a help page where we can
+     * see all the help-related features… this can be a separate page."* So it is
+     * a tab now, and the footer is down to the one button that is genuinely a
+     * reference you glance at rather than a page you read.
+     */
+    const html = render('general')
+    expect(html).toContain('data-section="help"')
+    // The footer link, and its ↗ mark, are gone with it.
+    expect(html).not.toContain('settings-rail-btn-out')
   })
 
   it('names the app from the bridge rather than a literal', () => {
     // No brand channel wired here, so it must degrade rather than invent a name.
+    // Asked for under the id the application menu uses, which now resolves to
+    // Help — About is the masthead at the top of that pane.
     expect(render('about')).toContain('This app')
   })
 })

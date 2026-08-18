@@ -426,8 +426,15 @@ describe('the tab strip is the top band, with everything that implies', () => {
       requireRule(BROWSER, '.bw'),
       'with a browser page in the pane there is no session bar, so this panel is what the tab meets',
     ).toContain('background: var(--tab-active)')
-    // And the two bands of that panel are one ground, not two spellings of it.
-    expect(requireRule(BROWSER, '.bw-bottom')).toContain('background: var(--tab-active)')
+    /*
+     * There used to be a second assertion here, on `.bw-bottom`, checking that
+     * the panel's two bands were one ground rather than two spellings of it.
+     * There is one band now: *"remove everything from the bottom, I need a
+     * clear view of the websites — whatever is required should be on the top
+     * right corner."* The rule, the class and the markup are all deleted, so
+     * the two bands cannot disagree, and asserting on a selector that no longer
+     * exists would only have proved the stylesheet still contained a corpse.
+     */
 
     /*
      * The one place that surface is deliberately *not* continued.

@@ -72,15 +72,23 @@ enum DeckSurface: Hashable, CaseIterable {
     /// A page from the machine, pushed from the Localhost tab.
     case localhostPage
     /**
-     * The copilot, pushed from the session list.
+     * The copilot conversation — **a tab**, and therefore one that keeps the bar.
      *
-     * Loses the bar, with the terminal and the localhost page, and it belongs
-     * with those two rather than with Machines for the reason the rule is
-     * actually about: it is *the whole thing you came for*, full height, and it
-     * has a text field at the bottom of it. The pill he complained about was
-     * floating over the last three rows of a session with the keyboard down —
-     * *"when this keyboard is down, see the pill is still there"* — and a
-     * composer is the same frame with a different keyboard in it.
+     * This answer is the opposite of what it was, and the fact underneath it
+     * changed rather than the judgement. While the copilot was a screen *pushed
+     * from the session list* it was the pill complaint exactly — full height,
+     * the whole thing you came for, and a text field at the bottom with the bar
+     * floating over it: *"when this keyboard is down, see the pill is still
+     * there."* Hiding the bar cost nothing there, because the chevron was how
+     * you left.
+     *
+     * *"A fourth pill, and the copilot goes leftmost"* moved it, and a tab that
+     * hides its own tab bar is a screen with **no way out**. There is no
+     * chevron over a tab's root and no gesture that pops one. So the bar stays,
+     * and the composer sits above it rather than under it — `CopilotView` puts
+     * the footer in a bottom `safeAreaInset`, which is measured against the bar's
+     * own safe area, so the two do not overlap. Verified by looking, in both
+     * appearances, which is the only way this class of thing is ever verified.
      */
     case copilot
 }
@@ -90,9 +98,9 @@ enum DeckChrome {
     /// Whether the tab bar is drawn over this screen.
     static func showsTabBar(on surface: DeckSurface) -> Bool {
         switch surface {
-        case .sessions, .localhost, .settings, .machines:
+        case .copilot, .sessions, .localhost, .settings, .machines:
             return true
-        case .session, .localhostPage, .copilot:
+        case .session, .localhostPage:
             return false
         }
     }

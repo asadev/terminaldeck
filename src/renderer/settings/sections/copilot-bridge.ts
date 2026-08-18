@@ -36,6 +36,14 @@ export interface CopilotBridge {
   copilotReadInstructions(): Promise<unknown>
   copilotWriteInstructions(text: string): Promise<unknown>
   copilotResetInstructions(): Promise<unknown>
+  /* the app's half, read-only — there is no writer behind either of these */
+  copilotReadContract(): Promise<unknown>
+  copilotReadComposed(): Promise<unknown>
+
+  /* its folder — `src/main/copilot-folder.ts` */
+  copilotFolder(): Promise<unknown>
+  copilotPickFolder(): Promise<unknown>
+  copilotClearFolder(): Promise<unknown>
 
   /* looking at it — `src/main/copilot-inspect.ts` */
   copilotScaffold(): Promise<unknown>
@@ -45,6 +53,25 @@ export interface CopilotBridge {
   copilotMemoryDelete(name: string): Promise<unknown>
   copilotActions(limit?: number): Promise<unknown>
   copilotReveal(place: string): Promise<unknown>
+
+  /**
+   * The one stored value this pane owns: whether the scan is put on the screen.
+   *
+   * The section's header says it holds no settings, and for everything else that
+   * is still true — every other block reads a folder, a log or a list. This one
+   * is here because the thing it switches has no other home: `copilot.interactive`
+   * decides whether driving mode *shows* itself, and driving mode is the copilot.
+   * Putting it in Appearance or General would file it under the surface it paints
+   * rather than under the agent it belongs to, which is the rule the settings
+   * schema builds its whole rail on — a section is a subject.
+   *
+   * The generic settings channels rather than a copilot-shaped pair, because the
+   * value lives in `settings.json` with everything else and is written the same
+   * way. `SettingsWindow` deliberately hands this section no `values` and no
+   * `save` (see `CopilotSectionView`), so it reads and writes them itself.
+   */
+  getSettings(): Promise<unknown>
+  setSettings(patch: Record<string, unknown>): Promise<unknown>
 
   /* routines — `src/main/routines/ipc.ts` */
   routinesList(): Promise<unknown>
@@ -74,6 +101,11 @@ const BRIDGE_METHODS: ReadonlyArray<keyof CopilotBridge> = [
   'copilotReadInstructions',
   'copilotWriteInstructions',
   'copilotResetInstructions',
+  'copilotReadContract',
+  'copilotReadComposed',
+  'copilotFolder',
+  'copilotPickFolder',
+  'copilotClearFolder',
   'copilotScaffold',
   'copilotMemory',
   'copilotMemoryRead',
@@ -81,6 +113,8 @@ const BRIDGE_METHODS: ReadonlyArray<keyof CopilotBridge> = [
   'copilotMemoryDelete',
   'copilotActions',
   'copilotReveal',
+  'getSettings',
+  'setSettings',
   'routinesList',
   'routinesText',
   'routinesSaveText',
@@ -157,6 +191,68 @@ export interface StartupFile {
   exists: boolean
   size: number | null
   modifiedAt: number | null
+  /** Whose file it is: this app's, the person's, or the working folder's. */
+  owner: 'app' | 'yours' | 'folder'
+}
+
+/** Mirrors `CopilotFolderReport` in `src/main/copilot-folder.ts`. */
+export interface CopilotFolder {
+  home: string
+  chosen: string | null
+  isDefault: boolean
+  problem: string | null
+  runningIn: string | null
+  restartNeeded: boolean
+}
+
+/** Mirrors `FolderChangeResult` in `src/main/copilot-folder.ts`. */
+export interface FolderChange {
+  folder: CopilotFolder | null
+  problem: string | null
+  cancelled: boolean
+}
+
+export function toCopilotFolder(raw: unknown): CopilotFolder | null {
+  const entry = record(raw)
+  if (!entry || typeof entry.home !== 'string') return null
+  return {
+    home: entry.home,
+    chosen: optStr(entry.chosen),
+    // Defaults to true, and the direction is the safe one: `isDefault` gates
+    // every sentence claiming the copilot is working inside somebody's own
+    // workspace, and a build that could not read the field must not claim it.
+    isDefault: entry.isDefault !== false,
+    problem: optStr(entry.problem),
+    runningIn: optStr(entry.runningIn),
+    restartNeeded: bool(entry.restartNeeded),
+  }
+}
+
+export function toFolderChange(raw: unknown): FolderChange {
+  const entry = record(raw)
+  if (!entry) return { folder: null, problem: 'That did not work.', cancelled: false }
+  return {
+    folder: toCopilotFolder(entry.report),
+    problem: optStr(entry.problem),
+    cancelled: bool(entry.cancelled),
+  }
+}
+
+/** Mirrors `LayerReadResult` in `src/main/copilot-layer.ts`. */
+export interface LayerRead {
+  text: string | null
+  path: string
+  error: string | null
+}
+
+export function toLayerRead(raw: unknown): LayerRead {
+  const entry = record(raw)
+  if (!entry) return { text: null, path: '', error: 'This build could not read that file.' }
+  return {
+    text: typeof entry.text === 'string' ? entry.text : null,
+    path: str(entry.path),
+    error: optStr(entry.error),
+  }
 }
 
 /** Mirrors `InstructionsState` in `src/main/copilot-home.ts`. */
@@ -176,7 +272,16 @@ export interface CopilotRecords {
 export interface CopilotState {
   status: CopilotStatus
   sessionId: string | null
-  paths: { root: string; instructions: string; memory: string; log: string; actions: string }
+  paths: {
+    root: string
+    ownFolder: boolean
+    instructions: string
+    memory: string
+    log: string
+    actions: string
+    layer: { dir: string; yours: string; contract: string; composed: string }
+  }
+  folder: CopilotFolder | null
   home: string
   startedAt: number | null
   problem: string | null
@@ -185,6 +290,7 @@ export interface CopilotState {
   instructionsAreDefault: boolean
   instructions: InstructionsState
   startupFiles: StartupFile[]
+  layerFiles: StartupFile[]
 }
 
 function toStartupFile(raw: unknown): StartupFile | null {
@@ -196,6 +302,10 @@ function toStartupFile(raw: unknown): StartupFile | null {
     exists: bool(entry.exists),
     size: optNum(entry.size),
     modifiedAt: optNum(entry.modifiedAt),
+    // `folder` is the default because it is the only value that promises
+    // nothing: a row this build cannot classify is drawn as one of the working
+    // directory's, which is a file the app does not claim to have written.
+    owner: entry.owner === 'app' || entry.owner === 'yours' ? entry.owner : 'folder',
   }
 }
 
@@ -216,11 +326,19 @@ export function toCopilotState(raw: unknown): CopilotState | null {
     sessionId: optStr(entry.sessionId),
     paths: {
       root: paths.root,
+      ownFolder: paths.ownFolder !== false,
       instructions: str(paths.instructions),
       memory: str(paths.memory),
       log: str(paths.log),
       actions: str(paths.actions),
+      layer: {
+        dir: str(record(paths.layer)?.dir),
+        yours: str(record(paths.layer)?.yours),
+        contract: str(record(paths.layer)?.contract),
+        composed: str(record(paths.layer)?.composed),
+      },
     },
+    folder: toCopilotFolder(entry.folder),
     home: str(entry.home),
     startedAt: optNum(entry.startedAt),
     problem: optStr(entry.problem),
@@ -240,6 +358,9 @@ export function toCopilotState(raw: unknown): CopilotState | null {
     instructionsAreDefault: bool(entry.instructionsAreDefault),
     instructions: toInstructionsState(entry.instructions),
     startupFiles: list(entry.startupFiles)
+      .map(toStartupFile)
+      .filter((file): file is StartupFile => file !== null),
+    layerFiles: list(entry.layerFiles)
       .map(toStartupFile)
       .filter((file): file is StartupFile => file !== null),
   }
@@ -347,6 +468,34 @@ export function toScaffoldResult(raw: unknown): ScaffoldResult {
 export function toRevealMessage(raw: unknown): string {
   const entry = record(raw)
   return str(entry?.message, 'Nothing happened.')
+}
+
+/* ------------------------------------------------------------- the showing -- */
+
+/** The key `main/deck-control/tour-tool.ts` reads before it stages a scan. */
+export const INTERACTIVE_SETTING = 'copilot.interactive'
+
+/**
+ * Whether the scan is put on the screen, read exactly as the main process reads
+ * it.
+ *
+ * **Anything other than an explicit `false` is on**, which is `interactiveDriving`
+ * in `tour-tool.ts` character for character, and the agreement is the whole
+ * point: the setting is not in the settings *schema* — the Copilot pane is not
+ * given this window's settings bridge, so there is no schema row to carry a
+ * default — and `settings-extra.ts` keeps keys it does not know without filling
+ * one in. So the default lives in whoever reads the value, and two readers with
+ * two defaults would put a switch on screen that disagrees with the behaviour it
+ * describes.
+ *
+ * It handles the envelope and the bare map for the same reason `toStoredSettings`
+ * does: `settings:get` answers with `{ version, values }` and older builds
+ * answered with the map itself.
+ */
+export function toInteractiveDriving(raw: unknown): boolean {
+  const entry = record(raw)
+  const values = record(entry?.values) ?? entry
+  return values?.[INTERACTIVE_SETTING] !== false
 }
 
 /* ------------------------------------------------------------------ memory -- */

@@ -9,6 +9,7 @@ import {
 import { StatusDot } from '../components/StatusDot'
 import { tip } from '../keymap'
 import {
+  dragStartedOnControl,
   isTabDrag,
   KIND_ICON,
   middleEllipsis,
@@ -572,6 +573,22 @@ export function WorkspaceTabStrip({
                 data-dragging={tab.id === draggingId || undefined}
                 draggable
                 onDragStart={(event) => {
+                  /*
+                   * A press on the tab's own ✕ is a press, not a drag.
+                   *
+                   * The same defect as the sidebar row's — see
+                   * `dragStartedOnControl`, which holds the measurement — but it
+                   * fails worse here, and that is worth spelling out. On the rail
+                   * a swallowed press does nothing. Here the drag *completes*
+                   * four pixels away, lands back on this strip, and reorders it:
+                   * the user pressed ✕ on the second tab and the second tab moved
+                   * to third place. A control that rearranges the bar when asked
+                   * to remove something from it is worse than one that is inert.
+                   */
+                  if (dragStartedOnControl(event.clientX, event.clientY)) {
+                    event.preventDefault()
+                    return
+                  }
                   dragging.current = tab.id
                   setDraggingId(tab.id)
                   droppedHere.current = false
@@ -644,6 +661,10 @@ export function WorkspaceTabStrip({
                 <button
                   type="button"
                   className="strip-tab-close"
+                  // See the guard in `onDragStart` above: the tab is draggable,
+                  // and without this marker a press that slides a few pixels
+                  // reorders the strip instead of taking this tab off it.
+                  data-no-drag=""
                   aria-label={`Remove ${full} from the top bar`}
                   title="Remove from the top bar. It keeps running, in the sidebar."
                   onClick={() => removeTab(tab.id)}

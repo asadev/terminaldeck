@@ -2,13 +2,23 @@
  * What this phone holds about **every** machine it is paired with, and where it
  * holds it.
  *
- * Three kinds of secret, and they are not the same kind:
+ * Four kinds of secret, and they are not the same kind:
  *
  *  1. **The credentials.** Bearer tokens, each granting a shell on somebody's
  *     machine. Whoever has the bytes is the device, so they live in the Keychain
  *     and nowhere else — not `UserDefaults`, not a plist, not a file in
  *     Documents, all of which are in the unencrypted backup and readable by
  *     anything that gets a look at the container.
+ *  1b. **The copilot credential**, per machine, in the same item as that
+ *     machine's pairing credential and therefore with the same protection class.
+ *     `COPILOT-REMOTE.md` §8 asks for it to sit *beside* the pairing one, and
+ *     the same item is the strongest reading of beside: the two are minted for
+ *     the same device by the same machine, they are revoked separately but they
+ *     die together when the pairing is forgotten, and one item cannot go missing
+ *     while the other survives. It is optional on the record, so a
+ *     `StoredCredential` written before this field existed still decodes — and a
+ *     record that fails to decode is a machine that has vanished from the phone,
+ *     which is exactly what this design exists to avoid.
  *  2. **The device's static X25519 private key.** The other half of the sealed
  *     channel's identity. Generated once, never leaves the device, never sent —
  *     only its public half goes to a host at pairing time. **One key for all
@@ -93,6 +103,26 @@ struct StoredCredential: Equatable, Codable {
      */
     var nickname: String?
 
+    /**
+     * The copilot credential for this machine, when this device has one.
+     *
+     * A **second** secret with a separate life. It is minted by a separate
+     * ceremony — six digits read off that machine, redeemed over the already
+     * sealed channel — and it is revoked separately: disconnecting the copilot
+     * at the desk drops it and leaves every terminal this device was paired for.
+     * That separation is the whole of `COPILOT-REMOTE.md` §6, and it is why this
+     * is its own field rather than something derived from `token`.
+     *
+     * **The desktop sends it exactly once** and keeps a scrypt hash, so there is
+     * no path that can show it again. A phone that loses it has to be given a
+     * new code; nothing here may quietly discard it.
+     *
+     * Optional with a default, so a record written before this field existed
+     * still decodes — see `nickname` for why that matters more here than it
+     * looks.
+     */
+    var copilotCredential: String?
+
     /// Which machine this is. Stable across re-pairings with the same host.
     var hostId: String { endpoint.hostId }
 
@@ -102,6 +132,18 @@ struct StoredCredential: Equatable, Codable {
         return endpoint.shortName
     }
 
+    /**
+     * The durable credential, from a redeemed pairing.
+     *
+     * The copilot credential is deliberately **not** carried across. Redeeming
+     * produces a device id, and a re-pair produces a *new* one — at which point
+     * the desktop's copilot record, which is keyed by device id, belongs to a
+     * device that no longer exists and is garbage-collected. A secret kept
+     * through that would be one this phone believes in and nothing on the far
+     * machine has ever heard of, which is the worst of the two ways to be wrong:
+     * the Connect screen would not be drawn, and every copilot frame would come
+     * back refused with no explanation on either end.
+     */
     func redeemed(token: String, deviceId: String, deviceName: String) -> StoredCredential {
         StoredCredential(endpoint: endpoint, token: token, kind: .device,
                          deviceId: deviceId, deviceName: deviceName, pairedAt: Date(),
@@ -111,7 +153,15 @@ struct StoredCredential: Equatable, Codable {
     func renamed(_ name: String?) -> StoredCredential {
         StoredCredential(endpoint: endpoint, token: token, kind: kind,
                          deviceId: deviceId, deviceName: deviceName, pairedAt: pairedAt,
-                         nickname: name)
+                         nickname: name, copilotCredential: copilotCredential)
+    }
+
+    /// The copilot credential, stored or dropped. Everything else survives —
+    /// this is the connection changing, not the pairing.
+    func withCopilotCredential(_ credential: String?) -> StoredCredential {
+        StoredCredential(endpoint: endpoint, token: token, kind: kind,
+                         deviceId: deviceId, deviceName: deviceName, pairedAt: pairedAt,
+                         nickname: nickname, copilotCredential: credential)
     }
 }
 

@@ -10,7 +10,85 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **A short setup flow the first time you open the copilot.** Four questions,
+  every one of them skippable, in front of the first start rather than after it:
+  what to call it, what it should call you, which folder it works in, and which
+  account it runs as. Then a screen showing what it is about to become —
+  including the text it will be handed, word for word — before anything is
+  spawned or billed.
+
+  The name is the one that matters, because you will say it a hundred times a
+  day: it appears on the pinned row, on the tab and in Settings, and the copilot
+  itself is told what it is called, so it answers to it. Skipping that question
+  is a real answer rather than a blank — it is told that you have not named it
+  and not to pick a name for itself, and the app goes on calling it the Copilot.
+
+  There is **no new store**. The answers are written into the copilot's own
+  instruction file, in the app's storage, which is the same file Settings →
+  Copilot puts in an editable box — so renaming it by editing that sentence
+  works exactly as well as running the questions again, and there is only ever
+  one copy of the fact. Nothing is written into the copilot's working directory,
+  because that folder can be one you already keep an assistant in. The flow is
+  re-runnable from Settings → Copilot, and it says plainly that a rename reaches
+  a copilot that is already running only at its next start.
+
 ### Fixed
+
+- **A session in a WSL folder can be restarted again, and a session that fails
+  to start is no longer turned into a shell.** Three faults on one Windows
+  machine, stacked, and each was enough on its own to lose a day's conversation.
+
+  `wsl.exe` was handed to the terminal as a *relative* program name, and
+  node-pty on Windows resolves one of those against the app's own working
+  directory first — returning an empty path when it hits. `C:\Windows\System32`
+  is the one directory that holds `wsl.exe`, and it is the working directory a
+  process inherits from a Start-menu entry or a login relaunch. So the app was
+  not told that `wsl.exe` is missing; it was told `File not found:` with nothing
+  after the colon, once per WSL tab, after every restart. The launcher is now an
+  absolute path, which never reaches that branch.
+
+  The probe that asks a distribution which agents it has was reading the exit
+  status instead of the output. A login shell exits with the status of its last
+  command, so whenever the *last* agent asked about was not installed — Claude
+  Code and no Gemini, which is the ordinary case — the probe printed
+  `agent-found:claude`, exited 1, and the whole answer was discarded with the
+  error. Every WSL session then reported every agent missing.
+
+  And a session that could not start was opened as a plain terminal instead, in
+  the same tab, with nothing said — and *that* was written down as what was
+  open. Every launch afterwards restored a shell, correctly reported that a
+  shell has no conversation to continue, and never attempted the real agent
+  again. A distro that was asleep for eight seconds became permanent. What was
+  asked for is now what gets remembered: a session that could not be started as
+  Claude Code is a session that failed to start.
+
+- **A session that does not come back is kept, and says so.** It used to be
+  dropped — silently, and not at the moment it failed: the remembered list is
+  rewritten from the running sessions, so a failed session survived only until
+  the next tab opened. Now it stays in the list, appears as a row under its
+  project saying what did not start and why, and offers to try again. Nothing is
+  retried behind your back and nothing is dismissed on a timer.
+
+- **The copilot is no longer restored as two ordinary sessions.** It is a
+  singleton the app starts for itself, with an instruction layer and its own
+  tools, and it was being remembered like a tab — twice, on a machine where it
+  had been restarted. Restoring one produced a plain Claude Code session in the
+  app's own storage with none of that, invisible in the sidebar and billing on
+  every launch. Launches the app composes for itself are no longer written down,
+  and the entries already on disk are dropped on the next start.
+
+- **A spawn that fails says what it was starting.** `File not found:` with
+  nothing after the colon appeared seven times in one log and named no file, no
+  folder and no agent — accurately, because the layer that refused had no path
+  to report. The agent, the folder, the program and the directory the process
+  was to start in are now added by the layer that still knows them, with the
+  original message kept verbatim at the end.
+
+- **A folder on a Windows path is named by its last segment.** Project rows, tab
+  qualifiers and two pickers were printing `C:\Users\…\Projects\app` where a
+  word belongs, because the name was taken by splitting on `/` alone.
 
 - **The bell in the sidebar now carries a count.** It has been drawn, styled and
   tested since Alerts became a pop-up, and nothing in the app ever gave it a

@@ -347,6 +347,11 @@ export async function createHeadlessHost(
   const remote = registerRemoteIpc(desk, {
     sessions: core.sessions,
     folders: core.grants,
+    // The same store the reach rule closes over. The headless daemon serves the
+    // same protocol from the same fanout, so it enforces the same two kinds —
+    // and a build where this was the missing argument would be a build where
+    // every device is a guest with no folders.
+    kinds: core.kinds,
     /*
      * The git credential proxy, on every host except the public one.
      *

@@ -13,6 +13,7 @@ import {
   runningProvider,
   type ChatMessage,
 } from './ChatView'
+import { CHAT_SESSION_ATTR } from '../driving/where'
 
 /**
  * No DOM environment in this project's test setup, so these render to static
@@ -221,5 +222,38 @@ describe('what is running in the session, not what was launched into it', () => 
     expect(runningProvider('claude', true)).toBe('claude')
     expect(runningProvider('claude', false)).toBe('claude')
     expect(runningProvider(undefined, null)).toBeUndefined()
+  })
+})
+
+describe('the pane says which session it is a view of', () => {
+  /**
+   * `app.where` answers "what am I looking at" by measuring the DOM — see
+   * `driving/where.ts` for why that is the right source rather than a shortcut —
+   * and a conversation was the one thing it could see and not name, because this
+   * pane's root carried no id. So the tool reported that this app could not say
+   * which session was in front of its own window.
+   *
+   * Asad asked for the capability in one sentence: *"if I ask it where I am right
+   * now, it should be able to answer."*
+   *
+   * These render with no `window`, so the pane falls straight through to its
+   * "not wired into this build" state — which is the point: the attribute is on
+   * the **root**, so it is there whatever the conversation underneath turns out
+   * to be, including before a transcript has been found.
+   */
+  it('carries the session id when it knows which pty it acts on', () => {
+    const html = renderToStaticMarkup(<ChatView cwd="/tmp/x" sessionId="sess-7" />)
+    expect(html).toContain(`${CHAT_SESSION_ATTR}="sess-7"`)
+  })
+
+  it('leaves the attribute off entirely when it does not', () => {
+    /*
+     * An absent attribute reads as "not known"; a guessed one reads as a fact.
+     * With no id passed in and no live session list to narrow to one, the pane
+     * genuinely does not know — and its own composer refuses to attach a file for
+     * exactly the same reason.
+     */
+    const html = renderToStaticMarkup(<ChatView cwd="/tmp/x" />)
+    expect(html).not.toContain(CHAT_SESSION_ATTR)
   })
 })

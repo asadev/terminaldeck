@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type KeyboardEvent,
 } from 'react'
 import type { ProviderId } from '@shared/types'
 import { formatChord } from '../keymap'
@@ -22,10 +21,11 @@ import {
   type StartProvider,
 } from '../session-start'
 import { folderName, shortSessionId } from '../session-title'
+import { detectPlatform, thisMachine } from '../platform'
+import { MACHINE_ICON } from '../shell/workspace-tabs'
 import { Modal } from './Modal'
 import { normalizePreferences } from '../preferences'
 import { useOptionalStore } from '../state/store'
-import { relativeTime } from './relative-time'
 import {
   isolationNotice,
   parseProfile,
@@ -36,7 +36,7 @@ import {
   type ProfileView,
   type SnapshotView,
 } from './ProfilePicker'
-import { buildProviderRows, PROVIDER_OPTIONS, resumeAvailability, type ProviderRow } from './ProviderPicker'
+import { buildProviderRows, PROVIDER_OPTIONS, type ProviderRow } from './ProviderPicker'
 // Relative, not '@shared/…', for the reason `ProviderPicker.tsx` gives: vitest
 // runs without the electron-vite alias, so a *value* import through it resolves
 // in the app and throws in a test.
@@ -126,15 +126,6 @@ interface StartBridge {
   pickProjectFolder(): Promise<string | null>
   /** Forget a folder. Nothing on disk is touched — see the Remove button. */
   removeProject(path: string): Promise<void>
-  /**
-   * Every transcript Claude Code has written for a folder, newest first.
-   *
-   * `insights:list` in the main process, which is `listTranscripts` over every
-   * store the folder can have written to. It is the only enumeration of past
-   * conversations this app can honestly make, and it is what the Conversation
-   * section names — see {@link parseConversations}.
-   */
-  listSessionInsights(cwd: string): Promise<unknown>
   /** Read-only sign-in status for one login, cached 30s in the main process. */
   profileSignIn(id: string, options?: { provider?: ProviderId }): Promise<unknown>
   setDefaultProfile(id: string | null): Promise<unknown>
@@ -255,67 +246,16 @@ export function withProject(projects: readonly RecentProject[], path: string): R
   return [{ path, name: folderName(path), lastOpenedAt: Date.now() }, ...rest]
 }
 
-/* ---------------------------------------------------------- conversations -- */
+/* ------------------------------------------------------- past conversations -- */
 
-/**
- * One past conversation in the folder, as far as this app can honestly see it.
- *
- * ## What the recording asked for, and what is actually available
- *
- * > *"which conversation will it bring? …it should actually give the choice of
- * > which session, maybe with session IDs or the name or maybe a little bit
- * > context with the summary"*
- *
- * The **choice** cannot be built today and pretending otherwise would be the
- * worst outcome of the two. `CreateSessionInput` carries `resume?: boolean` and
- * nothing else, and the flag it turns into is `--continue` (or `codex resume
- * --last`) — a flag that means *the newest one*, with no id to hand it. Wiring
- * `claude --resume <id>` through means a field on `CreateSessionInput`, a branch
- * in `host-core.ts`'s `startSession` and a second argument list in
- * `providers.ts`. A picker that offered nine conversations and silently opened
- * the newest one every time is exactly the kind of lie this app has twice
- * refused to ship.
- *
- * The **identity** is available and is most of the answer: `insights:list`
- * enumerates the transcripts, so the dialog can say which conversation the
- * resume will land on rather than leaving somebody to find out afterwards.
- *
- * A zero-byte file is not a conversation. The CLI opens a transcript before it
- * has a turn to put in it, and `--continue` aimed at an empty one does not open
- * an empty session — it errors and the tab dies. `newestConversation` in
- * `main/transcript.ts` skips them for that reason, and skipping them here too
- * is what makes this section agree with what will actually happen.
+/*
+ * `Conversation`, `parseConversations`, `conversationLine` and
+ * `olderConversationsLine` used to live here, and they are gone with the
+ * Conversation section they fed — see the note in the form below for his words
+ * and for why a real picker cannot be built on `CreateSessionInput` as it
+ * stands. `insights:list` is untouched in the main process; nothing here reads
+ * it any more.
  */
-export interface Conversation {
-  sessionId: string
-  modifiedAt: number
-  bytes: number
-}
-
-export function parseConversations(raw: unknown): Conversation[] {
-  if (!Array.isArray(raw)) return []
-
-  const conversations: Conversation[] = []
-  for (const entry of raw) {
-    if (typeof entry !== 'object' || entry === null) continue
-    const { sessionId, modifiedAt, bytes } = entry as {
-      sessionId?: unknown
-      modifiedAt?: unknown
-      bytes?: unknown
-    }
-    if (typeof sessionId !== 'string' || sessionId === '') continue
-    if (typeof bytes !== 'number' || bytes <= 0) continue
-    conversations.push({
-      sessionId,
-      modifiedAt: typeof modifiedAt === 'number' ? modifiedAt : 0,
-      bytes,
-    })
-  }
-  // Sorted here rather than trusted: the main process concatenates two stores
-  // and re-sorts, but a build that stops doing so must not silently rename the
-  // conversation this dialog says will be continued.
-  return conversations.sort((a, b) => b.modifiedAt - a.modifiedAt)
-}
 
 /**
  * Enough of a session id to tell two apart, and short enough to sit on a row.
@@ -327,32 +267,6 @@ export function parseConversations(raw: unknown): Conversation[] {
  * to change when a session id stops being a UUID.
  */
 export { shortSessionId }
-
-/** What the Continue row says about the conversation it will land on. */
-export function conversationLine(
-  conversations: readonly Conversation[],
-  now: number,
-): string | null {
-  const newest = conversations[0]
-  if (!newest) return null
-  const when = relativeTime(newest.modifiedAt, now)
-  return when === '' ? shortSessionId(newest.sessionId) : `${when} · ${shortSessionId(newest.sessionId)}`
-}
-
-/**
- * The one line that explains why there is no picker, and only when there is
- * something to explain.
- *
- * Silent for a folder with one conversation in it: a sentence about the others
- * when there are no others is the kind of clause that turns a five-row panel
- * into a wall of text.
- */
-export function olderConversationsLine(conversations: readonly Conversation[]): string | null {
-  const older = conversations.length - 1
-  if (older < 1) return null
-  const plural = older === 1 ? 'conversation' : 'conversations'
-  return `${older} older ${plural} here. Resume always takes the newest.`
-}
 
 /* ------------------------------------------------------------ the account -- */
 
@@ -486,30 +400,6 @@ export function loginOptionLabel(
 export function isDefaultLogin(snapshot: SnapshotView, profile: ProfileView | undefined): boolean {
   if (!profile) return false
   return profileBadges(profile, snapshot, null, undefined).includes('Default')
-}
-
-/**
- * Can the Conversation section name the conversation, for this login?
- *
- * `insights:list` reads the *default* config directory (plus the per-device
- * homes a paired phone writes to). A profile is a different `CLAUDE_CONFIG_DIR`
- * and therefore a different transcript store, which nothing on the bridge can
- * enumerate — so naming "the last conversation" while a non-default login is
- * selected would name a conversation from somebody else's history.
- *
- * The answer is a fact about which store will be read, not a capability, so it
- * is silence rather than an error: the row falls back to saying that the agent
- * picks its own most recent conversation, which is true in every case.
- */
-export function transcriptsAreReadable(
-  profiles: readonly ProfileView[],
-  profileId: string | null | undefined,
-): boolean {
-  if (!profileId) return true
-  const profile = profiles.find((entry) => entry.id === profileId)
-  // An id the list does not have is a list that has moved on under us; claiming
-  // to know its store would be worse than declining to.
-  return profile?.system === true
 }
 
 /* -------------------------------------------------------------- providers -- */
@@ -682,8 +572,17 @@ interface AgentChoicesProps {
   labelledBy: string
   selected: ProviderId | null
   onSelect(id: ProviderId): void
-  /** Opens the Add-an-agent form in place of this dialog's body. */
-  onAdd(): void
+  /**
+   * Opens the Add-an-agent form in place of this dialog's body.
+   *
+   * **Optional, and its absence removes the row** rather than disabling it. An
+   * agent added here is a command on *this* computer — `CustomAgentStore` writes
+   * a path this machine can spawn — so on a session bound for another machine
+   * the button could only ever add something that machine has never heard of.
+   * The row is absent there for the reason every dead control in this product is
+   * absent: an offer that cannot be honoured is worse than no offer.
+   */
+  onAdd?(): void
   /** Forgets an added agent. Only ever called for a `custom:` id. */
   onRemove(id: ProviderId): void
 }
@@ -773,40 +672,95 @@ export function AgentChoices({
         what they want is already performing. It is a `<button>`, so it is not
         one of the options; it is the thing after them.
       */}
-      <button type="button" className="ns-agent ns-agent-add" onClick={onAdd}>
-        <span className="ns-add-mark" aria-hidden="true">
-          +
-        </span>
-        <span className="ns-agent-text">
-          <span className="ns-agent-label">Add an agent</span>
-          <span className="ns-hint">Any other command-line agent on this machine.</span>
-        </span>
-      </button>
+      {onAdd && (
+        <button type="button" className="ns-agent ns-agent-add" onClick={onAdd}>
+          <span className="ns-add-mark" aria-hidden="true">
+            +
+          </span>
+          <span className="ns-agent-text">
+            <span className="ns-agent-label">Add an agent</span>
+            <span className="ns-hint">Any other command-line agent on this machine.</span>
+          </span>
+        </button>
+      )}
     </div>
   )
 }
 
 /* ------------------------------------------------------------- component -- */
 
+/**
+ * One machine this window can start a session on, as the dialog needs it.
+ *
+ * Flattened from the `Machine`/`MachineLinkState` pair for the reason the rail's
+ * `SidebarMachine` is: deciding which machines are worth offering is
+ * `reachableMachines`, one rule read by both screens, so a machine you can pick
+ * here is always one you can see there.
+ *
+ * `folders` is the list the far machine sent — what *it* is offering *this*
+ * device — and never a list assembled on this side. That is the whole reason a
+ * remote folder picker can be trusted: `session-create.ts` on the far end checks
+ * a request against the same array it advertised, so a row here cannot be a row
+ * that will be refused.
+ */
+export interface StartMachine {
+  id: string
+  name: string
+  folders: readonly string[]
+}
+
 interface Props {
   open: boolean
   /** Preselected folder — normally whichever project is in front. */
   projectPath?: string | null
+  /**
+   * Machines this window can reach. Empty is the ordinary case and draws no
+   * machine step at all: a person with no second computer paired should not be
+   * asked which computer they mean.
+   */
+  machines?: readonly StartMachine[]
+  /**
+   * Which machine the press already chose, or null for this one.
+   *
+   * *"New session → pick the machine → pick its folder → continue."* The rail's
+   * per-machine New session answers the first question, so the dialog opens with
+   * it answered — which is what makes that press a shortcut rather than a second
+   * flow.
+   */
+  machineId?: string | null
   onClose(): void
   /**
    * Hand off the decided launch. The dialog does not spawn anything itself:
    * creating the session, adding the project and sending the first prompt are
    * all the workspace's job, and it is the one holding the session store.
+   *
+   * `machineId` travels beside the request rather than inside it, and that is
+   * deliberate. A `SpawnRequest` is what `session-start.ts` resolves from this
+   * machine's agents, logins and defaults, and none of those are facts about
+   * another computer — a field on it would invite the resolver to start
+   * reasoning about a machine whose agents it has never probed. Where the
+   * session runs is the caller's routing decision, so it is the caller's
+   * argument.
    */
-  onStart(request: SpawnRequest): void | Promise<void>
+  onStart(request: SpawnRequest, machineId: string | null): void | Promise<void>
 }
 
-export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props) {
+export function NewSessionDialog({
+  open,
+  projectPath,
+  machines = [],
+  machineId = null,
+  onClose,
+  onStart,
+}: Props) {
   const [selectedPath, setSelectedPath] = useState<string | null>(projectPath ?? null)
+  /**
+   * Where the session runs. Null is this machine, which is the default and the
+   * overwhelmingly common answer.
+   */
+  const [selectedMachine, setSelectedMachine] = useState<string | null>(machineId)
   const [chosenProvider, setChosenProvider] = useState<ProviderId | null>(null)
   const [chosenProfileId, setChosenProfileId] = useState<string | null>(null)
-  const [chosenResume, setChosenResume] = useState<boolean | null>(null)
-  const [prompt, setPrompt] = useState('')
   const [remember, setRemember] = useState(true)
   /** What has been typed into the folder filter. Only drawn when it is needed. */
   const [filter, setFilter] = useState('')
@@ -824,8 +778,6 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
    * `hidden` prop for why nothing in the page can be stacked above an NSWindow.
    */
   const [browsing, setBrowsing] = useState(false)
-  /** Past conversations in the selected folder. Null until the bridge answers. */
-  const [conversations, setConversations] = useState<Conversation[] | null>(null)
   /** What the agent's own `auth status` said about the selected login. */
   const [signIn, setSignIn] = useState<SignInView | null>(null)
   /** A project row waiting for its Remove to be confirmed, because it is busy. */
@@ -872,7 +824,6 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
 
   const formId = useId()
   const ids = useId()
-  const formRef = useRef<HTMLFormElement>(null)
   /** Retires replies still in flight from a previous open. See ProfilePicker. */
   const ticket = useRef(0)
 
@@ -896,8 +847,20 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
           projectPath: selectedPath,
           provider: chosenProvider,
           profileId: chosenProfileId,
-          resume: chosenResume ?? undefined,
-          firstPrompt: prompt,
+          /*
+           * Fresh, said out loud rather than left off.
+           *
+           * `resolveStart` reads `selection.resume ?? remembered.resume ?? false`
+           * — so omitting it would let a `resume: true` remembered from *before*
+           * this control was removed quietly resume for ever, with nothing on
+           * screen saying so and no way left to change it. Sending `false` is
+           * what makes "fresh is then the only behaviour" true of the installs
+           * that already used the old radio.
+           */
+          resume: false,
+          // No first message any more. `resolveStart` turns an empty prompt into
+          // a null title, which is what it did whenever the box was left blank.
+          firstPrompt: '',
         },
       ),
     [
@@ -909,16 +872,12 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
       selectedPath,
       chosenProvider,
       chosenProfileId,
-      chosenResume,
-      prompt,
     ],
   )
 
   // What the dialog paints as selected is what the resolver decided, never the
   // raw click — see the module note.
   const decided = resolution.ok ? resolution.request : null
-  const activeRow = providerRows.find((row) => row.id === decided?.provider)
-  const resumeState = resumeAvailability(activeRow)
   const profileNotice = isolationNotice(decided?.provider)
 
   /* ------------------------------------------------------------- loading -- */
@@ -932,10 +891,11 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
     // screen while a fresh detection is in flight is how a session gets started
     // against an agent that has since been uninstalled.
     setSelectedPath(projectPath ?? null)
+    // Whatever the press said, every time. A machine chosen on the last visit
+    // and left here would make the ordinary ⌘T open on somebody else's computer.
+    setSelectedMachine(machineId ?? null)
     setChosenProvider(null)
     setChosenProfileId(null)
-    setChosenResume(null)
-    setPrompt('')
     setRemember(true)
     setFilter('')
     setDetected(null)
@@ -944,7 +904,6 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
     setBrowsing(false)
     setConfirmRemove(null)
     setSignIn(null)
-    setConversations(null)
     setMemory(readStartMemory(KNOWN_PROVIDERS))
     // Back to the agent list, and empty. A half-typed agent left over from last
     // time is the dialog opening on unfinished work with nothing to say how it
@@ -1030,7 +989,7 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
       cancelled = true
       ticket.current += 1
     }
-  }, [open, projectPath])
+  }, [open, projectPath, machineId])
 
   // The per-project profile default is resolved in the main process, so the
   // precedence rules for profiles stay in one place and are tested there.
@@ -1061,60 +1020,6 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
   }, [open, selectedPath])
 
   /*
-   * Which conversation "Continue" will land on.
-   *
-   * Only asked for the folder that is actually selected, and only while the
-   * store the enumeration reads is the store the session will write to — see
-   * `transcriptsAreReadable`. Re-run per folder and per login, because both
-   * change the answer, and per provider because a Codex session's history is in
-   * a store nothing here can list.
-   */
-  useEffect(() => {
-    if (!open) return
-    const cwd = selectedPath
-    const api = startBridge()
-    if (
-      !cwd ||
-      !api?.listSessionInsights ||
-      decided?.provider !== 'claude' ||
-      !transcriptsAreReadable(profiles, decided?.profileId)
-    ) {
-      setConversations(null)
-      return
-    }
-
-    /*
-     * `cancelled` alone, with no `ticket` — unlike the loads inside the open
-     * effect above.
-     *
-     * The ticket exists to retire replies from a *previous open*, and it works
-     * there because that effect re-runs on every open. This one keys on the
-     * folder, the agent and the login instead, so a ticket bumped by the open
-     * effect while this reply was in flight would throw the answer away and
-     * nothing would ever ask again: the deps have not changed, so the effect
-     * does not re-run. That is exactly what happened the first time this was
-     * written — the login row came back blank on the second opening — and the
-     * cleanup below already covers the case the ticket was there for.
-     */
-    let cancelled = false
-    void api.listSessionInsights(cwd).then(
-      (list) => {
-        if (!cancelled) setConversations(parseConversations(list))
-      },
-      () => {
-        // A store that cannot be read is not "no conversations" — saying so
-        // would talk somebody out of a resume that would have worked. Null puts
-        // the row back to the sentence that is true either way.
-        if (!cancelled) setConversations(null)
-      },
-    )
-
-    return () => {
-      cancelled = true
-    }
-  }, [open, selectedPath, decided?.provider, decided?.profileId, profiles])
-
-  /*
    * Whose account the selected login is.
    *
    * Read-only — `profiles:signin` runs the agent's own `auth status` and caches
@@ -1131,7 +1036,12 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
       return
     }
 
-    // `cancelled` alone — see the note on the conversations effect above.
+    // `cancelled` alone, with no `ticket`. The ticket retires replies from a
+    // *previous open* and works in the open effect because that one re-runs on
+    // every open; this one keys on the login and the agent, so a ticket bumped
+    // while this reply was in flight would throw the answer away and nothing
+    // would ever ask again. That happened — the login row came back blank on
+    // the second opening — and the cleanup below covers what the ticket was for.
     let cancelled = false
     void api.profileSignIn(profileId, { provider }).then(
       (report) => {
@@ -1306,24 +1216,62 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
       }
 
       try {
-        await onStart(resolution.request)
+        await onStart(resolution.request, selectedMachine)
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : 'Could not start that session.')
         setStarting(false)
       }
     },
-    [memory, onStart, remember, resolution, starting],
+    [memory, onStart, remember, resolution, selectedMachine, starting],
   )
 
-  // Enter in a textarea is a newline, so the dialog needs its own confirm
-  // chord — the same one the keymap already documents for every dialog.
-  const promptKeys = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
-    event.preventDefault()
-    formRef.current?.requestSubmit()
-  }, [])
+  /*
+   * `promptKeys` used to live here and does not any more.
+   *
+   * It was ⌘↵ inside the first-message textarea — Enter in a textarea is a
+   * newline, so the dialog needed its own confirm chord for that one field. The
+   * textarea is gone (*"remove 'first message' entirely"*), and with no
+   * multi-line control left, ⌘↵ is the form's own default submit again. That is
+   * also why `formRef` went: `requestSubmit()` was its only caller.
+   */
 
-  const { filtering, shown: recent, hidden } = projectShortlist(projects, filter)
+  /**
+   * The machine the session will run on, resolved to its row, or null for here.
+   *
+   * Resolved rather than trusted: a machine can go offline while this dialog is
+   * open, and `machines` is re-read by the window every few seconds. Falling back
+   * to null means the dialog quietly becomes a local one rather than offering a
+   * folder list belonging to a computer that is no longer answering — and the
+   * Where section shows *this* machine selected, so nothing about it is silent.
+   */
+  const machine = selectedMachine === null
+    ? null
+    : machines.find((row) => row.id === selectedMachine) ?? null
+
+  /*
+   * The folder list, from whichever machine the session will run on.
+   *
+   * A remote machine's list is what *it* advertised to this device — never a
+   * list assembled here — so a row in this picker is a row the far end's own
+   * rule will accept. `session-create.ts` hands out the advertised list and the
+   * enforced list from one call for exactly this reason, and a picker built from
+   * a second source is the failure that whole arrangement exists to prevent.
+   *
+   * They are shaped as `RecentProject`s so the rows below are the same rows in
+   * both cases. A remote folder has no session count and no Remove — those are
+   * facts about this machine's own store — and `ProjectRow` already draws a row
+   * with neither.
+   */
+  const remoteProjects: RecentProject[] = machine
+    // `lastOpenedAt: 0` because there is no such fact: the far machine sends a
+    // list in the order *it* thinks is most relevant, and inventing a timestamp
+    // here would let this side re-sort it into an order nobody chose. Nothing in
+    // the remote branch sorts, so the zero is never read.
+    ? machine.folders.map((path) => ({ path, name: folderName(path), lastOpenedAt: 0 }))
+    : []
+  const { filtering, shown: recent, hidden } = machine
+    ? { filtering: false, shown: remoteProjects, hidden: 0 }
+    : projectShortlist(projects, filter)
   const confirmChord = formatChord('mod+enter')
 
   const activeProfile = profiles.find((profile) => profile.id === decided?.profileId)
@@ -1344,12 +1292,6 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
     profileNotice === null &&
     activeProfile !== undefined &&
     !isDefaultLogin(snapshot, activeProfile)
-
-  // `conversations` is null whenever the store cannot be enumerated honestly —
-  // a Codex session, a non-default login, a bridge that did not answer — and
-  // the row falls back to the sentence that holds in every one of those cases.
-  const lastConversation = conversations && conversationLine(conversations, Date.now())
-  const olderConversations = conversations && olderConversationsLine(conversations)
 
   return (
     /*
@@ -1434,7 +1376,7 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
           }}
         />
       ) : (
-      <form id={formId} ref={formRef} className="ns" onSubmit={submit}>
+      <form id={formId} className="ns" onSubmit={submit}>
         {error && (
           <p className="ns-error" role="alert">
             {error}
@@ -1463,16 +1405,106 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
           </ul>
         )}
 
+        {/* --------------------------------------------------------- where -- */}
+
+        {/*
+          Which machine, first — and only when there is more than one.
+
+          *"New session → pick the machine → pick its folder → continue."* The
+          order is his and it is the right one: the machine decides which folders
+          exist, so asking for a folder first and the machine after would mean
+          re-answering the folder.
+
+          Withheld entirely when nothing is paired. A person with one computer
+          should never be asked which computer they mean — that is the "let's not
+          make it too complicated for them as non-technical" rule applied to the
+          only step here that most people will never need.
+        */}
+        {machines.length > 0 && (
+          <section className="ns-section">
+            <h3 className="ns-section-title" id={`${ids}-where`}>
+              Where
+            </h3>
+            {/* The same card, mark and `data-selected` the Agent rows use, so
+                the two questions on this panel are asked in one shape. */}
+            <div className="ns-where" role="radiogroup" aria-labelledby={`${ids}-where`}>
+              <label className="ns-choice ns-where-row" data-selected={machine === null}>
+                <input
+                  type="radio"
+                  name={`${formId}-where`}
+                  checked={machine === null}
+                  onChange={() => {
+                    setSelectedMachine(null)
+                    // The folder goes with it. A path from the far machine would
+                    // be checked against this one's list and refused, and the
+                    // refusal would arrive after Start with nothing on screen
+                    // explaining which of the two folders it meant.
+                    setSelectedPath(projectPath ?? null)
+                  }}
+                />
+                <span className="ns-mark" aria-hidden="true" />
+                <span className="ns-where-name">{thisMachine(detectPlatform())}</span>
+              </label>
+              {machines.map((row) => (
+                <label
+                  className="ns-choice ns-where-row"
+                  key={row.id}
+                  data-selected={machine?.id === row.id}
+                >
+                  <input
+                    type="radio"
+                    name={`${formId}-where`}
+                    checked={machine?.id === row.id}
+                    onChange={() => {
+                      setSelectedMachine(row.id)
+                      // Its first offered folder, so the ordinary case is one
+                      // press. Null when it is offering none, which is a real
+                      // state — a guest with nothing chosen for it — and the
+                      // Project section below says so rather than looking empty.
+                      setSelectedPath(row.folders[0] ?? null)
+                    }}
+                  />
+                  <span className="ns-mark" aria-hidden="true" />
+                  <svg
+                    className="ns-where-glyph"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d={MACHINE_ICON} />
+                  </svg>
+                  <span className="ns-where-name">{row.name}</span>
+                </label>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* ------------------------------------------------------- project -- */}
 
         <section className="ns-section">
           <div className="ns-section-head">
             <h3 className="ns-section-title" id={`${ids}-project`}>
-              Project
+              {machine ? `Folder on ${machine.name}` : 'Project'}
             </h3>
-            <button type="button" className="ns-link" onClick={() => void browse()}>
-              Browse…
-            </button>
+            {/*
+              Browse opens *this* machine's file panel, so it is absent on a
+              remote one rather than disabled. There is no picker that can walk
+              another computer's disk, and a button that opened the wrong
+              machine's folders would be the "control that cannot act" this
+              product is removing everywhere.
+            */}
+            {machine === null && (
+              <button type="button" className="ns-link" onClick={() => void browse()}>
+                Browse…
+              </button>
+            )}
           </div>
 
           {/* Only past the cap — see `filtering`. A search field over a list
@@ -1490,9 +1522,11 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
 
           {recent.length === 0 ? (
             <p className="ns-empty">
-              {filter.trim() === ''
-                ? 'No recent projects. Browse for a folder to run the session in.'
-                : 'No folder matches that. Browse for one instead.'}
+              {machine
+                ? `${machine.name} is not sharing any folder with this one yet. Choose one there, in its remote access settings.`
+                : filter.trim() === ''
+                  ? 'No recent projects. Browse for a folder to run the session in.'
+                  : 'No folder matches that. Browse for one instead.'}
             </p>
           ) : (
             <div className="ns-projects" role="radiogroup" aria-labelledby={`${ids}-project`}>
@@ -1540,13 +1574,29 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
             labelledBy={`${ids}-agent`}
             selected={decided?.provider ?? null}
             onSelect={setChosenProvider}
-            onAdd={() => setAddingAgent(true)}
+            // Absent on another machine — see `AgentChoicesProps.onAdd`. An
+            // agent added here is a command on this computer.
+            {...(machine === null ? { onAdd: () => setAddingAgent(true) } : {})}
             onRemove={(id) => void removeAgent(id)}
           />
         </section>
 
         {/* ------------------------------------------------------ profile -- */}
 
+        {/*
+          Absent on another machine, in his words: *"hide the account dropdown
+          once a remote machine is chosen — it is not relevant there."*
+
+          And it genuinely is not, mechanically rather than as a matter of taste.
+          Every profile in this list is a config directory on *this* computer,
+          resolved by *this* machine's `resolveProfile`, and the far end's
+          `create` frame carries no profile field at all — a session started
+          there runs as whatever account that machine resolves. So the control
+          could not act, and a login named here beside a session running
+          somewhere else would be a claim about which account is signed in that
+          this window has no way to make true.
+        */}
+        {machine === null && (
         <section className="ns-section">
           <div className="ns-row">
             <div className="ns-row-text">
@@ -1629,105 +1679,71 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
               A general warning next to a specific answer is one line of the
               five this panel was told to cut. */}
         </section>
+        )}
 
-        {/* ------------------------------------------------ fresh / resume -- */}
+        {/*
+          ------------------------------------------------------------------
+          Two sections used to sit here. Both are gone, on 2026-08-18, and the
+          argument for each is worth keeping because both were built carefully
+          and both were wrong.
 
-        <section className="ns-section">
-          <h3 className="ns-section-title" id={`${ids}-history`}>
-            Conversation
-          </h3>
+          **Conversation — "Start fresh" / "Continue the last conversation".**
 
-          <div className="ns-choices" role="radiogroup" aria-labelledby={`${ids}-history`}>
-            <label className="ns-choice" data-selected={!decided?.resume}>
-              <input
-                type="radio"
-                name={`${formId}-history`}
-                checked={!decided?.resume}
-                onChange={() => setChosenResume(false)}
-              />
-              <span className="ns-mark" aria-hidden="true" />
-              <span className="ns-agent-text">
-                {/* No second line. It said "A new conversation with no prior
-                    context", which is the two words above it spelled out. */}
-                <span className="ns-agent-label">Start fresh</span>
-              </span>
-            </label>
+          > *"'Continue last conversation' is agent-specific — either give a real
+          > picker of previous conversations, or remove it and 'start fresh',
+          > since fresh is then the only behaviour."*
 
-            <label
-              className="ns-choice"
-              data-selected={decided?.resume === true}
-              data-available={resumeState.enabled}
-            >
-              <input
-                type="radio"
-                name={`${formId}-history`}
-                checked={decided?.resume === true}
-                disabled={!resumeState.enabled}
-                onChange={() => setChosenResume(true)}
-              />
-              <span className="ns-mark" aria-hidden="true" />
-              <span className="ns-agent-text">
-                <span className="ns-agent-label">Continue the last conversation</span>
-                {/*
-                  Which one.
+          The picker cannot be built on what exists. `CreateSessionInput` carries
+          `resume?: boolean`, and the flag it becomes is `--continue` for Claude
+          and `resume --last` for Codex — both meaning *the newest one*, with no
+          id to hand them. Gemini has no resume command at all and a shell has no
+          such idea, and `host-core.ts` resolves an impossible resume by starting
+          a fresh session and saying nothing. So the pair offered one radio that
+          worked for two agents out of four, one that silently did the other
+          thing for the rest, and a caption enumerating conversations that could
+          not be chosen between. Taking both radios means fresh is the only
+          behaviour, which is what he said to do, and the dialog got shorter by a
+          section instead of gaining a sentence explaining itself.
 
-                  > *"which conversation will it bring? …So we know which one
-                  > session we are going to continue because we might have
-                  > multiple sessions before."*
+          A real picker is a `resume` that takes an id: a field on
+          `CreateSessionInput`, a branch in `startSession`, a second argument
+          list in `providers.ts`, and a per-agent enumeration of past
+          conversations — of which only Claude's exists today (`insights:list`).
+          That is a feature, not a control, and it does not belong in a pass
+          about removing things that do not work.
 
-                  It said "Picks up the most recent session in this folder",
-                  which restates the flag without answering the question. When
-                  the transcripts can be enumerated this is the conversation
-                  itself — when it was last written to, and the head of its
-                  session id, with the whole id in the row's title because that
-                  is what you would paste into `claude --resume`. When they
-                  cannot be, it falls back to the sentence that is true in every
-                  case rather than naming a conversation from the wrong store.
-                */}
-                <span className="ns-hint" title={conversations?.[0]?.sessionId}>
-                  {resumeState.reason ??
-                    lastConversation ??
-                    'The agent picks up its own most recent conversation here.'}
-                </span>
-              </span>
-            </label>
-          </div>
+          The two surfaces that still offer resume are the palette's *Continue
+          last session* and the ＋'s sibling on a project heading. Those are
+          named commands with exactly one answer rather than a question about
+          what kind of session to open, and both are now hidden outright when the
+          default agent has no resume command — see `canResumeDefault` in
+          `App.tsx`.
 
-          {/* Why there is no picker, said once, and only when there is more than
-              one conversation to pick between. `CreateSessionInput` carries a
-              boolean and the flag it becomes means "the newest one" — see the
-              note on `Conversation`. */}
-          {resumeState.enabled && olderConversations && (
-            <p className="ns-caveat">{olderConversations}</p>
-          )}
-        </section>
+          **First message.**
 
-        {/* ------------------------------------------------- first prompt -- */}
+          > *"Remove 'first message' from the new-session dialog entirely."*
 
-        <section className="ns-section">
-          <label className="ns-row-label" htmlFor={`${ids}-prompt`}>
-            First message <span className="ns-optional">optional</span>
-          </label>
-          <textarea
-            id={`${ids}-prompt`}
-            className="ns-prompt"
-            rows={2}
-            value={prompt}
-            placeholder="What should it start on?"
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={promptKeys}
-          />
-          {/* Why Enter is submit in an agent prompt is the agent's business,
-              not this dialog's. That a multi-line paste will arrive flattened
-              is the part that changes what somebody types. */}
-          <p className="ns-hint">Sent once the agent is ready. Line breaks become spaces.</p>
-          {decided?.title && (
-            <p className="ns-preview">
-              Tab will be titled <strong>{decided.title}</strong>
-            </p>
-          )}
-        </section>
+          Removed with its textarea, its state, its ⌘↵-in-a-textarea handler and
+          the "Tab will be titled …" preview it fed. `SpawnRequest` keeps
+          `firstPrompt` and `title` — the main process still accepts both, and a
+          paired phone starting a session with a prompt is a real path — so
+          nothing crossed the bridge to delete. What this dialog sends is `''`,
+          and `resolveStart` turns that into a null title, which is the state
+          `deriveSessionTitle` was always going to overwrite anyway.
+          ------------------------------------------------------------------
+        */}
 
+        {/*
+          Absent on another machine, for the same reason the Login row is.
+
+          `writeStartMemory` keys what it remembers by folder path, and it is
+          read the next time this dialog opens a *local* session — so a remote
+          folder recorded here would pre-fill the agent and login for a path
+          that does not exist on this computer, and the pre-fill would be
+          invisible until somebody wondered why a new local session had picked an
+          agent nobody chose.
+        */}
+        {machine === null && (
         <label className="ns-remember">
           <input
             type="checkbox"
@@ -1740,6 +1756,7 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
               the panel taller than the window it opens in. */}
           <span className="ns-agent-label">Remember these choices for this project</span>
         </label>
+        )}
       </form>
       )}
     </Modal>

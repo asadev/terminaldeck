@@ -1,15 +1,12 @@
-import { useCallback, useId, useState, type FormEvent } from 'react'
+import { useCallback, useState } from 'react'
 import type { ProviderId } from '@shared/types'
 import { Button, Explain, Group, Notice, SectionHead } from '../controls'
 import type { SectionProps } from '../settings-bridge'
+import { AgentCliUpdate } from '../../components/AgentCliUpdate'
 import { ProviderBadge } from '../../components/ProviderBadge'
-import {
-  AccountProviderList,
-  chosenAccountProvider,
-  providerOption,
-  useAccountProviderRows,
-  type AccountProviderRow,
-} from '../../components/ProviderPicker'
+import { providerOption, useAccountProviderRows, type AccountProviderRow } from '../../components/ProviderPicker'
+import { AddAccountDialog } from './AddAccountDialog'
+import { agentCanStart, agentProblem, canHaveMore } from './account-agent'
 import {
   accountLabel,
   accountsBridge,
@@ -96,64 +93,15 @@ function agentName(provider: ProviderId | null): string | undefined {
 }
 
 /**
- * Can a session actually be opened on this account's agent, right now?
+ * The three per-agent readings this screen makes live in `account-agent.ts`.
  *
- * The question the app never asked, and the reason the recording contains a Node
- * stack trace. `detectProviders` — which is what fills `providerRows.available`
- * — now runs each agent once to prove it starts rather than only looking it up,
- * so an unavailable row here means "pressing Sign in would open a terminal that
- * dies". Nothing is created and no session is started in that case.
- *
- * Unknown agent means allowed: an account whose provider the main process did
- * not name is one this screen has no grounds to block.
+ * They moved there when the Add-account dialog became a file of its own, which
+ * needs all three: a dialog importing from this pane while this pane imports
+ * the dialog is a cycle. They are re-exported here because they were tested
+ * through this module before the move and the tests are about the behaviour,
+ * not about which file it is typed in.
  */
-export function agentCanStart(
-  rows: readonly AccountProviderRow[],
-  provider: ProviderId | null,
-): boolean {
-  if (provider === null) return true
-  const row = rows.find((entry) => entry.id === provider)
-  return row === undefined || row.available
-}
-
-/**
- * What to say instead of offering Sign in.
- *
- * One sentence and a command, which is the whole of the brief for this screen:
- * *"it's very inconvenient and not understandable for me as not a technical
- * actual coder, because I am building this mostly for normal level coders or
- * vibe coders."*
- */
-export function agentProblem(
-  rows: readonly AccountProviderRow[],
-  provider: ProviderId | null,
-): { text: string; install: string | null } | null {
-  if (provider === null) return null
-  const row = rows.find((entry) => entry.id === provider)
-  if (!row || row.available) return null
-  return {
-    text: `${row.label} will not start on this machine, so signing in cannot open a session yet.`,
-    install: row.install,
-  }
-}
-
-/**
- * Can this agent hold more than one login?
- *
- * Separate from `agentCanStart` because they answer different questions and the
- * screen needs both: whether to offer *this* account an action, and whether a
- * second account of the same agent is a thing that can exist. Gemini answers no
- * here and yes to `agentCanStart`, which is the pairing the whole Gemini fix
- * turns on — it can be signed in; there is only ever one of it.
- */
-export function canHaveMore(
-  rows: readonly AccountProviderRow[],
-  provider: ProviderId | null,
-): boolean {
-  if (provider === null) return true
-  const row = rows.find((entry) => entry.id === provider)
-  return row === undefined || row.canAdd
-}
+export { agentCanStart, agentProblem, canHaveMore }
 
 /* ----------------------------------------------------------------- view -- */
 
@@ -168,6 +116,14 @@ export interface AccountsViewProps {
    * states are exercised.
    */
   head?: boolean
+  /**
+   * Open the Add-account popup on the first render.
+   *
+   * For tests only, and it is a prop rather than a hook because there is no DOM
+   * in this project to press the button with — the popup's contents are the
+   * whole of what this change is about, so they have to be renderable.
+   */
+  addingInitially?: boolean
   snapshot: AccountsSnapshot
   signIn: Readonly<Record<string, SignInView>>
   loading: boolean
@@ -217,6 +173,7 @@ export interface AccountsViewProps {
  */
 export function AccountsView({
   head = true,
+  addingInitially = false,
   snapshot,
   signIn,
   loading,
@@ -239,35 +196,15 @@ export function AccountsView({
    * rail happens to call the pane it lives in.
    */
   const title = 'Accounts'
-  const [draft, setDraft] = useState('')
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   /**
-   * The agent row that was clicked, which is not the same as the agent that
-   * will be used — see `chosenAccountProvider`. Held as "what was clicked" so
-   * an agent going missing corrects the answer instead of freezing it.
+   * Whether the Add-account popup is up.
+   *
+   * Held here rather than in the section so that the popup and the list it adds
+   * to close together, and so a render test can open it by passing `adding`.
    */
-  const [clicked, setClicked] = useState<ProviderId | null>(null)
-  const formId = useId()
-
-  const chosen = chosenAccountProvider(providerRows, clicked)
-
-  const problem = agentProblem(providerRows, chosen?.id ?? null)
-
-  const startNew = (event: FormEvent) => {
-    event.preventDefault()
-    const name = draft.trim()
-    // No agent means no account: a login has to be a login *of* something, and
-    // `createProfile` in the main process refuses a provider it cannot isolate
-    // with its own sentence rather than quietly making a Claude account.
-    if (name === '' || !chosen || !onSignInNew) return
-    // And no account at all for an agent that cannot start. Creating one here
-    // and letting the session die is how the recording ended with five orphan
-    // rows in the sidebar and nothing cleaned up.
-    if (problem) return
-    setDraft('')
-    onSignInNew(name, chosen.id)
-  }
+  const [adding, setAdding] = useState(addingInitially)
 
   if (!available) {
     return (
@@ -306,6 +243,13 @@ export function AccountsView({
       </Explain>
 
       {error && <Notice tone="error">{error}</Notice>}
+
+      {/*
+        The measured reason a sign-in is about to fail, on the screen somebody
+        is standing on when it does. It draws nothing when every agent CLI on
+        this machine is current — see `AgentCliUpdate` for the loop it closes.
+      */}
+      <AgentCliUpdate />
 
       <ul className="settings-profiles">
         {accounts.map((account) => {
@@ -504,7 +448,27 @@ export function AccountsView({
         <p className="settings-prose">No accounts yet.</p>
       )}
 
+      {/*
+        Two buttons, and the second one is the whole of this change.
+
+        Everything that used to sit under this line — a heading, the agent
+        question, the list, a name field, its own Sign in button, three notices
+        and an ⓘ — is now behind **Add account**, in a popup that carries the
+        sign-in steps and nothing else. His words: *"'Add' and 'Sign in' should
+        be one thing, called Add account. It must open a small popup with only
+        the sign-in steps — not the whole Agents page. It is confusing. Just
+        give me the login, sign-in steps."*
+
+        It is one button rather than two because it is one act. Adding an
+        account without signing it in leaves a directory that no agent has ever
+        written to, which is not an account in any sense a person cares about —
+        `signInToNewAccount` makes both happen on one press and unmakes the
+        first if the second fails.
+      */}
       <div className="settings-account-foot">
+        <Button tone="primary" disabled={busy} onClick={() => setAdding(true)}>
+          Add account
+        </Button>
         <Button disabled={busy || accounts.length === 0} onClick={onCheck}>
           Check again
         </Button>
@@ -513,89 +477,24 @@ export function AccountsView({
         </span>
       </div>
 
-      <Group title="Sign in to another account">
-        {/* The question the app never asked. Before this list, every account
-            made here was a Claude account whatever the person adding it had in
-            mind — see the module note. */}
-        <p className="settings-prose">Which agent is this a login for?</p>
-        <AccountProviderList
-          group={`${formId}-agent`}
-          rows={providerRows}
-          selected={chosen?.id ?? null}
-          onSelect={setClicked}
-        />
-
-        {/*
-          One button, and it says what happens.
-
-          This was Add, and pressing it put a row on the list with a Sign in
-          button of its own — two steps, two places to look, and a half-made
-          account left behind if you stopped between them. The account is still
-          created (an account *is* a directory, and the agent needs one before it
-          can be signed into), but it is created and signed into in one press, so
-          there is no state in which one has happened and the other has not.
-        */}
-        <form className="settings-inline-form settings-add-account" onSubmit={startNew}>
-          <input
-            className="settings-input wide"
-            value={draft}
-            // Not a plausible word like "Work": a single word sitting in an
-            // empty field reads as a value somebody already typed, and a person
-            // who leaves it alone expecting an account called Work gets nothing.
-            // It does name the chosen agent, which is the cheapest possible
-            // confirmation that the row above was actually taken.
-            placeholder={chosen ? `Name this ${chosen.label} account` : 'Name this account'}
-            maxLength={MAX_NAME_LENGTH}
-            aria-label="Name for the new account"
-            onChange={(event) => setDraft(event.target.value)}
-          />
-          <Button
-            type="submit"
-            tone="primary"
-            disabled={busy || draft.trim() === '' || !chosen || !onSignInNew || problem !== null}
-          >
-            Sign in
-          </Button>
-        </form>
-
-        {/* The agent is installed nowhere this app can start it. Said here,
-            before the button is pressed, rather than in a terminal afterwards. */}
-        {problem && (
-          <Notice tone="warn">
-            {problem.text}
-            {problem.install && <> Install it with <code>{problem.install}</code>.</>}
-          </Notice>
-        )}
-
-        {/* Every agent listed, none of them able to take one — which on this
-            machine means none of them is installed. Said once, here, rather
-            than left for somebody to infer from a button that never enables. */}
-        {providerRows.length > 0 && !chosen && (
-          <Notice tone="warn">
-            No agent on this machine can hold a second login. Install Claude Code or the Codex CLI
-            and this list will offer them.
-          </Notice>
-        )}
-
-        {/* A window with no way to open a session cannot sign anything in, and
-            making the account anyway would leave exactly the orphan this pass
-            exists to stop. */}
-        {chosen && !onSignInNew && (
-          <Notice tone="warn">
-            This window cannot open a session, so there is nothing here to sign in with.
-          </Notice>
-        )}
-
-        {/* Halved. The fact that has to be on screen before the button is
-            pressed is that a terminal is about to open; that this app never
-            sees the credential is reassurance, which is what an ⓘ is for. */}
-        <Explain
-          title="Signing in happens in the terminal"
-          more="A new account starts signed out. Press Sign in and a session opens on that agent, where it asks you to log in exactly as it would in your own terminal. This app never sees a password or a token."
-        >
-          Sign in opens a session on that agent and lets it ask.
-        </Explain>
-      </Group>
+      <AddAccountDialog
+        open={adding}
+        providerRows={providerRows}
+        busy={busy}
+        onSignIn={
+          onSignInNew
+            ? (name, provider) => {
+                // Closed on the way, not after: signing in opens a terminal
+                // session, and the settings window closes with it, so a popup
+                // left up would be the last thing on screen before the whole
+                // sheet went.
+                setAdding(false)
+                onSignInNew(name, provider)
+              }
+            : null
+        }
+        onClose={() => setAdding(false)}
+      />
     </Group>
   )
 }

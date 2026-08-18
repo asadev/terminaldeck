@@ -1,85 +1,84 @@
 /**
- * The three references hanging off the copilot screen: the confirmation waiting
- * at the desk, everything it has ever done, and the sessions it started.
+ * The four references hanging off the copilot screen: the confirmation this
+ * phone must answer, the one it may only watch, everything the copilot has ever
+ * done, and the sessions it started.
  *
- * All three are sheets rather than pushes, for the reason `SessionDetailView`
+ * All four are sheets rather than pushes, for the reason `SessionDetailView`
  * gives about itself — *a reference somebody opens, reads and closes, not a
- * place they are going* — and none of them is a control. That is most obviously
- * true of the first, and the argument for it is the longest thing in this file.
+ * place they are going*. The first one is the only control in this file, and the
+ * argument for its shape is the longest thing here, because it is the screen
+ * this feature is most easily made worse by.
  */
 
 import SwiftUI
 
 /* -------------------------------------------------------------------------- */
-/* A confirmation waiting at the desk                                          */
+/* A confirmation                                                              */
 /* -------------------------------------------------------------------------- */
 
 /**
- * The card in the timeline: something needs a person, and the person is not
- * here.
+ * The card in the timeline: something needs a person.
  *
- * ## Why there is no Allow button on it, or anywhere on this phone
+ * ## What changed, and what did not
  *
- * This is the part of the feature most likely to be got wrong, so the reasoning
- * is written where somebody would come to add the button.
+ * This card used to state, at length, that there was no Allow button on it or
+ * anywhere on this phone, because *the alter tier's whole safety property is a
+ * human at the machine says yes, and a dialog answered on the device that raised
+ * the request is answered by the party being confirmed.* That argument is
+ * preserved in `COPILOT-REMOTE.md` §4.8 verbatim rather than deleted, and it was
+ * superseded for a reason worth understanding: the second factor was never
+ * *geography*. Somebody who walks away from an unlocked Mac has taken their
+ * geography with them. It was **reaching the dialog required an authorisation
+ * the requesting party did not already hold** — and that is now the copilot
+ * connection, which is minted at the machine, is separate from pairing, and can
+ * be revoked in one press without unpairing anything.
  *
- * The alter tier's entire safety property is *a human at the machine says yes*.
- * A dialog answered on the device that raised the request is answered by the
- * party being confirmed — so if holding the phone were sufficient to approve
- * what the phone asked for, the phone would hold `alter` and the grant would be
- * a ceremony. `REMOTE_GRANTABLE_TIERS` is `['read', 'act']` and there is no
- * frame on this wire that answers a question, which is not an omission to be
- * fixed later: it is the mechanism.
+ * So a connected device holding `alter` answers **its own run's** questions.
+ * Everything else on this card is unchanged, and the unchanged half is still
+ * most of the value: the failure the design named is a desktop dialog on a
+ * screen nobody is looking at, timing out in silence two minutes later, with the
+ * copilot then reporting a refusal nobody understands. A phone that shows the
+ * question while it is still answerable fixes that whether or not it can answer
+ * it.
  *
- * Three further reasons, from `COPILOT-REMOTE.md` §4.5, that survive even if
- * somebody disagrees with the first:
+ * ## `decidable`, and why it is not `question.mine`
  *
- *  - **There is no push in this product.** `SessionAlerts` says it plainly:
- *    there is no APNs certificate and no server holding one, so an alert exists
- *    only while the app is running. A confirmation lives 120 seconds. A phone
- *    that is not already open, connected and in a hand cannot be asked at all —
- *    so a phone Allow button would work in exactly the situation where walking
- *    to the desk was already possible, while changing everything about the trust
- *    model.
- *  - **A lock-screen Allow is worse than no gate.** An action that approves
- *    without the request being read is a gate that is always answered yes,
- *    wearing the appearance of protection.
- *  - **The real defence is that alter is rare.** Wanting to approve things from
- *    a phone several times a week means the tier boundary is wrong, and the fix
- *    is to look at which tool keeps asking — not to move the approval surface
- *    closer to a thumb.
- *
- * ## So what is this card *for*
- *
- * Telling you to go and look. The failure it fixes is real and specific: a
- * confirmation dialog on a screen nobody is watching, timing out silently after
- * two minutes, with the copilot then reporting a refusal nobody understands.
- * This turns that into something you knew about while it was still answerable.
- * It is watch-only and must stay watch-only: no Allow, no Refuse, no nudge, no
- * snooze.
+ * `mine` says the desktop would accept an answer from this device. It does not
+ * say this phone was ever *sent* the request — and the two come apart in a case
+ * that is not rare, because **there is no replay**: a phone that reconnects
+ * while a confirmation is outstanding gets the watch row and no `copilot.ask`.
+ * It then holds an id and not a request, and answering on an id alone is
+ * answering blind, which is the reflex Yes this whole design refuses. So the
+ * caller passes `decidable` only when it has the full question, and this card
+ * says *go and look* in every other case — including for somebody else's
+ * question, whose arguments the desktop deliberately strips.
  *
  * ## And why the countdown is on it
  *
- * Because "go and look" is worthless without "how long have I got". The number
- * is the desktop's own `expiresAt`, ticked locally, and it is deliberately **not
- * extended for a phone**: a longer window is how an approval lands six minutes
- * later from somebody who has forgotten what they were approving.
+ * Because "there is a decision here" is worthless without "how long have I got",
+ * and because the deadline is not a deferral: it **expires into a refusal**. The
+ * number is the desktop's own `expiresAt`, ticked locally, and it is deliberately
+ * not extended for a phone — a longer window is how an approval lands six
+ * minutes later from somebody who has forgotten what they were approving.
  */
 struct CopilotQuestionCard: View {
     let question: CopilotQuestion
     /// What to call the machine — "Mac", "PC", "machine". The sentence has to
     /// name a real object for "go and look" to mean anything.
     let noun: String
+    /// This phone holds the whole request and may answer it. See the header:
+    /// **not** the same as `question.mine`.
+    let decidable: Bool
     let read: () -> Void
 
     var body: some View {
         Button(action: read) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Image(systemName: "hand.raised.fill")
+                    Image(systemName: decidable ? "hand.raised.fill" : "eye")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.warning)
-                    Text("Waiting for you at the \(noun)")
+                    Text(decidable ? "Waiting for you" : "Waiting for you at the \(noun)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.warning)
                     Spacer(minLength: 8)
@@ -110,7 +109,11 @@ struct CopilotQuestionCard: View {
                         .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 5,
                                                                             style: .continuous))
                     Spacer(minLength: 0)
-                    Text("See what it is asking")
+                    // The words differ because the errands differ, and a card
+                    // that said "answer it" over a question this phone cannot
+                    // answer would be a control that is always refused wearing a
+                    // verb.
+                    Text(decidable ? "Read it and decide" : "See what it is asking")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Theme.accent)
                     Image(systemName: "chevron.right")
@@ -146,24 +149,497 @@ struct CopilotQuestionCard: View {
 }
 
 /**
- * The whole question, in full.
+ * **The consent sheet.** The whole request, and the two answers.
  *
- * Everything needed to judge it, and nothing that judges it. The order is the
- * order somebody reads in: what will happen, at what tier, with which arguments
- * verbatim, and how long is left — then the one sentence saying where it is
- * answered.
+ * This is the screen `COPILOT-REMOTE.md` calls *the part worth the most care*,
+ * so the rules it is built from are written here rather than left to be
+ * inferred.
  *
- * The summary is the **desktop's** sentence, composed by the tool that wants to
- * run, and it is never re-worded here. A prompt whose words were written by the
- * side that draws it is a prompt that can flatter itself.
+ * ## 1. Everything needed to judge it, or it is worse than nothing
  *
- * The only control is Done, and it closes the sheet. Nothing on this screen
- * settles the question: leaving it does not refuse it, and there is nothing here
- * that could approve it. That is stated on the screen rather than left to be
- * inferred, because a sheet with one button is a sheet people assume that button
- * does something.
+ * *A consent prompt without enough context becomes a reflex Yes, and a gate that
+ * is always answered yes is worse than no gate, because it looks like
+ * protection.* So the sheet shows the desktop's own summary, the tool by its
+ * canonical id, the tier, **every argument verbatim**, who asked, and how long
+ * is left. Nothing is re-composed: the summary was written by the tool that is
+ * about to run, by the code that knows what it will do, and a client that wrote
+ * its own sentence would be describing an action it did not implement — the
+ * first time the two drifted, somebody would approve one thing having read
+ * another.
+ *
+ * ## 2. Refusing is at least as easy as accepting
+ *
+ * Not Allow under the thumb and Refuse in a corner. The two buttons are one
+ * `HStack` of equal halves built from the **same** metrics — see `answerHeight`
+ * — at the same distance from the bottom of the screen, and neither is behind a
+ * confirmation, a long-press or a biometric. The safe answer here is *Refuse*,
+ * and a design that makes the safe answer the harder gesture has inverted the
+ * gate it is pretending to be.
+ *
+ * Refuse is not painted red. Red would say *danger*, and refusing is the safe
+ * half; the colour would be arguing for the other button.
+ *
+ * ## 3. The countdown says what silence means
+ *
+ * It expires into a **refusal**, not a deferral, and the sheet says so in those
+ * words. A person who walks away has decided rather than postponed, and being
+ * told that is the difference between a deadline and a trap.
+ *
+ * ## 4. It does not vanish
+ *
+ * First answer wins, and the desktop tells every surface where a question went.
+ * When one is settled elsewhere — at the Mac, or by the timeout — this sheet
+ * stays up and **says where it was answered**. A dialog that disappears on its
+ * own teaches a person that the app does things behind their back, which is the
+ * opposite of what a consent surface is for.
+ *
+ * ## 5. No biometric gate, and the reason is what one would be worth
+ *
+ * §4.6 offers a device unlock in front of Allow as optional, *"worth having,
+ * defeats a found phone and nothing else"*, and never in front of Refuse. It is
+ * not built, and the argument for leaving it out is the same one that bounds
+ * what it would buy: this sheet only exists while the app is open in somebody's
+ * hand — there is no push in this product — so the phone it would defend against
+ * is one found unlocked, with the app foregrounded, inside a two-minute window.
+ * Against that it is worth a little; against the failure this screen is actually
+ * about, a reflex Yes from the person who owns the phone, it is worth nothing,
+ * and a gesture that feels like security while adding none is the thing this
+ * whole design keeps refusing.
+ *
+ * If it is added: in front of Allow only, never Refuse — a gate that makes the
+ * safe answer the harder one has inverted itself — and the sheet must say what
+ * it defeats rather than implying more.
+ *
+ * ## 6. There is no notification to answer from, and that is deliberate
+ *
+ * There is no APNs in this product — `SessionAlerts` says so plainly — so this
+ * only ever appears while the app is open in somebody's hand. If push is ever
+ * added, §4.6 is not negotiable: the payload carries nothing and it carries no
+ * actions, because a lock-screen Allow that approves without the request being
+ * read is the reflex-Yes machine wearing a badge.
  */
-struct CopilotQuestionSheet: View {
+struct CopilotConsentSheet: View {
+    let question: CopilotConsentQuestion
+    /// Where it went, when it has already gone. Non-nil replaces the buttons
+    /// with a sentence — see rule 4.
+    let settlement: CopilotSettlement?
+    let machine: String
+    let noun: String
+    /// Returns whether the answer reached the wire. **Not `Void`** — see
+    /// `answered` below: a sheet that dimmed its buttons over a dropped socket
+    /// would be a consent prompt that looks answered and is not.
+    let answer: (Bool) -> Bool
+    let dismiss: () -> Void
+
+    /// The one place the answer buttons' metrics live, so that "the same size"
+    /// is a fact rather than two numbers somebody keeps in step. Rule 2.
+    private static let answerHeight: CGFloat = 52
+
+    /**
+     * Set once the answer is **on the wire**, so a second tap cannot send a
+     * second frame and the sheet can say it is waiting rather than looking
+     * unresponsive while the desktop settles it.
+     *
+     * Set from the send's own result rather than from the tap, because
+     * `Transport.send` refuses instead of queuing: over a dropped socket the tap
+     * sends nothing, and a sheet that greyed itself out anyway would be showing
+     * somebody a decision they did not make. The error banner behind this sheet
+     * is not an answer to that — it is behind the sheet.
+     */
+    @State private var answered: Bool?
+
+    /// What went wrong here, on this sheet, where the person is looking.
+    @State private var problem: String?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(question.summary)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Theme.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("copilot.consent.summary")
+
+                        // The countdown stops when the question does. A clock
+                        // still saying "90 seconds left — if nobody answers, it
+                        // is refused" over a question that has already been
+                        // answered is a screen contradicting itself about the
+                        // one thing on it that matters.
+                        if settlement == nil {
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text(deadline(now: context.date))
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.warning)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.top, 8)
+                                    .accessibilityIdentifier("copilot.consent.countdown")
+                            }
+                        }
+
+                        Caption("What it is asking to do")
+                        Card {
+                            Row(name: "Tool", value: question.tool, mono: true)
+                            Hairline()
+                            Row(name: "Permission", value: tierWord, mono: false)
+                            Hairline()
+                            Row(name: "Asked by", value: askedBy, mono: false)
+                        }
+
+                        Caption(argumentsCaption)
+                        Card {
+                            if question.arguments.isEmpty {
+                                // A real answer, not an empty state: some tools
+                                // genuinely take none, and "no arguments" is
+                                // different from "we could not show them".
+                                Text("This call takes no arguments.")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.secondary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    ForEach(Array(question.arguments.enumerated()), id: \.element.id) {
+                                        index, argument in
+                                        if index > 0 { Hairline() }
+                                        ArgumentRow(argument: argument)
+                                    }
+                                }
+                            }
+                        }
+                        .accessibilityIdentifier("copilot.consent.args")
+
+                        if !question.argumentsAreOrdered && !question.arguments.isEmpty {
+                            // Said, because *as the tool wrote them* and *by
+                            // name* are two different claims and a sheet that
+                            // made the wrong one would have somebody comparing
+                            // this screen with the Mac's dialog and finding two
+                            // different orders with nothing to explain it.
+                            Text("Listed by name — this build could not read the order the tool "
+                                 + "wrote them in.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.faint)
+                                .padding(.top, 8)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Caption("Answering it")
+                        Card {
+                            Text(answeringNote)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .accessibilityIdentifier("copilot.consent.where")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { answers }
+            .navigationTitle("Needs you")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close", action: dismiss)
+                        .accessibilityIdentifier("copilot.consent.done")
+                }
+            }
+        }
+        // Not dismissable by swiping it away while it is still answerable.
+        // Flicking a consent prompt off the screen is not an answer, and the
+        // gesture that means "I have dealt with this" must not be the same one
+        // that means "I did not look". Closing it deliberately is still there,
+        // top right, and still changes nothing — the question goes on waiting.
+        .interactiveDismissDisabled(settlement == nil)
+    }
+
+    /**
+     * The two answers, equal in every dimension that costs a thumb anything.
+     *
+     * Same height, same width, same corner, same distance from the bottom edge,
+     * same number of taps. The only difference is the fill, and that difference
+     * is spent on making them tellable apart rather than on making one of them
+     * easier.
+     */
+    @ViewBuilder
+    private var answers: some View {
+        VStack(spacing: 0) {
+            if let settlement {
+                // Rule 4: it does not vanish. This is where the sheet says where
+                // the answer came from, and it is deliberately in the same place
+                // the buttons were, so the eye lands on it.
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(settledHeadline(settlement))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(settlement.granted ? Theme.primary : Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(settledDetail(settlement))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .accessibilityIdentifier("copilot.consent.settled")
+
+                Button("Close", action: dismiss)
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(maxWidth: .infinity, minHeight: Self.answerHeight)
+                    .background(Theme.surfaceHigh,
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .foregroundStyle(Theme.primary)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                    .accessibilityIdentifier("copilot.consent.close")
+            } else {
+                HStack(spacing: 12) {
+                    Button {
+                        send(false)
+                    } label: {
+                        Text("Refuse")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: Self.answerHeight)
+                    }
+                    /*
+                     * Neutral, not red — refusing is the *safe* half of this
+                     * screen, and painting it as the dangerous one would be the
+                     * sheet arguing for the other button.
+                     *
+                     * The outline is why this is not merely a paler Allow. A
+                     * filled blue button beside an unbordered grey one reads as
+                     * a primary action beside a way out, and rule 2 is about
+                     * more than hit targets: an eye that finds only one button
+                     * has been steered. The edge makes it a button of the same
+                     * weight, drawn in a different colour rather than a quieter
+                     * one — which is the most this design will spend on telling
+                     * the two apart.
+                     */
+                    .background(Theme.surfaceHigh,
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.hairline, lineWidth: 1))
+                    .foregroundStyle(Theme.primary)
+                    .accessibilityIdentifier("copilot.consent.refuse")
+
+                    Button {
+                        send(true)
+                    } label: {
+                        Text("Allow")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: Self.answerHeight)
+                    }
+                    .background(Theme.accent,
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .foregroundStyle(Theme.onAccent)
+                    .accessibilityIdentifier("copilot.consent.allow")
+                }
+                .disabled(answered != nil)
+                .opacity(answered == nil ? 1 : 0.5)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+                if let problem {
+                    Text(problem)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
+                        .accessibilityIdentifier("copilot.consent.problem")
+                } else if answered != nil {
+                    Text("Sent. Waiting for \(machine) to confirm where it was answered.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
+                }
+            }
+        }
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
+    }
+
+    /**
+     * One answer, on the wire or not at all.
+     *
+     * Both buttons come through here, which is the mechanical half of *refusing
+     * must be at least as easy as accepting*: there is one path, so neither
+     * answer can acquire a guard, a confirmation or a retry the other does not
+     * have. The buttons dim only once the frame has gone.
+     */
+    private func send(_ approved: Bool) {
+        guard answer(approved) else {
+            problem = approved
+                ? "That did not reach \(machine). Nothing was allowed — the question is still "
+                    + "waiting there."
+                : "That did not reach \(machine). Nothing was refused — the question is still "
+                    + "waiting there, and it runs out on its own."
+            return
+        }
+        problem = nil
+        answered = approved
+    }
+
+    /// The caption above the arguments, which is also the claim about them.
+    private var argumentsCaption: String {
+        question.argumentsAreOrdered ? "With these arguments, exactly" : "With these arguments"
+    }
+
+    /// The tier, in a word somebody can act on. Printed rather than mapped when
+    /// it is not one this build knows — a newer desktop may send a fourth tier,
+    /// and inventing a description of it would be this phone explaining somebody
+    /// else's permission model to them incorrectly.
+    private var tierWord: String {
+        switch question.tier {
+        case "alter": return "alter — changes things"
+        case "act": return "act — does work"
+        case "read": return "read — looks only"
+        case "": return "not stated"
+        default: return question.tier
+        }
+    }
+
+    /// Which copilot asked. The two must never read the same: *your phone's
+    /// copilot* and *the copilot at the Mac* are different things to be
+    /// approving, and `origin` is the only field that says which.
+    private var askedBy: String {
+        if question.origin == "window" { return "The copilot at \(machine)" }
+        if question.fromADevice { return "This phone's own copilot run" }
+        if question.origin.isEmpty { return "A copilot on \(machine)" }
+        return question.origin
+    }
+
+    private var answeringNote: String {
+        "Allowing this runs it once, now. It is not remembered and it does not widen anything: "
+        + "the next call like it asks again. Refusing tells the copilot no, and it carries on "
+        + "with the rest of its turn. Closing this without answering leaves the question "
+        + "waiting until it runs out, and running out is a refusal. "
+        + "Whoever is at \(machine) can answer it there instead — the first answer wins."
+    }
+
+    /// **The countdown says what silence means.** Rule 3.
+    private func deadline(now: Date) -> String {
+        guard let left = question.secondsLeft(now: now) else {
+            return "Waiting for an answer. The \(noun) did not say when it runs out."
+        }
+        if left == 0 {
+            return "This one ran out. Nobody answered, so the copilot was told no."
+        }
+        return "\(left) second\(left == 1 ? "" : "s") left — if nobody answers, it is refused."
+    }
+
+    private func settledHeadline(_ settlement: CopilotSettlement) -> String {
+        if settlement.timedOut { return "Nobody answered — it was refused" }
+        if settlement.granted { return "Allowed" }
+        return "Refused"
+    }
+
+    /// Where it went, in a sentence. The whole reason `copilot.settled` carries
+    /// `by`: an answer that arrived from somewhere else has to be attributed, or
+    /// the sheet is just a dialog that closed itself.
+    private func settledDetail(_ settlement: CopilotSettlement) -> String {
+        if settlement.timedOut {
+            return "It ran out after two minutes without an answer, which is a refusal. "
+                + "The copilot has been told."
+        }
+        /*
+         * **"Here" is decided by `answered`, not by `by`.**
+         *
+         * The desktop sends `device:<id>` for any device, and this end does not
+         * compare device ids — it does not need to. First answer wins, this
+         * sheet only ever shows a question this device owns, and only the owner
+         * or the desktop may answer one; so a device answer on a question this
+         * sheet just answered is this phone's. Reading "answered on a connected
+         * device" about your own tap two seconds ago is the kind of small
+         * wrongness that makes somebody stop trusting the sentence beside it.
+         */
+        let place = answered != nil ? "here"
+            : (settlement.atTheMachine ? "at \(machine)" : "on another connected device")
+        if settlement.granted { return "Answered \(place). It is running now." }
+        let reason = settlement.reason.map { " (\($0))" } ?? ""
+        return "Answered \(place)\(reason). The copilot has been told no."
+    }
+}
+
+/// One argument: the name the tool gave it and the value the desktop sent.
+///
+/// A block value gets its own line and a monospaced face, because the things
+/// that end up here are paths, commands and settings keys, and a path squeezed
+/// against a label on a phone is a path somebody approves without reading. Short
+/// values stay on the label's line, where a `true` given its own paragraph would
+/// be the opposite mistake.
+///
+/// Selectable, both ways round: somebody who is unsure about an argument will
+/// want to paste it somewhere before deciding, and a consent screen that made
+/// that impossible would be pushing them towards the quicker answer.
+private struct ArgumentRow: View {
+    let argument: CopilotArgument
+
+    var body: some View {
+        if argument.isBlock {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(argument.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.secondary)
+                Text(argument.value)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(Theme.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("copilot.consent.arg.\(argument.name)")
+        } else {
+            Row(name: argument.name, value: argument.value, mono: true)
+                // Combined **and** identified, in that order. An identifier on a
+                // container that is still two separate accessibility elements
+                // names nothing a query can find — which is not only a test
+                // problem: VoiceOver would read the name and the value as two
+                // unrelated fragments on the one screen where they only mean
+                // something together.
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("copilot.consent.arg.\(argument.name)")
+        }
+    }
+}
+
+/**
+ * The watch-only sheet: somebody else's question, or one this phone reconnected
+ * in the middle of.
+ *
+ * **No Allow and no Refuse, and that is not squeamishness.** Two different
+ * reasons land here and both of them make a button wrong:
+ *
+ *  - a question raised by another device or at the desk is not this device's to
+ *    answer — `ConsentBroker.respond` refuses it, so a button would be a control
+ *    whose only possible outcome is a refusal, which is the defect this
+ *    repository has paid for twice. The desktop strips those arguments too, so
+ *    there is nothing here to judge with even if there were a button.
+ *  - a question this device *may* answer but was never sent in full — there is
+ *    no replay of `copilot.ask`, so a phone that reconnected mid-question holds
+ *    the id and not the request. Answering on an id alone is answering blind.
+ *
+ * So this says *go and look*, with enough to know whether it is worth getting up
+ * for and how long there is to do it.
+ */
+struct CopilotWatchSheet: View {
     let question: CopilotQuestion
     let machine: String
     let noun: String
@@ -185,6 +661,7 @@ struct CopilotQuestionSheet: View {
                             Text(deadline(now: context.date))
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.warning)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .padding(.top, 8)
                                 .accessibilityIdentifier("copilot.question.countdown")
                         }
@@ -197,31 +674,29 @@ struct CopilotQuestionSheet: View {
                         Caption("Answering it")
                         Card {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("This is answered at \(machine), not here.")
+                                Text(question.mine
+                                     ? "This one is yours to answer, and the full request was not "
+                                        + "sent to this phone."
+                                     : "This one is answered at \(machine), not here.")
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(Theme.primary)
                                     .fixedSize(horizontal: false, vertical: true)
-                                Text("Actions that change settings or stop your sessions are "
-                                     + "confirmed by whoever is sitting at the \(noun). A phone "
-                                     + "cannot approve one — including a phone that asked for it "
-                                     + "— because then the thing being checked would be doing the "
-                                     + "checking. Closing this changes nothing: the question is "
-                                     + "still waiting there until it is answered or it runs out.")
+                                Text(explanation)
                                     .font(.system(size: 12))
                                     .foregroundStyle(Theme.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 /*
-                                 * Said plainly, because this sheet used to try
-                                 * to show the arguments and could not.
+                                 * Said plainly, because a person who has been
+                                 * shown a summary and no detail has to know that
+                                 * the detail exists and where — or they will
+                                 * read the summary as the whole of it.
                                  *
-                                 * They are not on this wire and they are not
-                                 * coming — the desktop's own row type says why:
+                                 * The arguments of a question this device cannot
+                                 * answer are deliberately not on the wire:
+                                 * `CopilotPendingRow` says why, and it is the
+                                 * same reason the action log carries none —
                                  * even scrubbed, they are the text of what was
-                                 * typed into somebody's sessions, and this is a
-                                 * relay. A person who has been shown a summary
-                                 * and no detail has to know that the detail
-                                 * exists and where, or they will read the
-                                 * summary as the whole of it.
+                                 * typed into somebody's sessions.
                                  */
                                 Text("The full request — every argument it would use — is on the "
                                      + "dialog at \(machine). It is not sent here.")
@@ -251,7 +726,21 @@ struct CopilotQuestionSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+    }
+
+    private var explanation: String {
+        if question.mine {
+            return "A confirmation is only sent in full to the connection that was watching when "
+                + "it was raised, and it is never sent twice. This phone reconnected after that, "
+                + "so it knows a question exists and not what is in it — and answering something "
+                + "you have not read is exactly what this gate is for stopping. Answer it at "
+                + "\(machine); it is still waiting there."
+        }
+        return "Actions that change settings or stop sessions are confirmed by whoever raised "
+            + "them, or by somebody sitting at the \(noun). A phone cannot answer another "
+            + "device's question — that would be a permission model with a shared password. "
+            + "Closing this changes nothing: the question is still waiting until it is answered "
+            + "or it runs out."
     }
 
     private func deadline(now: Date) -> String {
@@ -321,7 +810,6 @@ struct CopilotActivitySheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         // Asked for when the sheet appears rather than kept current, because the
         // live view of the same thing is the timeline behind it. A log that
         // refreshed itself on a timer would be this app polling something it is
@@ -374,7 +862,7 @@ struct CopilotActivitySheet: View {
  * carries one thing that one does not, which is **who asked**. In the timeline
  * that is always answerable — you are looking at your own conversation — and in
  * the log it is the whole question, because the file mixes the copilot at the
- * desk with every granted device. `deviceId` is the only place *which of my
+ * desk with every connected device. `deviceId` is the only place *which of my
  * phones did that* has an answer at all, since a relayed call leaves no other
  * trace.
  */
@@ -538,7 +1026,6 @@ struct CopilotSessionsSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 

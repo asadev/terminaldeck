@@ -100,7 +100,13 @@ describe('every menu on a session screen takes part', () => {
     ['the folder and account chips', 'renderer/shell/chip-menu.ts'],
     ['the plus behind the composer', 'renderer/chat/attach/AttachMenu.tsx'],
     ['the model and permission chips', 'renderer/chat/controls/ControlPicker.tsx'],
-    ['the Options panel', 'renderer/chat/controls/AgentControls.tsx'],
+    // Was `chat/controls/AgentControls.tsx`. That was the composer's copy of
+    // the control cluster and it is deleted along with the row it lived in —
+    // *"since we have it on top we actually don't need them here."* The Options
+    // panel it drew is now the chrome's sheet, so the entry moved rather than
+    // being dropped: there is still exactly one Options panel and it still has
+    // to take part in the one-menu rule.
+    ['the Options panel', 'renderer/shell/SessionControls.tsx'],
     ['the microphone', 'renderer/chat/voice/DictateButton.tsx'],
   ]
 

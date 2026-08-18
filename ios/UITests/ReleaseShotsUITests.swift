@@ -2,7 +2,7 @@
  * The iOS release gate, walked once end to end, with a photograph at every stop.
  *
  * `RELEASE-CHECK.md` lists six things about this app that have to be true before
- * anything ships: three tabs with Machines inside Settings, the tab pill hidden
+ * anything ships: the tab bar with Machines inside Settings, the tab pill hidden
  * inside a session and inside a localhost page, a Back button that is live after
  * a same-document navigation, GitHub sign-in, no notification spam, and a
  * localhost list that folds, groups and renames. Five of those six had never been
@@ -100,7 +100,7 @@ final class ReleaseShotsUITests: XCTestCase {
     // MARK: - The tour
 
     func testTheReleaseGateOnARealDesktop() throws {
-        try threeTabsAndMachinesIsNotOneOfThem()
+        try fourTabsAndMachinesIsNotOneOfThem()
         try machinesPushesFromSettings()
         try localhostGroupsAndFolds()
         try theBackButtonIsLiveAfterAPushState()
@@ -108,23 +108,30 @@ final class ReleaseShotsUITests: XCTestCase {
     }
 
     /**
-     * Three tabs, and Machines is not among them.
+     * Four tabs, and Machines is not among them.
      *
-     * *"maybe this machines thing can go inside the settings this page overall."*
-     * The assertion that matters is the **absence**: a fourth pill would look
-     * like a design decision rather than a regression, and it is the one thing
-     * here that a screenshot alone cannot settle, because "is that four or is
-     * that three" is exactly the question a small frame answers badly.
+     * Two of his decisions in one assertion, and they are from different
+     * recordings. *"Maybe this machines thing can go inside the settings this
+     * page overall"* took Machines off the bar; *"a fourth pill, and the copilot
+     * goes leftmost"* put the copilot on it. The count was three between those
+     * two moments and this file asserted three; it is four now, which is the
+     * later answer and the one that ships.
+     *
+     * The assertion that matters is still the **absence** of Machines, because
+     * a pill that came back would look like a design decision rather than a
+     * regression — and "is that four or is that three" is exactly the question a
+     * small frame answers badly, which is why the count is here rather than left
+     * to the screenshot beside it.
      */
-    private func threeTabsAndMachinesIsNotOneOfThem() throws {
+    private func fourTabsAndMachinesIsNotOneOfThem() throws {
         let bar = app.tabBars.firstMatch
         XCTAssertTrue(bar.waitForExistence(timeout: 20), "the tab bar should be on the session list")
-        for name in ["Sessions", "Localhost", "Settings"] {
+        for name in ["Copilot", "Sessions", "Localhost", "Settings"] {
             XCTAssertTrue(bar.buttons[name].exists, "\(name) should be a tab")
         }
-        XCTAssertEqual(bar.buttons.count, 3, "three tabs, no more")
+        XCTAssertEqual(bar.buttons.count, 4, "four tabs, no more")
         XCTAssertFalse(bar.buttons["Machines"].exists, "Machines moved into Settings")
-        capture("01-three-tabs")
+        capture("01-four-tabs")
     }
 
     /**
@@ -224,7 +231,7 @@ final class ReleaseShotsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Basket"].waitForExistence(timeout: 15),
                       "Back should actually go back")
         app.buttons["localhost.done"].tap()
-        XCTAssertTrue(app.buttons["localhost.refresh"].waitForExistence(timeout: 15),
+        XCTAssertTrue(app.buttons["localhost.open"].waitForExistence(timeout: 15),
                       "Done should return to the list")
     }
 
@@ -232,15 +239,35 @@ final class ReleaseShotsUITests: XCTestCase {
      * A session, with no pill over the bottom of its output.
      *
      * *"when this keyboard is down, see the pill is still there. So inside the
-     * session we don't need the pill."* Two assertions, because his complaint had
-     * two halves and only one of them is about the bar existing: the pill is gone,
-     * **and** the terminal now reaches the bottom of the window rather than
-     * stopping where the pill used to be. A screen that hid the bar and left the
-     * inset behind would satisfy the first and none of the point.
+     * session we don't need the pill."* The keyboard is put away first,
+     * deliberately — it is the exact frame he was looking at when he said it, and
+     * it is the state in which the pill used to be drawn over the last three rows
+     * of output.
      *
-     * The keyboard is put away first, deliberately — it is the exact frame he was
-     * looking at when he said it, and it is the state in which the pill used to be
-     * drawn over the last three rows of output.
+     * ## What this used to assert, and why the number came out
+     *
+     * There were two assertions here and the second one was a measurement: the
+     * gap between the bottom of the window and the bottom of the terminal had to
+     * be **under 40 points**, on the reasoning that the pill's band is about
+     * sixty, so anything smaller proved the band was not being reserved.
+     *
+     * It was the wrong instrument, because a *correct* screen also changes that
+     * distance. A phone with a home indicator owes the system the last 34 points,
+     * and a terminal that respects them measures 34 — inside the same window the
+     * old assertion allowed, and indistinguishable from a terminal drawn flat onto
+     * the indicator, which measures 0. So the check could not tell the fix from
+     * the bug, and when the safe-area inset went missing — which is what
+     * `.ignoresSafeArea(.container, edges: .bottom)` did to it while it was
+     * removing the pill's band — this assertion had nothing to say. He reported
+     * it instead: *"at the bottom we cannot see some stuff… leave a little space
+     * when the keyboard is off."*
+     *
+     * So the pill's absence is now stated as the pill's absence, which is a
+     * question about the accessibility tree with exactly one answer, and the
+     * distance is left to the two places that can say something true about it:
+     * `TerminalContainerTests`, which measures the inset on a real layout against
+     * a stated safe area, and `TerminalBottomInsetUITests`, which photographs it
+     * on a running phone in both keyboard states.
      */
     private func aSessionHasNoPillOverItsOutput() throws {
         app.openSessionsTab()
@@ -263,24 +290,24 @@ final class ReleaseShotsUITests: XCTestCase {
         if app.buttons["keys.dismiss"].exists { app.buttons["keys.dismiss"].tap() }
         sleep(2)
 
+        /*
+         * The pill, said as the pill.
+         *
+         * `tabBars` is the whole claim and it does catch the original regression:
+         * when `.toolbar(.hidden, for: .tabBar)` was written on the screen rather
+         * than on the `TabView`, the bar was still drawn — so it was still in the
+         * tree, and this line would have gone red. Nothing here measures a
+         * distance any more; see the header for what that measurement could and
+         * could not tell apart.
+         */
         XCTAssertFalse(app.tabBars.firstMatch.exists, "the pill should be gone inside a session")
 
-        /*
-         * How close to the bottom is close enough, and why it is a number.
-         *
-         * The floating pill on iOS 26 is about 50 points tall and sits about 20
-         * above the bottom safe-area edge, so a terminal that stopped short of it
-         * would end at least 60 points up. 40 is comfortably below that and
-         * comfortably above the home indicator's own inset, which the terminal
-         * does still respect — the ask was "the output is not covered", not "draw
-         * underneath the system's own affordance".
-         */
+        // The frame, for the person deciding whether to ship — with the numbers
+        // beside it, because "is the bottom of that terminal in the right place"
+        // is a question a small screenshot answers badly.
         let window = app.windows.element(boundBy: 0).frame
-        let gap = window.maxY - terminal.frame.maxY
-        XCTAssertLessThan(gap, 40,
-                          "the terminal stops \(gap) points short of the bottom — the pill's inset "
-                          + "is still being reserved")
-        add(XCTAttachment(string: "window \(window)  terminal \(terminal.frame)  gap \(gap)"))
+        add(XCTAttachment(string: "window \(window)  terminal \(terminal.frame)  "
+                          + "gap \(window.maxY - terminal.frame.maxY)"))
         capture("06-session-no-pill")
     }
 

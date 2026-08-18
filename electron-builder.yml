@@ -176,6 +176,14 @@ mac:
     NSDocumentsFolderUsageDescription: Terminal Deck opens coding projects stored in your Documents folder.
     NSDownloadsFolderUsageDescription: Terminal Deck opens coding projects stored in your Downloads folder.
     NSRemovableVolumesUsageDescription: Terminal Deck opens coding projects stored on external drives.
+    # Without this key macOS *terminates* the process the first time anything
+    # touches the microphone — it does not prompt and it does not fail, it kills
+    # the app. It is declared here rather than at the moment dictation is built
+    # because that failure is silent from inside the renderer, and a crash on
+    # first use is not something to discover from a bug report. The microphone
+    # itself is still gated behind a working transcription key: see
+    # `src/main/voice.ts`.
+    NSMicrophoneUsageDescription: Terminal Deck records your voice only while you hold the microphone button, and sends it to the transcription service whose key you set.
 
 win:
   # Restated in full for the same reason as `mac:` above: a platform `files`

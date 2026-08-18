@@ -18,6 +18,14 @@ const fakeSession = {
     cleared.push(options)
   },
   registerPreloadScript: () => 'preload-id',
+  // The three the hardening in `browser-profiles.ts` calls. This module now
+  // reaches its session through the active profile, and a profile is hardened
+  // the moment it is minted — so a fake that cannot be hardened is a fake this
+  // module cannot use, which is the honest shape of the dependency rather than
+  // an inconvenience to be mocked away.
+  setPermissionRequestHandler: () => undefined,
+  setPermissionCheckHandler: () => undefined,
+  on: () => fakeSession,
   cookies: {
     get: async (filter: { domain?: string }) =>
       filter.domain ? stored.filter((c) => c.domain.endsWith(filter.domain ?? '')) : stored,

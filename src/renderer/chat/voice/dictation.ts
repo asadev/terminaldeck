@@ -1,6 +1,8 @@
 /**
- * Dictation into the composer, and why it is the operating system's and not
- * ours.
+ * What this window's own speech recognition can do — which is nothing — and the
+ * small text helpers dictation still needs.
+ *
+ * ## The measurement that decided the architecture
  *
  * The obvious build is the Web Speech API: `SpeechRecognition` exists in this
  * Electron's Chromium, so a microphone button looks like twenty lines of work.
@@ -18,17 +20,27 @@
  *    `https://www.google.com/speech-api/full-duplex/v1`, which answers only for
  *    builds carrying Google's API keys. Electron ships none, and no
  *    configuration in this repo can add them.
- *  - Microphone authorisation for the app reads `not-determined`, and the
- *    packaged bundle declares no `NSMicrophoneUsageDescription` — on macOS,
- *    touching the microphone without that key terminates the process rather
- *    than prompting.
  *
- * So there is no recording state to render, no level to meter and no stop to
- * offer. What there is: macOS Dictation types into whatever text field has
- * focus, including this one, needs no permission from this app, and is already
- * enabled on the machine this was written on. The button therefore does the one
- * useful mechanical thing — puts the caret in the composer — and says plainly
- * where the microphone lives.
+ * So recognition is not asked of the browser. `MediaRecorder` and `getUserMedia`
+ * are a different story — those are ordinary capture and they work — and the
+ * recognition happens where it can: at a transcription service, behind a key the
+ * user supplies. `DictateButton.tsx` does the recording, `transcription.ts`
+ * decides whether there is a microphone at all, and `src/main/voice.ts` makes
+ * the request.
+ *
+ * ## What is left in this file
+ *
+ * The `speechSupport` probe, because a future Electron in which this starts
+ * working should be *noticed* rather than assumed, and two text helpers the
+ * composer uses. What has gone is the guidance popover: the button used to
+ * explain where macOS keeps its own dictation instead of recording, and there is
+ * no longer anything to explain.
+ *
+ * The fourth measurement from the original pass — that the packaged bundle
+ * declared no `NSMicrophoneUsageDescription`, so touching the microphone would
+ * terminate the process rather than prompt — is the one thing here that has been
+ * *fixed* rather than worked around. The key and the audio-input entitlement are
+ * in `electron-builder.yml` and `build/entitlements.mac.plist`.
  */
 
 /** Whether the Web Speech constructor exists at all. */
@@ -53,53 +65,12 @@ export function speechSupport(scope: SpeechScope | undefined = globalThis as Spe
   return typeof ctor === 'function' ? 'present-but-silent' : 'missing'
 }
 
+/**
+ * Whether this is a Mac, for the one settings row that still names an operating
+ * system.
+ */
 export function isMac(userAgent: string): boolean {
   return /Mac|iPhone|iPad/.test(userAgent)
-}
-
-export interface DictationGuidance {
-  /** Sentence one: where dictation comes from. */
-  summary: string
-  /** The steps, in order, each short enough to read at a glance. */
-  steps: string[]
-  /** Why it is not in this window. Shown smaller, and only once asked for. */
-  reason: string
-}
-
-const WHY_NOT_IN_APP =
-  'Speech recognition in this window would need Chrome’s own speech service, which Electron does not ship — it starts and then stays silent forever, so there is no honest recording state to show.'
-
-/**
- * The guidance the popover renders.
- *
- * The macOS shortcut is deliberately not asserted: this machine has the
- * Dictation hotkey unbound in `com.apple.symbolichotkeys`, so "press Fn twice"
- * would have been confidently wrong. The Edit menu item is always present —
- * macOS appends it to any app with a standard Edit menu, and this app has one.
- */
-export function dictationGuidance(userAgent: string): DictationGuidance {
-  if (isMac(userAgent)) {
-    return {
-      summary: 'Dictation comes from macOS and types straight into this box.',
-      steps: [
-        'The composer is focused, ready for it.',
-        'Choose Edit ▸ Start Dictation in the menu bar.',
-        'Or use the shortcut set in System Settings ▸ Keyboard ▸ Dictation.',
-        'Speak. Stop the same way, then edit before sending.',
-      ],
-      reason: WHY_NOT_IN_APP,
-    }
-  }
-  return {
-    summary: 'Dictation comes from the operating system and types into this box.',
-    steps: [
-      'The composer is focused, ready for it.',
-      'On Windows, press Win + H.',
-      'On Linux, use whichever dictation tool your desktop provides.',
-      'Speak. Stop the same way, then edit before sending.',
-    ],
-    reason: WHY_NOT_IN_APP,
-  }
 }
 
 /**

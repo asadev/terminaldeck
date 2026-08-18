@@ -162,4 +162,128 @@ final class TerminalBridgeTests: XCTestCase {
 
         XCTAssertEqual(sent, "after")
     }
+
+    // MARK: - The appearance
+
+    /**
+     * A terminal in a window, which is the only place trait changes happen.
+     *
+     * Worth its own helper and its own paragraph, because the first version of
+     * these tests set `overrideUserInterfaceStyle` on the bare view and measured
+     * nothing changing — and concluded, wrongly, that the mechanism did not
+     * work. On iOS 17 and later a view outside a window hierarchy does not get
+     * its trait collection updated at all: `traitCollection.userInterfaceStyle`
+     * stayed `.light` through both settings and no change handler ran. Put the
+     * same view in a window and the same code is correct.
+     *
+     * So the window is not scaffolding, it is the fixture: the app's terminal is
+     * always in one, and a test that skipped it would be asking a question the
+     * product never asks.
+     */
+    private func hosted() -> (bridge: TerminalBridge, window: UIWindow) {
+        let bridge = TerminalBridge()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let root = UIViewController()
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        bridge.view.frame = root.view.bounds
+        root.view.addSubview(bridge.view)
+        window.layoutIfNeeded()
+        return (bridge, window)
+    }
+
+    /// Change the appearance the way the window does when the setting moves, and
+    /// let UIKit run the update cycle that propagates it.
+    private func switchTo(_ style: UIUserInterfaceStyle, _ window: UIWindow) {
+        window.overrideUserInterfaceStyle = style
+        window.layoutIfNeeded()
+    }
+
+    /**
+     * The terminal repaints when the appearance changes, and this is the one
+     * test in the suite that could not have been written by reasoning about the
+     * code.
+     *
+     * SwiftTerm does not keep a `UIColor`. `nativeForegroundColor`'s setter runs
+     * `getTerminalColor()` on the value it is given and stores the result in
+     * `terminal.foregroundColor` as a 16-bit RGB struct, and `installColors`
+     * does the same to the ANSI set. So handing the emulator a colour built from
+     * a `dynamicProvider` — which is exactly what works for every other UIKit
+     * view in this app — resolves it once and freezes it. The symptom is a phone
+     * switched to Light whose chrome changes and whose terminal does not: no
+     * crash, no warning, and correct-looking in whichever appearance the app
+     * happened to launch in.
+     */
+    func testTheTerminalsPaperAndInkFollowTheAppearance() {
+        let (bridge, window) = hosted()
+
+        switchTo(.dark, window)
+        let darkPaper = bridge.view.getTerminal().backgroundColor
+        let darkInk = bridge.view.getTerminal().foregroundColor
+
+        switchTo(.light, window)
+        let lightPaper = bridge.view.getTerminal().backgroundColor
+        let lightInk = bridge.view.getTerminal().foregroundColor
+
+        XCTAssertNotEqual(darkPaper, lightPaper, "the terminal's paper did not follow the appearance")
+        XCTAssertNotEqual(darkInk, lightInk, "the terminal's ink did not follow the appearance")
+
+        // And it is the *right* paper rather than merely a different one: the
+        // light value is the desktop's own `--terminal-bg`, so the two products'
+        // terminals are one colour.
+        XCTAssertEqual(lightPaper.red / 257, 0xe8)
+        XCTAssertEqual(lightPaper.green / 257, 0xe8)
+        XCTAssertEqual(lightPaper.blue / 257, 0xe8)
+        XCTAssertEqual(darkPaper.red / 257, 0x12)
+    }
+
+    /**
+     * And so does the ANSI palette — asked of the emulator rather than of this
+     * app's own constants.
+     *
+     * OSC 4 with a `?` is the escape sequence a program uses to ask a terminal
+     * what colour *n* currently is, and the answer comes back through the same
+     * channel a keystroke does. So this reads the palette the emulator will
+     * actually paint with, which is the thing that was frozen: `installColors`
+     * flattens sixteen `UIColor`s into sixteen structs, and nothing re-runs it
+     * unless something asks.
+     *
+     * Colour 2 is green because green is the one an agent's diff uses on every
+     * line it adds, and because it is one of the nine that had to move for the
+     * light theme — the desktop's `#4e9a06` is 2.9:1 on paper.
+     */
+    func testTheAnsiPaletteFollowsTheAppearance() {
+        let (bridge, window) = hosted()
+        var replies = ""
+        bridge.onInput = { replies += $0 }
+
+        switchTo(.dark, window)
+        replies = ""
+        bridge.feed("\u{1b}]4;2;?\u{1b}\\")
+        let dark = replies
+
+        switchTo(.light, window)
+        replies = ""
+        bridge.feed("\u{1b}]4;2;?\u{1b}\\")
+        let light = replies
+
+        // `formatAsXcolor` writes each channel as four hex digits, and
+        // `init(red8:)` widens by 257 — so #4e9a06 comes back as 4e4e/9a9a/0606.
+        XCTAssertTrue(dark.contains("4e4e/9a9a/0606"),
+                      "dark ANSI green should be the desktop's #4e9a06; the terminal said \(dark.debugDescription)")
+        XCTAssertTrue(light.contains("3b3b/7474/0505"),
+                      "light ANSI green should be the walked-down #3b7405; the terminal said \(light.debugDescription)")
+    }
+
+    /// Going back is not a special case, and a stuck value would only show on
+    /// the second change — which is where a cache that was cleared once and not
+    /// again would hide.
+    func testTheTerminalFollowsTheAppearanceBackAgain() {
+        let (bridge, window) = hosted()
+        switchTo(.light, window)
+        let paper = bridge.view.getTerminal().backgroundColor
+        switchTo(.dark, window)
+        switchTo(.light, window)
+        XCTAssertEqual(bridge.view.getTerminal().backgroundColor, paper)
+    }
 }

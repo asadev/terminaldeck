@@ -26,35 +26,61 @@
  * is flattened rather than wrapped, and `InspectScript` for what runs inside the
  * page. It is the desktop's `CapturePanel` feature, from the sofa.
  *
- * ## It is pushed, and it wears exactly one bar
+ * ## It is pushed, and the chrome is the platform's
  *
  * This was a `fullScreenCover` and it rose from the bottom edge. Asad: *"it
  * should not come like this up. It should just move like this when we click on
  * localhost page. It comes like this, which is a bit different, feels like a
  * browser opens inside. So give it a native feel, not like this."* It is a
  * `navigationDestination` now — see `LocalhostListView` — so it slides in from
- * the trailing edge and the system's back-swipe pops it.
+ * the trailing edge.
  *
- * Two bars follow from that and both are turned off:
+ * That was not enough, and he said so again: *"localhost browsing is still not
+ * native on iOS."* Two things were left and they were one mistake made twice —
+ * this screen had taken over both of the places iOS owns:
  *
- *  - **The tab bar.** *"Pill should be on here… not inside the session and not
- *    also inside the localhost page."* A page is the whole reason you are here
- *    and it wants the height; the bar was sitting over the bottom of it pointing
- *    at somewhere else. That one is **not** turned off here: iOS 26 draws it as
- *    a floating pill owned by the `TabView` and ignores a `.toolbar` written on
- *    a pushed screen, so `DeckTabs` states it and this screen only reports that
- *    it is up — `DeckModel.localhostPageIsOpen`. `DeckChrome` holds the rule.
- *  - **The navigation bar.** The header below is already a browser's chrome —
- *    back, reload, where you are, inspect, Done — and he said of the last of
- *    those *"I think is on its correct place"*. A system bar above it would be
- *    94 points of chrome in two rows, and a second back button eleven points
- *    from the first one meaning something different. So this screen keeps its
- *    own bar and the system's is hidden.
+ *  - **The left edge belonged to the page.**
+ *    `allowsBackForwardNavigationGestures = true` handed the standard back
+ *    gesture to the web view's own history, so the single gesture everybody
+ *    reaches for to leave a pushed screen quietly did something else. It is off
+ *    now — see `BrowserBridge.init` — and page history is a button instead.
+ *  - **The navigation bar was hidden**, for a custom row carrying back, reload,
+ *    where you are, inspect and Done. The argument for hiding it was real: a
+ *    system bar above that row is 94 points of chrome in two rows, with two back
+ *    buttons eleven points apart meaning different things. The price was the
+ *    whole platform, though — no system chevron, no standard title, and no
+ *    interactive pop.
  *
- * Losing the system bar does **not** lose the way out. Done pops the stack, and
- * `allowsBackForwardNavigationGestures` gives the left edge to the *page's*
- * history, which is what a browser does with that gesture and what the back
- * button beside reload does with a tap.
+ * **The resolution is Safari's, and it dissolves the conflict rather than
+ * picking a side.** The navigation bar stays, so the chevron, the title and the
+ * pop gesture are the system's; the browser's own controls move to a **bottom**
+ * toolbar, which is where iOS has kept browser controls since the first iPhone.
+ * The two back buttons are no longer eleven points apart arguing over one
+ * meaning — they are at opposite ends of the screen and each is exactly where
+ * iOS says its meaning lives: leaving this screen is the chevron top left,
+ * going back a page is the chevron bottom left.
+ *
+ * Done is still last. *"Last button I think is on its correct place."*
+ *
+ * The **tab bar** is the one bar still turned off in here. *"Pill should be on
+ * here… not inside the session and not also inside the localhost page."* A page
+ * is the whole reason you are here and it wants the height; the pill sat over
+ * the bottom of it pointing somewhere else — and it would now be sitting on the
+ * toolbar this screen needs. It is not turned off in this file: iOS 26 draws it
+ * as a floating pill owned by the `TabView` and ignores a `.toolbar` written on
+ * a pushed screen, so `DeckTabs` states it and this screen only reports that it
+ * is up — `DeckModel.localhostPageIsOpen`. `DeckChrome` holds the rule.
+ *
+ * ## Forward exists because the gesture that used to do it does not
+ *
+ * `allowsBackForwardNavigationGestures` is one property and it buys two
+ * gestures: back on the left edge and **forward on the right**. Turning it off
+ * to give the left edge back to the system therefore also took away the only
+ * way this screen had of going forward, and a Back button that strands you is
+ * worse than no Back button — you tap it once by accident and the page you were
+ * reading is unreachable. So Forward is a button beside Back, disabled until
+ * there is somewhere to go, which is the pair Safari puts in the same corner.
+ * `BrowserBackTests` walks a real history through both of them.
  */
 
 import SwiftUI
@@ -63,6 +89,22 @@ import WebKit
 struct LocalhostBrowser: View {
     let model: DeckModel
     let tunnel: PortTunnel
+    /**
+     * What to ask that origin for, first.
+     *
+     * `"/"` for every row on the list, which is what a tap on a port has always
+     * meant. Anything else comes from the address field the `+` opens — see
+     * `LocalhostAddress` — and it is the reason that field exists at all: the
+     * thing somebody is working on is very often at `/admin` rather than at the
+     * root, and until there was somewhere to type a path there was no way to
+     * reach it from this app at all.
+     *
+     * Resolved against the tunnel's own URL rather than concatenated, so the
+     * loopback literal the tunnel actually managed to bind is kept — it is
+     * `127.0.0.1` on most phones and `[::1]` where the v4 bind lost a race, and
+     * a hand-built string would guess the wrong one about one time in a hundred.
+     */
+    var path: String = "/"
     let dismiss: () -> Void
 
     @State private var browser = BrowserBridge()
@@ -73,8 +115,26 @@ struct LocalhostBrowser: View {
             Theme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                header
-                Divider().overlay(Theme.hairline)
+                /*
+                 * The load bar sits under the navigation bar, which is where a
+                 * browser has always put it and is now the only place it can go:
+                 * this screen has no header of its own to hang it off any more.
+                 * A page coming over a phone connection to a laptop is not
+                 * instant, and a tap that shows nothing for two seconds reads as
+                 * a dead tap.
+                 */
+                if browser.loading {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .tint(Theme.accent)
+                        .accessibilityIdentifier("localhost.loading")
+                }
+
+                if browser.inspecting {
+                    inspectHint
+                    Divider().overlay(Theme.hairline)
+                }
+
                 content
             }
 
@@ -95,9 +155,142 @@ struct LocalhostBrowser: View {
                 .allowsHitTesting(false)
             }
         }
-        .preferredColorScheme(.dark)
-        // One bar on this screen, and it is the one below. See the header.
-        .toolbar(.hidden, for: .navigationBar)
+        /*
+         * The system's navigation bar, stated rather than left to inherit.
+         *
+         * This line used to be `.toolbar(.hidden, for: .navigationBar)` and its
+         * removal is the whole of what he asked for — see the file header. The
+         * title is given as well as the principal view below it because
+         * `navigationTitle` is what names the **back button on the screen that
+         * pushes this one**, and what VoiceOver reads when the bar is focused; a
+         * principal view replaces the drawing, not the identity.
+         */
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Where you are, in the slot the system reserves for exactly that.
+            ToolbarItem(placement: .principal) { header }
+
+            /*
+             * The browser's controls, along the bottom, in the order he blessed
+             * — page back, forward, reload, inspect, **Done last**.
+             *
+             * `Spacer()` between every pair rather than a block at one end.
+             * Inside a `ToolbarItemGroup` a Spacer becomes a UIToolbar flexible
+             * space, so the five spread evenly across the bar and each one keeps
+             * a thumb-sized share of it; grouped at the leading edge they would
+             * be five 15-point glyphs in a row, which is the desktop's spacing
+             * on a surface nobody clicks with a mouse.
+             *
+             * No `.font` on any of them, deliberately. The point of moving into
+             * the system's bar is that the system sizes, spaces and tints what
+             * is in it; a hand-set 15pt semibold here would be this screen
+             * disagreeing with every other bottom bar on the phone about what a
+             * toolbar button looks like.
+             */
+            ToolbarItemGroup(placement: .bottomBar) {
+                /*
+                 * The page's own Back — and it works now.
+                 *
+                 * Asad: *"the back button here doesn't work at all next to
+                 * refresh. So it should be working also."* The button was wired
+                 * to `goBack()` the whole time and the wiring was never the
+                 * problem: `canGoBack` was only ever re-read from the navigation
+                 * delegate, which does not fire for a same-document navigation.
+                 * Every dev server this feature exists to look at is a
+                 * single-page app, every route change in one is `pushState`, and
+                 * so on the pages he was testing this button was permanently
+                 * disabled no matter how far into the site he had clicked. A
+                 * disabled chevron and a dead one look identical.
+                 *
+                 * `BrowserBridge` watches the web view through KVO now, so this
+                 * is live within a frame of the page's own history changing —
+                 * and still genuinely disabled when there is nowhere to go,
+                 * which is the honest state for the first page of a site.
+                 */
+                Button {
+                    browser.goBack()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(!browser.canGoBack)
+                .accessibilityLabel("Back")
+                .accessibilityIdentifier("localhost.back")
+
+                Spacer()
+
+                // Forward, because the right-edge swipe that used to do this
+                // went out with the left-edge one — they are a single property.
+                // See the file header.
+                Button {
+                    browser.goForward()
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(!browser.canGoForward)
+                .accessibilityLabel("Forward")
+                .accessibilityIdentifier("localhost.forward")
+
+                Spacer()
+
+                Button {
+                    browser.reload()
+                } label: {
+                    Image(systemName: browser.loading ? "xmark" : "arrow.clockwise")
+                }
+                .disabled(!isLive)
+                .accessibilityLabel(browser.loading ? "Stop loading" : "Reload")
+                .accessibilityIdentifier("localhost.reload")
+
+                Spacer()
+
+                /*
+                 * Inspect.
+                 *
+                 * A toggle rather than a mode you enter and leave through a
+                 * menu, because it is the one control on this screen anybody
+                 * reaches for twice in a row: tap an element, say what to change,
+                 * tap the next one. Filled while it is on, so a tap that
+                 * cancels a link instead of following it is explained by
+                 * something visible rather than looking like a broken page.
+                 */
+                Button {
+                    browser.setInspecting(!browser.inspecting)
+                } label: {
+                    Image(systemName: browser.inspecting
+                          ? "square.dashed.inset.filled"
+                          : "square.dashed")
+                }
+                .disabled(!isLive)
+                .accessibilityLabel(browser.inspecting ? "Stop inspecting" : "Inspect an element")
+                .accessibilityIdentifier("localhost.inspect")
+
+                Spacer()
+
+                /*
+                 * Done, and it is not the chevron said twice.
+                 *
+                 * The chevron in the navigation bar leaves this screen; so does
+                 * this. That is duplication and it is the good kind: the chevron
+                 * is how iOS leaves any pushed screen and belongs to the system,
+                 * while Done is the sentence this screen wants to end with —
+                 * *I have finished with this page* — and closing it is what
+                 * takes the Mac's socket down. Both go through the same path:
+                 * whichever way this screen goes away, `LocalhostListView`
+                 * notices the destination is gone and closes the tunnel.
+                 *
+                 * He asked for it to stay where it is. *"Last button I think is
+                 * on its correct place."*
+                 */
+                Button("Done") {
+                    // Closing the view is the whole of the teardown: the
+                    // listener goes, the Mac's socket goes, and the port is
+                    // unreachable again until it is tapped.
+                    dismiss()
+                }
+                .accessibilityIdentifier("localhost.done")
+            }
+        }
         // Presented off a flag rather than off the capture itself. `.sheet(item:)`
         // tears the sheet down and builds a new one whenever the identity changes,
         // and Wider/Narrower change the capture on every press — which would make
@@ -124,10 +317,10 @@ struct LocalhostBrowser: View {
             // nothing is bound to yet gets a connection-refused page cached
             // against that URL, and the reload after it looks like the site is
             // broken rather than like it was early.
-            if case let .live(url) = phase { browser.load(url) }
+            if case let .live(url) = phase { browser.load(first(url)) }
         }
         .onAppear {
-            if case let .live(url) = tunnel.phase { browser.load(url) }
+            if case let .live(url) = tunnel.phase { browser.load(first(url)) }
         }
         .onDisappear {
             // The handler holds the page's only way back into this app, and the
@@ -140,6 +333,27 @@ struct LocalhostBrowser: View {
         // `RootView` presents from, so the one copy up there reaches it. Two
         // copies of a sheet bound to the same optional is how one question gets
         // asked twice.
+    }
+
+    /**
+     * The first page: the tunnel's origin with `path` resolved against it.
+     *
+     * `URL(string:relativeTo:)` rather than string concatenation, so that the
+     * loopback literal the tunnel bound is preserved and a query or a fragment
+     * survives. It returns nil for a path it cannot parse — which cannot happen
+     * for anything `LocalhostAddress` produced, since that only ever emits a
+     * string it built from a parsed `URL` — and the fallback is the origin
+     * itself, because a page at the root of the right server is a far better
+     * answer than nothing at all.
+     *
+     * `.absoluteURL` because a relative `URL` keeps its base, and `WKWebView`
+     * will load one perfectly well while `webView.url` reads back as the
+     * relative form — which the header above this screen would then print as the
+     * address.
+     */
+    private func first(_ origin: URL) -> URL {
+        guard path != "/", let resolved = URL(string: path, relativeTo: origin) else { return origin }
+        return resolved.absoluteURL
     }
 
     /// Copy, paste and "sent to an agent" are silent by nature; without this the
@@ -155,120 +369,65 @@ struct LocalhostBrowser: View {
 
     // MARK: - Chrome
 
+    /**
+     * Where you are, in the slot the navigation bar keeps for exactly that.
+     *
+     * The same two-line shape `TerminalScreen` puts in the same slot — what this
+     * thing is, then one mono line of what it *technically* is — and that
+     * consistency is worth more than either screen's own preference: the two
+     * places this app pushes you into are a session and a page, and they now
+     * name themselves the same way.
+     *
+     * Both lines are one line each and truncate rather than wrap, because the
+     * bar is 44 points tall and a title view that grows pushes the back button
+     * off the screen.
+     */
     private var header: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 12) {
-                /*
-                 * The page's own Back — and it works now.
-                 *
-                 * Asad: *"the back button here doesn't work at all next to
-                 * refresh. So it should be working also."* The button was wired
-                 * to `goBack()` the whole time and the wiring was never the
-                 * problem: `canGoBack` was only ever re-read from the navigation
-                 * delegate, which does not fire for a same-document
-                 * navigation. Every dev server this feature exists to look at is
-                 * a single-page app, every route change in one is `pushState`,
-                 * and so on the pages he was testing this button was permanently
-                 * disabled no matter how far into the site he had clicked. A
-                 * disabled chevron and a dead one look identical.
-                 *
-                 * `BrowserBridge` watches the web view through KVO now, so this
-                 * is live within a frame of the page's own history changing —
-                 * and still genuinely disabled when there is nowhere to go,
-                 * which is the honest state for the first page of a site.
-                 */
-                Button {
-                    browser.goBack()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .disabled(!browser.canGoBack)
-                .accessibilityLabel("Back")
-                .accessibilityIdentifier("localhost.back")
-
-                Button {
-                    browser.reload()
-                } label: {
-                    Image(systemName: browser.loading ? "xmark" : "arrow.clockwise")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .disabled(!isLive)
-                .accessibilityLabel(browser.loading ? "Stop loading" : "Reload")
-                .accessibilityIdentifier("localhost.reload")
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text(subtitle)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.faint)
-                        .lineLimit(1)
-                        // The interesting end of a URL is the path, not the
-                        // scheme, and every one of these starts with the same
-                        // eleven characters.
-                        .truncationMode(.head)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                /*
-                 * Inspect.
-                 *
-                 * A toggle rather than a mode you enter and leave through a
-                 * menu, because it is the one control on this screen anybody
-                 * reaches for twice in a row: tap an element, say what to change,
-                 * tap the next one. Filled while it is on, so a tap that
-                 * cancels a link instead of following it is explained by
-                 * something visible rather than looking like a broken page.
-                 */
-                Button {
-                    browser.setInspecting(!browser.inspecting)
-                } label: {
-                    Image(systemName: browser.inspecting
-                          ? "square.dashed.inset.filled"
-                          : "square.dashed")
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .disabled(!isLive)
-                .accessibilityLabel(browser.inspecting ? "Stop inspecting" : "Inspect an element")
-                .accessibilityIdentifier("localhost.inspect")
-
-                Button("Done") {
-                    // Closing the view is the whole of the teardown: the
-                    // listener goes, the Mac's socket goes, and the port is
-                    // unreachable again until it is tapped.
-                    dismiss()
-                }
-                .font(.system(size: 15, weight: .medium))
-                .accessibilityIdentifier("localhost.done")
-            }
-            .tint(Theme.accent)
-
-            if browser.inspecting {
-                HStack(spacing: 6) {
-                    Image(systemName: "hand.tap")
-                        .font(.system(size: 10))
-                    Text("Tap anything on the page to describe it.")
-                        .font(.system(size: 11))
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(Theme.accent)
-                .accessibilityIdentifier("localhost.inspectHint")
-            }
-
-            if browser.loading {
-                // A page over a phone connection to a laptop is not instant, and
-                // a tap that shows nothing for two seconds reads as a dead tap.
-                ProgressView().progressViewStyle(.linear).tint(Theme.accent)
-            }
+        VStack(spacing: 1) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Text(subtitle)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Theme.faint)
+                .lineLimit(1)
+                // The interesting end of a URL is the path, not the scheme, and
+                // every one of these starts with the same eleven characters.
+                .truncationMode(.head)
         }
+        // One element, so VoiceOver reads "<page> — <address>" as the one fact
+        // it is rather than stopping between two labels that only mean something
+        // together.
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("localhost.where")
+    }
+
+    /**
+     * What inspect mode is waiting for, said once, at the top of the page.
+     *
+     * At the top rather than beside the control that turned it on, which is now
+     * at the bottom: this is a sentence about *the page*, the page is what the
+     * eye is on, and a notice under the navigation bar is where iOS puts a
+     * sentence about what the screen is currently doing. The control says its
+     * own state where it lives — the glyph is filled while inspecting — so
+     * neither end of the screen is silent about it.
+     */
+    private var inspectHint: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "hand.tap")
+                .font(.system(size: 10))
+            Text("Tap anything on the page to describe it.")
+                .font(.system(size: 11))
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Theme.accent)
         .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, browser.loading ? 6 : 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface)
+        .accessibilityIdentifier("localhost.inspectHint")
     }
 
     @ViewBuilder
@@ -383,6 +542,7 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
     private(set) var address = ""
     private(set) var loading = false
     private(set) var canGoBack = false
+    private(set) var canGoForward = false
     /// A sentence for the failure overlay, or nil. Cleared on the next attempt.
     private(set) var failure: String?
 
@@ -423,7 +583,28 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         webView.navigationDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
+        /*
+         * **The left edge is the system's, not this page's.**
+         *
+         * `true` here is what made the screen feel wrong — *"localhost browsing
+         * is still not native on iOS"* — and it is worth being precise about
+         * why, because on its own the setting is perfectly reasonable and it is
+         * what a browser wants.
+         *
+         * On iOS the swipe from the left edge means one thing everywhere:
+         * **go back up the navigation stack**. This screen is pushed, so that
+         * gesture is how somebody leaves it — and with this property on, WebKit
+         * installs its own edge recognisers and wins, so the gesture instead
+         * walked the *page's* history and the screen would not leave at all.
+         * The one gesture nobody has to be taught was the one that did something
+         * unexpected, which is a worse outcome than the gesture not existing.
+         *
+         * So page history is a pair of buttons in the bottom toolbar and the
+         * edges belong to the platform. Stated as `false` rather than left to
+         * the default: this is a decision, `LocalhostChromeTests` pins it, and a
+         * missing line is indistinguishable from a line nobody thought about.
+         */
+        webView.allowsBackForwardNavigationGestures = false
         webView.isOpaque = false
         webView.backgroundColor = .black
         webView.scrollView.backgroundColor = .black
@@ -457,14 +638,17 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
      * moment and for exactly the same reason: a single-page app that routes with
      * `pushState` changes all three and tells the delegate nothing, so the
      * header would keep naming the page somebody left two taps ago.
+     * `canGoForward` joined them when Forward became a button rather than a
+     * right-edge swipe, and it would have had the identical bug for the
+     * identical reason had it been read anywhere else.
      *
-     * **Any of the three re-reads all three**, rather than each observer
+     * **Any of the four re-reads all four**, rather than each observer
      * updating only its own property. That is deliberate and it is what makes
-     * this robust rather than merely correct-looking: these are three
+     * this robust rather than merely correct-looking: these are four
      * notifications about one event, WebKit does not promise they arrive
      * together or in an order, and a `canGoBack` notification that is coalesced
      * away on some future release would otherwise silently bring back the exact
-     * bug this exists to fix. Re-reading three properties is free; being wrong
+     * bug this exists to fix. Re-reading four properties is free; being wrong
      * about the Back button is what he noticed.
      *
      * `[weak self]` in every block. The observations are owned by this object
@@ -478,6 +662,9 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         let options: NSKeyValueObservingOptions = [.initial, .new]
         observations = [
             webView.observe(\.canGoBack, options: options) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.refreshNavigationState() }
+            },
+            webView.observe(\.canGoForward, options: options) { [weak self] _, _ in
                 MainActor.assumeIsolated { self?.refreshNavigationState() }
             },
             webView.observe(\.title, options: options) { [weak self] _, _ in
@@ -502,6 +689,7 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
      */
     private func refreshNavigationState() {
         canGoBack = webView.canGoBack
+        canGoForward = webView.canGoForward
         title = webView.title ?? ""
         address = webView.url?.absoluteString ?? address
     }
@@ -538,6 +726,14 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
 
     func goBack() {
         if webView.canGoBack { webView.goBack() }
+    }
+
+    /// The other half of the pair. Guarded the same way and for the same reason:
+    /// the button is disabled when there is nowhere to go, and a method that
+    /// silently did nothing when called anyway would make a future bug in that
+    /// binding invisible.
+    func goForward() {
+        if webView.canGoForward { webView.goForward() }
     }
 
     // MARK: - Inspecting

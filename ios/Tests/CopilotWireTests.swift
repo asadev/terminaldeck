@@ -1,27 +1,39 @@
 /**
  * The `copilot` half of the wire, on this end.
  *
- * Five properties are pinned here, and each one is a way this feature could be
- * confidently wrong on screen — or, in two cases, wrong about a permission —
+ * Seven properties are pinned here, and each one is a way this feature could be
+ * confidently wrong on screen — or, in three cases, wrong about a permission —
  * while every other test in the suite passed.
  *
  * **No client frame carries a tool name.** The whole enforcement model rests on
  * it: the phone sends prose, the tool calls are made by a CLI on the desktop
  * holding a bearer token this phone does not have, and so *the set of frames a
- * phone can construct contains no tool at all*. Every other design has to
- * enumerate and deny. The corpus test at the foot of this file walks every
- * outbound case and asserts none of them can name one, so the day somebody adds
- * `copilot.tool` "just for a re-run button" is the day this fails.
+ * phone can construct contains no tool at all*. That survives the grant of
+ * `alter` unchanged — `copilot.answer` carries an id and a boolean, and the
+ * tool, the arguments and the effect were decided on the desktop before anybody
+ * was asked. The corpus test at the foot of this file walks every outbound case
+ * and asserts none of them can name one, so the day somebody adds `copilot.tool`
+ * "just for a re-run button" is the day this fails.
  *
  * **The grant collapses to nothing whenever it is not literally granted.**
  * Absent, malformed, `"true"`, `1`, a bare `true` — all of them are no access.
  * A JSON file a person may edit will eventually contain one of them, and the
  * difference between reading it as an intention and as a mistake is a difference
- * in who can drive an agent that spends money.
+ * in who can drive an agent that spends money and who can approve its changes.
  *
- * **`alter` cannot arrive.** It is not on the wire in any spelling, and a
- * desktop that sent one anyway must not produce a grant that has it. There is no
- * field for it to land in, and this is the test that says so out loud.
+ * **`alter` now arrives, and `open` decides nothing about it.** The tier is on
+ * the wire because the copilot is a separate connection; the connection is what
+ * carries the second factor. Both halves are read strictly.
+ *
+ * **`copilot.grant` carries `link`, not `grant`.** This client read the wrong
+ * key for a while against a desktop that has never sent it, which decodes as *no
+ * access* for every push — a connection would open and the phone would draw the
+ * not-connected screen over it.
+ *
+ * **A consent question keeps its arguments verbatim and in order.** Foundation's
+ * JSON reader loses both; `CopilotArguments` reads the frame a second time to
+ * get them back. A consent sheet that reshuffles somebody's arguments is showing
+ * them a different question from the one on the Mac.
  *
  * **A chat frame is dropped rather than merged when it belongs to another run.**
  * That is what the `run` field is for, and without it a run that ended while the
@@ -30,9 +42,8 @@
  *
  * **The two time formats on one frame are not swapped.** `ActionRow.at` is an
  * ISO string because `copilot-home.ts` writes ISO into the same file;
- * `ConsentRequest.requestedAt` and `expiresAt` are epoch numbers. Reading either
- * as the other produces a plausible-looking date and a countdown that is wrong
- * by decades.
+ * `requestedAt` and `expiresAt` are epoch numbers. Reading either as the other
+ * produces a plausible-looking date and a countdown that is wrong by decades.
  */
 
 import XCTest
@@ -40,20 +51,24 @@ import XCTest
 
 final class CopilotWireTests: XCTestCase {
 
-    // MARK: - The grant
+    // MARK: - The connection and the grant
 
-    func testAWelcomeCarriesTheGrantForThisDevice() {
+    func testAWelcomeCarriesThisDevicesConnection() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,
-         "sessions":[],"capabilities":["copilot"],"copilot":{"read":true,"act":true}}
-        """#), case let .welcome(_, _, _, _, _, capabilities, _, _, offer) = message else {
-            return XCTFail("a welcome with a copilot grant should decode")
+         "sessions":[],"capabilities":["copilot"],
+         "copilot":{"linked":true,"open":false,"grant":{"read":true,"act":true,"alter":true}}}
+        """#), case let .welcome(_, _, _, _, _, capabilities, _, _, connection) = message else {
+            return XCTFail("a welcome with a copilot connection should decode")
         }
         XCTAssertTrue(capabilities.contains(Copilot.capability))
-        XCTAssertTrue(offer.stated)
-        XCTAssertEqual(offer.grant, CopilotGrant(read: true, act: true))
-        XCTAssertTrue(offer.grant.canWatch)
-        XCTAssertTrue(offer.grant.canDirect)
+        XCTAssertTrue(connection.stated)
+        XCTAssertTrue(connection.linked)
+        XCTAssertFalse(connection.open, "a welcome never opens the copilot")
+        XCTAssertEqual(connection.grant, CopilotGrant(read: true, act: true, alter: true))
+        XCTAssertTrue(connection.grant.canWatch)
+        XCTAssertTrue(connection.grant.canDirect)
+        XCTAssertTrue(connection.grant.canAnswer)
     }
 
     /**
@@ -63,67 +78,67 @@ final class CopilotWireTests: XCTestCase {
      * *every extension this build knows how to serve* — against what its
      * injected objects can actually do, and the filter is a separate line of
      * code from the list it filters. `ios/Harness/host-standin.ts` skips the
-     * filter entirely and sends the list verbatim while implementing almost none
-     * of it, which is the shape that got an earlier localhost pass reported as
-     * verified against an empty screen.
+     * filter entirely and sends the list verbatim, which is the shape that got
+     * an earlier localhost pass reported as verified against an empty screen.
      *
      * The `copilot` field is the answer, because `copilotFrame()` on the desktop
-     * writes it only when a copilot layer exists — all-false and absent are
-     * different frames there on purpose. So a welcome that names the capability
-     * and says nothing in the field is a host advertising something it cannot
-     * serve, and the phone has to read it as "no copilot here" rather than as
-     * "you have not been given access", which would send somebody to a Mac to
-     * look for a switch that is not on it.
+     * writes it only when a copilot layer exists — a device with no connection
+     * and a machine with no copilot are different frames there on purpose. So a
+     * welcome that names the capability and says nothing in the field has to
+     * read as "no copilot here" rather than as "you are not connected", which
+     * would send somebody to a Mac to mint a code on a build that cannot.
      */
     func testTheCapabilityWithoutTheFieldIsNotACopilot() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,
          "sessions":[],"capabilities":["copilot","create","localhost","upload","credential","devserver"]}
-        """#), case let .welcome(_, _, _, _, _, capabilities, _, _, offer) = message else {
+        """#), case let .welcome(_, _, _, _, _, capabilities, _, _, connection) = message else {
             return XCTFail("the welcome should decode")
         }
         XCTAssertTrue(capabilities.contains(Copilot.capability), "it did advertise it")
-        XCTAssertFalse(offer.stated, "and it never showed one")
-        XCTAssertEqual(offer.grant, .none)
+        XCTAssertFalse(connection.stated, "and it never showed one")
+        XCTAssertEqual(connection, .silent)
     }
 
     /**
-     * An all-false field is a machine that **has** a copilot.
+     * An unconnected device still gets the object, and that is the point of it.
      *
-     * The whole reason the desktop sends the object rather than omitting it when
-     * the grant is empty, and the whole reason this end keeps the two apart. It
-     * is the ordinary case — copilot access is off for every device until
-     * somebody turns it on — and it is the one state a person can fix, so it has
-     * to reach the screen that says where.
+     * `linked: false` with an all-false grant is the ordinary state of every
+     * paired device — copilot access is a separate ceremony — and it is the one
+     * state a person can fix in thirty seconds. It has to reach the screen with
+     * the code field on it, which means it must not read the same as a machine
+     * that has no copilot at all.
      */
-    func testAnAllFalseFieldStillMeansTheMachineHasOne() {
+    func testAnUnconnectedDeviceStillLearnsTheMachineHasOne() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,
-         "sessions":[],"capabilities":["copilot"],"copilot":{"read":false,"act":false}}
-        """#), case let .welcome(_, _, _, _, _, _, _, _, offer) = message else {
+         "sessions":[],"capabilities":["copilot"],
+         "copilot":{"linked":false,"open":false,"grant":{"read":false,"act":false,"alter":false}}}
+        """#), case let .welcome(_, _, _, _, _, _, _, _, connection) = message else {
             return XCTFail("the welcome should decode")
         }
-        XCTAssertTrue(offer.stated)
-        XCTAssertTrue(offer.grant.isEmpty)
+        XCTAssertTrue(connection.stated)
+        XCTAssertFalse(connection.linked)
+        XCTAssertTrue(connection.grant.isEmpty)
     }
 
     /**
-     * A desktop that says nothing about the copilot has granted nothing.
+     * A desktop that says nothing about the copilot has connected nothing.
      *
      * The opposite call to `folders`, one field over, where absent means "this
-     * desktop predates per-device folder grants" and empty means "a person chose
-     * none" — two answers that lead to two screens. There is no such history
-     * here: nobody has ever had remote copilot access, so silence has only one
-     * honest reading.
+     * desktop predates per-device folder grants" and empty means "a person
+     * granted this device none" — two answers that lead to two screens. There is
+     * no such history here: nobody has ever had remote copilot access, so
+     * silence has only one honest reading.
      */
-    func testAWelcomeWithNoCopilotFieldGrantsNothing() {
+    func testAWelcomeWithNoCopilotFieldConnectsNothing() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,"sessions":[]}
-        """#), case let .welcome(_, _, _, _, _, _, _, _, offer) = message else {
+        """#), case let .welcome(_, _, _, _, _, _, _, _, connection) = message else {
             return XCTFail("a welcome without the field should still decode")
         }
-        XCTAssertEqual(offer, .silent)
-        XCTAssertTrue(offer.grant.isEmpty)
+        XCTAssertEqual(connection, .silent)
+        XCTAssertTrue(connection.grant.isEmpty)
     }
 
     /// A field this app cannot read is a machine that said nothing, not a
@@ -134,64 +149,160 @@ final class CopilotWireTests: XCTestCase {
             guard case let .ok(message, _) = WireCodec.decode(#"""
             {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,
              "sessions":[],"capabilities":["copilot"],"copilot":\#(liar)}
-            """#), case let .welcome(_, _, _, _, _, _, _, _, offer) = message else {
+            """#), case let .welcome(_, _, _, _, _, _, _, _, connection) = message else {
                 return XCTFail("\(liar) should still decode as a welcome")
             }
-            XCTAssertEqual(offer, .silent, "\(liar) is not a copilot")
-        }
-    }
-
-    /// Only literal `true` grants. `copilotGrantFrom` on the desktop makes the
-    /// same three refusals for the same reason, and this end refuses them again
-    /// rather than trusting that it did.
-    func testOnlyALiteralTrueGrantsAnything() {
-        let liars = [#"{"read":"true","act":"yes"}"#,
-                     #"{"read":1,"act":1}"#,
-                     #"{"read":"","act":"act"}"#,
-                     "true",
-                     "null",
-                     #"["read"]"#]
-        for liar in liars {
-            guard case let .ok(message, _) = WireCodec.decode(#"{"t":"copilot.grant","grant":\#(liar)}"#),
-                  case let .copilotGrant(grant) = message else {
-                return XCTFail("\(liar) should still decode as a frame")
-            }
-            XCTAssertEqual(grant, .none, "\(liar) is not a grant")
+            XCTAssertEqual(connection, .silent, "\(liar) is not a copilot")
         }
     }
 
     /**
-     * `alter` cannot arrive, however it is spelled.
+     * **`copilot.grant` carries `link`.**
      *
-     * `REMOTE_GRANTABLE_TIERS` is `['read', 'act']`, `set()` clamps it and
-     * `load()` scrubs it — and this end has no field for it either, which is the
-     * point of the assertion: a desktop that somehow sent one produces a grant
-     * with exactly the two booleans in it and nothing else.
+     * The frame is `{ t: 'copilot.grant', link: CopilotLinkWire }` — `linked`,
+     * `open` and the grant inside it. Reading `grant` off the top level, which
+     * is the key the previous design used, decodes every push as no access at
+     * all: the connection would open on the desktop and the phone would put the
+     * not-connected screen over it, with the Connect code field on a device that
+     * had just connected.
      */
-    func testAnAlterTierOnTheWireIsNotAGrant() {
+    func testAPushedGrantIsReadOffTheLinkAndOpensTheConnection() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
-        {"t":"copilot.grant","grant":{"read":true,"act":false,"alter":true}}
-        """#), case let .copilotGrant(grant) = message else {
+        {"t":"copilot.grant","link":{"linked":true,"open":true,
+         "grant":{"read":true,"act":true,"alter":false}}}
+        """#), case let .copilotGrant(connection) = message else {
             return XCTFail("the frame should decode")
         }
-        XCTAssertEqual(grant, CopilotGrant(read: true, act: false))
-        XCTAssertTrue(grant.canWatch)
-        XCTAssertFalse(grant.canDirect, "an alter that arrived anyway must not become act")
+        XCTAssertTrue(connection.stated)
+        XCTAssertTrue(connection.linked)
+        XCTAssertTrue(connection.open)
+        XCTAssertEqual(connection.grant, CopilotGrant(read: true, act: true, alter: false))
+        XCTAssertFalse(connection.grant.canAnswer, "act is not alter")
+    }
+
+    /// A disconnect is the same frame with `linked` false, and it has to be
+    /// distinguishable from "you have not been given enough access": the two
+    /// sentences send a person to two different controls, and only one of them
+    /// still exists on that machine.
+    func testADisconnectArrivesAsALinkThatIsNoLongerLinked() {
+        guard case let .ok(message, _) = WireCodec.decode(#"""
+        {"t":"copilot.grant","link":{"linked":false,"open":false,
+         "grant":{"read":false,"act":false,"alter":false}}}
+        """#), case let .copilotGrant(connection) = message else {
+            return XCTFail("the frame should decode")
+        }
+        XCTAssertFalse(connection.linked)
+        XCTAssertFalse(connection.open)
+        XCTAssertTrue(connection.grant.isEmpty)
+    }
+
+    /// Only a literal `true` grants anything, in any of the three tiers. The
+    /// desktop makes the same refusals; this end refuses again rather than
+    /// trusting that it did.
+    func testOnlyALiteralTrueGrantsAnything() {
+        let liars = [#"{"read":"true","act":"yes","alter":"true"}"#,
+                     #"{"read":1,"act":1,"alter":1}"#,
+                     #"{"read":"","act":"act","alter":"alter"}"#,
+                     "true",
+                     "null",
+                     #"["read"]"#]
+        for liar in liars {
+            guard case let .ok(message, _) =
+                    WireCodec.decode(#"{"t":"copilot.grant","link":{"linked":true,"open":true,"grant":\#(liar)}}"#),
+                  case let .copilotGrant(connection) = message else {
+                return XCTFail("\(liar) should still decode as a frame")
+            }
+            XCTAssertEqual(connection.grant, .none, "\(liar) is not a grant")
+        }
+    }
+
+    /**
+     * `open` is read as strictly as the tiers are.
+     *
+     * It is the gate in front of every other frame on this surface, so a `1` or
+     * a `"true"` from a host this build does not understand must not open a
+     * connection — the phone would subscribe, be refused, and show an error
+     * banner over a screen that looks connected.
+     */
+    func testOpenIsReadAsStrictlyAsAGrant() {
+        for liar in ["1", #""true""#, #""yes""#] {
+            guard case let .ok(message, _) = WireCodec.decode(#"""
+            {"t":"copilot.grant","link":{"linked":true,"open":\#(liar),"grant":{"read":true}}}
+            """#), case let .copilotGrant(connection) = message else {
+                return XCTFail("\(liar) should still decode")
+            }
+            XCTAssertFalse(connection.open, "\(liar) is not an open connection")
+        }
     }
 
     /**
      * `act` without `read` directs nothing.
      *
-     * Reachable from a hand-edited `remote-copilot.json` — `copilotGrantFrom`
-     * keeps whatever is literally `true` for each grantable tier and has no rule
-     * tying one to the other. Against a desktop that refuses the whole surface
-     * without `read`, drawing a composer for that grant would draw a control
-     * whose every message comes back `unauthorized`.
+     * Reachable from a hand-edited store — the desktop keeps whatever is
+     * literally `true` per tier and has no rule tying one to the other. Against
+     * a desktop that refuses the watching surface without `read`, drawing a
+     * composer for that grant would draw a control that can send a message into
+     * a screen showing no answer.
      */
     func testActWithoutReadIsNotAUsableGrant() {
-        let grant = CopilotGrant(read: false, act: true)
+        let grant = CopilotGrant(read: false, act: true, alter: false)
         XCTAssertFalse(grant.canWatch)
-        XCTAssertFalse(grant.canDirect, "read is the floor for the whole surface")
+        XCTAssertFalse(grant.canDirect, "read is the floor for the watching surface")
+    }
+
+    /**
+     * `canAnswer` is `alter` alone, exactly as the desktop's table spells it.
+     *
+     * This is the one place the client does *not* add `read` to the test,
+     * because `COPILOT_FRAME_TIER` does not: `copilot.answer` needs `alter` and
+     * nothing else. Adding a floor here would be this end inventing a rule the
+     * far end does not have — and the day somebody granted alter without read,
+     * the phone would refuse a frame the desktop would have taken.
+     */
+    func testAnsweringIsAlterAndNothingElse() {
+        XCTAssertTrue(CopilotGrant(read: false, act: false, alter: true).canAnswer)
+        XCTAssertFalse(CopilotGrant(read: true, act: true, alter: false).canAnswer)
+    }
+
+    // MARK: - The credential
+
+    /**
+     * `copilot.linked` carries the credential, once.
+     *
+     * The one frame on this wire with a secret in it, and there is no path on
+     * the desktop that can send it again — it keeps a scrypt hash. A frame
+     * missing it is refused rather than half-applied: storing an empty string
+     * would produce a phone that believes it is connected and is refused every
+     * frame afterwards, with nothing on either end saying why.
+     */
+    func testTheCredentialArrivesOnceAndIsRequired() {
+        guard case let .ok(message, _) = WireCodec.decode(#"""
+        {"t":"copilot.linked","credential":"c2VjcmV0LWJ5dGVz",
+         "link":{"linked":true,"open":true,"grant":{"read":true,"act":true,"alter":true}}}
+        """#), case let .copilotLinked(credential, connection) = message else {
+            return XCTFail("a linked frame should decode")
+        }
+        XCTAssertEqual(credential, "c2VjcmV0LWJ5dGVz")
+        XCTAssertTrue(connection.open, "redeeming opens this socket as well")
+        XCTAssertTrue(connection.grant.canAnswer)
+
+        guard case .failed = WireCodec.decode(#"""
+        {"t":"copilot.linked","link":{"linked":true,"open":true,"grant":{"read":true}}}
+        """#) else {
+            return XCTFail("a linked frame with no credential is not one")
+        }
+    }
+
+    /// And it is bounded here as well as there. `MAX_COPILOT_CREDENTIAL_CHARS`
+    /// exists so a caller that forgets to check a value cannot hand a megabyte
+    /// to a Keychain item; a cap only the far end enforces is not a cap.
+    func testAnOversizeCredentialIsRefused() {
+        let huge = String(repeating: "A", count: Copilot.maxCredentialChars + 1)
+        guard case .failed = WireCodec.decode(#"""
+        {"t":"copilot.linked","credential":"\#(huge)","link":{"linked":true,"open":true}}
+        """#) else {
+            return XCTFail("a credential longer than the cap is not one")
+        }
     }
 
     // MARK: - State
@@ -212,7 +323,7 @@ final class CopilotWireTests: XCTestCase {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"copilot.state","state":{"desk":"running","run":"01J8ZC4T9K5Q2V7XW3NHRF6MBD",
          "profile":"Work Claude","signedIn":true,"tools":14,"turnTokens":3200,"pending":2,
-         "grant":{"read":true,"act":true},"available":true,"reason":null}}
+         "grant":{"read":true,"act":true,"alter":true},"available":true,"reason":null}}
         """#), case let .copilotState(state) = message else {
             return XCTFail("a state frame should decode")
         }
@@ -224,7 +335,7 @@ final class CopilotWireTests: XCTestCase {
         XCTAssertEqual(state.tools, 14)
         XCTAssertEqual(state.turnTokens, 3200)
         XCTAssertEqual(state.pending, 2)
-        XCTAssertEqual(state.grant, CopilotGrant(read: true, act: true))
+        XCTAssertEqual(state.grant, CopilotGrant(read: true, act: true, alter: true))
         XCTAssertTrue(state.available)
         XCTAssertNil(state.reason, "a field the machine did not fill must stay absent")
     }
@@ -296,8 +407,9 @@ final class CopilotWireTests: XCTestCase {
      */
     func testAStateWithNoGrantDoesNotRevokeOne() {
         XCTAssertNil(WireCodec.copilotState(["desk": "running"])?.grant)
-        XCTAssertEqual(WireCodec.copilotState(["desk": "running", "grant": ["read": true, "act": false]])?.grant,
-                       CopilotGrant(read: true, act: false))
+        XCTAssertEqual(WireCodec.copilotState(["desk": "running",
+                                               "grant": ["read": true, "act": false, "alter": true]])?.grant,
+                       CopilotGrant(read: true, act: false, alter: true))
     }
 
     /**
@@ -492,22 +604,21 @@ final class CopilotWireTests: XCTestCase {
                      "a number is not this field — the two time formats on this wire are not swappable")
     }
 
-    // MARK: - Pending confirmations
+    // MARK: - Watching a confirmation
 
     /**
-     * A pending question, spelled as `CopilotPendingRow` spells it.
+     * A pending row, spelled as `CopilotPendingRow` spells it.
      *
-     * Five fields, and **no tier and no arguments**. An earlier draft of this
-     * client decoded both and drew a consent sheet around them; against the real
-     * desktop that sheet said "Permission: Not stated" over "With: No arguments"
-     * on every question it would ever show, which is a screen inviting a
-     * judgement it cannot support. The full request lives at the machine where
-     * it is answered — see the type's header, and the sheet now says so.
+     * Six fields, and **no tier and no arguments**. Watching a question is not
+     * judging it: the arguments of a pending alter call are a settings key and
+     * its new value, or a session id and the text about to be typed into it, and
+     * a device that cannot answer has no decision to make with them. A device
+     * that *can* gets them in full on `copilot.ask`.
      */
     func testAPendingQuestionIsTheDesktopsOwnRow() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"copilot.pending","questions":[{"id":"q1","tool":"settings.write",
-         "summary":"Change the theme to light",
+         "summary":"Change the theme to light","mine":true,
          "requestedAt":1755400000000,"expiresAt":1755400120000}]}
         """#), case let .copilotPending(questions) = message else {
             return XCTFail("a pending frame should decode")
@@ -518,17 +629,44 @@ final class CopilotWireTests: XCTestCase {
         XCTAssertEqual(question?.summary, "Change the theme to light")
         XCTAssertEqual(question?.requestedAt, 1_755_400_000_000)
         XCTAssertEqual(question?.expiresAt, 1_755_400_120_000)
+        XCTAssertEqual(question?.mine, true)
+    }
+
+    /**
+     * **`mine` is false unless the desktop literally said true.**
+     *
+     * It decides whether an Allow button exists. Of the two ways to be wrong,
+     * hiding a button that would have worked costs a walk to the desk, and
+     * showing one that cannot costs trust in every other button on the screen —
+     * so a `1`, a `"true"` and an absent field are all "somebody else's
+     * question".
+     */
+    func testMineIsFalseUnlessItIsLiterallyTrue() {
+        for liar in [#""true""#, "1", "null"] {
+            guard case let .ok(message, _) = WireCodec.decode(#"""
+            {"t":"copilot.pending","questions":[{"id":"q1","tool":"t","summary":"s",
+             "requestedAt":1,"expiresAt":2,"mine":\#(liar)}]}
+            """#), case let .copilotPending(questions) = message else {
+                return XCTFail("\(liar) should still decode")
+            }
+            XCTAssertEqual(questions.first?.mine, false, "\(liar) does not make it answerable here")
+        }
+        guard case let .ok(message, _) = WireCodec.decode(#"""
+        {"t":"copilot.pending","questions":[{"id":"q1","tool":"t","summary":"s",
+         "requestedAt":1,"expiresAt":2}]}
+        """#), case let .copilotPending(questions) = message else {
+            return XCTFail("a row with no `mine` should still decode")
+        }
+        XCTAssertEqual(questions.first?.mine, false, "absent is somebody else's question")
     }
 
     /**
      * A question with no summary is refused rather than drawn.
      *
-     * This is the assertion that matters most in the file. A prompt that arrives
-     * without enough context to judge it is a prompt that gets answered without
-     * being read — and while this phone has no answer button, the same principle
-     * applies to telling somebody to go and answer it at their Mac. A card
-     * saying only *"something needs you"* trains a person to walk over and click
-     * whatever is on screen.
+     * A prompt that arrives without enough context to judge it is a prompt that
+     * gets answered without being read. A card saying only *"something needs
+     * you"* trains a person to walk over and click whatever is on screen, which
+     * is the reflex Yes this whole design refuses to build.
      */
     func testAQuestionWithNothingToJudgeIsNotDrawn() {
         XCTAssertNil(WireCodec.copilotQuestion(["id": "q1", "tool": "settings.write"]),
@@ -543,13 +681,14 @@ final class CopilotWireTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_755_400_000)
         let question = CopilotQuestion(id: "q", tool: "t", summary: "s",
                                        requestedAt: 1_755_400_000_000,
-                                       expiresAt: 1_755_400_120_000)
+                                       expiresAt: 1_755_400_120_000,
+                                       mine: true)
         XCTAssertEqual(question.secondsLeft(now: now), 120)
         XCTAssertEqual(question.secondsLeft(now: now.addingTimeInterval(300)), 0,
                        "a lapsed question counts to zero, never below it")
 
         let undated = CopilotQuestion(id: "q", tool: "t", summary: "s",
-                                      requestedAt: 0, expiresAt: 0)
+                                      requestedAt: 0, expiresAt: 0, mine: false)
         XCTAssertNil(undated.secondsLeft(now: now), "no deadline is drawn when none was sent")
     }
 
@@ -566,6 +705,93 @@ final class CopilotWireTests: XCTestCase {
             return XCTFail("the frame should decode")
         }
         XCTAssertEqual(questions.count, 3)
+    }
+
+    // MARK: - Deciding a confirmation
+
+    /**
+     * `copilot.ask` carries everything needed to judge it, **in order**.
+     *
+     * The order is the assertion that matters. The desktop composes `args` in
+     * the tool's own declaration order, which is the order its own dialog shows;
+     * `JSONSerialization` hands this end an unordered dictionary, so without the
+     * second read in `CopilotArguments` this sheet and that dialog would show the
+     * same question in two different shapes — and two renderings of one consent
+     * prompt is how somebody approves one thing having read another.
+     */
+    func testAConsentQuestionKeepsItsArgumentsInTheToolsOwnOrder() {
+        guard case let .ok(message, _) = WireCodec.decode(#"""
+        {"t":"copilot.ask","question":{"id":"q1","tool":"settings.write","tier":"alter",
+         "summary":"Change the default agent to codex","origin":"device:d-7",
+         "requestedAt":1755400000000,"expiresAt":1755400120000,
+         "args":{"key":"defaultProvider","value":"codex","scope":"app","confirm":true}}}
+        """#), case let .copilotAsk(question) = message else {
+            return XCTFail("an ask should decode")
+        }
+        XCTAssertEqual(question.id, "q1")
+        XCTAssertEqual(question.tool, "settings.write")
+        XCTAssertEqual(question.tier, "alter")
+        XCTAssertEqual(question.summary, "Change the default agent to codex")
+        XCTAssertEqual(question.origin, "device:d-7")
+        XCTAssertTrue(question.fromADevice, "this phone's own run asked for it")
+        XCTAssertTrue(question.argumentsAreOrdered)
+        XCTAssertEqual(question.arguments.map(\.name), ["key", "value", "scope", "confirm"],
+                       "the tool's own order, not the dictionary's")
+        XCTAssertEqual(question.arguments.map(\.value), ["defaultProvider", "codex", "app", "true"],
+                       "verbatim — and a JSON true is `true`, not `1`")
+        XCTAssertEqual(question.secondsLeft(now: Date(timeIntervalSince1970: 1_755_400_060)), 60)
+    }
+
+    /// A window-origin question is the copilot at the desk, and it must not read
+    /// as this phone's own run. They are different things to be approving.
+    func testAWindowOriginIsNotThisPhonesRun() {
+        guard case let .ok(message, _) = WireCodec.decode(#"""
+        {"t":"copilot.ask","question":{"id":"q2","tool":"sessions.stop","tier":"alter",
+         "summary":"Stop “api”","origin":"window","requestedAt":1,"expiresAt":2,"args":{}}}
+        """#), case let .copilotAsk(question) = message else {
+            return XCTFail("an ask should decode")
+        }
+        XCTAssertFalse(question.fromADevice)
+        XCTAssertTrue(question.arguments.isEmpty, "a tool with no arguments is a real answer")
+    }
+
+    /// An ask with nothing to judge is refused, harder than a watch row is: this
+    /// is the sheet with the buttons on it, and a sheet that says *approve this*
+    /// with nothing to approve is the reflex-Yes machine.
+    func testAnAskWithNothingToJudgeIsRefused() {
+        guard case .failed = WireCodec.decode(#"""
+        {"t":"copilot.ask","question":{"id":"q1","tool":"settings.write","args":{}}}
+        """#) else {
+            return XCTFail("an ask with no summary must not draw a consent sheet")
+        }
+    }
+
+    /**
+     * `copilot.settled` says **where** it was answered.
+     *
+     * The whole reason the frame is not just a dismissal. First answer wins, and
+     * the surface that loses the race has to withdraw its sheet saying where it
+     * went — a dialog that disappears on its own teaches a person that the app
+     * does things behind their back.
+     */
+    func testASettlementSaysWhereItWasAnswered() {
+        guard case let .ok(message, _) = WireCodec.decode(#"""
+        {"t":"copilot.settled","settled":{"id":"q1","granted":true,"by":"window","reason":null}}
+        """#), case let .copilotSettled(settled) = message else {
+            return XCTFail("a settlement should decode")
+        }
+        XCTAssertTrue(settled.granted)
+        XCTAssertTrue(settled.atTheMachine)
+        XCTAssertFalse(settled.timedOut)
+
+        guard case let .ok(other, _) = WireCodec.decode(#"""
+        {"t":"copilot.settled","settled":{"id":"q2","granted":false,"by":null,"reason":"timeout"}}
+        """#), case let .copilotSettled(timeout) = other else {
+            return XCTFail("a timeout should decode")
+        }
+        XCTAssertTrue(timeout.timedOut, "nobody answered — which is a refusal, not an error")
+        XCTAssertFalse(timeout.granted)
+        XCTAssertEqual(timeout.reason, "timeout")
     }
 
     // MARK: - Sessions and the log
@@ -597,6 +823,7 @@ final class CopilotWireTests: XCTestCase {
 
     func testEveryVerbEncodesToTheNameTheDesktopParses() {
         let expected: [(ClientMessage, String)] = [
+            (.copilotBye, #"{"t":"copilot.bye"}"#),
             (.copilotAttach, #"{"t":"copilot.attach"}"#),
             (.copilotDetach, #"{"t":"copilot.detach"}"#),
             (.copilotState, #"{"t":"copilot.state"}"#),
@@ -608,6 +835,55 @@ final class CopilotWireTests: XCTestCase {
         ]
         for (message, wire) in expected {
             XCTAssertEqual(WireCodec.encode(message), wire)
+        }
+    }
+
+    /**
+     * The three ceremony frames, asserted field by field.
+     *
+     * Not compared as strings, unlike the single-key verbs above:
+     * `JSONSerialization.data(withJSONObject:)` does not promise a key order
+     * without `.sortedKeys` and does not deliver one either — this suite has seen
+     * the same two-key frame encode both ways round on one machine in one build.
+     */
+    func testTheCeremonyFramesCarryExactlyWhatTheyShould() {
+        func fields(_ message: ClientMessage) -> [String: Any] {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(WireCodec.encode(message).utf8)),
+                  let fields = object as? [String: Any] else { return [:] }
+            return fields
+        }
+
+        let connect = fields(.copilotConnect(code: "481902"))
+        XCTAssertEqual(connect["t"] as? String, "copilot.connect")
+        XCTAssertEqual(connect["code"] as? String, "481902")
+        XCTAssertEqual(connect.count, 2, "a connect is a verb and six digits")
+
+        let hello = fields(.copilotHello(credential: "c2VjcmV0"))
+        XCTAssertEqual(hello["t"] as? String, "copilot.hello")
+        XCTAssertEqual(hello["credential"] as? String, "c2VjcmV0")
+        XCTAssertEqual(hello.count, 2)
+    }
+
+    /**
+     * **A refusal travels as a field, never as an absence.**
+     *
+     * `credential.answer` writes its `remember` only when true, because the
+     * desktop reads it as `=== true` and a `false` there would be a field saying
+     * nothing. This is the opposite case and the difference is worth the
+     * asymmetry: `approved` *is* the decision, and a refusal that travelled as a
+     * missing key would be one lenient parser away from being an approval.
+     */
+    func testAnAnswerCarriesTheDecisionEitherWay() {
+        for approved in [true, false] {
+            guard let object = try? JSONSerialization.jsonObject(
+                    with: Data(WireCodec.encode(.copilotAnswer(id: "q1", approved: approved)).utf8)),
+                  let fields = object as? [String: Any] else {
+                return XCTFail("it should encode to an object")
+            }
+            XCTAssertEqual(fields["t"] as? String, "copilot.answer")
+            XCTAssertEqual(fields["id"] as? String, "q1")
+            XCTAssertEqual(fields["approved"] as? Bool, approved)
+            XCTAssertEqual(fields.count, 3, "an answer is a verb, a question and a decision")
         }
     }
 
@@ -650,23 +926,27 @@ final class CopilotWireTests: XCTestCase {
     /**
      * **The corpus test: no client frame can name a tool.**
      *
-     * The property that makes the enforcement airtight rather than exhaustive.
-     * Every outbound copilot frame is encoded and searched for any tool id in
-     * the desktop's catalogue; the phone's own vocabulary is prose, page sizes
-     * and row ids, and there is nothing in it a `DeckControl` dispatcher could
-     * read as a tool.
+     * The property that makes the enforcement airtight rather than exhaustive,
+     * and the one that had to survive the grant of `alter` intact. A device
+     * holding every tier still cannot *name a call*: it can say a sentence, and
+     * it can decide about a call the desktop composed. `copilot.answer` carries a
+     * question id and a boolean, and the tool, the arguments and the effect were
+     * all decided on that machine before anybody was asked anything.
      *
-     * It is written as a corpus rather than as a rule about types because the
-     * failure it guards against is a *new frame* — somebody adding
-     * `copilot.tool` for a "tap to re-run that" button, which is the first
-     * convenience feature anybody will ask for here and the one that breaks all
-     * of it. A new case with a tool id in it fails this the day it is written.
+     * Written as a corpus rather than as a rule about types because the failure
+     * it guards against is a *new frame* — somebody adding `copilot.tool` for a
+     * "tap to re-run that" button, which is the first convenience feature anybody
+     * will ask for here and the one that breaks all of it.
      *
      * The same shape as `wire-wording.test.ts` and `reachable.test.ts` on the
      * desktop: a property about text, pinned by walking text.
      */
     func testNoClientFrameCanNameATool() {
         let frames: [ClientMessage] = [
+            .copilotConnect(code: "481902"),
+            .copilotHello(credential: "c2VjcmV0LWJ5dGVz"),
+            .copilotBye,
+            .copilotAnswer(id: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", approved: true),
             .copilotAttach, .copilotDetach, .copilotState, .copilotSessions,
             .copilotLog(limit: Copilot.logPage, before: "01J8ZC4T9K5Q2V7XW3NHRF6MBD"),
             .copilotPending, .copilotStart,

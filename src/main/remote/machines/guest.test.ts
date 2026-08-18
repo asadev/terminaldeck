@@ -446,3 +446,116 @@ describe('stopping', () => {
     link.disconnect()
   })
 })
+
+/**
+ * Remote localhost, from the side that could not do it.
+ *
+ * `web.open` has been on this wire since the web client needed it, and until now
+ * only the web client sent it — so a Mac reaching a PC could list its sessions
+ * and had nothing at all to say about what that PC was serving. Both halves are
+ * gated on the far machine's advertisement rather than sent hopefully, which is
+ * the standing rule for every capability here and matters more for these two
+ * than for most: the far end answers an unadvertised verb by **closing the
+ * channel**, so a hopeful send is not a failed request, it is a disconnection.
+ */
+describe('what the far machine is serving', () => {
+  it('asks once, on the welcome, when that machine tunnels', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['create', 'localhost'] }))
+
+    // The hello, then the question. Asked here rather than when a panel opens,
+    // so the panel has a list the instant somebody looks at it.
+    const sent = rig.fakes[0].sent.map((text) => JSON.parse(text) as { t: string })
+    expect(sent.map((frame) => frame.t)).toEqual(['hello', 'ports'])
+  })
+
+  it('does not ask a machine that never offered it', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['create'] }))
+
+    expect(rig.fakes[0].sent.map((text) => (JSON.parse(text) as { t: string }).t)).toEqual(['hello'])
+    // And the refusal is local: the button is never drawn, so nothing can send
+    // the verb that would end the channel.
+    expect(link.ports()).toBe(false)
+  })
+
+  it('publishes the ports it is told about, dropping only the unreadable rows', async () => {
+    const { link, states, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['localhost'] }))
+    rig.fakes[0].say({
+      t: 'ports',
+      ports: [
+        { port: 5173, process: 'node', guessed: false },
+        { port: 8080, process: '', guessed: true },
+      ],
+    })
+
+    expect(link.state().ports).toEqual([
+      { port: 5173, process: 'node', guessed: false },
+      { port: 8080, process: '', guessed: true },
+    ])
+    expect(states.at(-1)?.ports).toHaveLength(2)
+  })
+
+  it('forgets them when the link drops', async () => {
+    // A port list describes what is running on a machine, and the most likely
+    // reason a link dropped is that the machine stopped. Rows left on screen
+    // would open nothing.
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['localhost'] }))
+    rig.fakes[0].say({ t: 'ports', ports: [{ port: 3000, process: 'node', guessed: false }] })
+    expect(link.state().ports).toHaveLength(1)
+
+    rig.fakes[0].hangUp('the relay closed the channel')
+    expect(link.state().ports).toEqual([])
+    link.disconnect()
+  })
+
+  it('opens a page on that machine only when it advertised `web`', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['localhost'] }))
+
+    expect(link.openThere('http://localhost:5173/')).toBe(false)
+    expect(rig.fakes[0].sent.some((text) => text.includes('web.open'))).toBe(false)
+  })
+
+  it('sends the address verbatim once it has', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['localhost', 'web'] }))
+
+    expect(link.openThere('http://localhost:5173/')).toBe(true)
+    const last: unknown = JSON.parse(rig.fakes[0].sent.at(-1) as string)
+    expect(last).toEqual({ t: 'web.open', url: 'http://localhost:5173/' })
+  })
+
+  it('says nothing about a confirmation, because the confirmation is the other screen', async () => {
+    // `web.opened` is deliberately not published as state: the page appearing on
+    // the far machine is the confirmation, and a panel that also announced it
+    // would be narrating something the person can see. A *failure* is a plain
+    // `error` and does reach `reason`, which is the asymmetry worth pinning.
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['localhost', 'web'] }))
+    const before = link.state()
+    rig.fakes[0].say({ t: 'web.opened', url: 'http://localhost:5173/' })
+
+    expect(link.state()).toEqual(before)
+    rig.fakes[0].say({ t: 'error', code: 'unauthorized', message: 'Only your own devices can open pages on this machine.' })
+    expect(link.state().reason).toBe('Only your own devices can open pages on this machine.')
+    expect(link.state().state).toBe('online')
+    link.disconnect()
+  })
+})

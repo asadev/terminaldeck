@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { panelSpec } from '../shell/panels'
+import { AgentCliUpdate } from './AgentCliUpdate'
 import { PageEmpty } from './PageEmpty'
+import {
+  dismiss,
+  idsFor,
+  readDismissed,
+  restoreAll,
+  writeDismissed,
+  type DismissedMap,
+} from './readiness-dismissed'
 import './ReadinessPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -31,6 +40,8 @@ export interface ReadinessCheck {
   detail: string
   fix: ReadinessFix | null
   gate: boolean
+  /** Project-relative file this row is about, when it is about exactly one. */
+  opens: string | null
 }
 
 export interface ReadinessReport {
@@ -52,6 +63,34 @@ export interface ReadinessFixResult {
 export interface ReadinessBridge {
   scanReadiness(projectPath: string): Promise<ReadinessReport>
   applyReadinessFix(projectPath: string, fixId: string): Promise<ReadinessFixResult>
+  /**
+   * Hand a file to the machine, which is how a row with no automatic fix still
+   * gets a button.
+   *
+   * Optional, and the panel simply draws no Open button without it — the same
+   * bargain every other capability in this window makes. `file:` is not one of
+   * the schemes `link-open.ts` refuses for a link the *app itself* raises, only
+   * for one a guest page raises, so this opens the person's own editor on their
+   * own file and nothing else.
+   */
+  openLinkExternally?(url: string): Promise<unknown>
+}
+
+/**
+ * A `file:` URL for one file inside a project.
+ *
+ * `encodeURI` rather than encoding each segment: a Windows project path starts
+ * `C:/…`, and per-segment encoding turns that colon into `%3A`, which is not a
+ * path any file URL handler will open. Only the two characters `encodeURI`
+ * deliberately leaves alone — the fragment and query marks, both legal in a
+ * filename on every platform here — are dealt with afterwards.
+ */
+export function fileUrlFor(projectPath: string, relPath: string): string {
+  const base = projectPath.replace(/[/\\]+$/, '').replace(/\\/g, '/')
+  const rest = relPath.replace(/\\/g, '/').replace(/^\/+/, '')
+  const joined = `${base}/${rest}`
+  const absolute = joined.startsWith('/') ? joined : `/${joined}`
+  return `file://${encodeURI(absolute).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
 }
 
 export interface ReadinessPanelProps {
@@ -75,6 +114,27 @@ function resolveBridge(): ReadinessBridge | null {
     return null
   }
   return host as ReadinessBridge
+}
+
+/**
+ * Which action a not-passing row offers, and why there is never more than one
+ * plus the door out.
+ *
+ * A row with a fix offers the fix: it is the thing that actually repairs the
+ * finding, and putting an Open beside it invites somebody to do by hand what
+ * the button next to it does properly. A row with no fix offers the file it is
+ * about, because "your instructions file is still the skeleton" is a true
+ * finding that no machine can act on and a person can act on in ten seconds
+ * with the file in front of them. A row with neither offers only the dismissal.
+ *
+ * Nothing that is passing offers anything. There is nothing to do about good
+ * news, and a Dismiss on every green row would be five controls asking to be
+ * read on a page whose whole job is to be skimmed.
+ */
+export function actionFor(check: ReadinessCheck, canOpen: boolean): 'fix' | 'open' | 'none' {
+  if (check.status === 'pass') return 'none'
+  if (check.fix) return 'fix'
+  return canOpen && check.opens !== null ? 'open' : 'none'
 }
 
 const BAND_COPY: Record<ReadinessBand, string> = {
@@ -148,9 +208,24 @@ export interface RowProps {
   busy: boolean
   result: ReadinessFixResult | null
   onApply(check: ReadinessCheck): void
+  /**
+   * Open the file this row is about. Null when this window cannot hand a file
+   * to the machine, in which case no Open button is drawn — see
+   * {@link ReadinessBridge.openLinkExternally}.
+   */
+  onOpen?: ((check: ReadinessCheck) => void) | null
+  /**
+   * Put this row away.
+   *
+   * Null only where dismissal makes no sense, which is a passing row. Every
+   * other row has it, including the ones that already carry a fix: an offer to
+   * add a lint script is still an offer somebody is entitled to decline, and a
+   * finding that cannot be declined is a finding that nags forever.
+   */
+  onDismiss?: ((check: ReadinessCheck) => void) | null
 }
 
-export function CheckRow({ check, busy, result, onApply }: RowProps) {
+export function CheckRow({ check, busy, result, onApply, onOpen, onDismiss }: RowProps) {
   const [confirming, setConfirming] = useState(false)
   const fix = check.fix
 
@@ -162,6 +237,10 @@ export function CheckRow({ check, busy, result, onApply }: RowProps) {
   useEffect(() => {
     setConfirming(false)
   }, [result, fix?.id])
+
+  const action = actionFor(check, Boolean(onOpen))
+  // Anything that is not good news can be put away. See `RowProps.onDismiss`.
+  const dismissable = check.status !== 'pass' && Boolean(onDismiss)
 
   const handleClick = useCallback(() => {
     if (!fix) return
@@ -206,24 +285,52 @@ export function CheckRow({ check, busy, result, onApply }: RowProps) {
         ) : null}
       </div>
 
-      {fix ? (
+      {action !== 'none' || dismissable ? (
         <div className="readiness-actions">
-          {confirming ? (
+          {fix && confirming ? (
             <button type="button" className="readiness-cancel" onClick={() => setConfirming(false)}>
               Cancel
             </button>
           ) : null}
-          <button
-            type="button"
-            className="readiness-fix"
-            data-destructive={fix.destructive || undefined}
-            data-confirming={confirming || undefined}
-            disabled={busy}
-            onClick={handleClick}
-            title={fix.description}
-          >
-            {busy ? 'Working…' : confirming ? 'Yes, apply it' : fix.label}
-          </button>
+
+          {action === 'fix' && fix ? (
+            <button
+              type="button"
+              className="readiness-fix"
+              data-destructive={fix.destructive || undefined}
+              data-confirming={confirming || undefined}
+              disabled={busy}
+              onClick={handleClick}
+              title={fix.description}
+            >
+              {busy ? 'Working…' : confirming ? 'Yes, apply it' : fix.label}
+            </button>
+          ) : null}
+
+          {/* The action for a finding no machine can repair. It opens the file
+              in whatever the person already uses for it, which is the only
+              honest place to fill in a README from. */}
+          {action === 'open' && onOpen ? (
+            <button
+              type="button"
+              className="readiness-fix"
+              onClick={() => onOpen(check)}
+              title={`Open ${check.opens ?? ''} on this machine`}
+            >
+              Open it
+            </button>
+          ) : null}
+
+          {dismissable && onDismiss ? (
+            <button
+              type="button"
+              className="readiness-cancel"
+              onClick={() => onDismiss(check)}
+              title="Hide this check. It still counts towards the score, and you can bring it back."
+            >
+              Dismiss
+            </button>
+          ) : null}
         </div>
       ) : null}
     </li>
@@ -247,6 +354,14 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
   const [scanning, setScanning] = useState(false)
   const [busyFix, setBusyFix] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, ReadinessFixResult>>({})
+  /*
+   * Rows this person has put away, read once on first render rather than in an
+   * effect. An effect would paint the full list and then remove rows from under
+   * a pointer that is already moving, which is a misclick rather than a blink —
+   * the same argument `features/state.ts` makes for reading its own map
+   * synchronously.
+   */
+  const [put, setPut] = useState<DismissedMap>(() => readDismissed())
 
   // Guards against a slow scan for a project the user has already navigated
   // away from overwriting the one they are now looking at.
@@ -316,9 +431,53 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
     [projectPath, resolved, scan],
   )
 
+  /**
+   * Put a row away, and remember it.
+   *
+   * The write happens inside the updater so the stored map and the rendered one
+   * are the same object — a `writeDismissed(put)` outside it would persist the
+   * state from *before* this click on any render React batches.
+   */
+  const putAway = useCallback(
+    (check: ReadinessCheck) => {
+      setPut((prev) => {
+        const next = dismiss(prev, projectPath, check.id)
+        writeDismissed(next)
+        return next
+      })
+    },
+    [projectPath],
+  )
+
+  const bringBack = useCallback(() => {
+    setPut((prev) => {
+      const next = restoreAll(prev, projectPath)
+      writeDismissed(next)
+      return next
+    })
+  }, [projectPath])
+
+  const openFile = useCallback(
+    (check: ReadinessCheck) => {
+      if (!resolved?.openLinkExternally || check.opens === null) return
+      void resolved.openLinkExternally(fileUrlFor(projectPath, check.opens))
+    },
+    [projectPath, resolved],
+  )
+
   const rows = useMemo(() => (report ? sortChecks(report.checks) : []), [report])
   const passing = rows.filter((check) => check.status === 'pass').length
   const applicable = rows.filter((check) => check.status !== 'skip').length
+  /*
+   * Hidden rows are hidden and nothing else. They are still in `rows`, so they
+   * are still counted above and still weighted by `scoreChecks` in the main
+   * process — dismissing a finding must never move the number, or the number
+   * stops meaning anything and the panel becomes the sort of control this
+   * release exists to remove.
+   */
+  const away = new Set(idsFor(put, projectPath))
+  const shown = rows.filter((check) => !away.has(check.id))
+  const hidden = rows.length - shown.length
 
   if (!resolved) {
     return (
@@ -371,17 +530,46 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
         </p>
       ) : null}
 
+      {/* Not a project finding, and it is here because this is one of the two
+          places a person is standing when it bites them. See `AgentCliUpdate`.
+          It draws nothing at all when every agent CLI on the machine is current,
+          which is the usual case. */}
+      <div className="readiness-machine">
+        <AgentCliUpdate />
+      </div>
+
       <ul className="readiness-list">
-        {rows.map((check) => (
+        {shown.map((check) => (
           <CheckRow
             key={check.id}
             check={check}
             busy={busyFix === check.id}
             result={results[check.id] ?? null}
             onApply={(target) => void applyFix(target)}
+            onOpen={resolved.openLinkExternally ? openFile : null}
+            onDismiss={putAway}
           />
         ))}
       </ul>
+
+      {/*
+        The door back, and the sentence that keeps dismissal honest.
+
+        Both halves matter. "Don't ask again" with no way to un-ask it was
+        called out by name in the same review — *"once ticked there is no way to
+        turn it back on. That has to exist."* And saying that a hidden check
+        still counts is what stops this from being a button that raises your
+        score by looking away.
+      */}
+      {hidden > 0 ? (
+        <p className="readiness-hidden">
+          {hidden === 1 ? '1 check hidden' : `${hidden} checks hidden`} — still counted in the
+          score.{' '}
+          <button type="button" className="readiness-link" onClick={bringBack}>
+            Show {hidden === 1 ? 'it' : 'them'} again
+          </button>
+        </p>
+      ) : null}
     </section>
   )
 }

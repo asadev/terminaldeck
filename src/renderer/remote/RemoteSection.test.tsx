@@ -67,6 +67,12 @@ const NOTHING: RemoteActions = {
   pair: () => {},
   closePairing: () => {},
   approve: () => {},
+  beginApproval: () => {},
+  cancelApproval: () => {},
+  approvalStep: () => {},
+  approvalKind: () => {},
+  approvalAddFolder: () => {},
+  approvalRemoveFolder: () => {},
   deny: () => {},
   revoke: () => {},
   disconnect: () => {},
@@ -82,6 +88,8 @@ const NO_MACHINE_ACTIONS: MachineActions = {
   newSession: () => {},
   open: () => {},
   close: () => {},
+  openPort: () => {},
+  refreshPorts: () => {},
 }
 
 /** A paired desktop, and the link to it. Both halves of one row. */
@@ -111,6 +119,7 @@ const STUDIO_LINK: MachineLinkState = {
   ],
   folders: ['/Users/a/projects/deck'],
   capabilities: ['create'],
+  ports: [],
   hostPlatform: 'win32',
   retryAt: null,
 }
@@ -481,7 +490,10 @@ describe('a device waiting to be let in', () => {
   const html = render({ state: { ...RUNNING, devices: [PHONE] } })
 
   it('offers both answers, not just the friendly one', () => {
-    expect(html).toContain('>Approve</button>')
+    // "Let it in…" rather than "Approve": the ellipsis is the promise that a
+    // press opens the questions rather than settling them, which is the whole
+    // difference between this flow and the one button it replaces.
+    expect(html).toContain('>Let it in…</button>')
     expect(html).toContain('>Deny</button>')
   })
 
@@ -1170,8 +1182,14 @@ describe('turning it on', () => {
   it('keeps every clause of the paragraph the confirmation used to carry', () => {
     const html = render({ state: { ...RUNNING, running: false } })
     for (const clause of [
-      'type into any session running here',
-      'your files, your keys, your git remotes',
+      // The two kinds replaced "any session running here", which described a
+      // world where approving was one button and a device with no folder record
+      // got whatever the desktop had open. Both halves are asserted, because the
+      // guest half is the one somebody reads before handing a phone to a
+      // colleague and it is the one that used to be missing.
+      'One of your own gets everything',
+      'A guest gets the folders you choose and nothing else',
+      'never the copilot',
       'sealed end to end',
       'an approval you give here',
     ]) {
@@ -1535,6 +1553,8 @@ function fakeBridge(
     'startRemotePairing',
     'cancelRemotePairing',
     'approveRemoteDevice',
+    'listRemoteDeviceKinds',
+    'pickProjectFolder',
     'revokeRemoteDevice',
     'disconnectRemoteConnection',
     'stopRemoteTunnel',
@@ -1565,6 +1585,12 @@ function harness(bridge: Partial<RemoteBridge>, pairing: RemotePairing | null = 
     reread: () => {
       state.rereads += 1
     },
+    // No flow open. These tests drive the actions directly, which is the layer
+    // below the flow — `approve` is called with the answers the flow would have
+    // collected, so the answers are explicit in each test rather than assembled
+    // by a component nothing here renders.
+    approving: null,
+    setApproving: () => {},
     run: (_key, work, done) => {
       pending.push(
         work().then(
@@ -1675,10 +1701,15 @@ describe('approving and refusing', () => {
       approveRemoteDevice: [{ id: 'dev-1', name: 'Asad’s iPhone', status: 'approved' }],
     })
     const h = harness(bridge)
-    h.actions.approve(PENDING_DEVICE)
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'])
     await h.settled()
-    expect(calls).toEqual(['approveRemoteDevice(dev-1)'])
-    expect(h.notices).toEqual([{ ok: true, text: 'Asad’s iPhone can connect.' }])
+    // The kind and the folders travel with the approval, in the same call. A
+    // channel that took only an id is the arrangement in which a device was let
+    // in with the folder question unanswered — and unanswered used to mean yes.
+    expect(calls).toEqual([
+      'approveRemoteDevice(dev-1, guest, /Users/apple/Projects/alpha)',
+    ])
+    expect(h.notices).toEqual([{ ok: true, text: 'Asad’s iPhone can open one folder.' }])
   })
 
   it('denies through the revoke channel, and never through the approve one', async () => {
@@ -1715,7 +1746,7 @@ describe('approving and refusing', () => {
       approveRemoteDevice: [{ id: 'dev-1', name: 'Asad’s iPhone', status: 'revoked' }],
     })
     const h = harness(bridge)
-    h.actions.approve(PENDING_DEVICE)
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'])
     await h.settled()
     expect(h.notices).toEqual([{ ok: false, text: expect.stringContaining('did not take') }])
   })
@@ -1723,9 +1754,9 @@ describe('approving and refusing', () => {
   it('falls back to what it asked for when the answer is not a device list', async () => {
     const { bridge } = fakeBridge({ approveRemoteDevice: { ok: true } })
     const h = harness(bridge)
-    h.actions.approve(PENDING_DEVICE)
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'])
     await h.settled()
-    expect(h.notices).toEqual([{ ok: true, text: 'Asad’s iPhone can connect.' }])
+    expect(h.notices).toEqual([{ ok: true, text: 'Asad’s iPhone can open one folder.' }])
     expect(deviceStateAfter({ ok: true }, 'dev-1')).toBeUndefined()
   })
 })
@@ -1810,7 +1841,7 @@ describe('a channel this build does not have', () => {
     h.actions.enable(true)
     h.actions.pair()
     h.actions.closePairing()
-    h.actions.approve(PENDING_DEVICE)
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'])
     h.actions.deny(PENDING_DEVICE)
     h.actions.revoke(PENDING_DEVICE)
     h.actions.disconnect(CONNECTION)

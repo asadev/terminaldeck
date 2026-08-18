@@ -70,6 +70,80 @@ interface Session {
 const SCROLLBACK_LIMIT = 4000
 
 /**
+ * What to say when a process would not start.
+ *
+ * ## Why this exists, and why it is not defensive wrapping
+ *
+ * One line, repeated seven times in Asad's app log on 2026-08-17, telling him
+ * nothing whatsoever:
+ *
+ *     [ipc] session:create failed File not found:
+ *
+ * Note what is after the colon: nothing. It is accurate. node-pty's `conpty.cc`
+ * builds that sentence as `"File not found: " + shellpath` and reaches it
+ * precisely when it has no path to name — `get_shell_path` hands back an empty
+ * string when a *relative* program name is found next to the calling process's
+ * own working directory (`wsl.ts`'s `wslExePath` carries the measurement). No
+ * amount of formatting downstream can recover a detail that was never in the
+ * string: `diagnostics.ts` writes `error.message`, and there was nothing else
+ * there to write.
+ *
+ * So the facts are added at the last layer that still has them, and there are
+ * four: which agent, which folder the *session* is in, which program, and which
+ * directory the *process* was to start in. The last two are separate on purpose
+ * — for a session inside WSL they are deliberately different, the session being
+ * in Ubuntu while the launcher starts on the Windows side, so a message naming
+ * only one of them explains the wrong half.
+ *
+ * The original message is kept verbatim and **last**: it is the only part
+ * written by whoever actually refused, and replacing it with a sentence of our
+ * own is how a specific failure becomes a vague one. When there is no original —
+ * which is the very case this exists for — the sentence simply ends, rather than
+ * trailing an em dash with nothing after it, which is the same defect as the
+ * colon it replaces.
+ *
+ * A pure function rather than a block inside the `catch`, because it is only
+ * reachable on Windows: node-pty on POSIX never throws from `spawn` — a missing
+ * program, a missing working directory and a bare name all return a live pty
+ * whose process exits a moment later (measured, all three). A sentence that can
+ * only be read on the platform where reading it means a bug report is a
+ * sentence nobody checks.
+ */
+export function spawnFailureMessage(
+  spawnSpec: SpawnSpec,
+  sessionCwd: string,
+  procCwd: string,
+  error: unknown,
+): string {
+  const why = error instanceof Error ? error.message.trim() : String(error).trim()
+  return (
+    `could not start ${spawnSpec.provider} in ${sessionCwd}: ` +
+    `${spawnSpec.command} would not run from ${procCwd}` +
+    (why === '' ? '' : ` — ${why}`)
+  )
+}
+
+/**
+ * Why a session left the manager, for the one caller that has to tell them apart.
+ *
+ * `stopped` is every ordinary ending: a tab closed, the copilot's `sessions.stop`,
+ * a phone stopping one, a routine, the shutdown sweep. Anything drawing a row for
+ * it should take the row away, because after this the session cannot be written
+ * to, cannot be re-attached and is not in {@link PtyManager.list}.
+ *
+ * `replaced` is the account switch, and it is the one case where taking the row
+ * away is wrong. A CLI is authenticated at spawn, so changing the account means
+ * stopping the process and starting another in its place — and to the person it
+ * is still *this session*, in the same tab, with the name they gave it.
+ * `withReplacedSession` in the renderer's store does that swap by finding the old
+ * id, and it deliberately returns the list unchanged when the old id has already
+ * gone (two rows for one pty being worse than a missing one). So a removal
+ * announced for the outgoing half would race the swap, and on the losing side of
+ * that race the tab disappears in the middle of a switch nobody asked to lose.
+ */
+export type RemovalReason = 'stopped' | 'replaced'
+
+/**
  * Owns every live terminal process. The renderer never touches node-pty —
  * it addresses sessions by id and receives output through the IPC bridge.
  */
@@ -93,6 +167,21 @@ export class PtyManager {
     private readonly onData: (id: string, data: string) => void,
     private readonly onExit: (id: string, exitCode: number) => void,
     private readonly onStatus: (id: string, status: SessionStatus) => void,
+    /**
+     * This manager is no longer holding that session — tell whoever is drawing
+     * rows for it.
+     *
+     * Deliberately separate from {@link onExit}, and the distinction is the
+     * whole of the bug it closes. `onExit` is a *process* ending, which leaves
+     * the session in the map with an exit code and its scrollback intact,
+     * because somebody wants to read what it printed. This fires from {@link
+     * kill}, at the moment the entry is deleted, after which the session cannot
+     * be written to, cannot be re-attached, and does not appear in {@link list}.
+     *
+     * Optional because the headless host and every test that builds a manager
+     * for its ptys has nothing to tell.
+     */
+    private readonly onRemoved?: (id: string, reason: RemovalReason) => void,
   ) {}
 
   /**
@@ -193,15 +282,24 @@ export class PtyManager {
     // pass at the end is new.
     const env = this.environmentFor(id, spawnSpec)
 
-    const proc = pty.spawn(spawnSpec.command, spawnSpec.args, {
-      name: 'xterm-256color',
-      cols: input.cols,
-      rows: input.rows,
-      // The *process's* directory, which is the session's folder in every case
-      // but one. See `hostCwd`.
-      cwd: spawnSpec.hostCwd ?? input.cwd,
-      env,
-    })
+    const procCwd = spawnSpec.hostCwd ?? input.cwd
+    let proc: pty.IPty
+    try {
+      proc = pty.spawn(spawnSpec.command, spawnSpec.args, {
+        name: 'xterm-256color',
+        cols: input.cols,
+        rows: input.rows,
+        // The *process's* directory, which is the session's folder in every case
+        // but one. See `hostCwd`.
+        cwd: procCwd,
+        env,
+      })
+    } catch (error) {
+      // The detail is added here because this is the last layer that still has
+      // it. See `spawnFailureMessage`, which is where the sentence and the
+      // reason for it live.
+      throw new Error(spawnFailureMessage(spawnSpec, input.cwd, procCwd, error), { cause: error })
+    }
 
     const activity = new ActivityTracker(id, this.onStatus, input.cols, input.rows)
     activity.setWatched(this.watched)
@@ -260,7 +358,7 @@ export class PtyManager {
     return session ? session.activity.settledText() : null
   }
 
-  kill(id: string): void {
+  kill(id: string, reason: RemovalReason = 'stopped'): void {
     const s = this.sessions.get(id)
     if (!s) return
     s.activity.dispose()
@@ -270,6 +368,7 @@ export class PtyManager {
       /* already gone */
     }
     this.sessions.delete(id)
+    this.onRemoved?.(id, reason)
   }
 
   list(): SessionMeta[] {

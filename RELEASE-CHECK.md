@@ -1,12 +1,42 @@
-# Release check — must be clean before anything is pushed
+# Release check — SHIP IT. He reviewed; the review is the work list.
 
-Asad, going to sleep 2026-08-17: *"once all of these agents and tasks are done
-nicely, properly, you will review every single thing — how everything is done
-according to my requirements — and make a proper list for me and verify
-everything and push everything live without waiting for me to wake up."*
+**2026-08-18, and this supersedes the review-gate below it.** He did the review
+he asked for — four recordings, 48 minutes, transcribed into
+`REVIEW-2026-08-17.md` — and then handed the whole thing back with instructions
+that could not be plainer:
 
-So this file is the gate. Nothing is tagged or pushed while anything below is
-unchecked.
+> *"Make a proper plan of action from all of the requirements and get everything
+> done properly and tested properly on all the devices — the simulator, the
+> Windows side, the MacBook side, the app side and the web browser side —
+> everything properly tested and verified. Then at the end launch a proper build
+> and version of it to everywhere… push to iOS, push to TestFlight, push to
+> GitHub. You will not even hold this just because I did not tell you, because
+> it is a serious matter and blah blah blah — because you did that last night.
+> If I am specifically telling you, it means it should be live. That's it."*
+
+So the order is now: **build the review list → test on every surface → ship,
+without asking.** The one thing he asked for up front was questions, before
+starting, if any were blocking. There were none that would change the work:
+every ambiguity in the review resolves to "the later statement wins", and those
+decisions are recorded in `PLAN-FINAL.md` rather than queued for him.
+
+Holding the release to be safe is the failure mode he named. Do not repeat it.
+
+## Notarization is blocked at Apple, and is not a reason to hold
+
+Re-checked 2026-08-18 00:40. Five submissions still `In Progress`, the oldest
+from 14 August and the newest a **fresh probe from 17 August 12:51** — twelve
+hours and counting on an artifact that is a few hundred bytes. A hold that
+catches a probe is a hold on the account, not on any build this repo produces,
+and no amount of rebuilding clears it. Only Apple Developer Support can.
+
+`TD_MAC_SIGNED_ONLY` is `true`, so the release workflow signs, skips
+notarization, and ships an install note telling people to right-click → Open
+once. That is a real Developer ID signature and it is checkable
+(`codesign -dv --verbose=2`) — it is **not** the "app is damaged" state that
+unsigned builds produce. Flip the variable back to `false` the day Apple answers.
+
+---
 
 ## Known-failing right now, and who owns each
 
@@ -148,8 +178,14 @@ agent's report.
 - [ ] It runs under the same confinement as any other session
 
 ### iOS
-- [ ] Three tabs, Machines inside Settings — **he said "four pills" first and
-      then reconsidered; flag this for him rather than assume**
+- [x] **Four tabs — Copilot · Sessions · Localhost · Settings, copilot leftmost.**
+      This entry used to say three, and to flag the question for him rather than
+      assume. He answered it in the 17 August review, having looked at it *with*
+      the copilot in place, and the later statement wins. Built and driven on a
+      simulator. The pinned copilot row in the session list is deleted — its
+      badge moved onto the pill, which is strictly better, because a consent
+      question expires into a refusal after two minutes and a badge on the
+      session list could only be seen from the session list.
 - [ ] Pill hidden inside a session and inside a localhost page
 - [ ] Back button live on same-document navigation
 - [ ] GitHub sign-in completes
@@ -230,6 +266,193 @@ Open, and worth his answer when it is built: can a device be changed from one
 kind to the other afterwards, or does that mean re-pairing? Re-pairing is safer
 and is probably right — a device that was a guest becoming an owner by a toggle
 is the kind of quiet escalation this app has been removing all night.
+
+## iOS localhost browsing — DONE, confirmed on screen 2026-08-18
+
+The Safari resolution below landed and was verified rendered: the system
+navigation bar is back with its chevron and its pop gesture, and reload,
+inspect and Done moved to a bottom toolbar, with **Done last** as he asked.
+The section is kept because the reasoning is the reason it is right, and
+somebody will otherwise re-hide that bar to win 44 points of height.
+
+## The original note (2026-08-17) — queued at the time
+
+> *"Local host browsing is still not native on iOS."*
+
+It **is** a push now — `navigationDestination`, sliding in from the trailing
+edge, after he rejected the `fullScreenCover` that rose from the bottom. Two
+things remain, and both are in `LocalhostBrowser.swift`:
+
+1. **The left-edge swipe belongs to the page, not the screen.**
+   `allowsBackForwardNavigationGestures = true` hands that gesture to the web
+   view's own history. On iOS the edge swipe is how a pushed screen is left, so
+   the one gesture everybody reaches for does the wrong thing.
+2. **The system navigation bar is hidden** for a custom row carrying back,
+   reload, where-you-are, inspect and Done. The reasoning in the file is real —
+   a system bar above that row is 94pt of chrome in two rows, with two back
+   buttons eleven points apart meaning different things — but the cost is no
+   system back chevron, no standard title, and no pop gesture.
+
+The native resolution is Safari's, and it dissolves the conflict rather than
+picking a side: **keep the system navigation bar** (so the chevron and the pop
+gesture are the platform's), and move reload/inspect/Done to a **bottom**
+toolbar, which is where iOS puts browser controls. Page-back becomes a button
+there rather than a gesture competing with the system's.
+
+He blessed the current bar's *ordering* earlier — *"last button I think is on
+its correct place"* — so keep Done last wherever it ends up.
+
+**Not dispatched yet on purpose:** two agents are mid-edit in `ios/`, and the
+light-mode one has this exact file open (it carries a
+`.preferredColorScheme(.dark)` call). A third agent in the same file is how the
+mass-revert happened earlier today.
+
+## A setup flow before the copilot's first run (2026-08-17) — BUILT, for review
+
+> *"Maybe we can give a few steps flow before someone sets up the copilot. It can
+> ask, what would you call your copilot, give it a name — related to identity
+> setup. And keep it in-app, actually, yes in app. So it will ask those questions
+> in the flow, and the copilot will always know about this and act that way
+> always."*
+
+He reasoned it out and landed in the right place: **the identity is app-owned,
+not folder-owned.** Same rule as the layer — the folder belongs to the person, so
+a plain terminal opened there must never be somebody's named assistant. The
+answers become part of the `--append-system-prompt-file` the app hands in at
+spawn.
+
+Queued deliberately: the copilot-layer agent owns both the identity file format
+and the Settings → Copilot pane, which is precisely what this writes into.
+Building the wizard before that settles means building it twice.
+
+**Keep it short.** Three or four questions, every one skippable with a sensible
+default, and re-runnable afterwards rather than a one-shot you can never revisit
+— the same answers already have an editing surface in Settings → Copilot, so the
+flow is a friendlier front door to it, not a separate store.
+
+Worth asking, roughly in this order:
+
+1. **What is it called.** This is the one that matters, because he will talk to
+   it constantly and its name appears in the sidebar, the tab pill and the
+   settings pane. Note the naming rule in CLAUDE.md applies to the *product* —
+   `BRAND.name` is read, never spelled — but a copilot's name is **user data**
+   and must not go near that constant.
+2. **What it should call him**, and anything about how he wants to be addressed.
+3. **Which folder it lives in** — the picker, with the honest sentence about
+   what it will then be able to read.
+4. **Which account it runs as.**
+
+Then show what it is about to become, before it starts, rather than starting and
+letting him discover it.
+
+There is a nice symmetry worth preserving in the copy: his own instructions to
+*me* say *"He hasn't named you yet. Until he does, don't pick one for yourself —
+he'll tell you."* The flow is that moment, made part of the product.
+
+### What landed, and what to look at
+
+Four questions and a summary, in a dialog the pinned row opens **instead of**
+starting the copilot — nothing is spawned or billed until the last button.
+`copilot-setup-model.ts` owns the order, `CopilotSetup.tsx` the screens, and
+`shared/copilot-identity.ts` the one thing worth arguing about: **where the
+answers go.**
+
+They go into `<userData>/copilot-layer/instructions.md`, as a paragraph, through
+the same channel the editor in Settings → Copilot saves with. There is no
+`copilot.name` setting and no second store — the sentence *is* the record, so
+editing it in Settings renames the copilot exactly as well as re-running the
+questions, and nothing can drift because there is one copy. Nothing is written
+into the copilot's working directory, which is the rule the whole layer exists
+for. The other two answers reuse the homes they already have: the folder is the
+picker's own setting, the account is a per-project pin on the copilot's folder.
+
+To look at, in the running app:
+
+- [ ] The pinned row, the tab pill and the bar all say the name you gave it
+- [ ] Skip every question: it is told *"they have not named you yet … do not
+      pick a name for yourself"*, and the app goes on calling it the Copilot
+- [ ] The summary shows the literal text it will be handed, `---` and all
+- [ ] Settings → Copilot → **Its name**, and "Set it up again…" — which closes
+      the settings sheet and re-opens the questions with your answers in them
+- [ ] Re-running while it is running says Save, not Start, and says why: a
+      session is handed its instructions at `exec`
+
+Verified on a built instance rather than the harness: `--append-system-prompt-file`
+carried the block, and the copilot answered *"I'm Nova, your Terminal Deck
+copilot. You're Asad."*
+
+## Switching account must carry the conversation (2026-08-17) — next
+
+The dialog currently says the conversation does not come with you:
+
+> *"This conversation stays with app.imatch.ae@gmail.com. imzapremium@gmail.com
+> has its own conversation in this folder and that is the one that will be
+> continued here — not the one on screen now."*
+
+Truthful about the mechanism, and not what he wants:
+
+> *"I want it to be like that — if I switch an account it should keep going just
+> like nothing happened, because this is how a normal terminal also does."*
+
+**Worth understanding why his comparison holds and what it actually proves.** In
+a terminal, logging out and back in as someone else *in another window* leaves
+the first session working — because it never switched. The running process
+already holds its token. "Nothing happened" is literally true: nothing reached
+that session. So the normal-terminal case is not evidence that switching is
+seamless; it is evidence that **not** switching is.
+
+What he is asking for is harder and is still right: change this session's
+account and keep the conversation.
+
+**The obstacle, and why it is not a wall.** Claude Code files transcripts under
+the account's config directory — `CLAUDE_CONFIG_DIR` chooses the credential
+*store*, which `profiles.ts` already records — so each account has its own
+history for the same folder. But a transcript is a **local JSONL file, and it is
+not owned by an account.** Which account is authenticated decides who is billed
+and who may call the API, not who may read a file on this disk. So the
+conversation can be carried into the account being switched to and resumed
+there. New turns bill to the new account; the old ones were already billed to
+the old one. Nothing is misattributed.
+
+**He then supplied the decisive evidence, and it corrects my claim above that a
+running process cannot change account.** It can:
+
+> *"I start a new session and I change the account and I come back to the
+> original one — this one comes with a new limit with the new account. If I do
+> any slash command and check the usage it will show me the newer account, not
+> the older one I was working with."*
+
+That is the plain CLI, where every session shares `~/.claude` and, on macOS, one
+Keychain item keyed to it. The account is **not fixed at spawn** — it is read
+from the store per request, so changing the login anywhere changes it for every
+session using that directory, on their next turn. Terminal Deck does not see
+this because it gives each profile its own `CLAUDE_CONFIG_DIR`, which is exactly
+what lets two accounts run at once.
+
+**Why that settles the design:** in his account, a conversation continued across
+an account change, in place, with new limits, and nothing broke. So a transcript
+is demonstrably not owned by an account, and carrying one into the profile being
+switched to is not a workaround — it is reproducing what the CLI already does
+when the directory is shared. The only reason it does not happen here is the
+isolation this app adds on purpose.
+
+There is a second shape worth naming and rejecting: share one config directory
+and swap the credential, which is the CLI's own behaviour exactly. It would be
+seamless and it would cost the ability to run two accounts at the same time,
+which is a feature of this app rather than an accident. Copying the transcript
+keeps both.
+
+To settle when building it:
+
+- **Copy or move?** Copying leaves the conversation in both stores, which is
+  probably right — switching back should also feel like nothing happened.
+- **Resume by id or by path?** Establish what the CLI actually accepts; do not
+  assume.
+- **What if it genuinely cannot carry** — a mid-turn switch, a transcript the
+  new account cannot read. Then the current dialog is the right answer and
+  should still appear. It stops being the default and becomes the exception.
+- The switch already restarts the session in place (same tab, folder and bar
+  position), and that part is correct and stays.
 
 ## Release scope — every surface, tested before any of it ships
 

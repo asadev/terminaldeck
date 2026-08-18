@@ -42,9 +42,15 @@ function fakeDrive(origin: string | null): BrowserDrive & { calls: unknown[] } {
       calls.push(['open', input])
       return { url: 'https://example.com/', title: 'Example', settled: true, created: true }
     },
+    // The page's own words travel with the outline. Mirrored here because a
+    // stub that disagrees with the real shape invents bugs and hides real ones
+    // — the standing rule for `.harness/stub.ts`, and it applies to this fake
+    // for the same reason: `browser.read` reads `outline.text` directly.
     outline: async () => ({
       url: 'https://example.com/',
       title: 'Example',
+      text: 'Example Domain\n\nThis domain is for use in documentation examples.',
+      textTruncated: false,
       elements: [
         { kind: 'field', tag: 'input', type: 'password', label: 'Password', selector: '#pw', secret: true, enabled: true },
       ],
@@ -156,6 +162,24 @@ describe('what a page text never reaches', () => {
     const payload = JSON.stringify(result.value)
     expect(payload).toContain('"secret":true')
     expect(payload).not.toContain('"value"')
+  })
+
+  it('gives the model the page’s words, and the log only their length', async () => {
+    /*
+     * The half of `browser.read` that was missing until 2026-08-18. Asked in
+     * words to read a form's result line, the copilot had to guess four
+     * selectors to reach one sentence, because the outline described the
+     * controls and never the page. It is pinned in both directions: the text
+     * reaches the model, and it does *not* reach `actions.jsonl`, which is a
+     * list somebody skims rather than a copy of every page that was looked at.
+     */
+    const deck = control(fakeDrive('https://example.com'), dir)
+    const result = await deck.call('browser_read', {})
+    expect(JSON.stringify(result.value)).toContain('This domain is for use in documentation examples.')
+
+    const written = readFileSync(join(dir, 'actions.jsonl'), 'utf8')
+    expect(written).not.toContain('This domain is for use in documentation examples.')
+    expect(written).toContain('textChars')
   })
 })
 

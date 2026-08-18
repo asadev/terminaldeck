@@ -316,3 +316,37 @@ One thing is outstanding rather than clean: every licence in this tree is a
 notice licence, and the notices for the Electron runtime are not yet inside the
 built app. That is item 5 above, and it is the one to close before tagging a
 release — the npm tree is fine; the bundle is short a file.
+
+---
+
+## Considered and not bundled: Whisper large-v3
+
+Asad asked, watching the voice settings, whether the app could simply download
+the model: *"we can give a button to download, so after installing they can just
+download and it will be patched here — if it is allowed legally from the V3 to
+using the tools. If not, then no need this feature, with that only key can be
+here."*
+
+Checked on 2026-08-18, at the source rather than from documentation about it:
+
+| what | where | licence |
+|---|---|---|
+| Whisper, the code | `github.com/openai/whisper/blob/main/LICENSE` | **MIT**, © OpenAI 2022 |
+| `whisper-large-v3`, the weights | `huggingface.co/openai/whisper-large-v3` | **Apache-2.0** |
+| `whisper.cpp` GGML conversions | `huggingface.co/ggerganov/whisper.cpp` | **MIT** |
+
+All three permit commercial use and redistribution, with attribution. The model
+card's cautions about high-risk domains are guidance rather than licence terms.
+**So there is no legal obstacle to a download button, and none to bundling the
+weights outright.**
+
+It is not shipped, and the reason is not legal: this app has no local inference
+runtime to hand the weights to. A button that downloads three gigabytes into an
+application that cannot run them is the dead control this repository keeps being
+audited for. What ships instead is a transcription key, checked against the
+provider before it is stored — and the hosted path uses the very same model,
+because Groq serves `whisper-large-v3` itself. See `src/main/voice.ts`.
+
+If a runtime is ever added, this table is the whole of the licence work: add the
+three notices above to the bundle's notice file, and the download button becomes
+legal to ship as written.

@@ -212,6 +212,7 @@ describe('the record on disk', () => {
         askedBy: 'user',
         question: 'q',
         headline: 'h',
+        shown: 'screen',
         stops: [],
         stoppedAfter: null,
         dropped: [],
@@ -256,6 +257,7 @@ describe('the window says what happened, never what was said', () => {
     askedBy: 'user',
     question: 'q',
     headline: 'h',
+    shown: 'screen',
     stops: [
       {
         index: 0,

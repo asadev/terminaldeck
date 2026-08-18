@@ -138,6 +138,36 @@ silent for the `pushState` every single-page app routes with, so on the pages
 this feature exists for it was permanently disabled. `BrowserBridge` observes the
 web view through KVO — `BrowserBackTests`.
 
+**And its chrome is the platform's.** *"Localhost browsing is still not native on
+iOS."* Pushing it was necessary and not sufficient: the screen had taken over the
+two pieces of a pushed screen that belong to iOS. It hid the navigation bar so it
+could draw its own row of browser controls along the top — which cost the
+chevron, the standard title and the interactive pop — and
+`allowsBackForwardNavigationGestures` gave the left edge to the *page's* history,
+so the one gesture everybody reaches for to leave a pushed screen quietly did
+something else and there was no way out with a thumb at all.
+
+The resolution is Safari's and it dissolves the conflict rather than picking a
+side. The navigation bar stays, so the chevron, the title and the pop gesture are
+the system's; the browser's own controls move to a **bottom** toolbar, which is
+where iOS has kept browser controls since the first iPhone. The two back buttons
+that made hiding the bar look necessary are no longer eleven points apart arguing
+over one meaning — they are at opposite ends of the screen and each is where iOS
+says its meaning lives. **Done stays last** — *"last button I think is on its
+correct place."*
+
+**Forward** is new and it is not a feature, it is a repair:
+`allowsBackForwardNavigationGestures` is one property buying two gestures, back
+on the left edge and forward on the right, so turning it off took forward away
+with it. `canGoForward` is observed beside `canGoBack` — it would have had the
+identical same-document bug otherwise — and `BrowserBackTests` walks a real
+history through both.
+
+`LocalhostChromeTests` is the tripwire in the unit suite (the bar is not hidden,
+the controls are in a `.bottomBar` group in that order, the web view does not
+take the edge swipe); `LocalhostUITests` is the proof, measuring the real bar's
+frames on a real tunnelled page and driving the edge swipe until the screen pops.
+
 **The connection is only mentioned when it is in the way.** *"when we just open
 the application, it shows connecting … let it give a few seconds; after five
 seconds if it is still not connected, then show … no need to show connected all
@@ -168,6 +198,25 @@ started yet. The scroll and the two selection gestures are now declared exclusiv
 the scroll is declared to wait for the selection drag to fail, and the scroll view's
 own pan is limited to one finger. `TerminalGesturesTests` asks the delegate each
 of those three questions directly.
+
+**The last line stops above the home indicator, and only when the keyboard is
+down.** *"At the bottom we cannot see some stuff because of the mobile's round
+corners and the running-agents things — whatever is at the most bottom is less
+visible. So leave a little space when the keyboard is off."* Two different things
+want that strip and the pass that took it back for the terminal could not tell
+them apart: `.ignoresSafeArea(.container, edges: .bottom)` was added to stop
+SwiftUI reserving the floating tab pill's band inside a session — correct, and it
+stays — and it took the hardware's 34 points with it, so the row an agent draws
+its status on was being crossed by the indicator and clipped by the corner radius.
+The two levers are now separate. SwiftUI keeps refusing the *container* inset;
+`TerminalContainerView`, a UIKit view that really does sit against the bottom
+edge, gives back its own `safeAreaInsets.bottom` — 34 on a phone with an
+indicator, 0 on a bezelled SE, nothing hard-coded. With the keyboard up the
+container no longer reaches the unsafe region at all, so the inset disappears by
+geometry rather than by a flag and no line of output is wasted while typing.
+Measured both ways: `Tests/TerminalContainerTests.swift` on a real layout in a
+real window, and `UITests/TerminalBottomInsetUITests.swift` with a photograph of
+each state.
 
 ## What the phone can do beyond attaching to a session
 
@@ -210,6 +259,156 @@ buffer** — scrollback included — to a `.txt` named after the session and han
 to the system share sheet. Deliberately not the same thing as Copy, which takes
 the screen or a selection: the reason to send somebody a session is usually the
 error that has already scrolled off the top. `ShareOutput.swift`.
+
+## Light and dark
+
+Asad, 2026-08-17: *"mobile iOS is only dark mode — it should have both, in
+settings."* Settings → Appearance → **System / Light / Dark**, System by default,
+stored in `UserDefaults` and stated **once**, by `RootView`, for the whole window
+including its sheets. `Appearance.swift` holds the choice; `Theme.swift` holds
+both halves of the palette.
+
+### It was pinned in three places, and only one of them was visible
+
+1. **`UIUserInterfaceStyle = Dark` in `Support/Info.plist`.** The one that
+   mattered: it is the operating system overriding every window in the process
+   before any view is consulted, so while it was there nothing else could have
+   worked. Gone; the key is deliberately absent rather than set to `Automatic`.
+2. **Eleven `.preferredColorScheme(.dark)` calls** across nine files — the
+   session detail, the alerts, the localhost browser, the GitHub account, the
+   inspect sheet, three copilot sheets, the credential prompt, and the root
+   twice. Harmless under the plist pin and eleven silent overrides without it.
+   Gone; `AppearanceTests` walks the source and fails if one comes back.
+3. **The palette itself**, which had one set of dark values. The light half is
+   `src/renderer/styles/tokens.css`'s own light theme carried across hex for hex
+   — not the dark half lightened, which gets the surfaces roughly right and every
+   ink on them wrong.
+
+Two smaller ones, same class of defect: two row highlights written as
+`Color.white.opacity(0.06)`, which is a pressed state on charcoal and nothing at
+all on paper, and a disabled key cap built with `withAlphaComponent` on a dynamic
+colour, which is not documented to keep the provider.
+
+### The terminal is the part that does not come for free
+
+Every other UIKit view in the app can be handed a `UIColor(dynamicProvider:)` and
+left alone — UIKit re-resolves it, and `Color(uiColor:)` carries the same object
+into SwiftUI. **SwiftTerm does not keep the provider.**
+`nativeForegroundColor`'s setter flattens the colour into a 16-bit RGB struct at
+the instant it is assigned, and `installColors` does the same to the sixteen ANSI
+values. A dynamic colour given to the emulator is therefore resolved once and
+frozen — a phone switched to Light whose chrome changes and whose terminal does
+not, with nothing in a log to say so.
+
+So `TerminalBridge.applyColors` re-applies the whole set on every trait change,
+resolving explicitly against the view's own trait collection.
+`TerminalBridgeTests` proves it by asking the emulator: it switches the window's
+appearance and reads the palette back with **OSC 4** (`ESC ] 4 ; 2 ; ?`), which
+is the escape sequence a program uses to ask a terminal what colour 2 currently
+is. Note the fixture puts the terminal in a real `UIWindow`, and that is not
+scaffolding: on iOS 17+ a view outside a window hierarchy is not given trait
+updates at all, so the first version of those tests measured nothing changing and
+concluded the mechanism was broken when it was the fixture that was.
+
+### The ANSI palette, and where the desktop does not help
+
+The dark sixteen are now **the desktop's** — `@xterm/xterm`'s default set, which
+`TerminalView.tsx` never overrides. SwiftTerm's own default is Apple Terminal's,
+so before this the same session rendered in two different colour schemes
+depending on which screen it was read on.
+
+For light there was nothing to copy. The desktop paints its light terminal
+`--terminal-bg` (`#e8e8e8`, which the phone now matches) and leaves the
+dark-ground ANSI set on top of it; measured against that paper its own yellow is
+2.1:1, its bright green 1.3:1 and its bright yellow 1.0:1. So the light sixteen
+are the same sixteen walked down in lightness — a channel scale toward black,
+which preserves hue and saturation exactly — until each clears its target on
+paper, which is the transform `tokens.css` already documents for the accent and
+applies to all five `--status-*` colours. `Ink.ansi` holds the values and the
+three deliberate exceptions; `AppearanceTests` recomputes the contrast, the hue
+drift and the normal/bright separation rather than trusting the table.
+
+**What no palette reaches is 256-colour and 24-bit output**, which bypasses the
+palette entirely. An agent that emits `ESC[38;2;…m` greys chosen for a black
+background is hard to read on paper on the phone exactly as it is on the desktop.
+That is a property of the programs, and it is the one thing worth knowing before
+choosing Light.
+
+### Looking at it
+
+```sh
+ios/Harness/appearance-shots.sh          # every screen, both schemes, real host
+```
+
+`UITests/AppearanceShotsUITests.swift` walks the app twice — Settings, Machines,
+Localhost grouped and unfolded, a tunnelled page, the session list, a live
+terminal printing all sixteen ANSI colours, the key grid, the find bar, the
+session detail, Alerts, GitHub, pairing — choosing the appearance through the
+app's own picker each time, and then kills and relaunches the app to prove the
+choice survives it. **Each frame is measured**: the screenshot is decoded and its
+mean luminance checked against the scheme the walk believes it is in, so a screen
+that quietly did not follow fails by name instead of being a photograph somebody
+has to notice. The simulator itself is left in Dark for the whole run, so the
+light pass is the *setting* working rather than the app following the system.
+
+The copilot screens need the stand-in instead. The **window** build has a copilot
+now, but `out/headless/host.mjs` does not — `src/headless/host.ts` injects no
+`CopilotRuns` — and the headless host is what the other appearance case runs
+against. Note `--rendezvous`: the stand-in's default pairing slot is its *own*
+local relay, and the phone has no relay setting, so without it the six digits are
+looked up somewhere the host is not sitting.
+
+```sh
+ios/Harness/run.sh host --port 8930 --rendezvous wss://relay.terminaldeck.dev \
+  --copilot alter --approve-after 3000 --folders /tmp/td-work &
+TEST_RUNNER_TD_CONTROL=127.0.0.1:8931 TEST_RUNNER_TD_COPILOT=alter \
+TEST_RUNNER_TD_SHOTS=/tmp/td/appearance \
+  xcodebuild test -project ios/TerminalDeck.xcodeproj -scheme TerminalDeck \
+  -destination 'platform=iOS Simulator,id=<UDID>' \
+  -only-testing:TerminalDeckUITests/AppearanceShotsUITests/testTheCopilotScreensInBothSchemes
+```
+
+### Connecting the copilot, which is a second ceremony
+
+A paired device has **no copilot reach at all** until somebody at the machine
+mints a six-digit connect code and it is redeemed — `COPILOT-REMOTE.md` §6. So a
+walk that wants the timeline has to mint one; the stand-in grew a control
+endpoint for exactly that, because a script cannot press a button on a Mac:
+
+```sh
+curl 127.0.0.1:8931/copilot-code     # six digits, sixty seconds, single use
+curl 127.0.0.1:8931/copilot-ask      # raise a confirmation on the connected device
+curl 127.0.0.1:8931/copilot-pending  # what is waiting, and who owns it
+```
+
+`CopilotScreensUITests` walks the whole thing: connect with a code, start a run,
+ask it something, answer the confirmation it raises, and read a question raised
+at the desk that this phone may watch and must not answer.
+
+```sh
+ios/Harness/run.sh host --port 8887 --rendezvous wss://relay.terminaldeck.dev \
+  --copilot alter --folders /tmp/tdwork &
+TEST_RUNNER_TD_CONTROL=127.0.0.1:8888 TEST_RUNNER_TD_COPILOT=alter \
+TEST_RUNNER_TD_SHOTS=/tmp/td/copilot-shots \
+  xcodebuild test -project ios/TerminalDeck.xcodeproj -scheme TerminalDeck \
+  -destination 'platform=iOS Simulator,id=<UDID>' \
+  -only-testing:TerminalDeckUITests/CopilotScreensUITests
+```
+
+Against the **real** desktop the same walk is `LiveCopilotUITests`, whose header
+carries the command: a window build under a scratch `--user-data-dir`, with the
+two codes minted over CDP into two files because each lives sixty seconds and a
+Simulator takes longer than that to arrive.
+
+**Two frames need a real device and are not in the set**, both for the same
+reason and it is the harness rather than the app. `PortTunnel` binds the *same
+port number* on the phone so that the absolute links a dev server writes into
+its own pages resolve, and a Simulator has no network stack of its own — so
+against a host on the same Mac that number is already taken by the server being
+tunnelled to, and the page answers "Port 4399 is already in use on this phone".
+The localhost-page frames are therefore photographs of that refusal, correct in
+both schemes, and the **inspect sheet** — which is a tap on an element of a page
+that rendered — has no page to be opened from.
 
 ## Build and run
 
@@ -401,6 +600,39 @@ command line" at the top of the log, never reaches the runner's
 `** TEST SUCCEEDED **`. That is a green run in which nothing was tested, which is
 the worst thing this suite can produce — and it is why `live-transfer.sh` exists
 as one command rather than as a recipe to be retyped.
+
+#### The localhost proof is one command, and it needs the *product's* host
+
+```sh
+ios/Harness/live-localhost.sh [--device "iPhone 17"|<UDID>] [--appearance light|dark]
+```
+
+It starts `out/headless/host.mjs` on the live relay under its own `HOME`, serves
+this repository's dev site on 3210, erases and boots a Simulator, pairs it,
+drives `LocalhostUITests` and exports every screenshot the run took. Five cases,
+about three minutes once the Simulator has booted.
+
+Neither of the two obvious hosts works for this suite, and both failures are
+quiet ones worth knowing:
+
+- **`ios/Harness/run.sh host`** implements **no `ports` frame and no `tunnel`
+  verb**, so a localhost run against it can only ever photograph an empty
+  screen. An earlier localhost pass was reported as verified that way.
+- **`scripts/remote-host.sh`** is the real desktop endpoint and its codes cannot
+  be typed in. **Six digits do not carry an address**: `Rendezvous.swift` derives
+  a relay slot from the code and expects the machine showing it to be sitting in
+  that slot, and what puts a machine there is `startBeacon` in
+  `src/main/remote/machines/rendezvous.ts` — which that script never calls. It
+  still prints a `terminaldeck://pair?…` link, which is the door a scanned QR
+  came through and which the product removed. Measured 2026-08-17: a code from
+  it, typed correctly, inside its sixty seconds, on the deployed relay, answers
+  *"No machine is showing that code."* Its `/pair` also answers `{ uri }` where
+  every self-pairing suite here reads `{ code }`.
+
+The headless host has neither problem: it is the same `createHostCore`,
+`registerRemoteIpc`, `scanDevPortsDetailed` and tunnel hub the window build
+links, and `Harness/run.sh live pair` mints through the same `machines:code` IPC
+the desktop's Pair button calls — beacon included.
 
 #### `FindShareAndAlertsUITests` pairs itself
 

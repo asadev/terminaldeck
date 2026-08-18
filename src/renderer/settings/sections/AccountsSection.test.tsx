@@ -11,7 +11,8 @@ import {
   signInToNewAccount,
   type AccountsViewProps,
 } from './AccountsSection'
-import { buildAccountProviderRows } from '../../components/ProviderPicker'
+import { AddAccountSteps } from './AddAccountDialog'
+import { buildAccountProviderRows, type AccountProviderRow } from '../../components/ProviderPicker'
 import type { AccountsSnapshot, SignInView } from '../../accounts'
 
 /**
@@ -92,6 +93,28 @@ const noop = (): void => {}
  * — the binary was there, `which` found it, and it died on spawn.
  */
 const ALL_RUNNABLE = buildAccountProviderRows({ claude: true, codex: true, gemini: true })
+
+/**
+ * The Add-account popup, rendered on its own.
+ *
+ * `AddAccountSteps` rather than `AddAccountDialog`: the dialog portals to
+ * `<body>`, and `createPortal` throws under `renderToStaticMarkup`, which is
+ * the only rendering this project does in a test. The panel is where all the
+ * copy is, so it is the half worth asserting — the same split
+ * `SettingsWindow.test.tsx` makes between `SettingsPanel` and the `Modal`
+ * around it.
+ */
+function dialog(over: { providerRows?: readonly AccountProviderRow[]; busy?: boolean } = {}): string {
+  return renderToStaticMarkup(
+    <AddAccountSteps
+      open
+      providerRows={over.providerRows ?? PROVIDERS}
+      busy={over.busy ?? false}
+      onSignIn={noop}
+      onClose={noop}
+    />,
+  )
+}
 
 function render(over: Partial<AccountsViewProps> = {}): string {
   return renderToStaticMarkup(
@@ -238,11 +261,32 @@ describe('AccountsView', () => {
     )
   })
 
+  it('offers exactly one way in, and it is called Add account', () => {
+    /*
+     * The change this pass is about, stated as a property of the pane rather
+     * than of the popup: *"'Add' and 'Sign in' should be one thing, called Add
+     * account. It must open a small popup with only the sign-in steps — not the
+     * whole Agents page."*
+     *
+     * So the pane may not carry the question, the agent list or a name field.
+     * Each of those was correct on its own and the sum of them was the
+     * complaint.
+     */
+    const html = render()
+    expect(html).toContain('>Add account<')
+    expect(html).not.toContain('Which agent is this a login for?')
+    expect(html).not.toContain('Name this Claude Code account')
+    expect(html).not.toMatch(/<input[^>]*value="claude"/)
+  })
+})
+
+describe('the Add-account popup', () => {
   it('says where signing in actually happens', () => {
     // It happens in the agent's own terminal, and a screen that does not say so
     // leaves a person hunting for a password field that does not exist.
-    const html = render()
-    expect(html).toContain('Signing in happens in the terminal')
+    const html = dialog()
+    expect(html).toContain('Sign in, in the terminal that opens.')
+    expect(html).toContain('never sees your password')
   })
 
   it('asks which agent an account is for, before asking its name', () => {
@@ -251,10 +295,30 @@ describe('AccountsView', () => {
      * accounts existed; there was simply nowhere on screen to give it one, so
      * every account made here was a Claude account.
      */
-    const html = render()
+    const html = dialog()
     expect(html).toContain('Which agent is this a login for?')
     expect(html).toMatch(/<input[^>]*value="claude"/)
     expect(html).toMatch(/<input[^>]*value="codex"/)
+  })
+
+  it('carries the steps and nothing else', () => {
+    /*
+     * *"Just give me the login, sign-in steps."* Three of them, numbered, and
+     * no account list, no installed-agents table and no default pickers — which
+     * is what "not the whole Agents page" means, checked from the outside.
+     */
+    const html = dialog()
+    expect(html.split('add-account-step"').length - 1).toBe(3)
+    expect(html).not.toContain('What is installed')
+    expect(html).not.toContain('settings-profiles')
+    /*
+     * And not the stale-CLI warning either, which was here for one build. Seen
+     * in the running window: the popup is 440px wide and the scrim over the
+     * pane is barely a tint, so the same amber block appeared twice in one
+     * frame — squeezed into three-word lines in front, at full width behind.
+     * The pane keeps it, above the button that opens this.
+     */
+    expect(html).not.toContain('agent-cli')
   })
 
   it('lists Gemini, disabled, with the reason on the row', () => {
@@ -263,9 +327,9 @@ describe('AccountsView', () => {
      * config-directory variable, so a missing row would read as an oversight —
      * what it does not have is a way to keep two logins apart, and signing into
      * a second one would overwrite the first. Leaving it out would also make
-     * this pane silently disagree with the request, which named Gemini.
+     * this popup silently disagree with the request, which named Gemini.
      */
-    const html = render()
+    const html = dialog()
     expect(html).toContain('Gemini CLI')
     expect(html).toContain('one login per machine')
     expect(html).toMatch(/<input[^>]*disabled[^>]*value="gemini"/)
@@ -291,17 +355,18 @@ describe('AccountsView', () => {
     expect(html).toContain('data-provider="codex"')
   })
 
-  it('says so, and refuses Add, on a machine with no agent installed', () => {
+  it('says so, and refuses Sign in, on a machine with no agent installed', () => {
     /*
      * Every row present and none of them selectable. Without the sentence this
-     * is a form that ignores you: a name can be typed into it and Add never
-     * lights, with nothing on screen saying why. `install` lines are already on
-     * each row; what was missing was the one that names the situation.
+     * is a form that ignores you: a name can be typed into it and the button
+     * never lights, with nothing on screen saying why. `install` lines are
+     * already on each row; what was missing was the one that names the
+     * situation.
      */
     const none = buildAccountProviderRows({ claude: false, codex: false, gemini: false, shell: true })
-    const html = render({ providerRows: none })
+    const html = dialog({ providerRows: none })
     expect(html).toContain('No agent on this machine can hold a second login')
-    expect(html).toContain('<button type="submit" class="settings-btn" data-tone="primary" disabled')
+    expect(html).toContain('<button type="submit" class="add-account-go" disabled')
   })
 
   it('binds the name field to the agent that was chosen', () => {
@@ -309,10 +374,10 @@ describe('AccountsView', () => {
      * The one visible proof, in a project with no DOM to click in, that the
      * list above the field is wired to the form below it rather than sitting
      * beside it. A choice that changes nothing on screen is how somebody types
-     * a name, presses Add and gets a Claude account anyway — which is the
-     * report this pass came from.
+     * a name, presses the button and gets a Claude account anyway — which is
+     * the report this pass came from.
      */
-    expect(render()).toContain('Name this Claude Code account')
+    expect(dialog()).toContain('Name this Claude Code account')
   })
 
   it('picks the agent up from the rows, not from an effect', () => {
@@ -320,10 +385,11 @@ describe('AccountsView', () => {
      * There is no DOM here and effects do not run under SSR — which is the
      * point rather than a limitation, because it is also true of the very first
      * paint in a real window. A selection settled by an effect would leave that
-     * paint with no row chosen, Add disabled, and a form that looks ready.
+     * paint with no row chosen, the button disabled, and a form that looks
+     * ready.
      */
     const codexOnly = buildAccountProviderRows({ claude: false, codex: true, gemini: true, shell: true })
-    const html = render({ providerRows: codexOnly })
+    const html = dialog({ providerRows: codexOnly })
     expect(html).toMatch(/<input[^>]*checked[^>]*value="codex"/)
     expect(html).toContain('Name this Codex CLI account')
   })

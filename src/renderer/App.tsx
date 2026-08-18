@@ -3,6 +3,8 @@ import { WorkspaceTabStrip } from './browser/WorkspaceTabStrip'
 import type { ProviderId, SessionStatus } from '@shared/types'
 import { StoreProvider, useStore, type Session } from './state/store'
 import { TerminalView } from './components/TerminalView'
+import { MachineSessionPane } from './machines/MachineLinks'
+import { useMachines } from './machines/useMachines'
 import { EmptyState } from './components/EmptyState'
 import { SettingsWindow } from './settings/SettingsWindow'
 import type { SectionId } from './settings/settings-schema'
@@ -15,9 +17,11 @@ import { useProjectAlerts } from './alerts-feed'
 import { openLinkExternally } from './link'
 import { markSeen, readSeen, unreadCount, writeSeen, type SeenAlerts } from './alerts-unread'
 import {
+  canResumeProvider,
   CloseSessionConfirm,
   CONFIRM_CLOSE_KEY,
   needsCloseConfirm,
+  RISKY_STATUSES,
 } from './components/CloseSessionConfirm'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { ShortcutsSheet } from './components/ShortcutsSheet'
@@ -42,22 +46,29 @@ import {
   closePaneOrCollapse,
   isSplit,
   pruneClosedPanes,
+  replaceTabInPanes,
   seedSplit,
   showInFocusedPane,
   splitFocused,
 } from './layout/panes'
 import { CopilotConsent } from './copilot/CopilotConsent'
+import { CopilotSetup } from './copilot/CopilotSetup'
 import { CopilotStop } from './copilot/CopilotStop'
 import { CopilotView } from './copilot/CopilotView'
 import { defaultPane } from './copilot/copilot-model'
-import { COPILOT_NAME } from './copilot/identity'
 import { useConsent } from './copilot/useConsent'
 import { useCopilot } from './copilot/useCopilot'
+import { useCopilotSetup } from './copilot/useCopilotSetup'
 import { partitionByOrigin, startedByCopilot, turnOf } from './copilot/session-origin'
+import { useHeldSessions } from './held-sessions'
+import { useKnownSignIns } from './accounts'
+import { switchNames, useSwitchAccount } from './session-switch'
+import { SwitchAccountConfirm } from './components/SwitchAccountConfirm'
 import { Sidebar } from './shell/Sidebar'
 import { WindowToolbar } from './shell/WindowToolbar'
 import { FolderTitle } from './shell/FolderChip'
 import { AccountChip } from './shell/AccountChip'
+import type { ChromeSession } from './shell/agent-presence'
 import { PaneBar } from './shell/PaneBar'
 import { SessionControls } from './shell/SessionControls'
 import { PanelView } from './shell/PanelView'
@@ -76,7 +87,9 @@ import {
 } from './shell/tab-selection'
 import {
   keepNewWindowInStrip,
+  keepWindowBesideInStrip,
   removeWindowFromStrip,
+  replaceWindowInStrip,
   stripIsPresent,
 } from './browser/workspace-strip'
 import { ErrorBoundary } from './shell/ErrorBoundary'
@@ -96,6 +109,24 @@ type PendingClose =
   | { kind: 'session'; tab: WorkspaceTab }
   | { kind: 'project'; path: string; name: string; status: SessionStatus; count: number }
 
+/**
+ * The three facts the session chrome needs about a session, off the store.
+ *
+ * `WorkspaceTab` deliberately does not carry the agent or the exit code — a tab
+ * is a thing on a bar, and a browser page is one too — so the chip's questions
+ * ("is there an agent in this", "has it ended") have to be answered from the
+ * session list. Null for a tab that is not a session, which is exactly what
+ * `AccountChip` reads as "I am being asked about a folder".
+ */
+function chromeSession(
+  id: string | null,
+  sessions: readonly Session[],
+): ChromeSession | null {
+  if (id === null) return null
+  const found = sessions.find((session) => session.id === id)
+  return found ? { id: found.id, provider: found.provider, exited: found.exitCode !== null } : null
+}
+
 /** Last segment of a path, or null. The store's own `folderName`, minus the store. */
 function folderNameOf(path: string | undefined): string | undefined {
   if (!path) return undefined
@@ -110,6 +141,7 @@ function Workspace() {
     activeSessionId,
     addProject,
     addSession,
+    replaceSession,
     removeProject,
     removeSession,
     setActiveSession,
@@ -168,6 +200,21 @@ function Workspace() {
   const copilot = useCopilot()
 
   /**
+   * What the copilot is called, and whether anybody has ever been asked.
+   *
+   * One read of the copilot's own instruction file, feeding the three places its
+   * name is printed — the pinned row, the tab pill and the bar — and the one
+   * decision that has to be made before it starts: whether to put the setup flow
+   * in front of it. `useCopilotSetup` carries why the name lives in that file
+   * rather than in a setting.
+   *
+   * It reads and never writes, exactly like `useCopilot` above, so mounting it
+   * cannot create a copilot, a folder or a file.
+   */
+  const copilotSetup = useCopilotSetup()
+  const [copilotSetupOpen, setCopilotSetupOpen] = useState(false)
+
+  /**
    * The fleet, and the copilot, told apart — because they are not the same list
    * even though they are the same kind of thing.
    *
@@ -195,26 +242,76 @@ function Workspace() {
    *    session as a window* reads this: the tab list, the heading, the control
    *    cluster, the terminals, the panes.
    *
-   * The split is by id and by folder. By **both**, because the two answers
-   * arrive at different moments: the id identifies the running process, and the
-   * folder catches the row for a copilot session that has exited but is still in
-   * the list, and catches the project heading its cwd would otherwise create.
-   * Neither is guessed — both come from `copilot:state`, which is the module
-   * that decides where the copilot lives.
+   * The split is **by id, and only by id.**
    *
-   * Until that answer lands, nothing is filtered and the row is briefly visible.
-   * That is the honest trade: the alternative is holding the whole session list
-   * back on an IPC round trip, which would delay every session a person cares
-   * about in order to hide one they do not.
+   * ## It used to be by folder as well, and that was the bug
+   *
+   * Asad, 2026-08-17: *"If I am opening same as copilot folder, it is taking me
+   * directly to the commander. It should be able to open another option of the
+   * separate session also in the same folder. But in that case it will not call
+   * itself as commander — it will just be a normal another session."*
+   *
+   * He is exactly right about what it should do, and the folder clause is what
+   * stopped it. Reproduced in the harness: start a session whose cwd is the
+   * copilot's own folder and it is filtered out of `sessions` altogether — no
+   * row in the rail, no tab in the strip, nothing on screen. `showTab` then
+   * names an id that resolves to no tab, `resolveActiveTab` falls back to
+   * `tabs[0]`, and what you are looking at is whatever else was open. With the
+   * copilot the only other window, that is the copilot: *"it is taking me
+   * directly to the commander."*
+   *
+   * The identity layer already makes the distinction he is asking for — only the
+   * copilot's own session is launched with `--append-system-prompt-file`, so a
+   * plain session started in that folder is a plain session and knows nothing
+   * about being an assistant. The routing was the only thing insisting otherwise.
+   *
+   * ## What the folder clause was for, and what replaces it
+   *
+   * Two things, and each gets its own answer rather than one clause doing both
+   * badly:
+   *
+   *  - **A copilot session that has exited but is still in the list.** Nothing
+   *    removes a session from the store when its process ends — it stays with
+   *    `status: 'exited'` — while `copilot:state` drops its `sessionId` the
+   *    moment it goes. So the id alone is not enough at that instant, and
+   *    {@link copilotIds} below is: every id this window has *ever* seen
+   *    `copilot:state` name is remembered, so an ended copilot stays recognised
+   *    as the copilot instead of reappearing as somebody's session.
+   *  - **The project heading its cwd would create.** That is `projects` below,
+   *    which still hides the folder — but now only while it is nothing but the
+   *    copilot's home. Open a session of your own in there and the heading
+   *    appears, because at that point it genuinely is a folder you are working in
+   *    and its sessions need somewhere to be listed.
+   *
+   * Until `copilot:state` answers, nothing is filtered and the row is briefly
+   * visible. That is the honest trade: the alternative is holding the whole
+   * session list back on an IPC round trip, which would delay every session a
+   * person cares about in order to hide one they do not.
    */
   const copilotSessionId = copilot.state?.sessionId ?? null
   const copilotRoot = copilot.state?.paths?.root ?? null
+  /**
+   * Every session id that has been the copilot's, in this window's lifetime.
+   *
+   * A ref rather than state because nothing is drawn *from* it — it only ever
+   * subtracts a row that would otherwise be drawn — and because it must not
+   * cause a render of its own: it is written during render, from the value the
+   * same render is filtering with, so the answer it gives can never be one frame
+   * behind the list it is being applied to.
+   *
+   * It grows by at most one entry per copilot restart and is thrown away with
+   * the renderer, which is also exactly the right lifetime: a session id names a
+   * pty in this main process, and after a restart `session:list` returns only
+   * live ptys, so an ended copilot is not in the list for anyone to mistake.
+   */
+  const copilotIds = useRef<Set<string>>(new Set())
+  if (copilotSessionId !== null) copilotIds.current.add(copilotSessionId)
   const sessions = useMemo(
-    () =>
-      storedSessions.filter(
-        (session) => session.id !== copilotSessionId && session.projectPath !== copilotRoot,
-      ),
-    [storedSessions, copilotSessionId, copilotRoot],
+    () => storedSessions.filter((session) => !copilotIds.current.has(session.id)),
+    // `copilotSessionId` is a dependency even though the filter does not read
+    // it: it is what the set is grown from, and without it the list would not be
+    // recomputed on the render where the copilot's own id first arrives.
+    [storedSessions, copilotSessionId],
   )
   /**
    * The copilot's own `SessionMeta`, when it is running and this window has seen
@@ -239,9 +336,30 @@ function Workspace() {
     () => (copilotSession ? [...sessions, copilotSession] : sessions),
     [sessions, copilotSession],
   )
+  /**
+   * The projects in the rail — the copilot's home among them only once it is
+   * also somewhere you are working.
+   *
+   * The copilot's cwd is a real folder with real files in it, and it is not a
+   * project: listing it unasked would put the assistant's memory directory in
+   * the rail with the assistant itself as a row inside it, three centimetres
+   * under the pinned entry that claims to be the one place it lives.
+   *
+   * But *"it should be able to open another option of the separate session also
+   * in the same folder"* — and a session with no heading to sit under is a
+   * session in the rail's orphan bucket, which is where sessions go when their
+   * project has been closed out from under them. That is not what happened here.
+   * So the heading appears exactly when there is one of his own sessions in
+   * there to need it, and disappears again when the last one closes.
+   */
   const projects = useMemo(
-    () => storedProjects.filter((project) => project.path !== copilotRoot),
-    [storedProjects, copilotRoot],
+    () =>
+      storedProjects.filter(
+        (project) =>
+          project.path !== copilotRoot ||
+          sessions.some((session) => session.projectPath === copilotRoot),
+      ),
+    [storedProjects, copilotRoot, sessions],
   )
 
   /**
@@ -259,6 +377,47 @@ function Workspace() {
 
   const sidebar = useSidebar()
   const { panel, selectPanel, clearPanel } = sidebar
+
+  /**
+   * The sessions that were open, did not come back, and are being kept.
+   *
+   * Subscribed here rather than inside the rail for the same reason
+   * `UpdateBanner` is mounted here: this is where the window's bridge
+   * subscriptions live and where `wiring.test.ts` can see them. The rail draws
+   * rows from a prop and knows nothing about IPC, which is what lets it be
+   * rendered in a test and in `.harness/` without one.
+   *
+   * Unconditional, and not behind a feature. A held row is the app reporting
+   * that it failed to do something a person asked for, and a report that can be
+   * switched off is a report that will be off on the machine where it mattered.
+   */
+  const held = useHeldSessions()
+  /**
+   * Running the session you already have as a different account.
+   *
+   * Asad, 2026-08-17: *"when I change account from the dropdown it starts a new
+   * session with that account, instead of changing it in the same session."* The
+   * account chip's menu now asks for a switch rather than a second session, and
+   * this is the state behind that ask: which switch is being considered, what it
+   * would do, and what went wrong if it did.
+   *
+   * It lives up here beside the other bridge-backed state, and not in the chip,
+   * for two reasons. The chip is mounted once per pane and once in the toolbar,
+   * so a sheet owned by it could be opened by whichever copy happened to be
+   * clicked — and the thing that has to happen on success is a change to the
+   * *window*: the tab, the pane and the strip position all move from one session
+   * id to another, and none of those are the chip's to touch.
+   */
+  const switcher = useSwitchAccount()
+  /**
+   * The addresses the account menu has already read, for the sheet's title.
+   *
+   * A store read and nothing more — no probe. `finish.test.ts` enumerates which
+   * surfaces are allowed to *ask*, because asking spawns the agent's CLI once per
+   * account; the chip's menu has already paid that cost by the time this sheet
+   * can exist, since opening the menu is the only way to reach it.
+   */
+  const knownSignIns = useKnownSignIns()
   const [extraTabs, setExtraTabs] = useState<WorkspaceTab[]>([])
   /** Makes a page's id unique when two are opened in the same millisecond. */
   const tabSeq = useRef(0)
@@ -332,6 +491,29 @@ function Workspace() {
   const [prefsSection, setPrefsSection] = useState<SectionId>('general')
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   /**
+   * The machines this window can reach, read here rather than in Settings.
+   *
+   * The rail lists them and the New Session dialog offers them, and neither can
+   * read a settings panel's state — which is why this moved up here. See
+   * `useMachines`, and his instruction behind it: *"Remote sessions belong in
+   * the sidebar, alongside local ones."*
+   */
+  const machines = useMachines()
+  /**
+   * The remote session on screen, or null when a local one is.
+   *
+   * Deliberately *not* a `WorkspaceTab`. A remote session is not this window's
+   * to keep: it lives on the far machine, it outlives this app being closed, and
+   * a tab strip entry for it would promise a ✕ that ends something this window
+   * does not own. Opening one covers the pane the way a sidebar view does, and
+   * selecting any local tab puts it away — see `selectTab`.
+   */
+  const [openMachineSession, setOpenMachineSession] = useState<
+    { machineId: string; sessionId: string } | null
+  >(null)
+  /** Which machine the New Session dialog opens on. Null is this one. */
+  const [newSessionMachine, setNewSessionMachine] = useState<string | null>(null)
+  /**
    * The folder the New session dialog should open on, when the press that
    * opened it named one.
    *
@@ -384,6 +566,26 @@ function Workspace() {
    * a config directory, and this setting is what decides that.
    */
   const defaultProvider = stringSetting(settings, 'general.defaultProvider')
+  /**
+   * Whether "continue the last session" can actually continue anything.
+   *
+   * The two surfaces that offer it — the palette row and the ＋'s sibling on a
+   * project heading — spawn through `newSessionIn(path, true)`, and
+   * `host-core.ts` resolves that as
+   * `input.resume && resumeArgs.length > 0 ? resumeArgs : args`. So on an agent
+   * with no resume command the request quietly becomes a *fresh* session and
+   * nothing says so. Claude has `--continue` and Codex has `resume --last`;
+   * Gemini deliberately has neither (see `agent-catalog.ts`, which explains that
+   * its flag errors on an empty history) and a shell has no such idea at all.
+   *
+   * Asked of the default agent because that is the one those two presses would
+   * start — neither of them asks which agent to run, which is precisely what
+   * makes them the named-command exception to *"everywhere it should be
+   * consistent and it should be asking same things to me"*.
+   */
+  const canResumeDefault = canResumeProvider(
+    isProviderId(defaultProvider) ? defaultProvider : undefined,
+  )
 
   /**
    * Any app-level dialog being open.
@@ -480,7 +682,18 @@ function Workspace() {
      * the copilot and its window goes, the same way any session's window goes
      * when its process ends. The pinned row starts it again.
      */
-    ...(copilotSession ? [{ ...windowTab(copilotSession), isCopilot: true as const }] : []),
+    /*
+     * `label` is overwritten with the copilot's own name, and that is the one
+     * field of `windowTab`'s that is wrong for this tab: a session's label is its
+     * title, and the copilot's title is its *folder's* name — which
+     * `sessionLabel` would then turn into "Session 4" beside a rail row saying
+     * Nova. The name is user data read out of its instruction file, so it
+     * arrives here rather than being reached for by `tabLabel`, which has no way
+     * to ask.
+     */
+    ...(copilotSession
+      ? [{ ...windowTab(copilotSession), label: copilotSetup.name, isCopilot: true as const }]
+      : []),
   ]
 
   const activeTab = resolveActiveTab(selection, tabs)
@@ -497,12 +710,14 @@ function Workspace() {
    * "terminaldeck" while the row the user clicked said "Session 2".
    */
   const labelOf = (tab: WorkspaceTab): string => {
-    // The copilot is called Copilot, in the bar, in the strip and in the rail.
-    // Without this it would be numbered like the session it is — and its title
-    // is its own folder's name, which is precisely what `sessionLabel` turns
-    // into "Session N". `tabLabel` in `workspace-tabs.ts` answers the same way
-    // for the strip; the two are the same rule stated where each is read.
-    if (tab.isCopilot) return COPILOT_NAME
+    // The copilot is called whatever it was named, in the bar, in the strip and
+    // in the rail. Without this it would be numbered like the session it is —
+    // and its title is its own folder's name, which is precisely what
+    // `sessionLabel` turns into "Session N". The name is user data read out of
+    // its instruction file and put on the tab where the tab is built, above;
+    // `tabLabel` in `workspace-tabs.ts` reads it from the same place, so the two
+    // are the same rule stated where each is read.
+    if (tab.isCopilot) return tab.label
     if (tab.kind !== 'session') return tab.label
     /*
      * Siblings are the sessions listed *beside* this one, which since the
@@ -928,23 +1143,42 @@ function Workspace() {
        * redirects me to claude only"*.
        */
       const provider = runAs ?? stringSetting(settings, 'general.defaultProvider')
-      const meta = await window.deck.createSession({
-        cwd: path,
-        cols: 100,
-        rows: 30,
-        resume,
-        ...(isProviderId(provider) ? { provider } : {}),
-        /*
-         * The account, when one was picked for *this* session.
-         *
-         * Left off otherwise, and that is not the same as sending null: absent
-         * means "resolve it", and the main process then applies this folder's
-         * account, or the default one, in that order. Sending a fixed id from
-         * here would freeze today's answer and quietly ignore a per-folder
-         * account the user set afterwards. `profiles.ts` owns that chain.
-         */
-        ...(profileId ? { profileId } : {}),
-      })
+      /*
+       * A start can be refused, and this is where that stops being a throw.
+       *
+       * `session:create` rejects when the agent that was asked for cannot run —
+       * it used to answer by starting a plain shell instead, and making a
+       * failure look like a success is the bug this whole change is about. What
+       * a rejection must not become is an unhandled promise nobody sees: the
+       * main process has already held the request and pushed it to the rail,
+       * where it is a row saying what did not start and offering to try again,
+       * so everything below this line — remembering the folder, adding the
+       * project, opening a tab — is work about a session that does not exist.
+       *
+       * Returned rather than rethrown for the same reason: every caller of this
+       * function is a button handler, and a button handler that throws is an
+       * unhandled rejection in the console and nothing on screen.
+       */
+      const meta = await window.deck
+        .createSession({
+          cwd: path,
+          cols: 100,
+          rows: 30,
+          resume,
+          ...(isProviderId(provider) ? { provider } : {}),
+          /*
+           * The account, when one was picked for *this* session.
+           *
+           * Left off otherwise, and that is not the same as sending null: absent
+           * means "resolve it", and the main process then applies this folder's
+           * account, or the default one, in that order. Sending a fixed id from
+           * here would freeze today's answer and quietly ignore a per-folder
+           * account the user set afterwards. `profiles.ts` owns that chain.
+           */
+          ...(profileId ? { profileId } : {}),
+        })
+        .catch(() => null)
+      if (!meta) return
       // Remembered here rather than at the call sites, because every way of
       // starting a session goes through this function and only one of them
       // knows where the folder came from.
@@ -976,6 +1210,45 @@ function Workspace() {
     },
     [addProject, addSession, showTab, settings],
   )
+
+  /**
+   * The switch was confirmed: put the replacement where the old session was.
+   *
+   * The main process has already done the hard half — started the replacement,
+   * then stopped the original, in that order so a failure costs nothing — and
+   * what is left is entirely about the *window*. A new process means a new
+   * session id, and four things in this window are keyed by that id. Every one
+   * of them has to move, and each one left behind is somebody's arrangement
+   * quietly rebuilding itself because a process restarted:
+   *
+   *  - the **session list**, in place, keeping a name the person typed;
+   *  - the **panes**, all of them, since `splitFocused` deliberately puts one
+   *    session in two — and this has to happen before the next prune, which
+   *    would otherwise find the old id gone and collapse the split;
+   *  - the **strip**, at the same index, because that bar holds an arrangement
+   *    somebody made by hand and a tab that jumps to the end is that arrangement
+   *    being rearranged by something that was not a drag;
+   *  - the **selection**, so the window is still showing what it was showing.
+   *
+   * Ordered store-first: the tab has to exist before anything points at it, and
+   * `pruneClosedPanes` runs off the tab list on the very next render.
+   */
+  const confirmAccountSwitch = useCallback(() => {
+    const asking = switcher.asking
+    if (!asking) return
+    void switcher.confirm().then((meta) => {
+      // Null is a refusal or a failure. The sheet is holding the reason and the
+      // old session is still running, so there is nothing for the window to do.
+      if (!meta) return
+      const previous = asking.sessionId
+      replaceSession(previous, meta)
+      setPanes((current) => replaceTabInPanes(current, previous, meta.id))
+      replaceWindowInStrip(previous, meta.id)
+      setSelection((current) =>
+        current.kind === 'tab' && current.id === previous ? showTabSelection(meta.id) : current,
+      )
+    })
+  }, [replaceSession, switcher])
 
   /**
    * Choose a folder, then start a session in it — optionally under a chosen
@@ -1057,10 +1330,25 @@ function Workspace() {
    * dialog's Start, Continue-last-session, the account chip and the sign-in
    * flow all call. What is gone is any *button* that reaches it without asking.
    */
-  const openNewSessionDialog = useCallback((path?: string) => {
-    setNewSessionPath(path ?? null)
-    setNewSessionOpen(true)
-  }, [])
+  const openNewSessionDialog = useCallback(
+    (
+      path?: string | null,
+      /**
+       * Which machine to start on, when the press already answered that.
+       *
+       * Null and `undefined` are the same answer — this machine — and that is
+       * the honest default: every existing caller means here, and a parameter
+       * that made them all say so would be a rewrite of four call sites to
+       * express what they already meant.
+       */
+      machineId?: string | null,
+    ) => {
+      setNewSessionPath(path ?? null)
+      setNewSessionMachine(machineId ?? null)
+      setNewSessionOpen(true)
+    },
+    [],
+  )
 
   /**
    * A tab has been taken off the top bar and it was the one on screen.
@@ -1204,6 +1492,17 @@ function Workspace() {
     (id: string) => {
       showTab(id)
       /*
+       * A remote session filling the window is put away by any local navigation.
+       *
+       * It covers the pane the way a sidebar view does — see `mainView` — so the
+       * thing that reveals what is underneath is the same thing that reveals it
+       * for a panel: choosing something else. Without this line, clicking a
+       * local session in the rail would highlight its row and leave the far
+       * machine's terminal on screen, which is the app disagreeing with itself
+       * about what is selected.
+       */
+      setOpenMachineSession(null)
+      /*
        * While the window is split, a sidebar row or a tab fills the pane you
        * are looking at rather than taking the whole window back.
        *
@@ -1234,6 +1533,74 @@ function Workspace() {
       setActiveSession(id)
     },
     [windowSessions, setActiveSession, showTab],
+  )
+
+  /**
+   * A row in the rail, pressed — which opens that window *beside* the one you
+   * are in rather than replacing it.
+   *
+   * ## What he asked for
+   *
+   * Asad, 2026-08-17: *"If I am clicking different ones, instead of switching,
+   * whenever I click on side panel on anyone, it should open a new window
+   * instead of switching. It should open its own new window next to it."*
+   *
+   * A "window" here is a pill in the top bar — that is the word he uses for them
+   * throughout the same recording (*"why the other ones are going from the
+   * windows tab bar?"*) — so this is not a second `BrowserWindow`. It is the
+   * difference between the bar holding one pill that keeps being overwritten and
+   * the bar accumulating the windows you opened, which is what every tabbed
+   * application does and what he was expecting.
+   *
+   * ## And it is the fix for the complaint two minutes later
+   *
+   * *"If I click on commander, they go away."* Reproduced in the harness: click
+   * three rows in turn and the strip reads `Session 1`, then `Session 2`, then
+   * `Update Claude Code…` — one pill, replaced each time. None of them was ever
+   * *kept*; each was drawn only because `shownTabs` always draws the active tab,
+   * so each evaporated the moment the next thing was opened. Opening the copilot
+   * was simply the next thing. He worked out for himself that the sessions
+   * involved were the copilot's and said that part *"makes sense"* — but then:
+   * *"they should still stay if they are opened in the top bar."* They do now,
+   * because opening one from the rail is what puts it there.
+   *
+   * ## Why this is a separate callback from `selectTab`
+   *
+   * `selectTab` is still what a pill in the strip, ⌘1–9 and ⌘⇧[ / ⌘⇧] call.
+   * Those are moves *between windows you already have*, and a strip that
+   * promoted on its own click would be promoting a tab that is either already
+   * promoted or is the transient one you are looking at — no-ops at best, and at
+   * worst a bar that pins whatever you glance at. Opening from the rail is the
+   * deliberate act; this is called there and nowhere else, which is the same
+   * line `keepNewWindowInStrip` draws for a window that is *created*.
+   */
+  const openTabWindow = useCallback(
+    (id: string) => {
+      // The anchor is read before the selection moves, because "next to it"
+      // means next to the window you were in when you pressed the row.
+      const anchor = activeTab?.id ?? null
+      /*
+       * The window you were already looking at is kept as well.
+       *
+       * Measured after the first version of this, in the harness: launch, then
+       * click the second row. `Session 1` was in the bar — transient, because a
+       * fresh window falls back to `tabs[0]` and `shownTabs` always draws
+       * whatever is active — and it vanished the instant the second window
+       * opened. Which is the complaint again, one window later: he watched
+       * something leave the bar that he had not asked to leave.
+       *
+       * So opening a second window keeps the first. It is bounded to this one
+       * act — a press on a rail row — and it is not "promote whatever is
+       * active": nothing here fires on a pill click, on ⌘1–9, or on a session
+       * merely becoming current. And it cannot resurrect a tab somebody took
+       * off the bar on purpose, because the pill's own ✕ moves the selection
+       * away as it goes, so a demoted tab is never the anchor.
+       */
+      if (anchor !== null && anchor !== id) keepNewWindowInStrip(anchor)
+      keepWindowBesideInStrip(id, anchor)
+      selectTab(id)
+    },
+    [activeTab, selectTab],
   )
 
   /**
@@ -1305,6 +1672,46 @@ function Workspace() {
     [features, newBrowserTab],
   )
 
+  /**
+   * A session this window did not close, and that is not there any more.
+   *
+   * The mirror of `onSessionCreated`, and it was the missing half. Closing a tab
+   * goes through `closeTabNow` below, which kills the pty and removes the row in
+   * the same breath — so the only ending this window ever heard about was one it
+   * caused itself. Everything else left a row behind: the copilot's
+   * `sessions.stop`, a paired phone stopping one, a routine.
+   *
+   * Watched on 2026-08-18: the copilot stopped a session it had started,
+   * `sessions_list` came back with only the copilot in it, and *"Copilot
+   * sessions → Session 1"* was still in the rail — a row that could not be typed
+   * into, re-attached, or got rid of short of quitting the app.
+   *
+   * Deliberately **not** `onSessionExit`. A process that ends by itself keeps its
+   * place in the main process, keeps its scrollback, and keeps its tab, because
+   * reading what it printed before it died is the reason that tab is still worth
+   * having. `session:removed` is the app letting go of the session entirely, and
+   * the main process filters the account switch out of it — see `RemovalReason`
+   * — so nothing here has to know about that case.
+   *
+   * Everything that remembers the session forgets it together, exactly as
+   * `closeTabNow` does: a stale unread dot is untidy, and a finish banner for a
+   * session that no longer exists is a click that goes nowhere.
+   *
+   * It sits here rather than beside `onSessionCreated` for one dull reason —
+   * `notifier` is declared further down this component, and a hook cannot read a
+   * binding that does not exist yet.
+   */
+  useEffect(
+    () =>
+      window.deck.onSessionRemoved?.((id) => {
+        unread.forget(id)
+        notifier.forget(id)
+        titler.forget(id)
+        removeSession(id)
+      }),
+    [removeSession, unread, notifier, titler],
+  )
+
   const closeTabNow = useCallback(
     (id: string) => {
       const tab = tabs.find((t) => t.id === id)
@@ -1351,13 +1758,29 @@ function Workspace() {
     [removeProject, unread, notifier, titler],
   )
 
+  /**
+   * Close a project, asking first — always, and about the whole of it.
+   *
+   * *"Always ask before closing anything from the side panel."* This used to
+   * count the sessions in the folder that were `working` or `input` and skip the
+   * dialog when there were none, which meant the ✕ on a project heading closed
+   * four calm agents outright with no confirmation at all. Reproduced in the
+   * harness: four rows, one press, everything gone. Closing a project is the
+   * single most destructive control in this window and it was the quietest.
+   *
+   * `count` is now every session in the folder rather than only the busy ones,
+   * because that is the number the dialog is telling you about: *"Closing this
+   * project closes 4 sessions."* Counting only the busy ones made the sentence
+   * describe a subset of what the button was about to do.
+   *
+   * An empty folder still asks. It costs one press and it is the one case where
+   * the person cannot be surprised by the answer; making it the exception would
+   * put a rule back that the whole change is about removing.
+   */
   const closeProject = useCallback(
     (path: string) => {
-      const risky = sessionsRef.current.filter(
-        (session) =>
-          session.projectPath === path && needsCloseConfirm(session.status, confirmClose),
-      )
-      if (risky.length === 0) {
+      const inside = sessionsRef.current.filter((session) => session.projectPath === path)
+      if (!confirmClose) {
         closeProjectNow(path)
         return
       }
@@ -1365,15 +1788,18 @@ function Workspace() {
         kind: 'project',
         path,
         name: folderNameOf(path) ?? path,
-        status: risky[0].status,
-        count: risky.length,
+        // The most alarming state among them, so the dialog's wording is about
+        // the worst thing this press will interrupt rather than about whichever
+        // session happens to be first in the list.
+        status: inside.find((session) => RISKY_STATUSES.has(session.status))?.status ?? 'idle',
+        count: inside.length,
       })
     },
     [closeProjectNow, confirmClose],
   )
 
   /**
-   * Close, asking first when the session has something to lose.
+   * Close, asking first. Always.
    *
    * `CloseSessionConfirm` was written, tested and left on the unreachable list
    * while Settings offered a switch called "Confirm closing an active session"
@@ -1381,6 +1807,11 @@ function Workspace() {
    * the reason its own comment gives: a component that decides for itself
    * whether to appear can only decline by rendering nothing, which leaves the
    * user having pressed Close with no dialog and no session closed.
+   *
+   * It used to ask only about `working` and `input`. *"Always ask before closing
+   * anything from the side panel."* — so the status no longer decides whether,
+   * only what the dialog says. `needsCloseConfirm` carries the argument and the
+   * one thing that still switches it off, which is the person.
    */
   const closeTab = useCallback(
     (id: string) => {
@@ -1408,7 +1839,19 @@ function Workspace() {
         if (removal.select !== undefined) showInstead(removal.select)
         return
       }
-      if (tab?.kind === 'session' && tab.status && needsCloseConfirm(tab.status, confirmClose)) {
+      /*
+       * `tab.status ?? 'idle'` rather than `tab.status &&`.
+       *
+       * The old spelling silently skipped the confirmation for any session whose
+       * status had not arrived yet — a session restored at launch, one a phone
+       * started, one whose first status push has not landed. Those are exactly
+       * the sessions a person knows least about, and they were the ones closing
+       * without a word.
+       *
+       * A browser page is not asked about and never was: nothing is running in
+       * it, and its ✕ takes a page off a list.
+       */
+      if (tab?.kind === 'session' && needsCloseConfirm(tab.status ?? 'idle', confirmClose)) {
         setPendingClose({ kind: 'session', tab })
         return
       }
@@ -1445,6 +1888,9 @@ function Workspace() {
     (id: PanelId, focus: string | null = null) => {
       setPanelFocus(focus)
       selectPanel(id)
+      // And a remote session on screen, for the reason `selectTab` gives: it
+      // covers the pane, so anything that fills the pane has to take it back.
+      setOpenMachineSession(null)
       // Going to a view cancels a copilot open that has not landed yet — see
       // `selectTab`, which does the same for the same reason.
       setCopilotPending(false)
@@ -1476,7 +1922,7 @@ function Workspace() {
    * a plain open for the reason `panelFocus` is: a door has to open onto the
    * thing it named, and the next plain press must not land you there again.
    */
-  const openCopilot = useCallback(
+  const showCopilot = useCallback(
     (turn?: string | null) => {
       setCopilotTurn(turn ?? null)
       copilot.ensure()
@@ -1501,6 +1947,40 @@ function Workspace() {
       keepNewWindowInStrip(copilotSessionId)
     },
     [copilot, copilotSessionId, clearPanel, selectTab],
+  )
+
+  /**
+   * The same door, with the first-run questions in front of it.
+   *
+   * Asad, 2026-08-17: *"Maybe we can give a few steps flow before someone sets
+   * up the copilot… so it will ask those questions in the flow, and the copilot
+   * will always know about this and act that way always."* The flow is **before**
+   * — nothing is spawned and nothing is billed until it finishes, which is the
+   * difference between showing somebody what their assistant is about to become
+   * and letting them discover it afterwards.
+   *
+   * Asked as a promise rather than read off state, and `useCopilotSetup` carries
+   * why: the answer lives in a file, the click can land before the read does,
+   * and concluding "never set up" from a state that has merely not loaded would
+   * put these questions in front of somebody who answered them last week. It
+   * resolves from the answer in hand when there is one, so the ordinary press
+   * costs a microtask.
+   *
+   * Once it has run, this is `showCopilot` and nothing else — there is no second
+   * chance to be nagged, and the flow is re-offered only from Settings.
+   */
+  const openCopilot = useCallback(
+    (turn?: string | null) => {
+      void copilotSetup.hasRun().then((ran) => {
+        if (ran) {
+          showCopilot(turn)
+          return
+        }
+        setCopilotTurn(turn ?? null)
+        setCopilotSetupOpen(true)
+      })
+    },
+    [copilotSetup, showCopilot],
   )
 
   /**
@@ -1765,7 +2245,27 @@ function Workspace() {
       // process and a chord this window silently stopped answering to would be
       // worse than a duplicate row.
       { id: 'session.new', title: 'New session…', group: 'Session', run: () => openNewSessionDialog() },
-      { id: 'session.resume', title: 'Continue last session', group: 'Session', run: () => newSession(undefined, true) },
+      /*
+       * Continue-last-session, offered only to an agent that has one.
+       *
+       * *"'Continue last conversation' is agent-specific"* — and it is worse
+       * than agent-specific, it is silently so. `host-core.ts` spawns with
+       * `input.resume && resumeArgs.length > 0 ? resumeArgs : args`, so asking
+       * Gemini or a plain shell to continue starts a **fresh** session and says
+       * nothing: the command appears to work and quietly does something else.
+       * That is the class of defect he names more than any other.
+       *
+       * The section in the New session dialog is gone entirely (see
+       * `NewSessionDialog.tsx` for why a real conversation picker cannot be
+       * built on `CreateSessionInput` as it stands). This row is not that
+       * section — it is a named command with exactly one answer, which is the
+       * distinction `openNewSessionDialog` already draws — so it survives, and
+       * is simply absent on an agent it cannot act for. A control that cannot
+       * act is removed, not left looking live.
+       */
+      ...(canResumeDefault
+        ? [{ id: 'session.resume', title: 'Continue last session', group: 'Session', run: () => newSession(undefined, true) }]
+        : []),
       { id: 'project.open', title: 'Open a project', group: 'Project', run: () => void openProject() },
       { id: 'palette.quickOpen', title: 'Open a file…', group: 'Project', run: () => setPaletteMode('files') },
       { id: 'view.browser', title: 'New browser tab', group: 'View', run: () => newBrowserTab() },
@@ -1816,7 +2316,7 @@ function Workspace() {
       // the chrome of one. The id keeps its `view.` prefix because that is what
       // the feature registry and any menu item dispatch, and renaming it to
       // describe a change the user cannot see would drop it out of both.
-      { id: 'view.copilot', title: COPILOT_NAME, group: 'View', run: () => openCopilot() },
+      { id: 'view.copilot', title: copilotSetup.name, group: 'View', run: () => openCopilot() },
       { id: 'view.dashboard', title: 'Overview', group: 'View', run: () => showPanel('overview') },
       { id: 'view.files', title: 'Files', group: 'View', run: () => showPanel('files') },
       // `view.search` keeps its id, and therefore its ⌘⇧F chord, while what it
@@ -1889,6 +2389,10 @@ function Workspace() {
     openProject,
     showPanel,
     openCopilot,
+    // The copilot's row is titled with its name, so a rename has to rebuild the
+    // list — a palette that went on offering "Copilot" after somebody called it
+    // Nova is a search that fails on the word they would type.
+    copilotSetup.name,
     openSettings,
     sidebar,
     splitPanes,
@@ -2078,6 +2582,42 @@ function Workspace() {
   )
 
   const mainView = () => {
+    /*
+     * A session on another machine, filling the pane exactly as a local one
+     * does.
+     *
+     * First, above the panel branch, and that ordering is the feature. His
+     * complaint about remote was that it lived on a page of its own with its own
+     * vocabulary — *"the Remote page is for connecting only, not controlling"* —
+     * and the fix is that opening one from the rail puts it where every other
+     * session goes, in the same frame, in the same terminal, with the same
+     * theme. `RemoteTerminal` already shares `terminalTheme()` with the local
+     * one for precisely this reason.
+     *
+     * Keyed on both handles so switching between two remote sessions builds a
+     * new terminal rather than writing the next one's bytes into the last one's
+     * scrollback — the same rule the settings pane's copy follows.
+     */
+    if (openMachineSession && machines.bridge) {
+      return (
+        /*
+         * Wrapped, because `.panes` is `flex: 1; position: relative` and not a
+         * flex container — so `.machines-terminal`'s own `flex: 1` does nothing
+         * here and the terminal took its natural height, leaving a band of empty
+         * chrome under it. The settings pane it was written for *is* a flex
+         * column, which is why it has never needed this. Caught by looking:
+         * nothing about either stylesheet says which of the two a pane is.
+         */
+        <div className="remote-pane">
+          <MachineSessionPane
+            key={`${openMachineSession.machineId}\u0000${openMachineSession.sessionId}`}
+            machineId={openMachineSession.machineId}
+            sessionId={openMachineSession.sessionId}
+            bridge={machines.bridge}
+          />
+        </div>
+      )
+    }
     if (showingPanel && panel) {
       return (
         <PanelView
@@ -2182,7 +2722,14 @@ function Workspace() {
           onFocusSession={selectTab}
           // The leftover slots in the grid are a real affordance or they are a
           // row of empty boxes. Without this they were the second thing.
-          onNewSession={() => newSession()}
+          //
+          // Through the dialog, like every other New session in this window.
+          // *"It is not asking me for this kind of pop-ups when I am opening
+          // from here. Everywhere it should be consistent and it should be
+          // asking same things to me."* This one spawned straight into the
+          // active folder on the default agent — the exact behaviour he was
+          // objecting to, surviving in the two places nobody had looked.
+          onNewSession={() => openNewSessionDialog()}
           renderCell={({ session }) => (
             <TerminalView
               sessionId={session.id}
@@ -2292,6 +2839,13 @@ function Workspace() {
                             provider: isProviderId(defaultProvider) ? defaultProvider : undefined,
                             onPickAccount: (accountId, runAs) =>
                               newSession(session.projectPath ?? undefined, false, accountId, runAs),
+                            // The same pair the window's bar passes, about this
+                            // pane's own session. Without them a guest pane
+                            // would keep opening a *third* session while the
+                            // pane the click happened in carried on unchanged.
+                            chrome: chromeSession(session.id, sessions),
+                            onSwitchAccount: (sessionId, accountId) =>
+                              switcher.ask({ sessionId, profileId: accountId }),
                             onManageAccounts: () => openSettings('profiles'),
                           }
                         : pageTab
@@ -2382,7 +2936,12 @@ function Workspace() {
                     // not a second one yet.
                     <PageEmpty
                       title="Nothing in this pane yet"
-                      action={{ label: 'New session', onClick: () => newSession() }}
+                      // The dialog, like every other New session — see the
+                      // swarm grid's opener above for his words on it. The
+                      // empty pane below this branch already went through the
+                      // dialog, so this pane and that one were asking different
+                      // questions for the same press.
+                      action={{ label: 'New session', onClick: () => openNewSessionDialog() }}
                     >
                       Pick a session in the sidebar and it opens here.
                     </PageEmpty>
@@ -2608,7 +3167,36 @@ function Workspace() {
    * for it, which is the point: splitting a window does not relocate the
    * session you were already working in, it puts something beside it.
    */
-  const heading = showingPanel && panel
+  /**
+   * The remote session on screen, as the bar names it.
+   *
+   * Read from the machines view rather than remembered beside the id, because
+   * the far machine renames its own sessions — an agent that titles itself, a
+   * session that exits — and a name captured when the row was clicked would go
+   * stale on a screen whose whole claim is that it feels like a local one.
+   */
+  const openMachine = openMachineSession
+    ? machines.machines.find((row) => row.machine.id === openMachineSession.machineId) ?? null
+    : null
+  const openRemoteSession = openMachine?.link?.sessions.find(
+    (session) => session.id === openMachineSession?.sessionId,
+  )
+
+  const heading = openMachineSession
+    ? {
+        // Its own title, and the machine underneath — the one fact that makes
+        // this window different from the identical-looking local one above it.
+        // The folder is the far machine's, so it is *not* passed as `folder`:
+        // `FolderChip` opens a path on this computer, and a chip that opened
+        // nothing would be the dead control this whole pass is removing.
+        title: openRemoteSession?.title ?? 'Session',
+        subtitle: openMachine
+          ? `${openRemoteSession?.cwd ?? ''} on ${openMachine.machine.name}`.trim()
+          : null,
+        folder: null,
+        account: null,
+      }
+    : showingPanel && panel
     ? { title: panelSpec(panel).label, subtitle: panelSpec(panel).blurb, folder: null, account: null }
     : headingTab
       ? {
@@ -2626,7 +3214,7 @@ function Workspace() {
         // something true to name — the window below is its own starting state —
         // and because a bar reading "Terminal Deck" over it would say the app
         // had nothing open while a CLI was being spawned three lines down.
-        ? { title: COPILOT_NAME, subtitle: null, folder: null, account: null }
+        ? { title: copilotSetup.name, subtitle: null, folder: null, account: null }
         : splitting || tabs.length > 0
         // Two states with one right answer, which is to say nothing.
         //
@@ -2713,6 +3301,9 @@ function Workspace() {
    * the one case where the app's own name over an empty window is the truth.
    */
   const showSessionBar =
+    // A remote session gets the bar too — it is a session, and the bar is where
+    // its name and its machine are said.
+    openMachineSession !== null ||
     showingPanel ||
     splitting ||
     !hasStrip ||
@@ -2764,6 +3355,14 @@ function Workspace() {
              the dot and the list cannot disagree. */
           alertCount={alertCount}
           unread={unreadIds}
+          /* The sessions that did not come back, as rows under the projects
+             they belonged to. This is the only place in the window a person is
+             told; the alternative — which is what shipped — was a warning in a
+             log file and a window that looked completely normal. */
+          held={held.rows}
+          heldRetrying={held.retrying}
+          onRetryHeld={held.retry}
+          onForgetHeld={held.forget}
           peeking={sidebar.peeking && sidebar.collapsed}
           // Above Settings, in the foot. Mounted here rather than inside the
           // sidebar so the component stays where the wiring test can see it and
@@ -2783,12 +3382,18 @@ function Workspace() {
             stage: copilot.stage,
             state: copilot.state,
             active: !showingPanel && (copilotPending || (activeTab?.isCopilot ?? false)),
+            // What it was named, or this app's own word for one nobody has named.
+            name: copilotSetup.name,
           }}
           /* Both the pinned row and the "why does this exist" links, which pass
              the turn they want the window to land on. There is nothing to
              navigate to any more — the copilot is a window, so this opens one. */
           onOpenCopilot={(focus) => openCopilot(focus)}
-          onSelectTab={selectTab}
+          /* Opens the window *beside* the one you are in rather than replacing
+             it — see `openTabWindow`, which carries his words and the two
+             complaints it answers at once. The strip below keeps plain
+             `selectTab`, because moving between pills is not opening anything. */
+          onSelectTab={openTabWindow}
           onCloseTab={closeTab}
           onSelectPanel={showPanel}
           /*
@@ -2805,6 +3410,11 @@ function Workspace() {
           onNewSession={(projectPath, resume) =>
             resume ? newSession(projectPath, true) : openNewSessionDialog(projectPath)
           }
+          /* Whether the resume glyph on a project heading exists at all. See
+             `canResumeDefault`: on an agent with no resume command it started a
+             fresh session and said nothing, which is the one thing this app has
+             been told repeatedly not to do. */
+          canResume={canResumeDefault}
           // Wrapped, not passed. The rail puts this straight on a button's
           // onClick, so passing it bare hands React's MouseEvent in as the
           // address — see the guard at the top of `newBrowserTab`.
@@ -2817,6 +3427,40 @@ function Workspace() {
           // at is still on screen behind it, and closing puts you back with
           // nothing to restore.
           onOpenAlerts={() => setAlertsOpen(true)}
+          /*
+            The machines, and the two things the rail does with them.
+
+            Flattened here rather than in the rail, for the reason every other
+            list it takes is: the rail draws what it is handed, and deciding
+            which machines are worth listing is `reachableMachines` — one rule,
+            read by this section and by the New Session dialog's machine step, so
+            a machine you can pick in the dialog is always one you can see here.
+          */
+          machines={machines.machines.map((row) => ({
+            machineId: row.machine.id,
+            name: row.machine.name,
+            sessions: (row.link?.sessions ?? []).map((session) => ({
+              id: session.id,
+              title: session.title,
+              cwd: session.cwd,
+            })),
+          }))}
+          activeMachineSession={openMachineSession}
+          onOpenMachineSession={(machineId, sessionId) => {
+            // Whatever was filling the window goes, exactly as selecting a
+            // sidebar view does. A remote terminal drawn behind a panel would be
+            // a session nobody could see running keystrokes nobody sent.
+            clearPanel()
+            setOpenMachineSession({ machineId, sessionId })
+          }}
+          /*
+            The same dialog, with the machine already chosen.
+
+            *"New session → pick the machine → pick its folder → continue."* This
+            press answers the first question, so the dialog opens on the second —
+            which is the difference between a shortcut and a second flow.
+          */
+          onNewMachineSession={(machineId) => openNewSessionDialog(null, machineId)}
           onToggleCollapsed={sidebar.toggleCollapsed}
           onPeekStart={sidebar.beginPeek}
           onPeekEnd={sidebar.endPeek}
@@ -2861,8 +3505,12 @@ function Workspace() {
             /* A sidebar view is filling the window, so none of these tabs is
                what is on screen — the bar below is headed with the view's name.
                The tab stays drawn, because it is what you will come back to;
-               it just stops claiming to be the selected one. */
-            covered={showingPanel}
+               it just stops claiming to be the selected one.
+
+               A remote session covers it for exactly the same reason: it fills
+               the pane, so a local tab still drawn as selected would be the
+               strip claiming to be what is on screen when it is not. */
+            covered={showingPanel || openMachineSession !== null}
             onSelect={selectTab}
             onShowInstead={showInstead}
             /* The two icons after the last tab. The terminal opens the dialog,
@@ -2933,6 +3581,27 @@ function Workspace() {
                     onPick={(accountId, runAs) =>
                       newSession(headingFolder, false, accountId, runAs)
                     }
+                    /*
+                     * The session this chip is over, and what a row does to it.
+                     *
+                     * Both, or neither: `session` is how the chip knows there is
+                     * an agent running to switch, and `onSwitchAccount` is how it
+                     * knows this caller can actually perform one. With only the
+                     * first it would draw a switch-shaped menu whose rows opened
+                     * a second session, which is the reported bug wearing the fix
+                     * as a costume.
+                     *
+                     * Spelled as plain props rather than a conditional spread so
+                     * `wiring.test.ts` can see them — a spread is invisible to
+                     * that guard, and this is exactly the seam it watches.
+                     */
+                    session={chromeSession(
+                      !showingPanel && headingTab?.kind === 'session' ? headingTab.id : null,
+                      sessions,
+                    )}
+                    onSwitchAccount={(sessionId, accountId) =>
+                      switcher.ask({ sessionId, profileId: accountId })
+                    }
                     onManage={() => openSettings('profiles')}
                   />
                 </div>
@@ -2986,7 +3655,16 @@ function Workspace() {
               terminal is drawn at once and there is no single session for a
               model to be the model of.
             */}
-            {headingSession && !swarm ? (
+            {/*
+              Absent while a remote session is on screen, and the reason is the
+              same one that hides the account picker in the New Session dialog:
+              the model, the effort and the connectors are read off *this*
+              machine's session — `SessionControls` drives `agent-controls.ts`
+              against a local pty — and there is no frame on the wire that
+              carries any of them. A model chip over somebody else's session
+              would be naming a setting it cannot see and cannot change.
+            */}
+            {headingSession && !swarm && openMachineSession === null ? (
               <SessionControls
                 sessionId={headingSession.id}
                 cwd={headingSession.projectPath ?? null}
@@ -2994,7 +3672,14 @@ function Workspace() {
                 onOpenConnectors={openConnectors}
               />
             ) : null}
-            {(activeSession || splitting) && !showingPanel && !swarm ? (
+            {/*
+              And the mode switch with them. Chat is a view of a transcript file
+              on this machine's disk, and Split arranges this window's own panes
+              — neither has anything to show for a session running somewhere
+              else. Absent rather than disabled, which is this product's rule for
+              a control that cannot act.
+            */}
+            {(activeSession || splitting) && !showingPanel && !swarm && openMachineSession === null ? (
               <ModeSwitch mode={mode} onChange={setMode} splitOffer={!features.on('split')} />
             ) : null}
             {/*
@@ -3046,11 +3731,53 @@ function Workspace() {
           // Signing a Codex account in used to open Claude — see `newSessionIn`.
           newSession(undefined, false, profileId, provider)
         }}
+        /*
+         * Settings → Copilot's "Set it up again" — the same few questions, from
+         * the pane that shows what they wrote.
+         *
+         * It comes up here rather than being opened inside the settings sheet,
+         * for the same reason `onStartSession` does: this window owns the flow,
+         * and a dialog over a dialog would leave two Escape handlers on one key
+         * — pressing it in the flow would take the settings sheet away with it.
+         * Closing the sheet first also means the answers land in front of the
+         * workspace they change, which is where their effect is visible.
+         */
+        onSetUpCopilot={() => {
+          setPrefsOpen(false)
+          setCopilotSetupOpen(true)
+        }}
         // Every behavioural setting is read from one copy up here, so a change
         // made in the dialog has to land in it — otherwise the next ⌘W, the
         // next banner and the next terminal all disagree with what is on
         // screen until the app is restarted.
         onChange={applySettings}
+      />
+      {/*
+        What switching this session's account would do, before it does it.
+
+        Mounted unconditionally and gated on `open`, like every other dialog in
+        this window — a sheet rendered only while it is wanted loses its state on
+        the way in and cannot animate on the way out.
+
+        The title of the session comes from the tab list rather than from the
+        plan, because the plan is about accounts and this line is about *which
+        session* is being talked about. Falling back to the empty string is
+        `CloseSessionConfirm`'s answer to the same question and means the same
+        thing: the sheet is shut, and nothing is being asked about.
+      */}
+      <SwitchAccountConfirm
+        open={switcher.asking !== null}
+        title={
+          switcher.asking === null
+            ? ''
+            : (tabs.find((tab) => tab.id === switcher.asking?.sessionId)?.label ?? '')
+        }
+        names={switchNames(switcher.plan ?? { from: null, to: null }, knownSignIns)}
+        plan={switcher.plan}
+        busy={switcher.busy}
+        problem={switcher.problem}
+        onCancel={switcher.cancel}
+        onConfirm={confirmAccountSwitch}
       />
       <CloseSessionConfirm
         open={pendingClose !== null}
@@ -3097,10 +3824,77 @@ function Workspace() {
            session in terminaldeck" into "new session in whatever is on screen",
            which is a press that quietly does something else. */
         projectPath={newSessionPath ?? activeProjectPath}
+        /*
+          The machines, and which one the press already chose.
+
+          The same `reachableMachines` rule the rail uses, so a machine offered
+          here is always one with a heading over there — and `folders` is the
+          list the far machine advertised to this one, never a list assembled on
+          this side, which is what makes a row in that picker a row its own rule
+          will accept.
+        */
+        machines={machines.machines.map((row) => ({
+          id: row.machine.id,
+          name: row.machine.name,
+          folders: row.link?.folders ?? [],
+        }))}
+        machineId={newSessionMachine}
         onClose={() => setNewSessionOpen(false)}
-        onStart={async (request) => {
+        onStart={async (request, machineId) => {
           setNewSessionOpen(false)
-          const meta = await window.deck.createSession(request)
+          /*
+           * A session on another machine, started the same way and landing in
+           * the same place — the rail, beside the local ones.
+           *
+           * It returns before any of the local bookkeeping below, and every line
+           * of that bookkeeping is why: `addProject` would put another
+           * computer's folder in *this* one's project list, `addSession` would
+           * put a session this window does not own into the store that decides
+           * what ⌘W closes, and `keepNewWindowInStrip` would give it a tab with
+           * a ✕ that promises to end something living on a different machine.
+           *
+           * What it does instead is ask the far end to start it and then open
+           * it, which is the whole flow: New session → the machine → its folder
+           * → a terminal.
+           */
+          if (machineId !== null) {
+            // `startSession` waits for the session to actually exist on the far
+            // machine rather than for the request to have been sent — see the
+            // long note on it. Null means it refused or did not appear, and the
+            // rail is the honest place for that: the machine's own heading is
+            // there, and a session that turns up a moment later lands in it.
+            const sessionId = await machines.startSession(machineId, request.cwd, request.provider)
+            machines.reread()
+            if (sessionId === null) return
+            clearPanel()
+            setOpenMachineSession({ machineId, sessionId })
+            return
+          }
+          // Refusals land in the rail as a held row — see `newSessionIn`, which
+          // carries the reasoning. This dialog does not draw the picker's
+          // "could not start" line for it, because by the time the dialog has
+          // closed the answer belongs where the session would have been.
+          const meta = await window.deck.createSession(request).catch(() => null)
+          if (!meta) return
+          /*
+           * The folder joins the rail, exactly as it does on every other route.
+           *
+           * `newSessionIn` has done this since the day it was written — *"a
+           * session in a folder the sidebar is not listing is a session with no
+           * row"* — and this path, which became the *only* path when every
+           * button started opening this dialog, never did. Browse to a folder
+           * the app has not seen, press Start, and the session lands in the
+           * rail's orphan bucket, which means "your project was closed out from
+           * under this" and is not what happened.
+           *
+           * It is what makes the copilot's own folder work as a place to start a
+           * normal session in — *"it will just be a normal another session"* —
+           * because `projects` gives that folder a heading precisely when one of
+           * his sessions is in it, and nothing here would ever have put it in
+           * the list for that test to pass.
+           */
+          addProject(request.cwd)
+          void window.deck.addProject(request.cwd)
           addSession(meta)
           showTab(meta.id)
           /*
@@ -3159,6 +3953,28 @@ function Workspace() {
         waiting={consent.waiting}
         titles={consent.titles}
         onAnswer={consent.answer}
+      />
+      {/*
+        The few questions before a copilot's first run.
+
+        Opened by `openCopilot` and by nothing else in this window, so it appears
+        exactly once per install — in front of the first start, never after it.
+        Closing it writes nothing and starts nothing, which is what makes it safe
+        to dismiss; finishing it saves the answers into the copilot's own
+        instruction file and *then* starts it, which is the order Asad asked for.
+
+        `reload()` before `showCopilot()` matters: the name it was just given is
+        the label on the tab that is about to be created, and a stale read here
+        would open a window called "Copilot" for a copilot called Nova.
+      */}
+      <CopilotSetup
+        open={copilotSetupOpen}
+        onClose={() => setCopilotSetupOpen(false)}
+        onDone={() => {
+          setCopilotSetupOpen(false)
+          copilotSetup.reload()
+          showCopilot(copilotTurn)
+        }}
       />
       <AlertsWindow
         /*

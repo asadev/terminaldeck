@@ -3,12 +3,17 @@ import {
   PROVIDERS,
   detectProviders,
   loginPath,
+  markedNames,
   providersFor,
   resetLoginPathCache,
   resolvedProvidersFor,
   withLaunchArgs,
 } from './providers'
 import { resetAgentBinaryCache } from './agent-binaries'
+// The two resolvers the Windows branch of the table now goes through. Asserted
+// against rather than restated as literals: a literal Windows path in a test is
+// green on the platform the feature does not run on and red on the one it does.
+import { windowsShellPath, wslExePath } from './wsl'
 
 /**
  * `execFile` is replaced wholesale so the two platforms' *commands* can be
@@ -17,7 +22,19 @@ import { resetAgentBinaryCache } from './agent-binaries'
  * wraps the mock callback-style and resolves with stdout alone, and every
  * `{ stdout }` destructure in the module under test throws.
  */
-const calls = vi.hoisted(() => ({ ran: [] as Array<{ file: string; args: string[] }> }))
+const calls = vi.hoisted(() => ({
+  ran: [] as Array<{ file: string; args: string[] }>,
+  /**
+   * Make the in-distro probe fail the way a real one does.
+   *
+   * Measured on `DESKTOP-DDGMNCV`: the probe printed `agent-found:claude` and
+   * `execFile` still rejected, because a login shell exits with the status of
+   * its last command and the last command is `command -v` for the last name in
+   * the list. On a machine with Claude Code and no Gemini that is every probe.
+   * `stdout` on the rejection is where the answer actually was.
+   */
+  wslFails: false,
+}))
 
 vi.mock('node:child_process', () => {
   const execFile = ((): unknown => undefined) as unknown as Record<symbol, unknown>
@@ -43,14 +60,22 @@ vi.mock('node:child_process', () => {
     // The noise line is the point of the marker. Output comes back through an
     // interactive login shell, and a login shell prints whatever the user's
     // .bashrc prints.
-    if (file === 'wsl.exe') {
-      return {
-        stdout: Buffer.from(
-          'Welcome to Ubuntu 24.04 LTS\nagent-found:claude\nagent-found:codex\n',
-          'utf8',
-        ),
-        stderr: '',
+    //
+    // `endsWith`, not `===`: the command is resolved to an absolute path when
+    // one can be found, so on a Windows runner this is
+    // `C:\Windows\System32\wsl.exe` and an exact match would silently make every
+    // in-distro assertion below meaningless on the one platform they are about.
+    if (file.endsWith('wsl.exe')) {
+      const stdout = Buffer.from(
+        'Welcome to Ubuntu 24.04 LTS\nagent-found:claude\nagent-found:codex\n',
+        'utf8',
+      )
+      if (calls.wslFails) {
+        // Shaped like a real `execFile` rejection: the output it managed to
+        // produce is hung on the error object, which is the whole point.
+        throw Object.assign(new Error('Command failed: wsl.exe …'), { code: 1, stdout, stderr: '' })
       }
+      return { stdout, stderr: '' }
     }
     return { stdout: '', stderr: '' }
   }
@@ -59,6 +84,7 @@ vi.mock('node:child_process', () => {
 
 beforeEach(() => {
   calls.ran = []
+  calls.wslFails = false
   resetLoginPathCache()
   // `detectProviders` now runs each agent once to prove it starts, and that
   // answer is memoised for twenty seconds. Without this, the second test to ask
@@ -124,7 +150,16 @@ describe('the provider table per platform', () => {
   })
 
   it('falls back to cmd.exe when COMSPEC is missing', () => {
-    expect(providersFor('win32', {}).shell.bin).toBe('cmd.exe')
+    /*
+     * `windowsShellPath({})`, not the literal `'cmd.exe'`, and for the reason
+     * the comment further down this file already spells out about `COMSPEC`:
+     * the fallback resolves `%SystemRoot%\System32\cmd.exe` when that file is
+     * there, so a literal is green on a Mac and red on Windows over a fact about
+     * the runner rather than about the code. What matters is that the fallback
+     * still names the command processor, and that it is what the table uses.
+     */
+    expect(providersFor('win32', {}).shell.bin).toBe(windowsShellPath({}))
+    expect(providersFor('win32', {}).shell.bin.endsWith('cmd.exe')).toBe(true)
   })
 
   it('exports the table for the platform this process is on', () => {
@@ -277,7 +312,14 @@ describe('the provider table inside a distribution', () => {
   it('launches wsl.exe, not cmd.exe', () => {
     // The reported bug in one assertion: cmd.exe cannot see a `claude` installed
     // inside Ubuntu, and cannot take the folder as a working directory either.
-    expect(wsl.claude.spawn.command).toBe('wsl.exe')
+    //
+    // `wslExePath(env)`, not the literal `'wsl.exe'`. The command is resolved to
+    // an absolute path wherever one can be found, so a literal here is an
+    // assertion that only holds on a host with no `System32\wsl.exe` — i.e. on
+    // every machine except the one the feature runs on. `wsl.test.ts` pins the
+    // resolution itself; what this pins is that the table goes through it.
+    expect(wsl.claude.spawn.command).toBe(wslExePath(env))
+    expect(wsl.claude.spawn.command.endsWith('wsl.exe')).toBe(true)
     expect(wsl.claude.spawn.args.slice(0, 5)).toEqual([
       '-d',
       'Ubuntu',
@@ -318,9 +360,28 @@ describe('the provider table inside a distribution', () => {
   })
 
   it('gives the shell tab the distribution’s login shell, not cmd.exe', () => {
-    expect(wsl.shell.spawn.command).toBe('wsl.exe')
+    expect(wsl.shell.spawn.command).toBe(wslExePath(env))
     expect(wsl.shell.spawn.args[wsl.shell.spawn.args.length - 1]).toBe('')
     expect(wsl.shell.bin).not.toBe(env.COMSPEC)
+  })
+
+  it('keeps `bin` the name and `spawn.command` the path, which are not the same string', () => {
+    /*
+     * The one place these two were quietly identical, and the reason a WSL
+     * session could not be restarted after a reboot.
+     *
+     * `bin` answers "what opens a shell on this machine" — the name a person
+     * would type, and what a lookup would use. `spawn.command` is handed to a
+     * pty, and there a *relative* name is resolved by node-pty against the app's
+     * own working directory first: `get_shell_path` returns an empty string when
+     * that directory contains a file of the same name, and `conpty.cc` reports
+     * the empty string as "File not found: " with nothing after the colon.
+     * `C:\Windows\System32` holds `wsl.exe` and is the working directory of any
+     * launch that did not choose one. `wsl.ts`'s `wslExePath` carries the
+     * measurement taken on `DESKTOP-DDGMNCV`.
+     */
+    expect(wsl.shell.bin).toBe('wsl.exe')
+    expect(wsl.shell.spawn.command).toBe(wslExePath(env))
   })
 
   it('omits -d when nobody has chosen a distribution', () => {
@@ -347,7 +408,59 @@ describe('detecting agents inside a distribution', () => {
     // session quietly becomes a cmd.exe shell.
     const found = await detectProviders('win32', target)
     expect(found).toEqual({ claude: true, codex: true, gemini: false, shell: true })
-    expect(calls.ran.every((call) => call.file === 'wsl.exe')).toBe(true)
+    // `endsWith`: the command is an absolute path wherever one resolves.
+    expect(calls.ran.every((call) => call.file.endsWith('wsl.exe'))).toBe(true)
+  })
+
+  it('believes what the probe printed even when the probe exited non-zero', async () => {
+    /*
+     * The defect this pins was measured on `DESKTOP-DDGMNCV` on 2026-08-17, by
+     * running this module's own command line by hand against the machine's own
+     * Ubuntu-24.04:
+     *
+     *     stdout: "agent-found:claude\n"
+     *     err:    { message: 'Command failed: …', code: 1, killed: false }
+     *
+     * The probe **found Claude Code** and the app reported the distribution as
+     * having none, because `execFile` rejects on a non-zero exit and the `catch`
+     * threw the answer away with the error.
+     *
+     * And the status had nothing to do with the question. A login shell exits
+     * with the status of its last command; the last command is `command -v` for
+     * the last name in the list; so whenever the last agent asked about is not
+     * installed — Claude Code and no Gemini, which is his machine and the
+     * ordinary case — the whole probe was discarded. Every WSL session on that
+     * PC then fell to the shell fallback, which is how a day's conversations
+     * became bare terminals.
+     */
+    calls.wslFails = true
+    const found = await detectProviders('win32', target)
+    expect(found).toEqual({ claude: true, codex: true, gemini: false, shell: true })
+  })
+
+  it('stops the question reporting the last name’s status as its own', async () => {
+    // The other half, and the one that keeps the ordinary case ordinary: the
+    // script ends deterministically rather than with whatever `command -v` said
+    // about the last agent in the list.
+    await detectProviders('win32', target)
+    const inner = calls.ran[0].args[calls.ran[0].args.length - 1]
+    expect(inner.trimEnd().endsWith('exit 0')).toBe(true)
+  })
+
+  it('answers "none" when there is genuinely nothing to read', async () => {
+    // A distro that is missing, refuses to start, or times out before printing
+    // anything. The rejection carries no stdout, and inventing agents from an
+    // empty answer is the opposite mistake.
+    expect(markedNames(undefined)).toEqual(new Set())
+    expect(markedNames(Buffer.alloc(0))).toEqual(new Set())
+    expect(markedNames(Buffer.from('Welcome to Ubuntu 24.04 LTS\n', 'utf8'))).toEqual(new Set())
+  })
+
+  it('reads the UTF-16LE wsl.exe writes for its own messages', async () => {
+    // `wsl.exe` writes its own output as UTF-16LE with a BOM; reading that as
+    // utf8 is how a working distro reports nothing installed.
+    const utf16 = Buffer.from('﻿agent-found:claude\r\n', 'utf16le')
+    expect(markedNames(utf16)).toEqual(new Set(['claude']))
   })
 
   it('spends one round trip on the whole table, not one per agent', async () => {

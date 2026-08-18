@@ -173,7 +173,15 @@ export const PANELS: PanelSpec[] = [
     group: 'project',
     command: 'view.artifacts',
     icon: 'M5 4.5h9L19 9v10.5H5zM14 4.5V9h5M8.5 13h7M8.5 16.5h4.5',
-    blurb: 'Every file your agents wrote or changed here.',
+    /*
+      "Every file your agents wrote or changed here" is what this page was, and
+      being that is what got it reported twice as *"showing some kind of files
+      instead of artifacts."* An artifact is something the agent **made** — a
+      file it wrote whole. What it merely edited is a change to your project,
+      and that is the second chip on the page rather than the subtitle of it.
+      See the header comment in `components/ArtifactsPanel.tsx`.
+    */
+    blurb: 'Documents, pages and notes your agents made here.',
   },
   {
     id: 'git',
@@ -251,10 +259,21 @@ export const PANELS: PanelSpec[] = [
   },
   {
     id: 'hooks',
-    label: 'Hooks',
+    label: 'Session updates',
     group: 'integrations',
     icon: 'M9.2 5.2a2.8 2.8 0 1 1 5.6 0v8.6a4 4 0 1 1-8 0v-1.1',
-    blurb: 'Commands this project runs around every agent action.',
+    /*
+      Called "Hooks", with the subtitle "Commands this project runs around every
+      agent action" — the mechanism, twice, in a rail where every other row is a
+      *place*. Beside a list of the same agent names in Settings it read as a
+      second copy of that list: *"Do you think hooks and CLIs are the same
+      thing? Because this is a hooks folder and we see CLI here."*
+
+      The id stays `hooks` — it is what a saved rail position and the feature
+      registry are keyed on, and renaming it would silently drop somebody back
+      to Overview at their next launch. Only what a person reads changed.
+    */
+    blurb: 'Whether a tab can tell you an agent is working, waiting or done.',
   },
 ]
 

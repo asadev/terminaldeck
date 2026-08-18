@@ -31,7 +31,7 @@ function token(name: string, fallback: string): string {
 export const DEFAULT_TERMINAL_FONT_SIZE = 13
 
 /**
- * The four colours a terminal takes from the app, resolved to literals.
+ * The twenty colours a terminal takes from the app, resolved to literals.
  *
  * xterm paints on a canvas, so it cannot read a CSS custom property — the theme
  * has to be resolved to real values every time it is applied. The second
@@ -45,7 +45,26 @@ export const DEFAULT_TERMINAL_FONT_SIZE = 13
  * fire, the terminal came up in a colour scheme the rest of the app had not
  * used for months and nobody could reproduce it. If the dark theme's
  * --terminal-bg / --terminal-fg / --accent / --accent-soft change, change these
- * too — `tokens.test.ts` reads these three lines and fails when they drift.
+ * too — `tokens.test.ts` reads these lines and fails when they drift.
+ *
+ * ## Why the sixteen are here
+ *
+ * Four of these are the surface and two of the marks on it. The other sixteen
+ * are the ANSI palette, and until now this function did not pass them, which
+ * meant xterm kept its own Tango-derived defaults. That was invisible in the
+ * dark theme, because those defaults were drawn for a near-black ground and
+ * `--terminal-bg` is one. It was not invisible in the light theme, where the
+ * same set sat on `#e8e8e8` paper at 2.05:1 for yellow and 1.01:1 for bright
+ * yellow — output a program had gone to the trouble of colouring, rendered as
+ * a blank line. `tokens.css` carries the derivation of the light sixteen and
+ * the argument for each exception; this function's only job is to hand them
+ * over, and to hand over the dark ones unchanged so a session that has always
+ * looked a certain way still does.
+ *
+ * Passing them also makes the palette follow the theme *switch*: the object
+ * below is literals by the time xterm has it, so `subscribeTheme` re-applies
+ * the whole thing — see the note on that subscription further down for the bug
+ * that taught this file the difference between a colour and a colour token.
  *
  * Exported because `RemoteTerminal` draws a session from another machine and
  * has to look identical to a local one; it is the same terminal to look at,
@@ -61,6 +80,27 @@ export function terminalTheme(): ITheme {
     foreground: token('--terminal-fg', '#ededed'),
     cursor: token('--accent', '#3b8fee'),
     selectionBackground: token('--accent-soft', 'rgba(59,143,238,0.16)'),
+    /* The sixteen, in the order the wire numbers them. Written out one per
+       line rather than built from a table, because a fallback that has drifted
+       from the sheet is the failure this whole block of comment is about, and
+       `tokens.test.ts` reads these very lines to check each one against the
+       dark theme's declaration. */
+    black: token('--ansi-black', '#2e3436'),
+    red: token('--ansi-red', '#cc0000'),
+    green: token('--ansi-green', '#4e9a06'),
+    yellow: token('--ansi-yellow', '#c4a000'),
+    blue: token('--ansi-blue', '#3465a4'),
+    magenta: token('--ansi-magenta', '#75507b'),
+    cyan: token('--ansi-cyan', '#06989a'),
+    white: token('--ansi-white', '#d3d7cf'),
+    brightBlack: token('--ansi-bright-black', '#555753'),
+    brightRed: token('--ansi-bright-red', '#ef2929'),
+    brightGreen: token('--ansi-bright-green', '#8ae234'),
+    brightYellow: token('--ansi-bright-yellow', '#fce94f'),
+    brightBlue: token('--ansi-bright-blue', '#729fcf'),
+    brightMagenta: token('--ansi-bright-magenta', '#ad7fa8'),
+    brightCyan: token('--ansi-bright-cyan', '#34e2e2'),
+    brightWhite: token('--ansi-bright-white', '#eeeeec'),
   }
 }
 

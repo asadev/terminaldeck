@@ -1,5 +1,6 @@
 import { StatusDot } from '../components/StatusDot'
 import { entryDot, entryTooltip, type CopilotStage, type CopilotStateView } from './copilot-model'
+import { COPILOT_ACTIVE_ATTR, COPILOT_ROW_ATTR } from '../driving/where'
 import { COPILOT_BLURB, COPILOT_ICON, COPILOT_NAME } from './identity'
 import './copilot.css'
 
@@ -42,6 +43,22 @@ import './copilot.css'
  * the honest rendering for a `Sidebar` mounted on its own in a test or the
  * harness: the row is there and it opens the window, and it makes no claim
  * about a copilot nobody has asked about.
+ *
+ * ## The row is also driving mode's contract with the window
+ *
+ * Two attributes, `data-copilot-row` and `data-copilot-active`, and neither has
+ * a line of CSS behind it. They exist because driving mode has to answer one
+ * question that nothing else in the window can: **is the copilot's own page the
+ * one in front?** — which decides whether the driving panel is drawn at all, per
+ * *"it should not make two split views on its own page."*
+ *
+ * It is answered here rather than from the tab strip because the copilot is
+ * deliberately not in the strip's tab list (`Sidebar.tsx` says so), so this row
+ * is the only element in the window that knows. And it is an attribute rather
+ * than the `active` class for the reason `focus-target.ts` gives about
+ * `data-drive-anchor`: a class is styling and belongs to whoever is working on
+ * the rail, whereas an attribute with no styling attached to it is obviously a
+ * contract. `where.ts` reads them and `sidebar-copilot.test.tsx` pins them.
  */
 
 interface Props {
@@ -50,24 +67,42 @@ interface Props {
   state?: CopilotStateView | null
   /** True while the copilot's own window is what the window is showing. */
   active: boolean
+  /**
+   * What it is called.
+   *
+   * User data — typed in the setup flow, stored in the copilot's own instruction
+   * file, read back by `useCopilotSetup` — so it arrives as a prop rather than
+   * from {@link COPILOT_NAME}, which is now only the fallback for a copilot
+   * nobody has named. The two must not be confused: the product's name is a
+   * constant this repo spells once, and this is the opposite of a constant.
+   */
+  name?: string
   onOpen(): void
 }
 
-export function CopilotEntry({ stage = null, state = null, active, onOpen }: Props) {
+export function CopilotEntry({
+  stage = null,
+  state = null,
+  active,
+  name = COPILOT_NAME,
+  onOpen,
+}: Props) {
   // Null for a copilot that is not running, and for a machine that cannot run
   // one. `entryDot` carries the argument: there is no session status that means
   // "no process", and both of the near misses print a word that is not true.
   const dot = stage === null ? null : entryDot(stage)
   return (
-    <section className="sb-group sb-pinned" aria-label={COPILOT_NAME}>
+    <section className="sb-group sb-pinned" aria-label={name}>
       <button
         type="button"
         className={`sb-row sb-nav sb-copilot${active ? ' active' : ''}`}
+        {...{ [COPILOT_ROW_ATTR]: 'copilot' }}
+        {...(active ? { [COPILOT_ACTIVE_ATTR]: '' } : {})}
         aria-current={active}
         // The whole sentence, not the label again. A tooltip that repeats what
         // is already on the line is one nobody reads twice — and this is the
         // only place a refusal from the last start attempt is ever shown.
-        title={stage === null ? COPILOT_BLURB : `${COPILOT_NAME} — ${entryTooltip(stage, state)}`}
+        title={stage === null ? COPILOT_BLURB : `${name} — ${entryTooltip(stage, state)}`}
         onClick={onOpen}
       >
         <svg
@@ -84,7 +119,7 @@ export function CopilotEntry({ stage = null, state = null, active, onOpen }: Pro
         >
           <path d={COPILOT_ICON} />
         </svg>
-        <span className="sb-label">{COPILOT_NAME}</span>
+        <span className="sb-label">{name}</span>
         {dot !== null && <StatusDot status={dot} />}
       </button>
     </section>

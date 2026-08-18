@@ -196,6 +196,89 @@ final class CredentialStoreTests: XCTestCase {
         XCTAssertEqual(store.load(Self.pcId)?.label, "K3ZQW7")
     }
 
+    /**
+     * **The copilot credential is a second secret in the same item.**
+     *
+     * `COPILOT-REMOTE.md` §8 asks for it *beside* the pairing credential, with
+     * the same protection class, and the same Keychain item is the strongest
+     * reading of beside: one item cannot go missing while the other survives.
+     * It is sent exactly once — the desktop keeps a scrypt hash — so a phone
+     * that fails to store it has to show the Connect screen and ask for a **new**
+     * code, which is the one outcome worth a test rather than an assumption.
+     *
+     * Read back through a second store over the same drawer, so this is a
+     * Keychain round trip rather than a cache hit.
+     */
+    func testTheCopilotCredentialSurvivesBesideThePairingOne() {
+        store.save(credential("token").withCopilotCredential("c2VjcmV0LWJ5dGVz"))
+
+        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
+        XCTAssertEqual(reloaded.load(Self.macId)?.copilotCredential, "c2VjcmV0LWJ5dGVz")
+        XCTAssertEqual(reloaded.load(Self.macId)?.token, "token", "and the pairing one is untouched")
+    }
+
+    /**
+     * Disconnecting the copilot drops that secret and leaves the pairing alone.
+     *
+     * The two are revoked separately by design — disconnecting the copilot at
+     * the desk leaves every terminal the device was paired for — so the record
+     * has to survive losing one of them. A store that dropped the row, or that
+     * kept a credential whose record on the far machine has gone, would be wrong
+     * in the two opposite directions this separation exists to keep apart.
+     */
+    func testDroppingTheCopilotCredentialKeepsTheMachine() {
+        store.save(credential("token").withCopilotCredential("c2VjcmV0"))
+        store.save(credential("token").withCopilotCredential(nil))
+
+        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
+        XCTAssertNil(reloaded.load(Self.macId)?.copilotCredential)
+        XCTAssertEqual(reloaded.load(Self.macId)?.token, "token")
+        XCTAssertEqual(reloaded.all().count, 1, "the machine is still paired")
+    }
+
+    /**
+     * Re-pairing does **not** carry the copilot credential across.
+     *
+     * Redeeming produces a new device id, and the desktop's copilot record is
+     * keyed by device id — so a secret kept through a re-pair is one this phone
+     * believes in and nothing on that machine has ever heard of. That is the
+     * worse of the two ways to be wrong: the Connect screen would not be drawn,
+     * and every copilot frame would be refused with no explanation on either end.
+     */
+    func testRedeemingAPairingDoesNotCarryTheCopilotCredential() {
+        let paired = credential("pairing-token").withCopilotCredential("c2VjcmV0")
+
+        let durable = paired.redeemed(token: "device-token", deviceId: "device-2",
+                                      deviceName: "iPhone")
+
+        XCTAssertNil(durable.copilotCredential,
+                     "a new device id is a new device, and its copilot record does not exist yet")
+        XCTAssertEqual(durable.token, "device-token")
+    }
+
+    /**
+     * A record written before this field existed still decodes.
+     *
+     * A `StoredCredential` that fails to decode is a machine that has vanished
+     * from the phone, which is the failure this whole store is designed against
+     * — so the field has to be optional *and* absent from the bytes when there
+     * is nothing to write, which is what makes yesterday's record readable by
+     * today's build.
+     *
+     * Built by encoding rather than hand-written, because a hand-written blob
+     * would be pinning this test's idea of the format instead of the format.
+     */
+    func testARecordWithNoCopilotFieldStillDecodes() throws {
+        let encoded = try JSONEncoder().encode(credential("t"))
+        let text = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertFalse(text.contains("copilotCredential"),
+                       "an absent second secret writes no key at all")
+
+        let decoded = try JSONDecoder().decode(StoredCredential.self, from: encoded)
+        XCTAssertNil(decoded.copilotCredential)
+        XCTAssertEqual(decoded.token, "t")
+    }
+
     // MARK: - Damage
 
     /**

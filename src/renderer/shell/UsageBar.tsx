@@ -1,44 +1,58 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { ProviderId } from '@shared/types'
 import { accountIdentity, useAccountIdentity } from '../accounts'
 import { useFeatures } from '../features/FeaturesProvider'
 import { ProviderBadge } from '../components/ProviderBadge'
 import { providerOption } from '../components/ProviderPicker'
+import { useAutoUsage } from './auto-usage'
 import { useOneMenu } from './one-menu'
 import {
-  alertReading,
   primaryReading,
   sourceSentence,
   usageReadout,
   type UsageReadout,
   type UsageReport,
 } from './usage-bar-model'
+import { extraAlert, leadIsLive, usageLines, type UsageLine } from './usage-stack'
 import { useUsageBar } from './useUsageBar'
 import './UsageBar.css'
 
 /**
- * How much of the account's limit is gone, on the session's own bar.
+ * How much of the account's limits are gone, on the session's own bar.
  *
  * ## What this is answering
  *
- * Asad, twice, the second time listing it among what was still missing:
+ * Asad asked for this reading three times over two recordings. First for its
+ * existence — *"where we show the account, next to it we show a bar of the
+ * five-hour limit — how much limit is completed, how much is left, with the time
+ * of renewal"* — then, when it had been built but drawn only inside the chat
+ * composer's Options panel, *"and also bring that usage bar."* Both of those are
+ * done, and the third is what this file is now shaped by:
  *
- *   > *"Where we show the account, next to it we show a bar of the five-hour
- *   > limit — how much limit is completed, how much is left, with the time of
- *   > renewal."* … *"and also bring that usage bar."*
+ *   > *"Maybe two bars, up and down. Upper one for five hours and down one for
+ *   > weekly. For weekly it will show the 55% and no need to say week here and
+ *   > no even need to show the dates. For the five-hour window it will also show
+ *   > the percentage and it will show the time of reset."*
  *
- * The numbers were built and they worked. What never happened was the placement:
- * the only surface that drew them was `UsageStrip`, inside the chat composer's
- * Options panel — so a session drawn as a terminal, which is how this app opens
- * every session, had no way to see them at all, and a session drawn as a chat
- * had to open a panel first. This is the same reading, in the chrome, for
- * terminal and chat alike, beside the account it is about.
+ *   > *"Usage should appear on its own, not need a click."* … *"Claude Code has
+ *   > it, it should automatically do it and bring it here."*
  *
- * It sits in `SessionControls` and is therefore mounted twice for the same
- * reason everything else in that cluster is: the window's bar carries the host
- * session's, each guest pane carries its own, and both are this component with
- * their own `sessionId`. A split can hold two accounts, and two accounts have
- * two different five-hour windows.
+ * Which is three changes, and they only make sense together:
+ *
+ *  1. **Two fixed lines, not one variable one.** Which window each line
+ *     describes is decided by `usage-stack.ts`, and is decided in advance rather
+ *     than by whichever window happened to report. The screen he was looking at
+ *     when he asked read `Week 81% ▬▬ resets Aug 21 at 2pm`, because the
+ *     five-hour figure was missing and the weekly one had been promoted into its
+ *     place — one element saying different things about different periods from
+ *     one hour to the next.
+ *  2. **The weekly line loses its name and its date**, exactly as asked. What
+ *     names it is sitting under the line that says `5h`, in the same columns.
+ *  3. **Nobody presses anything.** The `Check now` button is gone and
+ *     `auto-usage.ts` does what it did, off the session's own output going
+ *     quiet. Removing the button without that would not have simplified the bar,
+ *     it would have emptied it: `/usage` was the only thing in this app that
+ *     made Claude Code state its limits.
  *
  * ## The three things it will not do
  *
@@ -47,9 +61,10 @@ import './UsageBar.css'
  * enforced there; what this file does is respect them:
  *
  *  1. **A bar only when both halves are real** — a measured fraction *and* a
- *     renewal time. Everything else is words.
- *  2. **"Not reported" is a distinct state**, never a zero. An empty bar and an
- *     absent one are opposite claims and they are drawn differently.
+ *     renewal time. Everything else is words, or a dash.
+ *  2. **"Not reported" is a distinct state**, never a zero. An empty meter and
+ *     an absent one are opposite claims, so a line with no figure is drawn with
+ *     no meter at all rather than with a meter at 0%.
  *  3. **Nothing comes from `~/.claude.json`.** Its `cachedUsageUtilization`
  *     block has exactly the fields a bar wants and was measured at 21.3 hours
  *     stale, describing a window that had ended 17 hours earlier. The only
@@ -58,48 +73,116 @@ import './UsageBar.css'
  *
  * ## Whose it is
  *
- * The panel names the agent, the login and the window, in that order, and the
+ * The panel names the agent, the login and every window, in that order, and the
  * login is resolved through `accountIdentity` — the same function the account
  * chip a few inches away calls. That is not a nicety: the bar sits beside the
  * account precisely so the two agree, and the way to make two surfaces agree is
  * to have them ask the same function rather than to word the same answer twice.
  */
 
+/**
+ * How much of itself the reading is allowed to draw.
+ *
+ * Three tiers, each a measured width rather than a taste — see
+ * {@link UsageBarViewProps.fit}, and `SessionControls.tsx`, which decides which
+ * one applies from the room its own bar actually has.
+ */
+export type UsageFit = 'full' | 'dense' | 'tight'
+
 export interface UsageBarViewProps {
   /** What the session's usage looks like right now, or null before the first answer. */
   report: UsageReport | null
-  /** Which agent the session runs. Decides whether `/usage` can be asked for. */
+  /** Which agent the session runs. Decides what can be fetched and what cannot. */
   provider?: ProviderId
-  /** The cluster is folded into one chip, so this one has to get out of the way. */
-  folded?: boolean
+  /**
+   * How much of itself the reading can afford to draw, measured by the cluster.
+   *
+   * ## Why this is a measurement and not `folded`
+   *
+   * It used to take the cluster's `folded` flag and give up its renewal clause
+   * whenever the *controls* beside it collapsed. That was wrong, and the real
+   * app is where it showed: on a session called "Update Claude Code terminal to
+   * new…" the controls folded at a **1440pt window** — because `control-room.ts`
+   * protects the session name's share of the bar before it gives anything to
+   * the chips — and the reading dropped `resets 4:40am` while 645 pixels of room
+   * sat unused. One of the two things he asked for on the five-hour line,
+   * withheld because a neighbour was short of space and this one was not.
+   *
+   * So it now asks about *its own* room, in three tiers, each a measured figure:
+   *
+   * - **`full`** — 380 pixels or more. Everything: the window name, both
+   *   figures, both meters, and the renewal time. 380 is measured, not reasoned;
+   *   the arithmetic and the wrong first answer are in `SessionControls.tsx`
+   *   beside the line that picks the tier.
+   * - **`dense`** — 120 to 379. The renewal clause goes and the meters narrow.
+   *   It is a caption; the figures are not — and a clause drawn as `res…` is an
+   *   ellipsis where a fact should be, which is worse than no clause at all.
+   * - **`tight`** — under 120. The figures alone. At the app's own minimum
+   *   window width — 720, pinned in `src/main/index.ts` — a toolbar carrying a
+   *   session name, a folder, a long account address and the mode switch leaves
+   *   this cluster 67 pixels, and flex handed the reading 22.9 of them: enough
+   *   for the word `5h` and no number at all, which is the one thing this
+   *   component must never draw. Stripped to `30%` over `19%` it measures 35,
+   *   which with the controls chip's 30 and the 2-pixel gap is exactly the 67
+   *   that exist — so at the narrowest this app can be made, neither control is
+   *   clipped by a pixel.
+   */
+  fit?: UsageFit
   /** What the account chip would call this login, resolved by the same function. */
   accountLabel: string | null
   /** True when the build has no usage channel at all. */
   unwired?: boolean
-  canCheck?: boolean
-  checking?: boolean
-  refusal?: string | null
-  /** Runs `/usage` in the session. Claude only — see the panel below. */
-  onCheck?: () => void
+  /** A fetch is in flight right now. Nobody asked for it — see `auto-usage.ts`. */
+  fetching?: boolean
   /** Clock, for tests and for the harness. */
   now: number
+  /**
+   * The value of `data-drive-anchor` this bar should carry, or undefined.
+   *
+   * A tour can be asked to point at a session's usage and that is a reasonable
+   * thing to point at — a stop reading "this one is nearly out of its five-hour
+   * window" has somewhere to put the box. `focus-target.ts` calls the kind
+   * `usage`; it used to call it `usage-strip` and point at the readout inside
+   * the chat composer, which was deleted when the composer's control row went
+   * *"from the chat box side completely"*. This is where that reading lives now.
+   *
+   * Built by {@link UsageBar} rather than here, because only it knows the
+   * session, and passed rather than composed inline so that **a bar with no
+   * session produces no attribute at all**. The alternative — building
+   * `usage:${sessionId}` in the view — writes the literal string
+   * `usage:undefined` into the DOM whenever the view is rendered on its own, in
+   * the harness or in its own tests, and that is an anchor that exists, matches
+   * a selector and names nothing.
+   */
+  anchor?: string
 }
 
 /**
- * The bar itself.
+ * One window's meter.
  *
- * 44 pixels rather than the usage strip's 72: this one is on a toolbar shared
- * with a session name, a folder, an account, three pickers and a mode switch,
- * and it is read as "roughly how far along", not measured off. The strip is at
- * the bottom of a pane with a whole row to itself.
+ * Four pixels tall and drawn twice, one line above the other, so the pair reads
+ * as a single instrument rather than as two controls. The strip at the bottom of
+ * a chat pane is 72px wide with a row to itself; this shares a toolbar with a
+ * session name, a folder, an account, three pickers and a mode switch, and is
+ * read as "roughly how far along" with the exact figure printed beside it.
  */
 function Meter({ percent, level, state }: { percent: number; level: string; state: string }) {
   return (
     <span className="ub-meter" data-level={level} data-state={state} aria-hidden="true">
       {/* Clamped, because a bar cannot draw past its own track. The number
           beside it is not clamped — a limit can be exceeded, and 104% is the
-          finding rather than an error. */}
-      <span className="ub-meter-fill" style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} />
+          finding rather than an error.
+
+          Rounded to two places because these fractions arrive as decimals and
+          the arithmetic shows: `0.55 * 100` is 55.00000000000001 in IEEE 754,
+          which React writes into the attribute verbatim. Two places is finer
+          than a 40px track can draw and finer than any screen can show, so
+          nothing is lost, and what is gained is a style attribute a person can
+          read in devtools. */}
+      <span
+        className="ub-meter-fill"
+        style={{ width: `${Math.round(Math.min(100, Math.max(0, percent)) * 100) / 100}%` }}
+      />
     </span>
   )
 }
@@ -114,9 +197,10 @@ function providerLabel(provider: ProviderId | undefined): string | null {
 /**
  * One line in the panel: a window, what it has used, and when it renews.
  *
- * Every window is listed, not only the one on the bar, because the bar shows the
- * shortest and a weekly limit at 100% behind a quiet five-hour one is the exact
- * screen this feature must not produce.
+ * Every window is listed here, including the ones the bar has no line for. The
+ * bar shows two; a Claude account can be near a limit on `Current week (Opus)`
+ * as well, and this is where that is stated in full, under the source's own
+ * label rather than this app's paraphrase of it.
  */
 function WindowRow({ readout }: { readout: UsageReadout }) {
   /*
@@ -159,6 +243,27 @@ function WindowRow({ readout }: { readout: UsageReadout }) {
 }
 
 /**
+ * What goes in a line's figure column.
+ *
+ * The single line may spend words — `Not reported`, `Reading…` — because it has
+ * the whole element to itself and because those words *are* the reading in that
+ * state. A line of a pair may not: the two figures are meant to sit on one
+ * vertical rule and be compared at a glance, and `Not reported` in one of them
+ * is four times the width of `55%` and pushes the other's meter across the bar.
+ *
+ * So a pair's missing figure is an em dash. That is not a coy way of saying zero
+ * — it is the absence, marked, in the one column where a number would otherwise
+ * be, drawn in the same muted italic every unread value in this app wears. The
+ * sentence explaining which absence it is stays where there is room for it: the
+ * hover label, and the panel one click away.
+ */
+function lineFigure(line: UsageLine, fallback: string): string {
+  if (line.slot === 'single') return line.readout?.value ?? fallback
+  if (line.readout === null || line.readout.percent === null) return '—'
+  return line.readout.value
+}
+
+/**
  * The presentational half, exported for its own tests and for the harness.
  *
  * Every figure arrives already decided, so what the bar says and refuses to say
@@ -169,14 +274,12 @@ function WindowRow({ readout }: { readout: UsageReadout }) {
 export function UsageBarView({
   report,
   provider,
-  folded = false,
+  fit = 'full',
   accountLabel,
   unwired = false,
-  canCheck = false,
-  checking = false,
-  refusal = null,
-  onCheck,
+  fetching = false,
   now,
+  anchor,
 }: UsageBarViewProps) {
   const [open, setOpen] = useState(false)
   const host = useRef<HTMLDivElement>(null)
@@ -206,9 +309,8 @@ export function UsageBarView({
     }
   }, [open])
 
-  const primary = primaryReading(report)
-  const readout = primary === null ? null : usageReadout(primary, now)
-  const alert = alertReading(report, primary, now)
+  const lines = usageLines(report, now)
+  const alert = extraAlert(report, lines, now)
   const agent = providerLabel(provider)
 
   /*
@@ -227,73 +329,156 @@ export function UsageBarView({
       ? 'Asking this session what it has used…'
       : (report.reason ?? 'Nothing has been reported for this session yet.')
 
-  const label = readout?.short ?? 'Usage'
-  const value = readout?.value ?? (unwired ? 'Not wired' : report === null ? 'Reading…' : 'Not reported')
-  const measured = readout?.percent !== null && readout?.percent !== undefined
+  /* What the single line says when it has no reading. A fetch in flight is
+     worth saying out loud precisely because nobody started it: without it the
+     bar would sit on "Not reported" through the two seconds it takes to run. */
+  const fallback = unwired ? 'Not wired' : fetching || report === null ? 'Reading…' : 'Not reported'
 
   /*
-   * Everything the chip cannot fit, for the hover label and for a screen reader.
+   * Everything the lines cannot fit, for the hover label and for a screen reader.
    *
-   * It names the agent and the login as well as the window, because the whole
+   * It names the agent and the login as well as the windows, because the whole
    * reason this sits next to the account chip is that the two are statements
    * about one thing, and a reading that does not say whose it is invites exactly
-   * the confusion a split window already caused once.
+   * the confusion a split window already caused once. Each line contributes its
+   * own full sentence — including the weekly one's renewal date, which is off
+   * the bar by request and is not thereby lost.
    */
   const whose = [agent, accountLabel].filter((part): part is string => part !== null).join(' · ')
-  const sentence = readout === null ? nothing : readout.detail
+  const said = lines
+    .map((line) => line.readout?.detail)
+    .filter((part): part is string => part !== undefined)
+  const sentence = said.length === 0 ? nothing : said.join(' ')
   const title = whose === '' ? sentence : `${whose} — ${sentence}`
 
+  /*
+   * The drive anchor sits on the bar itself, not on the chip inside it and not
+   * on the sheet that hangs off it.
+   *
+   * A tour stop that says "this session is nearly out of its five-hour window"
+   * is pointing at a *reading*, and the bar is the reading; the chip is the
+   * control that opens the detail panel. They occupy the same pixels today, so
+   * the choice is invisible on screen and would stop being invisible the first
+   * time the bar grows a second child.
+   *
+   * The sheet is `position: absolute`, which matters more than it looks:
+   * `getBoundingClientRect` on this element does not grow to contain an
+   * absolutely-positioned descendant, so a highlight cannot swell to the panel's
+   * 300×460 because somebody happened to leave the detail open.
+   */
   return (
-    <div className="usage-bar" ref={host} data-folded={folded || undefined}>
+    <div className="usage-bar" ref={host} data-fit={fit} data-drive-anchor={anchor}>
       <button
         type="button"
-        className="cc-chip ub-chip"
+        className="cc-chip ub-stack"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Usage: ${title}`}
         title={title}
         onClick={() => setOpen((was) => !was)}
       >
-        <span className="ac-name">{label}</span>
         {/*
-          The figure before the bar, which is not the conventional order and is
-          deliberate.
+          Four columns shared by both lines, so the two percentages sit on one
+          vertical rule and the two meters start at the same pixel. That
+          alignment is the whole reason the weekly line can go without a name:
+          it is identified by the column it is in and the line it is under.
 
-          A chip in this cluster clips from its right edge when the row is
-          clamped — see `SessionControls.css`, where every chip is made to
-          shrink so that none of them paints over the mode switch. With the
-          meter first, a squeezed chip drew `5h ● 34` at a 900pt window: the bar
-          survived and the number lost its percent sign, which is the one thing
-          here that must never happen. Reversed, what the clip takes is the
-          caret and then the bar — decoration, then a proportion that is still
-          printed as a number an inch to its left.
+          The name column stays in the grid for the weekly line even though it
+          is empty — *"no need to say week here"* — because taking it out would
+          shift that line's figure left and undo the alignment the pair is for.
         */}
-        <span
-          className={measured ? 'ac-value ub-value' : 'ac-value ub-value ac-value-unknown'}
-          data-level={readout?.level ?? 'ok'}
-        >
-          {value}
+        <span className="ub-lines">
+          {lines.map((line, index) => {
+            const readout = line.readout
+            const last = index === lines.length - 1
+            /* The renewal time is half of what he originally asked for, so it is
+               on the bar rather than only in the tooltip — and it is the first
+               thing to go when the cluster folds, because the alternative is a
+               chip hanging off the end of the window. The weekly line never
+               carries one: *"no even need to show the dates."* */
+            const tail = fit === 'full' && line.showReset && readout !== null ? readout.caveat : ''
+            return (
+              <Fragment key={line.slot}>
+                {/*
+                  Cells are dropped from the markup rather than hidden in CSS,
+                  and that is not a preference. A grid with three explicit
+                  columns places items in order — item 4 starts row 2 — so a row
+                  that renders two cells while its neighbour renders three does
+                  not "lose a column", it shifts every cell after it into the
+                  wrong one. `display: none` has the same effect, since a hidden
+                  item is removed from the grid entirely. Every line therefore
+                  renders exactly the same number of cells as the template it is
+                  drawn under, and the template changes with the state.
+                */}
+                {fit === 'tight' ? null : <span className="ub-cell ub-name">{line.name}</span>}
+                <span
+                  className={
+                    readout?.percent === null || readout === null
+                      ? 'ub-cell ub-figure ac-value-unknown'
+                      : 'ub-cell ub-figure'
+                  }
+                  data-level={readout?.level ?? 'ok'}
+                >
+                  {lineFigure(line, fallback)}
+                </span>
+                {/* The meters are the first whole thing to go, and they go by
+                    not being rendered rather than by being hidden: an empty
+                    track column would still hold its 12 pixels open, which is
+                    a third of the room this state has to work with. */}
+                {fit === 'tight' ? null : (
+                  <span className="ub-cell ub-track">
+                    {readout?.bar ? (
+                      <Meter percent={readout.percent ?? 0} level={readout.level} state={readout.state} />
+                    ) : null}
+                  </span>
+                )}
+                {/* The tail column goes with the meters when the room is
+                    tight: an empty grid cell still holds its column gap open,
+                    and 4 pixels is an eighth of what this state has to work
+                    with. Nothing is in it — the renewal clause belongs to
+                    `full` and the alert is a `full`/`dense` affordance. */}
+                {fit === 'tight' ? null : (
+                <span className="ub-cell ub-tail">
+                  {tail === '' ? null : <span className="ub-caveat">{tail}</span>}
+                  {/* A window that is on neither line and is not quiet. The
+                      weekly line's tail is empty by design, which is exactly the
+                      room a `Current week (Opus)` at 97% needs so it cannot hide
+                      behind a comfortable pair. */}
+                  {last && alert !== null ? (
+                    <span className="ub-alert" data-level={alert.level}>
+                      {alert.short} {alert.value}
+                    </span>
+                  ) : null}
+                </span>
+                )}
+              </Fragment>
+            )
+          })}
         </span>
-        {readout?.bar ? (
-          <Meter percent={readout.percent ?? 0} level={readout.level} state={readout.state} />
-        ) : null}
-        {/* The renewal time is half of what he asked for, so it is on the bar
-            rather than only in the tooltip — and it is the first thing to go
-            when the bar is folded, because the alternative is a chip hanging
-            off the end of the window. */}
-        {!folded && readout !== null && readout.caveat !== '' ? (
-          <span className="ub-caveat">{readout.caveat}</span>
-        ) : null}
-        {/* A second window, and only ever when it is in trouble. A weekly limit
-            at 100% must not be hidden behind a five-hour bar reading 5%. */}
-        {alert !== null ? (
-          <span className="ub-alert" data-level={alert.level}>
-            {alert.short} {alert.value}
-          </span>
-        ) : null}
-        <svg className="ac-caret" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
-          <path d={CARET} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-        </svg>
+        {/*
+          The caret goes when the bar is tight, and it is the last thing to go.
+
+          Everywhere else on this bar the caret is sacred — it is the mark that
+          says a control opens something, and `.sc-summary` keeps its own at
+          every width for exactly that reason. Here it loses, and the
+          measurement is why: with it, the tight control needs 48 pixels and the
+          room allows 35, so the grid overflowed its own box and the chevron was
+          drawn **on top of** `18%` — a 6.9px overlap, measured in the running
+          app at a 720pt window. A chevron painted through a percentage is not
+          an affordance, it is a rendering fault.
+
+          Nothing else is given up with it. The element is still a real
+          button, still announces `aria-haspopup="dialog"`, still lights up on hover
+          like every chip beside it, and still carries the whole reading in its
+          title; and two stacked percentages are not ambiguous about what they
+          are. Removed from the markup rather than hidden in CSS so that its
+          absence is one fact in one place, and so the tests can see it.
+        */}
+        {fit === 'tight' ? null : (
+          <svg className="ac-caret" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
+            <path d={CARET} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+        )}
       </button>
 
       {open ? (
@@ -315,45 +500,25 @@ export function UsageBarView({
             <p className="ub-empty">{nothing}</p>
           )}
 
-          {/* Where the numbers came from, once for the panel rather than once
-              per row: a session runs one agent, so every reading in it has the
-              same source, and repeating that sentence under each window was the
-              same paragraph three times in a 300px card. */}
-          {readout !== null ? <p className="ub-foot">{readout.source}</p> : null}
-
           {/*
-            The one action, and it belongs to Claude alone.
+            Where the numbers come from and what keeps them current — once for
+            the panel rather than once per row, because a session runs one agent
+            and every reading in it therefore has one source.
 
-            `plan:refresh` types `/usage` into the session and reads the panel
-            the CLI draws — a Claude gesture with Claude's own refusals, gated on
-            an idle session with an empty prompt. Codex needs no equivalent and
-            must not be offered one: it writes its limits into its rollout as it
-            works, so there is nothing to ask it for, and a button that typed
-            `/usage` at a Codex prompt would just be an unknown command.
+            The second sentence is the replacement for the `Check now` button,
+            and it is here for the reason the whole review turns on: a reader who
+            can see a figure is missing will look for the thing to press, and the
+            honest answer is that there is nothing to press because the app is
+            already doing it. Saying so is what stops the absence reading as a
+            fault. Claude's is the only one that is fetched — Codex writes its
+            limits into its rollout as it works, so there is nothing to ask it
+            for.
           */}
-          {provider === 'claude' ? (
-            <div className="ub-actions">
-              <button
-                type="button"
-                className="ub-check"
-                onClick={onCheck}
-                disabled={!canCheck || checking}
-                title={
-                  canCheck
-                    ? 'Types /usage into this session, reads the panel Claude Code draws, then closes it with Esc. Only runs while the session is idle and its prompt is empty.'
-                    : 'Running /usage from here is not wired into this build.'
-                }
-              >
-                {checking ? 'Checking…' : 'Check now'}
-              </button>
-              {refusal ? <p className="ub-refusal">{refusal}</p> : null}
-            </div>
-          ) : provider === 'codex' && readout === null ? (
-            // Nothing has been reported and there is nothing to press: Codex
-            // writes its limits as it works, so the honest thing to add here is
-            // what will make one appear.
-            <p className="ub-foot">{sourceSentence('codex-rollout')}</p>
-          ) : null}
+          <p className="ub-foot">
+            {provider === 'claude'
+              ? 'Read from Claude Code’s own /usage panel. This checks by itself whenever the session goes quiet, so there is nothing to press.'
+              : sourceSentence(provider === 'codex' ? 'codex-rollout' : 'claude-usage-panel')}
+          </p>
         </div>
       ) : null}
     </div>
@@ -364,14 +529,15 @@ export interface UsageBarProps {
   /** The pty this reading is about. */
   sessionId: string
   provider?: ProviderId
-  folded?: boolean
+  /** See {@link UsageBarViewProps.fit}. Decided by the cluster's own measurement. */
+  fit?: UsageFit
   /** Injectable for tests and for the harness; defaults to `window.deck`. */
   bridge?: Parameters<typeof useUsageBar>[1]
   /** Clock, for tests. */
   now?: number
 }
 
-export function UsageBar({ sessionId, provider, folded = false, bridge, now }: UsageBarProps) {
+export function UsageBar({ sessionId, provider, fit = 'full', bridge, now }: UsageBarProps) {
   /*
    * Usage is a feature that can be uninstalled, and this is one of its surfaces.
    *
@@ -383,7 +549,37 @@ export function UsageBar({ sessionId, provider, folded = false, bridge, now }: U
    */
   const features = useFeatures()
   const usage = useUsageBar(sessionId, bridge)
-  const primary = primaryReading(usage.report)
+  const clock = now ?? Date.now()
+
+  /*
+   * Fetching it without being asked to, which is the half of *"usage should
+   * appear on its own"* that is not about drawing.
+   *
+   * The hook is handed the same decision the bar draws from — `leadIsLive` over
+   * the same lines — rather than making its own judgement about freshness, so a
+   * figure that is good enough to show is by construction good enough to leave
+   * alone. See `auto-usage.ts` for why this is an event and not a timer, and for
+   * why typing into somebody's session unasked is safe here.
+   */
+  useAutoUsage({
+    sessionId,
+    provider,
+    /*
+     * Off when the feature is off, and this is not belt-and-braces.
+     *
+     * The `controlOn` check below returns null and draws nothing — but hooks
+     * run before any early return, so without this the fetcher would carry on
+     * typing `/usage` into people's sessions for a reading no surface in the
+     * app is showing. A feature that has been switched off must stop *acting*,
+     * not merely stop being drawn; a switched-off feature that still touches a
+     * terminal is the worst kind of leftover.
+     */
+    canFetch: usage.canCheck && features.controlOn('chrome.usage'),
+    fetching: usage.checking,
+    fresh: leadIsLive(usageLines(usage.report, clock)),
+    fetch: usage.check,
+  })
+
   /*
    * The login, asked for exactly the way the account chip asks for it.
    *
@@ -398,7 +594,7 @@ export function UsageBar({ sessionId, provider, folded = false, bridge, now }: U
    * most of the time has no readings at all, and "not reported" without a name
    * on it is exactly the half-answer this was moved here to stop giving.
    */
-  const account = primary?.account ?? usage.report?.account ?? null
+  const account = primaryReading(usage.report)?.account ?? usage.report?.account ?? null
   const signIn = useAccountIdentity(account?.id ?? null)
   const identity =
     account === null
@@ -409,18 +605,35 @@ export function UsageBar({ sessionId, provider, folded = false, bridge, now }: U
   // is a component whose hook order changes with a setting.
   if (!features.controlOn('chrome.usage')) return null
 
+  /*
+   * The place a tour points at when it points at a session's usage.
+   *
+   * Built here because here is where the session is known, and left `undefined`
+   * for a bar with no session so that nothing ever writes `usage:` followed by
+   * nothing into the DOM. Deliberately below the feature check: switching the
+   * usage control off draws no bar, so there is no element to anchor, and the
+   * overlay's honest answer is `anchor-missing` rather than a box around a gap.
+   *
+   * The literal is spelled here rather than imported from `anchorId` in
+   * `focus-target.ts`, which is the file that reads it back. That is the same
+   * arrangement every other anchor in this app uses — `Sidebar.tsx` writes
+   * `session-row:${tab.id}`, `GitPanel.tsx` writes its own — and it is not
+   * laziness: the two sides are meant to be able to disagree, so that
+   * `anchor-contract.test.ts` can catch it when they do. A shared helper would
+   * make the contract agree with itself no matter what either end did.
+   */
+  const anchor = sessionId === '' ? undefined : `usage:${sessionId}`
+
   return (
     <UsageBarView
       report={usage.report}
       provider={provider}
-      folded={folded}
+      fit={fit}
       accountLabel={identity?.label ?? null}
       unwired={usage.unwired}
-      canCheck={usage.canCheck}
-      checking={usage.checking}
-      refusal={usage.refusal}
-      onCheck={usage.check}
-      now={now ?? Date.now()}
+      fetching={usage.checking}
+      now={clock}
+      anchor={anchor}
     />
   )
 }

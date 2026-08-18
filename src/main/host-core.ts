@@ -38,7 +38,7 @@
 import { join } from 'node:path'
 import { BRAND } from '../shared/brand'
 import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../shared/types'
-import { PtyManager } from './pty-manager'
+import { PtyManager, type RemovalReason } from './pty-manager'
 import {
   PROVIDERS,
   customProviderSpec,
@@ -49,7 +49,8 @@ import {
   withLaunchArgs,
 } from './providers'
 import { CustomAgentStore, lookupCommand } from './custom-agents'
-import { isCustomProviderId } from '../shared/custom-agents'
+import { AGENT_CATALOG } from '../shared/agent-catalog'
+import { isCustomProviderId, type CustomAgent } from '../shared/custom-agents'
 import { currentPlatform, type Platform } from './platform/host'
 import { homeDir } from './platform/paths'
 import { getState as profilesState, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
@@ -68,11 +69,14 @@ import { forgetBoundary, noteBoundary } from './session-boundary'
 import { installDeviceHomes, installHomeScopes } from './transcript'
 import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-session'
 import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
-import { FolderGrants, foldersForDevice } from './remote/folder-grants'
+import { FolderGrants } from './remote/folder-grants'
+import { DeviceKinds } from './remote/device-kind'
+import { reachFor, type DeviceReach } from './remote/device-reach'
 import { guestGitDir, HELPER_FILE, type GuestGitEnv } from './remote/git-guest'
 import { isHiddenSession } from './remote/hidden-sessions'
 import { SessionFanout } from './remote/session-fanout'
 import { remoteSessionStart } from './remote/session-create'
+import { HeldSessions } from './session-held'
 import type { SavedSession } from './session-restore'
 import { store } from './store'
 import {
@@ -83,6 +87,52 @@ import {
   type WslStore,
   type WslTarget,
 } from './wsl'
+
+/* ------------------------------------------------ refusing, rather than -- */
+
+/**
+ * The agent that was asked for cannot be started on this machine.
+ *
+ * A class rather than a bare `Error` because three callers have to be able to
+ * tell this apart from a spawn that blew up: the window (which draws the
+ * sentence in the New Session dialog), a paired device (`remote/session-create.ts`
+ * turns it into a refusal the phone can show) and the restore path (which has to
+ * decide whether a session is worth keeping and offering again — it is; an agent
+ * that is missing this minute is frequently installed the next).
+ *
+ * The message is written for a person and is the only thing most of them will
+ * ever see, so it says the name they chose in the picker and where this app
+ * looked. "inside the WSL distribution" and "on this machine" are genuinely
+ * different problems with genuinely different fixes, and a machine whose work
+ * lives in Ubuntu is exactly the machine that reads a message about `PATH` and
+ * checks the wrong `PATH`.
+ */
+export class AgentUnavailableError extends Error {
+  readonly provider: ProviderId
+
+  constructor(provider: ProviderId, label: string, insideWsl: boolean) {
+    super(
+      `${label} could not be found ${insideWsl ? 'inside the WSL distribution' : 'on this machine'}, ` +
+        `so this session was not started.`,
+    )
+    this.name = 'AgentUnavailableError'
+    this.provider = provider
+  }
+}
+
+/**
+ * What to call an agent when telling somebody it is missing.
+ *
+ * The catalogue for the four this build ships, the person's own label for one
+ * they added, and the raw id as the last resort — which is reached only by an id
+ * that is in neither, i.e. an agent removed in another window or a session
+ * restored from a machine that had it. Naming the id there is more useful than
+ * a generic "the agent": it is the string they can search their settings for.
+ */
+function agentLabel(provider: ProviderId, added: CustomAgent | null): string {
+  if (added !== null) return added.label
+  return AGENT_CATALOG[provider]?.label ?? provider
+}
 
 /* ------------------------------------------------------------- the ledger -- */
 
@@ -103,6 +153,19 @@ export class OpenSessionLedger {
   private readonly records = new Map<string, SavedSession>()
   private frozen = false
 
+  /**
+   * The sessions that were open, could not be started again, and are being kept
+   * anyway.
+   *
+   * On the ledger rather than beside it because they are written to the same
+   * file, in the same list, by the same `flush`. Two writers of `openSessions`
+   * is how one of them ends up overwriting the other's half — which is precisely
+   * the bug this field exists to fix, in its original form: the live map was the
+   * only writer, so anything that was not a running session was erased by the
+   * first tab that opened. See `session-held.ts` for the whole account.
+   */
+  readonly held = new HeldSessions(() => this.flush())
+
   note(id: string, saved: SavedSession): void {
     this.records.set(id, saved)
     this.flush()
@@ -111,6 +174,35 @@ export class OpenSessionLedger {
   forget(id: string): void {
     this.records.delete(id)
     this.flush()
+  }
+
+  /**
+   * What one live session would need to be started again, or null.
+   *
+   * Null is a real answer and a load-bearing one rather than a miss: this map
+   * deliberately holds only the sessions that are somebody's *tab*, so a null
+   * here means "the copilot's own session, or one held inside a device's folder
+   * grant" — the two kinds that were left out because a `SavedSession` cannot
+   * carry what makes them what they are. `session-switch.ts` reads it as exactly
+   * that and refuses, rather than restarting one of them as an ordinary session
+   * in the same tab, which is precisely the substitution the comment beside
+   * `ledger.note` spends a page refusing to make.
+   */
+  get(id: string): SavedSession | null {
+    return this.records.get(id) ?? null
+  }
+
+  /**
+   * Every live session and its record, in tab order.
+   *
+   * Paired with the id, because the one caller outside this class needs to ask
+   * "which *other* sessions are running" — `--continue` attaches to one
+   * conversation per store, and a tab about to be started must not be pointed at
+   * a conversation another tab is already showing. Without the id there is no
+   * way to leave yourself out of that comparison.
+   */
+  entries(): { id: string; saved: SavedSession }[] {
+    return [...this.records].map(([id, saved]) => ({ id, saved }))
   }
 
   /**
@@ -150,7 +242,17 @@ export class OpenSessionLedger {
    */
   flush(): void {
     if (this.frozen) return
-    store().setOpenSessions([...this.records.values()])
+    /*
+     * Held first, then live.
+     *
+     * `openSessions` is read back in order and restored in order, and a held
+     * entry is a tab from *before* this launch while every live record is one
+     * from during it — so this is the order they were in, and putting the
+     * survivors of a failed restore after the sessions that replaced them would
+     * reshuffle somebody's tabs a little more every time the app could not start
+     * one.
+     */
+    store().setOpenSessions([...this.held.saved(), ...this.records.values()])
   }
 
   /** Stop writing. Called once, immediately after the last honest flush. */
@@ -189,6 +291,15 @@ export interface HostCoreOptions {
   onExit?(id: string, exitCode: number): void
   onStatus?(id: string, status: SessionStatus): void
   /**
+   * A session is gone from this core altogether — not merely finished.
+   *
+   * Every shell that draws a list of sessions needs this and only the desktop
+   * has one today. See `RemovalReason`: a process that ended on its own is
+   * `onExit` and keeps its place, and this is the entry being dropped, after
+   * which nothing here can answer for that id at all.
+   */
+  onSessionRemoved?(id: string, reason: RemovalReason): void
+  /**
    * A session appeared that this shell did not ask for — today, one a paired
    * device started. The desktop turns it into a tab; the headless build has
    * nowhere to put it and passes nothing.
@@ -224,6 +335,15 @@ export interface HostCore {
   /** The `SessionAccess` the remote server serves, and the `PtySource` behind it. */
   sessions: SessionFanout
   grants: FolderGrants
+  /**
+   * Whether each paired device is one of the owner's own or a guest.
+   *
+   * On the core beside `grants` and for the same reason: the shell that draws
+   * the approval screen registers IPC against *this* instance, and a shell that
+   * built its own would decide kinds in one copy of the file while every
+   * connection was checked against another.
+   */
+  kinds: DeviceKinds
   /**
    * The agents this machine has added.
    *
@@ -343,6 +463,58 @@ export function createHostCore(options: HostCoreOptions): HostCore {
   const grants = new FolderGrants(options.storageDir)
 
   /**
+   * Whether each paired device is one of the owner's own or a guest.
+   *
+   * Beside the folder grants and for the same reason — one instance, because two
+   * would be two in-memory copies of one file, the approval screen writing to
+   * one while every connection is checked against the other. It is built *here*
+   * rather than by the Electron shell so that the headless daemon, which serves
+   * the same protocol from the same fanout, cannot be the build where the rule
+   * is missing. `session-fanout.ts` says the same thing about `hidden`: a rule a
+   * shell has to remember to install is a rule the other shell forgets.
+   */
+  const kinds = new DeviceKinds(options.storageDir)
+
+  /**
+   * What one device may touch, computed once and read by three doors.
+   *
+   * Every consumer below goes through this — the folder list a device is sent,
+   * the folder rule `create` enforces, and the per-session visibility check the
+   * fanout applies to `list`, `attach` and every keystroke. That is the property
+   * `device-reach.ts` exists for: the advertised set and the enforced set are
+   * one call, so a picker cannot offer what the rule refuses and a list cannot
+   * show what a keystroke would be denied.
+   */
+  const reach = (deviceId: string): DeviceReach =>
+    reachFor({ kinds, grants }, deviceId, {
+      // The open projects, most-recently-opened first, then the folders sessions
+      // are running in. Suggestions only, and only for a device of the owner's
+      // own: a guest's answer is its granted list and never touches this.
+      //
+      // Live sessions come after the projects because a session can be running
+      // in a folder that was never added as a project, and the owner's own
+      // laptop can see it in its own list.
+      offered: () => [
+        ...store().getProjects().map((project) => project.path),
+        ...ptys.list().map((session) => session.cwd),
+      ],
+      /*
+       * The home directory one of the owner's own machines lands in when it
+       * names nothing — on the same side of the boundary as everything else.
+       *
+       * The platform home is `C:\Users\Asad` on Windows, and starting a session
+       * there on a machine whose work is all in Linux hands it the one folder
+       * with nothing in it. The distro's own `$HOME` is the right answer and is
+       * used when it is known; it is not always known, because asking for it
+       * means starting a stopped distribution and this app does not boot a
+       * virtual machine to fill in a default. The platform home is the fallback
+       * — a real folder, on the wrong side, which is better than a path that
+       * resolves to nothing.
+       */
+      home: () => wsl.home() ?? homeDir(),
+    })
+
+  /**
    * The agents this machine has added, beyond the four this build ships.
    *
    * Built here rather than beside the IPC that lists them, for the reason this
@@ -455,8 +627,6 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     // bug this whole path exists to fix: every agent reported missing, and every
     // tab silently downgraded to a shell.
     const available = await detectProviders(platform, target)
-    // Fall back to a plain shell rather than spawning a binary that isn't there,
-    // which would flash a dead tab with no explanation.
     const requested = input.provider ?? 'claude'
     /*
      * An agent the person added, if that is what was asked for.
@@ -493,7 +663,41 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      */
     const addedRuns =
       added !== null && (target !== null || (await lookupCommand(added.command, platform)) !== null)
-    const provider = addedRuns ? requested : available[requested] ? requested : 'shell'
+    /*
+     * What was asked for, or nothing at all. **Never something else.**
+     *
+     * This line used to read
+     *
+     *     const provider = addedRuns ? requested : available[requested] ? requested : 'shell'
+     *
+     * and that expression is the second half of the fault Asad reported on
+     * 2026-08-17, which is the worse half. A session whose agent could not be
+     * started opened as a plain terminal instead, wearing the same tab, in the
+     * same folder — and then `ledger.note` wrote *that* down as what was open.
+     * Every launch afterwards restored a shell, correctly reported that a shell
+     * has no conversation to continue, and never attempted the real agent again.
+     * A transient failure — a distro that was asleep, a probe that timed out,
+     * the `wsl.exe` path bug in `wsl.ts` — had become permanent, and the
+     * downgrade hid the failure that caused it.
+     *
+     * The two comments this function used to carry about that fallback both
+     * described it as protection ("rather than spawning a binary that isn't
+     * there, which would flash a dead tab with no explanation"). The premise is
+     * right and the conclusion was wrong: the answer to "we cannot start what
+     * you asked for" is to say so, not to start something else and let the
+     * person work out for themselves why their agent is gone. `copilot-session.ts`
+     * had already reached that conclusion and defended itself from this line by
+     * hand, checking `meta.provider !== 'claude'` after the fact and killing the
+     * session — a downstream check nobody else knew to write.
+     *
+     * A shell is still perfectly startable; it is simply never a *substitute*.
+     * `available.shell` is always true, so asking for one cannot reach this
+     * throw.
+     */
+    if (!addedRuns && !available[requested]) {
+      throw new AgentUnavailableError(requested, agentLabel(requested, added), target !== null)
+    }
+    const provider = requested
     /*
      * The table for this machine, with each agent pointed at a copy that runs.
      *
@@ -773,11 +977,14 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     /*
      * Remember the session, so a relaunch can put it back.
      *
-     * `requested`, not `provider`: the two differ when the chosen CLI is not
-     * installed and the fallback above turns the session into a plain shell.
-     * Writing the fallback down would make the downgrade permanent — install
-     * Claude Code tomorrow and every restored session would still be a shell,
-     * with nothing on screen explaining why.
+     * `requested`, and `requested` is now the only thing it can be: the
+     * substitution that used to make the two differ is gone, because writing a
+     * fallback down is what made a downgrade permanent. That happened, on
+     * `DESKTOP-DDGMNCV`, and the state file still had the wreckage in it on
+     * 2026-08-17 — two folders that had been `"provider":"claude"` in the log
+     * that morning were `"provider":"shell"` on disk that afternoon, and every
+     * relaunch afterwards restored a bare terminal that then reported, quite
+     * correctly, that it had no conversation to continue.
      *
      * `input.profileId`, not the resolved `profile`: a null here means "whatever
      * this project's default profile is", and that is a question worth asking
@@ -800,8 +1007,40 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * and the device starts a new one. The honest fix is for the ledger to carry
      * the device and for the restore path to rebuild the confinement — worth
      * doing, and a change to the stored shape rather than to this line.
+     *
+     * ## Nor is a session this app started for itself
+     *
+     * The same argument, one step further. A `SavedSession` is a folder, an
+     * agent and an account — everything a person's tab is made of, and nothing
+     * else. A launch that also carried a `fence` or `extraArgs` is a launch this
+     * *app* composed for its own purposes, and neither of those survives into a
+     * `SavedSession`, so restoring one produces something that is not the
+     * session that was written down.
+     *
+     * Concretely, and this was on Asad's machine: the copilot's own session is
+     * spawned with `--append-system-prompt-file <layer>` and `--mcp-config`, and
+     * it was being written into `openSessions` like any tab — twice, because it
+     * had been restarted. The next launch would restore two ordinary Claude
+     * sessions in `<userData>/copilot`, with no instruction layer, no
+     * `deck-control` tools and no fence, hidden from the sidebar because the
+     * window filters that folder out. Two invisible agent processes, billing,
+     * every time the app opens. `startCopilot` already refuses to start a
+     * copilot without its layer — *"A copilot spawned with no layer is not a
+     * diminished copilot. It is a plain Claude Code session in somebody's
+     * workspace, wearing this app's name"* — and this is that same refusal,
+     * enforced at the one place that could otherwise arrange it behind
+     * everybody's back.
+     *
+     * Keyed on the arguments rather than on a flag the caller sets, because the
+     * arguments *are* the fact: they are main-process-only by construction (a
+     * renderer cannot compose argv — see the note where `extraArgs` is
+     * declared), so "was this launch composed by the app" and "did it carry
+     * these" are the same question. The copilot is the only caller of either
+     * today, and `host-core.copilot.test.ts` pins that a launch carrying them is
+     * not remembered.
      */
-    if (!confined) {
+    const appComposed = fence !== undefined || (extraArgs !== undefined && extraArgs.length > 0)
+    if (!confined && !appComposed) {
       ledger.note(meta.id, {
         cwd: input.cwd,
         provider: requested,
@@ -841,6 +1080,30 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     resize: (id, cols, rows) => ptys.resize(id, cols, rows),
     scrollback: (id) => ptys.scrollback(id),
     /*
+     * Ending a session from a device, which until tonight nothing could do.
+     *
+     * A session could be started from a phone and never stopped from one, so the
+     * swipe he asked for — *"close the session (with a confirmation)"* — had no
+     * verb behind it and the iOS client refused to draw a button that would have
+     * had to fake it. `SessionAccess.close` is the verb; this is the only place
+     * that answers it, and its presence here is what makes the desktop advertise
+     * the capability at all.
+     *
+     * `PtyManager.kill` is exactly what the ✕ in this app's own window calls, so
+     * a session closed from a phone ends the same way as one closed at the desk —
+     * one behaviour rather than two that can drift — and the `session:removed`
+     * announcement that fix rides on takes the row out of the window with no
+     * reload. The membership test is here rather than in the manager because
+     * `kill` returns void: an id that is not running has to come back as `false`
+     * so the device is told "no session <id> is running" instead of a silent
+     * success over a session that had already exited.
+     */
+    close: (id) => {
+      if (!ptys.list().some((session) => session.id === id)) return false
+      ptys.kill(id)
+      return true
+    },
+    /*
      * The copilot's own terminal is not the network's business.
      *
      * `SessionFanout` grew the predicate for this and then nothing answered it,
@@ -871,46 +1134,33 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * to install either.
      */
     hidden: (id) => isCopilotSession(id) || isHiddenSession(id),
+    /*
+     * And which sessions belong to *this* device, which is the same question one
+     * step out.
+     *
+     * `hidden` above answers "is this anybody's business"; this answers "whose".
+     * Until it existed, `list` took no device id at all, so a guest paired to one
+     * shared folder was sent every session on the machine and could attach to any
+     * of them — starting a shell in an ungranted folder was refused while typing
+     * into an agent already running in one was not.
+     *
+     * The same `reach` the folder rule below uses, deliberately: one call behind
+     * what a device is offered and what it may touch, so the two cannot drift.
+     */
+    reach,
     // Both halves out of one starter, so the list a phone's picker is drawn from
     // is the list `create` checks against rather than a second computation of
     // the same idea. See `remoteSessionStart`.
     ...remoteSessionStart(
       {
-        // What a person chose for this device — and, only when nobody has chosen
-        // anything for it, what this host is offering everyone: its projects
-        // most-recently-opened first, then the folders sessions are running in.
-        // That fallback is what every device got before grants existed, and it
-        // is kept so that a phone paired before the feature is not locked out by
-        // it.
-        //
-        // Live sessions come after the projects: a session can be running in a
-        // folder that was never added as a project, and the phone can see it in
-        // its own list, so refusing to start a second one beside it would be
-        // arbitrary.
-        folders: (deviceId) =>
-          foldersForDevice(
-            grants,
-            deviceId,
-            () => [
-              ...store().getProjects().map((project) => project.path),
-              ...ptys.list().map((session) => session.cwd),
-            ],
-            /*
-             * The home directory a phone lands in when nothing has been chosen
-             * for it — on the same side of the boundary as everything else.
-             *
-             * The platform home is `C:\Users\Asad` on Windows, and starting a
-             * phone's session there on a machine whose work is all in Linux
-             * hands it the one folder with nothing in it. The distro's own
-             * `$HOME` is the right answer and is used when it is known; it is
-             * not always known, because asking for it means starting a stopped
-             * distribution and this app does not boot a virtual machine to fill
-             * in a default. The platform home is the fallback — a real folder,
-             * on the wrong side, which is better than a path that resolves to
-             * nothing.
-             */
-            () => wsl.home() ?? homeDir(),
-          ),
+        // What this device may start a session in: a guest's chosen folders, or
+        // — for one of the owner's own machines — the projects and running
+        // sessions offered as suggestions, with anything else still startable.
+        // `device-reach.ts` holds the rule and the argument for it, including
+        // why a device nobody has chosen for now reaches nothing rather than
+        // everything.
+        folders: (deviceId) => reach(deviceId).folders,
+        unrestricted: (deviceId) => reach(deviceId).unrestricted,
         spawn: async (input) => {
           /*
            * A session started from somebody else's device does not get this
@@ -1026,6 +1276,18 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       sessions.noteStatus(id, status)
       options.onStatus?.(id, status)
     },
+    /*
+     * Forwarded rather than acted on here.
+     *
+     * Everything this core has to forget about a dead session is already
+     * forgotten in the exit callback above, and a kill produces that exit a
+     * moment later — `kill` signals and returns, and node-pty reports the death
+     * when the OS gets round to it. What the *shell* cannot wait for is the row
+     * on screen: between the kill and the exit the session is already out of
+     * `list()`, so a window still drawing it is drawing something this process
+     * can no longer answer for.
+     */
+    (id, reason) => options.onSessionRemoved?.(id, reason),
   )
 
   /**
@@ -1048,6 +1310,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     wsl,
     sessions,
     grants,
+    kinds,
     agents,
     credentials,
     ledger,

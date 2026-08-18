@@ -5,8 +5,12 @@ import {
   ArtifactsPanel,
   ChangeBody,
   changeSummary,
+  describeRead,
   diffLines,
   directoryOf,
+  kindOf,
+  previewKindOf,
+  wasMade,
   MAX_DIFF_LINES,
   SCAN_FRESH_MS,
   scanOutcome,
@@ -130,11 +134,11 @@ describe('diffLines', () => {
 
 describe('summarize', () => {
   it('says nothing was produced rather than showing an empty list', () => {
-    expect(summarize(list(), 0)).toBe('Nothing written or edited in 3 sessions.')
+    expect(summarize(list(), 0, 'made')).toBe('Nothing written or edited in 3 sessions.')
   })
 
   it('distinguishes "no sessions" from "sessions that produced nothing"', () => {
-    expect(summarize(list({ sessionsScanned: 0 }), 0)).toBe(
+    expect(summarize(list({ sessionsScanned: 0 }), 0, 'made')).toBe(
       'No sessions recorded for this project yet.',
     )
   })
@@ -144,8 +148,8 @@ describe('summarize', () => {
       artifacts: [artifact({ relPath: 'a.ts' }), artifact({ relPath: 'b.ts' })],
       sessions: [{ sessionId: 's', at: NOW, files: 2 }],
     })
-    expect(summarize(found, 2)).toBe('2 files · 1 session')
-    expect(summarize(found, 1)).toBe('1 of 2 files · 1 session')
+    expect(summarize(found, 2, 'made')).toBe('2 made here · 1 session')
+    expect(summarize(found, 1, 'made')).toBe('1 of 2 made here · 1 session')
   })
 
   it('admits when a cap stopped the scan', () => {
@@ -154,7 +158,7 @@ describe('summarize', () => {
       sessions: [{ sessionId: 's', at: NOW, files: 1 }],
       truncated: true,
     })
-    expect(summarize(found, 1)).toContain('older work not read')
+    expect(summarize(found, 1, 'made')).toContain('older work not read')
   })
 })
 
@@ -178,19 +182,25 @@ describe('directoryOf', () => {
 /* ----------------------------------------------------------------- render -- */
 
 describe('ArtifactRow', () => {
-  it('shows the name, the directory and what happened to it', () => {
+  it('leads with what the thing is, not with where it lives', () => {
     const html = renderToStaticMarkup(
       <ArtifactRow
-        artifact={artifact({ relPath: 'src/main/index.ts', writes: 1, edits: 4 })}
+        artifact={artifact({ relPath: 'plans/launch.md', writes: 1, edits: 4 })}
         now={NOW}
         selected={false}
         onSelect={() => undefined}
       />,
     )
-    expect(html).toContain('index.ts')
-    expect(html).toContain('src/main')
-    expect(html).toContain('1 write · 4 edits')
+    expect(html).toContain('launch.md')
+    // The kind, in a word, is the second thing on the row — it is what stops a
+    // list of artifacts reading as a list of paths.
+    expect(html).toContain('Document')
+    expect(html).toContain('1.0 KB')
     expect(html).toContain('10m ago')
+    // The folder is still there, and still last: it is how two files of the
+    // same name are told apart and nothing more.
+    expect(html).toContain('plans')
+    expect(html.indexOf('Document')).toBeLessThan(html.indexOf('>plans<'))
   })
 
   it('says when a file the agent made is no longer there', () => {
@@ -278,6 +288,143 @@ describe('ArtifactsPanel', () => {
     expect(html).toContain('This project’s sessions')
     expect(html).toContain('Every session')
     expect(html.indexOf('This project’s sessions')).toBeLessThan(html.indexOf('Every session'))
+  })
+})
+
+/* ------------------------------------------- what the word Artifacts means -- */
+
+/**
+ * The regression that came back, pinned so it cannot come back again.
+ *
+ * Reported twice, in the same words: *"they are showing some kind of files
+ * instead of artifacts."* Both times the page was rebuilt from the transcript
+ * data, which is a list of file paths, and both times it arrived back at a file
+ * browser — the second time with the reasoning written into the source as
+ * settled ("the only honest definition").
+ *
+ * The meaning is a decision, not a consequence of the data, so it is asserted
+ * here rather than left to the next reader's judgement:
+ *
+ * **An artifact is a file the agent produced whole** — at least one recorded
+ * `Write`. A file it only ever *edited* is a change to something that already
+ * existed, and belongs under a word that says so.
+ *
+ * Breaking that means deleting these assertions, which is a thing somebody has
+ * to do on purpose and explain.
+ */
+describe('an artifact is something the agent made', () => {
+  const made = artifact({ relPath: 'plans/launch.md', writes: 2, edits: 1 })
+  const edited = artifact({ relPath: 'src/app.ts', writes: 0, edits: 6 })
+
+  it('counts a whole-file write as making it, and an edit alone as not', () => {
+    expect(wasMade(made)).toBe(true)
+    expect(wasMade(edited)).toBe(false)
+    // One write is enough. An agent that wrote a file and then refined it four
+    // times still made that file; demoting it for improving it would move an
+    // artifact off this page the moment it got better.
+    expect(wasMade(artifact({ relPath: 'a.md', writes: 1, edits: 40 }))).toBe(true)
+  })
+
+  it('shows only what was made, by default', () => {
+    const html = renderToStaticMarkup(
+      <ArtifactsPanel
+        projectPath="/p"
+        now={NOW}
+        bridge={{
+          listArtifacts: async () => ({ ok: true, ...list({ artifacts: [made, edited] }) }),
+          artifactChanges: async () => ({
+            ok: true,
+            root: '/p',
+            relPath: 'a.ts',
+            changes: [],
+            totalChanges: 0,
+            truncated: false,
+            cancelled: false,
+            tookMs: 1,
+          }),
+        }}
+      />,
+    )
+    // The two chips, with their counts, so nothing is hidden and the split is
+    // between two honest words rather than between shown and dropped.
+    expect(html).toContain('Made here')
+    expect(html).toContain('Changed')
+    // Default is Made — `aria-pressed` is what a static render can prove.
+    const madeChip = html.slice(html.indexOf('Made here') - 220, html.indexOf('Made here'))
+    expect(madeChip).toContain('aria-pressed="true"')
+  })
+
+  it('names the list for what it holds, not "files"', () => {
+    const html = renderToStaticMarkup(
+      <ArtifactsPanel
+        projectPath="/p"
+        now={NOW}
+        bridge={{
+          listArtifacts: async () => ({ ok: true, ...list({ artifacts: [made, edited] }) }),
+          artifactChanges: async () => ({
+            ok: true,
+            root: '/p',
+            relPath: 'a.ts',
+            changes: [],
+            totalChanges: 0,
+            truncated: false,
+            cancelled: false,
+            tookMs: 1,
+          }),
+        }}
+      />,
+    )
+    // The page's own subtitle lives in `panels.ts`; this is the list's
+    // accessible name, which said "Files this project's agents produced".
+    expect(html).not.toContain('Filter by path')
+    expect(html).toContain('Filter by name')
+  })
+})
+
+describe('what kind of thing an artifact is', () => {
+  it('answers in one word somebody already knows', () => {
+    expect(kindOf('memory/2026-08-15.md')).toBe('Document')
+    expect(kindOf('index.html')).toBe('Web page')
+    expect(kindOf('logo.svg')).toBe('Image')
+    expect(kindOf('data/leads.csv')).toBe('Data')
+    expect(kindOf('src/app.tsx')).toBe('Code')
+    expect(kindOf('notes.ipynb')).toBe('Notebook')
+  })
+
+  it('does not call a dotfile a Document because of its name', () => {
+    // `.claudeignore` and `.gitignore` have no extension at all — their whole
+    // name is the type, and "File" would be true and useless.
+    expect(kindOf('.claudeignore')).toBe('Setting')
+    expect(kindOf('.gitignore')).toBe('Setting')
+    // A dotfile that does carry an extension keeps it.
+    expect(kindOf('.eslintrc.json')).toBe('Data')
+  })
+
+  it('renders a note as prose and never pretends to render what it cannot', () => {
+    expect(previewKindOf('notes.md')).toBe('document')
+    // A PDF is a Document nobody here can turn into prose. Showing its bytes
+    // would be worse than saying what it is.
+    expect(previewKindOf('report.pdf')).toBe('text')
+    expect(previewKindOf('logo.png')).toBe('image')
+    expect(previewKindOf('build.bin')).toBe('none')
+  })
+})
+
+describe('describeRead', () => {
+  it('turns each of fs:read’s three answers into something to show', () => {
+    expect(describeRead({ kind: 'text', text: '# Hi' }, 4)).toEqual({
+      status: 'text',
+      text: '# Hi',
+    })
+    // An empty artifact is a fact, not a blank pane.
+    expect(describeRead({ kind: 'text', text: '  \n' }, 3).status).toBe('note')
+    expect(describeRead({ kind: 'binary' }, 2048).status).toBe('note')
+    expect(describeRead({ kind: 'too-large', limit: 2_097_152 }, null).status).toBe('note')
+  })
+
+  it('never renders a reply it does not understand as if it were content', () => {
+    expect(describeRead(null, null).status).toBe('error')
+    expect(describeRead({ kind: 'something-new' }, null).status).toBe('error')
   })
 })
 

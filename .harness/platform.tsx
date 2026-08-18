@@ -7,7 +7,6 @@ import '../src/renderer/settings/SettingsWindow.css'
 import '../src/renderer/remote/RemoteSection.css'
 import { EmptyState } from '../src/renderer/components/EmptyState'
 import { ShortcutsList } from '../src/renderer/components/ShortcutsSheet'
-import { copyFor } from '../src/renderer/chat/attach/AttachPicker'
 import { RemoteView } from '../src/renderer/remote/RemoteSection'
 import { formatChord } from '../src/renderer/keymap'
 import { detectPlatform, machineNoun, type UiPlatform } from '../src/renderer/platform'
@@ -134,12 +133,6 @@ function Harness() {
           <li>Previous match ({formatChord('shift+enter')})</li>
           <li>Next match ({formatChord('enter')})</li>
         </ul>
-      </Panel>
-
-      <Panel title="Image picker, empty (was “screenshot with ⇧⌘4”)">
-        <p data-testid="attach-empty" style={{ font: '400 14px/1.6 var(--font-ui)', margin: 0 }}>
-          {copyFor('image', detected as UiPlatform).empty}
-        </p>
       </Panel>
 
       <Panel title="Remote access (was “this Mac”, 11 sentences)">

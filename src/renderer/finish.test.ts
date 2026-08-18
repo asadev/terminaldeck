@@ -343,7 +343,13 @@ describe('a scrolling region fades instead of slicing', () => {
     ['renderer/settings/SettingsWindow.tsx', 'settings-panel'],
     ['renderer/components/ShortcutsSheet.tsx', 'sheet'],
     ['renderer/dashboard/Dashboard.tsx', 'widget-body'],
-    ['renderer/chat/controls/AgentControls.tsx', 'ac-sheet'],
+    // Was `chat/controls/AgentControls.tsx`, `.ac-sheet`. That component was
+    // the composer's copy of the control cluster, and it went with the control
+    // row he asked to be removed from the chat box. The sheet it named is now
+    // the chrome's, drawn by `SessionControls.tsx` as `.sc-sheet` — so the
+    // entry moved rather than being deleted, which would have quietly dropped
+    // the one place this fade is now needed.
+    ['renderer/shell/SessionControls.tsx', 'sc-sheet'],
     ['renderer/shell/Sidebar.tsx', 'sidebar-scroll'],
   ])('%s wears it on .%s', (file, className) => {
     expect(read(file)).toMatch(new RegExp(`className="${className} scroll-fade`))
@@ -490,9 +496,14 @@ describe('a shell session is not described as an agent', () => {
     // They are read from the CLI's settings file when the session's own screen
     // cannot be parsed, which is how a `/bin/zsh -l` came to report a model of
     // "Opus 5" and a permission mode of "Unknown".
-    const controls = read('renderer/chat/controls/AgentControls.tsx')
-    expect(controls).toMatch(/const shell = provider === 'shell'/)
-    expect(controls).toMatch(/&&\s*!shell/)
+    //
+    // This used to read the composer's copy, which withdrew each picker
+    // individually behind a `!shell` guard. That copy is deleted along with the
+    // control row it lived in, and the chrome answers the same question more
+    // bluntly — it draws no cluster at all for a shell — so the assertion is
+    // against the early return rather than against four separate guards.
+    const controls = read('renderer/shell/SessionControls.tsx')
+    expect(controls).toMatch(/if \(provider === 'shell'\) return null/)
   })
 
   it('does not invite the user to message an agent that is not there', () => {
@@ -580,16 +591,25 @@ describe('the lists read sign-in answers rather than asking for them', () => {
      * and gating that too left the chip unable to name the account for the first
      * second of every session.
      *
+     * The copilot's setup flow is the third, and it is the one that pays
+     * nothing: it takes the *list* so its account step has rows to draw, and
+     * passes `probe: false`, so not a single CLI is spawned by opening it. That
+     * promise is asserted below rather than described here — a flow that quietly
+     * dropped the flag would start one process per account because somebody
+     * clicked Copilot, which is exactly the cost this whole rule is about.
+     *
      * The declaring module is filtered out: it is where the hook is written.
      */
     const askers = rendererSources().filter(
       (file) => file !== 'renderer/accounts.ts' && read(file).includes('useAccounts('),
     )
     expect(askers).toEqual([
+      'renderer/copilot/CopilotSetup.tsx',
       'renderer/settings/sections/AccountsSection.tsx',
       'renderer/shell/AccountChip.tsx',
     ])
     expect(read('renderer/shell/AccountChip.tsx')).toContain('useAccounts(true, menu.open)')
+    expect(read('renderer/copilot/CopilotSetup.tsx')).toContain('useAccounts(open, false)')
   })
 })
 
@@ -603,9 +623,23 @@ describe('a control that looks pressable answers', () => {
   })
 
   it('greys the update check on a build that cannot be updated', () => {
+    /*
+     * The guard used to be `about !== null && !checkable`, which left one state
+     * out: a build with no `app:about` channel at all reports `about === null`,
+     * so the button stayed fully lit beside the only sentence it could show —
+     * "Press the button to check." — and pressing it could answer nothing but
+     * "this build cannot tell". A lit button under an instruction is the
+     * strongest promise this window makes, and that was the one state unable to
+     * keep it. Greyed in every state that cannot check, with the reason both
+     * beside it and on its hover.
+     */
     const about = read('renderer/settings/sections/AboutSection.tsx')
     expect(about).toMatch(/const checkable = about\?\.updates\?\.checkable/)
-    expect(about).toMatch(/disabled=\{about !== null && !checkable\}/)
+    expect(about).toMatch(/disabled=\{!checkable\}/)
+    // And the sentence beside it is chosen by a function that has a case for
+    // each state, rather than by a chain of `??` ending in "press the button".
+    expect(about).toMatch(/export function updateNote\(/)
+    expect(about).not.toContain("?? 'Press the button to check.'")
   })
 
   it('lets the sound be previewed whether or not anything plays it for you', () => {

@@ -41,6 +41,8 @@ import { watch, type FSWatcher } from 'node:fs'
 import type { ActionRow } from '../deck-control/action-log'
 import type { CreateSessionInput, SessionMeta } from '../../shared/types'
 import { buildRecordsFence } from '../confine/records'
+import { copilotPaths } from '../copilot-home'
+import { copilotLayerArgs, writeCopilotLayer, type LayerTool } from '../copilot-layer'
 import type { SpawnFence } from '../copilot-session'
 import { currentPlatform } from '../platform/host'
 import { getState as profilesState, resolveProfile } from '../profiles'
@@ -182,6 +184,16 @@ export interface RunSpawnDeps {
    */
   stop(sessionId: string): void
   userData(): string
+  /**
+   * The live tool catalogue, for regenerating the copilot layer.
+   *
+   * Same dep the desk copilot takes, and it is here for the same reason the
+   * profile and the fence are resolved through the same two calls rather than
+   * reasoned about again: a phone's run *is* the copilot, so it must be told
+   * what it is by the same mechanism. Absent means no `deck-control` server,
+   * which the generated file states plainly.
+   */
+  tools?(): readonly LayerTool[]
 }
 
 /**
@@ -206,6 +218,26 @@ export interface RunSpawnDeps {
  * gives — without it the run also inherits whatever MCP servers happen to be in
  * the person's own `~/.claude.json`, so a phone's powers would depend on
  * something nobody thought of as part of this feature.
+ *
+ * ## The layer, and why this caller needs it too
+ *
+ * `--append-system-prompt-file` is the second thing that travels, and it is the
+ * one that makes this run *the copilot* rather than a Claude Code session in the
+ * copilot's folder with tools attached. It used to be free: the identity was a
+ * `CLAUDE.md` in the working directory, so anything started there inherited it.
+ * That is exactly what had to stop — a file on disk is read by every session in
+ * that folder, including an ordinary terminal somebody opens — so identity is
+ * now handed to each process that should have it, and this is one of them.
+ *
+ * A phone's run getting the tools and not the instructions would be the worst of
+ * the three possible states: an agent that can start sessions and write settings
+ * and has not been told what to confirm first. So it is regenerated here through
+ * the same `writeCopilotLayer`, and a failure refuses the run rather than
+ * starting it — the same trade `copilot-session.ts` makes, for the same reason.
+ *
+ * `copilotPaths` is asked with this run's own `cwd`, so `ownFolder` — and
+ * therefore what the generated file says about whose folder it is working in —
+ * is right for a person who has pointed the copilot at a workspace of their own.
  *
  * ## The fence is measured per start, not cached
  *
@@ -238,8 +270,24 @@ export async function startCopilotRun(
   deps: RunSpawnDeps,
   request: { cwd: string; mcpConfig: string },
 ): Promise<string> {
-  const measured = await buildRecordsFence({ userData: deps.userData(), platform: currentPlatform() })
+  const userData = deps.userData()
+  const platform = currentPlatform()
+  const measured = await buildRecordsFence({ userData, platform })
   const profile = resolveProfile(profilesState(), { projectPath: request.cwd })
+
+  const paths = copilotPaths(userData, request.cwd)
+  const layer = writeCopilotLayer(paths.layer, {
+    root: paths.root,
+    actionsLog: paths.actions,
+    chosenFolder: !paths.ownFolder,
+    userData,
+    tools: deps.tools?.() ?? [],
+    toolsAttached: true,
+    platform,
+  })
+  if (layer.composed === null) {
+    throw new Error(`the copilot run’s instructions could not be prepared: ${layer.error}`)
+  }
   const meta = await deps.startSession(
     {
       cwd: request.cwd,
@@ -275,7 +323,7 @@ export async function startCopilotRun(
     undefined,
     undefined,
     measured.fence ?? undefined,
-    ['--mcp-config', request.mcpConfig, '--strict-mcp-config'],
+    ['--mcp-config', request.mcpConfig, '--strict-mcp-config', ...copilotLayerArgs(layer.composed)],
   )
   /*
    * Belt and braces on a silent fallback.

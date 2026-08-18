@@ -134,6 +134,7 @@ function rig(
         sessions: [],
         folders: null,
         capabilities: [],
+        ports: [],
         hostPlatform: '',
         retryAt: null,
       }
@@ -153,6 +154,8 @@ function rig(
         input: () => true,
         resize: () => true,
         create: () => true,
+        ports: () => true,
+        openThere: () => true,
       }
     },
     ...(options.pair ? { pair: options.pair } : {}),
@@ -222,7 +225,15 @@ describe('launching', () => {
         'machines:forget',
         'machines:input',
         'machines:list',
+        // The two that make remote localhost work in both directions. `ports`
+        // is the refresh — the link asks once per welcome and pushes the answer,
+        // so this is the button for "I have just started a dev server over
+        // there", which nothing on the far machine watches for. `open` is the
+        // verb the phone already had and this desktop did not: put the page on
+        // *that* machine's screen.
+        'machines:open',
         'machines:pair',
+        'machines:ports',
         'machines:rename',
         'machines:resize',
       ].sort(),
@@ -427,6 +438,7 @@ describe('waking', () => {
             sessions: [],
             folders: null,
             capabilities: [],
+            ports: [],
             hostPlatform: '',
             retryAt: null,
           }
@@ -442,6 +454,8 @@ describe('waking', () => {
             input: () => true,
             resize: () => true,
             create: () => true,
+            ports: () => true,
+            openThere: () => true,
           }
         },
       },

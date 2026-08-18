@@ -1,16 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DRIVE_CONTROL_ATTR,
   INTERRUPTIONS,
-  MOVEMENTS,
-  PACE_CONTROL_ATTR,
   TRANSPORT_KEYS,
-  isPaceControlTarget,
+  isDriveControlTarget,
   isTransportKey,
   watchForInterruption,
   type EventSource,
   type WatchedEvent,
 } from './interruption'
-import type { PauseReason } from './pacer'
+import type { PauseReason } from '../../../shared/scan'
 
 /**
  * The interruption watch, exercised without a DOM.
@@ -71,7 +70,6 @@ interface Harness {
   window: FakeSource
   document: FakeSource
   interruptions: Array<{ reason: PauseReason; at: number }>
-  moves: number[]
   hidden: boolean
   stop(): void
 }
@@ -88,7 +86,6 @@ function harness(
     window: win,
     document: doc,
     interruptions: [],
-    moves: [],
     hidden: false,
     stop: () => {},
   }
@@ -102,7 +99,6 @@ function harness(
     isHidden: () => state.hidden,
     ...(overrides.hasSelection === undefined ? {} : { hasSelection: overrides.hasSelection }),
     onInterrupt: (reason, at) => state.interruptions.push({ reason, at }),
-    onSurfaceMoved: (at) => state.moves.push(at),
   })
   state.stop = watch.stop
   return state
@@ -185,12 +181,12 @@ describe('the set of things that count as the reader doing something', () => {
      */
     expect(INTERRUPTIONS.map((entry) => entry.type)).toEqual([
       'wheel',
+      'touchmove',
       'pointerdown',
       'touchstart',
       'keydown',
       'blur',
     ])
-    expect(MOVEMENTS).toEqual(['scroll', 'touchmove'])
   })
 
   it('registers every one of them, in the capture phase', () => {
@@ -205,7 +201,6 @@ describe('the set of things that count as the reader doing something', () => {
     const test = harness()
     const types = test.window.registered.map((entry) => entry.type)
     for (const { type } of INTERRUPTIONS) expect(types).toContain(type)
-    for (const type of MOVEMENTS) expect(types).toContain(type)
     expect(test.window.registered.every((entry) => entry.capture)).toBe(true)
     expect(test.document.registered.every((entry) => entry.capture)).toBe(true)
   })
@@ -222,16 +217,18 @@ describe('the set of things that count as the reader doing something', () => {
 /* ------------------------------------------------------------- behaviour -- */
 
 describe('a person doing something', () => {
-  it('pauses on a scroll, and reports the movement as well', () => {
+  it('stops on a scroll, and on a finger still on the glass', () => {
     /*
-     * A wheel event is two facts at once — somebody did something, and the
-     * screen is now moving. Reporting only the pause would let the tour advance
-     * the moment it resumed, in the middle of a fling.
+     * `touchmove` is here rather than in a second "the screen is moving" table,
+     * which is where it used to live. That table answered a question the paced
+     * read-along had — *may I advance yet?* — and the scan does not: nobody is
+     * reading during it. What is left of `touchmove` is the only thing it ever
+     * said about a **person**, which is that one of them is dragging the screen.
      */
     const test = harness()
     test.window.fire('wheel')
-    expect(test.interruptions.map((entry) => entry.reason)).toEqual(['scrolled'])
-    expect(test.moves).toHaveLength(1)
+    test.window.fire('touchmove')
+    expect(test.interruptions.map((entry) => entry.reason)).toEqual(['scrolled', 'scrolled'])
   })
 
   it('pauses on a click, a tap, a key and losing the window', () => {
@@ -281,19 +278,25 @@ describe('a person doing something', () => {
 })
 
 describe('the things that are not the reader', () => {
-  it('does not pause on a scroll the tour caused', () => {
+  it('never listens for scroll at all, because it cannot say who caused one', () => {
     /*
-     * The split this module exists for. A `scroll` event does not say who caused
-     * it: the tour's own travel fires one, a live session appending output fires
-     * one, and the reader's trackpad fires one. If `scroll` paused, the tour
-     * would pause itself the instant it moved to a stop and would freeze
-     * permanently on any session still printing.
+     * The distinction this module was built around, and the reason the listener
+     * is *gone* rather than filtered. A `scroll` event does not say who caused
+     * it: the scan's own travel fires one, a live session appending output
+     * fires one, and a trackpad fires one. It was listened for as *movement* —
+     * never a pause, only a reason to hold off advancing until the pane settled,
+     * which mattered because advancing out from under a reader loses their
+     * place.
+     *
+     * There is no place to lose during a scan. So the event carries nothing
+     * anybody acts on, and a listener kept "just in case" on an event that fires
+     * every frame of every streaming session is the most expensive kind of dead
+     * code there is.
      */
     const test = harness()
+    expect(test.window.registered.map((entry) => entry.type)).not.toContain('scroll')
     test.window.fire('scroll')
-    test.window.fire('touchmove')
     expect(test.interruptions).toHaveLength(0)
-    expect(test.moves).toHaveLength(2)
   })
 
   it('does not treat the transport’s own keys as somebody typing', () => {
@@ -305,16 +308,15 @@ describe('the things that are not the reader', () => {
     expect(test.interruptions.map((entry) => entry.reason)).toEqual(['typed'])
   })
 
-  it('does not treat a press on the transport as an interruption', () => {
-    // Pressing Next is the one gesture that unambiguously means "I have finished
-    // with this". Making it pause would be perverse — and it would break both
-    // the learned speed and the Skim offer, which need to watch somebody advance
-    // early several times while the tour is still running.
+  it('does not treat a press on the panel’s own controls as an interruption', () => {
+    // Pressing → is the one gesture that unambiguously means "I am done with
+    // this one". Making it stop everything would be perverse. The same exemption
+    // is what lets the panel's chat box be typed into while a scan plays —
+    // asking the copilot something is not taking the screen back.
     const test = harness({ isOwnControl: (target) => target === 'next-button' })
     test.window.fire('pointerdown', { target: 'next-button' })
     test.window.fire('wheel', { target: 'next-button' })
     expect(test.interruptions).toHaveLength(0)
-    expect(test.moves).toHaveLength(0)
   })
 })
 
@@ -350,7 +352,6 @@ describe('tearing the watch down', () => {
       isOwnControl: () => false,
       isCommandKey: isTransportKey,
       onInterrupt: (reason) => seen.push(reason),
-      onSurfaceMoved: () => {},
     })
     win.fire('wheel')
     expect(seen).toEqual(['scrolled'])
@@ -364,10 +365,10 @@ describe('recognising the transport’s own controls', () => {
     // The question is asked of whatever the event happened to hit — an SVG path
     // inside a button inside the bar — so `closest` is the only cheap way to ask
     // "is this inside our controls" of an arbitrary descendant.
-    const inside = { closest: (selector: string) => (selector.includes(PACE_CONTROL_ATTR) ? {} : null) }
+    const inside = { closest: (selector: string) => (selector.includes(DRIVE_CONTROL_ATTR) ? {} : null) }
     const outside = { closest: () => null }
-    expect(isPaceControlTarget(inside)).toBe(true)
-    expect(isPaceControlTarget(outside)).toBe(false)
+    expect(isDriveControlTarget(inside)).toBe(true)
+    expect(isDriveControlTarget(outside)).toBe(false)
   })
 
   it('answers no for anything it cannot ask', () => {
@@ -376,9 +377,9 @@ describe('recognising the transport’s own controls', () => {
      * not need; the worst case of a false yes is the tour ignoring a real click,
      * which is the failure this whole module exists to prevent.
      */
-    expect(isPaceControlTarget(null)).toBe(false)
-    expect(isPaceControlTarget(undefined)).toBe(false)
-    expect(isPaceControlTarget('window')).toBe(false)
-    expect(isPaceControlTarget({})).toBe(false)
+    expect(isDriveControlTarget(null)).toBe(false)
+    expect(isDriveControlTarget(undefined)).toBe(false)
+    expect(isDriveControlTarget('window')).toBe(false)
+    expect(isDriveControlTarget({})).toBe(false)
   })
 })

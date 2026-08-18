@@ -1,11 +1,17 @@
 /* ============================================================================
-   Artifacts — the files an agent produced, and the text of every change.
+   Artifacts — the things an agent made, shown as themselves.
 
-   Two panes: a column of files on the left, the change history of the selected
-   one on the right. The diff is the interface here in the way the snippet was
-   the interface on the search page, so everything else is kept quiet — chips
-   with no borders, a list with no rules between rows, and no card around the
-   file list, because the space between the two panes is the separation.
+   Two panes: a column of artifacts on the left, the selected one **rendered**
+   on the right. The rendered document is the interface here; the diff, which
+   used to be the only thing this pane ever showed, is behind a History switch.
+   That inversion is the fix — see the header comment in ArtifactsPanel.tsx for
+   why the page was reported twice as "showing files instead of artifacts", and
+   why a pane of monospace source under a monospace path heading was most of the
+   reason.
+
+   Everything around the two panes is kept quiet: chips with no borders, a list
+   with no rules between rows, and no card around the list, because the space
+   between the two panes is the separation.
 
    Colours from tokens.css only. The diff is the one place a meaningful colour
    is spent: added and removed are data, and neutralising them would leave two
@@ -73,6 +79,12 @@
 .artifacts-sessions {
   flex-wrap: wrap;
   padding-bottom: var(--sp-1);
+}
+
+/* Space, not a rule, between the two questions this row answers: which
+   sessions to read, and which one of them to look at. */
+.artifacts-chip-gap {
+  width: var(--sp-4);
 }
 
 /* A fill, not an outline — a row of bordered chips draws a line per chip
@@ -227,6 +239,20 @@
   flex: none;
 }
 
+/* What kind of thing this is, in a word — the first thing after the name, and
+   the thing that stops a row reading as a path. Slightly brighter than the rest
+   of the meta line because it is the row's second piece of information rather
+   than its footnote. */
+.artifact-row-kind {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.artifact-row-size {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
 .artifact-tag {
   flex: none;
   padding: 0 var(--sp-1);
@@ -270,7 +296,14 @@
   padding-bottom: var(--sp-3);
 }
 
-.artifacts-detail-path {
+/* The artifact's name, in the app's own type at heading weight.
+
+   It was `.artifacts-detail-path`: the whole project-relative path, in
+   monospace. A heading in a code face saying `credentials/apple-appstore.md`
+   announces "you are looking at a file at a path" before the pane has shown
+   anything, which is half of why this page read as Files. The path is still
+   here — one line down, in the meta, and in the heading's `title`. */
+.artifacts-detail-name {
   min-width: 0;
   flex: 1;
   margin: 0;
@@ -278,9 +311,165 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: var(--t-subhead);
+  font-size: var(--t-title3);
   font-weight: var(--w-semibold);
+}
+
+.artifacts-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-basis: 100%;
+  padding-top: var(--sp-1);
+}
+
+/* ------------------------------------------------------------- preview -- */
+
+/*
+   A document, rendered.
+
+   Prose measure rather than the full pane width: a markdown note run edge to
+   edge across a 1200px pane is a wall, and this is the one surface on the page
+   somebody is meant to actually *read*.
+*/
+.artifact-doc {
+  max-width: 68ch;
+  padding-bottom: var(--sp-8);
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  user-select: text;
+}
+
+.artifact-doc h1,
+.artifact-doc h2,
+.artifact-doc h3,
+.artifact-doc h4,
+.artifact-doc h5,
+.artifact-doc h6 {
+  margin: var(--sp-5) 0 var(--sp-2);
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+  line-height: var(--lh-tight);
+}
+
+.artifact-doc h1 { font-size: var(--t-title3); }
+.artifact-doc h2 { font-size: var(--t-headline); }
+.artifact-doc h3,
+.artifact-doc h4,
+.artifact-doc h5,
+.artifact-doc h6 { font-size: var(--t-subhead); }
+
+/* The first heading sits at the top of the pane; the margin above it would be
+   the only thing in the gap. */
+.artifact-doc > :first-child {
+  margin-top: 0;
+}
+
+.artifact-doc p,
+.artifact-doc ul,
+.artifact-doc ol,
+.artifact-doc blockquote,
+.artifact-doc table {
+  margin: 0 0 var(--sp-3);
+}
+
+.artifact-doc ul,
+.artifact-doc ol {
+  padding-left: var(--sp-5);
+}
+
+.artifact-doc li {
+  margin-bottom: var(--sp-1);
+}
+
+.artifact-doc strong {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+/* A tint and a radius, not a border — the card rule, applied to a quotation. */
+.artifact-doc blockquote {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  color: var(--text-muted);
+}
+
+.artifact-doc code {
+  padding: 0 var(--sp-05);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+}
+
+/* `renderMarkdown` folds every fenced block into a `<details>` with a summary
+   naming the language and the line count — so a note full of code opens as
+   prose and the code is one click away rather than eight screens of it. */
+.artifact-doc details {
+  margin: 0 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+}
+
+.artifact-doc summary {
+  padding: var(--sp-15) var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  cursor: pointer;
+  user-select: none;
+}
+
+.artifact-doc details pre {
+  margin: 0;
+  padding: 0 var(--sp-3) var(--sp-2);
+  overflow-x: auto;
+}
+
+.artifact-doc details code {
+  padding: 0;
+  background: none;
+}
+
+.artifact-doc hr {
+  height: 1px;
+  margin: var(--sp-5) 0;
+  border: none;
+  background: var(--border);
+}
+
+.artifact-doc table {
+  border-collapse: collapse;
+  font-size: var(--t-callout);
+}
+
+.artifact-doc th,
+.artifact-doc td {
+  padding: var(--sp-1) var(--sp-2);
+  text-align: left;
+  vertical-align: top;
+}
+
+.artifact-doc th {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+/* Anything that is text but not prose — a stylesheet, a config, a CSV. Shown as
+   itself, which for these *is* the artifact. */
+.artifact-plain {
+  margin: 0;
+  padding-bottom: var(--sp-8);
+  overflow-x: auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  tab-size: 2;
+  white-space: pre;
+  user-select: text;
 }
 
 .artifacts-detail-meta {

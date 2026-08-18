@@ -41,10 +41,12 @@
 
 import { hostname } from 'node:os'
 import {
+  CAPABILITY,
   PROTOCOL_VERSION,
   parseServerMessage,
   serialize,
   type ClientMessage,
+  type LocalPort,
   type ProtocolErrorCode,
   type RemoteSession,
 } from '../protocol'
@@ -100,6 +102,27 @@ export interface MachineLinkState {
    */
   folders: string[] | null
   capabilities: string[]
+  /**
+   * What is listening on **that** machine, as it last answered.
+   *
+   * The other half of remote localhost, and until now it did not exist on this
+   * side at all: `web.open` was on the wire and only the phone sent it, so a Mac
+   * could see a PC's sessions and had no idea what that PC was serving. His
+   * words for the gap are about the row rather than the list — *"remote
+   * localhost should list the remote machine's ports with the machine's icon"* —
+   * and the icon is the panel's job; this is the list it draws.
+   *
+   * Empty for a machine that has not answered and for one that is genuinely
+   * serving nothing, which is a distinction this field deliberately does not
+   * make: the panel already knows whether the link is online, and a third state
+   * here would be a second source of truth for the same fact.
+   *
+   * Asked once per connection, on the `welcome`, and not polled. A port list is
+   * a scan of a process table on somebody else's machine — see
+   * `feedback_events_not_polling`: the desktop pushes what it wants watched, and
+   * this is a question rather than a subscription.
+   */
+  ports: LocalPort[]
   /** `darwin`, `win32`, `linux`, or empty. Never guessed. */
   hostPlatform: string
   /** When the next dial is due, epoch ms, or null when one is not scheduled. */
@@ -119,6 +142,21 @@ export interface MachineLink {
   resize(sessionId: string, cols: number, rows: number): boolean
   /** Start a session over there. Refused unless that machine advertised `create`. */
   create(request: { cwd?: string; provider?: string; resume?: boolean }): boolean
+  /** Ask again what is listening over there. Refused unless it advertised `localhost`. */
+  ports(): boolean
+  /**
+   * Open a page **on that machine**, in its own browser.
+   *
+   * The half of remote localhost this desktop could not do. A tunnel would bring
+   * the page here and this end opens no listener; what it can do is drive — ask
+   * the far machine to put the page on its own screen, which is the same verb
+   * the phone sends and the same one his review asked for on every surface.
+   *
+   * Refused unless that machine advertised `web`, which it withholds from a host
+   * with no window and from a device it treats as a guest. So a button drawn off
+   * this capability is never a button that discovers it does not work.
+   */
+  openThere(url: string): boolean
   /** The machine woke up. Redial now rather than waiting out the backoff. */
   wake(): void
 }
@@ -187,6 +225,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     sessions: [],
     folders: null,
     capabilities: [],
+    ports: [],
     hostPlatform: '',
     retryAt: null,
   }
@@ -243,7 +282,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     if (wasStable) attempts = 0
 
     if (stopped) {
-      publish({ state: 'offline', reason: null, sessions: [], retryAt: null })
+      publish({ state: 'offline', reason: null, sessions: [], ports: [], retryAt: null })
       return
     }
     publish({
@@ -251,8 +290,11 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       reason,
       // The list belonged to a connection that is over. Keeping it would leave
       // rows on screen that open nothing, which is the same lie as a hover state
-      // on something that is not clickable.
+      // on something that is not clickable. The ports go for the same reason and
+      // more strongly: a port list describes what is running on a machine, and
+      // the most likely reason this link dropped is that the machine stopped.
       sessions: [],
+      ports: [],
     })
     schedule()
   }
@@ -288,6 +330,10 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           reason: null,
           sessions: message.sessions,
           capabilities: message.capabilities,
+          // Belonged to a connection that is over, exactly like the session
+          // list. A port that was listening ten minutes ago on a machine that
+          // has since rebooted is a row that opens nothing.
+          ports: [],
           hostPlatform: message.hostPlatform ?? '',
           // Spread rather than assigned, so "never said" survives as null. See
           // the field's own comment.
@@ -295,6 +341,18 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           retryAt: null,
         })
         options.onWelcome(message.hostPlatform ?? '')
+        /*
+         * And ask what it is serving, once, here.
+         *
+         * On the welcome rather than when a panel opens, for the reason the
+         * phone asks here too: the answer is one small frame, it is what the
+         * panel needs the instant somebody looks at it, and a question asked on
+         * first paint is a panel that is empty for a round trip every time it is
+         * opened. Gated on the advertisement — a host that never offered
+         * `localhost` answers this verb by closing the channel, and a button
+         * that disconnects you is worse than a button that is not offered.
+         */
+        if (message.capabilities.includes(CAPABILITY.localhost)) send({ t: 'ports' })
         return
       }
       case 'sessions':
@@ -318,6 +376,21 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         return
       case 'folders':
         publish({ folders: message.folders })
+        return
+      case 'ports':
+        publish({ ports: message.ports })
+        return
+      case 'web.opened':
+        /*
+         * The page is open over there, and there is nothing here to change.
+         *
+         * Deliberately not published as state. The confirmation is a window
+         * appearing on the other machine — that is what was asked for and it is
+         * what happened — and a panel that also announced it would be narrating
+         * a thing the person can see. A *failure* is a plain `error` and does
+         * reach the panel through `reason`, which is the asymmetry that matters:
+         * silence means it worked.
+         */
         return
       case 'output':
         options.onOutput(message.id, message.data, message.replay === true)
@@ -471,7 +544,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       const live = channel
       channel = null
       live?.close()
-      publish({ state: 'offline', reason: null, sessions: [], retryAt: null })
+      publish({ state: 'offline', reason: null, sessions: [], ports: [], retryAt: null })
     },
     state: () => current,
     attach: (sessionId, cols, rows) => send({ t: 'attach', id: sessionId, cols, rows }),
@@ -489,6 +562,22 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         ...(request.provider === undefined ? {} : { provider: request.provider }),
         ...(request.resume === undefined ? {} : { resume: request.resume }),
       })
+    },
+    ports(): boolean {
+      // Refused here rather than sent and refused there, for the reason
+      // `create` gives: the far end answers an unadvertised verb by closing the
+      // channel.
+      if (!current.capabilities.includes(CAPABILITY.localhost)) return false
+      return send({ t: 'ports' })
+    },
+    openThere(url): boolean {
+      if (!current.capabilities.includes(CAPABILITY.web)) return false
+      // The URL is not checked here and deliberately is not. The far machine
+      // puts every one through the same gate an untrusted link goes through,
+      // because a client is not something a machine gets to trust about what it
+      // opens — and a second, weaker check written on this side would be the one
+      // somebody later mistook for the real one.
+      return send({ t: 'web.open', url })
     },
     wake(): void {
       if (stopped) return

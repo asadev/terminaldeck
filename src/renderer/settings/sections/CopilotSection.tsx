@@ -1,23 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { BRAND } from '../../../shared/brand'
-import { Button, Info, MoreBody, Notice, SectionHead, Switch, useMore } from '../controls'
+import { Button, Notice, Row, SectionHead, Switch } from '../controls'
+import { HoverNote } from '../../components/HoverNote'
 import { errorText } from '../settings-bridge'
-import { ReadingSpeedControl } from '../../copilot/driving/PaceControls'
-import { DEFAULT_SPEED, type ReadingSpeed } from '../../copilot/driving/estimate'
-import { loadSpeed, saveSpeed } from '../../copilot/driving/reading-speed'
-import { TourRecap } from '../../copilot/driving/TourRecap'
-import { FileEditor } from './CopilotEditor'
+import { CHOOSING_A_FOLDER, FOLDER_NEEDS_A_RESTART } from '../../../shared/copilot-text'
+import { FileEditor, ReadOnlyFile } from './CopilotEditor'
+import { useCopilotSetup, type CopilotSetup } from '../../copilot/useCopilotSetup'
+import { DEFAULT_COPILOT_NAME } from '../../../shared/copilot-identity'
 import {
   resolveCopilotBridge,
+  INTERACTIVE_SETTING,
   toActionLog,
   toCopilotSignIn,
+  toInteractiveDriving,
   toCopilotState,
+  toFolderChange,
   toInstructionsRead,
+  toLayerRead,
   toInstructionsWrite,
-  toMemoryDelete,
-  toMemoryRead,
   toMemoryReport,
-  toMemoryWrite,
   toResetResult,
   toRevealMessage,
   toRoutineRows,
@@ -26,6 +27,7 @@ import {
   toScaffoldResult,
   type ActionLogReport,
   type CopilotBridge,
+  type CopilotFolder,
   type CopilotSignIn,
   type CopilotState,
   type LoggedAction,
@@ -49,24 +51,52 @@ import './CopilotSection.css'
  * hidden prompt would have had nothing to put on this screen, which is the
  * point `COPILOT-DESIGN.md` settles every decision by.
  *
- * ## Six things, in the order somebody actually asks about them
+ * ## Five things, in the order somebody actually asks about them
  *
  *  1. **Its session.** Is it running, whose account is it, and can I stop it.
- *  2. **What it reads at startup**, as the actual files, because that is what
- *     "why did it say that" resolves to — and `CLAUDE.md` in a box, editable.
- *  3. **Its memory**, one file per fact, readable, editable and deletable.
- *  4. **The action log** — every call, and who confirmed it. Read-only.
- *  5. **What it can and cannot reach**, stated rather than left in a design doc.
- *  6. **Routines**, including the one the engine paused after failing — each
+ *  2. **Its files** — everything it reads before it answers, each with the one
+ *     button that acts on it. That is what "why did it say that" resolves to.
+ *  3. **The action log** — every call, and who confirmed it. Read-only, and
+ *     behind a View button rather than spread across the pane.
+ *  4. **What it can and cannot reach**, stated rather than left in a design doc.
+ *  5. **Routines**, including the one the engine paused after failing — each
  *     one's file editable in place.
  *
- * ## Three of the four are editable here, and the fourth never will be
+ * ## The 2026-08-17 pass, and what it took off this screen
+ *
+ * This pane was a listing before it was a control panel:
+ *
+ *   > *"Every file needs an Edit button beside it, opening the same editor style
+ *   > already used, and saving. So they can actually control and fix and design
+ *   > their copilot from here directly."*
+ *   > *"Memory is the exception — do not list dated files. One Open folder
+ *   > button… They don't need to edit memories. They need to edit the character,
+ *   > identity and that related stuff only."*
+ *   > *"The action log should not be listed either — a View button."*
+ *   > *"This is busy for nothing, for no sensible reason."*
+ *
+ * Four blocks became two. "What it reads at startup" listed every file the
+ * session loads, one row per memory, each with its absolute path; "Its memory"
+ * then listed the same files again with an editor and a Forget on each; the
+ * action log printed twelve three-line rows on open; and "Reading pace" set the
+ * speed of a driving mode that has since been rebuilt around a machine-speed
+ * scan, so it controlled nothing. The pane measured 4,946 pixels tall. It is now
+ * 2,656, every row has exactly one button, and no path is on screen except the
+ * one row whose subject *is* a path — the folder the copilot works in.
+ *
+ * The ⓘ went with it, from a disclosure that grew the page to a popup that does
+ * not: {@link HoverNote}, and `Block` below carries the argument.
+ *
+ * ## What is editable here, and what never will be
  *
  * Asad, 2026-08-17: *"none of them is clickable or editable … I should be able
- * to click and make changes and click save, and those folders, instructions,
- * everything should be directly changed from here."* So the instruction file,
- * every memory and every routine each get a box and a Save, through the one
- * {@link FileEditor} in `CopilotEditor.tsx`.
+ * to click and make changes and click save."* Two files get a box and a Save,
+ * through the one {@link FileEditor} in `CopilotEditor.tsx`: the copilot's own
+ * instructions, and any routine. Two more get a read-only box, in full, because
+ * they are generated from what is wired and a hand-edited copy would stop
+ * matching it. Nothing is hidden — the founding argument for this feature was
+ * *"so we can see and learn how our copilot is working"* — and nothing pretends
+ * to be editable that is not.
  *
  * **The action log stays read-only, and that is not an omission.** It is the
  * record of what the copilot did, and the pane's own paragraph about it says the
@@ -76,18 +106,22 @@ import './CopilotSection.css'
  * can check a claim against. There is no Save under it and there is no channel
  * behind one.
  *
+ * **Memory is read-only here too, and that is his instruction rather than a
+ * limitation.** It grows daily and it is the copilot's own record of what it
+ * learned; the files worth a person's attention are the identity ones. One
+ * button opens the folder, and everything in it is still readable and prunable
+ * there.
+ *
  * ## When an edit takes effect, said out loud under each box
  *
- * The three differ and the difference matters, so no editor here is allowed to
- * be quiet about it:
+ * The two differ and the difference matters, so no editor here is allowed to be
+ * quiet about it:
  *
- *  - **`CLAUDE.md`** — at the copilot's *next start*. The CLI reads it as the
- *    session spawns and never again, so a save while it is running changes
- *    nothing about the conversation on screen. The editor says so and offers
- *    Restart when it is running, which is a stop and a start and is the only
- *    honest version of "apply".
- *  - **A memory** — the same, for the same reason: `memory/` is loaded at
- *    startup.
+ *  - **Its instructions** — at the copilot's *next start*. The CLI is handed the
+ *    file as the session spawns and never again, so a save while it is running
+ *    changes nothing about the conversation on screen. The editor says so and
+ *    offers Restart when it is running, which is a stop and a start and is the
+ *    only honest version of "apply".
  *  - **A routine** — immediately. The engine reloads the folder on the save, so
  *    the next trigger uses the new text.
  *
@@ -123,13 +157,6 @@ import './CopilotSection.css'
  */
 
 /* ------------------------------------------------------------- formatting -- */
-
-/** Bytes, at the precision a person reading a file listing cares about. */
-function bytes(size: number): string {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`
-}
 
 /**
  * A moment, as short as it can be while staying unambiguous.
@@ -218,14 +245,38 @@ const STATUS_LABEL: Record<CopilotState['status'], string> = {
   running: 'Running',
 }
 
-export function CopilotSection() {
+/**
+ * @param setUpCopilot ask the app to run the setup questions again. Absent in a
+ *   panel rendered without a host — see `SectionProps.setUpCopilot` for why the
+ *   flow cannot be opened from inside this sheet.
+ */
+export function CopilotSection({ setUpCopilot }: { setUpCopilot?(): void } = {}) {
   const bridge = useMemo<Partial<CopilotBridge>>(() => resolveCopilotBridge(), [])
+  /*
+   * What it is called, read out of the same instruction file this pane edits
+   * further down.
+   *
+   * The hook rather than a fourth parse in this file: `useCopilotSetup` is what
+   * the sidebar row and the tab pill read the name through, and a pane that
+   * parsed it a second way could print a different name from the rail six
+   * centimetres to its left.
+   */
+  const setup = useCopilotSetup()
 
   const [state, setState] = useState<CopilotState | null>(null)
   const [signIn, setSignIn] = useState<CopilotSignIn | null>(null)
   const [memory, setMemory] = useState<MemoryReport | null>(null)
   const [actions, setActions] = useState<ActionLogReport | null>(null)
   const [routines, setRoutines] = useState<RoutineRow[] | null>(null)
+  /**
+   * Whether the scan is put on the screen. See {@link ShowingGroup}.
+   *
+   * `null` until the settings file has answered, so the switch is drawn disabled
+   * for that instant rather than drawn *on* — the documented default — and then
+   * moving under somebody's eyes if their answer was off. A control that flips
+   * itself a beat after it appears reads as a control that did not take.
+   */
+  const [interactive, setInteractive] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
@@ -280,6 +331,16 @@ export function CopilotSection() {
         bridge.routinesList().then(
           (raw) => fresh(toRoutineRows(raw), setRoutines),
           () => fresh(null, setRoutines),
+        ),
+      )
+    }
+    if (bridge.getSettings) {
+      jobs.push(
+        bridge.getSettings().then(
+          (raw) => fresh(toInteractiveDriving(raw), setInteractive),
+          // Left null, so the row draws disabled and says the file could not be
+          // read rather than showing a switch in a position nobody chose.
+          () => fresh(null, setInteractive),
         ),
       )
     }
@@ -365,22 +426,34 @@ export function CopilotSection() {
         act={act}
         onSignIn={setSignIn}
         onReveal={reveal}
+        setup={setup}
+        {...(setUpCopilot ? { setUpCopilot } : {})}
       />
 
-      <StartupGroup state={state} loading={loading} busy={busy} bridge={bridge} act={act} onReveal={reveal} />
-
-      <MemoryGroup
+      {/*
+        One block where there were two. "What it reads at startup" listed every
+        file including each memory, and "Its memory" then listed the memories
+        again with an editor on each — so a copilot that had been running a while
+        showed the same dated filenames twice, once as paths and once as boxes.
+        `FilesGroup` carries the argument.
+      */}
+      <FilesGroup
+        state={state}
         memory={memory}
-        loading={loading}
         busy={busy}
         bridge={bridge}
         act={act}
         onReveal={reveal}
       />
 
-      <ActionsGroup actions={actions} loading={loading} onReveal={reveal} />
+      <ShowingGroup
+        interactive={interactive}
+        bridge={bridge}
+        onChange={setInteractive}
+        onProblem={setProblem}
+      />
 
-      <DrivingGroup />
+      <ActionsGroup actions={actions} loading={loading} onReveal={reveal} />
 
       <ReachGroup state={state} />
 
@@ -400,82 +473,30 @@ export function CopilotSection() {
 
 const BLURB = 'The one agent that can see every session — and every file it reads, remembers and writes.'
 
-/* -------------------------------------------------------------- driving -- */
-
-/**
- * How fast a tour goes, which is the one part of driving mode that belongs to
- * the reader rather than to the copilot.
+/*
+ * The "Reading pace" block used to sit here, and it is gone with the thing it
+ * controlled.
  *
- * The control itself is `ReadingSpeedControl`, and every option in it says how
- * long a real paragraph gets at that pace — computed by `estimate.ts` from
- * `SAMPLE_PARAGRAPH` rather than written into the label, so it cannot survive a
- * change to the model that makes it false.
+ * It set how long a driving-mode tour waited on each stop, computed from the
+ * word count so every option could say how long a real paragraph would take.
+ * That whole model was built for a read-along, and the read-along is what the
+ * 2026-08-17 review replaced:
  *
- * It is here rather than in `settings-schema.ts` for a mechanical reason, not a
- * stylistic one: `SettingsWindow.tsx` maps the `copilot` section to this
- * component, which renders none of the schema's rows, so a setting declared into
- * that section would be declared and drawn nowhere. `estimate.ts` carries the
- * rest of the argument, including why five names beat a words-a-minute spinner.
+ *   > *"Currently it stays for us to read. Let's not make it for us to read… it
+ *   > is scanning everything very fast and we can see like a machine is
+ *   > working."*
  *
- * **The copilot cannot change it.** `WRITABLE_PREFERENCES` is a short allowlist
- * and this key is not on it, so `settings.write` refuses it with no new work.
- * The reader's pace is the reader's.
+ * `estimate.ts`, `reading-speed.ts` and `PaceControls.tsx` were deleted with the
+ * rebuild, so this block's imports no longer resolve — but the reason it is not
+ * being re-pointed at whatever replaces them is the other rule this pass is
+ * held to: **a control that cannot act is removed, not disabled.** There is no
+ * pace to set in a scan that runs at machine speed.
+ *
+ * The tour recap that rode along inside it went too. Its real home is beside the
+ * conversation that produced it, which is where `TourRecap` is still mounted; a
+ * second copy in Settings was the one that would drift, and this pane is being
+ * cut down rather than added to.
  */
-function DrivingGroup() {
-  const [speed, setSpeed] = useState<ReadingSpeed>(DEFAULT_SPEED)
-
-  useEffect(() => {
-    let live = true
-    void loadSpeed().then((stored) => {
-      if (live) setSpeed(stored)
-    })
-    return () => {
-      live = false
-    }
-  }, [])
-
-  const store = (next: ReadingSpeed): void => {
-    setSpeed(next)
-    void saveSpeed(next)
-  }
-
-  return (
-    <Block
-      title="Reading pace"
-      says="How long a tour waits on each stop before it moves on."
-      more={
-        'A tour never waits on this alone. Anything you do — scrolling, clicking, typing, ' +
-        'leaving the window — pauses it where it is; resting the pointer on the box stops the ' +
-        'clock; and the right arrow moves on immediately. This is only where it starts from, ' +
-        'and the app corrects it from how you actually read. The sentence below is what it has ' +
-        'measured, and Reset throws that away without changing your choice.'
-      }
-    >
-      <ReadingSpeedControl
-        speed={speed}
-        onPick={(pace) => store({ pace, scale: speed.scale })}
-        onForget={() => store({ pace: speed.pace, scale: 1 })}
-      />
-      {/*
-        The tours themselves, listed here as well as beside the conversation.
-
-        `DRIVING-MODE.md` §6 asks for both and they answer different questions.
-        The card in the copilot's own pane is *"read it from here instead of
-        going back to the sessions"* — it belongs next to the turn that produced
-        it. This is the other half of the same section: **"Settings → Copilot
-        lists them and can delete them, in the same pane that already lists
-        memory and the action log."** It is the pane a person opens to see
-        everything this app is keeping *about* the copilot, and a record written
-        outside the copilot's reach is exactly that.
-
-        One component rather than two views of one list, because the second copy
-        is the one that drifts — and because the interesting content is the same
-        content: the quotes, the drops, and how far it got.
-      */}
-      <TourRecap limit={3} />
-    </Block>
-  )
-}
 
 /* ---------------------------------------------------------- shared props -- */
 
@@ -490,21 +511,25 @@ interface Acts {
 /**
  * A block: the group heading, one line that has to be read, and then a list.
  *
- * Assembled from `Info`, `useMore` and `MoreBody` rather than from `Explain`,
- * and the difference is not cosmetic. `Explain` draws its own `h5` title and
- * hangs the ⓘ off *that*, so it only offers the long half of an explanation
- * when it has a title of its own — passing it `more` with no `title` silently
- * drops the ⓘ, and every long paragraph on this pane would have been
- * unreachable. Written out here, the ⓘ hangs off the group's own `h4` and the
- * pane keeps the sheet's heading weight instead of introducing a second one.
+ * ## The ⓘ is a popup now, and that is the instruction
+ *
+ * Asad, 2026-08-17: *"the ⓘ dot shows its detail **on hover, as a popup** — not
+ * by expanding the pane downward."*
+ *
+ * This used to be the settings window's own expanding ⓘ, which is a disclosure: the
+ * paragraph was inserted into the flow under the heading. That is the right
+ * pattern for a settings row and the wrong one for a pane with six of them —
+ * every press moved everything below it, so reading the second explanation put
+ * the third somewhere else, on a pane that was already a screen and a half long.
+ * {@link HoverNote} costs nothing below it: open it, read it, move on, and the
+ * page has not shifted a pixel.
  *
  * The rhythm the flat sheet groups by is preserved: 40 above the heading, 8
  * below it, 8 to the list, against 20 between two entries — so a heading is
  * always nearer what it names than what it names is to itself.
  *
- * All six blocks go through this, because six hand-written copies of a heading
- * and a paragraph is six chances for one of them to drift into a different
- * shape.
+ * All the blocks go through this, because a hand-written copy of a heading and a
+ * paragraph is one more chance to drift into a different shape.
  */
 function Block({
   title,
@@ -514,43 +539,35 @@ function Block({
 }: {
   title: string
   says: string
-  /** The rest of the explanation, behind an ⓘ — the pattern the window uses. */
+  /** The rest of the explanation, behind the ⓘ, shown as a popup on hover. */
   more?: string
   children: ReactNode
 }) {
-  const rest = useMore()
   return (
     <section className="settings-group">
       <h4 className="settings-group-title">
         <span className="settings-label-line">
           {title}
-          {more && (
-            <Info label={title} open={rest.open} onToggle={rest.toggle}>
-              {more}
-            </Info>
-          )}
+          {more && <HoverNote label={title}>{more}</HoverNote>}
         </span>
       </h4>
       <p className="settings-explain-body copilot-says">{says}</p>
-      {more && rest.open && <MoreBody>{more}</MoreBody>}
       {children}
     </section>
   )
 }
 
-/** A path, with the one action that is always safe for it. */
-function PathLine({ path, onOpen, label }: { path: string; onOpen?(): void; label?: string }) {
-  return (
-    <div className="copilot-pathline">
-      <code className="settings-path" title={path}>
-        {path}
-      </code>
-      {onOpen && (
-        <Button onClick={onOpen}>{label ?? 'Open'}</Button>
-      )}
-    </div>
-  )
-}
+/*
+ * `PathLine` — a path with its own Open button — used to live here, and it is
+ * gone with its last caller.
+ *
+ * It put a second button inside the row's *text* column while the row's real
+ * controls sat in the actions column to the right, so the copilot's folder row
+ * drew "Open" one line below and two hundred pixels left of "Choose a folder…".
+ * Two buttons for one row on two different axes reads as a mistake, because it
+ * is one. The path is a plain `<code>` line now and both buttons are where every
+ * other row on this pane keeps them.
+ */
 
 /* -------------------------------------------------------------- 1. session -- */
 
@@ -563,10 +580,14 @@ function SessionGroup({
   loading,
   onSignIn,
   onReveal,
+  setup,
+  setUpCopilot,
 }: Acts & {
   state: CopilotState | null
   signIn: CopilotSignIn | null
   onSignIn(next: CopilotSignIn | null): void
+  setup: CopilotSetup
+  setUpCopilot?(): void
 }) {
   const status = state?.status ?? 'stopped'
   const running = status === 'running'
@@ -602,9 +623,70 @@ function SessionGroup({
     <Block
       title="Its session"
       says={`It runs as an ordinary ${BRAND.name} session, in a folder of its own, as one of your accounts.`}
-      more={`Everything the app can already do to a session works on this one: it has a transcript you can read, an account chip, a working directory, and it appears in the usage pane. That is the whole reason it is a session rather than a chat backend — a bespoke agent would have had to re-implement all of that, and every piece of it would have been a black box. It is also why it is not sandboxed: an assistant held to a smaller boundary than the sessions it supervises is worse at supervising them, and it started out signed out and unable to read a line of your code.`}
+      more={
+        'It is a real session, so everything the app can already do to one works on it: a ' +
+        'transcript you can read, an account, a working directory, a line in the usage pane. ' +
+        'That is why it is a session rather than a chat box built into this app.'
+      }
     >
       <ul className="settings-paths">
+        {/*
+          What it is called, and the way back to the questions that named it.
+
+          First in the list because it is the first thing about it a person
+          knows, and because the row has to be where the answer to "how do I
+          rename this" is looked for.
+
+          The name is not a setting and there is no box for it here: it lives in
+          a sentence in the copilot's own instruction file — the one this pane
+          puts in an editable box further down — so it can be changed in either
+          place and there is only ever one copy of it. `shared/copilot-identity.ts`
+          carries that argument in full.
+        */}
+        <li className="settings-path-row">
+          <span className="settings-path-main">
+            <span className="settings-label">
+              Its name
+              <span
+                className={setup.identity.name === null ? 'settings-badge quiet' : 'settings-badge'}
+              >
+                {setup.identity.name === null ? 'not named' : 'yours'}
+              </span>
+            </span>
+            {/*
+              One line where there were two, and the mechanism moved behind the
+              dot. It used to say what the copilot is called, then what it calls
+              you, then a third clause naming the heading inside the instruction
+              file to edit — which is a sentence for somebody who has already
+              opened that file, on the row of somebody who has not.
+            */}
+            <span className="settings-help">
+              {setup.identity.name === null
+                ? `Nobody has named it, so this app calls it the ${DEFAULT_COPILOT_NAME}.`
+                : `It is called ${setup.identity.name}.`}
+              {setup.identity.callThem === null
+                ? ' It has not been told what to call you.'
+                : ` It calls you ${setup.identity.callThem}.`}
+              <HoverNote label="its name">
+                {'The name is not a setting — it is a sentence in the copilot’s own instructions, ' +
+                  'which is why there is one copy of it and not two. Running these questions again ' +
+                  'rewrites that sentence, and so does editing it yourself under Its files.'}
+              </HoverNote>
+            </span>
+            {setUpCopilot === undefined && (
+              <span className="settings-help">
+                Set up again: this window was opened without the app behind it, so the questions
+                cannot be shown from here.
+              </span>
+            )}
+          </span>
+          <span className="settings-path-actions">
+            <Button disabled={setUpCopilot === undefined} onClick={() => setUpCopilot?.()}>
+              {setup.status === 'unset' ? 'Set it up…' : 'Set it up again…'}
+            </Button>
+          </span>
+        </li>
+
         <li className="settings-path-row">
           <span className="settings-path-main">
             <span className="settings-label">
@@ -717,17 +799,150 @@ function SessionGroup({
           </span>
         </li>
 
-        <li className="settings-path-row">
-          <span className="settings-path-main">
-            <span className="settings-label">Its folder</span>
-            <span className="settings-help">
-              Its working directory, and where its instructions and its memory live.
-            </span>
-            <PathLine path={state?.paths.root ?? '—'} onOpen={() => onReveal('root')} />
-          </span>
-        </li>
+        <FolderRow
+          state={state}
+          bridge={bridge}
+          act={act}
+          busy={busy}
+          loading={loading}
+          onReveal={onReveal}
+        />
       </ul>
     </Block>
+  )
+}
+
+/**
+ * Which folder it works in, and the two things a person can do about it.
+ *
+ * Asad, 2026-08-17: *"What if we want our copilot to have a folder of our
+ * choice? … if I point it to your folder, it means everything inside will start
+ * from where we left off here."* Choosing an assistant workspace they already
+ * built is the case this exists for, and it works because the copilot is a real
+ * session: the CLI reads that folder's own `CLAUDE.md` and memory the ordinary
+ * way, with nothing in this app that knows what an assistant is.
+ *
+ * Three sentences this row is not allowed to stop saying:
+ *
+ *  - **Nothing of this app's is written into a chosen folder.** Not
+ *    instructions, not `memory/`, not a marker. It is the promise the whole
+ *    design turns on, and it is stated where the choice is made rather than
+ *    somewhere in a document.
+ *  - **What choosing means for what it can read.** {@link CHOOSING_A_FOLDER},
+ *    the same string the native panel carries, because a folder may hold
+ *    credentials and that should be chosen rather than discovered. There is no
+ *    scanner behind it and there is not going to be one — see that constant.
+ *  - **It takes a restart.** A working directory is fixed at `exec`. The row
+ *    reports where the *running* copilot actually is, separately from where the
+ *    next one will start, because those differ for as long as somebody has not
+ *    restarted and a pane that showed only the setting would be lying about a
+ *    live process.
+ */
+function FolderRow({
+  state,
+  bridge,
+  act,
+  busy,
+  loading,
+  onReveal,
+}: Acts & { state: CopilotState | null }) {
+  const folder: CopilotFolder | null = state?.folder ?? null
+  const chosen = folder !== null && !folder.isDefault
+  const pickBecause = !bridge.copilotPickFolder
+    ? 'This build cannot change it — the channel is not wired.'
+    : null
+
+  return (
+    <li className="settings-path-row">
+      <span className="settings-path-main">
+        <span className="settings-label">
+          Its folder
+          {folder && (
+            <span className={chosen ? 'settings-badge' : 'settings-badge quiet'}>
+              {chosen ? 'yours' : 'this app’s'}
+            </span>
+          )}
+        </span>
+        <span className="settings-help">
+          {/*
+            "That folder's own instructions" rather than a filename, and the
+            same words the setup flow and `shared/copilot-text.ts` use. Which
+            file gets read out of a folder is the agent's own convention and
+            differs between the three this build ships, so a filename here was
+            a guess dressed up as a fact — on the row whose entire job is to say
+            what the copilot can see.
+          */}
+          {chosen
+            ? 'You pointed it at a folder of your own. It reads that folder’s own instructions and its memory the same way any session you start there would — and this app writes nothing into it.'
+            : 'A folder this app made for it. Point it at one of your own and it picks up whatever assistant already lives there.'}
+          {/*
+            What choosing a folder costs, behind the dot rather than standing
+            under the button as a four-sentence paragraph.
+
+            It is a warning and it is not being dropped — a chosen folder may
+            hold credentials, and that is a thing to be chosen rather than
+            discovered. But it was the longest single paragraph on this pane and
+            it was permanently on screen, including for the ninety per cent of
+            people who have never changed the folder and never will. Same string,
+            one hover away, still {@link CHOOSING_A_FOLDER}.
+          */}
+          <HoverNote label="choosing a folder">{CHOOSING_A_FOLDER}</HoverNote>
+        </span>
+        <code className="settings-path" title={folder?.home ?? state?.paths.root ?? '—'}>
+          {folder?.home ?? state?.paths.root ?? '—'}
+        </code>
+
+        {folder?.problem && (
+          <Notice tone="warn">
+            {folder.chosen ? `${folder.chosen} — ` : ''}
+            {folder.problem} It is running in {folder.home} instead.
+          </Notice>
+        )}
+
+        {folder?.restartNeeded && (
+          <Notice tone="info">
+            The copilot running now is still working in {folder.runningIn}. {FOLDER_NEEDS_A_RESTART}
+          </Notice>
+        )}
+
+        {pickBecause !== null && <span className="settings-help">Choose: {pickBecause}</span>}
+      </span>
+      <span className="settings-path-actions">
+        <Button onClick={() => onReveal('root')} disabled={!bridge.copilotReveal}>
+          Open
+        </Button>
+        <Button
+          disabled={pickBecause !== null || busy !== null || loading}
+          onClick={() =>
+            act('folder-pick', async () => {
+              const result = toFolderChange(await bridge.copilotPickFolder?.())
+              if (result.cancelled) return null
+              if (result.problem !== null) return result.problem
+              return result.folder === null
+                ? 'The folder could not be changed.'
+                : `The copilot will start in ${result.folder.home}. ${FOLDER_NEEDS_A_RESTART}`
+            })
+          }
+        >
+          {busy === 'folder-pick' ? 'Choosing…' : 'Choose a folder…'}
+        </Button>
+        {chosen && (
+          <Button
+            disabled={!bridge.copilotClearFolder || busy !== null}
+            onClick={() =>
+              act('folder-clear', async () => {
+                const result = toFolderChange(await bridge.copilotClearFolder?.())
+                return result.folder === null
+                  ? 'That did not work.'
+                  : `Back to ${result.folder.home}. Nothing was moved out of the folder you had chosen. ${FOLDER_NEEDS_A_RESTART}`
+              })
+            }
+          >
+            Use this app’s folder
+          </Button>
+        )}
+      </span>
+    </li>
   )
 }
 
@@ -773,18 +988,247 @@ const INSTRUCTIONS: Record<
   },
 }
 
-function StartupGroup({
+/**
+ * One file on the pane: what it is, what state it is in, and **one button that
+ * acts on it**.
+ *
+ * Asad, 2026-08-17, looking at what this block used to be — an ordered list of
+ * absolute paths with no controls on any of them:
+ *
+ *   > *"Every file needs an Edit button beside it, opening the same editor style
+ *   > already used, and saving. So they can actually control and fix and design
+ *   > their copilot from here directly."*
+ *   > *"This is busy for nothing, for no sensible reason."*
+ *
+ * Both halves are this component. The path is gone from the row — it is a
+ * settings pane for people who are, in his words, *"mostly non-technical vibe
+ * coders"*, and `/Users/…/Library/Application Support/terminaldeck/copilot-layer/instructions.md`
+ * answers no question any of them are asking — and in its place is the button
+ * that opens the file.
+ *
+ * **The verb is the truth about the file.** Edit for the two files a person owns
+ * and this app can write; View for the two it generates, which are shown in full
+ * and cannot be edited because they are descriptions of what is wired rather
+ * than opinions; Open for the folder's own instructions, which live on the
+ * person's disk in a folder this app has promised never to write into. A row
+ * whose verb outran what the app can do would be the fake control this whole
+ * review was about.
+ */
+function FileRow({
+  label,
+  badges,
+  says,
+  action,
+  onAction,
+  disabledBecause,
+  children,
+}: {
+  label: string
+  /** Short state words: whose it is, whether it is current, whether it exists. */
+  badges: Array<{ text: string; quiet?: boolean }>
+  /** One line about what the file is for. Never a path. */
+  says: string
+  /** What the button says right now — `Edit`/`Close`, `View`/`Close`, `Open`. */
+  action: string
+  onAction(): void
+  /** Why the button cannot act, or null. Rendered beside it, never swallowed. */
+  disabledBecause?: string | null
+  /** The editor or viewer this row opens, when it is open. */
+  children?: ReactNode
+}) {
+  return (
+    <li className="settings-path-row">
+      <span className="settings-path-main">
+        <span className="settings-label">
+          {label}
+          {badges.map((badge) => (
+            <span key={badge.text} className={badge.quiet === false ? 'settings-badge' : 'settings-badge quiet'}>
+              {badge.text}
+            </span>
+          ))}
+        </span>
+        <span className="settings-help">{says}</span>
+        {disabledBecause != null && <span className="settings-help">{action}: {disabledBecause}</span>}
+        {children}
+      </span>
+      <span className="settings-path-actions">
+        <Button disabled={disabledBecause != null} onClick={onAction}>
+          {action}
+        </Button>
+      </span>
+    </li>
+  )
+}
+
+/**
+ * Read a file when its box is opened, and not before.
+ *
+ * The pane used to read the instruction file and the tool contract on every
+ * mount, because both boxes were always on screen. Now that they are behind
+ * buttons, the read belongs to the opening — which also means a pane opened to
+ * check whether the copilot is running costs two IPC calls instead of four.
+ *
+ * `key` re-reads when what is on disk changed underneath an open box: a Restore
+ * rewrites the file from a control in this same block, and a box still holding
+ * the pre-restore text would put it straight back the next time Save was
+ * pressed.
+ */
+function useFileText(
+  read: (() => Promise<unknown>) | undefined,
+  parse: (raw: unknown) => { text: string | null; error: string | null },
+  key: string,
+  open: boolean,
+  unwired: string,
+): {
+  text: string | null
+  problem: string | null
+  /** Set after a save, because the bytes just written *are* the bytes on disk. */
+  accept(next: string): void
+} {
+  const [text, setText] = useState<string | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+  const readKey = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      // Dropped on close, so re-opening re-reads rather than showing a snapshot
+      // from before somebody edited the file in their own editor.
+      readKey.current = null
+      return
+    }
+    if (!read) {
+      setText(null)
+      setProblem(unwired)
+      return
+    }
+    if (readKey.current === key) return
+    readKey.current = key
+    void read().then(
+      (raw) => {
+        const result = parse(raw)
+        setText(result.text)
+        setProblem(result.error)
+      },
+      (cause: unknown) => {
+        setText(null)
+        setProblem(errorText(cause, 'That file could not be read.'))
+      },
+    )
+  }, [read, parse, key, open, unwired])
+
+  return { text, problem, accept: setText }
+}
+
+/** `toInstructionsRead`'s union, in the shape {@link useFileText} wants. */
+function readInstructions(raw: unknown): { text: string | null; error: string | null } {
+  const result = toInstructionsRead(raw)
+  return result.ok ? { text: result.text, error: null } : { text: null, error: result.error }
+}
+
+function readLayer(raw: unknown): { text: string | null; error: string | null } {
+  const result = toLayerRead(raw)
+  return { text: result.text, error: result.error }
+}
+
+/**
+ * Everything the copilot reads, as a control panel rather than a file listing.
+ *
+ * ## What this replaced, and why the memory list is not in it
+ *
+ * It used to be an ordered list of every file the session loads — the composed
+ * layer, the folder's own instructions, the memory index, and then **one row per
+ * memory file**, each with its full absolute path — followed by a second block
+ * that listed the same memory files again, each with its own Edit and Forget.
+ * On a copilot that had been running a while that is a screen of dated
+ * filenames, which is exactly what he said to stop:
+ *
+ *   > *"Memory is the exception — do not list dated files. One Open folder
+ *   > button. Memory grows daily; the identity files do not."*
+ *   > *"They don't need to edit memories. They need to edit the character,
+ *   > identity and that related stuff only."*
+ *
+ * So memory is one row with a count and one button. The claim the pane has
+ * always made about it — that what it remembers is its own conversation and
+ * never another session's, and that this is a rule in its instructions rather
+ * than something the machine refuses — moved onto that row's own ⓘ, because it
+ * is a true and load-bearing thing to say and it is not worth a paragraph on
+ * screen.
+ *
+ * What is left is five rows, and every one of them has a button that does
+ * something. The verb is the truth about the file, which is the other half of
+ * the same instruction — *"a control that cannot act is removed or disabled with
+ * a reason"*:
+ *
+ *  - **Edit** — its instructions, the one file here that is a person's own and
+ *    that this app writes. The box saves, and says when the save takes effect.
+ *  - **View** — the tool list and the composed text. Shown in full, and
+ *    read-only on purpose: both are generated from what is wired, so a
+ *    hand-edited copy would stop matching the thing it describes.
+ *  - **Show** — the folder's own instructions, which live on somebody else's
+ *    disk in a directory this app has promised never to write into.
+ *  - **Open the folder** — memory, which grows on its own.
+ */
+function FilesGroup({
   state,
+  memory,
   bridge,
   act,
   busy,
-  loading,
   onReveal,
-}: Acts & { state: CopilotState | null }) {
+}: Omit<Acts, 'loading'> & { state: CopilotState | null; memory: MemoryReport | null }) {
   const [confirm, setConfirm] = useState(false)
-  const files = state?.startupFiles ?? []
+  /** Which of the three boxes is open. One at a time — see the note on Edit. */
+  const [open, setOpen] = useState<'yours' | 'contract' | 'composed' | null>(null)
+  const [saveNote, setSaveNote] = useState<{ text: string; ok: boolean } | null>(null)
+
   const instructions = state?.instructions ?? 'missing'
   const note = INSTRUCTIONS[instructions]
+  const running = state?.status === 'running'
+  const layerFiles = state?.layerFiles ?? []
+  const yoursFile = layerFiles.find((file) => file.owner === 'yours') ?? null
+  const contractFile = layerFiles.find((file) => file.path.endsWith('tools.md')) ?? null
+  const composedFile = layerFiles.find((file) => file.path.endsWith('copilot.md')) ?? null
+
+  /*
+   * The person's own instructions file in the working directory, picked out of
+   * the startup list by elimination rather than by filename.
+   *
+   * `copilotStartupFiles` labels the memory entries `Memory` and `Memory index`
+   * and everything else in that folder is the one file the CLI discovers from
+   * the working directory. Matching on the filename instead would mean naming
+   * one agent's convention on a screen that must not name any — the three CLIs
+   * this build can run each look for a different file.
+   */
+  const folderFile =
+    (state?.startupFiles ?? []).find(
+      (file) => file.owner === 'folder' && file.purpose !== 'Memory' && file.purpose !== 'Memory index',
+    ) ?? null
+
+  const yours = useFileText(
+    bridge.copilotReadInstructions,
+    readInstructions,
+    `${instructions}:${yoursFile?.modifiedAt ?? 0}`,
+    open === 'yours',
+    'This build cannot read its instructions — the channel is not wired.',
+  )
+  const contract = useFileText(
+    bridge.copilotReadContract,
+    readLayer,
+    `${contractFile?.modifiedAt ?? 0}`,
+    open === 'contract',
+    'This build cannot read it — the channel is not wired.',
+  )
+  const composed = useFileText(
+    bridge.copilotReadComposed,
+    readLayer,
+    `${composedFile?.modifiedAt ?? 0}`,
+    open === 'composed',
+    'This build cannot read it — the channel is not wired.',
+  )
+
+  const saveBecause = !bridge.copilotWriteInstructions
+    ? 'This build cannot save it — the channel is not wired.'
+    : null
 
   const resetBecause = !bridge.copilotResetInstructions
     ? 'This build cannot restore it — the channel is not wired.'
@@ -794,512 +1238,363 @@ function StartupGroup({
         ? 'There is no file yet. Create its files instead.'
         : null
 
-  /*
-   * The file is re-read whenever the pane's own state changed underneath it.
-   *
-   * Keyed on `instructions` and on the file's own mtime rather than on a mount:
-   * pressing Restore rewrites the file from another control in this same block,
-   * and an editor still holding the pre-restore text would put it straight back
-   * the next time somebody pressed Save. Both keys are needed — a restore
-   * changes `instructions`, and an edit made in a real editor while this pane is
-   * open changes only the time.
-   */
-  const claudeFile = files.find((file) => baseName(file.path) === 'CLAUDE.md') ?? null
-  const [text, setText] = useState<string | null>(null)
-  const [problem, setProblem] = useState<string | null>(null)
-  const key = `${instructions}:${claudeFile?.modifiedAt ?? 0}`
-  const readKey = useRef<string | null>(null)
+  const toggle = (which: 'yours' | 'contract' | 'composed') => () => {
+    // One box at a time. Three textareas open at once is the wall of text this
+    // pass exists to remove, and the note under a box belongs to that box.
+    setSaveNote(null)
+    setOpen((was) => (was === which ? null : which))
+  }
 
-  useEffect(() => {
-    if (instructions === 'missing') {
-      setText(null)
-      setProblem('There is no CLAUDE.md yet — create its files above, and it appears here.')
-      return
-    }
-    if (!bridge.copilotReadInstructions) {
-      setText(null)
-      setProblem('This build cannot read its instructions — the channel is not wired.')
-      return
-    }
-    if (readKey.current === key) return
-    readKey.current = key
-    void bridge.copilotReadInstructions().then(
-      (raw) => {
-        const result = toInstructionsRead(raw)
-        if (result.ok) {
-          setText(result.text)
-          setProblem(null)
-        } else {
-          setText(null)
-          setProblem(result.error)
-        }
-      },
-      (cause: unknown) => {
-        setText(null)
-        setProblem(errorText(cause, 'Its instructions could not be read.'))
-      },
-    )
-  }, [bridge, instructions, key])
-
-  const running = state?.status === 'running'
-  const saveBecause = !bridge.copilotWriteInstructions
-    ? 'This build cannot save it — the channel is not wired.'
-    : null
-
-  /*
-   * What the last save did, kept here rather than in the pane's status notice.
-   *
-   * That notice renders after all six blocks, and this editor sits near the top
-   * of a screen and a half of content — so pressing Save put the sentence naming
-   * the backup file somewhere nobody would look. Each editor's `onSave` returns
-   * `null` to `act`, which leaves the pane-level notice empty, and puts its own
-   * result under its own box.
-   */
-  const [saveNote, setSaveNote] = useState<{ text: string; ok: boolean } | null>(null)
+  const facts = memory?.facts.length ?? 0
 
   return (
     <Block
-      title="What it reads at startup"
-      says="These files, in this order, before it answers anything."
-      more={`This is the answer to "why did it say that". A person who wants to know why their assistant behaved a certain way can read exactly the files the assistant read — the list is computed from the filesystem every time this pane opens, not remembered, so an edit you just made shows up here.`}
+      title="Its files"
+      says="What it reads before it answers anything — and what you can change."
+      more={
+        'This is the answer to “why did it say that”. The list is read off the disk every time ' +
+        'this pane opens rather than remembered, so an edit you just made — here or in your own ' +
+        'editor — shows up straight away.'
+      }
     >
-      {files.length === 0 ? (
-        <p className="settings-prose">
-          {loading ? 'Reading…' : 'Nothing yet — its folder has not been created.'}
-        </p>
-      ) : (
-        <ol className="settings-paths copilot-ordered">
-          {files.map((file, index) => (
-            <li className="settings-path-row" key={file.path}>
-              <span className="copilot-ordinal" aria-hidden="true">
-                {index + 1}
-              </span>
-              <span className="settings-path-main">
-                <span className="settings-label">
-                  {baseName(file.path)}
-                  {!file.exists && <span className="settings-badge quiet">not there</span>}
-                </span>
-                <span className="settings-help">
-                  {file.purpose}
-                  {file.exists && file.size !== null
-                    ? ` — ${bytes(file.size)}, changed ${when(file.modifiedAt)}`
-                    : ''}
-                </span>
-                <code className="settings-path" title={file.path}>
-                  {file.path}
-                </code>
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
+      {/*
+        The rows are drawn before anything has been read, not after.
 
-      <div className="settings-actions">
-        <Button
-          disabled={!bridge.copilotScaffold || instructions !== 'missing' || busy !== null}
-          onClick={() =>
-            act('scaffold', async () => {
-              const result = toScaffoldResult(await bridge.copilotScaffold?.())
-              return result.error !== null
-                ? result.error
-                : result.created.length === 0
-                  ? 'Everything was already there.'
-                  : `Created ${result.created.length} file${result.created.length === 1 ? '' : 's'}. Nothing was started.`
-            })
-          }
-        >
-          Create its files
-        </Button>
-      </div>
-      {instructions !== 'missing' && (
-        <p className="settings-help copilot-aside">
-          Its files exist, so there is nothing to create. Its instructions are below, and every
-          memory further down, editable here or in your own editor.
-        </p>
-      )}
-
-      <div className="copilot-instructions">
-        <span className="settings-label">
-          CLAUDE.md
-          <span className={note.quiet ? 'settings-badge quiet' : 'settings-badge'}>{note.badge}</span>
-        </span>
-        <span className="settings-help">{note.says}</span>
-
-        {/*
-          The box, and it is the copilot's real system instruction rather than a
-          preview of one. Editing it is editing the agent — which is why the
-          effect line under it is about *when*, and why Restart is offered beside
-          Save rather than left for somebody to work out.
-
-          Kept ahead of the Restore control, not after it: the thing a person
-          came here to do is read and change their assistant's instructions, and
-          the way back to the shipped wording is a fallback under it.
-        */}
-        <FileEditor
-          label="CLAUDE.md"
-          text={text}
-          problem={problem}
-          rows={20}
-          saveBecause={saveBecause}
-          saving={busy === 'instructions-save'}
-          note={saveNote}
-          effect={
-            running
-              ? 'Saving changes what it is told the next time it starts. The copilot running now still has the old text — restart it to hand it the new one.'
-              : 'Saving changes what it is told the next time it starts.'
-          }
-          onSave={(next) => {
-            setSaveNote(null)
-            act('instructions-save', async () => {
-              const result = toInstructionsWrite(await bridge.copilotWriteInstructions?.(next))
-              if (result.error !== null) {
-                setSaveNote({ text: result.error, ok: false })
-              } else {
-                // The saved bytes are what is on disk, so the box goes clean at
-                // once rather than waiting for the re-read the mtime triggers.
-                // See the memory editor for what leaving this out looks like.
-                setText(next)
-                const where = result.backup === null ? '' : ` What was there is at ${result.backup}.`
-                setSaveNote({
-                  text: running
-                    ? `Saved.${where} The running copilot still has the old text — restart it to apply this.`
-                    : `Saved.${where} It applies the next time the copilot starts.`,
-                  ok: true,
-                })
-              }
-              // Nothing for the pane-level notice: the sentence is under the box.
-              return null
-            })
-          }}
-        >
+        A single "Reading…" in place of the whole list was the first version, and
+        it is the wrong trade twice over: the structure of this block is the
+        answer to *"what does my copilot read"*, which does not change while a
+        read is in flight, and a pane that shows nothing for a beat and then five
+        rows moves everything under it. Each row says what state it is in
+        instead — a badge reading `not read`, a box saying `Reading…` when it is
+        opened — which is the same rule the rest of this pane follows.
+      */}
+      <ul className="settings-paths">
           {/*
-            Restart, beside Save, and only while something is running.
-            "It applies at the next start" is a true sentence that leaves
-            somebody with a job to do, and the job is two clicks on the other
-            side of this pane. Stop-then-start rather than a reload, because
-            there is no reload: the CLI reads `CLAUDE.md` as it spawns.
+            Its own instructions, first, and the only editor on this pane that
+            changes what the copilot *is*. Everything else here describes.
           */}
-          {running && (
-            <Button
-              disabled={!bridge.stopCopilot || !bridge.ensureCopilot || busy !== null}
-              onClick={() => {
-                setSaveNote(null)
-                act('restart', async () => {
-                  await bridge.stopCopilot?.()
-                  const next = toCopilotState(await bridge.ensureCopilot?.())
-                  /*
-                   * The restart's own result replaces the save's, in the same
-                   * place, because they are the two halves of one sentence: the
-                   * save says "the running copilot still has the old text" and
-                   * this is the answer to it. Leaving both on screen would have
-                   * the box telling somebody to restart directly above the line
-                   * saying they just did.
-                   */
-                  setSaveNote(
-                    next?.status === 'running'
-                      ? { text: 'Restarted. It has read the current instructions.', ok: true }
-                      : {
-                          text: next?.problem ?? 'It stopped, and did not come back up.',
-                          ok: false,
-                        },
-                  )
-                  return null
-                })
-              }}
-            >
-              {busy === 'restart' ? 'Restarting…' : 'Restart it'}
-            </Button>
-          )}
-          <Button onClick={() => onReveal('instructions')} disabled={!bridge.copilotReveal}>
-            Open in Finder
-          </Button>
-        </FileEditor>
-
-        {/*
-          The way back to the shipped wording, and the reason it is still a
-          confirmation rather than another Save. The editor above never replaces
-          anything without somebody having read what is in the box first; this
-          one puts *this build's* text over whatever is there, which for an
-          `edited` file means throwing away writing nobody has looked at in this
-          session. A copy is kept either way, and the sentence says where.
-        */}
-        {resetBecause !== null ? (
-          <span className="settings-help">Restore: {resetBecause}</span>
-        ) : confirm ? (
-          <div className="settings-confirm">
-            <span>
-              {instructions === 'edited'
-                ? 'Replace your version with the one this build ships? A copy of yours is kept beside it as CLAUDE.md.bak.'
-                : 'Replace this older default with the one this build ships? A copy of the old one is kept beside it.'}
-            </span>
-            <Button
-              tone={instructions === 'edited' ? 'danger' : 'primary'}
-              disabled={busy !== null}
-              onClick={() => {
-                setConfirm(false)
-                setSaveNote(null)
-                act('reset', async () => {
-                  const result = toResetResult(await bridge.copilotResetInstructions?.())
-                  /*
-                   * Into the editor's own note, replacing whatever the last save
-                   * said. Both controls act on one file, and a "Saved." from
-                   * five seconds ago sitting beside "Restored." is two claims
-                   * about `CLAUDE.md` where only the newer one is true.
-                   */
-                  setSaveNote(
-                    result.error !== null
-                      ? { text: result.error, ok: false }
-                      : {
-                          text:
-                            result.backup === null
-                              ? 'Restored. The box above is this build’s wording again.'
-                              : `Restored. What was there is at ${result.backup}.`,
-                          ok: result.error === null,
-                        },
-                  )
-                  return null
-                })
-              }}
-            >
-              Restore the shipped instructions
-            </Button>
-            <Button onClick={() => setConfirm(false)}>Cancel</Button>
-          </div>
-        ) : (
-          <div className="settings-actions">
-            <Button
-              tone={instructions === 'superseded' ? 'primary' : 'default'}
-              onClick={() => setConfirm(true)}
-              disabled={busy !== null}
-            >
-              Restore the shipped instructions…
-            </Button>
-          </div>
-        )}
-      </div>
-    </Block>
-  )
-}
-
-/* -------------------------------------------------------------- 3. memory -- */
-
-function MemoryGroup({
-  memory,
-  bridge,
-  act,
-  busy,
-  loading,
-  onReveal,
-}: Acts & { memory: MemoryReport | null }) {
-  const [open, setOpen] = useState<string | null>(null)
-  const [text, setText] = useState<string | null>(null)
-  const [problem, setProblem] = useState<string | null>(null)
-  /**
-   * True when the reader could only hand back the head of the file.
-   *
-   * The single most dangerous state on this pane, and the reason it is tracked
-   * separately from the text rather than folded into it as a trailing note the
-   * way the read-only version did. `readMemoryFact` stops at 256 KB; a Save from
-   * a box holding the first 256 KB of a longer file would write exactly that and
-   * delete the rest. So the flag disables Save with the sentence saying why, and
-   * points at the editor that can open the whole thing.
-   */
-  const [truncated, setTruncated] = useState(false)
-  const [confirm, setConfirm] = useState<string | null>(null)
-  /** What the last save said, under the box that produced it — see `StartupGroup`. */
-  const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null)
-
-  const read = useCallback(
-    (name: string) => {
-      // The note belongs to the fact that produced it. One `note` serves the
-      // whole list because only one editor is open at a time — which is only
-      // true if closing or switching clears it, or "Saved." follows you onto the
-      // next memory you open.
-      setNote(null)
-      if (open === name) {
-        setOpen(null)
-        setText(null)
-        setProblem(null)
-        setTruncated(false)
-        return
-      }
-      setOpen(name)
-      setText(null)
-      setProblem(null)
-      setTruncated(false)
-      if (!bridge.copilotMemoryRead) {
-        setProblem('This build cannot read a memory file — the channel is not wired.')
-        return
-      }
-      void bridge.copilotMemoryRead(name).then(
-        (raw) => {
-          const result = toMemoryRead(raw)
-          if (result.ok) {
-            setText(result.text)
-            setTruncated(result.truncated)
-          } else {
-            setProblem(result.error)
-          }
-        },
-        (cause: unknown) => setProblem(errorText(cause, 'That file could not be read.')),
-      )
-    },
-    [bridge, open],
-  )
-
-  const facts = memory?.facts ?? []
-  const writeBecause = !bridge.copilotMemoryWrite
-    ? 'This build cannot save a memory — the channel is not wired.'
-    : null
-
-  return (
-    <Block
-      title="Its memory"
-      says="One file per fact, and every one of them is its own — never another session's."
-      more={`Its memory is built from its conversation with you and nothing else. What it reads out of another session — a transcript, a diff, terminal output — is evidence it reports on, and its instructions forbid any of that from being written here, because memory is loaded at startup and a fact copied out of somebody else's agent would then be in its head in every future conversation. Credentials never go in either. Say plainly what that is: a rule in its instructions rather than something the machine refuses, which is why you can read every file in this folder. You can read every file, correct one in place, and delete any of them — a fact whose path has moved is worth fixing rather than throwing away, which is what its own instructions tell it to do too.`}
-    >
-      {memory === null ? (
-        <p className="settings-prose">{loading ? 'Reading…' : 'The memory folder could not be read.'}</p>
-      ) : !memory.exists ? (
-        <p className="settings-prose">
-          It has no memory folder yet. One is created the first time it runs, or when you create its
-          files above.
-        </p>
-      ) : facts.length === 0 ? (
-        <p className="settings-prose">The folder is there and it is empty. It has learned nothing yet.</p>
-      ) : (
-        <ul className="settings-paths">
-          {facts.map((fact) => (
-            <li className="settings-path-row copilot-fact" key={fact.name}>
-              <span className="settings-path-main">
-                <span className="settings-label">
-                  {fact.name}
-                  {fact.index && <span className="settings-badge quiet">index</span>}
-                  {fact.type && <span className="settings-badge quiet">{fact.type}</span>}
-                </span>
-                <span className="settings-help">
-                  {fact.description ?? (fact.index ? 'The list it keeps of everything below.' : 'No description in its front matter.')}
-                </span>
-                <span className="settings-help">
-                  {[
-                    fact.scope ? `scope ${fact.scope}` : null,
-                    /* `verified` is surfaced because the copilot's own
-                       instructions make a promise about it: a fact whose check
-                       is over a month old has to be quoted with its date. A
-                       person can only hold it to that if the date is visible
-                       without opening the file. */
-                    fact.verified ? `verified ${fact.verified}` : null,
-                    `${bytes(fact.bytes)}, changed ${when(fact.modifiedAt)}`,
-                  ]
-                    .filter((part): part is string => part !== null)
-                    .join(' · ')}
-                </span>
-
-                {open === fact.name && (
-                  <FileEditor
-                    label={fact.name}
-                    text={text}
-                    problem={problem}
-                    rows={12}
-                    saving={busy === `memory-save:${fact.name}`}
-                    saveBecause={
-                      truncated
-                        ? 'this file is longer than the pane can show, so saving from here would throw the rest of it away. Open the memory folder and edit it there.'
-                        : writeBecause
-                    }
-                    note={note}
-                    effect="Saving changes what it knows the next time it starts — its memory is read as the session spawns."
-                    onSave={(next) => {
-                      setNote(null)
-                      act(`memory-save:${fact.name}`, async () => {
-                        const result = toMemoryWrite(
-                          await bridge.copilotMemoryWrite?.(fact.name, next),
-                        )
-                        /*
-                         * What was written *is* what is now on disk, so say so
-                         * rather than re-reading it.
-                         *
-                         * Without this the box stayed dirty after a successful
-                         * save — Save still blue, the line still reading
-                         * "Unsaved." — because the editor compares its draft
-                         * against the text this component last read, and that
-                         * read happened when the fact was opened. Seen on the
-                         * real pane; it is the kind of thing that makes somebody
-                         * press Save twice and then doubt the first press.
-                         * `writeMemoryFact` writes verbatim, so `next` is exact.
-                         */
-                        if (result.ok) setText(next)
-                        setNote(
-                          result.ok
-                            ? { text: 'Saved. The edit is in its action log, recorded as yours.', ok: true }
-                            : { text: result.error ?? 'That file could not be saved.', ok: false },
-                        )
-                        return null
-                      })
-                    }}
-                  />
-                )}
-
-                {confirm === fact.name && (
-                  <div className="settings-confirm">
-                    <span>Forget {fact.name}? It is deleted from disk.</span>
+          <FileRow
+            label="Its instructions"
+            badges={[
+              { text: 'yours', quiet: false },
+              { text: note.badge, quiet: note.quiet },
+            ]}
+            says={note.says}
+            action={open === 'yours' ? 'Close' : 'Edit'}
+            onAction={toggle('yours')}
+          >
+            {open === 'yours' && (
+              <>
+                <FileEditor
+                  label={baseName(yoursFile?.path ?? 'instructions.md')}
+                  text={yours.text}
+                  problem={yours.problem}
+                  rows={18}
+                  saveBecause={saveBecause}
+                  saving={busy === 'instructions-save'}
+                  note={saveNote}
+                  effect={
+                    running
+                      ? 'Saving changes what it is told the next time it starts. The copilot running now still has the old text — restart it to hand it the new one.'
+                      : 'Saving changes what it is told the next time it starts.'
+                  }
+                  onSave={(next) => {
+                    setSaveNote(null)
+                    act('instructions-save', async () => {
+                      const result = toInstructionsWrite(await bridge.copilotWriteInstructions?.(next))
+                      if (result.error !== null) {
+                        setSaveNote({ text: result.error, ok: false })
+                      } else {
+                        // The saved bytes are what is on disk, so the box goes
+                        // clean at once rather than waiting for the re-read the
+                        // mtime triggers. Without this the box stayed dirty
+                        // after a successful save — Save still blue, the line
+                        // still reading "Unsaved." — which makes somebody press
+                        // Save twice and then doubt the first press.
+                        yours.accept(next)
+                        const where = result.backup === null ? '' : ` What was there is at ${result.backup}.`
+                        setSaveNote({
+                          text: running
+                            ? `Saved.${where} The running copilot still has the old text — restart it to apply this.`
+                            : `Saved.${where} It applies the next time the copilot starts.`,
+                          ok: true,
+                        })
+                      }
+                      // Nothing for the pane-level notice: the sentence is under
+                      // the box that produced it.
+                      return null
+                    })
+                  }}
+                >
+                  {/*
+                    Restart, beside Save, and only while something is running.
+                    "It applies at the next start" is a true sentence that leaves
+                    somebody with a job to do, and the job is two clicks on the
+                    other side of this pane. Stop-then-start rather than a
+                    reload, because there is no reload: the CLI is handed its
+                    instructions as it spawns.
+                  */}
+                  {running && (
                     <Button
-                      tone="danger"
-                      disabled={busy !== null}
+                      disabled={!bridge.stopCopilot || !bridge.ensureCopilot || busy !== null}
                       onClick={() => {
-                        setConfirm(null)
-                        setOpen(null)
-                        act(`forget:${fact.name}`, async () => {
-                          const result = toMemoryDelete(await bridge.copilotMemoryDelete?.(fact.name))
-                          return result.ok
-                            ? `Forgotten. The deletion is in its action log, recorded as yours.`
-                            : (result.error ?? 'That file could not be deleted.')
+                        setSaveNote(null)
+                        act('restart', async () => {
+                          await bridge.stopCopilot?.()
+                          const next = toCopilotState(await bridge.ensureCopilot?.())
+                          /*
+                           * The restart's own result replaces the save's, in the
+                           * same place, because they are the two halves of one
+                           * sentence: the save says "the running copilot still
+                           * has the old text" and this is the answer to it.
+                           */
+                          setSaveNote(
+                            next?.status === 'running'
+                              ? { text: 'Restarted. It has read the current instructions.', ok: true }
+                              : { text: next?.problem ?? 'It stopped, and did not come back up.', ok: false },
+                          )
+                          return null
                         })
                       }}
                     >
-                      Forget it
+                      {busy === 'restart' ? 'Restarting…' : 'Restart it'}
                     </Button>
-                    <Button onClick={() => setConfirm(null)}>Cancel</Button>
+                  )}
+                  <Button onClick={() => onReveal('instructions')} disabled={!bridge.copilotReveal}>
+                    Show the file
+                  </Button>
+                </FileEditor>
+
+                {/*
+                  The way back to the shipped wording, inside the editor's own
+                  disclosure rather than standing under the row. It is still a
+                  confirmation rather than another Save: the editor above never
+                  replaces anything without somebody having read what is in the
+                  box first, and this one puts *this build's* text over whatever
+                  is there. A copy is kept either way, and the note after it
+                  prints where.
+                */}
+                {resetBecause !== null ? (
+                  <span className="settings-help">Restore: {resetBecause}</span>
+                ) : confirm ? (
+                  <div className="settings-confirm">
+                    <span>
+                      {instructions === 'edited'
+                        ? 'Replace your version with the one this build ships? A copy of yours is kept beside it.'
+                        : 'Replace this older default with the one this build ships? A copy of the old one is kept beside it.'}
+                    </span>
+                    <Button
+                      tone={instructions === 'edited' ? 'danger' : 'primary'}
+                      disabled={busy !== null}
+                      onClick={() => {
+                        setConfirm(false)
+                        setSaveNote(null)
+                        act('reset', async () => {
+                          const result = toResetResult(await bridge.copilotResetInstructions?.())
+                          setSaveNote(
+                            result.error !== null
+                              ? { text: result.error, ok: false }
+                              : {
+                                  text:
+                                    result.backup === null
+                                      ? 'Restored. The box above is this build’s wording again.'
+                                      : `Restored. What was there is at ${result.backup}.`,
+                                  ok: true,
+                                },
+                          )
+                          return null
+                        })
+                      }}
+                    >
+                      Restore the shipped instructions
+                    </Button>
+                    <Button onClick={() => setConfirm(false)}>Cancel</Button>
+                  </div>
+                ) : (
+                  <div className="settings-actions">
+                    <Button
+                      tone={instructions === 'superseded' ? 'primary' : 'default'}
+                      onClick={() => setConfirm(true)}
+                      disabled={busy !== null}
+                    >
+                      Restore the shipped instructions…
+                    </Button>
                   </div>
                 )}
-              </span>
-              <span className="settings-path-actions">
-                {/*
-                  One button rather than a Read and an Edit. The box is
-                  readable, so a separate viewer would be a second control
-                  doing the lesser half of what this one already does — and on
-                  a list of facts that is two buttons per row before the delete
-                  is counted.
-                */}
-                <Button onClick={() => read(fact.name)}>{open === fact.name ? 'Close' : 'Edit'}</Button>
-                {/*
-                  Plain here, red in the confirmation.
+              </>
+            )}
+          </FileRow>
 
-                  Advanced draws its one destructive button in the danger tone
-                  and that is right for one button on a pane. A memory directory
-                  is a list, and a list of red buttons is a page that reads as a
-                  warning — which teaches the eye to stop seeing red, exactly
-                  where the next red thing might matter. The click that actually
-                  deletes is the one that wears the colour.
-                */}
-                <Button
-                  disabled={!bridge.copilotMemoryDelete || busy !== null}
-                  onClick={() => setConfirm(fact.name)}
-                >
-                  Forget
+          {/*
+            The generated half: shown in full, and not editable.
+
+            Hiding it would contradict the reason this whole pane exists — *"so
+            we can see and learn how our copilot is working"* — and editing it
+            would be worse than hiding it. It is composed from the live tool
+            catalogue, the tier each tool declares and the paths this machine
+            really refuses, every time the copilot starts. Hand-edit it and it
+            stops matching the thing it describes, which is this project's stated
+            bug class and a defect this feature has already shipped twice: an
+            instruction file claiming a jail that had been removed, and one
+            denying powers the copilot had.
+          */}
+          <FileRow
+            label="Its tool list"
+            badges={[{ text: 'the app’s' }, { text: 'generated' }]}
+            says="What it may do, written fresh from the tools that are actually wired every time it starts."
+            action={open === 'contract' ? 'Close' : 'View'}
+            onAction={toggle('contract')}
+          >
+            {open === 'contract' && (
+              <ReadOnlyFile
+                label={baseName(contractFile?.path ?? 'tools.md')}
+                text={contract.text}
+                problem={contract.problem}
+                rows={16}
+                because={
+                  'This one is not editable, because it is a description of what is wired rather ' +
+                  'than an opinion: hand-edit the tool list and it stops matching the tools that ' +
+                  'exist, which is how an assistant ends up refusing work it can do. To change ' +
+                  'what it says, change the thing it describes. To change how it behaves, edit ' +
+                  'its instructions above.'
+                }
+              >
+                <Button onClick={() => onReveal('contract')} disabled={!bridge.copilotReveal}>
+                  Show the file
                 </Button>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+              </ReadOnlyFile>
+            )}
+          </FileRow>
 
-      <div className="settings-actions">
-        <Button onClick={() => onReveal('memory')} disabled={!bridge.copilotReveal}>
-          Open the memory folder
-        </Button>
-        {memory?.dir && <code className="settings-path">{memory.dir}</code>}
-      </div>
+          <FileRow
+            label="What it was handed"
+            badges={[{ text: 'the app’s' }, { text: 'generated' }]}
+            says="The two halves above, composed — byte for byte what the running copilot was given, and never written into its folder."
+            action={open === 'composed' ? 'Close' : 'View'}
+            onAction={toggle('composed')}
+          >
+            {open === 'composed' && (
+              <ReadOnlyFile
+                label={baseName(composedFile?.path ?? 'copilot.md')}
+                text={composed.text}
+                problem={
+                  composed.problem ??
+                  (composedFile !== null && !composedFile.exists
+                    ? 'It has not been written yet — it is composed when the copilot starts.'
+                    : null)
+                }
+                rows={16}
+                because={
+                  'A copy, made at the moment it started. Editing it would change nothing: it is ' +
+                  'written again from the two halves every time the copilot starts.'
+                }
+              >
+                <Button onClick={() => onReveal('composed')} disabled={!bridge.copilotReveal}>
+                  Show the file
+                </Button>
+              </ReadOnlyFile>
+            )}
+          </FileRow>
+
+          {/*
+            The folder's own file, listed even when it is not there.
+
+            Its absence is the most reassuring row on this pane: it is the
+            visible proof that nothing in that folder claims to be a copilot, so
+            an ordinary terminal opened there reads nothing of ours. A row saying
+            "not there" states it; leaving the row out would leave somebody to
+            infer it.
+
+            **Open, not Edit, and that is a promise rather than missing work.**
+            This app writes nothing into a folder somebody chose — not
+            instructions, not `memory/`, not a marker — and a Save button here
+            would be this pane quietly breaking the one guarantee the folder
+            feature turns on. It opens where it lives instead, in their own
+            editor, which is whose file it is.
+          */}
+          <FileRow
+            label="The folder’s own instructions"
+            badges={
+              folderFile?.exists === true
+                ? [{ text: 'the folder’s' }]
+                : [{ text: 'the folder’s' }, { text: 'not there' }]
+            }
+            says={
+              folderFile?.exists === true
+                ? 'Whatever assistant already lives in that folder’s own instructions, read the ordinary way. This app never writes it.'
+                : 'Nothing in that folder claims to be the copilot, which is why an ordinary terminal opened there is not it.'
+            }
+            action="Show"
+            onAction={() => onReveal('root')}
+            disabledBecause={
+              !bridge.copilotReveal
+                ? 'This build cannot open a folder — the channel is not wired.'
+                : folderFile?.exists === true
+                  ? null
+                  : 'There is no such file yet. Put one in that folder and it is read from the next start.'
+            }
+          />
+
+          {/*
+            Memory, as a count and a folder — never as a list of dated files.
+          */}
+          <li className="settings-path-row">
+            <span className="settings-path-main">
+              <span className="settings-label">
+                Its memory
+                <span className="settings-badge quiet">
+                  {memory === null
+                    ? 'not read'
+                    : !memory.exists
+                      ? 'none yet'
+                      : `${facts} file${facts === 1 ? '' : 's'}`}
+                </span>
+                <HoverNote label="its memory">
+                  {'One file per fact, and every one of them is its own — never another session’s. ' +
+                    'What it reads out of another session is evidence it reports on, never a fact ' +
+                    'it keeps. That is a rule in its instructions rather than something the machine ' +
+                    'refuses, and this folder is yours to read and prune.'}
+                </HoverNote>
+              </span>
+              <span className="settings-help">
+                {memory !== null && !memory.exists
+                  ? 'One is created the first time it runs.'
+                  : 'What it has learned about you and your projects, one file per fact.'}
+              </span>
+            </span>
+            <span className="settings-path-actions">
+              <Button onClick={() => onReveal('memory')} disabled={!bridge.copilotReveal}>
+                Open the folder
+              </Button>
+            </span>
+          </li>
+      </ul>
+
+      {/*
+        The one button that brings the files into existence, and it is only on
+        screen while there is something to create. A permanently visible "Create
+        its files" over a folder that already has them is a control that cannot
+        act, which is the thing this pass is removing everywhere.
+      */}
+      {instructions === 'missing' && (
+        <div className="settings-actions">
+          <Button
+            disabled={!bridge.copilotScaffold || busy !== null}
+            onClick={() =>
+              act('scaffold', async () => {
+                const result = toScaffoldResult(await bridge.copilotScaffold?.())
+                return result.error !== null
+                  ? result.error
+                  : result.created.length === 0
+                    ? 'Everything was already there.'
+                    : `Created ${result.created.length} file${result.created.length === 1 ? '' : 's'}. Nothing was started.`
+              })
+            }
+          >
+            Create its files
+          </Button>
+        </div>
+      )}
     </Block>
   )
 }
@@ -1345,6 +1640,120 @@ function ActionRow({ row }: { row: LoggedAction }) {
   )
 }
 
+/**
+ * The action log, behind a View button rather than spread across the pane.
+ *
+ * Asad, 2026-08-17: *"The action log should not be listed either — a **View**
+ * button."* Twelve rows of tool calls were on screen the moment this pane
+ * opened, each three lines deep, on a pane he had already called *"busy for
+ * nothing, for no sensible reason."*
+ *
+ * ## Why a disclosure and not a link to the file
+ *
+ * The obvious reading of "View" is a button that opens `actions.jsonl` in
+ * whatever the machine has registered for `.jsonl`, which for most people is
+ * nothing at all, and for the rest is a text editor showing one JSON object per
+ * line. That is not viewing a log, it is exporting one. The rows are already in
+ * this window — the pane read them on open — so View shows them here, formatted,
+ * and Open the folder is still beside it for anyone who wants the bytes.
+ *
+ * ## What stays on screen with the list closed
+ *
+ * The count, and the sentence saying whether the file can be trusted. The count
+ * is the reason to press the button; the trust line is the pane's whole claim
+ * about this file and it must **flip** if the path ever moves back inside the
+ * copilot's writable folder — reporting a defect rather than going on reassuring
+ * somebody about a boundary that is no longer there. Hiding that behind the same
+ * button would hide it exactly when it matters.
+ */
+/* -------------------------------------------------------------- 3. showing -- */
+
+/**
+ * One switch: whether the copilot shows you the work, or just does it.
+ *
+ * Asad, 2026-08-17, asking for it by name and for both halves of it:
+ *
+ *   > *"Interactive mode ON — the visible scan. Interactive mode OFF — it does
+ *   > the work in the background and returns the final answer normally, with
+ *   > none of the driving."*
+ *
+ * Both modes are required, which means the switch is required: a feature with
+ * two intended states and one door into them has one state in practice. The one
+ * door it had was *"Don't show me next time"* in the scan panel — exactly the
+ * right place to *turn it off*, because that is the moment somebody decides they
+ * would rather not watch, and no place at all to turn it back on. Somebody who
+ * pressed it once had silently given up the feature.
+ *
+ * ## Why this is the only stored value on a pane that stores nothing
+ *
+ * Because what it switches is the copilot, not the window. Every other block
+ * here reads a folder, a log or a list; this writes one key. It could have gone
+ * to Appearance — it changes what the screen does — and that would file it under
+ * the surface it paints rather than the agent it belongs to, against the rule
+ * the settings rail is built on: a section is a *subject*. Somebody looking for
+ * "why does my copilot take over the screen" opens Copilot.
+ *
+ * ## Optimistic, and honest when the write fails
+ *
+ * The same contract the settings window states for every one of its own toggles:
+ * the switch moves the moment it is pressed, because a disk round trip is not
+ * something a switch should wait for, and a failed write says so rather than
+ * silently reverting under somebody's finger. Here it also puts the switch back,
+ * because unlike the settings window this pane has no footer to carry the
+ * message — so leaving it in the position that did not take would be the pane
+ * asserting a state that is not stored anywhere.
+ */
+function ShowingGroup({
+  interactive,
+  bridge,
+  onChange,
+  onProblem,
+}: {
+  interactive: boolean | null
+  bridge: Partial<CopilotBridge>
+  onChange(next: boolean | null): void
+  onProblem(message: string | null): void
+}) {
+  const canWrite = bridge.setSettings !== undefined && interactive !== null
+
+  return (
+    <Block
+      title="While it works"
+      says="Whether it takes you along when it looks through your sessions, or works quietly and answers."
+      more={
+        'With this on, it moves the window to whatever it is reading, boxes the exact words and dulls ' +
+        'the rest — at machine speed, to watch rather than to read. The answer arrives in its chat ' +
+        'either way; with it off, nothing on your screen moves.'
+      }
+    >
+      <Row
+        label="Show me what it is looking at"
+        help={
+          bridge.setSettings === undefined
+            ? 'This build has no settings channel wired into its preload, so this cannot be changed here.'
+            : interactive === null
+              ? 'The settings file could not be read, so this cannot be changed here.'
+              : 'It jumps to each session and highlights what it read. The answer is the same either way.'
+        }
+        control={
+          <Switch
+            checked={interactive ?? true}
+            disabled={!canWrite}
+            onChange={(next) => {
+              onChange(next)
+              onProblem(null)
+              void bridge.setSettings?.({ [INTERACTIVE_SETTING]: next })?.catch((cause: unknown) => {
+                onChange(!next)
+                onProblem(errorText(cause, 'That setting could not be saved.'))
+              })
+            }}
+          />
+        }
+      />
+    </Block>
+  )
+}
+
 function ActionsGroup({
   actions,
   loading,
@@ -1354,6 +1763,7 @@ function ActionsGroup({
   loading: boolean
   onReveal(place: string): void
 }) {
+  const [open, setOpen] = useState(false)
   const [all, setAll] = useState(false)
   const rows = actions?.rows ?? []
   const shown = all ? [...rows].reverse() : [...rows].reverse().slice(0, 12)
@@ -1362,44 +1772,62 @@ function ActionsGroup({
     <Block
       title="The action log"
       says="Every tool call it made, what came back, and whether a human said yes."
-      more={`It is append-only, one JSON object per line, and it is kept outside the copilot's own folder on purpose — and, on macOS, refused to it by the operating system. Without that, a log the copilot can write is one it could append to, edit, truncate or delete, and a record the audited party can compose is not a record. The app writes every line. The copilot's only way to add one is a log.note tool call, which is itself logged, so a row it wrote can never impersonate a row the app wrote.`}
+      more={
+        'Append-only, and kept outside the copilot’s own folder on purpose — a record the ' +
+        'audited party can compose is not a record. The app writes every line; the copilot’s ' +
+        'only way to add one is a log.note call, which is itself recorded.'
+      }
     >
-      {actions !== null && (
-        <p className="settings-help copilot-aside">{logTrustLine(actions)}</p>
-      )}
+      <ul className="settings-paths">
+        <li className="settings-path-row">
+          <span className="settings-path-main">
+            <span className="settings-label">
+              What it has done
+              <span className="settings-badge quiet">
+                {loading && actions === null
+                  ? 'reading'
+                  : rows.length === 0
+                    ? 'nothing yet'
+                    : `${rows.length} record${rows.length === 1 ? '' : 's'}`}
+              </span>
+            </span>
+            {actions !== null && <span className="settings-help">{logTrustLine(actions)}</span>}
+            {rows.length === 0 && !loading && (
+              <span className="settings-help">
+                {actions?.exists
+                  ? 'The file is there and has nothing in it yet.'
+                  : 'Nothing has been recorded — the copilot has done nothing yet.'}
+              </span>
+            )}
 
-      {rows.length === 0 ? (
-        <p className="settings-prose">
-          {loading
-            ? 'Reading…'
-            : actions?.exists
-              ? 'The file is there and has nothing in it yet.'
-              : 'Nothing has been recorded — the copilot has done nothing yet.'}
-        </p>
-      ) : (
-        <>
-          <ul className="copilot-actions">
-            {shown.map((row, index) => (
-              <ActionRow key={`${row.at}-${row.action}-${index}`} row={row} />
-            ))}
-          </ul>
-          {rows.length > shown.length && (
-            <Button onClick={() => setAll(true)}>
-              Show the other {rows.length - shown.length}
+            {open && rows.length > 0 && (
+              <>
+                <ul className="copilot-actions">
+                  {shown.map((row, index) => (
+                    <ActionRow key={`${row.at}-${row.action}-${index}`} row={row} />
+                  ))}
+                </ul>
+                {rows.length > shown.length && (
+                  <div className="settings-actions">
+                    <Button onClick={() => setAll(true)}>
+                      Show the other {rows.length - shown.length}
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </span>
+          <span className="settings-path-actions">
+            <Button
+              disabled={rows.length === 0}
+              onClick={() => setOpen((was) => !was)}
+            >
+              {open ? 'Hide' : 'View'}
             </Button>
-          )}
-        </>
-      )}
-
-      <div className="settings-actions">
-        <Button onClick={() => onReveal('log')}>Open the log folder</Button>
-        {actions && (
-          <code className="settings-path" title={actions.file}>
-            {actions.file}
-            {actions.exists ? ` — ${bytes(actions.bytes)}` : ''}
-          </code>
-        )}
-      </div>
+            <Button onClick={() => onReveal('log')}>Open the folder</Button>
+          </span>
+        </li>
+      </ul>
     </Block>
   )
 }
@@ -1437,7 +1865,11 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
     <Block
       title="What it can reach"
       says={`Everything you can. It is an ordinary ${BRAND.name} session running as your account, not a sandboxed one.`}
-      more={`It was confined once, and the confinement made it worse at its job than any session it supervises: it started signed out, because its login would have lived in a keychain a sandboxed process cannot open, and it could not read a line of your code. A jail also never stopped anything leaving — the network is open to every session, because closing it would break git and npm — so what it bought was a smaller pool of things to read, at the cost of the feature. What bounds the copilot instead is the tool tiers and the confirmation you are shown before it changes anything, plus the three refusals below.`}
+      more={
+        'It was confined once, and the jail made it worse at its job than the sessions it ' +
+        'supervises: it started signed out and could not read a line of your code. What bounds ' +
+        'it instead is the tool tiers, the confirmation you are shown, and the refusals below.'
+      }
     >
       <ul className="settings-paths">
         <li className="settings-path-row">
@@ -1446,16 +1878,24 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
               Reads and writes
               <span className="settings-badge quiet">not sandboxed</span>
             </span>
+            {/*
+              One sentence on the page and the argument behind the dot.
+
+              The second paragraph — why reading and writing are worth it, and
+              that this app's own state is always confirmed — is a good paragraph
+              and it was permanently on screen under a heading that had already
+              said "not sandboxed". The uncomfortable fact leads, which is the
+              order this block was inverted for; the reasoning is one hover away.
+            */}
             <span className="settings-help">
               Your home directory, your projects, your shell and your tools, your git and GitHub
-              logins, your keychain, the network. The same as any session you open yourself, and the
-              same as the sessions it supervises.
-            </span>
-            <span className="settings-help">
-              Reading your code is what lets it look at the failing test instead of asking you to
-              paste it. Writing is what lets it fix a line rather than describing the fix. Anything
-              that touches this app’s own state — your settings, your sessions, your routines —
-              goes through a confirmation you see, whatever else is set.
+              logins, your keychain, the network — the same as any session you open yourself.
+              <HoverNote label="what it can reach">
+                {'Reading your code is what lets it look at the failing test instead of asking you ' +
+                  'to paste it; writing is what lets it fix a line rather than describe the fix. ' +
+                  'Anything that touches this app’s own state — your settings, your sessions, your ' +
+                  'routines — goes through a confirmation you see, whatever else is set.'}
+              </HoverNote>
             </span>
           </span>
         </li>
@@ -1484,20 +1924,33 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
               through.
 
               The failure this paragraph exists to prevent is the quiet one: somebody
-              turning off Claude Code's prompts and believing they turned off this
+              turning off the CLI's prompts and believing they turned off this
               app's, or seeing this app ask and assuming the CLI asked too.
+
+              The prose names the *actor* by category — "the CLI the copilot runs
+              on" — and keeps the one concrete path, because the path is the half
+              a person can act on. It said "Claude Code's own prompts" until the
+              naming sweep, and the sweep's rule is about vendor names in prose
+              that describes a mechanism, not about the location of a file: told
+              only that some settings file governs this, nobody can go and change
+              it. So the sentence describes and the <code>path</code> discloses.
             */}
             <span className="settings-help">
-              Claude Code’s own prompts — before it runs a command or edits a file — follow{' '}
-              <em>your</em> settings, in <code>~/.claude/settings.json</code>, exactly as they do in
-              every other session you open. If you have set that to bypass them, the copilot will
-              not stop to ask either. This app does not change that setting in either direction.
+              The CLI the copilot runs on has prompts of its own — before it runs a command or
+              edits a file — and they follow <em>your</em> settings for it, in{' '}
+              <code>~/.claude/settings.json</code>, exactly as they do in every other session you
+              open. If you have set that to bypass them, the copilot will not stop to ask either.
+              This app does not change that setting in either direction.
             </span>
             <span className="settings-help">
-              The confirmation <em>this app</em> shows you — before it writes a setting, starts a
-              session or changes a routine — is a separate thing, asked by the desktop rather than
-              by the CLI. Nothing in your Claude Code settings turns it off, and nothing the copilot
-              can say answers it. With no window open to ask, it is refused rather than allowed.
+              The confirmation <em>this app</em> shows you is a separate thing, asked by the desktop
+              rather than by the CLI. Nothing in that settings file turns it off.
+              <HoverNote label="this app’s confirmation">
+                {'It is asked before this app writes a setting, starts a session or changes a ' +
+                  'routine, over a request the agent cannot answer for itself — so nothing the ' +
+                  'copilot says can wave itself through. With no window open to ask, it is refused ' +
+                  'rather than allowed.'}
+              </HoverNote>
             </span>
           </span>
         </li>
@@ -1556,12 +2009,29 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
         <li className="settings-path-row">
           <span className="settings-path-main">
             <span className="settings-label">A rule, not a wall: its memory</span>
+            {/*
+              "Its instructions", not a filename. The rule this paragraph is
+              about lives in the layer file this pane edits four blocks above —
+              `<userData>/copilot-layer/instructions.md`, handed over at exec —
+              so `CLAUDE.md` was the wrong file as well as the wrong kind of
+              name. Somebody who followed this sentence and went looking for a
+              CLAUDE.md holding that rule would not have found one.
+            */}
+            {/*
+              One line, because the memory row under Its files carries the same
+              claim behind its own ⓘ, and two copies of a promise are two copies
+              that can drift. What this row adds — and why it stays — is the
+              *kind* of promise: nothing on this machine enforces it.
+            */}
             <span className="settings-help">
-              It can read your other sessions’ transcripts — that is one of the things it is for —
-              and its instructions tell it never to copy any of that into its own <code>memory/</code>,
-              which is the folder it loads at the start of every conversation. Nothing on this
-              machine enforces that. It is a rule it keeps, written in its <code>CLAUDE.md</code> in
-              those words, and <code>memory/</code> is a folder you can read and prune yourself.
+              It can read your other sessions’ transcripts, and its instructions tell it never to
+              copy any of that into its own memory. Nothing on this machine enforces that.
+              <HoverNote label="its memory rule">
+                {'Memory is the folder it loads at the start of every conversation, so a fact ' +
+                  'copied out of somebody else’s agent would be in its head in every future one. ' +
+                  'It is a rule written into its instructions in those words — not a wall — and ' +
+                  'the folder is one you can read and prune yourself.'}
+              </HoverNote>
             </span>
           </span>
         </li>
@@ -1900,7 +2370,11 @@ function RoutinesGroup({
     <Block
       title="Routines"
       says="Saved instructions the app runs on its own, kept where the copilot cannot reach them — and editable here, by you."
-      more={`A routine is a trigger, a prompt and a folder, one file each, readable and editable by hand. They live in the app's own storage rather than in the copilot's folder, and the reason is not tidiness: the directory is the database, so a file dropped into it is a real automation that really runs — which would have made writing one a way around the confirmation a person is owed. The copilot may read that folder and, on macOS, cannot write it, so a routine can only be created or changed by you, here or in your own editor, or by a tool call you confirm. Editing one from this pane is that first door, not a new one for the copilot: writing the exact text of a routine file is wider than anything the copilot could ever be given a tool for, and it is marked in the code as reachable only from a window.`}
+      more={
+        'A routine is a trigger, a prompt and a folder — one file each. They are kept in the ' +
+        'app’s own storage, which the copilot may read and cannot write, so one can only be ' +
+        'created or changed by you: here, in your own editor, or by a tool call you confirm.'
+      }
     >
       {routines === null ? (
         <p className="settings-prose">

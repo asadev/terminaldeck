@@ -234,11 +234,52 @@ enum WireCapability {
      */
     static let create = "create"
 
+    /**
+     * The desktop can end a session on request. `create`'s opposite number.
+     *
+     * Its own name rather than being implied by `create`, and the split is not
+     * symmetry for its own sake: a host can genuinely have one and not the
+     * other. The public demo box hands a stranger a shell and withholds this,
+     * because starting something there is additive and bounded by a container
+     * while ending something is neither.
+     *
+     * It is the capability this app waited for. `SessionListView` carried a doc
+     * comment for a week saying the Close swipe was absent because no verb
+     * existed and both available fakes had been refused — typing `exit` or a
+     * Ctrl-C is not closing a session, since a full-screen agent CLI ignores
+     * both and the row stays; a Close that only archived would be a label
+     * describing something else. This is the verb, and the swipe is drawn only
+     * when a desktop has said it speaks it.
+     */
+    static let close = "close"
+
     /// The desktop can say what is listening on its own loopback, and tunnel a
     /// byte stream to one of those ports. One name for the whole feature: a
     /// desktop that could list ports but not open one would have nothing to
     /// show for it.
     static let localhost = "localhost"
+
+    /**
+     * The desktop will open a page **on its own screen** because this phone
+     * asked.
+     *
+     * A different question from `localhost`, which is why it is a different
+     * name. A tunnel brings the page *here*, and that is the right answer for
+     * reading a dev server on a train. This is the other half, and it is the one
+     * he asked for by name: *"a browser started from the phone must run on the
+     * machine you are inside — a live link or a localhost link both open on the
+     * connected machine."* The phone is driving rather than viewing.
+     *
+     * Withheld by a host with no window to open a page in — the headless daemon
+     * and the demo box are both in that position — and withheld from a device
+     * that is a **guest** rather than one of the owner's own. A page appearing
+     * on somebody's desktop is driving their machine, and no folder grant says
+     * anything about a window; the desktop strips this name out of the welcome
+     * for a guest exactly as it strips `copilot`. Both arrive here the same way,
+     * as a capability the welcome did not carry, and the button is simply not
+     * drawn.
+     */
+    static let web = "web"
 
     /**
      * The desktop can receive a file, and has somewhere to put it.
@@ -502,6 +543,31 @@ enum ClientMessage: Equatable {
      * session in the product is titled after its folder, by the Mac.
      */
     case create(folder: String?, size: TerminalSize?)
+
+    /* ---- capability `close`. Never sent unless the desktop offered it. ------ */
+
+    /**
+     * End that session. **Only** legal when the desktop advertised `close`.
+     *
+     * ## Not `detach`, and the distinction is the whole frame
+     *
+     * `detach` says *stop sending me this session's bytes* and is what leaving a
+     * terminal screen does. This ends the **process**: the tab on the desktop
+     * goes, every other attached device gets an `exit`, and whatever the agent
+     * was part-way through stops there. It is the only frame this app can send
+     * whose effect cannot be taken back, which is why nothing sends it without a
+     * confirmation the person read — see `SessionListView.closeAction`.
+     *
+     * ## One field, and the two that are deliberately absent
+     *
+     * No signal and no force flag. Choosing how somebody else's editor is killed
+     * is not a phone's decision, and the desktop ends a session exactly as its
+     * own ✕ does — one behaviour rather than two that can drift. And no reason
+     * string: it would be text from this device printed into the desktop's own
+     * chrome, for nothing.
+     */
+    case close(id: String)
+
     /// The size travels with the attach so the first screen arrives already the
     /// right shape; it is optional because a client that has not measured its
     /// terminal yet must still be able to attach and then resize.
@@ -525,6 +591,28 @@ enum ClientMessage: Equatable {
      */
     case tunnelOpen(id: String, port: Int)
     case tunnelClose(id: String)
+
+    /* ---- capability `web`. Never sent unless the desktop offered it. -------- */
+
+    /**
+     * Open this page **on the machine**, in its own browser.
+     *
+     * The other half of localhost, and the half a tunnel cannot be. A tunnel
+     * brings a dev server to this screen; this puts it on the screen of the
+     * machine the person is inside, which is what he asked for in the same
+     * breath as the port list — *"a live link or a localhost link both open on
+     * the connected machine."*
+     *
+     * `url` is checked on the desktop and not here, and that split is
+     * deliberate: this app composes `http://localhost:<port>/` from a row that is
+     * on screen, so it never has an arbitrary address to send — but the desktop
+     * still puts every one through the same gate an untrusted link goes through,
+     * because a client is not a thing a machine gets to trust about what it opens.
+     * Answered with `webOpened` carrying what was *actually* opened, or with a
+     * plain `error`.
+     */
+    case webOpen(url: String)
+
     /// One browser connection on the phone's loopback listener. Only legal
     /// after the desktop has answered `tunnelOpen` with `tunnel.opened`.
     case netOpen(ch: String, tunnel: String)
@@ -634,6 +722,69 @@ enum ClientMessage: Equatable {
        for why the second gate is here as well as on the desktop. ------------ */
 
     /**
+     * Redeem a six-digit connect code, minted at the desktop. **No tier.**
+     *
+     * The first of three frames that carry no tier and cannot: they *are* the
+     * authorisation. A device with no copilot connection has no tiers, so
+     * requiring one to send the frame that establishes the connection would mean
+     * no device could ever connect. `COPILOT_UNTIERED_FRAMES` names them on the
+     * desktop so the set is checkable.
+     *
+     * It travels on the **already-authenticated sealed channel**, so the device
+     * id is a fact rather than a claim and the code is the second thing being
+     * proved rather than the first. Answered once with `copilot.linked` carrying
+     * the credential — and never again by any path, because the desktop keeps a
+     * scrypt hash of it.
+     *
+     * **Normalise before sending.** `PairingCodeParser.normalise` is the same
+     * function the pairing screen uses, and the split is deliberate: one place
+     * decides what a code looks like and it is the client, because the client is
+     * where somebody typed it. The desktop hashes the string it is given and
+     * strips nothing, so `481 902` is simply a wrong code.
+     */
+    case copilotConnect(code: String)
+    /**
+     * Open the copilot connection on this socket, with the stored credential.
+     * **No tier.**
+     *
+     * **Required after every reconnect**, before any other `copilot.*` frame.
+     * `welcome.copilot.open` is *always* false — a session channel does not
+     * carry the copilot by existing, which is the whole difference between this
+     * design and the per-device grant it replaced — so a client that treats the
+     * welcome as "already in" sends frames that are refused.
+     *
+     * Answered with `copilot.grant` carrying `open: true`.
+     */
+    case copilotHello(credential: String)
+    /**
+     * Close the copilot connection on this socket, and keep the terminals.
+     * **No tier.**
+     *
+     * The credential and the record survive: this is the *connection* ending,
+     * not the authorisation, so the next `copilotHello` works with no ceremony.
+     * It is what a person sends when they are done with the copilot on a phone
+     * somebody else might pick up.
+     */
+    case copilotBye
+    /**
+     * Answer a confirmation. **Tier: alter.**
+     *
+     * The only frame on this wire that decides anything, and it carries a
+     * question id and a boolean — never a tool, never an argument. The tool, the
+     * arguments and the effect were all composed on the desktop before anybody
+     * was asked anything, which is what keeps the enforcement model airtight
+     * while the phone holds every tier.
+     *
+     * Two further rules are the desktop's and are not repeated here as checks,
+     * only as expectations: a question may only be answered by the surface that
+     * owns the run that raised it (enforced in `ConsentBroker.respond`, with the
+     * question, so a second transport cannot arrive without it), and a settled
+     * question and somebody else's question get the **same** answer, so probing
+     * for another device's ids learns nothing.
+     */
+    case copilotAnswer(id: String, approved: Bool)
+
+    /**
      * Watch the copilot. **Tier: read.**
      *
      * Subscribes this connection to the copilot surface and asks for what
@@ -717,16 +868,23 @@ enum ServerMessage: Equatable {
      * means a person sat at that machine and granted this device no folders,
      * which is a real answer and the one the New Session button has to respect.
      *
-     * `copilot` carries **two** answers and that is why it is a `CopilotOffer`
-     * rather than a bare grant. Absent and `{read: false, act: false}` mean the
-     * same thing about the *grant* — no access — because nobody has ever had
-     * remote copilot access, so there is no older behaviour for a desktop's
-     * silence to preserve. They do not mean the same thing about the *machine*:
-     * the field is written by the same object on the desktop that serves the
-     * frames, so its presence is the only trustworthy answer to "does this
-     * machine have a copilot at all". The capability name is not that answer —
-     * see `CopilotOffer`, which is where the difference is argued and where the
-     * host that advertises a feature it does not implement is named.
+     * `copilot` carries **four** answers and that is why it is a
+     * `CopilotConnection` rather than a bare grant. Absent and an all-false
+     * grant mean the same thing about the *grant* — no access — because nobody
+     * has ever had remote copilot access, so there is no older behaviour for a
+     * desktop's silence to preserve. They do not mean the same thing about the
+     * *machine*: the field is written by the same object on the desktop that
+     * serves the frames, so its presence is the only trustworthy answer to "does
+     * this machine have a copilot at all". The capability name is not that
+     * answer — see `CopilotConnection`, which is where the difference is argued
+     * and where the host that advertises a feature it does not implement is
+     * named.
+     *
+     * **`copilot.open` is false on every welcome, always.** Not sometimes, and
+     * not "unless you were connected a moment ago": the copilot is a separate
+     * connection and a session channel does not carry it by existing. A client
+     * reads `linked` to decide between the Connect screen and sending
+     * `copilotHello`, and never reads `open` as "already in".
      *
      * So the collapse is right one level down, inside the grant, and wrong here;
      * `folders` one field to the left keeps nil and empty apart for a third,
@@ -735,7 +893,7 @@ enum ServerMessage: Equatable {
      */
     case welcome(protocolVersion: Int, deviceId: String, deviceName: String, token: String?,
                  sessions: [RemoteSession], capabilities: Set<String>, hostPlatform: HostPlatform,
-                 folders: [String]?, copilot: CopilotOffer)
+                 folders: [String]?, copilot: CopilotConnection)
     case sessions([RemoteSession])
     /**
      * This device's folder list changed while it was connected.
@@ -771,10 +929,38 @@ enum ServerMessage: Equatable {
     /// understands.
     case created(session: RemoteSession)
 
+    /* ---- capability `close` ---------------------------------------------- */
+
+    /**
+     * That session is gone, because this phone asked.
+     *
+     * Sent only to the device that asked, and only once the session has actually
+     * ended — never on the request being received. The row is removed on *this*
+     * frame rather than optimistically on the tap, which is the difference
+     * between a list that reflects the machine and one that reflects what
+     * somebody pressed. Every other connected device finds out through the
+     * ordinary `sessions` refresh, a v1 frame, so a client that has never heard
+     * of closing still watches the row disappear.
+     *
+     * A refusal is a plain `error` — a folder taken back a moment ago, a session
+     * that had already exited — and it arrives with the id nowhere in it, so the
+     * screen says its own sentence about the row it asked about.
+     */
+    case closed(id: String)
+
     /* ---- capability `localhost` ------------------------------------------ */
 
     case ports([LocalPort])
     case tunnelOpened(id: String, port: Int)
+    /**
+     * The page is open on the machine.
+     *
+     * Carries what was opened rather than what was asked for: a redirect or a
+     * normalisation on the far side is the truth and this end's copy is not.
+     * Sent only when a tab was actually made, so the confirmation on screen is
+     * about something that happened.
+     */
+    case webOpened(url: String)
     /**
      * The tunnel is gone, and `message` says why in a sentence to put on screen.
      *
@@ -892,20 +1078,68 @@ enum ServerMessage: Equatable {
     /// view of the same thing is `copilotTool`. `more` says the tail was
     /// bounded, in the same spirit `ToolTrail.partial` reports its own window.
     case copilotLog(rows: [CopilotAction], more: Bool)
-    /// Confirmations waiting at the desk. An answer, and pushed when the set
-    /// changes — including to empty, which is how a question that was answered
-    /// or timed out leaves this phone's screen.
+    /// Confirmations waiting, at the desk and on other devices. An answer, and
+    /// pushed when the set changes — including to empty, which is how a question
+    /// that was answered or timed out leaves this phone's screen. `mine` says
+    /// which of them this connection may answer; the rest are a *go and look*.
     case copilotPending([CopilotQuestion])
     /**
-     * This device's copilot grant changed while it was connected.
+     * This device's copilot connection changed while it was connected.
      *
-     * Pushed the moment the panel on the desktop changes, so a revoked phone's
-     * Copilot screen goes away without a reconnect. The *rule* is already live
-     * without this frame — the desktop re-reads the grant on every call — which
-     * is what makes this honest rather than load-bearing: it stops the phone
-     * offering a control whose only outcome is a refusal, and nothing more.
+     * One frame for four different events, because to this end they are one:
+     * the connection opened (`copilot.hello` answered), it closed
+     * (`copilot.bye`), somebody reticked the boxes, or somebody disconnected the
+     * device entirely — in which case `linked` is false and the sentence a
+     * refusal produces changes from *you do not have enough access* to *this
+     * device is not connected*. Two different remedies, and the second one would
+     * send somebody looking for a checkbox that is no longer the obstacle.
+     *
+     * The *rule* is already live without this frame — the desktop re-reads the
+     * store on every frame and every tool call — which is what makes this honest
+     * rather than load-bearing: it stops the phone offering a control whose only
+     * outcome is a refusal, and nothing more.
      */
-    case copilotGrant(CopilotGrant)
+    case copilotGrant(CopilotConnection)
+    /**
+     * The copilot connection was established, and here is the credential.
+     *
+     * **Sent exactly once**, in answer to `copilot.connect`, and never again by
+     * any path — the desktop keeps a scrypt hash of it, so there is nothing left
+     * over there to show. A client that drops it cannot ask for it back and has
+     * to show the Connect screen again; a person then mints a new code at the
+     * machine, which is right, because minting one is a deliberate act at the
+     * desk and re-issuing on request would not be.
+     *
+     * It is stored where the pairing credential is stored and with the same
+     * care. The two are worth the same.
+     */
+    case copilotLinked(credential: String, link: CopilotConnection)
+    /**
+     * A confirmation **this** connection may answer, in full.
+     *
+     * Sent only to the surface that owns the run that raised it, and carrying
+     * what a pending row deliberately does not: the tier, the origin, and every
+     * argument verbatim. That is not generosity — it is the minimum somebody
+     * needs to answer honestly, and withholding it produces the reflex Yes the
+     * whole design refuses.
+     *
+     * There is no replay. A phone that reconnects while a question is
+     * outstanding sees it in `copilot.pending` with `mine: true` and gets no
+     * `copilot.ask`, so it has the id and not the request — and answering on an
+     * id alone is answering blind. See `CopilotView`, which draws that case as a
+     * *go and look* rather than as a button.
+     */
+    case copilotAsk(CopilotConsentQuestion)
+    /**
+     * A question closed, and where it was answered.
+     *
+     * Pushed to every connection that was told about it, **including the one
+     * that answered**. First answer wins, and the surface that loses the race
+     * withdraws its sheet saying where it went rather than having it vanish: a
+     * dialog that disappears on its own teaches a person that the app does
+     * things behind their back.
+     */
+    case copilotSettled(CopilotSettlement)
 }
 
 enum ProtocolErrorCode: String, CaseIterable, Equatable {

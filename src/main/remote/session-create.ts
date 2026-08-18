@@ -174,6 +174,27 @@ export interface SessionStarter {
    */
   folders(deviceId: string): string[]
   /**
+   * Is this one of the owner's own machines, for which the list above is a set
+   * of suggestions rather than a ceiling?
+   *
+   * **Optional, and absent means "enforce the list"** — which is what every
+   * caller written before device kinds existed wants, and what `remote-host.ts`
+   * and the tests still supply. A host that knows about kinds answers it from
+   * `device-reach.ts`.
+   *
+   * The asymmetry is the point of the two kinds. A guest may name only what was
+   * chosen for it, because somebody chose. One of your own may name any folder
+   * on the machine, because *"it's you at another keyboard"* and a second laptop
+   * that could only open the projects that happened to be open at the desk would
+   * be worse than the ssh it replaces. The picker still shows the suggestions
+   * first; this only decides whether naming something else is a refusal.
+   *
+   * What it does **not** do is skip any other check. The path must still be
+   * absolute, the spawn still refuses a state directory, and on macOS the
+   * session is still held inside whatever folder it started in.
+   */
+  unrestricted?(deviceId: string): boolean
+  /**
    * Start it for real. Throws exactly as `PtyManager.create` throws.
    *
    * `deviceId` travels with it for the same reason it travels on the request —
@@ -237,6 +258,44 @@ export function sameFolder(a: string, b: string, platform: Platform = currentPla
 }
 
 /**
+ * Is `child` the same folder as `parent`, or somewhere inside it?
+ *
+ * The containment half of the comparison above, written here rather than in
+ * `device-reach.ts` for the reason that file's header gives about there being
+ * one implementation of "are these the same directory": a second normaliser
+ * would answer the trailing-slash and the Windows-casing questions its own way,
+ * and the two would disagree about a real folder on somebody's machine long
+ * before anybody noticed.
+ *
+ * The separator test is what makes it containment rather than a prefix match.
+ * `startsWith` alone says `/home/asad/work-notes` is inside `/home/asad/work`,
+ * which is a different directory that merely begins with the same letters —
+ * exactly the mistake that turns "I shared one project" into "I shared the one
+ * next to it too". Comparing `parent + sep` costs nothing and cannot make it.
+ *
+ * The root is the one folder that is its own prefix with a separator already on
+ * it, so `/` covers `/etc` without a doubled slash; that falls out of trimming
+ * the parent before the test rather than needing a case.
+ */
+export function withinFolder(
+  parent: string,
+  child: string,
+  platform: Platform = currentPlatform(),
+): boolean {
+  if (sameFolder(parent, child, platform)) return true
+  const { normalize, sep } = rules(platform)
+  const fold = (path: string): string => (isWindows(platform) ? path.toLowerCase() : path)
+  const top = fold(trimEnd(normalize(parent), sep))
+  const inner = fold(trimEnd(normalize(child), sep))
+  // A relative path can never be inside an absolute one, and comparing them
+  // would let `projects/..` — which normalises to `.` — win or lose for a reason
+  // that has nothing to do with what anybody meant.
+  if (!isAbsoluteFolder(parent, platform) || !isAbsoluteFolder(child, platform)) return false
+  const boundary = top.endsWith(sep) || top.endsWith('/') ? top : `${top}${sep}`
+  return inner.startsWith(boundary)
+}
+
+/**
  * Is this a path the rule above can compare at all?
  *
  * Exported for the same reason {@link sameFolder} is: `folder-grants.ts` stores
@@ -274,6 +333,9 @@ export function remoteSessionCreator(
   const here = `This ${machineNoun(platform)}`
   return async (request: CreateRequest): Promise<CreateOutcome> => {
     const offered = starter.folders(request.deviceId)
+    // Absent is false: a starter that has never heard of device kinds enforces
+    // the list, which is what every caller predating them already relies on.
+    const anywhere = starter.unrestricted?.(request.deviceId) === true
     const named = request.cwd
     let cwd: string
 
@@ -298,9 +360,14 @@ export function remoteSessionCreator(
       // Absolute first: `normalize('projects/..')` is `'.'`, which would then be
       // compared against a list of absolute paths and lose for the wrong
       // reason. Refusing here says the true thing.
+      // One of the owner's own machines may name a folder that is not on the
+      // suggestion list — see `SessionStarter.unrestricted`. Absolute is still
+      // required of it: the comparison below is against absolute paths and a
+      // relative one would be resolved against this app's working directory,
+      // which is not a folder anybody was thinking about.
       if (
         !isAbsoluteFolder(named, platform) ||
-        !offered.some((folder) => sameFolder(folder, named, platform))
+        (!anywhere && !offered.some((folder) => sameFolder(folder, named, platform)))
       ) {
         return {
           ok: false,
@@ -426,14 +493,23 @@ export function remoteSessionCreator(
 export interface RemoteSessionStart {
   create(request: CreateRequest): Promise<CreateOutcome>
   folders(deviceId: string): string[]
+  /**
+   * Present exactly when the starter has an opinion, so a host that knows
+   * nothing about device kinds still spreads into a `PtySource` with no such
+   * key — which is how `SessionFanout` tells "this host does not do kinds" from
+   * "this host says no", and the two must not look the same.
+   */
+  unrestricted?(deviceId: string): boolean
 }
 
 export function remoteSessionStart(
   starter: SessionStarter,
   platform: Platform = currentPlatform(),
 ): RemoteSessionStart {
+  const anywhere = starter.unrestricted
   return {
     create: remoteSessionCreator(starter, platform),
     folders: (deviceId) => starter.folders(deviceId),
+    ...(anywhere === undefined ? {} : { unrestricted: (deviceId: string) => anywhere.call(starter, deviceId) }),
   }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AttachChips } from '../chat/attach/AttachChips'
 import { AttachMenu } from '../chat/attach/AttachMenu'
 import {
@@ -11,11 +11,14 @@ import {
   type AttachScope,
 } from '../chat/attach/mentions'
 import {
+  browseStart,
   confinedRefusal,
+  partialRefusal,
   pasteAttachment,
   picksFromDrop,
   resolveOutsideBridge,
   sessionBoundary,
+  splitByBoundary,
   UNCONFINED,
   type AttachBoundary,
   type AttachOutsideBridge,
@@ -33,16 +36,6 @@ interface Props {
   cwd?: string | null
   disabled?: boolean
   placeholder?: string
-  /**
-   * The agent's controls, rendered on the box's own bottom row beside the plus.
-   *
-   * A slot rather than an import, because `wiring.test.ts` pins `AgentControls`
-   * and `UsageStrip` to `ChatView.tsx` — that table is the record of them
-   * having shipped mounted nowhere, and the fix for a messy composer is not to
-   * move the seam it guards. So the owner stays the same and only the place
-   * they are drawn changes.
-   */
-  controls?: ReactNode
   /**
    * Whether this session is a plain shell rather than an agent CLI.
    *
@@ -108,38 +101,48 @@ const NOTICE_MS = 4000
  *
  * ## The shape
  *
- * One box, tall enough to look like somewhere you write a paragraph, with every
- * control inside its frame: attachments above the text, and a single row under
- * it holding the plus, the agent's controls, the microphone and send. Before
- * this, the plus and the microphone squeezed a single-line field between them
- * and three further rows of controls and readouts hung underneath — which is
- * the thing that got reported, in these words: "it's very messy with a lot of
- * options under the chat box".
+ * One box, tall enough to look like somewhere you write a paragraph, and one
+ * row under the text holding three things: the plus, the microphone and send.
+ * Nothing else. The plus carries a word ("Add" for an agent, "Path" for a
+ * shell); the two glyphs that stay glyphs are the pair every chat app in the
+ * world draws in that corner, and both say what they are on hover.
  *
- * Nothing on that row is a bare icon on its own: the plus carries a word ("Add"
- * for an agent, "Path" for a shell), the controls carry their names and their
- * values, the panel behind them is called Options and names its whole contents
- * on hover, and the two glyphs that stay glyphs — the microphone and send — are
- * the pair every chat app in the world draws in that corner, and both say what
- * they are on hover.
+ * ## What used to be on that row, and why removing it is not the old mistake
  *
- * ## Folding is not deleting
+ * Model, permission mode and an Options panel holding effort, fast mode and a
+ * usage readout. They are gone from here, and this is the *third* time this row
+ * has been re-cut, so the distinction matters:
  *
- * Said here because it is the mistake this composer has already made once. The
- * first pass at "one box with the options folded inside it" folded two controls
- * onto the row, two behind a button labelled "More", and — on a shell — the plus
- * into nothing at all, which came back as *"all the options you have actually
- * removed"*. Nothing on this row may be dropped to make the row shorter. If a
- * control does not fit, it goes in the Options panel, which lists every one of
- * them; if it does not belong on this kind of session, it changes form rather
- * than disappearing. `wiring.test.ts` pins the list.
+ *   > *"Options is showing the same options that we already have here… since we
+ *   > have it on top we actually don't need them here. Let's keep them only on
+ *   > top and let's not keep them here — remove them from the chat box side
+ *   > completely, only keep the maybe add files or something."*
+ *
+ * The first two re-cuts *hid* controls — behind a button called "More", and by
+ * deleting the attach menu from shell sessions — and both came back as "you
+ * removed everything", because a control that is hidden is a control that is
+ * gone. This one moves nothing and hides nothing: every one of them is drawn on
+ * the window's own bar by `shell/SessionControls.tsx`, at the top of the same
+ * pane, on *every* session — including the ones drawn as a terminal, which have
+ * no composer on screen at all and therefore never had these controls. That is
+ * why the composer's copies were the redundant pair rather than the only pair.
+ *
+ * Permission mode was the one exception: it had no chip in the bar, only here.
+ * It was given one rather than dropped — `CHROME_CONTROLS` in
+ * `shell/SessionControls.tsx` — and `chat/controls/one-home.test.ts` fails if
+ * any control ends up with no home at all, which is the failure this paragraph
+ * exists to prevent from happening quietly.
+ *
+ * The usage *readout* did not move to the bar, because the bar carries a
+ * different reading (the account's five-hour and weekly limits). This session's
+ * tokens, cost and context fill are in the session inspector, which is where the
+ * rest of "what has this session done" already lives.
  */
 export function ChatComposer({
   onSend,
   cwd,
   disabled = false,
   placeholder,
-  controls,
   shell = false,
   sessionId,
   outsideBridge,
@@ -266,7 +269,7 @@ export function ChatComposer({
     : null
 
   /**
-   * What a batch of picks becomes, from any of the four routes into this box.
+   * What a batch of picks becomes, from any of the three routes into this box.
    *
    * Two answers, because there are two things on the other end. An agent gets
    * attachments, which are `@"path"` mentions the CLI expands on submit and
@@ -289,9 +292,13 @@ export function ChatComposer({
    * exotic, it is two ordinary gestures a second apart. The ref is always the
    * list that is actually on screen.
    *
-   * The paths arrive absolute. They used to arrive relative and be joined here,
-   * which stopped being possible when three of the four routes started producing
-   * paths that have no relative form — see `AttachPicker`'s `onPick`.
+   * The paths arrive absolute, from all three routes. They used to arrive
+   * relative from the in-app project list and be joined onto the root here,
+   * which was never possible for the other two: there is no relative form of
+   * `/Users/apple/Desktop/shot.png` from a project in `~/Projects`, and
+   * inventing one out of `../../..` would mean something different the moment
+   * the session changed directory. With that list deleted, absolute is simply
+   * the only form there is.
    */
   const add = useCallback(
     (picks: readonly OutsidePick[], scope: AttachScope) => {
@@ -316,23 +323,44 @@ export function ChatComposer({
   )
 
   /**
-   * The same, for the three routes that reach outside the project.
+   * The same, for every route — all of which now reach outside the project.
    *
-   * `outsideRefusal` is checked once for the batch rather than per pick: the
-   * boundary is a property of the session, so the answer cannot differ between
-   * two files dropped together, and repeating the sentence four times would be
-   * four copies of the same refusal.
+   * ## Why this stopped being "refuse the batch if the session is confined"
+   *
+   * It used to be exactly that, and it was fine while the in-app project list
+   * existed: a confined session still had one working door, every row of which
+   * was inside the boundary by construction, so refusing the whole of Browse
+   * with one sentence took nothing away. That list is gone — he asked for the
+   * file manager and nothing else — so a flat refusal would now leave a copilot
+   * session, or one a phone started, unable to attach *anything at all*,
+   * including the files sitting in the very folder it is held inside. That is a
+   * control that cannot act, which is the thing this whole pass is about.
+   *
+   * So the boundary is applied to each pick instead: what the session can read
+   * is attached, what it cannot is dropped with the reason — once for the batch,
+   * because it is one fact about one session and four copies of it would be
+   * four copies of the same sentence.
+   *
+   * Nothing here enforces anything. The operating system holds the boundary
+   * whatever this decides; all this buys is that the refusal arrives at the
+   * click rather than a minute later, in the agent's words, as "I cannot open
+   * that file".
    */
   const addPicks = useCallback(
     (picks: readonly OutsidePick[]) => {
       if (picks.length === 0) return
-      if (outsideRefusal !== null) {
-        setNotice(outsideRefusal)
-        return
+      const { allowed, refused } = splitByBoundary(boundary, picks)
+      if (allowed.length > 0) add(allowed, 'anywhere')
+      // Set after `add`, which writes its own notice — a refusal about what this
+      // session may read outranks a caution about what the CLI does with an
+      // outside folder, and the later `setNotice` is the one that survives.
+      // `partialRefusal` names the file that did *not* arrive; see it for why
+      // the bare reason read as a complaint about the chip that did.
+      if (refused.length > 0 && outsideRefusal !== null) {
+        setNotice(partialRefusal(refused, outsideRefusal))
       }
-      add(picks, 'anywhere')
     },
-    [add, outsideRefusal],
+    [add, boundary, outsideRefusal],
   )
 
   /**
@@ -482,25 +510,24 @@ export function ChatComposer({
 
         <div className="cc-foot">
           <div className="cc-foot-left">
-            {/* Drawn for a shell as well as for an agent, and the mode is what
-                differs — see the `shell` prop for the regression that rule
-                exists to close. */}
+            {/* The only control on this side of the row, and drawn for a shell
+                as well as for an agent — the mode is what differs. See the
+                `shell` prop for the regression that rule exists to close. */}
             <AttachMenu
               root={root}
-              attachments={attachments}
-              onAdd={add}
-              onInsert={insert}
+              onAdd={addPicks}
               onNotice={setNotice}
               onClose={focusBox}
-              disabled={off || root === ''}
+              // `root === ''` no longer disables it. The panel is the operating
+              // system's, so it has somewhere to open even with no project —
+              // and on a confined session that is exactly the case where the
+              // folder it *can* read is not the project.
+              disabled={off}
               mode={shell ? 'path' : 'mention'}
-              // Null on every session started at this keyboard. Non-null only
-              // for one held inside a folder by the OS, where Browse is drawn
-              // disabled with this sentence on it rather than quietly missing.
-              browseRefusal={outsideRefusal}
+              // The project, unless this session cannot read the project.
+              startIn={browseStart(boundary, root)}
               {...(outsideBridge ? { outsideBridge } : {})}
             />
-            {controls}
           </div>
           <div className="cc-foot-right">
             {/*
@@ -526,7 +553,13 @@ export function ChatComposer({
               the microphone cannot fall out of step with whatever else the
               registry gates.
             */}
-            {voiceOffer === null && <DictateButton onFocusComposer={focusBox} disabled={off} />}
+            {/* And it draws nothing at all until a transcription key has been
+                saved and proved — see `DictateButton`. `insert` is the same
+                appender the attach menu uses, so dictated words land in a
+                half-typed sentence the way pasted ones do. */}
+            {voiceOffer === null && (
+              <DictateButton onInsert={insert} onFocusComposer={focusBox} disabled={off} />
+            )}
             <button
               type="button"
               className="cc-send"

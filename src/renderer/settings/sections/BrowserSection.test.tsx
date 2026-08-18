@@ -1,22 +1,31 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   blockedNote,
   BrowserSection,
   browserButtonLabel,
+  forgetAllConfirmText,
   groupSources,
   importedCountText,
   importedSummary,
+  keptSummary,
+  profileCaption,
+  SavedLoginRow,
+  savedSummary,
   whenImported,
 } from './BrowserSection'
 import {
+  toBrowserStored,
   toCookieImportReport,
   toCookieImportStatus,
   toCookieSources,
   type DetectedBrowser,
   type SettingsBridge,
 } from '../settings-bridge'
-import { SETTINGS } from '../settings-schema'
+import { SETTINGS, settingsIn } from '../settings-schema'
+import type { AccountsApi } from '../../browser/accounts-bridge'
 
 /**
  * The cookie-import block, as far as static markup reaches.
@@ -31,7 +40,7 @@ import { SETTINGS } from '../settings-schema'
 
 const values = Object.fromEntries(SETTINGS.map((setting) => [setting.id, setting.default]))
 
-function render(bridge: SettingsBridge = {}): string {
+function render(bridge: SettingsBridge = {}, accounts?: AccountsApi): string {
   return renderToStaticMarkup(
     <BrowserSection
       values={values}
@@ -40,8 +49,36 @@ function render(bridge: SettingsBridge = {}): string {
       loading={false}
       goTo={() => {}}
       reload={() => {}}
+      {...(accounts ? { accounts } : {})}
     />,
   )
+}
+
+/**
+ * A fully wired accounts bridge, which is what a real build hands this pane.
+ *
+ * Every method is present because {@link profilesAvailable} and
+ * {@link passwordsAvailable} are all-or-nothing on purpose — a pane that can
+ * list profiles but not switch to one is the dead control this whole review is
+ * a list of, so the honest answer to a half-wired preload is to draw nothing.
+ */
+const ACCOUNTS: AccountsApi = {
+  browserProfiles: async () => ({
+    profiles: [
+      { id: 'default', name: 'Default', partition: 'persist:x', createdAt: 1, isDefault: true },
+    ],
+    activeId: 'default',
+  }),
+  browserProfileCreate: async () => ({ profiles: [], activeId: 'default' }),
+  browserProfileRename: async () => ({ profiles: [], activeId: 'default' }),
+  browserProfileActivate: async () => ({ profiles: [], activeId: 'default' }),
+  browserProfileDelete: async () => ({ profiles: [], activeId: 'default' }),
+  browserPasswordsAvailable: async () => true,
+  browserPasswords: async () => [],
+  browserPasswordForget: async () => ({ ok: true, message: '' }),
+  browserPasswordForgetAll: async () => ({ ok: true, message: '' }),
+  browserPasswordCopy: async () => true,
+  browserPasswordAnswer: async () => ({ ok: true, message: '' }),
 }
 
 describe('the cookie import block', () => {
@@ -81,11 +118,290 @@ describe('the cookie import block', () => {
     expect(render({})).toContain('Importing cookies is not available in this build yet.')
   })
 
-  it('explains per-tab isolation without pretending to own the switch', () => {
+  /**
+   * The block is headed **Profiles**, and it now manages the profiles that
+   * exist rather than explaining that there is one.
+   *
+   *   > "Browser — start page, cookies, and profile settings, so people get the
+   *   > browser's own features."
+   *
+   * It was headed "Per-tab isolation" — the name of the mechanism, not of the
+   * thing anybody came looking for — and was then rewritten as a paragraph
+   * saying this browser had a single profile plus a throwaway one per tab. That
+   * was true when it was written and `browser-profiles.ts` landed after it, so
+   * the pane spent a week telling people a feature was absent while it was
+   * running one window away in the browser's own menu.
+   *
+   * What survives from that paragraph is the *per-tab* switch, and it survives
+   * as a description: it is a property of one tab, so it belongs on the tab, and
+   * a `role="switch"` in this block would be a second control for it.
+   */
+  it('answers "profiles" under that word, and describes the per-tab switch without owning it', () => {
     const html = render(wired)
-    expect(html).toContain('Per-tab isolation')
+    expect(html).toContain('Profiles')
+    expect(html).toMatch(/A profile is a separate set of logins and cookies/)
     expect(html).toMatch(/Shared \/ Isolated/)
-    expect(html).toMatch(/thrown away when the\s+app quits/)
+    expect(html).toMatch(/thrown away on quit/)
+    const profiles = html.slice(html.indexOf('Profiles'))
+    expect(profiles.slice(0, profiles.indexOf('</section>'))).not.toContain('role="switch"')
+  })
+})
+
+/**
+ * The pane is now shaped like the three things he asked for, and the two ways
+ * that shape can silently break are both pinned here.
+ *
+ *   > "Browser — start page, cookies, and profile settings, so people get the
+ *   > browser's own features."
+ *
+ * The rows are generated from the schema and split across two groups with
+ * `omit`, which is the only mechanism in this window that can *lose* a row: a
+ * third browser setting added tomorrow is omitted from one group and not
+ * declared in the other, so it lands nowhere and nothing else fails.
+ */
+describe('the three subjects, and every row under one of them', () => {
+  it('draws each declared browser setting exactly once', () => {
+    const html = render()
+    for (const setting of settingsIn('browser')) {
+      const escaped = setting.label.replace(/&/g, '&amp;').replace(/'/g, '&#x27;')
+      // Matched as an element's whole text — `>Start page<` — rather than as a
+      // substring. A row with an ⓘ also carries its label inside that button's
+      // `aria-label`, so a plain substring count says two for half the rows and
+      // this check would be measuring which settings have a `more`.
+      const hits = html.split(`>${escaped}<`).length - 1
+      expect(hits, `${setting.id} appears ${hits} times`).toBe(1)
+    }
+  })
+
+  it('heads them with the three subjects, in that order', () => {
+    const html = render()
+    // Saved passwords is fourth and not a fourth subject: which profile you are
+    // in decides which logins are in play, so the list sits under the control
+    // that changes it rather than in a group of its own further down.
+    const order = [
+      'Where new tabs open',
+      'Cookies and sign-ins',
+      'Profiles',
+      'Saved passwords',
+      'What the browser has kept',
+    ]
+    let at = -1
+    for (const heading of order) {
+      const found = html.indexOf(heading)
+      expect(found, heading).toBeGreaterThan(at)
+      at = found
+    }
+  })
+})
+
+/**
+ * Profiles, reaching the mechanism that exists.
+ *
+ * There is no DOM in this project's test setup, so a static render is the
+ * pane's *first frame* — before any effect has run and before the main process
+ * has answered. That is exactly the frame worth pinning, because it is the one
+ * that used to lie: a list that draws "no profiles" or "nothing saved" before it
+ * has asked is a screen reporting a fault it has not checked for. Everything
+ * that needs a second frame is verified against the running app instead, which
+ * is this repo's rule for anything visible.
+ */
+describe('the profiles block', () => {
+  it('offers nothing at all when the preload cannot do all five', () => {
+    // All-or-nothing, by `profilesAvailable`. Half a manager — list but not
+    // switch — is worse than none, because every row then looks broken.
+    const html = render({}, { browserProfiles: async () => ({ profiles: [], activeId: 'x' }) })
+    expect(html).toContain('Browser profiles is not available in this build yet.')
+    expect(html).not.toContain('Add a profile')
+  })
+
+  it('offers the four things a manager is, once the channels are there', () => {
+    const html = render({}, ACCOUNTS)
+    expect(html).not.toContain('Browser profiles is not available')
+    expect(html).toContain('Add a profile')
+    // Rename is the one thing this pane can do that the browser's own top-right
+    // menu cannot, and it is the reason a *settings* pane earns its place next
+    // to a menu that already switches profiles.
+    const source = readFileSync(join(__dirname, 'BrowserSection.tsx'), 'utf8')
+    expect(source).toContain('browserProfileRename')
+    expect(source).toContain('browserProfileActivate')
+    expect(source).toContain('browserProfileDelete')
+    expect(source).toContain('browserProfileCreate')
+  })
+
+  it('says nothing about a list it has not been given yet', () => {
+    // The first frame has no profiles because none have arrived, which is not
+    // the same as none existing. Neither sentence may be on screen then.
+    const html = render({}, ACCOUNTS)
+    expect(html).not.toContain('No profiles')
+    expect(html).not.toContain('Nothing saved in')
+  })
+
+  it('never calls the mechanism a partition', () => {
+    // *"Mostly non-technical vibe coders."* The consequence is the copy: signed
+    // in here, signed out there. The Electron word belongs in the comments.
+    const html = render({}, ACCOUNTS)
+    expect(html).not.toMatch(/partition/i)
+    expect(html).toMatch(/separate set of logins and cookies/)
+  })
+})
+
+describe('profileCaption', () => {
+  it('says which profile new tabs open in', () => {
+    expect(profileCaption({ id: 'a', isDefault: false }, 'a')).toBe('New tabs open in this one')
+  })
+
+  it('keeps the two facts apart once they stop coinciding', () => {
+    // The default profile holds the partition every build so far has used, so it
+    // cannot be deleted — and that is a different claim from "this is the one
+    // you are browsing as". They are the same row on a fresh install and
+    // different rows the moment somebody adds a second and switches.
+    expect(profileCaption({ id: 'default', isDefault: true }, 'work')).toBe('Cannot be deleted')
+    expect(profileCaption({ id: 'default', isDefault: true }, 'default')).toBe(
+      'New tabs open in this one · Cannot be deleted',
+    )
+  })
+
+  it('is empty for a row with nothing to say', () => {
+    // Rather than "Not in use", which reads as a fault on a perfectly good row.
+    expect(profileCaption({ id: 'work', isDefault: false }, 'default')).toBe('')
+  })
+})
+
+/**
+ * Saved passwords — and the rule that the renderer never holds one.
+ *
+ * `browser-passwords.ts` keeps the secret in four places and the React tree is
+ * not one of them: the store on disk, the main process's memory, the guest page
+ * it is filled into, and the clipboard. This pane names a row and is told
+ * whether a copy happened. The test that matters most here is therefore a
+ * negative one, and it is asserted against the bridge rather than against this
+ * file, because the way this rule dies is somebody adding a channel that
+ * returns the string — after which every screen is one line away from leaking.
+ */
+describe('the saved-passwords block', () => {
+  it('has no way to ask for a password, anywhere on the bridge', () => {
+    const bridge = readFileSync(join(__dirname, '..', '..', 'browser', 'accounts-bridge.ts'), 'utf8')
+    expect(bridge).not.toMatch(/browserPasswordRead|browserPasswordReveal|browserPasswordValue/)
+    // And the summary type it does carry has no field one could arrive in.
+    const summary = bridge.slice(bridge.indexOf('interface SavedLoginSummary'))
+    expect(summary.slice(0, summary.indexOf('}'))).not.toContain('password')
+  })
+
+  it('offers Copy rather than Reveal, and says where it goes', () => {
+    const html = renderToStaticMarkup(
+      <SavedLoginRow
+        entry={{
+          profileId: 'default',
+          origin: 'https://example.com',
+          username: 'sam@example.com',
+          updatedAt: Date.UTC(2026, 7, 12, 11, 0, 0),
+        }}
+        now={Date.UTC(2026, 7, 12, 12, 0, 0)}
+        onCopy={() => {}}
+        onForget={() => {}}
+      />,
+    )
+    expect(html).toContain('Copy')
+    expect(html).not.toContain('Reveal')
+    expect(html).not.toContain('Show password')
+    expect(html).toMatch(/It is not shown here/)
+    // The row says who and where and when, and nothing that is or resembles a
+    // secret — `SavedLoginSummary` has no field one could arrive in.
+    expect(html).toContain('example.com — sam@example.com')
+    expect(html).toContain('Saved 1 hour ago')
+    expect(html).not.toMatch(/type="password"/)
+  })
+
+  it('says so plainly when the channels are not in this build', () => {
+    expect(render()).toContain('Saved passwords is not available in this build yet.')
+  })
+
+  it('reports no encryption problem before it has asked about one', () => {
+    // `canStore` is null until `browser-password:available` answers. A machine
+    // with no keyring is a real state and worth a warning; drawing that warning
+    // on a first frame would be reporting a fault nobody has checked for.
+    expect(render({}, ACCOUNTS)).not.toContain('no secure store available')
+  })
+
+  it('does not offer to forget nothing', () => {
+    // Disabled with the reason on it, not hidden: the button is the answer to
+    // "where do I clear these", and a control that is absent until it would
+    // work is a control nobody finds.
+    const html = render({}, ACCOUNTS)
+    expect(html).toMatch(/Forget all saved passwords/)
+    expect(html).toMatch(/There are no saved passwords to forget/)
+  })
+})
+
+describe('savedSummary', () => {
+  it('names the profile even when the list is empty', () => {
+    // Without the name, "nothing saved yet" is a sentence somebody can read as
+    // "this app has never saved a password" and be wrong about, because theirs
+    // are all in the profile they are not currently in.
+    expect(savedSummary(0, 'Work')).toMatch(/^Nothing saved in Work yet\./)
+  })
+
+  it('counts, with the singular right', () => {
+    expect(savedSummary(1, 'Default')).toBe('1 saved login in Default.')
+    expect(savedSummary(4, 'Default')).toBe('4 saved logins in Default.')
+  })
+})
+
+describe('forgetAllConfirmText', () => {
+  it('names the quantity and the scope, because the channel is store-wide', () => {
+    // `browser-password:forget-all` empties every profile. A confirm under a
+    // list headed with one profile's name has to say so, or it is read as
+    // clearing that list.
+    const text = forgetAllConfirmText(7)
+    expect(text).toContain('7')
+    expect(text).toContain('every profile')
+    expect(text).toContain('cannot be undone')
+  })
+
+  it('reads as a sentence for one', () => {
+    expect(forgetAllConfirmText(1)).toMatch(/^Forget the one saved password\?/)
+  })
+})
+
+/**
+ * The red button now names what it is about to destroy.
+ *
+ * It said "cannot be undone" and gave no quantity at all, which is an
+ * irreversible decision about an unknown. The numbers have been on the preload
+ * since the browser's own dialog was built — this pane simply never asked.
+ */
+describe('what the browser has kept', () => {
+  it('counts what the Clear button will remove', () => {
+    const html = render({
+      clearBrowserData: async () => ({ cleared: true, message: '' }),
+      browserSessionInfo: async () => ({ cookieCount: 12, domainCount: 3, cacheBytes: 2_097_152 }),
+    })
+    expect(html).toContain('cannot be undone')
+  })
+
+  it('says nothing rather than a made-up zero before the read lands', () => {
+    // Static markup runs no effects, so this is the pane's first frame — and on
+    // a build whose preload predates the channel it is every frame.
+    expect(render()).not.toContain('Nothing kept yet')
+  })
+
+  it.each([
+    [{ cookieCount: 0, domainCount: 0, cacheBytes: 0 }, 'Nothing kept yet.'],
+    [{ cookieCount: 1, domainCount: 1, cacheBytes: 0 }, '1 cookie from 1 site, and nothing cached.'],
+    [
+      { cookieCount: 12, domainCount: 3, cacheBytes: 2_097_152 },
+      '12 cookies from 3 sites, and 2.0 MB of cached pages.',
+    ],
+    // Cache with no cookies is real: a site visited and never signed into.
+    [{ cookieCount: 0, domainCount: 0, cacheBytes: 4096 }, 'No cookies, and 4.0 KB of cached pages.'],
+  ])('reads %o as a sentence', (stored, expected) => {
+    expect(keptSummary(stored)).toBe(expected)
+  })
+
+  it('treats a missing answer as nothing rather than throwing', () => {
+    // A build whose preload predates the channel answers undefined, and the
+    // narrowing has to survive it — this pane is not worth a blank window.
+    expect(keptSummary(toBrowserStored(undefined))).toBe('Nothing kept yet.')
   })
 })
 

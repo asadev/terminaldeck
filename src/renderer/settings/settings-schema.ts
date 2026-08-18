@@ -51,9 +51,13 @@ import type { UiPlatform } from '../platform'
  * looking for its subject — never where it happened to be built.
  *
  * The sections that left the rail are not gone. Accounts and Setup are groups
- * inside Agents, Shortcuts is a popover off the rail's own footer, and Help is
- * the link beside it. `MERGED_SECTIONS` below is what keeps every old name
- * pointing at wherever its contents actually went.
+ * inside Assistants, About is the masthead at the top of Help, and Shortcuts is
+ * a popover off the rail's own footer. `MERGED_SECTIONS` below is what keeps
+ * every old name pointing at wherever its contents actually went.
+ *
+ * Help went the other way in this pass — it was the link in that footer and is a
+ * pane again, on his instruction, and it cost the rail nothing because About
+ * moved into it. The count is unchanged: ten on a Mac, eleven on Windows.
  */
 export const SECTIONS = [
   {
@@ -89,10 +93,37 @@ export const SECTIONS = [
    * which is the failure mode he named: *"when you reorganize you mostly miss
    * the things and you drop some stuff."*
    */
+  /*
+   * "Agents" was the wrong word, and the id is not the word.
+   *
+   *   > "Agents is the wrong name for that section. Needs a better one."
+   *
+   * He is right, and the reason is the audience the whole pass is written for —
+   * *"my audience will be mostly non-technical vibe coders"*. "Agent" is our
+   * word, not theirs, and inside this one product it already means three
+   * different things: the CLI that runs a session, the model that CLI talks to,
+   * and the copilot — which has its own rail entry two rows down. A rail that
+   * reads "Agents … Copilot" is asking somebody to know that the copilot is an
+   * agent but does not live under Agents.
+   *
+   * "Assistants" is what a person who is not a programmer already calls Claude
+   * Code, Codex and Gemini CLI, it names no vendor (the review's own rule —
+   * *"you should not mention in any settings or any pop-up a specific tool or
+   * LLM"*), and it does not collide with **Tools**, which is the label he chose
+   * himself for the voice pane and expects to grow. "Coding tools" and "AI
+   * tools" both would have.
+   *
+   * The **id stays `agents`** and so does the file name. Ids are storage and
+   * routing — `finish.test.ts` names `AgentsSection.tsx` by path, and `App.tsx`
+   * is a file no single agent may edit while others are working here — and this
+   * table already makes that trade once, deliberately, for `features`/"Tools".
+   * A label is what a person reads; an id is what the machine reads; they do
+   * not have to agree.
+   */
   {
     id: 'agents',
-    label: 'Agents',
-    blurb: 'The agents, the logins they run as, and what this machine has.',
+    label: 'Assistants',
+    blurb: 'Which AI runs your sessions, the logins it uses, and what is installed.',
   },
   /*
    * The id stays `features` and the label says Tools.
@@ -196,20 +227,59 @@ export const SECTIONS = [
    * one nobody scrolls twice, which is the shape of a reference rather than of
    * a settings screen. See `ShortcutsPopover`.
    *
-   * Help is not one either. *"Maybe we can make it like help button. When they
-   * click on it, it should take to terminal website… instead of inside the
-   * application."* The generated in-app help is still one keystroke away in the
-   * main window (⌘?), so nothing was lost by taking the duplicate out of here.
+   * Help *is* one again, and this entry is the reversal. See the block below
+   * the Advanced row.
    */
   {
     id: 'advanced',
     label: 'Advanced',
-    blurb: 'Diagnostics, files on disk, and starting over.',
+    /*
+     * "Files on disk" has gone out of this blurb because it has gone off the
+     * pane. See `AdvancedSection.tsx` — what is left is the two things a person
+     * actually does here when something is wrong, and neither of them is a
+     * path.
+     */
+    blurb: 'When something is wrong, and starting over.',
   },
+  /*
+   * Help, back in the rail — and About folded into it.
+   *
+   *   > "We should have a help page where we can see all the help-related
+   *   > features, options — whatever you had before, those kinds of stuff. So
+   *   > this can be a separate page."
+   *
+   * This entry existed, was demoted to a link out to the marketing site, and is
+   * now a pane again, which is worth being honest about rather than quietly
+   * flipping: the earlier instruction was *"maybe we can make it like help
+   * button… it should take to terminal website"*, and this one supersedes it.
+   * The site did not lose its link — it is a row **on** this pane now (About's
+   * "Website"), so the professional thing he asked for is one click from the
+   * help rather than instead of it.
+   *
+   * ## Why About is inside it rather than beside it
+   *
+   * The rail's own rule, applied to the last entry that was breaking it: a
+   * section is something you *change*. Shortcuts left for being a reference and
+   * Help left for being a reference; About — version, licence, source, "check
+   * for updates" — is the third reference and the only one still holding a rail
+   * seat. It is also the same subject as the help panel's own About card
+   * ("Versions, and what to include in a bug report"), which is a duplication
+   * this window has removed everywhere else.
+   *
+   * So the count does not move: ten on a Mac, eleven on Windows, exactly as
+   * before. A help page is not worth a rail that grows back towards the
+   * thirteen entries this reorganisation was asked for.
+   *
+   * Nothing was retyped to move it. `AboutSection` is rendered *in place* at the
+   * top of the pane — the same assembled-not-rewritten trick `AgentsSection`
+   * uses for Accounts and Setup — so `openSettings('about')` from the
+   * application menu lands on the masthead it always landed on, and every fact
+   * that pane carried is still the first thing on screen.
+   */
   {
-    id: 'about',
-    label: 'About',
-    blurb: 'Version, licence and updates.',
+    id: 'help',
+    label: 'Help',
+    blurb: 'What this app is, how it works, and what to do when it does not.',
   },
 ] as const
 
@@ -232,14 +302,23 @@ export type LiveSectionId = (typeof SECTIONS)[number]['id']
  * fail the build in a file nobody is allowed to fix.
  */
 export const MERGED_SECTIONS = {
-  /** Accounts is a group inside Agents. */
+  /** Accounts is a group inside Assistants. */
   profiles: 'agents',
-  /** Setup is two groups inside Agents. */
+  /** Setup is two groups inside Assistants. */
   setup: 'agents',
   /** A popover off the rail's footer, not a pane. */
   shortcuts: 'general',
-  /** A link off the rail's footer; the pane it had said what About says. */
-  help: 'about',
+  /*
+   * About is the masthead at the top of Help.
+   *
+   * This entry is the reverse of the one that used to sit here (`help: 'about'`)
+   * and it is the reason that one could be inverted safely: the application
+   * menu's About item calls `openSettings('about')`, and a menu item that
+   * silently lands on General is indistinguishable from a broken menu. Through
+   * this table it lands on the pane whose first block is the About card, which
+   * is the same thing it always showed.
+   */
+  about: 'help',
 } as const satisfies Readonly<Record<string, LiveSectionId>>
 
 export type MergedSectionId = keyof typeof MERGED_SECTIONS
@@ -421,7 +500,8 @@ export const SETTINGS: readonly Setting[] = [
   /* ------------------------------------------------------------- general -- */
   /*
    * What is left in General once every row that belonged to another subject has
-   * gone to it: the language, and how a *session* behaves while you work.
+   * gone to it: how a *session* behaves while you work, and nothing else. The
+   * language row went too — see the block where it used to be.
    *
    * Three rows left this block in this pass. The coding-tool picker went to
    * Agents, where the list of installed agents and the login each one uses
@@ -435,29 +515,30 @@ export const SETTINGS: readonly Setting[] = [
    * to be not here, it is somewhere at wrong place."* It is: what happens to
    * your sessions is the subject of this section, and diagnostics is not.
    */
-  {
-    id: 'general.language',
-    section: 'general',
-    label: 'Language',
-    help: 'English is the only one there is.',
-    more: 'No other language has been translated yet. The row is here to answer the question rather than to leave you hunting for it.',
-    store: 'extra',
-    kind: 'select',
-    default: 'en',
-    /*
-     * Deliberately one option, and deliberately not drawn as a dropdown.
-     *
-     * The row earns its place: "can I have this in my language" wants an answer,
-     * and hiding the row until a second language exists just makes people ask.
-     * What it must not do is answer with a *control* — an enabled `<select>`
-     * holding one entry, beside prose saying English is the only one there is,
-     * which is something that looks pressable and can never do anything.
-     *
-     * `SettingControl` handles that from the option count rather than from this
-     * row's id, so the day a translation lands the picker comes back by itself.
-     */
-    options: [{ value: 'en', label: 'English' }],
-  },
+  /*
+   * `general.language` was here, and it is gone rather than disabled.
+   *
+   *   > "It will be always English and it is English, so there is no selection.
+   *   > The option should not be there."
+   *
+   * It had already been through the halfway house: the picker was replaced by
+   * the *word* "English" beside a help line explaining that English is the only
+   * one there is, on the argument that "can I have this in my language" deserves
+   * an answer rather than a missing row. That argument was wrong in the way this
+   * whole pass is about — a row that states a constant is still a row somebody
+   * has to read, in a window being cut down for people who are not programmers,
+   * and it answers a question by taking up the space of a setting.
+   *
+   * Nobody's stored value is lost by this. `mergeSettings` keeps a key it does
+   * not recognise, so an existing `general.language: "en"` rides along untouched
+   * and would be picked straight back up if a translation ever lands and the row
+   * comes back. That is why there is no `RENAMED_IDS` entry: this is not a
+   * rename, and inventing a destination for it would be worse than none.
+   *
+   * The rule the row used to demonstrate — a select with one option is drawn as
+   * a value, never as a dropdown — lives in `SettingControl` and is pinned by a
+   * test of its own, so removing this row did not remove the behaviour.
+   */
   {
     id: 'general.restoreSessions',
     /*
@@ -509,9 +590,24 @@ export const SETTINGS: readonly Setting[] = [
   {
     id: 'general.confirmCloseWorking',
     section: 'general',
-    label: 'Confirm closing a working session',
-    help: 'A session that is still running asks before it closes.',
-    more: 'An idle session always closes straight away, whichever way this is set.',
+    /*
+     * The wording follows the behaviour, which changed on 2026-08-18.
+     *
+     * *"Always ask before closing anything from the side panel."* — so this is
+     * no longer about working sessions in particular, and the old `more` line
+     * ("an idle session always closes straight away") had become the opposite of
+     * what happens. The id is untouched on purpose: it is what the dialog reads
+     * and what every existing install has already written, and renaming a
+     * setting id silently resets everybody's answer to the default.
+     *
+     * This row is also the *only* way back once "Don't ask again" has been
+     * ticked in the dialog — *"once ticked there is no way to turn it back on.
+     * That has to exist."* It did exist, and nothing said so; the dialog now
+     * names this section by name, so the two have to keep agreeing.
+     */
+    label: 'Confirm before closing a session',
+    help: 'Closing a session or a project asks first.',
+    more: 'The confirmation says what is at stake: a session mid-task loses that work, one that has already ended loses only its scrollback. Off, everything closes straight away.',
     store: 'extra',
     kind: 'toggle',
     default: true,
@@ -692,7 +788,21 @@ export const SETTINGS: readonly Setting[] = [
     id: 'browser.startUrl',
     section: 'browser',
     label: 'Start page',
-    help: 'Where a new browser tab opens.',
+    /*
+     * The line stopped restating its own group heading.
+     *
+     * Under "Where new tabs open" — the heading the Browser pane grew when it
+     * was reshaped around start page / cookies / profiles — "Where a new browser
+     * tab opens" is the heading again in a smaller font, and the *useful* half
+     * was hiding in `emptyMeans`, appended only while the field was empty.
+     *
+     * Empty is also the default, so what an untouched install used to read was
+     * "Where a new browser tab opens. Leave empty to open the start page." —
+     * two sentences, one of them a tautology, the other naming "the start page"
+     * as if the reader knew that is a page this app has. Now it says what
+     * happens and what that page is, once.
+     */
+    help: 'Type an address, or leave it empty for the page that lists what is running here.',
     store: 'extra',
     kind: 'text',
     // Empty, because a default address is a guess about somebody else's machine.
@@ -709,7 +819,9 @@ export const SETTINGS: readonly Setting[] = [
     // offers those — which is a true answer rather than a guess.
     default: '',
     placeholder: 'http://localhost:3000',
-    emptyMeans: 'Leave empty to open the start page.',
+    // No `emptyMeans`: the help line above says what empty does, in every state
+    // rather than only while the field is empty, and appending it as well is how
+    // that row came to say the same thing twice.
   },
   {
     id: 'browser.persistSession',
@@ -723,12 +835,22 @@ export const SETTINGS: readonly Setting[] = [
   },
 
   /* ------------------------------------------------------------ advanced -- */
+  /*
+   * The one switch on the pane, and it is now the door everything technical is
+   * behind — so its line says *when to press it* rather than what it renders.
+   *
+   * It used to read "Shows the raw stored settings and extra diagnostics here",
+   * which is a true description written for somebody who already knows what a
+   * stored setting is. The reader this window is being rewritten for does not,
+   * and the honest thing to tell them is the only reason they will ever touch
+   * it: somebody asked them to.
+   */
   {
     id: 'advanced.debugMode',
     section: 'advanced',
     label: 'Debug mode',
-    help: 'Shows the raw stored settings and extra diagnostics here.',
-    more: 'An IPC trace, the process table, the tail of the log and a support bundle, all inside this window. Nothing is sent anywhere.',
+    help: 'Turn it on if you are asked for it while reporting a problem.',
+    more: 'It adds the diagnostics to this pane: what the app is doing right now, the tail of the log, a support bundle, and where its files are kept. Nothing is sent anywhere.',
     store: 'extra',
     kind: 'toggle',
     default: false,
@@ -1082,11 +1204,13 @@ export function settingsSchemaProblems(settings: readonly Setting[] = SETTINGS):
     }
 
     if (setting.kind === 'select') {
-      // One option is allowed, two used to be required. `general.language` ships
-      // English alone on purpose: the row exists to answer the question, and a
-      // second option would have to be a language nobody translated. Zero
-      // options is still a bug — the control renders empty and can store
-      // nothing, so `coerce` would reject the setting's own default.
+      // One option is allowed and no row uses it today — `general.language`,
+      // which did, has gone. The allowance stays because the rule it protects
+      // is in `SettingControl`, not here: a one-option select is *drawn as a
+      // value*, so a schema that rejected one would push the next person into
+      // faking a second option to get a row on screen. Zero options is still a
+      // bug — the control renders empty and can store nothing, so `coerce`
+      // would reject the setting's own default.
       if (setting.options.length === 0) problems.push(`${setting.id}: a select needs an option`)
       const values = new Set<string>()
       for (const option of setting.options) {

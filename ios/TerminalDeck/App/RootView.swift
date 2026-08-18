@@ -47,6 +47,24 @@ import SwiftUI
 struct RootView: View {
     @Bindable var model: DeckModel
 
+    /**
+     * The one place in this app that decides what colour scheme anything is.
+     *
+     * `@AppStorage` rather than a `@State` mirror of a store, and the difference
+     * matters here in a way it does not for `TextSize`: the control that changes
+     * this is three levels down a navigation stack inside a tab, and this view
+     * is above the `TabView`. `@AppStorage` is a live view of the defaults
+     * database, so the picker in Settings writes and this repaints — with no
+     * property threaded through four screens that do not otherwise care.
+     *
+     * It survives a relaunch because `UserDefaults` persists it, and it is read
+     * here at first body rather than applied in `onAppear`, so the first frame
+     * is already the right scheme rather than a flash of the wrong one.
+     *
+     * See `Appearance` for why `system` is `nil` and not a third painted value.
+     */
+    @AppStorage(Appearance.key) private var appearance: Appearance = .system
+
     var body: some View {
         Group {
             if !model.isPaired {
@@ -59,10 +77,20 @@ struct RootView: View {
         }
         .animation(.default, value: model.isPaired)
         .tint(Theme.accent)
-        .preferredColorScheme(.dark)
+        /*
+         * Stated once, here, for the whole window — including the sheets below.
+         *
+         * A sheet is presented from this hierarchy, so it inherits the scheme
+         * this modifier puts on the window rather than needing one of its own.
+         * Every one of them used to carry `.preferredColorScheme(.dark)`
+         * anyway, which was harmless while the app was pinned dark in
+         * `Info.plist` and would have been eleven silent overrides of this
+         * setting the moment that pin came out. Verified by looking: every
+         * screen and every sheet was rendered in both schemes.
+         */
+        .preferredColorScheme(appearance.colorScheme)
         .sheet(isPresented: $model.addingHost) {
             PairingView(model: model, adding: true) { model.addingHost = false }
-                .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $model.showingGitHub) {
             GitHubAccountView(model: model) { model.showingGitHub = false }

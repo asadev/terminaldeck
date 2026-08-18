@@ -26,6 +26,13 @@ let rejectLoads = false
 /** Set when the test wants `capturePage` to fail, as it does on a hidden view. */
 let captureFails = false
 
+interface WindowOpenDetails {
+  url: string
+  frameName: string
+  disposition: string
+  features: string
+}
+
 class FakeWebContents extends EventEmitter {
   private static nextId = 1
   readonly id = FakeWebContents.nextId++
@@ -100,9 +107,18 @@ class FakeWebContents extends EventEmitter {
    * and the first of those is the whole point of the change — see
    * `link-open.ts`. There is nothing else that reaches it.
    */
-  windowOpenHandler: ((details: { url: string }) => unknown) | null = null
+  /**
+   * The full details Chromium sends, not only the address.
+   *
+   * The handler routes on the disposition and the frame name as well now: a
+   * sized or named request is a sign-in pop-up and becomes a real window with a
+   * real opener, and everything else is a link and becomes a tab in this
+   * window. A fake that only carried the URL would let the handler read
+   * `undefined` for the two fields the routing turns on.
+   */
+  windowOpenHandler: ((details: WindowOpenDetails) => unknown) | null = null
 
-  setWindowOpenHandler(handler: (details: { url: string }) => unknown): void {
+  setWindowOpenHandler(handler: (details: WindowOpenDetails) => unknown): void {
     this.windowOpenHandler = handler
   }
 
@@ -178,13 +194,26 @@ class FakeWindow extends EventEmitter {
 let fakeWindow = new FakeWindow()
 
 vi.mock('electron', () => ({
-  app: { getPath: () => USER_DATA },
+  app: {
+    getPath: () => USER_DATA,
+    // Real Electron always has one; the guest session's user agent is
+    // derived from it, and Google's sign-in behaviour turns on what is in
+    // it. See `browser-user-agent.ts`.
+    userAgentFallback:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Electron/41.10.5 Safari/537.36',
+  },
   BrowserWindow: { fromWebContents: () => fakeWindow },
   session: {
     fromPartition: () => ({
       setPermissionRequestHandler: () => undefined,
       setPermissionCheckHandler: () => undefined,
       on: () => undefined,
+      // The flow recorder's script is attached per session, and that attachment
+      // moved into `browser-profiles.ts` so every profile gets it rather than
+      // only the first one. A fake session that cannot be hardened is one this
+      // module cannot use, which is the honest shape of the dependency.
+      registerPreloadScript: () => 'record-preload',
+      setUserAgent: () => undefined,
     }),
   },
   WebContentsView: FakeWebContentsView,
@@ -585,7 +614,23 @@ describe('a link that asks for a new window', () => {
   const openWindow = (guest: FakeWebContents, url: string): unknown => {
     const handler = guest.windowOpenHandler
     if (!handler) throw new Error('no window-open handler was registered')
-    return handler({ url })
+    // The whole details object, because the handler routes on more than the
+    // address now: a sized or named request is a sign-in pop-up and becomes a
+    // real window, everything else is a link and becomes a tab here. See
+    // `browser-popup.ts` for the dispositions Chromium actually reports.
+    return handler({ url, frameName: '', disposition: 'foreground-tab', features: '' })
+  }
+
+  /** The shape a page produces with `window.open(url, 'oauth', 'width=…')`. */
+  const openPopup = (guest: FakeWebContents, url: string): unknown => {
+    const handler = guest.windowOpenHandler
+    if (!handler) throw new Error('no window-open handler was registered')
+    return handler({
+      url,
+      frameName: 'oauth',
+      disposition: 'new-window',
+      features: 'width=500,height=600',
+    })
   }
 
   it('becomes a tab in this window instead of a pop-up', async () => {
@@ -600,12 +645,45 @@ describe('a link that asks for a new window', () => {
     expect(host.sent.filter((m) => m.channel === 'browser:state-changed')).toEqual([])
   })
 
-  it('never gets a window of Chromium’s, whatever the answer', async () => {
-    // The deny is not a detail. A bare Electron window would have no toolbar,
-    // no address bar and none of the navigation guards above.
+  it('never gets a window of Chromium’s for an ordinary link', async () => {
+    // The deny is not a detail for a *link*. A bare Electron window would have
+    // no toolbar, no address bar and none of the navigation guards above.
     const { guest } = await openTab({ url: 'http://localhost:3000' })
     expect(openWindow(guest, 'https://example.com/')).toEqual({ action: 'deny' })
     expect(openWindow(guest, 'file:///etc/passwd')).toEqual({ action: 'deny' })
+  })
+
+  /**
+   * The one thing that must not be tidied back into a single `deny`.
+   *
+   * Answering every `window.open` with `deny` makes the *page's* own handle come
+   * back `null` — measured on Electron 41.10.5 — so the sign-in library that
+   * opened it waits forever for a `postMessage` from a window it was never
+   * given. That is the whole of *"the verification link gets stuck"* and the QR
+   * that *"appeared and then stopped"* in the 2026-08-17 review, and it is
+   * silent: nothing throws, and the destination even finishes the sign-in in a
+   * tab. It simply cannot say so.
+   */
+  it('lets a real sign-in pop-up be a real window, with a real opener', async () => {
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    host.sent.length = 0
+    const answer = openPopup(guest, 'https://accounts.example.com/oauth') as {
+      action: string
+      overrideBrowserWindowOptions?: { webPreferences?: { sandbox?: boolean } }
+    }
+    expect(answer.action).toBe('allow')
+    // On this tab's own session, sandboxed, with context isolation — a pop-up
+    // is a window with fewer checks than a tab, so this is the one place the
+    // hardening must not be relaxed.
+    expect(answer.overrideBrowserWindowOptions?.webPreferences?.sandbox).toBe(true)
+    // And it is not also opened as a tab: two of them is the bug wearing a
+    // different face.
+    expect(host.sent.filter((m) => m.channel === 'link:open-tab')).toEqual([])
+  })
+
+  it('still refuses a pop-up to a scheme a page must not reach', async () => {
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    expect(openPopup(guest, 'file:///etc/passwd')).toEqual({ action: 'deny' })
   })
 
   it('still refuses anything that is not http or https, and says so', async () => {

@@ -109,9 +109,28 @@ export interface LocalhostState {
   checking: { id: string; port: number } | null
   /** The last finished check, kept on screen until the next one starts. */
   outcome: CheckOutcome | null
+  /**
+   * The port whose page is being opened **on the machine**, or null.
+   *
+   * Separate from {@link checking} and never folded into it. A check dials a
+   * port and closes; an open puts a tab on somebody's screen and leaves it
+   * there. They are two different promises and two different sentences, and one
+   * field would have the second overwriting the first the moment anybody used
+   * both on the same row.
+   */
+  opening: number | null
+  /** The last open that finished, kept on screen until another starts. */
+  openOutcome: { port: number; kind: 'opened' } | { port: number; kind: 'refused'; detail: string } | null
 }
 
-export const NO_LOCALHOST: LocalhostState = { ports: null, listing: false, checking: null, outcome: null }
+export const NO_LOCALHOST: LocalhostState = {
+  ports: null,
+  listing: false,
+  checking: null,
+  outcome: null,
+  opening: null,
+  openOutcome: null,
+}
 
 export type LocalhostAction =
   /** Ask what is listening. */
@@ -121,6 +140,15 @@ export type LocalhostAction =
    * so that the whole machine stays pure and a test can name the tunnel.
    */
   | { t: 'check'; port: number; id: string }
+  /**
+   * Open `http://localhost:<port>/` **on the machine**, in its own browser.
+   *
+   * No id, unlike a check: there is one of these in flight at a time and the
+   * confirmation names the URL rather than a handle, so there is nothing to
+   * correlate. A second press while one is outstanding is dropped for the same
+   * reason a second `list` is — one press, one page.
+   */
+  | { t: 'open'; port: number }
   | { t: 'frame'; message: ServerMessage }
   /** {@link CHECK_PATIENCE_MS} elapsed with nothing back for this check. */
   | { t: 'silence'; id: string }
@@ -168,6 +196,17 @@ export function localhostStep(state: LocalhostState, action: LocalhostAction): L
       }
     }
 
+    case 'open': {
+      if (state.opening !== null) return still(state)
+      return {
+        // The previous answer goes now rather than when the new one arrives, the
+        // same rule the check follows: "opened port 3000" left under a spinner
+        // for port 5173 is a stale truth that reads as a live one.
+        state: { ...state, opening: action.port, openOutcome: null },
+        send: [{ t: 'web.open', url: localhostUrl(action.port) }],
+      }
+    }
+
     case 'frame':
       return afterFrame(state, action.message)
 
@@ -192,7 +231,7 @@ export function localhostStep(state: LocalhostState, action: LocalhostAction): L
       // left spinning against a socket that will never answer it is the lie this
       // whole client is built to avoid.
       return {
-        state: { ...state, listing: false, checking: null, outcome: null },
+        state: { ...state, listing: false, checking: null, outcome: null, opening: null, openOutcome: null },
         send: [],
       }
   }
@@ -209,6 +248,29 @@ function afterFrame(state: LocalhostState, message: ServerMessage): LocalhostSte
     // not name. Re-sorting by number here would throw that away and bury the
     // dev server under whatever the OS happens to have on port 22.
     return { state: { ...state, ports: message.ports, listing: false }, send: [] }
+  }
+
+  const opening = state.opening
+  if (opening !== null) {
+    if (message.t === 'web.opened') {
+      return { state: { ...state, opening: null, openOutcome: { port: opening, kind: 'opened' } }, send: [] }
+    }
+    /*
+     * An `error` while an open is in flight is that open's refusal.
+     *
+     * Correlated by *there being one*, not by an id, because this verb carries
+     * none — and that is honest rather than lazy: nothing else this client sends
+     * while an open is outstanding produces a bare `error`, since a check's
+     * refusal comes back as `tunnel.closed` with its own id and a `create`
+     * refusal is drawn on the sessions screen. The `checking` branch below is
+     * reached first for anything that names a tunnel.
+     */
+    if (message.t === 'error') {
+      return {
+        state: { ...state, opening: null, openOutcome: { port: opening, kind: 'refused', detail: message.message } },
+        send: [],
+      }
+    }
   }
 
   const checking = state.checking
@@ -256,6 +318,32 @@ export function localhostOffered(capabilities: readonly string[]): boolean {
   return capabilities.includes(CAPABILITY.localhost)
 }
 
+/**
+ * Whether this machine will open a page for this browser.
+ *
+ * The answer to the complaint this whole screen has been carrying — *"localhost
+ * lists ports with no way to open any of them"* — and it is a different question
+ * from `localhostOffered`, which is why it is a different function. A tab cannot
+ * serve a tunnel, and the three reasons are at the top of this file and have not
+ * changed. What it can do is ask the machine to open the page **there**, which
+ * is what he asked for on the phone in the same review: *"a browser started from
+ * the phone must run on the machine you are inside."*
+ *
+ * Absent for a machine with no window to open one in, and absent for a device
+ * that is a guest rather than one of the owner's own — a page appearing on
+ * somebody's screen is driving their machine, and no folder grant covers that.
+ * Both arrive here the same way, as a capability the welcome did not carry, and
+ * the button is simply not drawn.
+ */
+export function webOfferedHere(capabilities: readonly string[]): boolean {
+  return capabilities.includes(CAPABILITY.web)
+}
+
+/** `http://localhost:<port>/` — what "open it on the machine" means, spelled out. */
+export function localhostUrl(port: number): string {
+  return `http://localhost:${port}/`
+}
+
 /** One port, as a row reads: `3000 · node`, or `3000 · unknown process`. */
 export function portLabel(port: LocalPort): string {
   // `guessed` is the desktop's own word for "I could not name the owner" — see
@@ -264,6 +352,25 @@ export function portLabel(port: LocalPort): string {
   // difference between a screen that reads like a sentence and one that reads
   // like a field dump.
   return port.guessed ? `${port.port} · unknown process` : `${port.port} · ${port.process}`
+}
+
+/** What a finished open says, in one line. */
+export function openSentence(
+  outcome: NonNullable<LocalhostState['openOutcome']>,
+  noun: string,
+): string {
+  if (outcome.kind === 'opened') {
+    // Precise about what happened and where. Not "port 3000 is open" — the page
+    // was opened on somebody else's screen, which is the smaller claim and the
+    // true one, and the whole difference between this and a tunnel.
+    return `Opened localhost:${outcome.port} on the ${noun}.`
+  }
+  // The machine's own words when it gave any. A refusal from there is about that
+  // machine — no window, not your device, a URL it will not open — and inventing
+  // a sentence here would replace a specific remedy with a general one.
+  return outcome.detail === ''
+    ? `The ${noun} did not open localhost:${outcome.port}.`
+    : outcome.detail
 }
 
 /** What a finished check says, in one line. */

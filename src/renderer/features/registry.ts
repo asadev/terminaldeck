@@ -137,17 +137,22 @@ export interface FeatureData {
 export const CONTROL_IDS = [
   'chat.dictate',
   'chat.connectors',
-  'chat.usage',
   /*
    * The usage bar on the session's own chrome — the five-hour window beside the
    * account, for a terminal session as much as a chat one.
    *
-   * A second control under the same feature as `chat.usage`, not a replacement
-   * for it: they are two different readings. That one is what this session has
-   * moved (tokens, requests, context); this one is how much of the account's
-   * subscription window is gone. Both switch off with Usage, because both are
-   * read from the same place — the agent's own output — and a person turning
-   * Usage off means "stop showing me any of this".
+   * It used to be the second of a pair. `chat.usage` was the strip of tokens,
+   * requests and context fill that hung under the chat box, and the two were
+   * kept apart because they are genuinely different readings of different
+   * things. That strip is gone with the rest of the composer's control row —
+   * *"since we have it on top we actually don't need them here"* — so there is
+   * one control again, and it is this one. The reading the strip carried is not
+   * lost: the session inspector shows tokens, cost and context fill, with room
+   * to show them properly.
+   *
+   * The id is not reused for that, and deliberately: `chat.usage` named a place,
+   * and pointing it at a different place would make everyone's saved on/off
+   * choice mean something they did not choose.
    */
   'chrome.usage',
   'window.split',
@@ -306,12 +311,12 @@ export const FEATURES: readonly Feature[] = [
     name: 'Usage',
     summary: 'How many tokens your sessions have moved, and how full each context window is.',
     where:
-      'the bar beside the account on a session’s own chrome, the Usage tile on the Overview page, and the strip under the chat box.',
+      'the bar beside the account on a session’s own chrome, the Usage tile on the Overview page, and the session inspector.',
     default: 'on',
     panels: [],
     widgets: ['cost'],
     commands: [],
-    controls: ['chat.usage', 'chrome.usage'],
+    controls: ['chrome.usage'],
     sections: [],
     settings: [],
     // The numbers are read out of the agent's own transcripts on every look.
@@ -359,11 +364,12 @@ export const FEATURES: readonly Feature[] = [
     id: 'mcp',
     name: 'MCP servers',
     summary: 'The tool servers your agents can reach, and what each one exposes.',
-    // "the Add menu", not "the ＋ menu". The button is labelled Add on screen,
-    // and U+FF0B — a fullwidth plus, from a font that has no other fullwidth
-    // character in this window — is a glyph twice the width of the sentence
-    // around it. A place is named the way it is written on the button.
-    where: 'the MCP servers row under Integrations, and Connectors in the Add menu in the chat box.',
+    // Named for where it is now. Connectors was a row inside the chat box's Add
+    // menu until 2026-08-18, and this sentence said so; the row went with the
+    // rest of the controls the composer was duplicating from the window's bar,
+    // and a `where` that names a place somebody cannot find is worse than one
+    // that is vague.
+    where: 'the MCP servers row under Integrations, and the Connectors chip on a session’s own bar.',
     // On. The page says "nothing configured" for somebody with no MCP server,
     // which is a better answer than a row that is not there.
     default: 'on',

@@ -1,65 +1,65 @@
 /**
- * Playing a tour: navigate, point, wait for the reader, move on.
+ * Playing a tour: navigate, point, move on — at machine speed, and then answer.
  *
- * This is the thing `DRIVING-MODE.md` §0 means by *"the app plays it"*. The
- * pacing engine underneath it was built first and separately — `estimate.ts`
- * says how long a stop takes, `pacer.ts` is the playhead, `interruption.ts`
- * watches the reader, `usePacer.ts` turns frames into ticks — and every one of
- * those is pure and testable against a fake clock. What was missing was the part
- * that knows what a session is, and this is it.
+ * ## The inversion this file was rewritten for
+ *
+ * It used to stop at each place *for him to read*, held there for as long as
+ * `estimate.ts` thought the text needed. Asad, 2026-08-17:
+ *
+ *   > *"Currently it stays for us to read. Let's not make it for us to read. It
+ *   > will do it in a way that it is reading it in very fast mode — it is going
+ *   > here and there, it is going to all of those sessions… and we can see which
+ *   > words it is making focus… it is scanning everything very fast and we can
+ *   > see like a machine is working, a proper feel of high-speed intelligence."*
+ *
+ * So there are two phases and the reading is at the **end**:
+ *
+ * 1. **The scan.** {@link SCAN_HOLD_MS} on each stop, whatever it says. Nothing
+ *    here measures text and nothing waits for a person.
+ * 2. **The answer.** The last stop takes the screen back to the copilot's own
+ *    window, where the app's record renders as one structured response grouped
+ *    by session. That is what gets read, once, at whatever pace suits.
+ *
+ * The reading-time model is not turned down to zero — it is deleted. `shared/scan.ts`
+ * carries the argument for why a dial that no longer moves anything is worse
+ * than no dial at all.
  *
  * ## The loop, in the order it happens
  *
- * For each stop:
- *
  *  1. **Dim off.** A scrim sliding across the window while a pane is also
  *     scrolling is two motions competing, and it repaints the shadow's quad on
- *     every frame of the journey. `setLit(false)` keeps the target and takes the
- *     scrim down; the overlay is still measuring underneath.
+ *     every frame of the journey.
  *  2. **Navigate.** Bring the session to the front, put it in the pane the stop
  *     needs — terminal for a `screen` stop, conversation for a `message` one —
  *     and, for a terminal, scroll the buffer so the quote is on screen.
  *  3. **Point.** `setFocus` hands the overlay the target; the overlay resolves
  *     it, chases it while the layout settles, and reports what it managed.
  *  4. **Arrive.** On the first report that the box is drawn, the dim comes up
- *     and *only then* does the clock start. Counting travel as reading time is
- *     how a tour that looks correctly paced on paper feels rushed on screen.
- *  5. **Wait.** The pacing engine owns this entirely. Nothing here has a timer
- *     for reading.
+ *     and the hold starts. Travel is still not counted — at 260 ms a stop, a
+ *     tab switch charged against the hold would eat most of it.
+ *  5. **Hold, and go.** No estimate, no ring, no waiting on anybody.
  *
  * ## Arrival is not optional
  *
  * A stop that never resolves would leave the playhead in `travelling` for ever,
- * burning frames over a fleet of terminals that are each painting a canvas. So
- * arrival is guaranteed: {@link ARRIVE_GRACE_MS} after entering a stop, the tour
- * arrives regardless, marks the stop **degraded**, and says why — *"this one is
- * in vim; here is the text"*. `DRIVING-MODE.md` §2d is explicit that this beats
- * the alternative: *"a tour that quietly stops boxing is worse than one that
- * says why."*
+ * burning frames over a fleet of terminals each painting a canvas. So arrival is
+ * guaranteed: {@link ARRIVE_GRACE_MS} after entering a stop the scan arrives
+ * regardless, marks the stop **degraded**, and says why — *"this one is in vim;
+ * here is the text"*. A scan that quietly stops boxing is worse than one that
+ * says why.
  *
  * ## Two index spaces, and why there have to be two
  *
  * The record on disk is indexed by the **plan**: stop 0 is the first stop the
  * copilot wrote, for ever, whatever happens next. The playhead is indexed by
- * what is **currently playable**, because resuming after a long pause can find
- * that a session has closed and drop stops out of the middle. Collapsing the two
+ * what is **currently playable**, because carrying on after a hold can find that
+ * a session has closed and drop stops out of the middle. Collapsing the two
  * would mean either a record whose indices shuffle — so "stopped after 4 of 11"
  * names a different stop than it did an hour ago — or a playhead that has to
- * step over holes, which every selector in `pacer.ts` would need to learn about.
+ * step over holes, which every selector in the reducer would need to learn.
  *
  * So there is a plan, fixed, and an {@link order} into it. `order[playhead]` is
  * the record index. Two arrays and one lookup, in one file.
- *
- * ## What resuming re-checks, and what it cannot
- *
- * Resuming re-resolves the anchor before it moves, so a session that has since
- * closed, or a quote that has scrolled out of a buffer, drops rather than
- * pointing at nothing. It does **not** re-check the `why` — that is
- * `importance.ts`'s judgement, it lives in the main process against data this
- * window does not hold, and a second copy here is the exact duplication that
- * module exists to prevent. A tour is a briefing about the last few minutes; the
- * reasons were true when it was validated, and the honest thing this side can
- * add is whether the evidence is still on screen.
  */
 
 import { clearFocus, setFocus, setLit } from '../../driving/focus-controller'
@@ -70,52 +70,48 @@ import {
   type FocusTarget,
 } from '../../driving/focus-target'
 import type { FocusReport } from '../../driving/FocusOverlay'
-import { isPaceControlTarget, isTransportKey } from './interruption'
-import { normalizeSpeed, type ReadingSpeed } from './estimate'
-import { isRunning } from './pacer'
-import { attachInterruption, browserPaceEngine, type PaceEngine } from './usePacer'
+import { isDriveControlTarget, isTransportKey } from './interruption'
+import { attachInterruption, browserScanEngine, type ScanEngine } from './scan-engine'
 import { navigator as driveNavigator } from './navigator'
-import {
-  focusOf,
-  paneFor,
-  pacedOf,
-  type TourMessage,
-  type TourRecord,
-  type TourStop,
-} from './tour'
-import type { PacerState } from './pacer'
+import { focusOf, paneFor, type TourMessage, type TourRecord, type TourStop } from './tour'
+import { isScanning, type ScanState } from '../../../shared/scan'
 
 /* ------------------------------------------------------------- constants -- */
 
 /**
- * How long a stop may spend failing to resolve before the tour arrives anyway.
+ * How long a stop may spend failing to resolve before the scan arrives anyway.
  *
  * Long enough to cover a whole navigation: a tab switch, a pane mode change,
  * `TerminalView`'s `ResizeObserver` firing, xterm refitting, and the overlay's
  * own 380 ms chase window on top of that. Short enough that a stop which
- * genuinely cannot be boxed — a session sitting in `vim`, a browser page, a
- * quote that has scrolled out of the buffer — does not read as the app having
- * hung before it says so.
+ * genuinely cannot be boxed — a session in `vim`, a browser page, a quote that
+ * has scrolled out of the buffer — does not read as the app having hung.
+ *
+ * Unchanged by the move to machine speed, and worth saying why: this is a
+ * *failure* budget, not a pace. In the ordinary case the overlay resolves
+ * synchronously inside its own effect, so arrival lands on the first frame and
+ * this timer never fires. It only ever costs anything on a stop that was never
+ * going to be boxable, and there the alternative is a scan that stalls.
  */
 export const ARRIVE_GRACE_MS = 900
 
 /**
- * A pause longer than this makes resuming re-check *every* remaining stop rather
- * than only the next one.
+ * A hold longer than this makes carrying on re-check *every* remaining stop
+ * rather than only the next one.
  *
- * Five minutes, from `DRIVING-MODE.md` §8. Under it, the stop being resumed onto
- * is the only one worth re-resolving; over it the fleet has moved on, and
- * walking somebody into four stops that are no longer there is worse than
- * telling them once that three of the remaining seven have gone.
+ * Five minutes. Under it, the stop being resumed onto is the only one worth
+ * re-resolving; over it the fleet has moved on, and walking somebody into four
+ * stops that are no longer there is worse than saying once that three of the
+ * remaining seven have gone.
  */
 export const RESUME_STALE_MS = 5 * 60_000
 
-/** The attribute the driving panel wears, so its own clicks do not pause. */
+/** The attribute the driving panel wears, so its own clicks do not interrupt. */
 export const PANEL_ATTR = 'data-drive-panel'
 
 /* ----------------------------------------------------------------- shapes -- */
 
-/** What the panel draws: everything the pacing engine does not already say. */
+/** What the panel draws: everything the scan reducer does not already say. */
 export interface TourView {
   record: TourRecord
   /** The stops still playable, in play order. Indexes match the playhead. */
@@ -123,23 +119,21 @@ export interface TourView {
   /**
    * `recordIndexes[playheadIndex]` is that stop's index in the record.
    *
-   * Published rather than left implicit because the two diverge the first time
-   * a resume drops a stop out of the middle, and everything the panel reads out
+   * Published rather than left implicit because the two diverge the first time a
+   * recount drops a stop out of the middle, and everything the panel reads out
    * of the record — the session's title, whether it has been shown — is keyed
-   * the record's way. See the header for why there are two index spaces at all.
+   * the record's way.
    */
   recordIndexes: readonly number[]
-  pacer: PacerState
+  scan: ScanState
   /** Set while the stop on screen is navigable but not boxable. */
   degraded: { index: number; why: FocusFailure } | null
-  /** Stops this window dropped on resume, on top of the ones main dropped. */
+  /** Stops this window dropped on carrying on, on top of the ones main dropped. */
   droppedHere: Array<{ title: string; why: FocusFailure }>
-  /** The reader stopped driving and asked for the rest as a list. */
-  skimming: boolean
   ended: boolean
 }
 
-export type TourCommand = 'back' | 'toggle' | 'next' | 'stop' | 'skim'
+export type TourCommand = 'back' | 'toggle' | 'next' | 'stop'
 
 export interface TourReporter {
   (message: {
@@ -152,10 +146,16 @@ export interface TourReporter {
 export interface PlayerDeps {
   /** Told what the window did, so the record on disk stays current. */
   report: TourReporter
-  /** The reader's declared pace. */
-  speed?: ReadingSpeed
+  /**
+   * The copilot's own session, so the scan can end where the answer is.
+   *
+   * *"Once it is all done it takes us back to its own chat box."* Null when the
+   * copilot is not running in this window — the scan then simply stops where it
+   * is, which is honest: there is no chat to go back to.
+   */
+  copilotSessionId?: string | null
   /** Injected for tests; a real frame-driven engine otherwise. */
-  engine?: PaceEngine
+  engine?: ScanEngine
   now?(): number
 }
 
@@ -166,11 +166,10 @@ export interface RunningTour {
   /**
    * Go straight to a stop, by its index in {@link TourView.stops}.
    *
-   * The manual override for "I want to see number seven again", and the reason
-   * every row in the panel is a button. Clamped by `pacer.ts` rather than here,
-   * so a click on a row that a resume has just dropped lands on the last stop
-   * instead of ending the tour — `next` is the only thing allowed to walk off
-   * the end.
+   * The manual override for "wait, what was that one", and the reason every row
+   * in the trace is a button. It matters more at machine speed than it did at
+   * reading speed: the trace fills faster than anybody can follow, so clicking
+   * back into it is the primary way a person interacts with a scan at all.
    */
   jump(index: number): void
   /** The overlay's verdict on the current target. This is what makes it arrive. */
@@ -183,10 +182,10 @@ export interface RunningTour {
 
 export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
   const now = deps.now ?? (() => Date.now())
-  const engine = deps.engine ?? browserPaceEngine(normalizeSpeed(deps.speed))
+  const engine = deps.engine ?? browserScanEngine()
   const listeners = new Set<() => void>()
 
-  /** Fixed for the life of the tour. Indices here are the record's indices. */
+  /** Fixed for the life of the scan. Indices here are the record's indices. */
   const plan: readonly TourStop[] = message.stops
   /** Which of them are still playable, in play order. See the header. */
   let order: number[] = plan.map((_, index) => index)
@@ -196,10 +195,9 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
     record,
     stops: order.map((index) => plan[index]),
     recordIndexes: order,
-    pacer: engine.getState(),
+    scan: engine.getState(),
     degraded: null,
     droppedHere: [],
-    skimming: false,
     ended: false,
   }
 
@@ -209,7 +207,7 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
   let graceTimer: ReturnType<typeof setTimeout> | null = null
   /** The last failure the overlay reported for the stop being entered. */
   let lastFailure: FocusFailure | null = null
-  let pausedAt: number | null = null
+  let heldAt: number | null = null
   let ended = false
 
   const recordIndex = (playIndex: number): number => order[playIndex] ?? -1
@@ -222,7 +220,7 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
       record,
       stops: order.map((index) => plan[index]),
       recordIndexes: order,
-      pacer: engine.peek(),
+      scan: engine.peek(),
       ended,
     }
     for (const listener of listeners) listener()
@@ -249,9 +247,11 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
         stop.index === index
           ? {
               ...stop,
-              // Wall-clock from the moment the box was drawn: the reader's own
-              // time, which is not the same as the estimate and is the only
-              // number worth keeping. Null when the stop was never shown.
+              // Wall-clock from the moment the box was drawn. Kept even though
+              // nothing paces against it any more: it is the only evidence that
+              // the screen actually held this stop for the time it claims, which
+              // is what makes the record an account rather than a restatement of
+              // the plan.
               dwellMs: shown === null ? null : Math.max(0, now() - shown),
               degraded: failure !== null,
               degradedWhy: failure === null ? null : degradeSentence(failure),
@@ -289,7 +289,7 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
          *
          * Both orders work and this one flickers less: setting the mode on a
          * session that is not in front changes nothing anybody can see, whereas
-         * bringing it forward first shows one frame of the pane the reader is
+         * bringing it forward first shows one frame of the pane the person is
          * not being taken to.
          */
         nav.setSessionMode(stop.sessionId, pane)
@@ -313,9 +313,8 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
       /*
        * The window does not know that anchor — the one failure this renderer's
        * mirror of the plan can produce, and the reason `tour.ts` returns null
-       * rather than guessing. Point at the session's row instead, so the reader
-       * is at least looking at the right session, and let the grace timer mark
-       * it degraded.
+       * rather than guessing. Point at the session's row instead, so at least
+       * the right session is lit, and let the grace timer mark it degraded.
        */
       lastFailure = 'anchor-missing'
       setFocus({ kind: 'anchor', anchor: { at: 'session-row', sessionId: stop.sessionId } }, false)
@@ -330,13 +329,12 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
    *
    * Only terminals, and only when the region is not already visible —
    * `scrollToFocus` checks that itself, because scrolling a passage that is
-   * already on screen moves the reader's page for no reason, which during a tour
-   * reads as the app twitching.
+   * already on screen moves the page for no reason.
    *
    * A chat bubble needs no equivalent here: `ChatView` watches the focus store
    * and scrolls its own scroller, because it is the only thing that can also
    * clear its stick-to-bottom flag — without which the next line of output on a
-   * live session yanks the view back to the end while somebody is mid-sentence.
+   * live session yanks the view back to the end.
    */
   const scrollIfNeeded = (target: FocusTarget): void => {
     if (target.kind !== 'terminal') return
@@ -344,7 +342,7 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
       scrollToFocus(createAnchor(target))
     } catch (error) {
       // A terminal mounted but not laid out can throw out of the measurement.
-      // That is a degraded stop, not a broken tour.
+      // That is a degraded stop, not a broken scan.
       console.error('[driving] could not scroll to the quote:', error)
     }
   }
@@ -400,9 +398,8 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
    * Follow the playhead.
    *
    * The engine is the authority on *when*; this is what happens as a result.
-   * Subscribing rather than driving it is what keeps every timing rule — the
-   * hover hold, the stall detection, the learned speed — inside the pure module
-   * where it can be tested against a fake clock.
+   * Subscribing rather than driving it is what keeps every timing rule inside
+   * the pure module where it can be tested against a fake clock.
    */
   const unsubscribe = engine.subscribe(() => {
     if (ended) return
@@ -413,13 +410,13 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
       return
     }
 
-    if (state.index !== pointedAt && isRunning(state)) {
+    if (state.index !== pointedAt && isScanning(state)) {
       if (pointedAt >= 0) noteLeft(pointedAt, lastFailure)
       enterStop(state.index)
     }
 
-    if (state.status === 'paused' && pausedAt === null) pausedAt = now()
-    if (state.status !== 'paused' && pausedAt !== null) pausedAt = null
+    if (state.status === 'paused' && heldAt === null) heldAt = now()
+    if (state.status !== 'paused' && heldAt !== null) heldAt = null
 
     publish()
   })
@@ -430,31 +427,31 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
     window,
     document,
     now: () => performanceNow(),
-    isOwnControl: (target) => isPaceControlTarget(target) || isPanelTarget(target),
+    isOwnControl: (target) => isDriveControlTarget(target) || isPanelTarget(target),
     isCommandKey: isTransportKey,
     isHidden: () => document.visibilityState === 'hidden',
     // A collapsed selection is a focus change, not a person reading with a
-    // finger on the page. Without this the panel taking focus paused the tour
+    // finger on the page. Without this the panel taking focus stopped the scan
     // before it had drawn its first box — see `hasSelection` in
     // `interruption.ts` for the whole of it.
     hasSelection: () => (document.getSelection()?.toString() ?? '') !== '',
   })
 
   /**
-   * The four keys the tour owns while it is playing.
+   * The four keys the scan owns while it is playing.
    *
    * Capture phase and `stopImmediatePropagation`, which is the part worth
-   * justifying: during a tour these four chords belong to the tour, and letting
+   * justifying: during a scan these four chords belong to the scan, and letting
    * them through would type a space into whichever pty happens to hold focus.
    * That is the closest thing there is to driving mode typing into a session,
-   * and `DRIVING-MODE.md` §7 spends a sentence on driving never typing.
+   * and driving never types.
    *
-   * Scoped as tightly as it can be: only while a tour is running, only these
+   * Scoped as tightly as it can be: only while a scan is running, only these
    * four keys, and only with no modifier held, so every ⌘ chord in the app still
-   * works. The frame the tour ends, the keys go back.
+   * works. The frame the scan ends, the keys go back.
    */
   const onKey = (event: KeyboardEvent): void => {
-    if (ended || !isRunning(engine.peek())) return
+    if (ended || !isScanning(engine.peek())) return
     if (event.metaKey || event.ctrlKey || event.altKey) return
     if (!isTransportKey(event.key)) return
     event.preventDefault()
@@ -491,36 +488,22 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
         if (engine.peek().status === 'paused') resume()
         else engine.dispatch({ kind: 'pause', at, reason: 'asked' })
         return
-      case 'skim':
-        /*
-         * Stop driving, keep the panel, hand over the rest as a list.
-         *
-         * The honest answer to a reader who is faster than the tour: the fastest
-         * version of a tour is not a faster tour, it is the document. The focus
-         * comes off because nothing is being pointed at any more — leaving a box
-         * up over a list nobody is being walked through would be the overlay
-         * outliving its reason.
-         */
-        publish({ skimming: true })
-        engine.dispatch({ kind: 'pause', at, reason: 'asked' })
-        clearFocus()
-        return
       case 'stop':
         end()
     }
   }
 
   /**
-   * Carry on — after re-checking that what was paused on is still there.
+   * Carry on — after re-checking that what was held on is still there.
    *
-   * `DRIVING-MODE.md` §8: resuming re-validates before it moves, and re-validates
-   * *everything* remaining if the pause was long. What this side can answer is
-   * whether the evidence is still on screen; the reasons were checked in the main
-   * process and are not re-litigated here.
+   * What this side can answer is whether the evidence is still on screen; the
+   * reasons were checked in the main process against data this window does not
+   * hold, and a second copy here is the exact duplication `importance.ts` exists
+   * to prevent.
    */
   const resume = (): void => {
     const state = engine.peek()
-    const stale = pausedAt !== null && now() - pausedAt > RESUME_STALE_MS
+    const stale = heldAt !== null && now() - heldAt > RESUME_STALE_MS
     const from = state.index
     const through = stale ? order.length - 1 : from
 
@@ -543,13 +526,13 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
 
     if (lost.length === 0) {
       /*
-       * Redraw before starting the clock.
+       * Redraw before starting the hold.
        *
-       * Resuming has to leave the reader looking at the thing they paused on
-       * rather than at the thing after it, and the overlay may have been moved
-       * or taken down while they were away — so the stop is entered again, which
-       * re-navigates, re-points and re-arrives, and only then does the engine's
-       * resume take effect.
+       * Carrying on has to leave the person looking at the thing they stopped
+       * on rather than at the thing after it, and the overlay may have been
+       * moved or taken down while they were away — so the stop is entered again,
+       * which re-navigates, re-points and re-arrives, and only then does the
+       * engine's resume take effect.
        */
       enterStop(from)
       engine.dispatch({ kind: 'resume', at: performanceNow() })
@@ -562,23 +545,41 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
       end()
       return
     }
-    // Where the reader lands: the same stop if it survived, otherwise the next
+    // Where the person lands: the same stop if it survived, otherwise the next
     // one that did. Counting the losses before `from` is what keeps that the
     // *same* stop rather than one shifted by however many vanished above it.
     const landing = Math.min(from - lost.filter((index) => index < from).length, kept.length - 1)
     order = kept
     publish({ droppedHere: [...view.droppedHere, ...dropped] })
     engine.dispatch({
-      kind: 'play',
+      kind: 'recount',
       at: performanceNow(),
-      stops: order.map((index) => pacedOf(plan[index])),
-      travel: true,
+      count: order.length,
+      index: Math.max(0, landing),
     })
-    engine.dispatch({ kind: 'jump', at: performanceNow(), index: Math.max(0, landing), travel: true })
+    engine.dispatch({ kind: 'resume', at: performanceNow() })
     enterStop(Math.max(0, landing))
   }
 
   /* -------------------------------------------------------------- the end -- */
+
+  /**
+   * Take the screen back to the copilot, where the answer is.
+   *
+   * This is the second half of the feature and it is one line, because the
+   * answer itself is not built here: the app's record is already on disk, and
+   * `ScanAnswer` in the copilot's own window renders it grouped by session. All
+   * this has to do is put that window in front, which is exactly what he asked
+   * for — *"once it is all done it takes us back to its own chat box"* — and
+   * nothing more, because a scan that also scrolled or selected something in the
+   * chat would be one more unrequested movement at the moment he wanted movement
+   * to stop.
+   */
+  const returnToCopilot = (): void => {
+    const id = deps.copilotSessionId ?? null
+    if (id === null) return
+    driveNavigator()?.selectTab(id)
+  }
 
   const finish = (): void => {
     if (ended) return
@@ -598,16 +599,17 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
       /*
        * Only when it really was cut short.
        *
-       * A tour that reached its last stop has nothing to confess, and "stopped
-       * after 11 of 11" is a sentence that makes a completed tour look
-       * interrupted. Counted from the stops actually shown rather than from the
-       * playhead, because the playhead moves during a rewind and the number
-       * being reported is "how much did you see".
+       * A scan that reached its last stop has nothing to confess, and "stopped
+       * after 11 of 11" makes a completed scan look interrupted. Counted from
+       * the stops actually shown rather than from the playhead, because the
+       * playhead moves during a step back and the number being reported is "how
+       * much did you see".
        */
       stoppedAfter: shown > 0 && shown < record.stops.length ? shown - 1 : null,
     }
     deps.report({ kind: 'ended', tourId: record.id, record })
     engine.destroy()
+    returnToCopilot()
     publish()
   }
 
@@ -620,12 +622,7 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
   /* ---------------------------------------------------------------- start -- */
 
   deps.report({ kind: 'started', tourId: record.id, record })
-  engine.dispatch({
-    kind: 'play',
-    at: performanceNow(),
-    stops: order.map((index) => pacedOf(plan[index])),
-    travel: true,
-  })
+  engine.dispatch({ kind: 'play', at: performanceNow(), count: order.length })
   enterStop(0)
 
   return {
@@ -640,13 +637,13 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
     jump(index: number) {
       if (ended) return
       /*
-       * A jump pauses, and that is not the same decision `next` makes.
+       * A jump holds, and that is not the same decision `next` makes.
        *
-       * Pressing → means "I have finished with this one" and the tour carries
-       * on counting. Clicking a row three stops back means "wait, show me that
-       * again", which is the same evidence a rewind carries — the reader missed
-       * something, and answering that with another countdown is the wrong
-       * response. `pacer.ts` draws the same line between → and ←.
+       * Pressing → means "carry on from there" and the scan keeps running.
+       * Clicking a row three stops back means "wait, show me that again", which
+       * at machine speed is the only way anybody can look at a single stop —
+       * answering it by scanning onward two hundred milliseconds later would
+       * make the trace unclickable in practice.
        */
       engine.dispatch({ kind: 'jump', at: performanceNow(), index, travel: true })
       engine.dispatch({ kind: 'pause', at: performanceNow(), reason: 'stepped-back' })
@@ -682,11 +679,11 @@ function isPanelTarget(target: unknown): boolean {
 }
 
 /**
- * Why there is no box, in the reader's terms.
+ * Why there is no box, in the person's terms.
  *
  * Every one of these is a state the design predicts and names, and each says
  * what is true rather than apologising. The `alternate-buffer` sentence is the
- * one `DRIVING-MODE.md` writes out itself: *"this one is in vim; here is the
+ * one the design document writes out itself: *"this one is in vim; here is the
  * text."*
  */
 export function degradeSentence(why: FocusFailure): string {

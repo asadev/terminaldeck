@@ -60,6 +60,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   resize: true,
   ping: true,
   create: true,
+  close: true,
   ports: true,
   'tunnel.open': true,
   'tunnel.close': true,
@@ -67,6 +68,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'net.data': true,
   'net.ack': true,
   'net.close': true,
+  'web.open': true,
   'upload.begin': true,
   'upload.data': true,
   'upload.end': true,
@@ -104,9 +106,11 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   error: true,
   pong: true,
   created: true,
+  closed: true,
   folders: true,
   ports: true,
   'tunnel.opened': true,
+  'web.opened': true,
   'tunnel.closed': true,
   'net.data': true,
   'net.ack': true,
@@ -144,8 +148,15 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'create', cwd: '/Users/apple/Projects/terminaldeck', cols: 100, rows: 30 },
   { t: 'create', provider: 'shell' },
   { t: 'create', cwd: '/Users/apple/Projects/terminaldeck', provider: 'claude', cols: 100, rows: 30 },
+  // `create`'s opposite number. An id and nothing else — no signal, no force
+  // flag, no reason string — because none of those are a phone's to choose.
+  { t: 'close', id: SESSION_ID },
   { t: 'ports' },
   { t: 'tunnel.open', id: 'tun-1', port: 3000 },
+  // The verb behind "open it on the machine" — the thing a browser tab cannot do
+  // for itself, and the whole of what the web client's localhost screen was
+  // missing.
+  { t: 'web.open', url: 'http://localhost:5173/' },
   { t: 'tunnel.close', id: 'tun-1' },
   { t: 'net.open', ch: 'c1', tunnel: 'tun-1' },
   { t: 'net.data', ch: 'c1', data: Buffer.from('GET / HTTP/1.1\r\n\r\n').toString('base64') },
@@ -219,6 +230,7 @@ const VALID_SERVER: ServerMessage[] = [
   { t: 'sessions', sessions: [] },
   { t: 'ports', ports: [{ port: 3000, process: 'node', guessed: false }] },
   { t: 'tunnel.opened', id: 'tun-1', port: 3000 },
+  { t: 'web.opened', url: 'http://localhost:5173/' },
   { t: 'tunnel.closed', id: 'tun-1', message: 'Stopped from the desktop.' },
   { t: 'net.data', ch: 'c1', data: Buffer.from('HTTP/1.1 200 OK\r\n\r\n').toString('base64') },
   { t: 'net.ack', ch: 'c1', bytes: 19 },
@@ -232,6 +244,7 @@ const VALID_SERVER: ServerMessage[] = [
   { t: 'error', code: 'unknown-session', message: 'That session is not open.' },
   { t: 'pong' },
   { t: 'created', session: SESSION },
+  { t: 'closed', id: SESSION_ID },
   { t: 'folders', folders: ['/Users/apple/Projects/terminaldeck'] },
   // Empty is a frame that gets sent: it is a person having removed the last
   // folder from a device, which is a different message from never having chosen

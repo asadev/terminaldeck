@@ -16,12 +16,22 @@ import { detectProviders } from './providers'
 import { lookupCommand, registerCustomAgentsIpc } from './custom-agents'
 import { currentPlatform } from './platform/host'
 import { electronPaths, installPaths } from './platform/paths'
+/*
+ * The held list travels on a channel named in the module that owns it — see
+ * `SESSIONS_HELD_CHANNEL` there for why it is exported rather than declared
+ * beside the handler down in this file, which is a fact about
+ * `preload/contract.test.ts` as much as about the house rule.
+ */
+import { savedFrom, SESSIONS_HELD_CHANNEL } from './session-held'
 import {
   conversationOnDisk,
+  conversationScope,
   folderExists,
+  personalSessions,
   planRestore,
   restoreOpenSessions,
   type RestoreDecision,
+  type SavedSession,
 } from './session-restore'
 import { store, type Preferences } from './store'
 import { pickerStartDirectory } from './project-picker'
@@ -41,6 +51,7 @@ import {
 } from './dev-server'
 import { autoUpdater } from 'electron-updater'
 import { registerAgentControlsIpc } from './agent-controls'
+import { registerVoiceIpc } from './voice'
 import { registerUpdateIpc } from './updates/updater'
 import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
@@ -67,10 +78,31 @@ import { registerDashboardIpc } from './dashboard-store'
 import { registerArtifactsIpc } from './artifacts'
 import { registerSessionSearchIpc } from './session-search'
 import { registerAlertsIpc } from './alerts'
-import { registerProfilesIpc, getState as profilesState, resolveProfile } from './profiles'
+import {
+  registerProfilesIpc,
+  findProfile,
+  getState as profilesState,
+  resolveProfile,
+} from './profiles'
+/*
+ * Switching the account a *running* session is on. The channels are named in
+ * the module that owns the feature, for the same two reasons the held list's is
+ * — the house rule, and `preload/contract.test.ts`, which can only resolve a
+ * channel registered through an exported constant.
+ */
+import {
+  planSwitch,
+  SESSION_SWITCH_CHANNEL,
+  SESSION_SWITCH_PLAN_CHANNEL,
+  startFailed,
+  survivedStart,
+  switchRefusal,
+  type SwitchPlan,
+} from './session-switch'
 import { registerSignInIpc } from './profiles-signin'
 import { copilotState, registerCopilotIpc } from './copilot-session'
-import { copilotPaths } from './copilot-home'
+import { appendCopilotAction, copilotPaths } from './copilot-home'
+import { COPILOT_HOME_SETTING, registerCopilotFolderIpc } from './copilot-folder'
 import { registerCopilotInspectIpc } from './copilot-inspect'
 import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
 import { registerDeckignoreIpc } from './deckignore'
@@ -93,12 +125,16 @@ import {
   REMOTE_ENABLED_KEY,
 } from './settings-extra'
 import { registerBrowserSessionIpc } from './browser-session'
+import { registerBrowserProfileIpc } from './browser-profiles'
+import { registerBrowserPasswordIpc } from './browser-passwords'
+import { registerBrowserSignInIpc } from './browser-signin'
 import { registerBrowserViewIpc } from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
 import { registerNotificationIpc } from './os-notifications'
 import { registerLidAwakeIpc } from './lid-awake'
 import { logger } from './app-log'
 import { registerLogIpc } from './app-log-ipc'
+import { SESSION_REMOVED_CHANNEL } from './live-push'
 import { traceIpc, TRACE_SETTING } from './ipc-trace'
 import { buildMenu, hidesMenuBar } from './menu'
 import { overlayFor, resolveAppearance, titleBarChrome, type Appearance } from './title-bar'
@@ -219,13 +255,29 @@ let rendererAlive = false
  * ordinary case of a window that has gone while the app keeps running, which on
  * macOS is most of the time.
  */
-function send(channel: string, ...args: unknown[]): void {
-  if (quitting || !rendererAlive) return
+/*
+ * It answers whether it sent, and that answer is load-bearing for exactly one
+ * caller.
+ *
+ * Every other push in this process ignores the return, and should: a status
+ * update for a window that has gone is nothing to report. `settings.write` is
+ * different — it has to tell the copilot whether the value it just saved is
+ * *on the screen* or only on the disk, and those are different sentences. The
+ * only thing that knows is this function, which is the one place that holds the
+ * liveness flag and the window. See `live-push.ts`.
+ *
+ * `false` is never "the send failed": the four checks below are all forms of
+ * "there is no window to tell", which is a true and ordinary state — on macOS an
+ * app with every window closed is still running.
+ */
+function send(channel: string, ...args: unknown[]): boolean {
+  if (quitting || !rendererAlive) return false
   const window = mainWindow
-  if (!window || window.isDestroyed()) return
+  if (!window || window.isDestroyed()) return false
   const contents = window.webContents
-  if (!contents || contents.isDestroyed()) return
+  if (!contents || contents.isDestroyed()) return false
   contents.send(channel, ...args)
+  return true
 }
 
 /**
@@ -358,6 +410,29 @@ const core = createHostCore({
     // session goes quiet and cancels it the moment it says anything.
     routines.engine.noteSessionStatus(id, status)
     send('session:status', id, status)
+  },
+  /*
+   * The row goes when the session goes, whoever ended it.
+   *
+   * The window only ever learned about an ending it caused: `closeTabNow` calls
+   * `killSession` and removes the row in the same breath, and there was no
+   * subscription for anything else. So a session ended from any other route
+   * stayed in the sidebar forever, pointing at a pty this process had already
+   * dropped.
+   *
+   * Watched on 2026-08-18 in the capability audit: the copilot ran
+   * `sessions_stop`, `sessions_list` came back holding only the copilot, and
+   * *"Copilot sessions → Session 1"* was still there — a row that could not be
+   * typed into, re-attached or closed by anything except quitting the app.
+   *
+   * `replaced` is filtered out here rather than in the renderer, because this is
+   * the side that knows: it is the account switch, which stops one process and
+   * starts another *in the same tab*, and the swap the window does finds the old
+   * row by id. See {@link RemovalReason}.
+   */
+  onSessionRemoved: (id, reason) => {
+    if (reason === 'replaced') return
+    send(SESSION_REMOVED_CHANNEL, id)
   },
   /*
    * Every session, so a routine can be refused when its own work would start it.
@@ -695,13 +770,88 @@ let restored = false
  * every pty running and every tab gone, with no way back to a session that is
  * still alive. After this, the tabs come back with it.
  */
+/**
+ * How a remembered session is turned into a decision — at launch, and again
+ * every time somebody presses Try again.
+ *
+ * A named function rather than the argument expression it used to be, because
+ * there are now two callers and they must not diverge. The retry has to ask the
+ * *same* questions in the *same* order as the launch did — is the folder there,
+ * can this agent continue at all, which login's transcripts, is there a
+ * conversation — or pressing the button would start a subtly different session
+ * from the one that failed, which is the class of difference nobody notices
+ * until it is a bug report.
+ */
+const planSaved = (sessions: readonly SavedSession[]): Promise<RestoreDecision[]> =>
+  planRestore(sessions, {
+    // Asked about the folder as Windows can see it. Without the translation
+    // every session that was running inside a distro is planned as "its folder
+    // is gone" and dropped, which is the app losing a day's tabs and explaining
+    // it with a sentence that is not true.
+    folderExists: (cwd) => folderExists(statablePath(cwd)),
+    // `core.canContinue`, not `PROVIDERS[provider].resumeArgs`: the table has
+    // only the agents this build ships, so a restored session on an agent the
+    // person added threw a `TypeError` here and took the whole restore — every
+    // other tab included — down with it.
+    canContinue: core.canContinue,
+    /*
+     * Resolved exactly the way `startSession` resolves it, and that is the
+     * point: the directory searched for a conversation has to be the directory
+     * the restored session will then write to, or the answer is about a
+     * different login than the one coming back.
+     *
+     * Passing `conversationOnDisk` by reference used to be enough — it took an
+     * optional config directory and fell back to the app's own. That fallback is
+     * `~/.claude`, so every session that ran as a profile was asked about the
+     * wrong store, answered "no conversation" and came back blank with its
+     * transcript sitting untouched on disk. The profile is the whole reason the
+     * transcripts moved.
+     */
+    configDir: (session) =>
+      resolveProfile(profilesState(), {
+        sessionProfileId: session.profileId ?? undefined,
+        projectPath: session.cwd,
+      }).configDir,
+    conversation: conversationOnDisk,
+  })
+
+/**
+ * Tell the window which sessions are being held.
+ *
+ * The window is allowed not to exist. This runs during launch, before there is
+ * anything to draw a row, and `send` is already a no-op without a window — so
+ * the three callers below do not have to know whether anybody is listening, and
+ * the window gets the list again when it asks on mount.
+ */
+function announceHeld(): void {
+  send(SESSIONS_HELD_CHANNEL, ledger.held.list())
+}
+
 async function hydrateRenderer(): Promise<void> {
   if (!restored) {
     // Set before the await, not after. `did-finish-load` can fire again while
     // the first restore is still spawning — a reload in dev does it routinely —
     // and a second pass would start a second copy of every session.
     restored = true
-    const saved = store().getOpenSessions()
+    /*
+     * What a person had open — which is not always what the list says.
+     *
+     * The copilot is a singleton `ensureCopilot` starts, and it was being
+     * written down like an ordinary tab; two entries for `<userData>/copilot`
+     * were sitting in Asad's `state.json` on 2026-08-17 because it had been
+     * restarted once. Restoring them would start two plain Claude sessions with
+     * none of the copilot's instructions or tools, invisible in the sidebar
+     * because the window filters that folder out, on every launch. `host-core.ts`
+     * stops writing them; `personalSessions` drops the ones already there, and
+     * the next `ledger.flush()` writes the list back without them.
+     *
+     * `copilotPaths(userData)` with no chosen folder on purpose — the app's own
+     * storage, never wherever the copilot has been pointed. See the note on
+     * `personalSessions` for why widening it would throw away real work.
+     */
+    const saved = personalSessions(store().getOpenSessions(), [
+      copilotPaths(app.getPath('userData')).root,
+    ])
 
     /*
      * Every restored folder has to be a known project before the window asks
@@ -745,39 +895,7 @@ async function hydrateRenderer(): Promise<void> {
         // Read now rather than captured at import: the switch can have been
         // turned off since the last launch.
         enabled: () => store().getPreferences().restoreSessions,
-        plan: (sessions) =>
-          planRestore(sessions, {
-            // Asked about the folder as Windows can see it. Without the
-            // translation every session that was running inside a distro is
-            // planned as "its folder is gone" and dropped, which is the app
-            // losing a day's tabs and explaining it with a sentence that is not
-            // true.
-            folderExists: (cwd) => folderExists(statablePath(cwd)),
-            // `core.canContinue`, not `PROVIDERS[provider].resumeArgs`: the
-            // table has only the agents this build ships, so a restored session
-            // on an agent the person added threw a `TypeError` here and took
-            // the whole restore — every other tab included — down with it.
-            canContinue: core.canContinue,
-            /*
-             * Resolved exactly the way `startSession` resolves it, and that is
-             * the point: the directory searched for a conversation has to be the
-             * directory the restored session will then write to, or the answer is
-             * about a different login than the one coming back.
-             *
-             * Passing `conversationOnDisk` by reference used to be enough — it
-             * took an optional config directory and fell back to the app's own.
-             * That fallback is `~/.claude`, so every session that ran as a
-             * profile was asked about the wrong store, answered "no conversation"
-             * and came back blank with its transcript sitting untouched on disk.
-             * The profile is the whole reason the transcripts moved.
-             */
-            configDir: (session) =>
-              resolveProfile(profilesState(), {
-                sessionProfileId: session.profileId ?? undefined,
-                projectPath: session.cwd,
-              }).configDir,
-            conversation: conversationOnDisk,
-          }),
+        plan: planSaved,
         /*
          * No picture is painted here, and that is a measured decision rather
          * than an omission.
@@ -810,7 +928,36 @@ async function hydrateRenderer(): Promise<void> {
         // ever notice.
         spawn: startSession,
         announce: (meta) => send(SESSION_CREATED_CHANNEL, meta),
-        report: reportRestore,
+        report: (decisions) => {
+          reportRestore(decisions)
+          /*
+           * Keep the ones that did not come back.
+           *
+           * This is the line that stops a bad launch from being permanent. The
+           * ledger is rebuilt from nothing every time the app starts and its
+           * `flush` overwrites `openSessions` wholesale, so a session that
+           * failed to restart used to survive only until the next tab opened —
+           * at which point the app forgot it had ever existed. Asad lost four
+           * Claude sessions in two WSL folders that way on 2026-08-16 and got
+           * two plain terminals in their place. `session-held.ts` has the
+           * account.
+           *
+           * `skip` is held as well as `failed`, and that is deliberate. "The
+           * folder it ran in is no longer on this machine" is *also* usually
+           * temporary — an unmounted volume, a network share not up yet, and,
+           * on this very machine, a WSL distribution that had not started, which
+           * makes `\\wsl.localhost\Ubuntu\…` unreadable for a few seconds after
+           * login. Throwing a day's work away over a folder that is late is the
+           * same mistake in a different coat. Each row can be dismissed, so the
+           * cost of being wrong here is one click.
+           */
+          for (const decision of decisions) {
+            if (decision.outcome === 'failed' || decision.outcome === 'skip') {
+              ledger.held.hold(decision.session, decision.reason)
+            }
+          }
+          announceHeld()
+        },
       })
     } catch (err) {
       // A restore that throws must not take the window's session list with it.
@@ -821,6 +968,10 @@ async function hydrateRenderer(): Promise<void> {
   }
 
   for (const meta of ptys.list()) send(SESSION_CREATED_CHANNEL, meta)
+  // On every hydration, not only the first: a renderer reload throws away the
+  // window's copy of this list exactly as it throws away its tabs, and the rows
+  // it draws are the only place a person is told a session did not come back.
+  announceHeld()
 }
 
 /**
@@ -1011,6 +1162,10 @@ function registerIpc(): void {
   // PtyManager is the SessionAccess: controls are read off the rendered
   // screen and applied by typing, exactly as a person would.
   registerAgentControlsIpc(ipcMain, ptys)
+  // Dictation's transcription key and the request it is for. `userData` is a
+  // thunk rather than a value because `pinUserData` can move the directory, and
+  // a path captured at wiring time would outlive the move.
+  registerVoiceIpc(ipcMain, () => app.getPath('userData'))
   // `write` is what lets plan:refresh run /usage in the session; without it the
   // module reports 'unwired' and the strip hides the control rather than
   // offering a button that does nothing.
@@ -1105,7 +1260,11 @@ function registerIpc(): void {
       delete: (token) => deckControl?.endpoint.callers.delete(token) ?? false,
     },
     endpoint: () => (deckControl === null ? null : { url: deckControl.endpoint.url }),
-    copilotRoot: () => copilotPaths(app.getPath('userData')).root,
+    copilotRoot: () =>
+      copilotPaths(
+        app.getPath('userData'),
+        storedValue(COPILOT_HOME_SETTING) as string | null,
+      ).root,
     spawn: (request) =>
       startCopilotRun(
         {
@@ -1113,6 +1272,9 @@ function registerIpc(): void {
           announce: announceSession,
           stop: (id) => ptys.kill(id),
           userData: () => app.getPath('userData'),
+          // A phone's run is the copilot, so it is told what it is by the same
+          // generated file the desk copilot gets — see `startCopilotRun`.
+          tools: () => deckControl?.control.tools() ?? [],
         },
         request,
       ),
@@ -1150,6 +1312,9 @@ function registerIpc(): void {
         isAlive: (id) => ptys.list().some((meta) => meta.id === id && meta.exitCode === null),
         stop: (id) => ptys.kill(id),
         userData: () => app.getPath('userData'),
+        // The chosen folder, or this read reports the copilot's paths as the
+        // default ones while it is actually working somewhere else.
+        home: () => storedValue(COPILOT_HOME_SETTING) as string | null,
         storageDir: remoteStorageDir,
       })
       return {
@@ -1234,6 +1399,34 @@ function registerIpc(): void {
     // the panel edits what `create` is checked against, or it edits a copy and
     // the phone keeps the folders the user just removed until the next launch.
     folders: core.grants,
+    // And the same kind store the reach rule closes over, for the same reason
+    // one line up: the approval screen decides what a device is, and every
+    // connection is checked against it, so two copies would agree until the
+    // first approval and then not.
+    kinds: core.kinds,
+    /*
+     * A page a device asked for opens **here**, as a tab of this app's own
+     * browser.
+     *
+     * `openAppLink` is the same function the app's own links go through, against
+     * the same window, so a localhost link tapped on a phone lands exactly where
+     * a link clicked in this window lands — which is the whole of *"a browser
+     * started from the phone must run on the machine you are inside."* It is
+     * routed rather than handed to `shell.openExternal`: this app has a browser,
+     * and launching Chrome instead is the behaviour Asad objected to by name.
+     *
+     * False when there is no window, which is the honest answer during a launch
+     * or after a close — the server turns that into `unavailable` rather than
+     * reporting an open that did not happen. The scheme has already been checked
+     * on the way in; `routeAppLink` inside checks it again, because a rule that
+     * holds only because of what a different file refused is a rule the next
+     * caller does not have.
+     */
+    openUrl: (url: string): boolean => {
+      const window = mainWindow
+      if (!window || window.isDestroyed()) return false
+      return openAppLink(window.webContents, url) === 'tab'
+    },
     // Likewise the same proxy the spawn path above hands each guest session a
     // key from. This is also where it is brought into being: the endpoint binds
     // at launch, with nobody pressing anything, so the first push a phone makes
@@ -1382,6 +1575,101 @@ function registerIpc(): void {
      * start time, the answer is the truth at start time.
      */
     mcpConfig: () => deckControl?.configPath ?? null,
+    /*
+     * Which folder it works in, read at every start rather than captured.
+     *
+     * `copilot-folder.ts` turns this into a usable path — a chosen folder that
+     * has been unmounted or deleted falls back to the default and says why. All
+     * this has to do is answer with what the setting holds.
+     */
+    home: () => storedValue(COPILOT_HOME_SETTING) as string | null,
+    /*
+     * The live tool catalogue, for the generated half of the copilot layer.
+     *
+     * `control.tools()` is the same array `tools/list` answers with, so the file
+     * that tells the copilot what it can do is composed from the tools that
+     * actually exist — including the ones contributed at assembly time, like the
+     * browser tools, which a hard-coded list in a template would have missed.
+     * Undefined until `deckControl` resolves, and empty is the honest answer for
+     * a copilot started before the server is listening.
+     */
+    tools: () => deckControl?.control.tools() ?? [],
+  })
+  /*
+   * Choosing the folder, and the native panel that does it.
+   *
+   * The panel is here because it needs a window to be a sheet on; every rule
+   * about which folder is acceptable is in `copilot-folder.ts`, where it can be
+   * tested without one. `defaultPath` is always passed, for the reason
+   * `project-picker.ts` measures at length: omitting it means "open wherever
+   * AppKit last left you", which on the machine that was recorded on meant an
+   * empty directory and a picker listing nothing, four openings in a row.
+   */
+  registerCopilotFolderIpc(ipcMain, {
+    userData: () => app.getPath('userData'),
+    read: () => storedValue(COPILOT_HOME_SETTING) ?? null,
+    write: (value) => {
+      patchStoredSettings({ [COPILOT_HOME_SETTING]: value === null ? null : value })
+    },
+    runningIn: () =>
+      copilotState({
+        startSession,
+        isAlive: (id) => ptys.list().some((meta) => meta.id === id && meta.exitCode === null),
+        stop: (id) => ptys.kill(id),
+        userData: () => app.getPath('userData'),
+        home: () => storedValue(COPILOT_HOME_SETTING) as string | null,
+        storageDir: remoteStorageDir,
+      }).folder.runningIn,
+    homeDir: () => app.getPath('home'),
+    pick: async (defaultPath) => {
+      /*
+       * No parent window, and that is the fix rather than an omission.
+       *
+       * Asad, 2026-08-17, watching this open: *"Why does this open like this? It
+       * should open just like normal windows."* — and then the panel's own
+       * button landed outside the visible area, so he cancelled and tried again.
+       *
+       * Passing `mainWindow` makes the panel a **sheet**: on macOS it drops out
+       * of that window's title bar and is clipped to that window's bounds. On a
+       * window shorter than the panel wants to be, the row of buttons along its
+       * bottom edge is not drawn at all — which is exactly what he hit, and it
+       * is why cancelling and retrying sometimes appears to work (the sheet
+       * remembers a smaller directory listing the second time).
+       *
+       * With no parent, Electron shows the free-standing Open panel every other
+       * Mac application shows: its own window, its own size, its own buttons.
+       * It is still application-modal, so nothing about the flow's ordering
+       * changes, and the renderer still steps the dialog aside while it is up
+       * (`Modal`'s `hidden`) because a native panel is above every pixel the
+       * renderer draws either way.
+       *
+       * The `message` came off with it. On macOS that string is drawn as a block
+       * of text inside the panel, which is what made it tall enough to have this
+       * problem in the first place; the same sentence is one hover away on the
+       * screen that opens it (`CHOOSING_A_FOLDER`, behind the ⓘ), which is where
+       * somebody is deciding rather than mid-decision.
+       *
+       * `mainWindow` is no longer required for the panel, but the guard stays:
+       * a folder chosen with no window open would have nowhere to report back
+       * to, and the copilot's folder is not a thing to change from a menu bar.
+       */
+      if (!mainWindow) return null
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: 'Choose the copilot’s folder',
+        buttonLabel: 'Use this folder',
+        defaultPath,
+      })
+      return canceled || filePaths.length === 0 ? null : (filePaths[0] ?? null)
+    },
+    log: (entry) =>
+      appendCopilotAction(
+        copilotPaths(
+          app.getPath('userData'),
+          storedValue(COPILOT_HOME_SETTING) as string | null,
+        ),
+        entry,
+      ),
   })
   /*
    * Looking at the copilot, which is a different job from running it.
@@ -1391,7 +1679,10 @@ function registerIpc(): void {
    * file name and a place key, both checked in `copilot-inspect.ts`, and mixing
    * the two sets would make that sentence false in the file that relies on it.
    */
-  registerCopilotInspectIpc(ipcMain, { userData: () => app.getPath('userData') })
+  registerCopilotInspectIpc(ipcMain, {
+    userData: () => app.getPath('userData'),
+    home: () => storedValue(COPILOT_HOME_SETTING) as string | null,
+  })
   registerRoutinesIpc(ipcMain, routines.api)
   registerDeckignoreIpc(ipcMain)
   registerHooksIpc(ipcMain)
@@ -1434,7 +1725,12 @@ function registerIpc(): void {
   registerCookieImportIpc(ipcMain)
   registerBrowserIsolationIpc(ipcMain)
   registerSettingsIpc(ipcMain)
-  // registerBrowserSessionIpc installs the recorder preload itself.
+  // Profiles first: everything below asks which one is switched on, and
+  // `registerBrowserSessionIpc` hardens that profile's session as its first act.
+  registerBrowserProfileIpc(ipcMain, () => app.getPath('userData'))
+  registerBrowserPasswordIpc(ipcMain, () => app.getPath('userData'))
+  registerBrowserSignInIpc(ipcMain)
+  // registerBrowserSessionIpc hardens the active profile's session.
   registerBrowserSessionIpc(ipcMain)
   registerBrowserViewIpc(ipcMain)
   registerDiagnosticsIpc(ipcMain)
@@ -1478,7 +1774,335 @@ function registerIpc(): void {
     onReport: (report) => routines.engine.noteAlertReport(report),
   })
 
-  ipcMain.handle('session:create', (_e, input: CreateSessionInput) => startSession(input))
+  /**
+   * The window asking for a session — and what happens when it cannot have one.
+   *
+   * The rejection travels on, so the caller still knows; but a rejection alone
+   * is what the renderer does nothing with, and doing nothing is what a person
+   * experiences as a button that does not work. There was no visible failure
+   * path here at all until now, because there did not need to be: `startSession`
+   * used to answer "that agent cannot run" by starting a shell instead, which is
+   * the downgrade this whole change removes.
+   *
+   * So a start that fails is *held*, exactly like a session that failed to come
+   * back at launch, and appears as the same row in the same place with the same
+   * sentence and the same Try again. One mechanism and one place to look, rather
+   * than a second notification surface for the same fact — and one that survives
+   * the window being closed, which matters most for the case that produced this:
+   * a WSL distribution that is asleep answers "not installed" for a few seconds
+   * after login and then works.
+   *
+   * Only this channel. A session a phone asked for is answered on the wire the
+   * phone is listening to, and the copilot's own start has `refuse`, which puts
+   * its reason on the copilot's row — neither of them is a tab of somebody's
+   * that went missing from this rail.
+   */
+  ipcMain.handle('session:create', async (_e, input: CreateSessionInput) => {
+    try {
+      return await startSession(input)
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error)
+      ledger.held.hold(
+        {
+          cwd: input.cwd,
+          // `input.provider ?? 'claude'` is what `startSession` resolves an
+          // absent provider to, and the held entry has to be the request that
+          // was actually made or Try again would attempt a different one.
+          provider: input.provider ?? 'claude',
+          profileId: input.profileId ?? null,
+          cols: input.cols,
+          rows: input.rows,
+          lastSeenAt: Date.now(),
+        },
+        `it could not be started: ${why}`,
+      )
+      announceHeld()
+      logger.warn('session', `could not start: ${why}`, {
+        folder: input.cwd,
+        agent: input.provider ?? 'claude',
+      })
+      throw error
+    }
+  })
+
+  /* ------------------------------------------- sessions that did not start -- */
+  /*
+   * Three channels for the sessions being held, and no fourth for "start them
+   * all".
+   *
+   * A retry is one row at a time on purpose. The reason a session did not come
+   * back is frequently specific to it — this agent is not installed, that folder
+   * is on a volume that is not mounted — and a single button that fires four
+   * spawns produces one outcome for four different problems, which is exactly
+   * the shape of report ("it didn't work") that cannot be acted on. One row, one
+   * attempt, one answer in that row.
+   */
+  ipcMain.handle(SESSIONS_HELD_CHANNEL, () => ledger.held.list())
+
+  /**
+   * Try again, now.
+   *
+   * Everything about this goes through the same two functions the launch used —
+   * `planSaved` and `startSession` — because a retry that resolved the
+   * conversation differently, or spawned differently, would be a second kind of
+   * restore that only ever runs when the first one has already failed. That is
+   * the least-exercised code in the app and the worst place for a difference.
+   *
+   * The entry is released only once a session actually exists. A retry that
+   * removed the row and then threw would be the original bug in miniature: press
+   * the button, the row disappears, the session is gone.
+   */
+  ipcMain.handle('session:held-retry', async (_e, key: unknown) => {
+    const held = typeof key === 'string' ? ledger.held.get(key) : null
+    if (!held) return ledger.held.list()
+
+    const [decision] = await planSaved([savedFrom(held)])
+    if (!decision || decision.outcome === 'skip') {
+      ledger.held.fail(held.key, decision?.reason ?? 'it could not be planned')
+      announceHeld()
+      return ledger.held.list()
+    }
+
+    try {
+      const meta = await startSession({
+        cwd: held.cwd,
+        cols: held.cols,
+        rows: held.rows,
+        provider: held.provider,
+        profileId: held.profileId,
+        resume: decision.outcome === 'resume',
+      })
+      ledger.held.release(held.key)
+      send(SESSION_CREATED_CHANNEL, meta)
+      logger.info('restore', 'came back on a retry', {
+        folder: held.cwd,
+        agent: held.provider,
+      })
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error)
+      ledger.held.fail(held.key, `it could not be started again: ${why}`)
+      logger.warn('restore', `retry failed: ${why}`, { folder: held.cwd, agent: held.provider })
+    }
+    announceHeld()
+    return ledger.held.list()
+  })
+
+  /**
+   * Stop holding it.
+   *
+   * The only way a held session leaves the list without starting, and it is a
+   * person's decision rather than a timeout, because the app has no way to know
+   * whether a folder is gone for good or gone until Thursday. Nothing is deleted
+   * beyond the entry itself: the conversation is in the agent's own transcript
+   * and is not this app's to remove.
+   */
+  ipcMain.handle('session:held-forget', (_e, key: unknown) => {
+    if (typeof key === 'string' && ledger.held.release(key)) announceHeld()
+    return ledger.held.list()
+  })
+
+  /* ------------------------------------ running this session as somebody else -- */
+
+  /**
+   * Everything the two channels below need to know about one session, gathered
+   * once.
+   *
+   * A helper rather than two copies, because the plan and the switch have to
+   * agree about every one of these or the sentence somebody read is not a
+   * description of what then happened. That is the entire promise this feature
+   * makes: *say what will happen before it happens.* Two independent lookups is
+   * how the two would come to disagree — the account resolved twice, the folder
+   * probed twice, the conversation asked about twice, in between which the
+   * person has had time to read a paragraph and press a button.
+   */
+  const switchSubject = async (
+    sessionId: unknown,
+    profileId: unknown,
+  ): Promise<{ plan: SwitchPlan; saved: SavedSession | null; resume: boolean }> => {
+    const id = typeof sessionId === 'string' ? sessionId : ''
+    const wanted = typeof profileId === 'string' ? profileId : ''
+    const meta = ptys.list().find((session) => session.id === id) ?? null
+    const saved = ledger.get(id)
+    const target = wanted === '' ? null : findProfile(profilesState(), wanted)
+
+    /*
+     * The decision is only asked for once the cheap refusals have passed, and
+     * that ordering is deliberate rather than an optimisation. `planSaved` stats
+     * a folder and reads a directory; asking it about a session that is a plain
+     * shell, or about an account of the wrong agent, would be doing work to
+     * answer a question that has already been answered — and, on a WSL machine,
+     * doing it across a filesystem boundary.
+     */
+    const refused = switchRefusal({ meta, saved, target })
+    if (refused !== null || saved === null || target === null) {
+      /*
+       * `switchRefusal` and not `planSwitch` for the question itself, and that
+       * distinction cost a live driving run to find. `planSwitch` treats a
+       * *missing* decision as a refusal in its own right — deliberately, because
+       * "nothing was decided" is not "start it fresh" — so asking it with
+       * `decision: null` answers "cannot be started again" about every switch
+       * that was going to work perfectly well. The refusals that can be reached
+       * without touching a disk are their own function precisely so this pass
+       * can ask only them.
+       */
+      return {
+        plan: planSwitch({ sessionId: id, meta, saved, target, decision: null, occupied: false }),
+        saved,
+        resume: false,
+      }
+    }
+
+    const switched: SavedSession = { ...saved, profileId: target.id }
+    const [decision] = await planSaved([switched])
+
+    /*
+     * Is another tab already on the conversation this one would continue?
+     *
+     * `conversationScope` is the shared answer to "which transcript would
+     * `--continue` attach to" — provider, config directory and folder, which is
+     * narrower than a folder and was made narrower because keying on the folder
+     * alone silently threw conversations away. Reused rather than re-derived, so
+     * the switch and the launch cannot come to disagree about what counts as the
+     * same conversation.
+     *
+     * `planRestore` cannot answer this for a switch: it reasons about a list of
+     * *remembered* sessions being started together, and this one is about the
+     * tabs open on screen right now. Hence the one extra fact, computed here
+     * where the live list is, and applied by `planSwitch`.
+     */
+    const configDir = decision?.configDir ?? null
+    const mine = configDir === null ? null : conversationScope(switched, configDir)
+    const occupied =
+      mine !== null &&
+      ledger
+        .entries()
+        .filter((entry) => entry.id !== id)
+        .some(
+          (entry) =>
+            conversationScope(
+              entry.saved,
+              resolveProfile(profilesState(), {
+                sessionProfileId: entry.saved.profileId ?? undefined,
+                projectPath: entry.saved.cwd,
+              }).configDir,
+            ) === mine,
+        )
+
+    const plan = planSwitch({ sessionId: id, meta, saved, target, decision: decision ?? null, occupied })
+    return { plan, saved, resume: plan.resume }
+  }
+
+  /**
+   * What a switch would do, before one is made.
+   *
+   * The window draws this as a sheet and will not stop anything until somebody
+   * has read it. It is the whole of the answer to the complaint underneath this
+   * feature — a restart nobody expected — and it is why the plan touches the
+   * disk and the switch does not decide anything.
+   */
+  ipcMain.handle(SESSION_SWITCH_PLAN_CHANNEL, async (_e, sessionId: unknown, profileId: unknown) => {
+    const { plan } = await switchSubject(sessionId, profileId)
+    return plan
+  })
+
+  /**
+   * Run this session as another account: same tab, same folder, new process.
+   *
+   * ## The order is start, then stop, and that is the point
+   *
+   * The obvious order is the wrong one. Stopping first and spawning afterwards
+   * means a spawn that fails has already destroyed a working session — and
+   * `AgentUnavailableError` is thrown *by* the spawn, after probing, so "could
+   * this even start?" cannot be answered fully in advance. That is the exact
+   * fault that was just fixed on the restore path in the other direction, and
+   * the fix there was to keep the request rather than let it evaporate.
+   *
+   * Here it can be avoided outright, because the two processes cannot collide.
+   * They are different accounts, so they are different config directories, so
+   * they are different transcript stores — the measurement at the top of
+   * `session-switch.ts` is exactly that — and the old session is stopped within
+   * a moment of the new one existing. So a switch that cannot start leaves the
+   * session it was asked about running, untouched, and the window says why.
+   *
+   * ## Which is why nothing is held
+   *
+   * `session:create` holds a request that failed, because there the alternative
+   * is a tab that vanished with nothing to show for it. Here the session is
+   * still there. A held row saying *"this could not be started"* beside a
+   * session that is still running would be the app inventing a loss it did not
+   * suffer, and the Try again beside it would start a *second* session rather
+   * than retrying anything. The reuse that matters is the sentence:
+   * `AgentUnavailableError`'s own message is what the window prints, unchanged,
+   * because it is already written for the person who is reading it.
+   */
+  ipcMain.handle(SESSION_SWITCH_CHANNEL, async (_e, sessionId: unknown, profileId: unknown) => {
+    const { plan, saved } = await switchSubject(sessionId, profileId)
+    if (plan.refusal !== null || saved === null || plan.to === null) {
+      throw new Error(plan.refusal ?? 'This session cannot be switched.')
+    }
+
+    const meta = await startSession({
+      cwd: saved.cwd,
+      cols: saved.cols,
+      rows: saved.rows,
+      provider: saved.provider,
+      profileId: plan.to.id,
+      resume: plan.resume,
+    })
+
+    /*
+     * A spawn that succeeded is not yet a session that started.
+     *
+     * `startSession` resolves the moment the pty exists, and the agent can still
+     * refuse a second later — `--continue` against a transcript the CLI declines
+     * to continue is a real, reproduced case, and `survivedStart` carries it.
+     * Stopping the old session before knowing would leave a dead tab where a
+     * working agent was, which is the one outcome this feature must not produce.
+     *
+     * The replacement is cleaned up rather than left as a corpse: it never
+     * became anybody's tab — this handler is the only thing that knows it exists
+     * — so leaving it in the ledger would put a phantom session in `openSessions`
+     * for the next launch to restore.
+     */
+    const started = await survivedStart(meta.id, {
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      alive: (id) => ptys.list().some((session) => session.id === id),
+      screen: (id) => ptys.scrollback(id),
+    })
+    if (!started.alive) {
+      ledger.forget(meta.id)
+      ptys.kill(meta.id)
+      const why = startFailed(plan.to.name, started.said)
+      logger.warn('session', `account switch did not take: ${why}`, {
+        folder: saved.cwd,
+        agent: saved.provider,
+        to: plan.to.id,
+      })
+      throw new Error(why)
+    }
+
+    /*
+     * Only now. `ledger.forget` as well as the kill, for the reason
+     * `session:kill` gives: `onExit` arrives later, and a session that has been
+     * deliberately replaced must not sit in the remembered list in the meantime,
+     * where a crash inside that gap would bring it back beside its replacement.
+     */
+    ledger.forget(plan.sessionId)
+    // `replaced`, not `stopped`: the tab is not going anywhere, only the process
+    // inside it. Announcing a removal for the outgoing half would race the
+    // window's own swap, which finds the old row by id and leaves the list alone
+    // when it cannot — so the losing side of that race is a tab that vanishes in
+    // the middle of a switch. See `RemovalReason`.
+    ptys.kill(plan.sessionId, 'replaced')
+    logger.info('session', 'switched account', {
+      folder: saved.cwd,
+      agent: saved.provider,
+      from: plan.from?.id ?? null,
+      to: plan.to.id,
+      continued: plan.resume,
+    })
+    return meta
+  })
 
   ipcMain.on('session:write', (_e, id: string, data: string) => {
     // Typing into a session is the only honest "you were using this one"
@@ -1656,6 +2280,16 @@ app.whenReady().then(() => {
       return meta
     },
     sessionStatus: (id) => liveStatus.get(id),
+    /*
+     * How a change made from outside the window reaches the window.
+     *
+     * `send` and nothing of its own: a second sender would be a second idea of
+     * which window is the window, and would outlive `before-quit` — which is the
+     * whole reason `send` holds a liveness flag rather than asking Electron.
+     * Passing it here is also what makes `settings.write` able to say whether a
+     * value it saved is on the screen, because `send` answers that.
+     */
+    tellWindow: (channel, payload) => send(channel, payload),
     /*
      * Exactly one window may answer a confirmation, and it is this app's own.
      *

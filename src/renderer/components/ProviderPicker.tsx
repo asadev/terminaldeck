@@ -681,15 +681,22 @@ export function chosenAccountProvider(
 }
 
 /*
- * There is no Add-account *dialog* here, and that is a decision rather than an
- * omission.
+ * The Add-account dialog is not here, and the reason it is not a `Modal` is
+ * worth keeping.
  *
- * One was written, as a `Modal` the Accounts pane would open. It cannot ship:
- * `Modal` binds Escape to `window`, the Settings sheet is itself a `Modal`, and
- * listeners on one target fire in the order they were added — so Escape inside
- * a dialog opened from Settings closes Settings *and* the dialog, throwing away
- * the pane the user was working in. The three pieces above are what that dialog
- * was made of, and the Accounts pane draws them inline instead, where the choice
- * of agent sits directly above the name field it belongs with and there is no
- * second sheet to dismiss.
+ * One was written as a `Modal` the Accounts pane would open, and it could not
+ * ship: `Modal` binds Escape to `window`, the Settings sheet is itself a
+ * `Modal`, and listeners on one target fire in the order they were added — so
+ * Escape inside a dialog opened from Settings closes Settings *and* the dialog,
+ * throwing away the pane the user was working in. For a while the pane drew
+ * these three pieces inline instead.
+ *
+ * The review of 2026-08-17 asked for the popup by name — *"'Add' and 'Sign in'
+ * should be one thing, called Add account. It must open a small popup with only
+ * the sign-in steps"* — so it exists again, as
+ * `settings/sections/AddAccountDialog.tsx`, and it is not a `Modal`. It catches
+ * Escape on `document` in the **capture** phase, which runs before the event
+ * reaches any window-level bubble listener, exactly as `ShortcutsPopover` in
+ * the same window already does. One Escape closes the popup; a second closes
+ * Settings.
  */

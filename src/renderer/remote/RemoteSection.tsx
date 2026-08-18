@@ -14,6 +14,12 @@ import {
 } from '../machines/MachineLinks'
 import { asView, resolveBridge, type MachinesBridge, type MachinesView } from '../machines/types'
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
+import {
+  DeviceApproval,
+  nextStep,
+  type ApprovalStep,
+  type DeviceKind,
+} from './DeviceApproval'
 import { DeviceCopilot, type CopilotDevice } from './DeviceCopilot'
 import './RemoteSection.css'
 
@@ -159,7 +165,22 @@ export interface RemoteBridge {
   stopRemote(): Promise<unknown>
   startRemotePairing(): Promise<unknown>
   cancelRemotePairing(): Promise<unknown>
-  approveRemoteDevice(deviceId: string): Promise<unknown>
+  /**
+   * Let a device in — and, in the same call, decide what it is and what it may
+   * reach.
+   *
+   * Three arguments rather than one, and that is the security fix rather than a
+   * convenience. It used to take an id: approval admitted the device and the
+   * folder choice was a separate block further down this page that nobody had to
+   * visit, so the ordinary path let a phone in with every open project reachable.
+   * The main process now writes the kind and the folders *before* it approves,
+   * so a caller that cannot answer both cannot let anything in.
+   */
+  approveRemoteDevice(deviceId: string, kind: string, folders: string[]): Promise<unknown>
+  /** Which devices are yours and which are guests. Read-only; a kind never changes. */
+  listRemoteDeviceKinds(): Promise<unknown>
+  /** The app's own native folder chooser, the one Open Project uses. */
+  pickProjectFolder(): Promise<string | null>
   revokeRemoteDevice(deviceId: string): Promise<unknown>
   disconnectRemoteConnection(connectionId: string): Promise<unknown>
   stopRemoteTunnel(connectionId: string, tunnelId: string): Promise<unknown>
@@ -174,6 +195,8 @@ const BRIDGE_METHODS: ReadonlyArray<keyof RemoteBridge> = [
   'startRemotePairing',
   'cancelRemotePairing',
   'approveRemoteDevice',
+  'listRemoteDeviceKinds',
+  'pickProjectFolder',
   'revokeRemoteDevice',
   'disconnectRemoteConnection',
   'stopRemoteTunnel',
@@ -241,6 +264,22 @@ export interface RemoteDevice {
    * first time it fails from a coffee shop.
    */
   fingerprint: string | null
+}
+
+/**
+ * The approval flow, as the panel holds it.
+ *
+ * One at a time, and deliberately: two phones pairing at once is a real thing
+ * that happens, and two flows on screen with two fingerprints to compare is the
+ * arrangement in which somebody approves the wrong one. The second device stays
+ * on the list with its own button, waiting.
+ */
+export interface ApprovalState {
+  device: RemoteDevice
+  step: ApprovalStep
+  kind: DeviceKind | null
+  /** Chosen so far. Empty is the starting state and a real answer. */
+  folders: string[]
 }
 
 /**
@@ -412,6 +451,32 @@ export function deviceLabel(raw: string): string {
   if (name === '') return 'Unnamed device'
   if (/^(google\s+)?sdk_gphone/i.test(name)) return 'Android emulator'
   return name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Device id → its kind, dropping anything unreadable.
+ *
+ * A row that cannot be read is left out rather than defaulted to `guest`, and
+ * the difference matters on screen: a device that is absent from this map draws
+ * the "paired before folder approval existed" line, which is the true thing to
+ * say about a device the store has no record for. Defaulting would print
+ * "Guest — only the folders you chose" over a device nobody has chosen for.
+ *
+ * Nothing here can produce `mine` from a value that is not the literal string,
+ * which is the same rule the store's own parser follows for the same reason.
+ */
+export function toDeviceKinds(raw: unknown): Map<string, DeviceKind> {
+  const kinds = new Map<string, DeviceKind>()
+  if (!Array.isArray(raw)) return kinds
+  for (const entry of raw) {
+    const record = asRecord(entry)
+    if (!record) continue
+    const id = record.deviceId
+    if (typeof id !== 'string' || id === '') continue
+    if (record.kind !== 'mine' && record.kind !== 'guest') continue
+    kinds.set(id, record.kind)
+  }
+  return kinds
 }
 
 export function toRemoteDevices(raw: unknown): RemoteDevice[] {
@@ -966,7 +1031,31 @@ export interface RemoteActions {
   reread(): void
   pair(): void
   closePairing(): void
-  approve(device: RemoteDevice): void
+  /**
+   * Let a device in as `kind`, reaching `folders` and nothing else.
+   *
+   * The two extra arguments are not optional and there is no overload that omits
+   * them. That is the whole shape of the fix: the old `approve(device)` admitted
+   * a device and left the folder question to a block further down the page, and
+   * an unanswered folder question defaulted to every project this desktop had
+   * open. A signature that cannot be called without an answer is the only
+   * version of this that cannot regress.
+   *
+   * `folders` is ignored by the main process for a `mine` device and is passed
+   * as empty by the flow, rather than being made conditional here — a caller
+   * assembling a different argument list per kind is a caller that can assemble
+   * the wrong one.
+   */
+  approve(device: RemoteDevice, kind: DeviceKind, folders: string[]): void
+  /** Open the step-by-step flow for one pending device. */
+  beginApproval(device: RemoteDevice): void
+  /** Close it without letting anything in. The device stays pending. */
+  cancelApproval(): void
+  /** Move the flow to a step, pick a kind, or add and remove a folder. */
+  approvalStep(step: ApprovalStep): void
+  approvalKind(kind: DeviceKind): void
+  approvalAddFolder(): void
+  approvalRemoveFolder(folder: string): void
   deny(device: RemoteDevice): void
   revoke(device: RemoteDevice): void
   disconnect(connection: RemoteConnection): void
@@ -999,6 +1088,13 @@ export interface RemoteViewProps {
   /** Seconds left on the code, or null when there is no code or no stated expiry. */
   secondsLeft: number | null
   busy: RemoteBusy
+  /**
+   * Device id → what it is. **Null until the first read lands**, so a row can
+   * stay quiet rather than claiming a device is a guest before anybody knows.
+   */
+  kinds?: Map<string, DeviceKind> | null
+  /** The device whose approval flow is open, and where it has got to. */
+  approving?: ApprovalState | null
   /**
    * The outward half: the machines this desktop can reach, and the field a code
    * from one of them is typed into.
@@ -1106,6 +1202,8 @@ export function RemoteView({
   pairing,
   secondsLeft,
   busy,
+  kinds = null,
+  approving = null,
   machines,
   folders = null,
   copilot = null,
@@ -1222,7 +1320,19 @@ export function RemoteView({
               description."* The one word that decides whether to press the
               switch — `shell` — is in the line above, where it is read.
             */
-            more={`A device you approve can type into any session running here — your files, your keys, your git remotes — exactly as if it were sitting at this keyboard. Nothing is published to the internet: everything is sealed end to end, so the relay that carries it routes bytes it holds no key for. That seal lets nothing in on its own — a code you mint here and an approval you give here do.`}
+            /*
+              Rewritten because it had stopped being true, which is the failure
+              mode `neutral-naming.test.ts` writes a page about: a string that is
+              merely *untrue* type-checks perfectly.
+
+              It said every approved device can type into any session running
+              here. That was exactly right when approving was one button and a
+              device with no folder record got whatever the desktop had open. It
+              is now the description of one of the two kinds and a lie about the
+              other, and it is read by somebody deciding whether to hand a phone
+              to a colleague.
+            */
+            more={`Letting a device in asks you two things: whose it is, and what it may open. One of your own gets everything — every folder, every session, the copilot. A guest gets the folders you choose and nothing else: not your other projects, not the sessions running in them, and never the copilot. Nothing is published to the internet either way — everything is sealed end to end, so the relay that carries it routes bytes it holds no key for. That seal lets nothing in on its own; a code you mint here and an approval you give here do.`}
             labelId={`${ids}-label`}
             helpId={`${ids}-help`}
             control={
@@ -1710,6 +1820,35 @@ export function RemoteView({
             </p>
           )}
 
+          {/*
+            The flow, above the roster and not in a dialog.
+
+            A modal would cover the list somebody is comparing against, and the
+            list is where the *other* pending device is — which is exactly the
+            moment they need to see both. It sits directly under the sentence
+            that says a device is waiting, so the words and the choice they are
+            about arrive together.
+          */}
+          {approving !== null && (
+            <DeviceApproval
+              device={approving.device}
+              platform={platform}
+              folders={approving.folders}
+              step={approving.step}
+              kind={approving.kind}
+              busy={busy !== null}
+              problem={problem}
+              onStep={actions.approvalStep}
+              onKind={actions.approvalKind}
+              onAddFolder={actions.approvalAddFolder}
+              onRemoveFolder={actions.approvalRemoveFolder}
+              onApprove={() =>
+                actions.approve(approving.device, approving.kind ?? 'guest', approving.folders)
+              }
+              onCancel={actions.cancelApproval}
+            />
+          )}
+
           {(
             <ul className="remote-list">
               {devices.map((device) => (
@@ -1721,6 +1860,31 @@ export function RemoteView({
                       Last seen {whenSeen(device.lastSeenAt, now)}
                       {device.addedAt === null ? '' : ` · paired ${whenSeen(device.addedAt, now)}`}
                     </span>
+                    {/*
+                      What this device is, stated on the row and not editable
+                      there.
+
+                      Three states and not two: `mine`, `guest`, and a device
+                      approved by a build older than the choice — which is read
+                      as a guest with no folders, and deserves a sentence saying
+                      why a phone that worked yesterday does not today. There is
+                      deliberately no control here; changing a kind means
+                      revoking and pairing again. See `device-kind.ts`.
+                    */}
+                    {device.state === 'approved' && kinds !== null && (
+                      <span className="remote-row-note">
+                        {kinds.get(device.id) === 'mine' ? (
+                          <>Your device — full access.</>
+                        ) : kinds.get(device.id) === 'guest' ? (
+                          <>Guest — only the folders you chose. No copilot.</>
+                        ) : (
+                          <>
+                            Paired before folder approval existed, so it is treated as a guest and
+                            can open nothing. Revoke it and pair it again to choose.
+                          </>
+                        )}
+                      </span>
+                    )}
                     {device.state !== 'revoked' &&
                       (device.fingerprint === null ? (
                         // Not a cosmetic gap. No key means no sealed channel,
@@ -1740,12 +1904,19 @@ export function RemoteView({
                   <span className="settings-chips">
                     {device.state === 'pending' && (
                       <>
+                        {/*
+                          "Let it in…" rather than "Approve", and the ellipsis is
+                          doing work: this opens the flow that asks whose device
+                          it is and what it may open, and the old one-word button
+                          is exactly what made people believe the decision had
+                          been made when it had not.
+                        */}
                         <Button
                           tone="primary"
-                          onClick={() => actions.approve(device)}
-                          disabled={busy !== null}
+                          onClick={() => actions.beginApproval(device)}
+                          disabled={busy !== null || approving?.device.id === device.id}
                         >
-                          Approve
+                          Let it in…
                         </Button>
                         <Button onClick={() => actions.deny(device)} disabled={busy !== null}>
                           Deny
@@ -1944,6 +2115,9 @@ export interface RemoteActionDeps {
   reread(): void
   /** Runs the work, reports it in the main process's words, then re-reads. */
   run(key: string, work: () => Promise<unknown>, done: string | null): void
+  /** The approval flow on screen, and the one thing that moves it. */
+  approving: ApprovalState | null
+  setApproving(next: ApprovalState | null): void
   /** False once the panel has gone, so nothing writes to a dead component. */
   isAlive(): boolean
 }
@@ -1960,7 +2134,20 @@ export interface RemoteActionDeps {
  * that a call that never happened is never reported as one that did.
  */
 export function remoteActions(deps: RemoteActionDeps): RemoteActions {
-  const { bridge, pairing, setPairing, run, isAlive } = deps
+  const { bridge, pairing, setPairing, run, isAlive, approving, setApproving } = deps
+
+  /**
+   * Edit the flow that is open, and do nothing when none is.
+   *
+   * Every step action goes through here rather than reading `approving` itself,
+   * because the null case is the same in all five and writing it five times is
+   * how the fifth one ends up creating a flow out of nothing — a folder picker
+   * opening for a device nobody is approving.
+   */
+  const edit = (change: (state: ApprovalState) => ApprovalState): void => {
+    if (approving === null) return
+    setApproving(change(approving))
+  }
 
   /** Approve/Deny/Revoke: do it, then believe the list that comes back, not the ask. */
   const settle = (
@@ -1970,6 +2157,14 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
     device: RemoteDevice,
     want: RemoteDeviceState,
     done: string,
+    /**
+     * Run only when the roster came back saying the change took.
+     *
+     * The one caller is the approval flow closing itself. Closing it on the
+     * press would hide the failure the throw below is about to report, and leave
+     * somebody looking at a device that is still waiting with no flow to finish.
+     */
+    settled?: () => void,
   ): void =>
     void run(
       key,
@@ -1980,6 +2175,7 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
             `${device.name} is still listed as ${STATE_LABEL[after].toLowerCase()}, so that did not take.`,
           )
         }
+        settled?.()
       },
       done,
     )
@@ -2054,14 +2250,66 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
       setPairing(null)
       void run('pair', () => invoke(bridge.cancelRemotePairing, 'cancel pairing'), null)
     },
-    approve: (device) =>
+    beginApproval: (device) =>
+      setApproving({ device, step: 'check', kind: null, folders: [] }),
+    // The device stays pending. Cancelling is *not* denying — the person may
+    // have walked away to read the fingerprint off the phone — and a cancel that
+    // quietly revoked would be unrecoverable, because a revoked device can never
+    // be approved later.
+    cancelApproval: () => setApproving(null),
+    approvalStep: (step) => edit((state) => ({ ...state, step })),
+    approvalKind: (kind) =>
+      edit((state) => ({
+        ...state,
+        kind,
+        // Answering the question moves on. A card that leaves you looking at the
+        // same screen wondering whether it registered is what this flow exists
+        // not to be, and Back is right there.
+        step: nextStep('kind', kind),
+        // Folders chosen for a guest are dropped on switching to `mine`: they
+        // would be a list nothing reads, and one that reappeared on switching
+        // back would be the screen remembering a choice that was withdrawn.
+        folders: kind === 'mine' ? [] : state.folders,
+      })),
+    approvalAddFolder: () =>
+      void run(
+        'approval:folder',
+        async () => {
+          // The app's own native chooser, the one Open Project uses. A text
+          // field would let somebody type a path that does not exist, and the
+          // first they would hear of it is a refusal on a phone in another room.
+          const picked = await invoke(bridge.pickProjectFolder, 'choose a folder')
+          if (typeof picked !== 'string' || picked === '') return
+          if (!isAlive()) return
+          // Read through `deps` rather than the destructured `approving`: the
+          // picker is a native dialog and the person may have pressed Back while
+          // it was open, so the state this lands in is not the one it left.
+          const open = deps.approving
+          if (open === null || open.folders.includes(picked)) return
+          setApproving({ ...open, folders: [...open.folders, picked] })
+        },
+        null,
+      ),
+    approvalRemoveFolder: (folder) =>
+      edit((state) => ({ ...state, folders: state.folders.filter((one) => one !== folder) })),
+    approve: (device, kind, folders) =>
       settle(
         `device:${device.id}`,
-        bridge.approveRemoteDevice,
+        // Bound here rather than widening `settle`, which every other action on
+        // this panel calls with a bare id. One action needs three arguments; the
+        // helper that reads the roster back afterwards needs none of them.
+        bridge.approveRemoteDevice === undefined
+          ? undefined
+          : (id: string) => bridge.approveRemoteDevice!(id, kind, folders),
         'approve device',
         device,
         'approved',
-        `${device.name} can connect.`,
+        kind === 'mine'
+          ? `${device.name} has full access.`
+          : folders.length === 0
+            ? `${device.name} is in, and can open nothing until you choose a folder for it.`
+            : `${device.name} can open ${folders.length === 1 ? 'one folder' : `${folders.length} folders`}.`,
+        () => setApproving(null),
       ),
     // Deny is a revoke of something that was never approved. The registry has
     // three states and `revoked` is the one that means "not allowed in", so
@@ -2138,6 +2386,18 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
   const [pairing, setPairing] = useState<RemotePairing | null>(null)
   const [busy, setBusy] = useState<RemoteBusy>(null)
   const [now, setNow] = useState(() => Date.now())
+  /** The approval flow on screen, or null. One at a time — see `ApprovalState`. */
+  const [approving, setApproving] = useState<ApprovalState | null>(null)
+  /**
+   * Device id → what it is, or null before the first read.
+   *
+   * Read alongside the roster rather than folded into it, because it comes from
+   * a different file in the main process with a different failure direction: a
+   * roster that cannot be read means the panel says so, and a kind that cannot
+   * be read means every device is a guest, which is the safe answer and not one
+   * to draw as a fact.
+   */
+  const [kinds, setKinds] = useState<Map<string, DeviceKind> | null>(null)
 
   /* ------------------------------------------------- the machines half -- */
 
@@ -2186,15 +2446,22 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       // never from two different moments — and under a deadline, so the pair of
       // them cannot leave "Reading the current state…" on screen for ever. See
       // `withDeadline`.
-      const [status, devices] = await withDeadline(
+      const [status, devices, deviceKinds] = await withDeadline(
         Promise.all([
           bridge.remoteStatus(),
           bridge.listRemoteDevices?.() ?? Promise.resolve([]),
+          // In the same read, so a row never shows a device as approved while
+          // the line under it is still guessing what kind it is. A build whose
+          // preload predates the channel resolves to an empty list, which reads
+          // as "nobody has decided" — the same answer the store gives, and the
+          // safe one.
+          bridge.listRemoteDeviceKinds?.() ?? Promise.resolve([]),
         ]),
         'The remote access state',
         READ_DEADLINE_MS,
       )
       if (!alive.current || seq !== readSeq.current) return
+      setKinds(toDeviceKinds(deviceKinds))
       const parsed = toRemoteState(status, devices)
       if (parsed) {
         setState(parsed)
@@ -2358,6 +2625,8 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
     reread: () => void refresh(),
     run: (key, work, done) => void run(key, work, done),
     isAlive: () => alive.current,
+    approving,
+    setApproving,
   })
 
   const machinesHalf: MachinesHalf = {
@@ -2406,6 +2675,8 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       pairing={pairing}
       secondsLeft={secondsLeft}
       busy={busy}
+      kinds={kinds}
+      approving={approving}
       machines={machinesHalf}
       actions={actions}
       now={now}
@@ -2427,10 +2698,14 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
         setting with no subject.
       */
       folders={
-        wired && state !== null ? <DeviceFolders devices={grantableDevices(state.devices)} /> : null
+        wired && state !== null ? (
+          <DeviceFolders devices={grantableDevices(state.devices, kinds)} />
+        ) : null
       }
       copilot={
-        wired && state !== null ? <DeviceCopilot devices={copilotDevices(state.devices)} /> : null
+        wired && state !== null ? (
+          <DeviceCopilot devices={copilotDevices(state.devices, kinds)} />
+        ) : null
       }
     />
   )
@@ -2452,9 +2727,23 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
  * already dropped whatever it had. Listing it would offer an edit to a record
  * the main process deleted while this panel was open.
  */
-export function grantableDevices(devices: readonly RemoteDevice[]): FolderDevice[] {
+export function grantableDevices(
+  devices: readonly RemoteDevice[],
+  /**
+   * What each device is. Null before the read lands, and then every approved
+   * device is listed — a moment of showing one row too many is better than a
+   * panel that appears empty and then fills.
+   */
+  kinds: ReadonlyMap<string, DeviceKind> | null = null,
+): FolderDevice[] {
   return devices
     .filter((device) => device.state === 'approved')
+    // One of the owner's own machines has no folder list and never consults one,
+    // so a row for it here would be a control that changes nothing — which is
+    // the "a control that cannot act" this product is removing everywhere else.
+    // A device with no recorded kind is left in: it is read as a guest with
+    // nothing, and this panel is where somebody fixes that.
+    .filter((device) => kinds === null || kinds.get(device.id) !== 'mine')
     .map((device) => ({ id: device.id, name: device.name }))
 }
 
@@ -2476,8 +2765,26 @@ export function grantableDevices(devices: readonly RemoteDevice[]): FolderDevice
  * looking for the row rather than learning why it is not there. So the row is
  * drawn, and it says what is wrong and what fixes it.
  */
-export function copilotDevices(devices: readonly RemoteDevice[]): CopilotDevice[] {
+export function copilotDevices(
+  devices: readonly RemoteDevice[],
+  kinds: ReadonlyMap<string, DeviceKind> | null = null,
+): CopilotDevice[] {
   return devices
     .filter((device) => device.state === 'approved')
+    /*
+     * A guest is **filtered**, not carried, and it is the opposite decision from
+     * the one two paragraphs up — so it is worth saying why they differ.
+     *
+     * A device with no key is carried because the thing standing in its way is
+     * fixable and the row is how somebody learns to fix it: pair it again. A
+     * guest is not in that position. His rule is *"the copilot is never
+     * shared"*, so there is no state in which this row would become available,
+     * and drawing a row that can never act is the "unchecked box still
+     * advertises the feature and invites the ask" this rule exists to prevent.
+     *
+     * Before the kinds read lands nothing is filtered, for the reason above: a
+     * list that shrinks is worse than one that briefly showed a row too many.
+     */
+    .filter((device) => kinds === null || kinds.get(device.id) === 'mine')
     .map((device) => ({ id: device.id, name: device.name, sealed: device.fingerprint !== null }))
 }

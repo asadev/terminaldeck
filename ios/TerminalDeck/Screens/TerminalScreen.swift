@@ -91,6 +91,33 @@ struct TerminalScreen: View {
         ZStack {
             Color(Palette.terminalBackground).ignoresSafeArea()
 
+            /*
+             * Two things want the bottom sixty points of this screen and only
+             * one of them may have it, so the two levers are deliberately
+             * different levers.
+             *
+             * This modifier refuses the **container** inset, which on iOS 26 is
+             * where the floating tab pill's band lives. Inside a session there is
+             * no pill — `DeckChrome` decides it and `DeckTabs` states it at the
+             * `TabView` — and without this the space would still be reserved for
+             * a bar nothing draws. *"Inside the session we don't need the pill."*
+             *
+             * What it must not also refuse is the **home indicator**, which is a
+             * fact about the hardware rather than a piece of this app's chrome.
+             * It did, once, and he reported it: *"at the bottom we cannot see
+             * some stuff because of the mobile's round corners and the
+             * running-agents things… leave a little space when the keyboard is
+             * off."* That half is now `TerminalContainerView`'s, which is a
+             * UIKit view sitting against the real bottom edge and therefore the
+             * one thing here that can measure the indicator rather than guess at
+             * it. Read its header before touching either lever; deleting one of
+             * them re-creates one of the two bugs.
+             *
+             * `.container` and not `.all`: keyboard avoidance is a separate
+             * region and this screen wants it. It is what lifts the terminal
+             * above the keyboard, and it is also what makes the inset below
+             * disappear while somebody is typing.
+             */
             TerminalHostView(bridge: bridge)
                 .ignoresSafeArea(.container, edges: .bottom)
 

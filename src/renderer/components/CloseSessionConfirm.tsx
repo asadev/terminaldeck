@@ -5,31 +5,44 @@ import { PROVIDER_OPTIONS } from './ProviderPicker'
 import './CloseSessionConfirm.css'
 
 /**
- * Confirming a close that would throw something away.
+ * Confirming a close.
  *
- * ⌘W is one keystroke from ⌘Q and sits next to the tab it kills, so the cost of
- * never asking is an agent stopped mid-edit. The cost of always asking is
- * worse: a dialog on every close trains the muscle memory that dismisses it,
- * and then it is not a safeguard at all. So this asks about exactly two states
- * and never about the rest.
+ * ## It asks every time now, and that is a decision he made
  *
- * ## Which states are worth asking about
+ * Asad, 2026-08-17, on closing from the side panel: *"Always ask."* Stated
+ * plainly, about anything, and it reverses what is written below.
  *
- * Read from `session-activity.ts`, which is what actually produces them — and
- * one of them does not mean what its name suggests:
+ * What was here before asked about exactly two states — `working` and `input` —
+ * on the argument that a dialog on every close trains the muscle memory that
+ * dismisses it. That argument is sound and it lost to a better one: his audience
+ * is *"mostly non-technical vibe coders"*, ending a session is irreversible, and
+ * a person who does not yet know what `working` means cannot use a safeguard
+ * that only appears in states they cannot see. The escape hatch is the point —
+ * "don't ask again" is one tick away, and since this pass it says where to turn
+ * itself back on, which is the half he found missing.
  *
- * - `working`  — a spinner is on screen, output is still streaming. Asking.
- * - `input`    — the agent asked a question and is blocked on the answer. Asking.
+ * ## The states still mean different things, and the dialog still says so
+ *
+ * {@link RISKY_STATUSES} did not go; it stopped deciding *whether* to appear and
+ * now decides *what is at stake*, which is what it was always describing. Read
+ * from `session-activity.ts`, which is what produces them — and one does not
+ * mean what its name suggests:
+ *
+ * - `working`  — a spinner is on screen, output is still streaming. Something to lose.
+ * - `input`    — the agent asked a question and is blocked on the answer. Something to lose.
  * - `waiting`  — **an empty prompt**. The CLI is ready for you and doing
  *                nothing. Despite the name this is the resting state of every
- *                healthy session, so confirming on it would fire on almost
- *                every close and teach the user to click through.
- * - `idle`     — nothing recognisable on screen. Nothing to lose.
- * - `completed`— finished. Nothing to lose.
- * - `exited`   — the process is already gone. There is nothing left to close.
+ *                healthy session.
+ * - `idle`     — nothing recognisable on screen.
+ * - `completed`— finished.
+ * - `exited`   — the process is already gone.
+ *
+ * The last four are asked about too, in their own words: closing them still ends
+ * a terminal with its scrollback, its shell history and whatever is half-typed
+ * in it, which is a small loss rather than no loss.
  */
 
-/** The two states where closing costs something. See the module note. */
+/** The two states where closing costs real work. See the module note. */
 export const RISKY_STATUSES: ReadonlySet<SessionStatus> = new Set<SessionStatus>([
   'working',
   'input',
@@ -51,11 +64,28 @@ export const CONFIRM_CLOSE_KEY = 'general.confirmCloseWorking'
  *
  * The caller's gate, not the dialog's: a component that decides for itself
  * whether to appear can only refuse by rendering nothing, which leaves the user
- * having clicked close with no session closed and no dialog to explain it.
+ * having clicked close with no session closed and no dialog to explain it. That
+ * is not hypothetical — this file used to hold a second copy of the rule as a
+ * `return null` backstop inside the component, and the moment the caller's rule
+ * widened, the backstop would have turned every calm close into a ✕ that did
+ * nothing at all.
+ *
+ * `status` is still taken, and is still what the dialog's wording is built from
+ * — see {@link closeWarning}. It no longer decides whether to ask: *"Always
+ * ask."* The one thing that can switch this off is the person, by ticking the
+ * box in the dialog, and Settings → General turns it back on.
  */
-export function needsCloseConfirm(status: SessionStatus, confirmEnabled: boolean): boolean {
-  if (!confirmEnabled) return false
-  return RISKY_STATUSES.has(status)
+export function needsCloseConfirm(_status: SessionStatus, confirmEnabled: boolean): boolean {
+  /*
+   * `_status` is still in the signature, deliberately, and it is not vestigial.
+   *
+   * Every caller already has the status in hand and passes it, and the moment it
+   * is dropped from here it stops being obvious that this is the place where a
+   * per-status rule would go if one ever comes back. Underscored because the
+   * body genuinely does not read it any more, which `noUnusedParameters` is
+   * right to insist be said out loud rather than left looking used.
+   */
+  return confirmEnabled
 }
 
 /**
@@ -125,9 +155,9 @@ export interface CloseWarning {
 export function closeWarning(status: SessionStatus, count = 1): CloseWarning {
   if (count > 1) {
     return {
-      headline: `${count} sessions here are still going.`,
+      headline: `Closing this project closes ${count} sessions.`,
       detail:
-        'Closing the project stops every one of them part-way through. Anything they have not already written to disk goes with them.',
+        'Every one of them stops where it is. Anything they have not already written to disk goes with them.',
     }
   }
   if (status === 'input') {
@@ -137,10 +167,34 @@ export function closeWarning(status: SessionStatus, count = 1): CloseWarning {
         'It is blocked until it gets an answer. Closing now discards the question and whatever it was about to do.',
     }
   }
+  if (status === 'working') {
+    return {
+      headline: 'This session is still working.',
+      detail:
+        'Closing stops the agent part-way through. Anything it has not already written to disk goes with it.',
+    }
+  }
+  /*
+   * The calm states, which are now asked about too — see the module note.
+   *
+   * They need words of their own rather than the "still working" sentence,
+   * because the whole reason this dialog only appeared twice before was that
+   * telling somebody they are about to lose work when they are not is how a
+   * confirmation becomes a thing you click through without reading. A session
+   * that has already exited is the sharpest case: there is no process left, and
+   * saying so is what stops the dialog from crying wolf on the one press where
+   * it genuinely does not matter.
+   */
+  if (status === 'exited') {
+    return {
+      headline: 'This session has already ended.',
+      detail: 'Closing takes the row out of the sidebar. Its scrollback goes with it.',
+    }
+  }
   return {
-    headline: 'This session is still working.',
+    headline: 'This ends the session.',
     detail:
-      'Closing stops the agent part-way through. Anything it has not already written to disk goes with it.',
+      'The agent stops and the terminal goes, with its scrollback and anything half-typed in it. It cannot be reopened where it left off.',
   }
 }
 
@@ -216,11 +270,20 @@ export function CloseSessionConfirm({
     }
   }, [busy, onConfirm, onConfirmSettingChange, suppress])
 
-  // The caller gates on `needsCloseConfirm`; this is the backstop. Rendering a
-  // "you will lose work" dialog over a session that exited ten minutes ago is
-  // the fastest way to make every future one of these get clicked through.
-  if (!RISKY_STATUSES.has(status)) return null
-
+  /*
+   * There is no `if (!RISKY_STATUSES.has(status)) return null` here any more,
+   * and its absence is load-bearing rather than tidying.
+   *
+   * It was a second copy of the caller's rule, kept as a backstop against a
+   * "you will lose work" dialog appearing over a session that exited ten minutes
+   * ago. The caller's rule is now *"Always ask"*, and a component that refuses to
+   * render is a component that can only refuse **silently**: the press would set
+   * a pending close, draw nothing, and leave a ✕ that does nothing — which is
+   * the exact complaint this session was sent to fix, reintroduced by the fix
+   * for a different one. What the backstop was protecting is real and is handled
+   * where it belongs: `closeWarning` says something true for every state instead
+   * of one alarming sentence for all of them.
+   */
   const warning = closeWarning(status, count)
   const project = count > 1
 
@@ -264,12 +327,27 @@ export function CloseSessionConfirm({
           />
           <span className="close-confirm-suppress-text">
             <span className="close-confirm-suppress-label">Don’t ask again</span>
-            {/* No claim about where to undo it: the Preferences row that turns
-                this back on is listed as required wiring for this feature, and
-                promising a control that is not there yet is the one thing a
-                confirm dialog cannot afford to do. */}
+            {/*
+              Where to turn it back on, said here, on the control that turns it
+              off.
+
+              Asad, 2026-08-17: *"'Don't ask again' is a one-way door — once
+              ticked there is no way to turn it back on. That has to exist."*
+              It did exist by then — Settings → General carries the switch — but
+              nothing in this dialog said so, and the comment that used to sit
+              here explains why: the row was still unbuilt when this was written,
+              and *"promising a control that is not there yet is the one thing a
+              confirm dialog cannot afford to do."* The row was built and this
+              sentence was never updated, so from where he was sitting the door
+              was one-way.
+
+              It names the place rather than offering a button. A link out of a
+              confirmation is a second decision in front of the first one, and
+              the person is mid-close; a sentence they can act on afterwards is
+              what a one-way door actually needs.
+            */}
             <span className="close-confirm-detail">
-              Busy sessions close immediately from then on.
+              Sessions close straight away from then on. Settings → General turns this back on.
             </span>
           </span>
         </label>

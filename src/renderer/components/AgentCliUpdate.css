@@ -1,0 +1,162 @@
+/* ============================================================================
+   An agent CLI that is too old to sign in.
+
+   It appears in two places that look nothing alike — the Accounts pane inside
+   the settings sheet, and the AI readiness page — so it draws itself from
+   foundation tokens only and inherits nothing from either. A tint, a radius and
+   the space around it; no outline, because the tint is already the emphasis and
+   a border around a tinted block is the second time the same thing is said.
+   ============================================================================ */
+
+.agent-cli {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-5);
+  max-width: 84ch;
+}
+
+/* Wraps rather than squeezing. This block draws inside a settings pane whose
+   width follows the sheet, and beside a score column on the readiness page; at
+   the narrow end the buttons were pushing the sentence into three-word lines.
+   Below roughly 34rem of row the actions drop underneath the text instead. */
+.agent-cli-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  /* Warning, not failure. Nothing is broken on disk and nothing has leaked —
+     a sign-in will fail until this is dealt with, which is a different weight
+     of problem from the red the readiness gate wears. */
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+
+.agent-cli-body {
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+
+.agent-cli-title {
+  margin: 0;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* The command and the version it answered with, set as what they are. */
+.agent-cli-title code {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+}
+
+.agent-cli-detail {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The commands inside the advice, set as commands. They are what somebody
+   copies when they would rather run it themselves than press the button, so
+   they have to be selectable at a glance and unambiguous about where each one
+   ends — which is exactly what the backticks were doing badly. */
+.agent-cli-detail code {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.agent-cli-result {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--color-warning);
+}
+
+.agent-cli-result[data-ok='true'] {
+  color: var(--status-completed);
+}
+
+.agent-cli-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+.agent-cli-fix,
+.agent-cli-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.agent-cli-fix {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.agent-cli-fix:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.agent-cli-fix:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.agent-cli-dismiss {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.agent-cli-dismiss:hover {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+.agent-cli-fix:focus-visible,
+.agent-cli-dismiss:focus-visible,
+.agent-cli-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.agent-cli-hidden {
+  margin: 0;
+  font-size: var(--t-callout);
+  color: var(--text-tertiary);
+}
+
+/* A sentence with a control in it, so it is set as text rather than as a
+   button — the door back should not compete with the row it brings back. */
+.agent-cli-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.agent-cli-link:hover {
+  text-decoration: underline;
+}

@@ -158,13 +158,76 @@ describe('every section id still resolves to a pane', () => {
      * copilot was built as a real session rather than a bespoke backend, since
      * a session is the only shape that has those things to show.
      *
-     * Folding it into Agents was considered and is wrong on this table's own
-     * rule that a section is a *subject*: Agents answers "which agent runs, as
+     * Folding it into Assistants was considered and is wrong on this table's own
+     * rule that a section is a *subject*: Assistants answers "which AI runs, as
      * which login, with what installed", and six blocks of audit surface for
      * one specific agent under that heading is where somebody stops finding it.
+     *
+     * **Help arrived without moving the number**, which is the part worth
+     * reading. He asked for it in as many words — *"we should have a help page
+     * where we can see all the help-related features… this can be a separate
+     * page"* — and it was paid for rather than added: About folded into it as
+     * the masthead at the top of the pane. That is this rail's own rule finally
+     * applied to its last exception, since a version number and a licence are
+     * something you *read*, exactly like the Shortcuts and Help entries that
+     * left for the same reason.
      */
     expect(sectionsFor('mac').length).toBeLessThanOrEqual(10)
     expect(sectionsFor('windows').length).toBeLessThanOrEqual(11)
+  })
+})
+
+/**
+ * Help is a page, and it is the page it says it is.
+ *
+ * The failure this is really about is not "Help is missing" — that would be
+ * obvious the moment anybody opened the window. It is Help being *thin*: a rail
+ * entry with a heading and a link out, which is what it was before this pass and
+ * is what a page assembled from two other components quietly decays into if one
+ * of them stops being rendered. So each half is asserted by something only that
+ * half can produce.
+ */
+describe('Help is a real page rather than a jump to one', () => {
+  const html = (): string => render('help')
+
+  it('carries the in-app help, generated from the app itself', () => {
+    const markup = html()
+    // From `HelpPanel`'s own section list and topics — not a string this pane
+    // writes, which is the point of embedding the ⌘? component rather than
+    // describing it.
+    expect(markup).toContain('Getting started')
+    expect(markup).toContain('Troubleshooting')
+    expect(markup).toContain('Search help')
+  })
+
+  it('carries About, so the application menu still lands on it', () => {
+    // `AboutSection` with no bridge names the app "This app" and says the build
+    // details are unreadable — both are its markup, and neither is Help's.
+    expect(html()).toContain('This app')
+    expect(html()).toContain('Check for updates')
+    expect(renderToStaticMarkup(<SettingsPanel bridge={{}} platform="windows" initialSection="about" />)).toContain(
+      'data-section="help" class="settings-nav-item" aria-selected="true"',
+    )
+  })
+
+  it('does not print the shortcut list a second time', () => {
+    /*
+     * Shortcuts is the popover off the rail's footer, which he asked for by
+     * name. `HelpPanel` would happily draw all forty chords here as well, and
+     * the whole point of the popover was that they were the longest thing in the
+     * window.
+     */
+    const markup = html()
+    expect(markup).not.toContain('help-keys')
+    // And the footer button that opens the popover is still there.
+    expect(markup).toContain('aria-label="Keyboard shortcuts"')
+  })
+
+  it('no longer offers a second Help beside the first', () => {
+    // The rail footer's link out to the website is gone: the website is a row on
+    // the Help pane now. Two Helps a centimetre apart, doing different things,
+    // is the duplication that footer existed to remove.
+    expect(html()).not.toContain('class="settings-rail-btn-out"')
   })
 })
 
@@ -186,8 +249,21 @@ describe('every value the last build wrote still lands somewhere', () => {
     'general.notifyOnAttention': false,
     'general.showInsightAlerts': false,
     'advanced.restoreSessions': false,
+    /*
+     * `general.language: 'en'` was here.
+     *
+     * This is the line the header above describes: *"the day one of these can
+     * genuinely be dropped, deleting the line is the place that decision gets
+     * recorded."* The row is gone from the schema, on his instruction — *"there
+     * is no selection. The option should not be there"* — so there is no
+     * setting for it to land on and this list can no longer claim one.
+     *
+     * The stored value is not lost, it is just no longer *this* file's business:
+     * `mergeSettings` keeps an unrecognised key, and `settings-schema.test.ts`
+     * asserts that for this exact id. What this list is for is settings that
+     * still exist under a different name, and that is now not one of them.
+     */
     // The rows that did not.
-    'general.language': 'en',
     'general.autoNameSessions': false,
     'general.confirmCloseWorking': false,
     'general.copyOnSelect': true,
@@ -244,10 +320,22 @@ describe('nothing was stranded by the store being removed', () => {
     expect(off).toEqual(['voice'])
   })
 
-  it('puts that one switch on the Tools pane', () => {
+  /*
+   * The consequence, restated after the switch became a key.
+   *
+   * This used to assert a `role="switch"` on the Tools pane, and the rule it
+   * was guarding — the one feature that ships off must have somewhere to be
+   * turned on — is unchanged. What changed is *what turns it on*: a
+   * transcription key, checked against the provider before it is stored, since
+   * a toggle could leave the microphone on with nothing behind it. So the pane
+   * must still be the place voice is dealt with, and it must still say
+   * something a person can act on when there is nothing wired to act with,
+   * which is the state this render is in.
+   */
+  it('deals with that one feature on the Tools pane', () => {
     const html = render('features')
-    expect(html).toContain('Microphone in the chat box')
-    expect(html).toContain('role="switch"')
+    expect(html).toContain('Voice dictation')
+    expect(html).toMatch(/transcription/i)
   })
 
   it('offers no install or uninstall anywhere in the window', () => {

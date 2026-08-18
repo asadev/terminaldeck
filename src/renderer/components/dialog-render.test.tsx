@@ -63,13 +63,29 @@ describe('NewSessionDialog', () => {
     expect(html).toMatch(/<input type="radio"[^>]*checked=""[^>]*value="claude"/)
   })
 
-  it('defaults to a fresh conversation', () => {
-    expect(html).toContain('Start fresh')
-    expect(html).toContain('Continue the last conversation')
+  it('asks nothing about the conversation, because fresh is the only behaviour', () => {
+    /*
+     * *"'Continue last conversation' is agent-specific — either give a real
+     * picker of previous conversations, or remove it and 'start fresh', since
+     * fresh is then the only behaviour."*
+     *
+     * Both radios are gone. The picker cannot be built on `CreateSessionInput`,
+     * which carries `resume?: boolean` and no id, and the flag it becomes means
+     * "the newest one" for two of the four agents and is silently ignored by the
+     * other two — see the note in the form.
+     */
+    expect(html).not.toContain('Start fresh')
+    expect(html).not.toContain('Continue the last conversation')
+    expect(html).not.toContain('Conversation')
   })
 
-  it('warns that a multi-line prompt will be flattened before it is sent', () => {
-    expect(html).toContain('Line breaks become spaces')
+  it('asks for no first message', () => {
+    // *"Remove 'first message' from the new-session dialog entirely."* The
+    // textarea, its caveat and the "Tab will be titled …" preview it fed all go
+    // with it — a heading with nothing under it is the same defect one line up.
+    expect(html).not.toContain('First message')
+    expect(html).not.toContain('Line breaks become spaces')
+    expect(html).not.toContain('<textarea')
   })
 
   it('offers to remember the choice for the project', () => {
@@ -230,11 +246,30 @@ describe('CloseSessionConfirm', () => {
     )
   }
 
-  it('renders nothing for a session with nothing to lose', () => {
-    // `waiting` is an empty prompt in this codebase — see the component note.
-    for (const status of ['idle', 'waiting', 'completed', 'exited'] as const) {
-      expect(render(status)).toBe('')
+  it('appears for every state, and says something true about each', () => {
+    /*
+     * *"Always ask."* This used to be `expect(render(status)).toBe('')` for the
+     * four calm states, backing a caller that skipped the dialog for them — so
+     * closing a project took four idle agents with no confirmation at all.
+     *
+     * The reason the old rule existed is still respected, and this is where:
+     * the dialog appears, and it does **not** claim work is being lost when
+     * none is. A "you will lose everything" sentence over a session that exited
+     * an hour ago is how a confirmation becomes a thing you click through.
+     */
+    for (const status of ['idle', 'waiting', 'completed'] as const) {
+      const html = render(status)
+      expect(html).toContain('This ends the session.')
+      expect(html).not.toContain('still working')
     }
+    expect(render('exited')).toContain('already ended')
+  })
+
+  it('says where to turn the confirmation back on', () => {
+    // *"'Don't ask again' is a one-way door — once ticked there is no way to
+    // turn it back on."* The switch existed in Settings by then; nothing in
+    // this dialog said so, which from where he was sitting is the same thing.
+    expect(render('working')).toContain('Settings → General')
   })
 
   it('warns about a session that is mid-task', () => {

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { AnchoredPopup } from './AnchoredPopup'
+import { BrowserMenu } from './BrowserMenu'
 import { CapturePopup } from './CapturePopup'
 import { DeviceBar } from './DeviceBar'
+import { PasswordOffer } from './PasswordOffer'
+import { SignInBanner } from './SignInBanner'
 import { DrawLayer, type DrawSurface } from './DrawLayer'
 import { DriveBanner } from './DriveBanner'
 import { DrawPanel } from './DrawPanel'
@@ -24,7 +28,14 @@ import {
   type DrawApi,
   type PageFrame,
 } from './draw-bridge'
-import { anchorInWindow } from './popup-anchor'
+import { anchorInWindow, type Box } from './popup-anchor'
+import {
+  passwordsAvailable,
+  readSignInTrouble,
+  resolveAccountsApi,
+  signInHelpAvailable,
+  type SignInTrouble,
+} from './accounts-bridge'
 import { useAgentTarget } from './useAgentTarget'
 import type { AgentSessionBridge } from './agent-target'
 import {
@@ -432,6 +443,34 @@ export function BrowserWorkspace({
    */
   const [drive, setDrive] = useState<DriveStatus>(IDLE_DRIVE)
   const [copied, setCopied] = useState(false)
+
+  /*
+   * Everything that used to live at the bottom of this panel, and the two
+   * features he asked for while he was there.
+   *
+   * *"Remove everything from the bottom. I need a clear view of the websites.
+   * Whatever is required should be on the top right corner."* The band under
+   * the stage is gone; these four pieces of state are where its contents went.
+   *
+   *  - `menuAnchor` is the toolbar's action group, measured when a popup opens
+   *    rather than kept in state, so a resized window cannot leave a popup
+   *    pointing at where a button used to be.
+   *  - `flowOpen` is the recorded flow, as a popup. It deliberately does not
+   *    open *while* recording: a popup here parks the native page — see
+   *    `AnchoredPopup` — so showing the steps live would hide the very website
+   *    the person is recording themselves using.
+   *  - `trouble` is what Google is doing to a sign-in on this page.
+   *  - `offer` is a login a page just submitted, waiting to be saved. The
+   *    password itself is never here; see `browser-passwords.ts`.
+   */
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [menuAnchor, setMenuAnchor] = useState<Box>({ x: 0, y: 0, width: 0, height: 0 })
+  const [flowOpen, setFlowOpen] = useState(false)
+  const [trouble, setTrouble] = useState<SignInTrouble | null>(null)
+  const [troubleFor, setTroubleFor] = useState('')
+  const [offer, setOffer] = useState<{ id: string; origin: string; username: string } | null>(null)
+  const [offerNote, setOfferNote] = useState('')
+  const accounts = useMemo(() => resolveAccountsApi(), [])
   const [focusToken, setFocusToken] = useState(0)
 
   /**
@@ -466,6 +505,16 @@ export function BrowserWorkspace({
 
   const stageRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * The toolbar's right-hand action group, which every popup in this panel is
+   * now placed against.
+   *
+   * One anchor for all of them rather than one per button: `anchorPopup` slides
+   * a popup back inside the viewport, so anchoring to a cluster that already
+   * sits at the right edge lands every popup in the top right corner — which is
+   * where he asked for them — without each button having to carry a ref.
+   */
+  const actionsRef = useRef<HTMLDivElement | null>(null)
   const seq = useRef(0)
   /** Serialises create/claim so "the newest unclaimed view" stays unambiguous. */
   const queue = useRef<Promise<void>>(Promise.resolve())
@@ -905,6 +954,31 @@ export function BrowserWorkspace({
     if (key !== '') setTabs((prev) => moveTab(prev, key, index))
   }, [closeTab, openNewTab])
 
+  /**
+   * Reopen the page that is on screen, in whichever profile is now switched on.
+   *
+   * **Not a navigation.** A `WebContents`' session is fixed when it is
+   * constructed and cannot be swapped afterwards — the physics the Isolated
+   * toggle above already lives under — so calling `navigate` here would reload
+   * the page in the *old* profile's cookie jar while the menu said it had moved
+   * it. That is precisely the kind of control this whole review is about: one
+   * that looks like it acted and did not. So the tab is closed and a new one is
+   * opened at the same address and put back in the same place in the strip,
+   * which is the only arrangement in which the new session is real.
+   */
+  const reopenInActiveProfile = useCallback((): void => {
+    const tab = tabsRef.current.find((entry) => entry.key === activeRef.current)
+    if (!tab) return
+    const index = tabsRef.current.findIndex((entry) => entry.key === tab.key)
+    const url = tab.url || tab.draft
+    closeTab(tab.key)
+    // Never isolated: an isolated tab belongs to no profile at all, and
+    // reopening one "in a profile" would silently move it out of the in-memory
+    // partition somebody chose it for.
+    const key = openNewTab(url, false, false)
+    if (key !== '') setTabs((prev) => moveTab(prev, key, index))
+  }, [closeTab, openNewTab])
+
   /* -- the extras, all of which need the claimed view. */
   const withId = useCallback(
     (run: (api: BrowserBridge, id: string) => Promise<void>): void => {
@@ -1121,6 +1195,90 @@ export function BrowserWorkspace({
     }
   }, [])
 
+  /**
+   * Measure the toolbar, then open whichever popup was asked for.
+   *
+   * Measured at the moment of opening rather than kept in state and updated on
+   * resize. The toolbar moves whenever the window is resized, the panel becomes
+   * half of a split, or a band above it appears — and a stale anchor is a popup
+   * pointing at where a button used to be, which is worse than one that is
+   * placed a frame later.
+   */
+  const openAt = useCallback((open: () => void): void => {
+    const node = actionsRef.current
+    if (node) {
+      const box = node.getBoundingClientRect()
+      setMenuAnchor({ x: box.x, y: box.y, width: box.width, height: box.height })
+    }
+    open()
+  }, [])
+
+  /*
+   * When recording stops, show what was recorded.
+   *
+   * This is the whole of why the recorder is no longer a permanent band at the
+   * bottom. During a recording the one thing that must stay on screen is the
+   * page — a popup here parks the native view — so nothing is shown but a
+   * counter on the Stop button. The moment recording ends the page stops
+   * mattering and the steps start to, so the popup opens by itself. Nobody has
+   * to know it is a popup at all.
+   */
+  const wasRecording = useRef(false)
+  useEffect(() => {
+    if (wasRecording.current && !recording.recording && recording.steps.length > 0) {
+      openAt(() => setFlowOpen(true))
+    }
+    wasRecording.current = recording.recording
+  }, [recording.recording, recording.steps.length, openAt])
+
+  /*
+   * Ask the main process what Google is doing to this page's sign-in.
+   *
+   * Per URL, and only ever a question about the address — `browser-signin.ts`
+   * explains why it refuses to read the page's text instead. `troubleFor`
+   * remembers which address the answer was about, so a dismissed banner stays
+   * dismissed while the person keeps typing into the same page, and comes back
+   * if they navigate somewhere that is also in trouble.
+   */
+  const pageUrl = active?.url ?? ''
+  useEffect(() => {
+    if (!signInHelpAvailable(accounts) || pageUrl === '') {
+      setTrouble(null)
+      return
+    }
+    let alive = true
+    // The saved-login note is about the page that was on screen when it was
+    // written. Carrying it across a navigation leaves "Saved." sitting over a
+    // completely different site, which reads as the app having just done
+    // something to *that* one.
+    setOfferNote('')
+    void accounts.browserSignInDiagnose?.(pageUrl).then((raw) => {
+      if (!alive) return
+      setTrouble(readSignInTrouble(raw))
+      setTroubleFor(pageUrl)
+    })
+    return () => {
+      alive = false
+    }
+  }, [accounts, pageUrl])
+
+  /*
+   * A login a page just submitted, offered for saving.
+   *
+   * Scoped to this panel's own tabs: several browser panels can be mounted at
+   * once — a browser page is a row in the sidebar — and the push reaches every
+   * one of them, so without the id check the same offer would appear in every
+   * open browser panel in the window.
+   */
+  useEffect(() => {
+    if (!passwordsAvailable(accounts) || !accounts.onBrowserPasswordOffer) return
+    return accounts.onBrowserPasswordOffer((id, origin, username) => {
+      if (!tabsRef.current.some((tab) => tab.id === id)) return
+      setOfferNote('')
+      setOffer({ id, origin, username })
+    })
+  }, [accounts])
+
   /*
    * A drawing belongs to the page it is a picture of.
    *
@@ -1277,8 +1435,11 @@ export function BrowserWorkspace({
         drawing={frame !== null}
         deviceOpen={deviceOpen}
         onToggleDevice={() => setDeviceOpen((open) => !open)}
-        onOpenSession={() => setSessionOpen(true)}
         onToggleIsolation={isolationAvailable(iso) ? toggleIsolation : undefined}
+        actionsRef={actionsRef}
+        menuOpen={menuOpen}
+        onMenu={() => openAt(() => setMenuOpen((open) => !open))}
+        steps={recording.steps.length}
       />
 
       {/*
@@ -1292,6 +1453,68 @@ export function BrowserWorkspace({
         while it runs.
       */}
       <DriveBanner status={drive} onResume={(carryOn) => driveApi.browserDriveResume?.(carryOn)} />
+
+      {/*
+        The two account bands, in the flow for the same reason `DriveBanner` is:
+        a browser page is a native view composited above this entire renderer, so
+        nothing HTML can be drawn on top of it. As blocks they shrink the page's
+        rectangle instead of covering it, which means the site reflows once when
+        one appears and the website stays visible underneath — which is the whole
+        point of telling somebody their sign-in is about to be refused.
+      */}
+      {trouble && troubleFor === pageUrl && (
+        <SignInBanner
+          trouble={trouble}
+          api={accounts}
+          url={pageUrl}
+          onDismiss={() => setTrouble(null)}
+        />
+      )}
+
+      {offer && (
+        <PasswordOffer
+          origin={offer.origin}
+          username={offer.username}
+          api={accounts}
+          onAnswered={(message) => {
+            setOffer(null)
+            setOfferNote(message)
+          }}
+        />
+      )}
+
+      {offerNote !== '' && (
+        <p className="bw-said" role="status">
+          {offerNote}
+          <button type="button" className="bw-text-button" onClick={() => setOfferNote('')}>
+            Dismiss
+          </button>
+        </p>
+      )}
+
+      {/*
+        Draw mode's controls, in a strip under the toolbar rather than a popup.
+
+        Two reasons, and neither is taste. Draw mode has already parked the
+        native page and put a canvas where it was, so there is no website on
+        screen for a strip to shrink — the clear view he asked for is not at
+        stake here. And a popup would float over the top right of the canvas,
+        which is a part of the picture somebody is trying to draw on.
+      */}
+      {frame && (
+        <div className="bw-strip">
+          <DrawPanel
+            tool={tool}
+            markCount={marks.length}
+            ready={!saving}
+            onTool={setTool}
+            onUndo={() => setMarks(undoMark)}
+            onClear={() => setMarks([])}
+            onSend={sendMarked}
+            onCancel={() => toggleMode('draw')}
+          />
+        </div>
+      )}
 
       {deviceOpen && (
         <DeviceBar
@@ -1454,71 +1677,6 @@ export function BrowserWorkspace({
       </div>
 
       {/*
-        The bottom strip is the recorder's alone now.
-
-        It used to be a two-tab strip — Element and Flow — and that arrangement
-        is what made the recording bug visible: a capture forced the strip to
-        Element, so recording a flow meant watching the panel jump away from the
-        list it was supposed to be filling. An element is a popup at the element
-        now, which leaves nothing to switch between, so there is nothing to
-        switch with. A tab strip of one tab is a label.
-      */}
-      <div className="bw-bottom">
-        <div className="bw-bottom-tabs">
-          {/*
-            One band, whichever mode is on. The modes are exclusive, so a flow
-            and a drawing can never both want it — and a tab strip of one tab is
-            a label, which is what this already is.
-          */}
-          <span className="bw-bottom-title">
-            {frame
-              ? `Marks${marks.length > 0 ? ` (${marks.length})` : ''}`
-              : `Flow${recording.steps.length > 0 ? ` (${recording.steps.length})` : ''}`}
-          </span>
-          <span className="bw-spacer" />
-          <button
-            type="button"
-            className="bw-text-button"
-            title="Open this page every time"
-            disabled={!onStartUrl || !active?.url || active.url === startUrl}
-            onClick={() => {
-              const url = active?.url
-              if (url) onStartUrl?.(url)
-            }}
-          >
-            {active?.url && active.url === startUrl ? 'Start page' : 'Set as start page'}
-          </button>
-        </div>
-
-        {frame ? (
-          <DrawPanel
-            tool={tool}
-            markCount={marks.length}
-            ready={!saving}
-            onTool={setTool}
-            onUndo={() => setMarks(undoMark)}
-            onClear={() => setMarks([])}
-            onSend={sendMarked}
-            onCancel={() => toggleMode('draw')}
-          />
-        ) : (
-          <RecorderPanel
-            state={recording}
-            agent={agent}
-            onStop={toggleRecording}
-            onClear={() =>
-              withId(async (a, id) => {
-                const state = await a.browserRecordClear(id)
-                setRecordings((prev) => ({ ...prev, [activeKey]: state }))
-              })
-            }
-            onCopy={copyFlow}
-            copied={copied}
-          />
-        )}
-      </div>
-
-      {/*
         The two popups, both anchored to something real on the page: the element
         that was clicked, and — for a screenshot, which is of the whole page —
         the top of the page's own rectangle.
@@ -1556,6 +1714,48 @@ export function BrowserWorkspace({
           agent={agent}
           onReveal={(path) => void api.browserRevealScreenshot(path)}
           onClose={() => setShot(null)}
+        />
+      )}
+
+      {/*
+        The recorded flow, as a popup in the top right corner.
+
+        `onCopy` and the session picker come with it unchanged — this is the
+        same panel that used to be docked at the bottom, in a place where it is
+        not between the person and the website. It opens itself when a recording
+        stops and is reachable from the menu afterwards; it is deliberately
+        unreachable *during* a recording, because opening it would park the page
+        being recorded.
+      */}
+      {flowOpen && (
+        <AnchoredPopup anchor={menuAnchor} label="Recorded flow" onClose={() => setFlowOpen(false)}>
+          <RecorderPanel
+            state={recording}
+            agent={agent}
+            onStop={toggleRecording}
+            onClear={() =>
+              withId(async (a, id) => {
+                const state = await a.browserRecordClear(id)
+                setRecordings((prev) => ({ ...prev, [activeKey]: state }))
+              })
+            }
+            onCopy={copyFlow}
+            copied={copied}
+          />
+        </AnchoredPopup>
+      )}
+
+      {menuOpen && (
+        <BrowserMenu
+          api={accounts}
+          anchor={menuAnchor}
+          url={active?.url ?? ''}
+          startUrl={startUrl}
+          onStartUrl={onStartUrl}
+          onCookies={() => setSessionOpen(true)}
+          onFlow={recording.steps.length > 0 ? () => openAt(() => setFlowOpen(true)) : undefined}
+          onReopen={reopenInActiveProfile}
+          onClose={() => setMenuOpen(false)}
         />
       )}
 

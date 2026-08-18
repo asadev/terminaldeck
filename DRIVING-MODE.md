@@ -1,9 +1,69 @@
 # Driving Mode
 
-**Status:** design, not built. Written 2026-08-17 against `main` at `bc2e6dc` with four
-agents mid-flight in `deck-control/`, `routines/`, `copilot-*.ts` and `CopilotSection.tsx`.
-Nothing here has been implemented; every file named below is named so the person building
-it can find the seam rather than invent one.
+**Status: rebuilt 2026-08-18 around a different idea.** Everything below §0 was
+written for a *read-along* — the app stopped at each place and held it there for
+as long as it estimated a person needed to read the text. Part 4 of
+`REVIEW-2026-08-17.md` inverts that, and the inversion is the whole feature:
+
+> *"Currently it stays for us to read. Let's not make it for us to read. It will
+> do it in a way that it is reading it in very fast mode — it is going here and
+> there, it is going to all of those sessions… and we can see which words it is
+> making focus… it is scanning everything very fast and we can see like a machine
+> is working, a proper feel of high-speed intelligence."*
+
+So there are two phases and **the reading happens at the end, not during**:
+
+1. **The scan.** Every stop is held for `SCAN_HOLD_MS` (260 ms), whatever it
+   says. Nothing measures text and nothing waits for anybody. `shared/scan.ts`.
+2. **The answer.** The last stop takes the screen back to the copilot's own
+   window, where the app's record renders as one structured response **grouped by
+   session** — *"this session did this, this session did that."*
+   `copilot/driving/TourRecap.tsx`, `shared/scan.ts#groupBySession`.
+
+**What was deleted rather than configured to zero**, because a dial that no
+longer moves anything is worse than no dial:
+
+| Gone | What it was |
+|---|---|
+| `copilot/driving/estimate.ts` | reading time from word count, symbol density and a words-a-minute setting |
+| `copilot/driving/pacer.ts` | the read-along playhead: hover-hold, learned reading speed, the Skim offer, `HOLD_ABOVE_MS` |
+| `copilot/driving/usePacer.ts` | its frame engine and notification throttle |
+| `copilot/driving/PaceControls.tsx` + `.css` | the five named paces, the progress ring, *"reading at about 210 words a minute"* |
+| `copilot/driving/reading-speed.ts` | persisting the measured correction |
+| `interruption.ts`'s `MOVEMENTS` / `onSurfaceMoved` | "the surface is still moving, do not advance yet" — a question only a reader has |
+| Settings → Copilot → Reading pace | the control for a thing that no longer exists |
+
+`src/shared/scan.test.ts` fails if any of those come back, and says why there.
+
+**What survived and why:** interruption (the screen belongs to the person in
+front of it, and that matters *more* at machine speed), the stall guard, the two
+index spaces, the whole anchor/overlay/degradation machinery in §§1–4 and §7–10,
+and the transport.
+
+**What is new:**
+
+- **The dot field.** `renderer/driving/ScanField.tsx` — *"some dots around it or
+  kind of things happening… a proper feel of high-speed intelligence"*, and the
+  sentence that decides the geometry: **the non-focused areas carry the dots; the
+  focus is what stays clear.** A hole is cut out of the field at the measured
+  focus rectangle, so the quoted words are the one part of the window with
+  nothing over them at all.
+- **The panel is the copilot.** Its trace, its transport, and its real chat box,
+  writing to the copilot's own pty.
+- **The layout rule, stated twice in the review and therefore enforced in code:**
+  *"It should not make two split views on its own page."* No panel while the
+  copilot's own window is in front. `renderer/driving/where.ts`.
+- **`app.where`.** A real tool that reads the current view, the focused pane, the
+  visible session and the driven page's URL and text —
+  `main/deck-control/where-tool.ts`. Not a sentence in an instruction file.
+- **The toggle.** `copilot.interactive`, read by `tour.play` before it stages
+  anything; off does the same work, records the same answer and shows none of it.
+  Unwritable by the copilot (`PROTECTED_SETTING_PREFIXES` covers `copilot.`).
+
+Read the rest as the design of the parts that did not change. **§5 is gone
+entirely** and is marked so where it stood.
+
+---
 
 **Reads on top of:** `COPILOT-DESIGN.md` (the copilot is a real session with an MCP server)
 and `COPILOT-CAPABILITIES.md` (what it is for, and the eight things it must not do). Where
@@ -502,131 +562,24 @@ go" stops being a file read.
 
 ---
 
-## 5. Pacing
+## 5. Pacing — deleted 2026-08-18
 
-He is right that seconds-per-line is the wrong answer and he is right that it is the part most
-likely to be got wrong. Seconds per line is wrong three times over: a line of `ls` output and
-a line of dense stack trace are not the same reading, a one-line stop and a fifteen-line stop
-are not the same wait, and — the real problem — it makes the viewer a passenger. The fix is
-not a better formula. It is that **the reader is always the authority and the formula is only
-a default.**
+This section specified the read-along: an estimate in words corrected for symbol
+density, five named paces, a learned per-reader correction, a hover-hold, a
+progress ring, a hand-over above 25 seconds, and a Skim offer for a reader who
+got ahead. All of it was built, measured against 8,760 real assistant messages,
+and then made pointless by Part 4 of the review — **nobody reads during a scan**,
+so there is nothing to pace.
 
-### The estimate
+What replaced it is one constant with one argument behind it: `SCAN_HOLD_MS` in
+`src/shared/scan.ts`, 260 ms, bounded below by the ~150 ms a saccade plus a
+fixation needs before a jump reads as a jump rather than as flicker, and above by
+the point at which a machine starts looking like a slideshow.
 
-```
-travel        = scroll animation, min(320ms, distance-scaled), NOT counted
-fixation      = 450 ms — finding the box after the screen settles
-words         = words(quote) + words(note)
-density       = 1 + 0.6 × symbolRatio,  capped at 2.0
-dwell         = fixation + (words / (wpm × scale)) × 60_000 × density
-              clamped to [1_400, 20_000]
-```
-
-- **Words, not lines.** A word count is the only measure that is right for both a one-liner
-  and a paragraph.
-- **`density`.** `symbolRatio` is the share of non-alphanumeric, non-space characters in the
-  quote. A stack trace, a diff hunk and a JSON blob all land near 2.0; prose lands near 1.0.
-  This is one derived number rather than a second setting, and it is the thing that makes
-  "seconds per line" wrong in the first place.
-- **`fixation = 450 ms`.** The timer does not start until the scroll has settled and the box
-  has been drawn. Counting travel time as reading time is how a tour that looks correctly
-  paced on paper feels rushed on screen.
-- **The floor, 1.4 s.** Nothing flashes. A stop shorter than this is a stop that read as a
-  glitch.
-- **The ceiling, 20 s, is a *hold*, not a clamp.** Past 20 s the tour stops auto-advancing and
-  the bar says *"long one — press → when you're ready."* A forty-second automatic stop is not
-  pacing; it is being held hostage by a progress ring. It is also a signal the stop is too
-  big, and `MAX_QUOTE_CHARS` should have caught it.
-
-### The default, and why
-
-`wpm` default **190**.
-
-Derived, not picked: the commonly cited meta-analysis figure for silent reading of English
-non-fiction is about 238 words per minute, with wide individual spread. Auto-advance has
-asymmetric costs — being too fast means he loses the thread, has to rewind, and learns to
-distrust the feature; being too slow means he presses one key. So the default sits at roughly
-0.8 × average, and `density` pushes it slower again on anything code-shaped. It errs in the
-direction whose failure is cheap.
-
-The setting is a `NumberSetting` in `settings-schema.ts`, section `copilot`, `unit: 'words a
-minute'`, `min: 80`, `max: 500`, `step: 10`. Words a minute rather than raw seconds because a
-number in seconds means nothing without knowing how much text a stop holds, and because it is
-the unit the estimate is actually built from — a setting that lies about its own mechanism is a
-setting people set wrong.
-
-**Note that the copilot cannot change it.** `PROTECTED_SETTING_PREFIXES` in `catalogue.ts:248`
-already contains `copilot.`, so a key named `copilot.tourWordsPerMinute` is unwritable by
-`settings.write` with no new work. That is the correct outcome and worth stating in the
-instruction file: the reader's pace is the reader's.
-
-### `scale` — the part that is better than a number
-
-The estimate is a starting guess and it is wrong for this person. So the player measures.
-
-- On every stop, record `estimated` and `observed` — where `observed` is the time from the box
-  being drawn to the reader advancing, if they advanced manually.
-- Keep an EWMA, α = 0.35, over the last 8 measured stops. Clamp `scale` to `[0.4, 2.5]`.
-- Update **only from evidence**: an early manual advance (he was faster), or a timeout that
-  expired while the pointer was inside the box (he was still reading — see hover-hold below).
-  Do not update from a timeout he did not react to at all: that could equally mean he was
-  looking at his phone.
-- Persist in preferences, not settings. It is a measurement, not a knob. Surface it as one
-  sentence in the Copilot settings pane — *"reading at about 260 words a minute"* — with a
-  Reset. Legible, adjustable, and not a control.
-
-It converges within about four stops, which is inside the first tour.
-
-### The controls that are always there
-
-- **Progress ring on Next**, filling over the dwell. He asked for this in his own words —
-  the wait is never a surprise because you can see it. Under `prefers-reduced-motion` it is a
-  count-down number instead of an animated ring.
-- **`4 of 11 · about 3 min left`** in the panel, computed from the remaining stops' estimates
-  at the current `scale`. It changes as `scale` learns, which is fine and honest.
-- **`← Back · ⏸ Pause · Next →`**, always visible, always enabled, plus `Stop`.
-- **Keyboard:** `Space` pause/resume, `→` next, `←` back, `Esc` stop. Register them in
-  `keymap.ts` with a new `driving` scope. `TerminalView.tsx:80` records the lesson: three
-  chords were printed in the shortcuts sheet with no implementation anywhere, and "a sheet
-  that lists a chord the app ignores is the same lie as a roadmap that ticks a feature nobody
-  can reach." Wire them and the sheet in the same change.
-- **Hover-hold.** While the pointer is inside the box, the timer does not run and the ring
-  stops filling. No badge, no alarm, nothing to dismiss. It is the cheapest possible signal
-  for "I am still on this" and it costs the reader nothing to express.
-
-### His two failure modes, answered
-
-**Running away from a slow reader.** Four independent brakes, any one of which is enough:
-
-1. Hover-hold — resting the pointer on the thing you are reading stops the clock.
-2. Any evidence of engagement hard-pauses (§8): scroll, click, keystroke, text selection,
-   window blur. Not "slows down" — pauses, and stays paused until he says otherwise. A user
-   doing something is unambiguous evidence they are not done, and the correct response to
-   unambiguous evidence is not a heuristic.
-3. `scale` learns downward from his timeouts-while-hovering.
-4. The recap (§6) means a missed stop is never lost. Most of what makes an auto-advancing tour
-   stressful is the fear that the thing that just scrolled past was the important one.
-
-**Boring a fast reader.** Three:
-
-1. `→` advances immediately, with no animation to wait out. Pressing `→` *during* travel jumps
-   straight to the destination rather than queueing.
-2. `scale` learns upward from early advances, within four stops.
-3. **After three consecutive early advances, the panel offers "Skim".** Skim stops driving and
-   shows the remaining stops as the full recap list, right there, in the panel — quotes
-   included. This is the honest answer to a reader who is faster than the tour: the fastest
-   version of a tour is not a faster tour, it is the document. And the document already exists
-   because §6 requires it.
-
-### One thing to get right in the implementation
-
-The timer is `requestAnimationFrame`-driven against `performance.now()`, not `setTimeout`. A
-`setTimeout` keeps running while the machine is asleep or the renderer is throttled in a
-background window, and a tour that advanced eight stops while the lid was shut is exactly the
-kind of thing that gets a feature switched off. `lid-awake.ts` exists because this app already
-runs into that class of problem.
-
----
+The files are listed in the table at the top of this document. Do not restore
+them piecemeal: `src/shared/scan.test.ts` fails on a reading-time helper
+reappearing anywhere in the driving folder, and that test is where the argument
+for one has to be made.
 
 ## 6. What lands in the chat afterwards
 

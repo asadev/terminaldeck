@@ -179,6 +179,22 @@ export const KIND_LABEL: Record<TabKind, string> = {
 }
 
 /** 15x15 icon path per kind, matching the rail's visual weight. */
+/**
+ * The mark a session on **another machine** wears, everywhere it is listed.
+ *
+ * A display and a stand: the ordinary "a computer" glyph, and deliberately not a
+ * second terminal prompt. His words about the localhost list apply to every
+ * remote row — *"list the remote machine's ports with the machine's icon beside
+ * them, so remote and local are distinguishable at a glance"* — and the only
+ * thing that makes that work is that the mark is of a **machine** rather than of
+ * a kind of window. A remote session and a local one are the same kind of thing;
+ * what differs is where it is running.
+ *
+ * Here rather than in the sidebar, because four screens draw it: the rail, the
+ * New Session dialog's machine step, the localhost list, and the tab strip.
+ */
+export const MACHINE_ICON = 'M3 5h18v11H3zM8 20h8M12 16v4'
+
 export const KIND_ICON: Record<TabKind, string> = {
   session: 'M4 17l6-6-6-6M12 19h8',
   browser: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3c-2.5 2.6-2.5 15.4 0 18',
@@ -230,20 +246,27 @@ export function sessionLabel(title: string, index: number, folderName?: string):
  */
 export function tabLabel(tab: WorkspaceTab, tabs: readonly WorkspaceTab[]): string {
   /*
-   * The copilot is called Copilot, wherever it is drawn.
+   * The copilot is called whatever it was named, wherever it is drawn.
    *
    * It is a session, so without this it would be numbered like one — and its
    * title is the name of its own folder, which is exactly the case
    * {@link sessionLabel} turns into `Session N`. So the pinned row in the rail
-   * would say "Copilot" and the pill three centimetres above it would say
+   * would say "Nova" and the pill three centimetres above it would say
    * "Session 4", for the same window. One thing wearing two names in two places
    * on one screen is the defect {@link tabIdentities} exists to prevent between
    * two *different* tabs; it would be worse coming from one.
    *
+   * The name arrives on the tab. It is user data — somebody typed it into the
+   * setup flow and it lives in the copilot's own instruction file — so this
+   * function has no way to ask for it and does not try: `App.tsx` puts it on
+   * `label` where the copilot's tab is built, and {@link COPILOT_NAME} is left
+   * as the fallback for a copilot nobody has named and for a tab assembled
+   * without one.
+   *
    * Above the `kind` test rather than below it, because the answer does not
    * depend on what else is open — there is exactly one copilot.
    */
-  if (tab.isCopilot) return COPILOT_NAME
+  if (tab.isCopilot) return tab.label || COPILOT_NAME
   if (tab.kind !== 'session') return tab.label
   const siblings = tabs.filter(
     (other) => other.kind === 'session' && other.projectPath === tab.projectPath,
@@ -606,4 +629,82 @@ export function readTabDrag(transfer: TabTransfer | null | undefined): string | 
   if (!isTabDrag(transfer)) return null
   const id = transfer?.getData(TAB_DRAG_MIME) ?? ''
   return id === '' ? null : id
+}
+
+/* ------------------------------------------------ the drag that ate the ✕ -- */
+
+/**
+ * The marker that says "a press here is a press, not the start of a drag".
+ *
+ * Put on every control that lives *inside* a draggable row or tab: the ✕, the
+ * promote toggle, the "why does this exist" link. Read by
+ * {@link dragStartedOnControl} below, which is what actually refuses the drag.
+ *
+ * An attribute rather than a class, and rather than a list of selectors kept in
+ * this file, because the question being asked is behavioural and not visual —
+ * "may a drag begin from this element" — and a rule keyed on `.sb-row-action`
+ * would silently stop protecting a button the day somebody restyled it.
+ */
+export const NO_DRAG_ATTR = 'data-no-drag'
+
+/**
+ * Did this drag begin on a control rather than on the row itself?
+ *
+ * ## The defect, measured
+ *
+ * Asad, 2026-08-17: *"The ✕ sometimes does not work."* It is not sometimes and
+ * it is not the ✕ — it is every control inside a draggable container, and it
+ * fails on every press where the hand moves a few pixels between button-down and
+ * button-up. Reproduced in the harness through CDP, with the events logged:
+ *
+ *     pointerdown → mousedown → dragstart          (4px of movement)
+ *     pointerdown → mousedown → mouseup → click    (0px of movement)
+ *
+ * A sidebar row is `<div draggable>` and a strip tab is `<div draggable>`, so
+ * once the browser decides a press has become a drag it *cancels the click* —
+ * no `mouseup`, no `click`, and the ✕ inside the row never hears about the press
+ * at all. On a trackpad, where a tap almost always slides a little, that is most
+ * presses. On the sidebar the press does nothing whatsoever; on the top strip it
+ * is worse, because the drag completes four pixels away and silently *reorders*
+ * the bar instead of removing the tab.
+ *
+ * ## Why the check is a hit-test and not `event.target`
+ *
+ * The obvious spelling — `event.target.closest('[data-no-drag]')` inside
+ * `onDragStart` — does not work, and it was tried first and measured failing.
+ * `dragstart` is dispatched at the **drag source**, which is the element
+ * carrying `draggable`; the deepest node under the pointer is what `mousedown`
+ * gets, not this. So the handler is always told "the row", whichever pixel of
+ * the row was pressed.
+ *
+ * `draggable={false}` on the button does not work either, and was also measured:
+ * the drag source is the ancestor, and an ancestor's drag begins from a press on
+ * a non-draggable descendant exactly as it does from anywhere else.
+ *
+ * What is left is the press point, which `dragstart` does carry. Asking the
+ * document what is under it answers the real question — *was the finger on a
+ * control when it went down* — with no state to keep in step and no extra
+ * handler to forget on the next row somebody adds.
+ *
+ * A null answer (a pointer outside the viewport, a document that cannot
+ * hit-test) allows the drag, which is the behaviour that existed before this and
+ * is the safe way to fail: the worst case is the old bug, not a rail whose rows
+ * cannot be dragged at all.
+ *
+ * `doc` is a parameter so this is testable in a project whose test run has no
+ * DOM — `document` is the default and is what every caller passes by omission.
+ */
+export interface HitTestable {
+  elementFromPoint(x: number, y: number): { closest(selector: string): unknown } | null
+}
+
+export function dragStartedOnControl(
+  x: number,
+  y: number,
+  doc: HitTestable | null = typeof document === 'undefined' ? null : (document as unknown as HitTestable),
+): boolean {
+  if (!doc) return false
+  const under = doc.elementFromPoint(x, y)
+  if (!under || typeof under.closest !== 'function') return false
+  return under.closest(`[${NO_DRAG_ATTR}]`) !== null
 }

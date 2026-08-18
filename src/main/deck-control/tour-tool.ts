@@ -78,6 +78,31 @@ function fleetOf(context: ToolContext): SessionView[] {
     .sort(byAttention)
 }
 
+/**
+ * The setting that decides whether the scan is put on the screen.
+ *
+ * `copilot.interactive`. **On by default**, because the feature is the showing:
+ * somebody who has never touched this setting asked for a copilot that drives,
+ * and defaulting to the quiet path would make the whole thing invisible until
+ * discovered.
+ *
+ * It is a setting rather than a tool argument on purpose. The copilot must not
+ * be able to decide whether its own work is watched — that is the person's
+ * choice about their own screen — and it cannot: `PROTECTED_SETTING_PREFIXES`
+ * in `catalogue.ts` already contains `copilot.`, so `settings.write` refuses
+ * this key with no new work. The same mechanism that stops it changing its own
+ * instructions stops it turning off the light.
+ */
+export const INTERACTIVE_KEY = 'copilot.interactive'
+
+export function interactiveDriving(context: ToolContext): boolean {
+  const value = context.surface.readSettings().settings[INTERACTIVE_KEY]
+  // Anything other than an explicit false is on. A settings file that lost the
+  // key, or holds a string from a hand edit, gets the documented default rather
+  // than a quietly disabled feature.
+  return value !== false
+}
+
 export function tourTool(stage: TourStage): ToolSpec {
   return {
     id: 'tour.play',
@@ -131,8 +156,8 @@ export function tourTool(stage: TourStage): ToolSpec {
                 description:
                   "'message' points at a bubble in the chat view and is the one to prefer wherever a " +
                   "transcript exists — it is the same content you read. 'screen' points at a passage of " +
-                  "terminal output, found by its text. 'anchor' points at a changed file or a usage strip " +
-                  'and carries no quote, because there is no source to check one against.',
+                  "terminal output, found by its text. 'anchor' points at a changed file or a session's " +
+                  'usage reading, and carries no quote, because there is no source to check one against.',
               },
               sessionId: { type: 'string', description: 'The session this stop is about.' },
               messageId: {
@@ -150,10 +175,10 @@ export function tourTool(stage: TourStage): ToolSpec {
               },
               at: {
                 type: 'string',
-                enum: ['git-file', 'usage-strip'],
+                enum: ['git-file', 'usage'],
                 description:
-                  "Which place. 'git-file' is a changed file in Source control; 'usage-strip' is the token " +
-                  'and cost strip under a session\'s chat.',
+                  "Which place. 'git-file' is a changed file in Source control; 'usage' is the session's " +
+                  'own usage reading — the stacked limit bars in the toolbar above it.',
               },
               path: { type: 'string', description: 'For a git-file anchor: the path git reports as changed.' },
               note: {
@@ -268,6 +293,37 @@ export function tourTool(stage: TourStage): ToolSpec {
               'smaller tour of the stops you can source.',
           },
           summary: { playing: 0, dropped: summary.dropped },
+        }
+      }
+
+      if (!interactiveDriving(context)) {
+        /*
+         * Interactive mode is off. Same work, same checks, same answer — nothing
+         * on the screen.
+         *
+         * Returned as a success rather than as a refusal, and the wording is
+         * load-bearing: the copilot has to understand that the tour *happened*
+         * and that its findings are the answer, or it will apologise for a
+         * feature the person deliberately turned off. The one thing it must not
+         * do is retry with `start: 'offer'` and put a notification on somebody's
+         * screen instead.
+         */
+        const record = stage.quietly(validated)
+        return {
+          value: {
+            played: false,
+            shown: 'background',
+            tourId: record.id,
+            found: summary.playing,
+            dropped: summary.dropped,
+            droppedDetail: summary.reasons,
+            note:
+              'Interactive mode is off, so nothing was driven on their screen — but everything you sent was ' +
+              'checked and recorded, and it is in the copilot’s own window as the answer. Say what you found, ' +
+              'session by session, in your reply. Do not apologise for not driving and do not ask for it: they ' +
+              'chose this.',
+          },
+          summary: { found: summary.playing, dropped: summary.dropped, shown: 'background' },
         }
       }
 

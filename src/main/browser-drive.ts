@@ -307,11 +307,36 @@ export type HandoverOutcome = 'resumed' | 'stopped' | 'still-waiting' | 'drive-e
 /**
  * How long one `browser.handover` call blocks before reporting back.
  *
- * Well under `consent.ts`'s two minutes, and for the reason `server.ts` states
- * about that number: the MCP client has a call timeout of its own, and a tool
- * that blocks past it is a tool whose answer arrives after the model has been
- * told it failed. Ninety seconds is long enough that a password and a code from
- * a phone usually fit in one call, and short enough that the model gets a turn
- * to say something to him if they do not.
+ * It has to be under the MCP client's own call timeout, because a tool that
+ * blocks past it is a tool whose answer arrives after the model has been told it
+ * failed — and the whole of `HandoverOutcome`'s `still-waiting` design is an
+ * answer that has to *arrive* to do its job.
+ *
+ * This was ninety seconds, and the comment here said that was "well under" the
+ * client's timeout. It was not. Measured on 2026-08-18 against Claude Code
+ * 2.1.234 driving the packaged build: `browser_handover` was called at
+ * 20:46:40.985 and the client gave up at 20:47:41.129 — **60.14 seconds**, so
+ * the client's cap is sixty and the ninety-second window could never be reached.
+ * Every handover nobody answered inside a minute came back as *"The operation
+ * timed out"*, an error, which is exactly the thing the outcome vocabulary above
+ * exists to avoid: the model was told it failed, retried in a different shape,
+ * and gave up. The person's banner was up and correct the whole time.
+ *
+ * Forty-five seconds, so there is a quarter of the client's budget spare for the
+ * round trip and for a slow renderer. That is still long enough for a password
+ * from a manager, and a code fetched from a phone simply takes two calls now —
+ * which is the interaction `still-waiting` was written for and which now
+ * actually happens. Anything raised past sixty here is a regression whatever the
+ * number looks like; `browser-handover-window.test.ts` fails on it.
  */
-export const HANDOVER_WINDOW_MS = 90_000
+export const HANDOVER_WINDOW_MS = 45_000
+
+/**
+ * The MCP client's own call timeout, as measured rather than as documented.
+ *
+ * Named so the ceiling above is checkable against something rather than being a
+ * number somebody has to trust. Claude Code's `MCP_TOOL_TIMEOUT` defaults here;
+ * a client configured with a longer one is free to have it, and nothing in this
+ * app may *depend* on that, because the copilot is spawned with the default.
+ */
+export const MCP_CALL_TIMEOUT_MS = 60_000

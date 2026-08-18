@@ -3,7 +3,6 @@ import {
   droppedSentence,
   focusOf,
   focusOfRecord,
-  pacedOf,
   paneFor,
   readTour,
   reasonLabel,
@@ -118,17 +117,6 @@ describe('which pane a stop needs', () => {
 
   it('asks for no pane at all for an anchor, so the tour does not twitch', () => {
     expect(paneFor({ ...SCREEN, kind: 'anchor', at: 'git-file', path: 'a.ts' })).toBeNull()
-  })
-})
-
-describe('what the pacing engine is given', () => {
-  it('hands over the two pieces of text and nothing about sessions', () => {
-    expect(pacedOf(SCREEN)).toEqual({ quote: 'the build failed', note: 'it failed' })
-  })
-
-  it('paces an anchor stop on its note alone, because it carries no quote', () => {
-    const stop: TourStop = { ...SCREEN, kind: 'anchor', at: 'usage-strip' }
-    expect(pacedOf(stop)).toEqual({ quote: '', note: 'it failed' })
   })
 })
 

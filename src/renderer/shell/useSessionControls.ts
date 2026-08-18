@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ControlId, ControlReading, ControlsReading } from '../chat/controls/catalog'
+import {
+  DEFAULT_EFFORT,
+  EFFORT_OPTIONS,
+  type ControlId,
+  type ControlReading,
+  type ControlsReading,
+} from '../chat/controls/catalog'
+import type { ModelRow } from '../../shared/model-catalog'
 
 /**
  * One session's model, effort and fast mode, read from the session and written
@@ -65,6 +72,21 @@ export interface SessionControlsState {
   /** True when there is a bridge, a session, and a CLI this build can drive. */
   wired: boolean
   pick(control: ControlId, value: string): void
+  /**
+   * The models this session's own `/model` picker offered, or null until it has
+   * been asked.
+   *
+   * Null and empty mean different things and the UI depends on it: null is "not
+   * asked yet, use the captured list", empty is "asked and could not be told",
+   * which comes with a `notice` saying why.
+   */
+  models: ModelRow[] | null
+  /**
+   * Ask the session what models it has. Types `/model`, reads the dialog and
+   * presses Esc — so it is called when somebody opens the menu, never on a
+   * timer.
+   */
+  discoverModels(): void
 }
 
 /**
@@ -82,7 +104,35 @@ interface Bridge {
     value: string
     provider?: string
   }): Promise<unknown>
+  discoverAgentModels?(request: { sessionId?: string; provider?: string }): Promise<unknown>
   onSessionData?(cb: (id: string, data: string) => void): () => void
+}
+
+/**
+ * A model row off the bridge, parsed rather than trusted.
+ *
+ * Same rule as `asReading` above and for the same reason: what arrives here is
+ * `unknown` off an IPC channel. A row missing its alias is dropped outright,
+ * because an option whose id is `undefined` is a button that types `/model
+ * undefined` into somebody's terminal.
+ */
+function asModelRows(value: unknown): ModelRow[] {
+  if (!isRecord(value) || !Array.isArray(value.models)) return []
+  const rows: ModelRow[] = []
+  for (const entry of value.models) {
+    if (!isRecord(entry)) continue
+    if (typeof entry.alias !== 'string' || entry.alias === '') continue
+    if (typeof entry.model !== 'string' || entry.model === '') continue
+    rows.push({
+      alias: entry.alias,
+      name: typeof entry.name === 'string' ? entry.name : entry.model,
+      model: entry.model,
+      note: typeof entry.note === 'string' ? entry.note : '',
+      current: entry.current === true,
+      recommended: entry.recommended === true,
+    })
+  }
+  return rows
 }
 
 /**
@@ -169,12 +219,85 @@ function deckBridge(): Bridge | undefined {
   return (globalThis as unknown as { deck?: Bridge }).deck
 }
 
+/* --------------------------------------------------- the effort default -- */
+
+/**
+ * Where the app remembers the effort you last chose.
+ *
+ * No product-name prefix — `localStorage` is already scoped to this renderer's
+ * origin, and the product name is allowed in exactly one file, which is not this
+ * one. The convention and the reasoning are `session-start.ts`'s.
+ */
+export const EFFORT_MEMORY_KEY = 'session-controls.effort.v1'
+
+/**
+ * The effort this app will set on a session that has none.
+ *
+ * Asad asked for two things in one sentence — *"effort defaults to extra-high,
+ * and a change sticks"* — and they are the two halves of this function. The
+ * default is `DEFAULT_EFFORT`; the sticking is that a value you picked from the
+ * bar replaces it, for this and every later session, on this machine.
+ *
+ * Reading it out of storage is what makes the second half true across a restart.
+ * Claude Code does persist an effort of its own accord, in its `settings.json`,
+ * and where it has, this never fires at all — the session already reports one.
+ * What it cannot persist is `auto`, because `auto` *is* the cleared state: the
+ * CLI answers `Cleared effort from settings`. So somebody who deliberately wants
+ * the model's own default would otherwise be handed extra-high again by this app
+ * on every new session, for ever, with no way to stop it. Remembering the choice
+ * is the way out, and it is also just what he asked for.
+ *
+ * Total by construction. This string is editable by hand in devtools and can be
+ * left behind by an older build, so anything that is not one of the ids the CLI
+ * accepts falls back to the default rather than being typed at a prompt.
+ */
+export function preferredEffort(store: Pick<Storage, 'getItem'> | null): string | null {
+  let stored: string | null = null
+  try {
+    stored = store?.getItem(EFFORT_MEMORY_KEY) ?? null
+  } catch {
+    // Storage can be unavailable or blocked outright. The default still applies.
+  }
+  if (stored === null) return DEFAULT_EFFORT
+  // `auto` is the one answer that means "apply nothing": the CLI implements it
+  // by clearing the setting, so typing it at a session that already has no
+  // effort would be a command that changes nothing, sent every time a session
+  // opens. Null is this function's way of saying there is nothing to do.
+  if (stored === 'auto') return null
+  return EFFORT_OPTIONS.some((option) => option.id === stored) ? stored : DEFAULT_EFFORT
+}
+
+function rememberEffort(store: Pick<Storage, 'setItem'> | null, value: string): void {
+  try {
+    store?.setItem(EFFORT_MEMORY_KEY, value)
+  } catch {
+    // A quota or a blocked store costs the memory, not the change: the value was
+    // already typed into the session, which is the part that mattered.
+  }
+}
+
+function storage(): Storage | null {
+  return (globalThis as unknown as { localStorage?: Storage }).localStorage ?? null
+}
+
+/**
+ * Sessions this window has already applied the default to.
+ *
+ * Module-level rather than a ref because the same session can be on screen in
+ * two places at once — the window's bar and a pane's bar both mount this — and
+ * two components each holding their own "not yet" would type the command twice
+ * at one prompt. Never pruned: an id is a few dozen bytes and a window that
+ * opened ten thousand sessions has bigger problems.
+ */
+const defaulted = new Set<string>()
+
 export function useSessionControls(
   sessionId: string | undefined,
   cwd: string | null | undefined,
   provider: string | undefined,
 ): SessionControlsState {
   const [readings, setReadings] = useState<SessionReadings | null>(null)
+  const [models, setModels] = useState<ModelRow[] | null>(null)
   const [busy, setBusy] = useState<ControlId | null>(null)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const alive = useRef(true)
@@ -274,6 +397,18 @@ export function useSessionControls(
            * once already.
            */
           setReadings((was) => (was ? { ...was, [control]: answer.reading } : was))
+          /*
+           * …and the *clicked* value is what is remembered, which is the one
+           * place the two deliberately differ.
+           *
+           * The reading answers "what is this session set to". The memory
+           * answers "what does he want new sessions set to", and for `auto` the
+           * two cannot be the same fact: the CLI implements auto by clearing the
+           * setting, so the reading that comes back is an absence. Storing the
+           * absence would lose the choice and hand him extra-high again on the
+           * next session — the exact loop `preferredEffort` exists to end.
+           */
+          if (control === 'effort' && answer.ok) rememberEffort(storage(), value)
         } catch (error) {
           if (alive.current) {
             setNotice({ ok: false, text: error instanceof Error ? error.message : 'The change failed.' })
@@ -287,7 +422,114 @@ export function useSessionControls(
     [bridge, sessionId, cwd, provider, refresh],
   )
 
+  /*
+   * The default effort, applied once to a session that has none.
+   *
+   * ## Why this types a command rather than displaying a value
+   *
+   * Because the alternative is a lie, and this file's whole discipline is built
+   * to refuse it. A control that printed `Extra high` because that is the
+   * default, over a session running at whatever the CLI does by itself, would be
+   * showing a value it never read — which is the single failure the readings
+   * layer, the source note and `unreadLabel` all exist to prevent. If the bar is
+   * to say extra-high then the session has to *be* extra-high, and the only
+   * channel this app has for that is the one a person uses: `/effort xhigh`,
+   * through the same gate, with the same refusals.
+   *
+   * ## Every condition below is a way this could be wrong
+   *
+   *  - **Claude only.** These are Claude Code's commands. `unsupportedProviderNote`
+   *    says the same thing to the reader; this is the same fact, enforced.
+   *  - **A reading has landed** and it reports *nothing* — no screen line, no
+   *    transcript, no `settings.json`, no `CLAUDE_CODE_EFFORT_LEVEL`. Anything at
+   *    all means somebody or something already chose, and a default that
+   *    overrides a choice is not a default.
+   *  - **No stated reason it is unavailable**, which is the account being barred
+   *    from the control rather than the value being unknown.
+   *  - **The gate is open.** The main process would refuse anyway; asking first
+   *    means not queueing a command behind a half-typed prompt.
+   *  - **Nothing else mid-change**, so two commands never race into one pty.
+   *  - **Once per session id**, across both mounts of this cluster.
+   *
+   * ## And it is silent
+   *
+   * No notice. The bubble under the bar is the answer to something you pressed,
+   * and nobody pressed this. What a reader sees is a session that came up at
+   * extra high, which is what a default looks like when it is working.
+   */
+  useEffect(() => {
+    const want = preferredEffort(storage())
+    if (want === null || !wired || !sessionId || provider !== 'claude') return
+    if (readings === null || busy !== null) return
+    if (readings.effort.label !== null || readings.effort.unavailableReason !== undefined) return
+    if (!readings.gate.canType) return
+    if (defaulted.has(sessionId)) return
+
+    const apply = bridge?.applyAgentControl
+    if (typeof apply !== 'function') return
+    defaulted.add(sessionId)
+    setBusy('effort')
+    void (async () => {
+      try {
+        const answer = asApplyResult(
+          await apply({ sessionId, cwd: cwd ?? undefined, control: 'effort', value: want, provider }),
+        )
+        if (!alive.current) return
+        setReadings((was) => (was ? { ...was, effort: answer.reading } : was))
+      } catch {
+        // A default that could not be applied leaves the control saying
+        // "Unknown", which is true, and leaves the menu one click away.
+      } finally {
+        if (alive.current) setBusy(null)
+        void refresh()
+      }
+    })()
+  }, [wired, sessionId, provider, readings, busy, bridge, cwd, refresh])
+
+  /**
+   * Ask this session's own `/model` picker what it offers.
+   *
+   * ## Why this is a click and not a poll
+   *
+   * Because it types. `refresh` above is passive — it scrapes a screen the
+   * session drew anyway — and it runs every time the session prints something,
+   * which is the right shape for a reading and completely the wrong shape for a
+   * keystroke. This one opens a dialog in somebody's terminal and closes it
+   * again, so it happens when a person opens the menu and at no other moment.
+   *
+   * ## Why a failure is not silent
+   *
+   * The commonest reason this cannot answer is that the session is mid-turn,
+   * and the main process explains that in a sentence worth reading. Swallowing
+   * it would leave the menu showing the captured list with nothing on screen
+   * saying it is the captured list — which is the class of quiet
+   * half-truth this whole cluster is being rebuilt to remove. So the message
+   * goes to the same notice strip a failed change uses.
+   */
+  const discoverModels = useCallback((): void => {
+    const ask = bridge?.discoverAgentModels
+    if (!sessionId || typeof ask !== 'function') return
+    void (async () => {
+      try {
+        const answer = await ask({ sessionId, provider })
+        if (!alive.current) return
+        const rows = asModelRows(answer)
+        setModels(rows)
+        const message = isRecord(answer) && typeof answer.message === 'string' ? answer.message : null
+        if (message !== null) setNotice({ ok: false, text: message })
+        // Opening and cancelling the picker makes the CLI print
+        // `Kept model as …`, which settles the current model on a session that
+        // had never said. Re-reading here is how that reaches the chip.
+        void refresh()
+      } catch {
+        // A bridge that throws leaves `models` as it was: the captured list is
+        // still a real picker from a real CLI, and blanking it would trade a
+        // slightly old truth for no answer at all.
+      }
+    })()
+  }, [bridge, sessionId, provider, refresh])
+
   const dismissNotice = useCallback(() => setNotice(null), [])
 
-  return { readings, busy, notice, dismissNotice, wired, pick }
+  return { readings, busy, notice, dismissNotice, wired, pick, models, discoverModels }
 }

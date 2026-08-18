@@ -128,6 +128,23 @@ export function findTerminal(sessionId: string): RegisteredTerminal | null {
   return terminals.get(sessionId) ?? null
 }
 
+/**
+ * Every terminal this window has mounted, with its session id.
+ *
+ * The registry already knows the one fact nothing else in the renderer does:
+ * which sessions actually have a pane in this window. `where.ts` uses it to
+ * answer *"which session am I looking at"* — the app keeps every open session
+ * mounted and hides the ones that are not in front, so the visible one is a
+ * property of these elements and not of any state variable.
+ *
+ * A fresh array rather than the map's own iterator, so a caller cannot hold on
+ * to a live view of the registry and read it after the terminals it names have
+ * been unmounted.
+ */
+export function registeredTerminals(): Array<{ id: string; entry: RegisteredTerminal; host: HTMLElement }> {
+  return [...terminals.entries()].map(([id, entry]) => ({ id, entry, host: entry.host }))
+}
+
 /** Test seam. Nothing in the app calls this. */
 export function clearTerminals(): void {
   terminals.clear()

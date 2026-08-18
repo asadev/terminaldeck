@@ -102,9 +102,28 @@
   color: var(--text-muted);
 }
 
-/* ---------------------------------------------------------------- stops -- */
+/* -------------------------------------------------------------- sessions -- */
 
-.tr-stops {
+/*
+  One block per session — "this session did this, this session did that."
+
+  Separated with space, then with a heading, and never with a line. A dozen
+  findings across four sessions is a list of four things with detail under each,
+  not twelve rows with the session name repeated on every one; the repetition is
+  what made the old flat list unreadable at a glance.
+*/
+.tr-session + .tr-session {
+  margin-top: var(--sp-4);
+}
+
+.tr-session-name {
+  margin: 0 0 var(--sp-15);
+  font-size: var(--t-subhead);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.tr-lines {
   margin: 0;
   padding: 0;
   list-style: none;
@@ -113,19 +132,16 @@
   gap: var(--sp-3);
 }
 
-.tr-stop[data-unseen] {
+/* Never reached — the scan was stopped before it got here. Dimmed, never
+   hidden: the account of an interrupted scan has to include what it missed. */
+.tr-line[data-unseen] {
   opacity: 0.66;
 }
 
-.tr-stop-top {
+.tr-line-top {
   display: flex;
   align-items: baseline;
   gap: var(--sp-15);
-}
-
-.tr-where {
-  font-size: var(--t-footnote);
-  color: var(--text-muted);
 }
 
 .tr-badge {

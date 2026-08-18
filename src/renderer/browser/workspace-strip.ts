@@ -263,6 +263,70 @@ export function keepInStrip(order: readonly string[], id: string): string[] {
 }
 
 /**
+ * Keep a window that has just been *opened from the rail*, next to the one you
+ * were in.
+ *
+ * ## What changed, and why the comment above it now reads as history
+ *
+ * Asad, 2026-08-17: *"If I am clicking different ones, instead of switching,
+ * whenever I click on side panel on anyone, it should open a new window instead
+ * of switching. It should open its own new window next to it."*
+ *
+ * {@link keepInStrip}'s note argues at length that clicking a sidebar row is
+ * *not* choosing to keep a tab on the bar, and that a strip which filled itself
+ * as you browsed the rail would be the automatic strip this file rejected in its
+ * opening paragraph. That argument was made before he had used it, and he has
+ * now overruled it in as many words. It is left standing above rather than
+ * deleted, because the reasoning is still the reasoning for everything else in
+ * here — nothing promotes a tab on its own; what changed is that *opening a row*
+ * is now counted as an act of opening a window, which is the category
+ * `keepInStrip` already serves.
+ *
+ * What that fixes, beyond doing what he asked, is the complaint he made two
+ * minutes later: *"If I click on commander, they go away."* The windows that
+ * vanished were the ones he had reached from the rail — every one of them a
+ * *transient* tab, drawn by {@link shownTabs} only because it was active, and
+ * therefore replaced wholesale by the next thing he looked at. Once a click from
+ * the rail keeps its window, nothing in the bar is disturbed by opening the
+ * copilot, and the two complaints turn out to be one bug seen from both ends.
+ *
+ * ## "Next to it", literally
+ *
+ * `after` is the window he was in. The new one goes immediately to its right —
+ * which is what a browser does when a link opens a tab from the one you are on,
+ * and what "next to it" means when said out loud while pointing at a bar. Only
+ * when that window is itself on the bar: a transient neighbour has no place in
+ * the order to be next to, and neither has an `after` of null, so both fall back
+ * to the end. Nothing else moves; the tabs somebody arranged by hand stay in the
+ * order they were put in, which is the promise the whole file is built on.
+ */
+export function keepBesideInStrip(
+  order: readonly string[],
+  id: string,
+  after: string | null,
+): string[] {
+  if (order.includes(id)) return [...order]
+  const at = after === null ? -1 : order.indexOf(after)
+  return promote(order, id, at === -1 ? order.length : at + 1)
+}
+
+/**
+ * The same thing against the shared store, for a click handler in `App.tsx`.
+ *
+ * The seam {@link keepNewWindowInStrip} already establishes, for the one caller
+ * that knows which window it is opening *from*. See that function for why a
+ * handler cannot read {@link usePromotedOrder} and has to reach the store.
+ */
+export function keepWindowBesideInStrip(
+  id: string,
+  after: string | null,
+  storage: Storage | null = defaultStorage(),
+): void {
+  const store = promotedStore(storage)
+  store.set(keepBesideInStrip(store.get(), id, after))
+}
+
+/**
  * The same thing, against the shared store, for a caller that is not a
  * component.
  *
@@ -305,6 +369,43 @@ export function removeWindowFromStrip(
   const result = removeFromStrip(store.get(), tabs, id, activeId)
   store.set(result.order)
   return result
+}
+
+/**
+ * One id has become another and the tab must not move.
+ *
+ * The strip is an arrangement somebody made by hand — this file's opening
+ * comment is emphatic that it holds what the user *chose*, and {@link keepInStrip}
+ * refuses even to re-anchor a tab it is asked to promote twice. So when
+ * switching a session's account replaces its process, and with it its id, the
+ * tab has to stay exactly where it was rather than being taken off the end and
+ * pushed back on.
+ *
+ * Done by index rather than remove-then-add for that reason: the remove-and-add
+ * spelling produces the right *set* and the wrong *order*, and the difference is
+ * invisible until somebody with four tabs switches the account on the first one
+ * and watches it jump to the end.
+ *
+ * An id that was never promoted stays unpromoted. A switch is not a promotion —
+ * the session was already a transient tab or already on the bar, and this
+ * changes neither, it only keeps whichever was true from breaking.
+ */
+export function replaceInStrip(order: readonly string[], oldId: string, newId: string): string[] {
+  const at = order.indexOf(oldId)
+  if (at < 0) return [...order]
+  const next = [...order]
+  next[at] = newId
+  return next
+}
+
+/** The same thing against the shared store, for a caller that is not a render. */
+export function replaceWindowInStrip(
+  oldId: string,
+  newId: string,
+  storage: Storage | null = defaultStorage(),
+): void {
+  const store = promotedStore(storage)
+  store.set(replaceInStrip(store.get(), oldId, newId))
 }
 
 /**

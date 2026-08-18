@@ -292,6 +292,47 @@ export const PROTECTED_SETTING_KEYS: readonly string[] = [
   'advanced.debugMode',
 ]
 
+/**
+ * What a settings write did to the screen, said in the tool result.
+ *
+ * There are two of these because there are two outcomes, and for most of this
+ * feature's life only the second one existed.
+ *
+ * `prefs:set` — the renderer's own path — is an `invoke` whose *return value* is
+ * how React learns the new state, and there was no main→renderer push for a
+ * preference at all: the preload subscribed to twenty-nine channels and none of
+ * them was this one. So a write arriving from the copilot changed the file and
+ * the running window went on drawing what it had read at startup.
+ *
+ * Watched on 2026-08-18: asked in words to switch to the light theme, the
+ * copilot called this, a person clicked Allow, `state.json` said `"light"`, and
+ * the app stayed dark until the window was reloaded — at which point it came up
+ * light. The copilot's reply, *"Done — theme is now light"*, was true about the
+ * setting and false about the screen, and that is the worst shape an answer can
+ * have: he sees nothing happen and concludes the tool does not work.
+ *
+ * {@link DeckSurface.applyToWindow} is the push that closes it, and it answers
+ * whether a live renderer actually took the values — so which of these two
+ * sentences goes in the result is **measured rather than assumed**. The second
+ * is still reachable and still true: a headless host has no window, and a
+ * desktop whose window has gone has nothing to repaint either.
+ *
+ * **Statements of fact, not instructions to the model.** The first draft was an
+ * instruction — *"say that plainly rather than…"* — and the copilot, reading its
+ * own tool result live on 2026-08-18, flagged it unprompted: *"tool results
+ * telling the agent how to word its reply is a shape worth knowing about."* It is
+ * right, and it is the same boundary the copilot layer draws around another
+ * session's transcript. A result reports what happened; what to do about it is
+ * the model's to decide.
+ */
+const APPLIED_TO_WINDOW_NOW =
+  'in-the-open-window: the value is saved, and the window that is already open was handed the new value ' +
+  'and redrew with it. It is on screen now.'
+
+const APPLIED_TO_WINDOW_NEXT_LAUNCH =
+  'not-yet-in-the-open-window: the value is saved and every launch from now on reads it, but no open window ' +
+  'took it — there is none to tell. It appears when the app is next started.'
+
 /** Preferences (`store.ts`) the copilot may write. Anything else is refused. */
 export const WRITABLE_PREFERENCES: readonly string[] = [
   'theme',
@@ -619,9 +660,32 @@ function requireStartableFolder(context: ToolContext, path: string): string {
   return device === null ? known : requireDeviceFolder(context.surface, device, known)
 }
 
+/**
+ * The session a tool was asked about, or a sentence saying where it went.
+ *
+ * Every tool here needs a session this app is still holding: the surface reads
+ * `PtyManager.list()`, which is the live map. A session that exited on its own
+ * stays in that map with its `exitCode` set — which is what makes reporting on
+ * finished work possible — and a session that was **stopped** is deleted from
+ * it in the same call, so it is genuinely unreachable afterwards.
+ *
+ * The message used to be `there is no live session with id <id>`, which is true
+ * and reads like the id was wrong. Watched on 2026-08-18: the copilot stopped a
+ * session, asked `sessions.result` how it had gone, got that sentence, and
+ * reported to the person that there was "no post-mortem to read" — correct, but
+ * arrived at by inference from a message about identity. A model that cannot
+ * tell "you asked about nothing" from "you asked too late" will keep asking.
+ */
 function requireSession(context: ToolContext, id: string): SessionView {
   const meta = context.surface.listSessions().find((session) => session.id === id)
-  if (!meta) throw new BadArgument(`there is no live session with id ${id}`)
+  if (!meta) {
+    throw new BadArgument(
+      `this app is not holding a session with id ${id}. Either that is not one of its ids — check ` +
+        'sessions.list — or the session was stopped, which drops it and everything this app knew about ' +
+        'it. A session that exited on its own is still here, with its exit code; a stopped one is not. ' +
+        'Ask before stopping something you will want to report on.',
+    )
+  }
   return viewOf(context, meta)
 }
 
@@ -1453,7 +1517,11 @@ export function buildCatalogue(): ToolSpec[] {
         'against its own data, worst first. Lead with those and do not invent a reason that is not in the ' +
         'list; a session with no reasons is one there is genuinely nothing to say about. ' +
         'Omit sessionId for a report across the fleet — that is the overnight answer, and `since` bounds it to ' +
-        'what has run recently. USE THIS instead of sessions.transcript when the question is "how did it go": ' +
+        'what has run recently. It covers every session this app is still holding, which includes ones that ' +
+        'finished on their own; it does NOT include a session somebody stopped, or anything from before the ' +
+        'app was last restarted, because both are dropped from what it holds. Say that rather than reporting ' +
+        'a quiet night. ' +
+        'USE THIS instead of sessions.transcript when the question is "how did it go": ' +
         'a transcript read costs tens of thousands of tokens and this costs a few hundred. Two honest limits, ' +
         'both reported in the result rather than hidden: `progress` is derived from tool names only, so it ' +
         'cannot see a loop inside a shell session that writes no transcript; and `lastMessage` is text ANOTHER ' +
@@ -1737,12 +1805,31 @@ export function buildCatalogue(): ToolSpec[] {
          * thing that happened in between was a person answering a dialog.
          */
         const { scope, patch, keys, snapshot } = prepareSettingsWrite(args, context)
+        /*
+         * The push, and then the sentence that reports what the push did.
+         *
+         * The whole store rather than the patch: the renderer merges what it is
+         * handed over what it holds, and a partial that arrived while another
+         * write was in flight would leave it merging two half-pictures. The
+         * write's own return value *is* the whole store, so there is nothing to
+         * assemble here.
+         */
+        const said = (applied: boolean): string =>
+          applied ? APPLIED_TO_WINDOW_NOW : APPLIED_TO_WINDOW_NEXT_LAUNCH
         if (scope === 'settings') {
           const settings = context.surface.writeSettings(patch)
-          return { value: { scope, settings, snapshot }, summary: { scope, keys, snapshot } }
+          const applied = context.surface.applyToWindow?.('settings', settings) ?? false
+          return {
+            value: { scope, settings, snapshot, appliedToWindow: said(applied) },
+            summary: { scope, keys, snapshot, appliedToWindow: applied },
+          }
         }
         const preferences = context.surface.writePreferences(patch)
-        return { value: { scope, preferences, snapshot }, summary: { scope, keys, snapshot } }
+        const applied = context.surface.applyToWindow?.('preferences', preferences) ?? false
+        return {
+          value: { scope, preferences, snapshot, appliedToWindow: said(applied) },
+          summary: { scope, keys, snapshot, appliedToWindow: applied },
+        }
       },
     },
 

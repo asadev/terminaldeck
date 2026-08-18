@@ -8,6 +8,8 @@ import {
   localhostOffered,
   localhostStep,
   noPortsSentence,
+  openSentence,
+  webOfferedHere,
   portLabel,
   stalePortsSentence,
   type LocalhostAction,
@@ -317,5 +319,98 @@ describe('the wire, read by the desktop’s own parser', () => {
       ok: true,
       message: { t: 'tunnel.closed', id: 'a', message: 'nope' },
     })
+  })
+})
+
+/**
+ * Opening a port's page **on the machine**.
+ *
+ * This is the answer to the one complaint this screen has never been able to
+ * meet: *"Localhost lists ports with no way to open any of them. The whole
+ * reason localhost exists is to drive them."* A browser tab cannot serve a
+ * tunnel — the top of `localhost.ts` rejects three routes around that and none
+ * of them has become possible — so what "open it" means here is the thing he
+ * asked for on the phone in the same review: the page opens on the machine, in
+ * that machine's own browser, and this end is driving rather than viewing.
+ *
+ * Three properties, and the third is the one that would rot silently:
+ *
+ *   1. **A check and an open are two answers**, kept apart, because one proved a
+ *      port accepts a connection and the other put a window on somebody's
+ *      screen.
+ *   2. **A refusal is the machine's own sentence.** The three ways this fails —
+ *      no window, not your device, not a URL it will open — have three different
+ *      remedies and the machine is the only thing that knows which one happened.
+ *   3. **The frame is one the desktop will accept**, checked against
+ *      `parseClientMessage` itself rather than against this file's idea of it.
+ */
+describe('opening a port on the machine', () => {
+  it('sends a localhost URL for the port, and the desktop accepts it', () => {
+    const { state, send } = run(NO_LOCALHOST, { t: 'open', port: 5173 })
+    expect(send).toEqual([{ t: 'web.open', url: 'http://localhost:5173/' }])
+    expect(state.opening).toBe(5173)
+    // The desktop's own reader, not a shape this test made up.
+    const parsed = parseClientMessage(JSON.stringify(send[0]))
+    expect(parsed.ok).toBe(true)
+  })
+
+  it('drops a second press while one is in flight', () => {
+    const { state, send } = run(NO_LOCALHOST, { t: 'open', port: 5173 }, { t: 'open', port: 3000 })
+    expect(send).toHaveLength(1)
+    expect(state.opening).toBe(5173)
+  })
+
+  it('says what was opened, and where', () => {
+    const { state } = run(
+      NO_LOCALHOST,
+      { t: 'open', port: 5173 },
+      frame({ t: 'web.opened', url: 'http://localhost:5173/' }),
+    )
+    expect(state.opening).toBeNull()
+    expect(state.openOutcome).toEqual({ port: 5173, kind: 'opened' })
+    // The smaller, true claim: a page was opened somewhere else. Not "your dev
+    // server is up", which this end has proved nothing about.
+    expect(openSentence(state.openOutcome!, 'Mac')).toBe('Opened localhost:5173 on the Mac.')
+  })
+
+  it('repeats the machine’s refusal rather than inventing one', () => {
+    const { state } = run(
+      NO_LOCALHOST,
+      { t: 'open', port: 5173 },
+      frame({ t: 'error', code: 'unauthorized', message: 'Only your own devices can open pages on this machine.' }),
+    )
+    expect(state.opening).toBeNull()
+    expect(openSentence(state.openOutcome!, 'Mac')).toBe(
+      'Only your own devices can open pages on this machine.',
+    )
+  })
+
+  it('keeps a check’s answer and an open’s answer apart', () => {
+    const { state } = run(
+      NO_LOCALHOST,
+      { t: 'check', port: 5173, id: 'tun-1' },
+      frame({ t: 'tunnel.opened', id: 'tun-1', port: 5173 }),
+      { t: 'open', port: 5173 },
+      frame({ t: 'web.opened', url: 'http://localhost:5173/' }),
+    )
+    // Both survive. One field would have the second overwriting the first, and a
+    // row somebody had checked *and* opened would show only the later one.
+    expect(state.outcome).toEqual({ port: 5173, kind: 'answered' })
+    expect(state.openOutcome).toEqual({ port: 5173, kind: 'opened' })
+  })
+
+  it('forgets an open in flight when the socket goes', () => {
+    const { state } = run(NO_LOCALHOST, { t: 'open', port: 5173 }, { t: 'offline' })
+    // A spinner against a socket that will never answer is the lie this whole
+    // client is built to avoid.
+    expect(state.opening).toBeNull()
+    expect(state.openOutcome).toBeNull()
+  })
+
+  it('is offered only when the machine advertised it', () => {
+    // Withheld by a host with no window, and by a machine talking to a guest —
+    // both arrive as a capability that is simply not in the welcome.
+    expect(webOfferedHere(['localhost', 'create'])).toBe(false)
+    expect(webOfferedHere(['localhost', 'web'])).toBe(true)
   })
 })

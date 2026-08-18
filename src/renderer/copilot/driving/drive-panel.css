@@ -1,5 +1,11 @@
 /* ============================================================================
-   The driving panel — the rail's column, for the length of a tour.
+   The driving panel — the rail's column, and the copilot, for the length of a
+   scan.
+
+   It is drawn only when the copilot's own page is NOT the one in front:
+   "it should not make two split views on its own page." `DriveHost.tsx` makes
+   that call; this sheet only has to be cheap enough that mounting and
+   unmounting it as a scan walks on and off that page costs nothing.
 
    Every value is a token. The brief's order for separating things is followed:
    space first, then a change of material, and only then a line. There is
@@ -87,6 +93,49 @@
   padding: var(--sp-3) var(--sp-3) var(--sp-2);
 }
 
+.dp-head-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1);
+}
+
+/*
+  The round dot beside the copilot's name, as a control.
+
+  Asad: "the small round dot beside the copilot's name becomes a control — click
+  it to fold back, and the side panel returns." It is the same glyph the rail
+  draws next to the name, doing the same job from the other side: there it folds
+  the copilot into this panel, here it opens the window back up. One dot, one
+  meaning, both directions — which is why it is a dot and not a chevron or an ✕,
+  neither of which the rail has ever used for this.
+
+  A real hit area around a 8px dot, because a control the size of the thing it
+  draws is a control nobody can press.
+*/
+.dp-fold {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  cursor: pointer;
+}
+
+.dp-fold:hover {
+  background: var(--bg-hover);
+}
+
+.dp-fold-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
 .dp-kicker {
   margin: 0;
   font-size: var(--t-caption);
@@ -110,28 +159,39 @@
   color: var(--text-primary);
 }
 
-/* -------------------------------------------------------------- headline -- */
+/* -------------------------------------------------------------- progress -- */
 
 /*
-  The answer. Scrollable, because it is prose and prose does not have a length.
+  How far through the fleet, not how far through this stop.
 
-  Capped at a third of the panel so a long headline cannot push the stop list
-  and the transport off the bottom — the transport has to be reachable at every
-  moment of a tour, and a control you have to scroll to is a control that is
-  missing when you need it.
+  What used to be here was the copilot's headline — the answer, repeated in the
+  panel because the person watching a paced tour was not looking at the chat.
+  There is no reading during a scan any more, so the answer moved to where the
+  reading happens: the copilot's own window, after it ends, grouped by session.
+  Repeating it here would be asking somebody to read prose off a panel while the
+  screen jumps between sessions four times a second.
+
+  What replaced it is the one number a watcher wants. `transform: scaleX` rather
+  than `width`, because this updates on every arrival and a transform is
+  composited — a width animation on a bar this wide relayouts the panel next to a
+  fleet of repainting terminals.
 */
-.dp-headline {
-  max-height: 32%;
-  overflow-y: auto;
-  padding: 0 var(--sp-3) var(--sp-3);
-  font-size: var(--t-body);
-  line-height: 1.45;
-  color: var(--text-secondary);
+.dp-progress {
+  height: 2px;
+  margin: 0 var(--sp-3) var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  overflow: hidden;
 }
 
-.dp-headline p {
-  margin: 0;
-  white-space: pre-wrap;
+.dp-progress-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: left center;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: transform var(--dur) var(--ease);
 }
 
 /* --------------------------------------------------------------- dropped -- */
@@ -319,4 +379,126 @@
   margin-top: var(--sp-1);
   font-size: var(--t-caption);
   color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------ transport -- */
+
+/*
+  Held below the trace, always reachable.
+
+  Space first, then a change of material — no line. The panel's own glass is
+  already a different surface from the window behind it, so a rule here would be
+  a third separator inside one column.
+*/
+.dp-foot {
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.dp-status {
+  margin: 0 0 var(--sp-15);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.dp-transport {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.dp-transport button {
+  min-width: 30px;
+  height: 26px;
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  cursor: pointer;
+}
+
+.dp-transport button:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+/* Stop pushed to the end, so the destructive one is never where the eye lands
+   first while reaching for hold. */
+.dp-end {
+  margin-left: auto;
+}
+
+/* ---------------------------------------------------------------- say -- */
+
+/*
+  The chat box — the panel IS the copilot while driving.
+
+  "While driving, the side panel is the copilot: its chat box is there,
+  continuously talking, and he can navigate to other pages and bring it back."
+
+  What is typed here goes down the copilot's own pty, so the turn lands in the
+  copilot's real transcript. There is no second conversation, and nothing is
+  written into a transcript from outside — the same rule that keeps the scan's
+  record in a folder the copilot cannot reach.
+*/
+.dp-say {
+  flex-shrink: 0;
+  display: flex;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+
+.dp-say-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 var(--sp-15);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-footnote);
+}
+
+.dp-say-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.dp-say-send {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--text-onaccent);
+  cursor: pointer;
+}
+
+/*
+  Turning the showing off, from the one moment somebody wants it off.
+
+  Quiet, and deliberately not a button in the transport's family: those move the
+  screen, and this stops it moving ever again until it is turned back on. It sits
+  under them with space rather than a rule between, and it says the whole
+  sentence rather than being a switch with a label somewhere else.
+*/
+.dp-quiet {
+  display: block;
+  margin-top: var(--sp-15);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.dp-quiet:hover {
+  color: var(--text-secondary);
+  text-decoration: underline;
 }

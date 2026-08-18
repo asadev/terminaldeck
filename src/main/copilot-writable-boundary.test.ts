@@ -86,6 +86,8 @@ let paths: CopilotPaths
 let fenced: RecordsFencePaths
 /** A project the person has open. The copilot writes here now, like any session. */
 let project = ''
+/** A folder of the person's own, outside `<userData>`, chosen as the home. */
+let chosen = ''
 let profile = ''
 
 function run(args: string[], cwd: string): Promise<Ran> {
@@ -148,6 +150,21 @@ beforeAll(() => {
   mkdirSync(paths.log, { recursive: true })
 
   /*
+   * A workspace somebody already had, outside `<userData>` entirely.
+   *
+   * This is the case the fence had never been measured in, and it is the one
+   * that matters now: the copilot's working directory can be a folder the person
+   * chose, which moves the process's cwd out from under `<userData>` while the
+   * fenced paths stay where they are. Everything about Seatbelt says that is
+   * fine — the rules name absolute resolved paths, not relative ones — and
+   * "everything says it is fine" is exactly the claim this repository has been
+   * wrong about before, twice, in this directory.
+   */
+  chosen = realpathSync(mkdtempSync(join(tmpdir(), 'copilot-chosen-')))
+  writeFileSync(join(chosen, 'CLAUDE.md'), '# somebody else’s assistant\n')
+  mkdirSync(join(chosen, 'memory'), { recursive: true })
+
+  /*
    * The routines folder and the state file exist before the attempt, with real
    * content in them.
    *
@@ -166,7 +183,13 @@ beforeAll(() => {
 
 afterAll(() => {
   if (root !== '') rmSync(root, { recursive: true, force: true })
+  if (chosen !== '') rmSync(chosen, { recursive: true, force: true })
 })
+
+/** A shell line inside the fence, from a *chosen* working directory. */
+function inChosen(line: string): Promise<Ran> {
+  return run(['/bin/sh', '-c', line], chosen)
+}
 
 describe('the fence names the paths the routine engine really uses', () => {
   it('agrees with `routinesDirFor` and `runtimeStateFileFor`, resolved', () => {
@@ -309,5 +332,87 @@ describe.skipIf(!onMac)('the copilot, inside the fence it really runs in', () =>
     expect(profile).toContain(fenced.remoteAuth)
     // And the copilot's own folder is not in it: that is where it works.
     expect(profile).not.toContain(`(subpath "${paths.root}")`)
+  })
+})
+
+describe.skipIf(!onMac)('with a home the person chose, outside <userData>', () => {
+  /*
+   * ## Why this block exists rather than trusting the one above
+   *
+   * The fence used to be measured only from `<userData>/copilot`, which is a
+   * directory *inside* the tree the deny rules live in. That is the easy case,
+   * and it is no longer the interesting one: a person can point the copilot at
+   * `~/ClaudeAsad` or any repository they like, so the process being fenced now
+   * commonly runs with its working directory on the other side of the machine
+   * from the records being protected.
+   *
+   * Nothing in Seatbelt should care — `(subpath …)` matches resolved absolute
+   * paths and a process's cwd is not part of the match — and that reasoning is
+   * exactly the kind this directory has been wrong about twice: once when `/var`
+   * being a symlink meant a profile named paths the kernel never saw, and once
+   * when a folder was simply on the wrong side of a correct rule. So it is
+   * measured from there too, and the control cases come first.
+   */
+
+  it('can write in the folder it was pointed at, which is the whole point of choosing one', async () => {
+    // The control case, and the one that would fail if somebody "fixed" the
+    // fence by confining the copilot to its own directory again.
+    const ran = await inChosen('echo remembered > memory/a-fact.md && cat memory/a-fact.md')
+    expect(ran.stdout).toContain('remembered')
+    expect(ran.code).toBe(0)
+  })
+
+  it('can read the folder’s own instructions, which is why somebody chose it', async () => {
+    const ran = await inChosen('cat CLAUDE.md')
+    expect(ran.stdout).toContain('somebody else’s assistant')
+    expect(ran.code).toBe(0)
+  })
+
+  it('still cannot write a routine file', async () => {
+    const target = join(routinesDirFor(userData), 'from-a-chosen-home.md')
+    const ran = await inChosen(`echo '# Mine' > ${JSON.stringify(target)}`)
+    expect(ran.stderr).toMatch(/not permitted/i)
+    expect(existsSync(target)).toBe(false)
+  })
+
+  it('still cannot rewrite the engine state that holds the run budgets', async () => {
+    const state = runtimeStateFileFor(userData)
+    const ran = await inChosen(`echo '{"version":1}' > ${JSON.stringify(state)}`)
+    expect(ran.stderr).toMatch(/not permitted/i)
+    expect(readFileSync(state, 'utf8')).toBe('{"version":1,"routines":{}}\n')
+  })
+
+  it('cannot reach them through a symlink planted in the chosen folder either', async () => {
+    /*
+     * Worth repeating here rather than assuming it transfers. The escape works
+     * by borrowing the permissions of the directory holding the link, and the
+     * chosen folder is a directory the copilot fully owns — more so than its own
+     * home was under the old design — so if a prefix rule were going to be
+     * fooled, this is where it would happen.
+     */
+    const ran = await inChosen(
+      `ln -sfn ${JSON.stringify(routinesDirFor(userData))} escape && echo '# via a link' > escape/linked.md`,
+    )
+    expect(ran.stderr).toMatch(/not permitted/i)
+    expect(existsSync(join(routinesDirFor(userData), 'linked.md'))).toBe(false)
+  })
+
+  it('the fence names the same paths whichever folder the copilot works in', () => {
+    /*
+     * The path arithmetic behind all of the above, and the assertion that would
+     * have caught the whole class of bug at compile speed: the fenced paths are
+     * a function of `<userData>` alone, so choosing a home cannot move them —
+     * and cannot move them somewhere the profile does not name, which would be
+     * the absence of the protection rather than a weaker version of it.
+     */
+    const chosenPaths = copilotPaths(userData, chosen)
+    expect(chosenPaths.root).toBe(chosen)
+    expect(chosenPaths.log).toBe(paths.log)
+    expect(chosenPaths.actions).toBe(paths.actions)
+    expect(recordsFenceAgrees(recordsFencePaths(userData), {
+      routines: routinesDirFor(userData),
+      routineState: runtimeStateFileFor(userData),
+      log: chosenPaths.log,
+    })).toBe(true)
   })
 })

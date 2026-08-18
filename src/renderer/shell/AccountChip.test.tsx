@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccountChip, RUN_AGENT_COMMAND } from './AccountChip'
+import { AccountChip, MENU_HEAD, RUN_AGENT_COMMAND } from './AccountChip'
 import {
   chipMode,
   presenceFromSession,
@@ -522,5 +522,92 @@ describe('believing the screen, in the direction the screen is reliable', () => 
 
   it('believes an agent the instant one is seen', () => {
     expect(settle(nothing, agent, false)).toEqual(agent)
+  })
+})
+
+describe('running this session as somebody else', () => {
+  /**
+   * His words:
+   *
+   *   > "when I change account from the dropdown it starts a new session with
+   *   > that account, instead of changing it in the same session."
+   *
+   * The constraint that produced the old behaviour is real — a CLI is
+   * authenticated at spawn, so a running agent cannot change account — and the
+   * answer is not to deny the request but to restart the right thing: this
+   * session, in this tab, rather than a second one somewhere else.
+   *
+   * The menu is portalled and only exists once opened, which a static render
+   * cannot do, so the rules are read from the source. What each one guards is a
+   * one-word edit that typechecks and quietly restores the reported bug.
+   */
+  const source = readFileSync(join(__dirname, 'AccountChip.tsx'), 'utf8')
+
+  it('switches only when it has a session, a handler and an agent running in it', () => {
+    /*
+     * Four conditions and every one of them is load-bearing. Two callers render
+     * this about a *folder* and one is a pane bar with no session in hand; for
+     * all three there is nothing on screen to switch, so a click can only mean
+     * "start one" — which is what the old behaviour was, correctly, for them.
+     */
+    expect(source).toContain(
+      "session !== null && onSwitchAccount !== undefined && showAccount && sessionAgent !== null",
+    )
+  })
+
+  it('offers only accounts of the agent this session is running', () => {
+    // An account is a login of one CLI. `resolveProfileId` declines the mismatch
+    // quietly, by falling back to the machine's own install, and the quiet
+    // version is what made picking a Codex account look like an ignored click.
+    expect(source).toContain("account.provider !== sessionAgent || isCurrent")
+  })
+
+  it('does not offer to switch to the account it is already on', () => {
+    // The tick has already said everything there is to say, and a press could
+    // only stop a healthy agent and start it again as itself.
+    expect(source).toMatch(/const inert = switching\s*\?\s*account\.provider !== sessionAgent \|\| isCurrent/)
+  })
+
+  it('calls the switch rather than falling through to a new session', () => {
+    /*
+     * The regression this guards is exactly the reported bug: a row that
+     * silently reached `onPick` would open a second session in the same folder,
+     * which is the behaviour being removed.
+     */
+    expect(source).toContain('onSwitchAccount(session.id, account.id)')
+    const rows = source.slice(source.indexOf('role="menuitemradio"'))
+    expect(rows.slice(0, 1200)).toMatch(/switching && session && onSwitchAccount/)
+  })
+
+  it('says which of the two things a press does, in the heading and out loud', () => {
+    // A sighted user reading "Run this session as" while a screen reader
+    // announces "Start a session as" has been given two accounts of one press.
+    expect(MENU_HEAD.start).toBe('Start a session as')
+    expect(MENU_HEAD.switch).toBe('Run this session as')
+    expect(source).toContain("aria-label={MENU_HEAD[switching ? 'switch' : 'start']}")
+    expect(source).toContain("{MENU_HEAD[switching ? 'switch' : 'start']}")
+  })
+
+  it('promises the description that has to come first', () => {
+    /*
+     * The foot is what makes the press safe to make. Something stops, and the
+     * conversation does not travel — neither is guessable from a menu of
+     * account names — so the sentence has to say that a description comes before
+     * anything is stopped, and the app has to keep that promise.
+     */
+    const foot = source.slice(source.indexOf('className="account-menu-foot"'))
+    expect(foot.slice(0, 700)).toContain('Stops the agent in this session')
+    expect(foot.slice(0, 700)).toContain('in this same tab')
+    expect(foot.slice(0, 700)).toContain('before anything stops')
+  })
+
+  it('drops the notice about the *next* session while it is talking about this one', () => {
+    /*
+     * `blocked` is a statement about the agent a new session here would run. Over
+     * a running session being switched it is a sentence about a different
+     * session, which is the two-subjects-one-control fault `names` exists to
+     * prevent, one level down.
+     */
+    expect(source).toContain('{!switching && blocked && <p className="account-menu-blocked">')
   })
 })

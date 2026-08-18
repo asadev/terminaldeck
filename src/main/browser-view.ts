@@ -11,6 +11,8 @@ import {
 import { BRAND } from '../shared/brand'
 import { guestSession } from './browser-session'
 import { isIsolatedGuestSession } from './browser-isolation'
+import { isProfileGuestSession } from './browser-profiles'
+import { cleanUserAgent } from './browser-user-agent'
 import { GUEST_RECORD_CHANNEL, GUEST_STEP_CHANNEL, safeAccent } from './browser-record-preload'
 import { decodePngDataUrl, markedName } from './marked-image'
 import {
@@ -254,7 +256,17 @@ function isGuest(wc: WebContents): boolean {
   // session alone would leave it permanently unclaimed — no zoom, no devtools,
   // no screenshots, no load progress and no recording, with nothing on screen
   // to say why.
-  return wc.session === guestSession() || isIsolatedGuestSession(wc.session)
+  // A page opened in a second browser profile is on that profile's own
+  // partition, so a check against the active one alone would leave every tab
+  // from a profile the person has since switched away from permanently
+  // unclaimed — no zoom, no devtools, no screenshots, no load progress and no
+  // recording, with nothing on screen to say why. The identical trap the
+  // isolated check above exists for.
+  return (
+    wc.session === guestSession() ||
+    isIsolatedGuestSession(wc.session) ||
+    isProfileGuestSession(wc.session)
+  )
 }
 
 function watchCreations(): void {
@@ -642,7 +654,14 @@ export function registerBrowserViewIpc(ipcMain: IpcMain): void {
     const entry = entryFor(tabId)
     // Empty means "back to Chromium's own", which is what the app was launched
     // with — not the empty string, which would send no User-Agent at all.
-    const next = typeof ua === 'string' && ua.trim() !== '' ? ua.trim() : app.userAgentFallback
+    // `cleanUserAgent`, not the raw fallback: turning the phone size off used
+    // to put Electron's own token back into the string, and with it back in
+    // place Google routes every sign-in down its restricted path. See
+    // `browser-user-agent.ts` for the measurement.
+    const next =
+      typeof ua === 'string' && ua.trim() !== ''
+        ? ua.trim()
+        : cleanUserAgent(app.userAgentFallback)
     entry.wc.setUserAgent(next)
     return next
   })

@@ -146,6 +146,14 @@ describe('the files app.terminaldeck.dev is built from', () => {
       'src/shared/brand.ts',
       'src/shared/pairing-link.ts',
       'src/shared/relay-wire.ts',
+      // The playhead for the copilot's scan, and the clearest case this fixture
+      // has for the rule it exists to enforce. Its own header says it lives in
+      // `shared/` *because* three surfaces have to run one copy of it — the
+      // desktop renderer, the main process's tour tool and this client — and a
+      // second implementation here is how two clients come to disagree about
+      // what a scan is. So the crossing is deliberate and this line is where
+      // that was written down.
+      'src/shared/scan.ts',
       'src/shared/sealed.ts',
       'src/shared/short-code.ts',
     ])

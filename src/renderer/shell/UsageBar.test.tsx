@@ -6,23 +6,33 @@ import { UsageBarView } from './UsageBar'
 import type { UsageReport, UsageWindowReading } from './usage-bar-model'
 
 /**
- * What the usage bar puts on the chrome, and where it is mounted.
+ * What the usage element puts on the chrome, and where it is mounted.
  *
- * Two failures are being guarded, and only one of them is about markup.
+ * Three failures are being guarded, and only one of them is about markup.
  *
- * The first is the placement. Asad asked for this bar twice and both times it
- * stayed where it already was — inside the chat composer's Options panel, which
- * a session drawn as a terminal never opens. So the last block here does not
- * render anything: it reads `SessionControls.tsx` and `App.tsx` and asserts that
- * the bar is in the cluster and that the cluster is on both bars. A component
- * that renders beautifully and is mounted nowhere is exactly the state this was
- * in when the audit found it.
+ * The first is the placement. Asad asked for this reading twice and both times
+ * it stayed where it already was — inside the chat composer's Options panel,
+ * which a session drawn as a terminal never opens. So the last block here does
+ * not render anything: it reads `SessionControls.tsx` and `App.tsx` and asserts
+ * that the reading is in the cluster and that the cluster is on both bars. A
+ * component that renders beautifully and is mounted nowhere is exactly the state
+ * this was in when the audit found it.
  *
- * The second is the wording, which is what the rest of the file is about.
+ * The second is the shape, which is what he asked for on 2026-08-17 and what
+ * most of this file is about: **two lines, five-hour above weekly**, a
+ * percentage on each, the renewal time on the five-hour one alone, and no
+ * `Week` and no dates anywhere on the bar.
+ *
+ * The third is the absence of a button. *"Claude Code has it, it should
+ * automatically do it and bring it here."* `Check now` is gone, and the tests
+ * that prove it is gone are worth nothing on their own — so they are paired with
+ * the ones proving the thing that replaced it is wired, because deleting the
+ * button without that would have emptied the bar rather than simplified it.
+ *
  * `react-dom/server`, like every other render test in this folder — this project
- * has no DOM in its test setup, which fixes the bar in its closed state. That is
- * the state a person reads at a glance and the one that has to be true on its
- * own.
+ * has no DOM in its test setup, which fixes the element in its closed state.
+ * That is the state a person reads at a glance and the one that has to be true
+ * on its own.
  */
 
 const NOW = Date.parse('2026-08-17T01:00:00.000Z')
@@ -40,7 +50,7 @@ function claude(over: Partial<UsageWindowReading> = {}): UsageWindowReading {
     window: 'five-hour',
     windowMinutes: null,
     label: 'Current session',
-    used: { state: 'reported', fraction: 0.39 },
+    used: { state: 'reported', fraction: 0.18 },
     resets: { state: 'described', text: '4am (Asia/Dubai)' },
     observedAt: NOW,
     reportedAt: NOW - MINUTE,
@@ -48,6 +58,15 @@ function claude(over: Partial<UsageWindowReading> = {}): UsageWindowReading {
     ...over,
   }
 }
+
+/** The weekly window, at the 55% he used as his example. */
+const WEEK = claude({
+  id: 'claude/system:claude/weekly',
+  window: 'weekly',
+  label: 'Current week (all models)',
+  used: { state: 'reported', fraction: 0.55 },
+  resets: { state: 'described', text: 'Aug 21 at 2pm (Asia/Dubai)' },
+})
 
 function report(readings: UsageWindowReading[], reason: string | null = null): UsageReport {
   return {
@@ -69,7 +88,7 @@ function report(readings: UsageWindowReading[], reason: string | null = null): U
 function render(props: Partial<Parameters<typeof UsageBarView>[0]> = {}): string {
   return renderToStaticMarkup(
     <UsageBarView
-      report={report([claude()])}
+      report={report([claude(), WEEK])}
       provider="claude"
       accountLabel="app.imatch.ae@gmail.com"
       now={NOW}
@@ -78,53 +97,176 @@ function render(props: Partial<Parameters<typeof UsageBarView>[0]> = {}): string
   )
 }
 
-describe('what is on the bar', () => {
-  it('shows the window, a bar, the figure and the renewal time', () => {
-    // All four are the ask, in his words: *"a bar of the five-hour limit — how
-    // much limit is completed, how much is left, with the time of renewal."*
+/** The text of the element, tags stripped, for "is this word on the bar" asks. */
+function text(html: string): string {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+describe('the two bars, stacked', () => {
+  it('draws a meter and a percentage for each window', () => {
+    /*
+     * His words: *"Maybe two bars, up and down. Upper one for five hours and
+     * down one for weekly. For weekly it will show the 55% … For the five-hour
+     * window it will also show the percentage and it will show the time of
+     * reset."*
+     */
     const html = render()
-    expect(html).toContain('5h')
-    expect(html).toContain('ub-meter-fill')
-    expect(html).toContain('width:39%')
-    expect(html).toContain('39%')
+    expect(html.match(/ub-meter-fill/g) ?? []).toHaveLength(2)
+    expect(html).toContain('width:18%')
+    expect(html).toContain('width:55%')
+    expect(text(html)).toContain('18%')
+    expect(text(html)).toContain('55%')
+  })
+
+  it('puts the five-hour line first, and names only that one', () => {
+    // The order is what tells them apart once the weekly line has given up its
+    // name, so it is asserted on the string rather than on the model — this is
+    // the file that would catch a `flex-direction` or a `.reverse()`.
+    const html = render()
+    expect(text(html).indexOf('18%')).toBeLessThan(text(html).indexOf('55%'))
+    expect(text(html)).toContain('5h')
+  })
+
+  it('never says “Week” and never shows the weekly date', () => {
+    // *"No need to say week here and no even need to show the dates."* The
+    // weekly renewal time is not lost — it is in the hover label and in the
+    // panel, both of which have room for the whole phrase including its
+    // timezone. It is off the bar, which is a different thing.
+    const html = render()
+    expect(text(html)).not.toMatch(/\bWeek\b/)
+    expect(html).not.toContain('resets Aug 21')
+  })
+
+  it('shows the renewal time for the five-hour window', () => {
+    const html = render()
     expect(html).toContain('<span class="ub-caveat">resets 4am</span>')
     // The timezone the CLI printed is not lost, it is one hover away — see
     // `chipReset`, and the panel, which prints the phrase whole.
     expect(html).toContain('resetting 4am (Asia/Dubai)')
   })
 
-  it('says whose it is, where a bar cannot fit it', () => {
-    // The bar sits beside the account chip precisely so the two agree, so the
-    // hover label and the accessible name carry the agent and the login.
+  it('has exactly one renewal clause, on the line that is allowed one', () => {
+    expect(render().match(/ub-caveat/g) ?? []).toHaveLength(1)
+  })
+
+  it('says whose it is, where the lines cannot fit it', () => {
+    // The element sits beside the account chip precisely so the two agree, so
+    // the hover label and the accessible name carry the agent and the login.
     const html = render()
     expect(html).toContain('Claude Code')
     expect(html).toContain('app.imatch.ae@gmail.com')
   })
 
-  it('gives up the renewal clause, and nothing else, when the cluster folds', () => {
+  it('gives up the renewal clause, and nothing else, when the room runs short', () => {
     /*
      * The controls beside this one fold into a single chip, because a control
      * that is hidden is still reachable through the panel that hid it. A reading
      * cannot be hidden that way: out of sight it is indistinguishable from a
      * reading that does not exist, which is the one confusion this component is
-     * built to prevent. So it stays, and gives up its caption.
+     * built to prevent. So both lines stay, and give up their caption.
+     *
+     * `dense` is a *measured* tier and deliberately not the controls' fold —
+     * see `fit`. Following the fold meant losing the renewal time at a 1440pt
+     * window whenever the session had a long name, which is not short of room by
+     * any reading of the word.
      */
-    const html = render({ folded: true })
-    expect(html).toContain('5h')
-    expect(html).toContain('39%')
-    expect(html).toContain('ub-meter-fill')
+    const html = render({ fit: 'dense' })
+    expect(html.match(/ub-meter-fill/g) ?? []).toHaveLength(2)
+    expect(text(html)).toContain('18%')
+    expect(text(html)).toContain('55%')
     expect(html).not.toContain('ub-caveat')
     // …and the clause is still one hover away, whole.
     expect(html).toContain('resetting 4am (Asia/Dubai)')
   })
 })
 
+describe('the narrowest bar this app can be made', () => {
+  /**
+   * Measured, not imagined. At the app's own minimum window width — 720, pinned
+   * in `src/main/index.ts` — a toolbar carrying a session name, a folder, a long
+   * account address and the mode switch leaves this cluster 67 pixels, shared
+   * with the folded controls chip. Flex handed the reading 22.9 of them and it
+   * drew the word `5h` and no number at all.
+   *
+   * `tight` is the answer: the figures, and nothing else. Everything asserted
+   * below is something that has to *go* for the two numbers to come out whole,
+   * so each one is a thing somebody could reasonably put back.
+   */
+  const html = render({ fit: 'tight' })
+
+  it('keeps both figures', () => {
+    expect(text(html)).toContain('18%')
+    expect(text(html)).toContain('55%')
+  })
+
+  it('drops the window name, the meters and the renewal clause', () => {
+    expect(text(html)).not.toContain('5h')
+    expect(html).not.toContain('ub-meter')
+    expect(html).not.toContain('ub-caveat')
+  })
+
+  it('drops the caret, which everywhere else on this bar is sacred', () => {
+    /*
+     * With it the control needs 48px and the cap allows 35, so the grid
+     * overflowed its own box and the chevron was drawn *on top of* `18%` — a
+     * 6.9px overlap, measured in the running app. A caret painted through a
+     * percentage is not an affordance. The element is still a button, still
+     * announces `aria-haspopup`, and still carries the whole reading in its
+     * title, all of which is asserted here so that dropping the mark cannot
+     * quietly become dropping the control.
+     */
+    expect(html).not.toContain('ac-caret')
+    expect(html).toContain('aria-haspopup="dialog"')
+    expect(html).toContain('<button')
+    expect(html).toContain('resetting 4am (Asia/Dubai)')
+  })
+
+  it('renders one cell per line per column, so the grid cannot shear', () => {
+    /*
+     * A grid with N explicit columns places items in order, so a line that
+     * renders fewer cells than the template does not lose a column — it pushes
+     * every later cell into the wrong one, and the two lines stop being aligned,
+     * which is the one thing holding the unnamed weekly line together.
+     *
+     * One cell a line when tight (the figure), four when there is room (name,
+     * figure, meter, renewal clause). `UsageBar.css` states the matching
+     * template against the same `data-fit` value, and this is what stops the two
+     * being changed apart.
+     */
+    expect((html.match(/ub-cell/g) ?? []).length).toBe(2)
+    expect((render().match(/ub-cell/g) ?? []).length).toBe(8)
+  })
+})
+
+describe('one window reporting and the other silent', () => {
+  it('keeps the empty line rather than promoting the other window into it', () => {
+    /*
+     * The exact screen he was looking at when he asked for two bars: no
+     * five-hour figure, 81% for the week — and a single element that read
+     * `Week 81% ▬▬ resets Aug 21 at 2pm`, because the weekly reading had been
+     * promoted into the only slot there was. The percentage that is present must
+     * still be the weekly one, and the missing one must still be visibly the
+     * five-hour one.
+     */
+    const html = render({
+      report: report([{ ...WEEK, used: { state: 'reported', fraction: 0.81 } }]),
+    })
+    expect(text(html)).toContain('5h')
+    expect(text(html)).toContain('81%')
+    expect(html.match(/ub-meter-fill/g) ?? []).toHaveLength(1)
+    // An em dash: the absence, marked, in the column a number would be in. Not
+    // a zero — an empty meter and an absent one are opposite claims, so the
+    // silent line has no meter at all.
+    expect(text(html)).toContain('—')
+  })
+})
+
 describe('what is on the bar when nothing has been reported', () => {
-  it('says so in the main process’s own words rather than drawing an empty bar', () => {
+  it('collapses to one line and says so in the main process’s own words', () => {
     const reason =
       'Claude Code has not printed a plan-limit line in this session yet — it only does so near a limit, or when /usage is run.'
     const html = render({ report: report([], reason) })
-    expect(html).toContain('Not reported')
+    expect(text(html)).toContain('Not reported')
     expect(html).not.toContain('ub-meter')
     expect(html).toContain('only does so near a limit')
   })
@@ -132,6 +274,12 @@ describe('what is on the bar when nothing has been reported', () => {
   it('separates a build with no channel from a session with nothing to say', () => {
     expect(render({ report: null, unwired: true })).toContain('not wired into this build')
     expect(render({ report: null })).toContain('Asking this session')
+  })
+
+  it('says a fetch is happening while one is, because nobody started it', () => {
+    // A reader who did not press anything and sees "Not reported" for the two
+    // seconds a fetch takes has been told the wrong thing.
+    expect(text(render({ report: report([]), fetching: true }))).toContain('Reading…')
   })
 
   it('never draws a bar from an expired window', () => {
@@ -163,28 +311,89 @@ describe('what is on the bar when nothing has been reported', () => {
         }),
       ]),
     })
-    expect(html).toContain('Not reported')
-    expect(html).toContain('window has reset')
+    expect(text(html)).toContain('Not reported')
+    expect(text(html)).toContain('window has reset')
     expect(html).not.toContain('ub-meter-fill')
     expect(html).toContain('Codex CLI')
   })
 })
 
-describe('the one action, and who may have it', () => {
-  it('is offered to a Claude session, because /usage is a thing Claude Code answers', () => {
-    // Not rendered here — the panel is shut in a static render — so the guard is
-    // that the component only ever builds it for Claude. A Codex session must
-    // not be offered a button that types an unknown command at its prompt.
+describe('a window near its limit that has no line of its own', () => {
+  it('is put on the bar beside the two that do', () => {
+    // `Current week (Opus)` at 97% behind a comfortable pair is the screen this
+    // whole feature was nearly cancelled for producing.
+    const html = render({
+      report: report([
+        claude(),
+        WEEK,
+        claude({
+          id: 'claude/system:claude/weekly-opus',
+          window: 'other',
+          windowMinutes: 10080,
+          label: 'Current week (Opus)',
+          used: { state: 'reported', fraction: 0.97 },
+        }),
+      ]),
+    })
+    expect(html).toContain('ub-alert')
+    expect(text(html)).toContain('97%')
+  })
+})
+
+describe('nobody presses anything', () => {
+  it('has no Check button on the bar or in the panel', () => {
+    /*
+     * *"Claude Code has it, it should automatically do it and bring it here."*
+     *
+     * Counted rather than searched for by name, because the name is the thing
+     * most likely to change and least likely to matter. There is exactly one
+     * `<button>` in this whole element — the one that opens the panel — so a
+     * second one cannot be added anywhere in it, under any label, without this
+     * failing. The class and the prop the old control used are named too, so a
+     * revert that restores it wholesale is caught by its own spelling.
+     */
     const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
-    expect(source).toContain("provider === 'claude' ? (")
-    expect(source).toContain('ub-check')
+    expect(source.match(/<button/g) ?? []).toHaveLength(1)
+    expect(source).not.toContain('ub-check')
+    expect(source).not.toContain('onCheck')
   })
 
-  it('explains a refusal rather than appearing to do nothing', () => {
-    const source = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
-    // The sentences are the main process's own, reused from the strip that used
-    // to carry this control, so one refusal cannot be explained two ways.
-    expect(source).toContain('refreshFailureMessage')
+  it('fetches by itself instead, off the session’s own output', () => {
+    /*
+     * Paired with the test above deliberately. Removing the button on its own
+     * would not have simplified this element, it would have emptied it: `/usage`
+     * is the only thing in this app that makes Claude Code state its limits, and
+     * the button was the only thing that ran it. So the deletion is only correct
+     * while this is wired, and the two are asserted together so neither can be
+     * undone alone.
+     */
+    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
+    expect(source).toContain('useAutoUsage({')
+    expect(source).toContain('fetch: usage.check')
+    // …and it stops when the feature is switched off. Hooks run before the
+    // early return that stops this being *drawn*, so without this a
+    // switched-off reading would carry on typing `/usage` into people's
+    // sessions for a bar nobody can see.
+    expect(source).toContain("features.controlOn('chrome.usage')")
+    // The freshness judgement is the drawing layer's, not a second opinion — a
+    // figure good enough to show is good enough to leave alone.
+    expect(source).toContain('fresh: leadIsLive(')
+  })
+
+  it('is driven by an event, not by an interval', () => {
+    // The standing rule in this project, in his words: crons and timers *"make
+    // the system heavier"*. The only timers in the fetcher are one-shots.
+    const auto = readFileSync(join(__dirname, 'auto-usage.ts'), 'utf8')
+    expect(auto).toContain('onSessionData')
+    expect(auto).not.toContain('setInterval')
+  })
+
+  it('tells the reader there is nothing to press, rather than leaving a gap', () => {
+    // A person who can see a figure is missing will look for the button. The
+    // honest answer is that the app is already doing it — and saying so is what
+    // stops the absence reading as a fault.
+    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
+    expect(source).toContain('there is nothing to press')
   })
 })
 
@@ -199,7 +408,7 @@ describe('where this is mounted', () => {
      * This asserts the placement rather than the drawing, because the drawing
      * was never the part that was missing.
      */
-    expect(controls).toContain("import { UsageBar } from './UsageBar'")
+    expect(controls).toContain("from './UsageBar'")
     expect(controls).toContain('<UsageBar sessionId={sessionId}')
   })
 
@@ -212,12 +421,23 @@ describe('where this is mounted', () => {
   })
 
   it('and the chat view does not draw the same reading a second time', () => {
-    // Two readings of one subscription, from two channels with two rules about
-    // stale numbers, is two answers on one screen. The strip keeps what is
-    // genuinely about the session — tokens, requests, context.
-    const strip = readFileSync(join(__dirname, '../chat/usage/UsageStrip.tsx'), 'utf8')
-    expect(strip).not.toContain('PlanSection')
-    expect(strip).not.toContain('us-plan-limit')
-    expect(strip).not.toContain('planLabel')
+    /*
+     * Two readings of one subscription, from two channels with two rules about
+     * stale numbers, is two answers on one screen.
+     *
+     * This used to prove the point by reading `chat/usage/UsageStrip.tsx` and
+     * checking the plan limit was not in it. That file is gone: the composer's
+     * whole control row went with *"remove them from the chat box side
+     * completely, only keep the maybe add files or something"*, and the strip
+     * went with it. So the rule is now proved the stronger way — by the chat
+     * view mounting no usage reading at all, rather than by one particular
+     * reading being absent from a component that could always grow another.
+     */
+    const view = readFileSync(join(__dirname, '../components/ChatView.tsx'), 'utf8')
+    for (const gone of ['UsageStrip', 'UsageBar', 'PlanSection', 'planLabel']) {
+      expect(view, `${gone} draws a usage reading inside the conversation again`).not.toContain(
+        gone,
+      )
+    }
   })
 })

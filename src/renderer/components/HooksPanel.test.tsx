@@ -1,4 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
+import { panelSpec } from '../shell/panels'
+import { sectionMeta } from '../settings/settings-schema'
 import { describe, expect, it } from 'vitest'
 import {
   HookRow,
@@ -43,10 +45,14 @@ function status(partial: Partial<HookProviderStatus> = {}): HookProviderStatus {
 const noop = (): void => {}
 
 describe('primaryAction', () => {
-  it('offers a reinstall rather than an install when the address is stale', () => {
-    expect(primaryAction('stale').label).toBe('Reinstall')
-    expect(primaryAction('none').label).toBe('Install')
-    expect(primaryAction('partial').label).toBe('Repair')
+  it('offers a repair rather than a fresh switch-on when the address is stale', () => {
+    // The words are the reader's, not the installer's. "Reinstall" describes
+    // what happens to a settings file; "Fix it" describes what the press is
+    // for, which is the vocabulary shift that stopped this page reading as a
+    // second copy of the agent list.
+    expect(primaryAction('stale').label).toBe('Fix it')
+    expect(primaryAction('none').label).toBe('Turn on')
+    expect(primaryAction('partial').label).toBe('Fix it')
   })
 
   it('refuses to offer a write against a file it could not parse', () => {
@@ -135,16 +141,32 @@ describe('bridgeCalls', () => {
 })
 
 describe('HookRow', () => {
-  it('names the file it will write', () => {
+  /**
+   * A row is a sentence about an agent, not a record about a file.
+   *
+   * It printed the absolute path of the settings file as its own line under
+   * every agent's name — which, beside a list of the same agent names in
+   * Settings, is what produced *"do you think hooks and CLIs are the same
+   * thing?"*. The path is not gone; it moved to the hover of the button that
+   * writes it, which is the moment it is worth knowing. *"For important parts
+   * of the application we don't need to give folders and file paths."*
+   */
+  it('says what the state means for the reader, and keeps the path on the button', () => {
     const html = renderToStaticMarkup(
       <HookRow status={status()} busy={false} result={null} onInstall={noop} onRemove={noop} />,
     )
-    expect(html).toContain('/Users/a/.claude/settings.json')
-    expect(html).toContain('Install')
-    expect(html).not.toContain('Remove')
+    expect(html).toContain('cannot tell whether it is working or waiting for you')
+    expect(html).toContain('Turn on')
+    expect(html).not.toContain('Turn off')
+    // Present, and only as the hover on the write button.
+    expect(html).toContain('title="Writes /Users/a/.claude/settings.json"')
+    expect(html).not.toContain('>/Users/a/.claude/settings.json<')
   })
 
-  it('shows the backup location once one exists', () => {
+  it('keeps the backup path for the moment it reassures, not on every row', () => {
+    // It used to stand on every row as a second absolute path — see the note
+    // where it is rendered. It belongs with the confirmation, which is the one
+    // moment somebody wants to know their original is safe.
     const html = renderToStaticMarkup(
       <HookRow
         status={status({ state: 'complete', backupPath: '/Users/a/.terminaldeck/hook-backups/claude.bak' })}
@@ -154,8 +176,8 @@ describe('HookRow', () => {
         onRemove={noop}
       />,
     )
-    expect(html).toContain('/Users/a/.terminaldeck/hook-backups/claude.bak')
-    expect(html).toContain('Remove')
+    expect(html).not.toContain('/Users/a/.terminaldeck/hook-backups/claude.bak')
+    expect(html).toContain('Turn off')
   })
 
   it('disables both buttons while a write is in flight', () => {
@@ -190,7 +212,7 @@ describe('HooksPanel', () => {
  * "only our own entries" is what makes pressing the button reasonable.
  */
 describe('what this page says about itself', () => {
-  it('leads with what hooks buy, not with what a hook is', () => {
+  it('says which of the two pages it is, so nobody has to ask again', () => {
     const bridge: HooksBridge = {
       hooksStatus: async () => [],
       installHooks: async () => ({ ok: true, message: 'ok', status: status() }),
@@ -199,8 +221,18 @@ describe('what this page says about itself', () => {
     }
     const html = renderToStaticMarkup(<HooksPanel bridge={bridge} />)
     const sub = /<p class="hooks-sub">([^<]*)<\/p>/.exec(html)?.[1] ?? ''
-    expect(sub).toContain('follow a session without reading its terminal output')
-    expect(sub.split('.').filter((part) => part.trim() !== '')).toHaveLength(1)
+    // What it buys is the toolbar's job — `panelSpec('hooks').blurb`, asserted
+    // just below, so the page does not say one thing twice.
+    expect(panelSpec('hooks').blurb).toMatch(/working, waiting or done/)
+    // This line says the other half: what the page is *not*. It is the fix for
+    // *"do you think hooks and CLIs are the same thing?"* and is the assertion
+    // somebody has to delete to lose it.
+    expect(sub).toContain('Settings')
+    // Named from the schema, not written here: the rail entry was renamed from
+    // Agents to Assistants the same night, and a cross-reference that names the
+    // wrong pane is worse than none.
+    expect(sub).toContain(sectionMeta('agents').label)
+    expect(sub).toContain('One switch per assistant')
   })
 
   it('keeps the promise that a removal touches nothing else in the file', () => {

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { ProviderId, SessionStatus } from '@shared/types'
 import { StatusDot } from '../components/StatusDot'
 import { AccountChip } from './AccountChip'
+import type { ChromeSession } from './agent-presence'
 import { FolderTitle } from './FolderChip'
 import { SessionTitle } from './SessionTitle'
 
@@ -96,6 +97,31 @@ export type PaneSubject =
       /** The agent a session started from this pane's chip would run. */
       provider?: ProviderId
       onPickAccount(accountId: string, runAs?: ProviderId): void
+      /**
+       * Run *this* pane's session as another account, in this pane.
+       *
+       * The guest half of the fix reported against the window's own chip:
+       * *"when I change account from the dropdown it starts a new session with
+       * that account, instead of changing it in the same session."* A pane is
+       * where two sessions on two accounts are most likely to be side by side,
+       * so it is the one place the old behaviour would have been hardest to
+       * notice going wrong — a third session appearing in the rail while the
+       * pane you pressed in carried on unchanged.
+       *
+       * Optional, like every other switch entry point, and for the same reason:
+       * a caller that has not built the other half must get the old behaviour
+       * rather than a row that calls nothing.
+       */
+      onSwitchAccount?(sessionId: string, accountId: string): void
+      /**
+       * What is actually running in this pane, for the chip's own questions.
+       *
+       * Only "is there an agent in it" and "has it ended" — see `ChromeSession`.
+       * It is a separate field from `id` and `status` above because those two are
+       * about the *heading*, and a status of `idle` says nothing about whether a
+       * CLI is at the prompt or a bare shell is.
+       */
+      chrome?: ChromeSession | null
       onManageAccounts(): void
     }
   /**
@@ -178,7 +204,9 @@ export function PaneBar({ paneId, subject, focused, controls, onClose }: Props) 
                 current={subject.account}
                 projectPath={subject.folder}
                 provider={subject.provider}
+                session={subject.chrome ?? null}
                 onPick={subject.onPickAccount}
+                onSwitchAccount={subject.onSwitchAccount}
                 onManage={subject.onManageAccounts}
               />
             </div>

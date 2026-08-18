@@ -18,7 +18,20 @@ import '../src/renderer/styles/tokens.css'
 // button grows a UA border — so the harness disagrees with the app about
 // things that are not the component's fault. `main.tsx` has always loaded it.
 import '../src/renderer/styles/app.css'
-import { ChatToggle, type SessionViewMode } from '../src/renderer/components/ChatToggle'
+// `SessionViewMode` moved to the window's own mode switch when the standalone
+// Terminal/Chat segmented control was folded into it. The harness deliberately
+// does not import `ModeSwitch` in its place: this page exists to look at the
+// chat view, and mounting the window's real mode control here would put a
+// second, differently-wired copy of a shell control on a page that has no
+// shell — the exact "harness disagrees with the app" failure `stub.ts` warns
+// about. A plain button is honest about being scaffolding.
+//
+// It broke silently, which is worth recording: `ChatToggle.tsx` was deleted
+// with this import left behind, so `chat.html` returned a vite 500 and rendered
+// a blank white page. Nothing failed — no test covers a harness entry point —
+// and the only symptom was that the one page that can show this view stopped
+// showing it.
+import { type SessionViewMode } from '../src/renderer/shell/ModeSwitch'
 import { ChatView, type ChatBridge, type ChatMessage, type ChatUpdate } from '../src/renderer/components/ChatView'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -181,7 +194,13 @@ function Harness() {
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
       <div className="chat-toggle-bar" style={{ justifyContent: 'space-between' }}>
-        <ChatToggle mode={mode} onChange={setMode} />
+        <button
+          type="button"
+          style={{ font: 'inherit' }}
+          onClick={() => setMode(mode === 'chat' ? 'terminal' : 'chat')}
+        >
+          view: {mode}
+        </button>
         <span style={{ display: 'flex', gap: 8 }}>
           <button type="button" onClick={() => setReport(audit())} style={{ font: 'inherit' }}>
             Audit the DOM

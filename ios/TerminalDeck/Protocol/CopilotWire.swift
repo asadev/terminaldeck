@@ -1,11 +1,11 @@
 /**
  * The `copilot` half of the wire language, as this client sees it.
  *
- * A port of §2 of `COPILOT-REMOTE.md`, which settles the frames, the caps and
- * the grant. It lives beside `WireProtocol.swift` under the same rule that file
- * states about itself: it is a **copy** of the desktop's `protocol.ts`, Swift
- * having no way to import TypeScript, and it changes only when that file
- * changes, with the same names and the same values.
+ * A port of §2 of `COPILOT-REMOTE.md`, which settles the frames, the caps, the
+ * connection and the grant. It lives beside `WireProtocol.swift` under the same
+ * rule that file states about itself: it is a **copy** of the desktop's
+ * `protocol.ts`, Swift having no way to import TypeScript, and it changes only
+ * when that file changes, with the same names and the same values.
  *
  * ## The one property this file exists to preserve
  *
@@ -14,9 +14,11 @@
  * `ClientMessage` cases below can carry. The phone sends *prose*; the tool calls
  * are made by a Claude CLI on the desktop, over loopback, holding a bearer token
  * this phone does not have. The design calls this the strongest form of the
- * property the feature needs — *a phone that has not been granted alter must not
- * be able to reach an alter tool by any frame it can construct* — because the
- * set of frames it can construct contains no tool at all.
+ * property the feature needs, and it survives the grant of `alter` unchanged: a
+ * device holding every tier still cannot *name* a call. It can say a sentence,
+ * and it can decide about a call the desktop composed — `copilot.answer` carries
+ * a question id and a boolean, and the tool, the arguments and the effect were
+ * all decided on that machine before anybody was asked anything.
  *
  * It is also the rule that will come under pressure, because the obvious phone
  * feature is "tap that row to run it again". `CopilotWireTests` pins it: a
@@ -24,26 +26,48 @@
  * tool id. If a future frame needs one, this comment is where the argument
  * against it is.
  *
- * ## Read is the floor; act is a second switch on top of it
+ * ## The copilot is a **separate connection**, and that is the whole design
+ *
+ * This is the part that changed on 2026-08-17 and it changed everything else in
+ * the file. Copilot access used to be a box ticked beside an already-paired
+ * device, carried on the session channel, with `alter` deliberately absent from
+ * the wire in any spelling — three independent refusals guarding the tier whose
+ * safety property is *a human at the machine says yes*.
+ *
+ * Asad:
+ *
+ * > *"Phones will have full control over copilot, same as the actual machine
+ * > app. But connecting copilot will be a separate connection than the
+ * > sessions."*
+ *
+ * The property was not abandoned; the second factor moved. It was never really
+ * *geography* — somebody who walks away from an unlocked Mac has taken their
+ * geography with them — it was *reaching the dialog required an authorisation
+ * the requesting party did not already hold.* So the copilot now has its own
+ * six-digit code minted at the desktop, its own credential, its own record and
+ * its own revoke, and a device paired to run ten terminals has no copilot reach
+ * whatsoever until somebody mints a code for it and it is redeemed.
+ *
+ * Three consequences this file has to get right, each of which is a screen:
+ *
+ *  - **`linked`** — does that desktop hold a copilot record for this device.
+ *    False means *ask the person at the machine for a connect code*; there is no
+ *    frame that will work before one is redeemed, read tier included.
+ *  - **`open`** — has *this socket* presented the credential. It is false on
+ *    every `welcome`, always, and a client that treats it as "already in" sends
+ *    frames that are refused. `copilot.hello` opens it, on every reconnect.
+ *  - **`grant`** — what the connection may do once open. All three tiers,
+ *    `alter` included.
+ *
+ * ## Read is the floor; act and alter are two more switches on top of it
  *
  * `server.ts` refuses every `copilot.*` frame from a device whose grant does not
- * cover it — `read` for the whole surface, `act` additionally for `start`,
- * `say`, `cancel` and `stop`. That refusal is the transport keeping the UI
+ * cover it — `read` for the watching surface, `act` for `start`/`say`/`cancel`/
+ * `stop`, `alter` for `answer`. That refusal is the transport keeping the UI
  * honest rather than the boundary itself (the boundary is `DeckControl.call` on
  * the desktop, where it already is). What it means *here* is that a control this
  * grant does not cover must not be drawn: a button whose only possible outcome
  * is a refusal is the defect `reachable.test.ts` warns about, one level out.
- *
- * ## `alter` is not on this wire, in any spelling
- *
- * Not as a field, not as `false`, not as a case. `copilot-grants.ts` makes the
- * same choice for the file on disk and gives the reason: a stored `"alter":
- * false` reads, to somebody looking at it, like a switch that could be turned
- * on. It cannot be — `REMOTE_GRANTABLE_TIERS` is `['read', 'act']` — and neither
- * this type nor any screen built on it should imply otherwise. What the phone
- * *does* get is `copilot.pending`: it can see that a question is waiting at the
- * desk, with the desktop's own summary and the countdown, and it cannot answer
- * it. See `CopilotQuestion`.
  */
 
 import Foundation
@@ -55,9 +79,9 @@ enum Copilot {
      *
      * Advertised in `welcome.capabilities`, like every other name past protocol
      * v1, and read the same way: absent means "this desktop has never heard of
-     * the feature", which is every build shipping today including 0.3.0. It is
-     * **not** the same question as whether this device may use it — that is the
-     * grant, which travels separately, for the reason `folders` travels
+     * the feature", which is every build shipping before 0.4. It is **not** the
+     * same question as whether this device may use it — that is the connection
+     * and the grant, which travel separately, for the reason `folders` travels
      * separately from `create`. One is about the host, the other is about this
      * device, and folding them together is exactly how a phone ends up drawing a
      * control that is always refused.
@@ -107,54 +131,100 @@ enum Copilot {
      * pages against the file on the desktop rather than against this array.
      */
     static let maxTimelineRows = 600
+
+    /**
+     * Digits in a connect code. `CODE_LENGTH` in `src/shared/short-code.ts`, and
+     * the same six digits the pairing code uses.
+     *
+     * Deliberately the same format and deliberately **not** the same code: this
+     * one is minted by `CopilotLinks.mintCode` and redeemed by
+     * `copilot.connect`, and typing a pairing code here would be six digits that
+     * hash to nothing. The two screens say which is which; the format is shared
+     * because a person should not have to learn a second shape of code for the
+     * second thing they connect.
+     */
+    static let codeLength = 6
+
+    /// `MAX_COPILOT_CREDENTIAL_CHARS`. 32 bytes of base64url is 43 characters;
+    /// the ceiling is generous and finite for the reason `device-auth.ts` gives
+    /// about its own — a client that forgets to check a value must not be able
+    /// to hand a megabyte to a keychain item or to a frame.
+    static let maxCredentialChars = 512
 }
 
 /**
- * What one device may do with the copilot.
+ * What one connected device may do with the copilot.
  *
- * Two booleans, and deliberately not three. See the file header.
+ * **Three booleans now, and the third one used to be the mechanism.** `alter`
+ * was absent from this type in every spelling, because the tier's safety
+ * property was *a human at the machine says yes* and a phone is not that human.
+ * That is superseded by the separate connection — see the file header — and the
+ * property it protected is now carried by the connection instead. What `alter`
+ * decides is **which screen a confirmation is drawn on and whose thumb answers
+ * it**; it pre-authorises nothing, because every alter call still raises a
+ * question, still expires into a refusal, and still writes a row naming who
+ * answered.
  *
- * `none` is the default for every device, including every device paired before
- * this existed: `CopilotGrants.granted` answers `NO_TIERS` for an unknown device
- * and the store's header explains why it does *not* inherit `folder-grants.ts`'s
- * generous fallback — nobody has ever had remote copilot access, so nobody can
- * lose it.
+ * Independent booleans rather than a ladder, matching `TierGrant` on the desktop
+ * and for its reason: a ladder makes the *order* of the tiers a security
+ * property, and every existing grant silently widens the day somebody inserts a
+ * tier between two others.
+ *
+ * `none` is the answer for every device with no copilot record — the
+ * overwhelming majority, by design, because nobody has ever had remote copilot
+ * access and so nobody can lose it.
  */
 struct CopilotGrant: Equatable {
     let read: Bool
     let act: Bool
+    let alter: Bool
 
-    static let none = CopilotGrant(read: false, act: false)
+    static let none = CopilotGrant(read: false, act: false, alter: false)
 
     /// Whether this phone may see anything at all. `read` is the floor for the
-    /// whole surface, so this is also the answer to "is there a screen here".
+    /// watching surface, so this is also the answer to "is there a screen here".
     var canWatch: Bool { read }
 
     /**
      * Whether this phone may make the copilot do something.
      *
-     * `read && act`, not `act`. A hand-edited `remote-copilot.json` can produce
-     * `{read: false, act: true}` — `copilotGrantFrom` keeps whatever is literally
-     * `true` for each grantable tier and has no rule tying one to the other — and
-     * against a desktop that refuses the whole surface without `read`, drawing a
-     * composer for that grant would be drawing a control whose every message
-     * comes back `unauthorized`. The floor is a floor.
+     * `read && act`, not `act`. A hand-edited store can produce
+     * `{read: false, act: true}` — the desktop keeps whatever is literally
+     * `true` per tier and has no rule tying one to the other — and against a
+     * desktop that refuses the watching surface without `read`, drawing a
+     * composer for that grant would draw a control that can send a message into
+     * a screen that shows no answer. The floor is a floor.
      */
     var canDirect: Bool { read && act }
 
-    /// True when this device has been granted nothing, which is the case the
-    /// screen exists to explain rather than hide.
-    var isEmpty: Bool { !read && !act }
+    /**
+     * Whether this phone may answer its own run's confirmations.
+     *
+     * `alter` alone, exactly as `COPILOT_FRAME_TIER` spells it — this is the one
+     * place the client does **not** add `read` to the test, because the desktop
+     * does not. In practice the two arrive together: a `copilot.ask` is pushed
+     * down a watcher's sink, and there is no watcher without `read` and an
+     * `attach`. Writing it as the desktop writes it is what stops this end
+     * inventing a rule the far end does not have.
+     */
+    var canAnswer: Bool { alter }
+
+    /// True when this device has been granted nothing, which is a real state —
+    /// a connection whose boxes are all unticked still holds a working
+    /// credential — and the one the screen exists to explain rather than hide.
+    var isEmpty: Bool { !read && !act && !alter }
 }
 
 /**
- * What a `welcome` said about the copilot: whether the machine **has** one, and
- * what this device may do with it.
+ * What a `welcome` or a `copilot.grant` said about this device's copilot: does
+ * the machine have one, does this device hold a record for it, is *this socket*
+ * in, and what may it do.
  *
- * Two questions, and this type exists because the app got them confused once and
- * the confusion is expensive on screen.
+ * Four facts and not one, because a client has four screens to draw and folding
+ * any two of them together makes one of them wrong.
  *
- * `welcome.capabilities` is not a reliable answer to the first one. The desktop
+ * `stated` is this end's own bit and is not on the wire. `welcome.capabilities`
+ * is not a reliable answer to "does this machine have a copilot": the desktop
  * assembles that list by filtering `CAPABILITIES` — *every extension this build
  * knows how to serve* — against what its injected objects can actually do, and
  * the filter is a separate line of code from the thing it is filtering for. A
@@ -164,26 +234,38 @@ struct CopilotGrant: Equatable {
  * over a different feature was reported as verified against the empty screen
  * that produced.
  *
- * `welcome.copilot` **is** a reliable answer, because it is written by the same
- * object that serves the frames: `copilotFrame()` on the desktop returns `{}`
- * when there is no copilot layer and the grant object — *even when it is
- * all-false* — when there is one. A host that has a copilot says so in this
+ * The `copilot` **field** is the reliable answer, because it is written by the
+ * same object that serves the frames: `copilotFrame()` on the desktop returns
+ * `{}` when there is no copilot layer and the object — *even when the device
+ * holds nothing* — when there is one. A host that has a copilot says so in this
  * field by construction; a host that merely advertises the name cannot.
  *
- * So `stated` is the question "does this machine have a copilot at all", and
- * `grant` is the question "and may I touch it". Keeping them apart is what lets
- * a phone tell *this desktop is too old, update it* from *this desktop has one
- * and you have not been given it, here is where the switch is* — two sentences
- * that send a person to two different places, only one of which exists.
+ * So `stated` answers *does this machine have a copilot at all*, `linked`
+ * answers *and have I been connected to it*, `open` answers *and is this socket
+ * in*, and `grant` answers *and what may I do*. Keeping them apart is what lets
+ * a phone tell **update that desktop** from **ask for a connect code** from
+ * **send your credential** from **somebody unticked your boxes** — four
+ * sentences that send a person to four different places, three of which exist.
  */
-struct CopilotOffer: Equatable {
-    /// The `welcome` carried a `copilot` object. See the type's header: this is
-    /// the honest signal, and the capability name is not.
+struct CopilotConnection: Equatable {
+    /// The frame carried a `copilot` object. See the type's header: this is the
+    /// honest signal, and the capability name is not.
     let stated: Bool
+    /// That desktop holds a copilot record for this device. False is *ask for a
+    /// connect code*, and it is the state every paired device starts in.
+    let linked: Bool
+    /**
+     * **This socket** has presented the credential.
+     *
+     * False on every `welcome`, always — that is not a quirk to work around, it
+     * is the difference between this design and the per-device grant it
+     * replaced. A session channel does not carry the copilot by existing.
+     */
+    let open: Bool
     let grant: CopilotGrant
 
-    /// A desktop that said nothing. Every build shipping today.
-    static let silent = CopilotOffer(stated: false, grant: .none)
+    /// A desktop that said nothing. Every build shipping before this feature.
+    static let silent = CopilotConnection(stated: false, linked: false, open: false, grant: .none)
 }
 
 /**
@@ -264,8 +346,8 @@ struct CopilotState: Equatable {
      * Optional here and not on the desktop's type, because the difference
      * between a host that sent it and a host that did not is the difference
      * between applying a grant and inventing one: reading an absent field as
-     * `{read:false, act:false}` would revoke this phone's own screen on the
-     * first state frame from a host that did not repeat it.
+     * all-false would revoke this phone's own screen on the first state frame
+     * from a host that did not repeat it.
      */
     let grant: CopilotGrant?
 
@@ -348,8 +430,9 @@ struct CopilotChatMessage: Equatable, Identifiable {
  * later field: the arguments are scrubbed before the row is written, and *even
  * scrubbed they are the text of what was typed into somebody's sessions*. So a
  * tool row on a phone is what happened and what it was for, in the sentence the
- * tool composed — never the payload. The screens here draw exactly that and no
- * affordance that implies more is available behind a tap.
+ * tool composed — never the payload. The one place arguments do cross is
+ * `CopilotConsentQuestion`, and they cross there because a decision is being
+ * asked for and they go only to the device being asked.
  */
 struct CopilotAction: Equatable, Identifiable {
     let id: String
@@ -398,27 +481,26 @@ struct CopilotAction: Equatable, Identifiable {
 }
 
 /**
- * A confirmation waiting **at the desk**, and it is watch-only.
+ * A confirmation that is waiting, as a device **watches** it.
  *
- * A port of `CopilotPendingRow`, whose own header makes the argument this type
- * exists to carry: the alter tier's whole safety property is that a human at the
- * machine says yes, and the party holding the phone is by definition not that
- * human. A phone that could answer its own request holds `alter`, and the grant
- * that withheld it was a ceremony.
+ * A port of `CopilotPendingRow`. This type used to carry no `mine` and its
+ * header said, in those words, that there must never be an Allow or a Refuse on
+ * it. That was true while copilot access was a box ticked beside a paired phone.
+ * It is not true now that a copilot connection is its own act of authorisation —
+ * see `CopilotConnection` and `COPILOT-REMOTE.md` §4.
  *
- * What it is *for* is the failure the design named: the desktop dialog is on a
- * screen nobody is looking at, and two minutes later it times out in silence.
- * The phone's job is to say **go and look** — with enough to know whether it is
- * worth getting up for (what is being asked, in the desktop's own summary) and
- * how long there is to do it (`expiresAt`).
+ * What survives unchanged is the **watching** half, and it is still most of the
+ * value: the failure the design named is a desktop dialog on a screen nobody is
+ * looking at, timing out in silence two minutes later. A device sees every
+ * question, including ones it may not answer, so it can say *go and look*.
  *
- * Note what is deliberately not here, because a screen drawn from an earlier
- * draft of this type tried to show both: there is **no tier and no argument
- * list**. The full request — every argument verbatim — lives at the machine
- * where it is answered, which is the same place the decision lives. A phone that
- * showed the arguments would be inviting a judgement it cannot then act on, and
- * relaying the text of what an agent is about to type into somebody's session
- * across a relay to do it.
+ * There is deliberately **no `args` and no tier here**. Watching a question is
+ * not judging it, and the arguments of a pending alter call are the most
+ * sensitive thing on this surface — a settings key and its new value, a session
+ * id and the text about to be typed into it. A device that *can* answer gets
+ * them in full on `CopilotConsentQuestion`; a device that cannot has no decision
+ * to make with them, and drawing an Allow button over a row that has none would
+ * be inviting exactly the reflex Yes this whole design refuses.
  */
 struct CopilotQuestion: Equatable, Identifiable {
     let id: String
@@ -439,6 +521,22 @@ struct CopilotQuestion: Equatable, Identifiable {
      * approving, against a turn that has already moved on.
      */
     let expiresAt: Double
+    /**
+     * May **this** connection answer it?
+     *
+     * Computed per device on the desktop, never inferred here, and it is the
+     * wire half of the rule §4.2 calls non-obvious: *a question may only be
+     * answered by the surface that owns the run that raised it, or by the
+     * desktop.* Otherwise device A approves device B's action, which is a
+     * permission model with a shared password.
+     *
+     * **A row with `mine: false` draws no Allow button.** One would always be
+     * refused, and a control that is always refused is the defect this
+     * repository has paid for twice. `false` is also the safe default for a
+     * host that did not send the field: hiding a button that would have worked
+     * costs a walk to the desk, and showing one that cannot costs trust.
+     */
+    let mine: Bool
 
     /// Seconds left, floored at zero. Nil when the desktop sent no expiry, in
     /// which case the screen shows no countdown rather than a made-up one.
@@ -446,6 +544,100 @@ struct CopilotQuestion: Equatable, Identifiable {
         guard expiresAt > 0 else { return nil }
         return max(0, Int((expiresAt / 1000 - now.timeIntervalSince1970).rounded(.down)))
     }
+}
+
+/**
+ * A confirmation **this connection may answer**, with everything needed to
+ * judge it.
+ *
+ * A port of `CopilotConsentQuestion`, and a different type from
+ * `CopilotQuestion` for the reason the desktop keeps them apart: the two answer
+ * different questions and one of them is dangerous to get wrong. A pending row
+ * says *something needs attention*; this says *decide*.
+ *
+ * **A consent prompt without enough context becomes a reflex Yes, and a gate
+ * that is always answered yes is worse than no gate at all, because it looks
+ * like protection.** So this carries what a person actually needs and the sheet
+ * built on it draws all of it:
+ *
+ *  - **what** — the tool, by its canonical dotted id, and the desktop's own
+ *    one-line summary, composed by the code that knows what it will do. Never
+ *    re-worded here: a client that wrote its own sentence would be describing an
+ *    action it did not implement, and the first time the two drifted somebody
+ *    would approve one thing having read another.
+ *  - **who** — `origin` is `window` for the copilot at the desk and
+ *    `device:<id>` for a connection's own run, so *my phone's copilot asked for
+ *    this* and *the Mac's copilot asked for this* never read the same.
+ *  - **with what arguments** — every one of them, verbatim, in the order the
+ *    tool wrote them. See `CopilotArguments`, which exists because Foundation's
+ *    JSON reader loses both the order and the spelling.
+ *  - **what happens if nobody answers** — `expiresAt`. It expires into a
+ *    **refusal**, so a person who walks away has decided rather than deferred,
+ *    and the countdown has to be in front of them.
+ */
+struct CopilotConsentQuestion: Equatable, Identifiable {
+    let id: String
+    let tool: String
+    /// Always `alter` today. Carried so a client renders the stakes rather than
+    /// assuming them, and printed rather than mapped for the same reason
+    /// `CopilotAction.tier` is.
+    let tier: String
+    let summary: String
+    /// Every argument, verbatim, in the tool's own order when the frame could be
+    /// read in order and sorted by name when it could not. `argumentsAreOrdered`
+    /// says which, because *as the tool wrote them* and *by name* are two
+    /// different claims and only one is true at a time.
+    let arguments: [CopilotArgument]
+    let argumentsAreOrdered: Bool
+    /// `window`, or `device:<id>` for the connection whose run raised it.
+    let origin: String
+    let requestedAt: Double
+    let expiresAt: Double
+
+    /// True when this device's own run raised it — `origin` names a device
+    /// rather than the window. The sheet says *your copilot asked for this*
+    /// rather than *the copilot at the machine asked for this*, which are two
+    /// different things to be approving.
+    var fromADevice: Bool { origin.hasPrefix("device:") }
+
+    /// Seconds left, floored at zero. Nil when the desktop sent no expiry — and
+    /// an invented deadline on a consent prompt is the worst possible thing to
+    /// invent, so the sheet draws none.
+    func secondsLeft(now: Date = Date()) -> Int? {
+        guard expiresAt > 0 else { return nil }
+        return max(0, Int((expiresAt / 1000 - now.timeIntervalSince1970).rounded(.down)))
+    }
+}
+
+/**
+ * A question closed, and **where** it was answered.
+ *
+ * A port of `CopilotSettledRow`, pushed to every connection that could see the
+ * question including the one that answered it. The `by` field is the whole
+ * reason this frame is not just a dismissal: first answer wins, and the surface
+ * that loses the race has to withdraw its sheet *saying where it went* rather
+ * than having it vanish. **A dialog that disappears on its own teaches a person
+ * that the app does things behind their back.**
+ */
+struct CopilotSettlement: Equatable {
+    let id: String
+    let granted: Bool
+    /// `window`, `device:<id>`, or nil when nobody answered — a timeout, which
+    /// is a refusal and is drawn as one.
+    let by: String?
+    /// The refusal reason when it was refused, in the desktop's own word. Nil
+    /// when it was allowed.
+    let reason: String?
+
+    /// Answered at the machine rather than on a device. The two must never read
+    /// the same on screen — the desktop's own log distinguishes them, and a
+    /// phone that said "allowed" without saying where would be hiding the one
+    /// fact somebody would want afterwards.
+    var atTheMachine: Bool { by == "window" }
+    /// Nobody answered and it ran out. Not an error, and worded so it does not
+    /// read as one: the copilot was told no, which is the safe answer and the
+    /// design's intended one.
+    var timedOut: Bool { by == nil }
 }
 
 /**
@@ -483,7 +675,7 @@ struct CopilotSessionRow: Equatable, Identifiable {
 extension WireCodec {
 
     /**
-     * The grant, from a `welcome` or from a `copilot.grant`.
+     * The grant, from a `welcome`, a `copilot.grant` or a `copilot.state`.
      *
      * **Absent is `.none`, and so is malformed.** Both mean the same thing —
      * this device may do nothing — and collapsing them is right here in a way it
@@ -492,33 +684,45 @@ extension WireCodec {
      * screens. There is no older desktop whose silence about the copilot means
      * anything but no access, because there is no older desktop that had one.
      *
-     * Only literal `true` grants, matching `copilotGrantFrom` on the desktop:
-     * `"yes"`, `1` and `"true"` are all false. A JSON file a person may edit will
-     * eventually contain one of them, and the difference between reading it as
-     * an intention and as a mistake is a difference in who gets access.
+     * Only literal `true` grants, matching the desktop: `"yes"`, `1` and
+     * `"true"` are all false. A JSON file a person may edit will eventually
+     * contain one of them, and the difference between reading it as an intention
+     * and as a mistake is a difference in who gets access.
      */
     static func copilotGrant(_ value: Any?) -> CopilotGrant {
         guard let object = value as? [String: Any] else { return .none }
         return CopilotGrant(read: literalTrue(object["read"]),
-                            act: literalTrue(object["act"]))
+                            act: literalTrue(object["act"]),
+                            alter: literalTrue(object["alter"]))
     }
 
     /**
-     * The whole of what a `welcome` said about the copilot.
+     * The whole of what a frame said about this device's copilot connection.
      *
-     * The grant, plus the one bit the grant cannot carry: whether the field was
-     * there at all. See `CopilotOffer` — that bit is the difference between a
-     * desktop with a copilot this phone has not been given, and a desktop with
-     * no copilot whose capability list says otherwise.
+     * The grant, the two connection facts, plus the one bit none of them can
+     * carry: whether the field was there at all. See `CopilotConnection` — that
+     * bit is the difference between a desktop with a copilot this device has not
+     * been connected to, and a desktop with no copilot whose capability list
+     * says otherwise.
      *
      * Only an object counts as having said something. `"copilot": "yes"` and
      * `"copilot": null` are a host this app does not understand, and the honest
      * reading of not understanding is that nothing was said — the same
      * direction every other refusal in this codec falls in.
      */
-    static func copilotOffer(_ value: Any?) -> CopilotOffer {
+    static func copilotConnection(_ value: Any?) -> CopilotConnection {
         guard let object = value as? [String: Any] else { return .silent }
-        return CopilotOffer(stated: true, grant: copilotGrant(object))
+        return CopilotConnection(stated: true,
+                                 linked: literalTrue(object["linked"]),
+                                 // Read rather than assumed false, even though
+                                 // the desktop swears it is false on every
+                                 // `welcome`: this same decoder reads the
+                                 // `copilot.grant` push, where `open` is the
+                                 // whole message. A client that hard-coded the
+                                 // welcome's promise here would have to keep a
+                                 // second decoder for the frame that matters.
+                                 open: literalTrue(object["open"]),
+                                 grant: copilotGrant(object["grant"]))
     }
 
     /**
@@ -529,19 +733,19 @@ extension WireCodec {
      * `more` are all the desktop describing something it just sent, and being
      * lenient about a `1` there costs a cosmetic flag at worst. A grant is not
      * that kind of field. It decides whether this phone draws a composer that can
-     * spend money on somebody's machine, so it gets the strict read, and the
-     * strictness has to be written out because Swift will not do it for free:
-     * `JSONSerialization` hands back an `NSNumber` for `1`, and `NSNumber as?
-     * Bool` **succeeds** for 0 and 1 through the ObjC bridge. So the lenient
-     * spelling would have read `{"read":1}` as a granted device — the exact
-     * refusal `copilotGrantFrom` makes on the desktop, silently undone one hop
+     * spend money on somebody's machine, and whether it draws an Allow button, so
+     * it gets the strict read — and the strictness has to be written out because
+     * Swift will not do it for free: `JSONSerialization` hands back an `NSNumber`
+     * for `1`, and `NSNumber as? Bool` **succeeds** for 0 and 1 through the ObjC
+     * bridge. So the lenient spelling would have read `{"read":1}` as a granted
+     * device — the exact refusal the desktop makes, silently undone one hop
      * later.
      *
      * The `CFBooleanGetTypeID` comparison is the same one `whole` makes in the
      * other direction, and for the mirrored reason: there, a `true` must not read
      * as the number 1; here, the number 1 must not read as `true`.
      */
-    private static func literalTrue(_ value: Any?) -> Bool {
+    static func literalTrue(_ value: Any?) -> Bool {
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
             return false
         }
@@ -694,9 +898,19 @@ extension WireCodec {
 
     private static let isoPlain = ISO8601DateFormatter()
 
-    /// One pending confirmation, or nil. `summary` is required for the reason
-    /// the type's header gives: a question with nothing to judge is a question
-    /// that gets answered without being read, and this end refuses to draw one.
+    /**
+     * One pending confirmation, or nil.
+     *
+     * `summary` is required for the reason the type's header gives: a question
+     * with nothing to judge is a question that gets answered without being read,
+     * and this end refuses to draw one.
+     *
+     * `mine` is read strictly and defaults to false. It decides whether an Allow
+     * button exists, so a `1` or a `"true"` from a host this app does not
+     * understand must not become one — and of the two ways to be wrong, hiding a
+     * button that would have worked costs a walk to the desk while showing one
+     * that cannot costs trust in every other button on the screen.
+     */
     static func copilotQuestion(_ value: Any?) -> CopilotQuestion? {
         guard let row = value as? [String: Any],
               let id = string(row["id"]), !id.isEmpty,
@@ -706,12 +920,62 @@ extension WireCodec {
                                tool: tool,
                                summary: summary,
                                requestedAt: epoch(row["requestedAt"]),
-                               expiresAt: epoch(row["expiresAt"]))
+                               expiresAt: epoch(row["expiresAt"]),
+                               mine: literalTrue(row["mine"]))
+    }
+
+    /**
+     * The full question off a `copilot.ask`, or nil.
+     *
+     * `raw` is the whole frame's text and is not an optimisation: it is how the
+     * arguments keep the order the tool wrote them in. Foundation's reader hands
+     * back an unordered dictionary, so the object below can say *which*
+     * arguments there are and not *in what order*, and a consent screen that
+     * shuffles somebody's arguments is showing them a different question from
+     * the one on the Mac. See `CopilotArguments`.
+     *
+     * `summary` and `tool` are required for the same reason they are on the
+     * watch row, and harder: this is the sheet with the buttons on it, and a
+     * sheet that says *approve this* with nothing to approve is the reflex-Yes
+     * machine the design refuses to build.
+     */
+    static func copilotConsentQuestion(_ value: Any?, raw: String) -> CopilotConsentQuestion? {
+        guard let row = value as? [String: Any],
+              let id = string(row["id"]), !id.isEmpty,
+              let tool = displayLine(row["tool"]),
+              let summary = displayLine(row["summary"]) else { return nil }
+        let ordered = CopilotArguments.fromAsk(rawFrame: raw)
+        return CopilotConsentQuestion(
+            id: id,
+            tool: tool,
+            tier: string(row["tier"]) ?? "",
+            summary: summary,
+            arguments: ordered ?? CopilotArguments.sorted(row["args"] as? [String: Any] ?? [:]),
+            argumentsAreOrdered: ordered != nil,
+            // Printed rather than mapped, and empty when the host did not say:
+            // the sheet then says "a copilot on that machine" rather than
+            // claiming it was this phone's own run, which is the one attribution
+            // on the screen somebody would act on.
+            origin: string(row["origin"]) ?? "",
+            requestedAt: epoch(row["requestedAt"]),
+            expiresAt: epoch(row["expiresAt"]))
+    }
+
+    /// One settled question, or nil. Only the id is required: a settlement with
+    /// no id cannot withdraw anything, and everything else on it is a sentence
+    /// rather than a decision.
+    static func copilotSettlement(_ value: Any?) -> CopilotSettlement? {
+        guard let row = value as? [String: Any],
+              let id = string(row["id"]), !id.isEmpty else { return nil }
+        return CopilotSettlement(id: id,
+                                 granted: literalTrue(row["granted"]),
+                                 by: displayLine(row["by"]),
+                                 reason: displayLine(row["reason"]))
     }
 
     /// An epoch-millisecond field, or 0 for anything that is not one. Zero reads
     /// as "not said" everywhere it is used, which is why it is not an optional
-    /// in the two places it appears — a countdown either has a deadline or draws
+    /// in the places it appears — a countdown either has a deadline or draws
     /// nothing.
     private static func epoch(_ value: Any?) -> Double {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return 0 }

@@ -153,13 +153,39 @@ export const PROTOCOL_VERSION = 1
  * `unauthorized` rather than a closed socket, because a client drawing a tab it
  * cannot use is a UI bug on that client and not an attack on this one.
  */
+/**
+ * `close` is `create`'s opposite number, and it is deliberately its own name.
+ *
+ * A session can be started from a phone and, until this existed, could never be
+ * ended from one. That was the shape of the gap rather than an oversight nobody
+ * had noticed: v1 carries list, attach, detach, input, resize and create, and
+ * `detach` is the closest thing to it, which is exactly the confusion worth
+ * avoiding — detaching stops *this device* watching, closing ends the process
+ * everybody is watching. `ios/TerminalDeck/Screens/SessionListView.swift` refused
+ * to draw a Close button for as long as this name did not exist, and refused the
+ * two available fakes with it: typing `exit` or a Ctrl-C into the pty is not
+ * closing a session, because a full-screen agent CLI ignores both and the row
+ * stays; and a Close that only archived would be a label describing something
+ * else.
+ *
+ * Not folded into `create`, even though the two are the same feature read from
+ * two directions. A host can genuinely have one and not the other — the demo box
+ * starts sessions for strangers and must not let a stranger end somebody else's
+ * — and `SessionAccess.close` is a separate optional method for that reason, so
+ * a host that cannot end a session never advertises this and a client that never
+ * sees it never draws the button. The same negotiation `create` gets, and the
+ * same reason: a capability list assembled from a boolean somebody has to
+ * remember to set is a capability list that will one day lie.
+ */
 export const CAPABILITY = {
   localhost: 'localhost',
   create: 'create',
+  close: 'close',
   upload: 'upload',
   credential: 'credential',
   devserver: 'devserver',
   copilot: 'copilot',
+  web: 'web',
 } as const
 
 /**
@@ -175,10 +201,12 @@ export const CAPABILITY = {
 export const CAPABILITIES: string[] = [
   CAPABILITY.localhost,
   CAPABILITY.create,
+  CAPABILITY.close,
   CAPABILITY.upload,
   CAPABILITY.credential,
   CAPABILITY.devserver,
   CAPABILITY.copilot,
+  CAPABILITY.web,
 ]
 
 /**
@@ -452,6 +480,18 @@ export const MAX_CWD_BYTES = 1024
  * table, and the answer is a sentence rather than a closed socket.
  */
 export const MAX_PROVIDER_LENGTH = 32
+
+/**
+ * The longest URL `web.open` will carry.
+ *
+ * Two kilobytes is the practical ceiling every browser and every server agrees
+ * on for a URL — IE's 2083 is where the number comes from and nothing since has
+ * gone lower — so it is generous for the thing this verb is actually for, which
+ * is `http://localhost:5173/`, and small enough that a client that has gone
+ * wrong cannot push a megabyte of query string through a sealed channel and into
+ * an address bar.
+ */
+export const MAX_URL_LENGTH = 2048
 
 /** Terminal sizes a phone can plausibly ask for; anything else is a bug or an attack. */
 export const MIN_COLS = 20
@@ -1003,6 +1043,38 @@ export type ClientMessage =
    *    per-provider question above and not merely widening a type.
    */
   | { t: 'create'; cwd?: string; cols?: number; rows?: number; provider?: string }
+  /* ---- capability `close`. Refused when it is not advertised. ------------- */
+  /**
+   * End the session named by `id`. The process is killed; it does not come back.
+   *
+   * ## Not `detach`, and the difference is the whole frame
+   *
+   * `detach` is about this connection: stop sending me this session's bytes. It
+   * has existed since v1 and it is what closing a screen on a phone does. This
+   * ends the **process**, for everyone — the tab in the desktop's own window
+   * goes, every other attached device gets an `exit`, and the agent's work stops
+   * wherever it had got to. That is not undoable, which is why both clients ask
+   * before sending it and why a client that cannot ask should not send it.
+   *
+   * ## One field, and the two that are deliberately absent
+   *
+   * There is **no signal and no force flag**. A client that could name `SIGKILL`
+   * against `SIGTERM` would be a client choosing how somebody else's editor
+   * exits, and neither answer is a phone's to give; the desktop ends a session
+   * exactly as its own ✕ does, which is one behaviour rather than two that can
+   * drift. And there is **no reason string**: it would be attacker-chosen text
+   * about to be printed in the desktop's own chrome, for nothing.
+   *
+   * ## What authorises it
+   *
+   * The same door as `attach`, asked again here. This is a *fourth* door onto a
+   * running session — `list`, `attach` and `create` are the other three — and it
+   * is the one that opens onto somebody else's work, so a device that may not
+   * see a session may not end it and is told the sentence an unknown id gets.
+   * See `server.ts`, where the refusal is written, and `guest-close.test.ts`,
+   * which pins it against a real socket.
+   */
+  | { t: 'close'; id: string }
   /* ---- capability `localhost`. Refused outright when it is not advertised. -- */
   /** What is listening on the Mac right now. */
   | { t: 'ports' }
@@ -1030,6 +1102,45 @@ export type ClientMessage =
   /** "I have written this many bytes to my socket." See `NET_WINDOW_BYTES`. */
   | { t: 'net.ack'; ch: string; bytes: number }
   | { t: 'net.close'; ch: string }
+  /* ---- capability `web`. Refused outright when it is not advertised. ------ */
+  /**
+   * Open this page **on the machine**, in its own browser.
+   *
+   * ## Why this exists at all
+   *
+   * A browser tab cannot listen on a socket. `pwa/src/localhost.ts` opens by
+   * rejecting three ways around that and concludes, correctly, that the web
+   * client can say which ports are open and whether one answers and cannot serve
+   * through them. What it left is the complaint:
+   *
+   *   > *"Localhost lists ports with no way to open any of them. The whole
+   *   > reason localhost exists is to drive them."*
+   *
+   * Both statements are true at once, and the way out is not to make a tab do
+   * something no tab can do. It is the thing he asked for on the phone in the
+   * same review:
+   *
+   *   > *"A browser started from the phone must run on the machine you are
+   *   > inside — a live link or a localhost link both open on the connected
+   *   > machine."*
+   *
+   * So the page opens **there**, in a tab of that machine's own browser, and the
+   * device that asked is driving rather than viewing. That is a smaller promise
+   * than a tunnel and it is a real one, and it is the only one this transport can
+   * keep honestly.
+   *
+   * ## What is checked, and where
+   *
+   * `url` is a string off a network and nothing here has looked at it. Two
+   * checks happen in `server.ts` before anything is opened, and both matter:
+   * the URL must be http(s) — `canOpenOutside` is the same gate the app's own
+   * links go through, so a `file:` or a `javascript:` cannot walk a window onto
+   * somebody's disk — and the device must be one of the owner's own. A guest is
+   * refused, for the same reason a guest is never offered the copilot: this
+   * opens a page on a screen that is not theirs, and no folder grant says
+   * anything about that.
+   */
+  | { t: 'web.open'; url: string }
   /* ---- capability `devserver`. Refused when it is not advertised. --------- */
   /**
    * What is this project's dev server doing?
@@ -1361,6 +1472,29 @@ export type ServerMessage =
    * appear. That is the same additive rule the capability list is for.
    */
   | { t: 'created'; session: RemoteSession }
+  /* ---- capability `close` ------------------------------------------------- */
+  /**
+   * That session is gone, because this device asked.
+   *
+   * Sent only to the connection that asked, and only once the session layer has
+   * actually ended it — never on the request being received. A client draws its
+   * row away on this frame rather than optimistically on the tap, which is the
+   * difference between a list that reflects the machine and one that reflects
+   * what somebody pressed.
+   *
+   * Everybody else finds out the way they always have. A device attached to it
+   * gets `exit` from the pty ending, and every other connection gets an ordinary
+   * `sessions` refresh — both v1 frames, so a client that has never heard of
+   * this capability still sees the session disappear. That is the same additive
+   * rule `created` follows, in the same shape: the frame that names *your* action
+   * is the new one, and the frames that describe the machine are the old ones.
+   *
+   * A refusal is a plain `error`. There is no `close.failed`, for the reason
+   * `web.opened` gives about its own: the two ways this fails — the host cannot
+   * close sessions, or this device may not touch that one — are both things
+   * `error` already says with a code and a sentence.
+   */
+  | { t: 'closed'; id: string }
   /**
    * This device's folder list changed while it was connected.
    *
@@ -1397,6 +1531,16 @@ export type ServerMessage =
   | { t: 'net.data'; ch: string; data: string }
   | { t: 'net.ack'; ch: string; bytes: number }
   | { t: 'net.close'; ch: string }
+  /**
+   * The page is open on the machine.
+   *
+   * Sent only when a tab was actually made, never on the request being received,
+   * so the sentence the client draws is about something that happened. A refusal
+   * is an ordinary `error` — there is no `web.failed`, because the three ways
+   * this can fail (not advertised, not your machine, not a URL it will open) are
+   * all things `error` already says with a code and a sentence.
+   */
+  | { t: 'web.opened'; url: string }
   /* ---- capability `devserver` -------------------------------------------- */
   /**
    * One project's dev server, now.
@@ -2103,6 +2247,17 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return { ok: true, message }
     }
 
+    /* ---- capability `close` --------------------------------------------- */
+    // An id and nothing else. Whether it names a live session, and whether this
+    // device may end it, are the server's questions — the same split every verb
+    // in this file follows, and here the second half is the load-bearing one.
+    case 'close': {
+      const sessionId = id(parsed.id)
+      return sessionId
+        ? { ok: true, message: { t: 'close', id: sessionId } }
+        : bad('close without a session id')
+    }
+
     /* ---- capability `localhost` ----------------------------------------- */
     // Shape-checked here and authorised nowhere near here. Whether this desktop
     // offers tunnelling at all, and whether the port named is one it is willing
@@ -2121,6 +2276,17 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return tunnelId
         ? { ok: true, message: { t: 'tunnel.close', id: tunnelId } }
         : bad('tunnel.close without an id')
+    }
+    /* ---- capability `web` ------------------------------------------------ */
+    // Length-capped and nothing more. Whether the scheme is one this machine
+    // will open, and whether this device may ask, are the server's questions —
+    // the same split every other verb here follows.
+    case 'web.open': {
+      const url = asString(parsed.url)
+      if (url === null || url === '' || url.length > MAX_URL_LENGTH) {
+        return bad('web.open without a usable url')
+      }
+      return { ok: true, message: { t: 'web.open', url } }
     }
     case 'net.open': {
       const channel = id(parsed.ch)
@@ -2573,6 +2739,23 @@ export function parseSession(value: unknown): RemoteSession | null {
   return { id, title, cwd, provider, status, exitCode }
 }
 
+/**
+ * One row of a `ports` frame, or null.
+ *
+ * `guessed` is the far machine's own word for "I could not name the process
+ * holding this", and it is read as a strict `true` rather than as anything
+ * truthy: the difference between "node" and "something is on 3000" is the whole
+ * of what that flag says, and a client that guessed at it would be inventing a
+ * process name for a port nobody could identify.
+ */
+function parsePort(value: unknown): LocalPort | null {
+  if (!isRecord(value)) return null
+  const port = whole(value.port, 1, 65535)
+  const process = asString(value.process)
+  if (port === null || process === null) return null
+  return { port, process, guessed: value.guessed === true }
+}
+
 function asString(value: unknown): string | null {
   return typeof value === 'string' ? value : null
 }
@@ -2736,6 +2919,61 @@ export function parseServerFrame(parsed: unknown): ServerParse {
         return { ok: false, reason: 'exit without id and code' }
       }
       return { ok: true, message: { t: 'exit', id, exitCode } }
+    }
+    case 'closed': {
+      // The id is the whole frame, so a nameless one is refused rather than read
+      // as "something closed": a client that took it would have to guess which
+      // row to remove, and the only available guess is the one the person was
+      // last looking at.
+      const id = asString(parsed.id)
+      return id === null || id === ''
+        ? { ok: false, reason: 'closed without an id' }
+        : { ok: true, message: { t: 'closed', id } }
+    }
+    /*
+     * `ports` and `web.opened` are read here rather than only in the phone's own
+     * client, and that is a change of scope worth saying out loud.
+     *
+     * This parser exists for the **desktop acting as another desktop's guest**,
+     * and `pwa/src/protocol-client.ts` says at length that the localhost frames
+     * belong to it rather than here *"until the day the guest also tunnels"*.
+     * That day has arrived for half of the feature. A desktop reaching another
+     * desktop now lists what is listening over there and asks that machine to
+     * open a page on its own screen — which is machine-to-machine localhost, the
+     * thing his review found was one-way — so these two frames are frames this
+     * parser's caller has agreed to receive.
+     *
+     * The other five are still not here, and their absence is still a statement:
+     * `tunnel.*` and `net.*` carry a byte stream into a listening socket, and a
+     * desktop guest opens no listener. Reading frames nobody can send would be a
+     * parser for a conversation this end is not in.
+     */
+    case 'ports': {
+      const rows = parsed.ports
+      // A frame with no list at all is refused rather than read as "nothing is
+      // listening" — the same argument `folders` makes. An idle machine and a
+      // malformed message are different facts and a screen says different
+      // things about them.
+      if (!Array.isArray(rows)) return { ok: false, reason: 'ports without a list' }
+      const ports: LocalPort[] = []
+      for (const row of rows) {
+        // One bad row does not discard the list, for the reason `sessionRows`
+        // does not: a panel showing nine of ten ports is useful and one showing
+        // none because the tenth had a null process name is not.
+        const port = parsePort(row)
+        if (port !== null) ports.push(port)
+      }
+      return { ok: true, message: { t: 'ports', ports } }
+    }
+    case 'web.opened': {
+      // The URL is the whole payload: it is what the confirmation names, and the
+      // far machine echoes what it *actually* opened rather than what was asked
+      // for, because a redirect or a normalisation there is the truth and this
+      // end's copy is not.
+      const url = asString(parsed.url)
+      return url === null || url === ''
+        ? { ok: false, reason: 'web.opened without a url' }
+        : { ok: true, message: { t: 'web.opened', url } }
     }
     case 'created': {
       // Refused rather than half-read, unlike a row inside a list: a `sessions`

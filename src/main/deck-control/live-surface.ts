@@ -19,6 +19,7 @@ import { readChatTail } from '../chat-transcript'
 import { copilotPaths } from '../copilot-home'
 import { userDataDir } from '../platform/paths'
 import { readFileDiff, readGitStatus, type GitFile, type GitStatusResult } from '../git'
+import { PREFS_CHANGED_CHANNEL, SETTINGS_CHANGED_CHANNEL } from '../live-push'
 import type { PtyManager } from '../pty-manager'
 import { getStoredSettings, patchStoredSettings, writeSettingsSnapshot } from '../settings-extra'
 import { store } from '../store'
@@ -59,6 +60,25 @@ export interface LiveSurfaceDeps {
    * disagree.
    */
   sessionStatus(id: string): { status: SessionStatus; at: number } | undefined
+  /**
+   * Push something at the window that is open, and say whether one heard.
+   *
+   * `src/main/index.ts` passes its own `send`, which is the same function every
+   * other main→renderer push in this process goes through — so a change made by
+   * the copilot arrives on the window by exactly the route a change made by a
+   * pty does, and there is no second sender that could reach a different window
+   * or survive a quit.
+   *
+   * The **boolean is the point** as much as the send is. It answers "was there a
+   * window to tell", which is what {@link DeckSurface.applyToWindow} turns into
+   * the sentence `settings.write` reports; a push that returns nothing would put
+   * this back where it started, guessing about a screen it cannot see.
+   *
+   * Optional, because two of this surface's three constructions in tests build
+   * it for the pieces that read rather than the pieces that push, and a host with
+   * no window is a real state rather than a broken one.
+   */
+  tellWindow?(channel: string, payload: unknown): boolean
 }
 
 export function createLiveSurface(deps: LiveSurfaceDeps): DeckSurface {
@@ -186,6 +206,26 @@ export function createLiveSurface(deps: LiveSurfaceDeps): DeckSurface {
      * partial without validating it, and has done since it was written.
      */
     writePreferences: (patch) => ({ ...store().setPreferences(patch) }),
+
+    /*
+     * Saving and applying, kept as two steps on purpose.
+     *
+     * The write above persists and answers with the whole store; this hands that
+     * same object to the window. Two calls rather than one that does both,
+     * because they can fail independently and the caller has to be able to say
+     * which happened: a value on disk that no window took is a true and useful
+     * outcome ("it appears next launch"), while a value that never reached disk
+     * is a failure. Folding them together would collapse those into one word.
+     *
+     * The channel carries the **whole** store rather than the patch, which is
+     * what lets `useAppSettings` merge one object over what it holds instead of
+     * reasoning about which keys were in flight.
+     */
+    applyToWindow: (scope, values) =>
+      deps.tellWindow?.(
+        scope === 'settings' ? SETTINGS_CHANGED_CHANNEL : PREFS_CHANGED_CHANNEL,
+        values,
+      ) ?? false,
 
     /*
      * Every conversation in the folder, not the newest of them.

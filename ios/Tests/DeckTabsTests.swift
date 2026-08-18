@@ -6,11 +6,16 @@
  * failure shape — a tap that appears to do nothing — and every one is invisible
  * in a code review:
  *
- *  1. **Which tabs there are.** Sessions, Localhost, Settings. Both halves of
- *     that changed in one recording: the localhost list came off the session
- *     list and became a tab, and the Machines tab went inside Settings. The two
- *     are easy to half-do — a `Tab` case with no tab drawn for it, or a tab drawn
- *     for a case nothing selects — and neither half fails anything else.
+ *  1. **Which tabs there are, and in which order.** Copilot, Sessions,
+ *     Localhost, Settings. Every one of those has moved at least once: the
+ *     localhost list came off the session list and became a tab, the Machines
+ *     tab went inside Settings, and the copilot went from a pinned row on the
+ *     session list to the leftmost pill. Each move is easy to half-do — a `Tab`
+ *     case with no tab drawn for it, or a tab drawn for a case nothing selects —
+ *     and neither half fails anything else. The **order** is asserted as well as
+ *     the membership, because he named it: *"Copilot · Sessions · Localhost ·
+ *     Settings"*, with the copilot leftmost, and a bar with the right four pills
+ *     in the wrong order is a bar somebody's thumb has to relearn.
  *  2. **A session opened from anywhere lands on the tab that can show it.** A
  *     notification tap, a deep link and a dev-server row on the Localhost tab can
  *     all ask for a session while another tab is on screen. The route is pushed
@@ -90,21 +95,29 @@ final class DeckTabsTests: XCTestCase {
     // MARK: - Which tabs there are
 
     /**
-     * Three tabs, and which three.
+     * Four tabs, which four, and in what order.
      *
-     * Enumerated rather than asserted one at a time, so that adding a fourth
+     * Enumerated rather than asserted one at a time, so that adding a fifth
      * without drawing it — or drawing one nothing can select — is a failure here
      * rather than a tab bar somebody notices on a phone.
      *
-     * Both changes in this list are his, from one recording, and they pull in
-     * opposite directions if you take them literally: *"let's bring four icons in
-     * the pill"* while adding Localhost to the three that existed, and then
-     * *"maybe this machines thing can go inside the settings this page overall…
-     * This is a better design"* a minute later. Only one of those can be built.
-     * The second is the one he called better, and it is the one here.
+     * `allCases` follows declaration order, which is also the order `DeckTabs`
+     * writes them into the `TabView`, so this pins the arrangement he asked for
+     * and not merely the membership: *"a fourth pill, and the copilot goes
+     * leftmost — Copilot · Sessions · Localhost · Settings."*
+     *
+     * This is the third answer to "how many pills" and it is the one that ships.
+     * *"Let's bring four icons in the pill"* came first, with Localhost added to
+     * the three that existed; *"maybe this machines thing can go inside the
+     * settings this page overall… this is a better design"* took one off a
+     * minute later; and this took the copilot off the session list and made it
+     * the first. Each supersedes the one before it, and the last statement wins
+     * — the earlier arguments are recorded on `DeckModel.Tab` rather than
+     * re-run here.
      */
-    func testTheTabsAreSessionsLocalhostAndSettings() {
-        XCTAssertEqual(DeckModel.Tab.allCases, [.sessions, .localhost, .settings])
+    func testTheTabsAreCopilotSessionsLocalhostAndSettings() {
+        XCTAssertEqual(DeckModel.Tab.allCases, [.copilot, .sessions, .localhost, .settings])
+        XCTAssertEqual(DeckModel.Tab.allCases.first, .copilot, "he asked for it leftmost")
     }
 
     /// The app opens on the sessions, which is what it is for.
@@ -214,6 +227,7 @@ final class DeckTabsTests: XCTestCase {
      * so this end of it is a flag the browser sets, and a flag can be left set.
      */
     func testEachTabReportsWhatIsOnTopOfIt() {
+        XCTAssertEqual(model.copilotSurface, .copilot)
         XCTAssertEqual(model.sessionsSurface, .sessions)
         XCTAssertEqual(model.localhostSurface, .localhost)
         XCTAssertEqual(model.settingsSurface, .settings)
@@ -229,68 +243,101 @@ final class DeckTabsTests: XCTestCase {
     }
 
     /**
-     * The copilot is on the Sessions stack, and the tab bar knows it.
+     * The copilot is a tab, and asking for it selects that tab rather than
+     * pushing anything.
      *
-     * Two things at once, and both are the sort that fail silently. Opening the
-     * copilot from Settings or from Localhost has to move the selection, or the
-     * screen is pushed onto a stack nobody is looking at and the tap reads as
-     * having done nothing. And the surface has to report `.copilot` rather than
-     * `.session`, because `DeckChrome` is then answering correctly about the
-     * wrong screen — a pill floating over a composer, with every other test
-     * green.
+     * It used to be a route on the Sessions stack, pushed from a pinned row.
+     * The failure to guard against is the one that survived the move: something
+     * that asks for *a machine's* copilot — a deep link, a notification, a row
+     * on another screen — has to land on the conversation itself, not on
+     * whatever terminal happened to be pushed over it the last time the tab was
+     * looked at. A tab keeps its stack across selections, which is right for a
+     * thumb on the pill and wrong here.
      */
-    func testTheCopilotOpensOnTheSessionsTabAndIsItsOwnSurface() {
+    func testOpeningTheCopilotSelectsItsTabAndShowsTheConversation() {
         model.tab = .settings
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
+        model.tab = .copilot
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBE", on: Self.macId)
+        XCTAssertFalse(model.copilotRoute.isEmpty, "a terminal is pushed over the conversation")
+
         model.openCopilot(on: Self.macId)
 
-        XCTAssertEqual(model.tab, .sessions)
-        XCTAssertEqual(model.route.last, .copilot(host: Self.macId))
-        XCTAssertEqual(model.sessionsSurface, .copilot)
-        XCTAssertFalse(DeckChrome.showsTabBar(on: model.sessionsSurface))
-    }
-
-    /// Asking twice does not stack two copies of a live conversation, which
-    /// would take two taps of Back to leave and would look like the first tap
-    /// having done nothing.
-    func testOpeningTheCopilotTwiceDoesNotStackIt() {
-        model.openCopilot(on: Self.macId)
-        model.openCopilot(on: Self.macId)
-
-        XCTAssertEqual(model.route, [.copilot(host: Self.macId)])
+        XCTAssertEqual(model.tab, .copilot)
+        XCTAssertTrue(model.copilotRoute.isEmpty, "asking for the copilot lands on the copilot")
+        XCTAssertEqual(model.copilotSurface, .copilot)
     }
 
     /**
-     * A session opened from the copilot goes **on top of** it rather than
-     * replacing it.
+     * The copilot tab keeps the tab bar, and this is the case worth stating
+     * out loud because the answer used to be the other one.
+     *
+     * While it was a pushed screen it hid the bar with the terminal and the
+     * localhost page, and correctly: it is full height and ends in a composer,
+     * which is the pill complaint exactly. A tab cannot do that — there is no
+     * chevron over a tab's root and no gesture that pops one — so hiding the bar
+     * here would be a screen with no way out.
+     */
+    func testTheCopilotTabKeepsTheBarAndATerminalOverItDoesNot() {
+        XCTAssertTrue(DeckChrome.showsTabBar(on: model.copilotSurface),
+                      "a tab that hid its own bar could not be left")
+
+        model.tab = .copilot
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
+        XCTAssertEqual(model.copilotSurface, .session)
+        XCTAssertFalse(DeckChrome.showsTabBar(on: model.copilotSurface),
+                       "the pill was covering the bottom rows of the terminal")
+    }
+
+    /**
+     * A session opened **from the copilot** stays on the copilot's stack.
      *
      * That is the other half of "why does this session exist" being one tap in
      * either direction: Back from the terminal has to land on the conversation
-     * that started it, not on the session list.
+     * that started it. Pushing it onto the Sessions tab instead would move the
+     * person to another tab and lose the thread, which is worse than it sounds —
+     * they would then have to remember which of four pills they came from.
      */
-    func testASessionOpenedFromTheCopilotLeavesTheCopilotUnderneath() {
-        model.openCopilot(on: Self.macId)
+    func testASessionOpenedFromTheCopilotStaysOnTheCopilotsStack() {
+        model.tab = .copilot
         model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
 
-        XCTAssertEqual(model.route, [.copilot(host: Self.macId),
-                                     .session(host: Self.macId, id: "01J8ZC4T9K5Q2V7XW3NHRF6MBD")])
-        XCTAssertEqual(model.sessionsSurface, .session)
+        XCTAssertEqual(model.tab, .copilot, "it must not jump to another tab")
+        XCTAssertEqual(model.copilotRoute, [.session(host: Self.macId, id: "01J8ZC4T9K5Q2V7XW3NHRF6MBD")])
+        XCTAssertTrue(model.route.isEmpty, "and nothing is pushed onto the Sessions stack")
     }
 
     /**
-     * Switching machines pops a copilot belonging to the machine being left.
+     * Switching machines pops a terminal on the copilot's stack too.
      *
-     * One conversation per machine, keyed by device on the far end — so a
-     * copilot screen that survived a switch would be showing one machine's run
-     * under another machine's name, with a composer that sends to neither. The
-     * same rule `select` already applies to a terminal, extended to the case it
-     * did not know about.
+     * The conversation itself needs no popping — the tab redraws for whichever
+     * machine is current — but a session pushed over it belongs to the machine
+     * being left, and leaving it up would show one machine's output under
+     * another machine's name. `select` already did this for the Sessions stack;
+     * the copilot's stack is the one it did not know about.
      */
-    func testSwitchingMachinesPopsTheOtherMachinesCopilot() {
-        model.openCopilot(on: Self.macId)
+    func testSwitchingMachinesPopsATerminalOnTheCopilotStack() {
+        model.tab = .copilot
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
         model.select(Self.pcId)
 
-        XCTAssertTrue(model.route.isEmpty,
-                      "the Mac's copilot must not stay on screen under the PC's name")
+        XCTAssertTrue(model.copilotRoute.isEmpty,
+                      "the Mac's terminal must not stay on screen under the PC's name")
+    }
+
+    /// And the two stacks stay separate, which is the whole reason there are
+    /// two: a session opened from the list must not appear under the copilot,
+    /// and one opened from the copilot must not appear under the list.
+    func testTheTwoSessionStacksDoNotLeakIntoEachOther() {
+        model.tab = .sessions
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
+        model.tab = .copilot
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBE", on: Self.macId)
+
+        XCTAssertEqual(model.route, [.session(host: Self.macId, id: "01J8ZC4T9K5Q2V7XW3NHRF6MBD")])
+        XCTAssertEqual(model.copilotRoute, [.session(host: Self.macId, id: "01J8ZC4T9K5Q2V7XW3NHRF6MBE")])
+        XCTAssertEqual(model.openSession?.id, "01J8ZC4T9K5Q2V7XW3NHRF6MBE",
+                       "what is on screen is whatever the current tab has pushed")
     }
 
     /// And each of them goes back when what was on top of it does. A bar that

@@ -100,11 +100,58 @@ extension XCUIApplication {
 
     /// The Localhost tab, and proof it arrived. There is no row that is always
     /// present — a machine serving nothing has none — so the proof is the tab's
-    /// own refresh control, which is on the screen in every state.
+    /// own toolbar control, which is on the screen in every state. It used to be
+    /// a Refresh button and it is the `+` that opens an address now; the pull
+    /// gesture took over the refreshing. See `LocalhostListView`.
     @discardableResult
     func openLocalhostTab() -> Bool {
         openTab("Localhost")
-        return buttons["localhost.refresh"].waitForExistence(timeout: 10)
+        return buttons["localhost.open"].waitForExistence(timeout: 10)
+    }
+
+    /**
+     * The Copilot tab, and proof it arrived.
+     *
+     * **Was a row on the session list** — `copilot.row`, pinned above the
+     * sessions — until *"a fourth pill, and the copilot goes leftmost"*. Five
+     * suites reached for that row and none of them cares how it is reached, only
+     * that they end up looking at the conversation, which is exactly what this
+     * file exists for.
+     *
+     * A pop first, for the reason `openSettingsTab` does one: this tab has a
+     * stack of its own now, and a case that left a terminal pushed on it would
+     * come back to the terminal rather than to the copilot.
+     *
+     * The proof is deliberately loose — *something* the copilot screen draws.
+     * There is no one element common to all eight access states: a connected
+     * phone has a composer, an unconnected one has a code field, a machine with
+     * no copilot has a sentence. Asserting any single one of those here would
+     * make this helper mean "arrived at the copilot **and** it is in the state I
+     * expected", which is the caller's assertion, not this one's.
+     */
+    @discardableResult
+    func openCopilotTab() -> Bool {
+        openTab("Copilot")
+        if copilotIsShowing { return true }
+        // Something is pushed over it — one Back is enough; this stack is one
+        // deep by construction.
+        let back = navigationBars.buttons.element(boundBy: 0)
+        if back.exists { back.tap() }
+        return copilotIsShowing
+    }
+
+    private var copilotIsShowing: Bool {
+        for _ in 0 ..< 10 {
+            if textFields["copilot.composer"].exists
+                || textFields["copilot.connect.field"].exists
+                || otherElements["copilot.notGranted"].exists
+                || otherElements["copilot.notOffered"].exists
+                || staticTexts["Copilot"].exists {
+                return true
+            }
+            _ = staticTexts["Copilot"].waitForExistence(timeout: 1)
+        }
+        return false
     }
 
     /// Back to the sessions, which is where every other suite expects to be.

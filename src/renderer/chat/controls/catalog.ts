@@ -8,6 +8,13 @@
  * thing a user cannot find out by looking.
  */
 
+import {
+  foldDefaultRow,
+  FALLBACK_MODELS,
+  PREVIOUS_MODELS,
+  type ModelRow,
+} from '../../../shared/model-catalog'
+
 export type ControlId = 'model' | 'effort' | 'fast' | 'permission'
 
 /** Where a reading came from. Mirrors `ValueSource` in `src/main/agent-controls.ts`. */
@@ -18,6 +25,19 @@ export interface ControlOption {
   label: string
   /** One line under the label. Says what it does, not that it is recommended. */
   hint?: string
+  /**
+   * A caption printed above this option, starting a run of rows that are a
+   * different kind of claim from the ones before them.
+   *
+   * There is exactly one of these and it earns its existence. The model menu
+   * ends with names the CLI's picker deliberately does *not* list — `Opus 4.8`,
+   * `Sonnet 4.6` — which `/model` still accepts but which an account may not be
+   * entitled to. Run together with the picker's own rows they read as one list
+   * where half the entries are guaranteed and half are not, with nothing on
+   * screen saying which is which. That was visible the first time it was drawn
+   * and is the reason this field exists rather than a comment about it.
+   */
+  group?: string
 }
 
 export interface ControlReading {
@@ -51,44 +71,140 @@ export const PERMISSION_OPTIONS: ControlOption[] = [
 ]
 
 /**
+ * The effort a session gets when nobody has ever chosen one.
+ *
+ * Asad: *"effort defaults to extra-high, and a change sticks."*
+ *
+ * It is a real default rather than a label: `useSessionControls` types
+ * `/effort xhigh` into a session that reports **no** effort from any source —
+ * not the screen, not the transcript, not `settings.json`, not the environment
+ * — which is the state of a machine on which nobody has ever set one. The CLI
+ * then saves it as the default for new sessions, so this happens once on a
+ * machine and never again. A session that already has an effort is left exactly
+ * as it is, because overriding somebody's setting is not a default.
+ *
+ * Stated here rather than in the hook so that the value the app applies and the
+ * value the menu marks are one fact. Two spellings of a default is how a menu
+ * comes to point at a row the app is not actually setting.
+ */
+export const DEFAULT_EFFORT = 'xhigh'
+
+/**
  * Effort levels, quoted from the CLI's own rejection of a bad argument:
  * "Valid options are: low, medium, high, xhigh, max, ultracode, auto".
+ *
+ * ## The order, which is a decision and not the CLI's
+ *
+ * Extra high is first because it is what this app sets when nothing is set —
+ * see {@link DEFAULT_EFFORT} — and the first row of a menu is read as the
+ * default whether or not it was meant to be. It used to be `Auto`, which is not
+ * this app's default and never was: `auto` means *clear the setting and let the
+ * model decide*, which is the one option that undoes the default rather than
+ * being it. It reads better at the far end, next to the other deliberate
+ * choices, where it says what it actually is.
+ *
+ * The rest run from the deepest to the shallowest, so the list descends from
+ * the row above it instead of restarting. `Ultracode` sits with `Max` because
+ * both are "more than extra high", and `Auto` is last because it is the only
+ * row that is a *withdrawal* of a choice.
  */
 export const EFFORT_OPTIONS: ControlOption[] = [
-  { id: 'auto', label: 'Auto', hint: "The model's own default" },
-  { id: 'low', label: 'Low', hint: 'Quick, minimal overhead' },
-  { id: 'medium', label: 'Medium', hint: 'Standard implementation and testing' },
-  { id: 'high', label: 'High', hint: 'Comprehensive, with testing and docs' },
-  { id: 'xhigh', label: 'Extra high', hint: 'Deeper reasoning than high' },
-  { id: 'max', label: 'Max', hint: 'Deepest reasoning available' },
+  { id: 'xhigh', label: 'Extra high', hint: 'Deeper reasoning than high · the default here' },
   // "this session only" is not a guess: the CLI has no other answer for
   // ultracode — `Set effort level to ultracode (this session only): xhigh +
   // dynamic workflow orchestration` is the whole of it, with no branch.
   { id: 'ultracode', label: 'Ultracode', hint: 'Extra high plus dynamic workflows · this session only' },
+  { id: 'max', label: 'Max', hint: 'Deepest reasoning available' },
+  { id: 'high', label: 'High', hint: 'Comprehensive, with testing and docs' },
+  { id: 'medium', label: 'Medium', hint: 'Standard implementation and testing' },
+  { id: 'low', label: 'Low', hint: 'Quick, minimal overhead' },
+  { id: 'auto', label: 'Auto', hint: "Clear it, and let the model use its own default" },
 ]
 
 /**
- * Model aliases, each typed at the real CLI and accepted by it.
+ * The models on offer, built from the CLI's own picker rather than written here.
  *
- * `Default` and `Opus` are not the same: the CLI answered "Opus 5 (1M context)"
- * for one and "Opus 5" for the other, so both are offered.
+ * ## What was wrong with the list this replaced
  *
- * This is the set of names the CLI parses, not a claim about entitlement. A
- * model this account cannot use answers `Model 'x' not found`, and that reply
- * is shown as-is rather than being hidden behind a disabled menu row we would
- * have had to guess at.
+ * It was five hand-typed rows — `Default`, `Opus`, `Fable`, `Sonnet`, `Haiku` —
+ * and Asad named both of its faults in one breath:
+ *
+ *   > *"They are just very few, not all of them. And Opus 4 should be Opus 5.
+ *   > Opus 4-point-something is available. They should be listed here also… There
+ *   > are more models — see Sonnet 4.6, to Fable 5 — so we should have all of
+ *   > them."*
+ *
+ * A row reading `Opus` cannot answer "am I on Opus 5 or Opus 4.8", which is the
+ * question he was asking; and a list written by hand is right for exactly as
+ * long as it takes Anthropic to ship something. So the rows now carry the model
+ * each resolves to, and the list itself is {@link ModelRow}s from
+ * `shared/model-catalog.ts` — the same module the main process fills by reading
+ * the session's own `/model` picker. What is written down is only the fallback
+ * for the moment before a session has been asked.
+ *
+ * `Default` is gone as a choice, which is the second thing he asked for:
+ *
+ *   > *"Unknown should not be there, it should be already selected. Default, I
+ *   > think, is nothing, because in Claude you don't see anything default — it
+ *   > just says automatically unselected ones, but not as a separate choice."*
+ *
+ * `foldDefaultRow` does the removing, and moves the fact `Default` was carrying
+ * — which model the account prefers — onto that model's own row as a note.
  */
-export const MODEL_OPTIONS: ControlOption[] = [
-  { id: 'default', label: 'Default', hint: 'Whatever the account default resolves to' },
-  { id: 'opus', label: 'Opus' },
-  { id: 'fable', label: 'Fable' },
-  { id: 'sonnet', label: 'Sonnet' },
-  { id: 'haiku', label: 'Haiku' },
-]
+export function modelOptions(rows: readonly ModelRow[] = FALLBACK_MODELS): ControlOption[] {
+  return foldDefaultRow(rows).map((row) => ({
+    id: row.alias,
+    // The name and the model are usually the same word plus a number
+    // (`Sonnet` / `Sonnet 5`), and printing both would read as a stutter. Where
+    // they differ — `Opus (1M context)` / `Opus 5 with 1M context` — the model
+    // is the more useful of the two, so it wins outright.
+    label: row.model,
+    hint: [row.note, row.recommended ? 'your account’s default' : ''].filter(Boolean).join(' · ') || undefined,
+  }))
+}
 
+/**
+ * The models the picker hides but `/model` still accepts, under their own
+ * heading.
+ *
+ * Kept separate from {@link modelOptions} because they are a weaker claim: the
+ * picker's rows are what this account is offered today, while these are names
+ * the CLI will still parse and may still refuse. Each was typed at
+ * `claude 2.1.234` and accepted — the account-level refusal, when it comes,
+ * comes from the CLI in its own words.
+ */
+export function previousModelOptions(): ControlOption[] {
+  return PREVIOUS_MODELS.map((row, index) => ({
+    id: row.alias,
+    label: row.model,
+    // Only the first row carries the caption; the rest inherit it by sitting
+    // under it. See {@link ControlOption.group}.
+    group: index === 0 ? 'Earlier models' : undefined,
+  }))
+}
+
+/** The static list, for the surfaces that have not asked a session yet. */
+export const MODEL_OPTIONS: ControlOption[] = modelOptions()
+
+/**
+ * Fast mode, and the two facts about it that decide whether to touch it.
+ *
+ * Both come off the shipped binary rather than out of a help page. Its own
+ * description reads *"Fast mode for Claude Code uses Claude Opus with faster
+ * output (it does not downgrade to a smaller model). It can be toggled with
+ * /fast and is available on Opus 5/4.8"*, and the model picker prints
+ * *"Switching to other models turns off fast mode"* under its rows. So the two
+ * things worth saying here are what it costs and what it constrains — the
+ * second especially, because a user who turns it on and then picks Sonnet has
+ * silently turned it off again and nothing else on screen would say so.
+ */
 export const FAST_OPTIONS: ControlOption[] = [
   { id: 'off', label: 'Off' },
-  { id: 'on', label: 'On', hint: 'Draws from usage credits at a higher rate' },
+  // The hint is the *cost*, and only the cost. What fast mode is belongs to
+  // `describeControl`, which is printed directly above these two rows in the
+  // panel — saying it in both places put the same sentence on screen twice,
+  // three centimetres apart, which was visible the moment it was drawn.
+  { id: 'on', label: 'On', hint: 'Draws from your usage credits at a higher rate' },
 ]
 
 export function optionsFor(control: ControlId): ControlOption[] {
@@ -218,7 +334,14 @@ export function controlName(control: ControlId): string {
 export function describeControl(control: ControlId): string {
   if (control === 'model') return 'Which model answers in this session.'
   if (control === 'effort') return 'How much reasoning the model spends before it answers.'
-  if (control === 'fast') return 'A quicker reply, drawn from your usage credits at a higher rate.'
+  // Both halves of this sentence are the CLI's own. Its description of the
+  // feature: "uses Claude Opus with faster output (it does not downgrade to a
+  // smaller model)… available on Opus 5/4.8". Its model picker, under the rows:
+  // "Switching to other models turns off fast mode." The second half is the one
+  // worth the words — without it, somebody turns fast mode on, picks Sonnet,
+  // and has silently turned it off again.
+  if (control === 'fast')
+    return 'Opus, answering faster, at a higher draw on your usage credits. Switching to another model turns it off.'
   return 'What the agent may do without stopping to ask you first.'
 }
 
@@ -238,13 +361,16 @@ export function describeControl(control: ControlId): string {
  * ever "(this session only)". So the menu now says the CLI decides, and
  * `applyControl` quotes the arm the CLI actually printed.
  *
- * Fast mode returns null: `/fast` announces on/off but says nothing about
- * scope, and the CLI keeps that flag outside `settings.json`, so any scope
- * sentence here would be invented.
+ * Fast mode used to return null, on the grounds that nothing said what its
+ * scope was. Driving it settled that: fast mode was turned on, the `claude`
+ * process was killed, and a **brand-new** one booted with the `↯` still drawn in
+ * its status rule. It outlives the session, so the sentence is no longer a
+ * guess — and it is worth saying, because "on until I turn it off" and "on for
+ * this session" are very different things to leave switched on by accident.
  */
 export function reachOf(control: ControlId): string | null {
   if (control === 'permission') return 'This session only'
-  if (control === 'fast') return null
+  if (control === 'fast') return 'Stays on until you turn it off — new sessions too'
   return 'This session — and your default too, if the CLI says so when it confirms'
 }
 
@@ -279,13 +405,26 @@ export function displayValue(reading: ControlReading | undefined, control?: Cont
  * transcript, effort is persisted in `settings.json`, so nothing coming back
  * from either means something went wrong and the word should say so.
  *
- * Fast mode and permission mode are a different case. For both there are
- * states in which nothing has ever said, and no amount of waiting changes it.
+ * The **model** should now never reach this function at all, and that is the
+ * point of `readControls`' four-source chain: a screen confirmation, then the
+ * transcript, then the CLI's welcome panel, then `settings.json`. Asad's ask was
+ * *"Unknown should not be there, it should be already selected"*, and the only
+ * way to satisfy it honestly is to make the read succeed rather than to invent a
+ * label when it fails. The word stays here for the case that is left — a session
+ * whose screen cannot be read at all — because printing a model name for a
+ * session nobody could look at would be the fake this control exists to avoid.
  *
- *  - **Fast mode.** Checked against the shipped CLI, the only write it makes to
- *    `fastMode` in user settings is a *clear*, and the enabled state lives in a
- *    store this app does not read — so the screen is the sole source, and the
- *    CLI prints "Fast mode ON/OFF" only at the moment it *changes*.
+ * Permission mode is a different case. There are states in which nothing has
+ * ever said, and no amount of waiting changes it.
+ *
+ *  - **Fast mode** used to be listed here beside it, on the grounds that the CLI
+ *    "prints Fast mode ON/OFF only at the moment it changes". Driving the
+ *    shipped binary showed that is not the whole truth: it also draws a `↯` in
+ *    the status rule above the command line and leaves it there for as long as
+ *    fast mode is on, across new sessions. So fast mode is now read on every
+ *    screen and no longer reports silence — see `readFastIndicator` in
+ *    `src/main/agent-controls.ts`, and `agent-controls.live.test.ts`, which
+ *    reads both states out of captures of the real thing.
  *
  *  - **Permission mode.** Asad, watching the composer: the model "eventually
  *    resolves", permission "never does". He was right, and it was not slow — it
@@ -300,26 +439,30 @@ export function displayValue(reading: ControlReading | undefined, control?: Cont
  *    been told what it is, and inventing one would be a claim about what an
  *    agent is allowed to do — the last thing in this window to guess at.
  *
- * So both say the same thing, and it is what actually happened: nothing
- * reported it. One word for one situation, and "Unknown" left meaning "a read
- * failed" rather than doing double duty for "there was nothing to read".
+ * So permission says what actually happened — nothing reported it — and
+ * "Unknown" is left meaning "a read failed" rather than doing double duty for
+ * "there was nothing to read".
  */
 export function unreadLabel(control: ControlId | undefined): string {
-  return control === 'fast' || control === 'permission' ? 'Not reported' : 'Unknown'
+  return control === 'permission' ? 'Not reported' : 'Unknown'
 }
 
 /**
  * The sentence under an unread control, or null where the plain source note
  * already covers it.
  *
- * Both controls that can be honestly silent get one, because in both cases the
- * reader's next question is the same — why not, and what do I do about it — and
- * so is the answer: pick one, and the session will say.
+ * Permission is the one control left that can be honestly silent, and the
+ * reader's next question is always the same — why not, and what do I do about
+ * it — so the sentence answers both: pick one, and the session will say.
+ *
+ * Fast mode had one of these and no longer needs it. It said "the CLI announces
+ * fast mode only when it changes… until this session says so, nothing here
+ * can", which was written from reading the binary's strings and was wrong when
+ * the binary was actually driven: the `↯` in the status rule reports the state
+ * continuously. A note explaining why a control cannot answer, printed under a
+ * control that can, is worse than no note.
  */
 export function unreadNote(control: ControlId | undefined): string | null {
-  if (control === 'fast') {
-    return 'The CLI announces fast mode only when it changes, and keeps the setting out of settings.json — so until this session says so, nothing here can. Pick On or Off to set it.'
-  }
   if (control === 'permission') {
     return 'Claude prints the permission mode only when it changes, and no default is set in your Claude settings — so this session has not said which one it is in. Pick one and it will.'
   }
@@ -327,22 +470,59 @@ export function unreadNote(control: ControlId | undefined): string | null {
 }
 
 /**
+ * A model name reduced to the two things that decide whether two names are the
+ * same model: which model, and which context window.
+ *
+ * The same model arrives spelled four ways, and all four are real readings this
+ * app takes:
+ *
+ *   `Opus 5 (1M context) (default)`  the CLI's own confirmation line
+ *   `Opus 5 with 1M context`         a row of the CLI's own picker
+ *   `Opus 5 · 1M`                    `labelModelId`, from the transcript
+ *   `Opus 5`                         the CLI's welcome panel
+ *
+ * The long-context marker is the part that must survive the reduction: `Opus 5`
+ * and `Opus 5 (1M context)` are genuinely different — different windows,
+ * different money — and collapsing them would tick the wrong row on a list that
+ * offers both, which is precisely the list this app now offers. Everything else
+ * (the `(default)` marker, the punctuation, the word "with") is spelling.
+ */
+function modelKey(text: string): { name: string; long: boolean } {
+  const lower = text.toLowerCase()
+  const long = /1m/.test(lower)
+  const name = lower
+    .replace(/\((?:default|recommended)\)/g, '')
+    .replace(/\(1m context\)|with 1m context|·\s*1m/g, '')
+    .replace(/[^a-z0-9. ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return { name, long }
+}
+
+/**
  * True when the menu should mark this option as the one currently in force.
  *
  * Effort, fast mode and permission read back as the exact id that was sent, so
- * those are a straight comparison. The model does not: it comes back as a
- * display name — "Sonnet 5", "Opus 5 (1M context) (default)" — or, from the
- * transcript, as a raw id relabelled to "Opus 5 · 1M". So the model is matched
- * on the family word at the front of the label, and the CLI's own "(default)"
- * marker is what distinguishes Default from Opus, since both are Opus 5.
+ * those are a straight comparison, and that comparison is tried first for
+ * everything — the model reads back as its own alias when the source is
+ * `settings.json`.
+ *
+ * The model otherwise comes back as a *display name* rather than an id, and
+ * every row of the menu is now a display name too (`Opus 5`, `Sonnet 5`), so the
+ * two are compared after both have been through {@link modelKey}. The previous
+ * version compared the row's label against the front of the reading — which
+ * worked only while the rows were bare family words, and stopped the moment they
+ * started naming versions. That change is the entire point of the new list, so
+ * this had to move with it.
  *
  * A tick is a claim, so an unreadable value ticks nothing.
  */
 export function isCurrent(reading: ControlReading | undefined, option: ControlOption): boolean {
   if (!reading || reading.value === null) return false
   if (reading.value === option.id) return true
-  const shown = (reading.label ?? '').toLowerCase()
-  if (shown === '') return false
-  if (shown.includes('(default)')) return option.id === 'default'
-  return shown.startsWith(`${option.label.toLowerCase()} `)
+  const shown = reading.label ?? ''
+  if (shown.trim() === '') return false
+  const read = modelKey(shown)
+  const offered = modelKey(option.label)
+  return read.name !== '' && read.name === offered.name && read.long === offered.long
 }

@@ -275,10 +275,21 @@ describe('every module is reachable from an entry point', () => {
  * honest rather than a switch over nothing.
  */
 const SETTINGS_WITHOUT_READERS: Record<string, string> = {
-  'general.language':
-    'deliberately one option. The row exists to answer "can I have this in my language" — ' +
-    'the honest answer being no, not yet — and a setting with a single value has nothing to ' +
-    'read. It becomes a real setting the day a second language does.',
+  /*
+   * Empty, and worth leaving as a record of why.
+   *
+   * There was exactly one entry — `general.language` — excused on the grounds
+   * that a setting with a single value has nothing to read, and that it would
+   * become a real setting the day a second language did. It has been removed
+   * from the schema instead:
+   *
+   *   > "It will be always English and it is English, so there is no selection.
+   *   > The option should not be there."
+   *
+   * Which is the better answer to the same observation, and it means this table
+   * is now what it should always have been: the place a control that cannot act
+   * is *argued for*, rather than the place one is parked.
+   */
 }
 
 /** Files that only ever *declare* or *render* settings, so cannot count as readers. */

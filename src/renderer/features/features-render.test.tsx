@@ -289,15 +289,20 @@ describe('the chat box', () => {
     expect(html).toContain('cc-send')
   })
 
-  it('drops connectors from the button’s own name while MCP is not installed', () => {
-    const html = withFeatures(everythingOff(), <ChatComposer {...props} />)
-    expect(html).toContain('Add files, folders or images to this message')
-    expect(html).not.toContain('connectors')
-  })
-
-  it('has both when both features are installed', () => {
-    const html = withFeatures(everythingOn(), <ChatComposer {...props} />)
-    expect(html).toContain('Add files, folders, images or connectors to this message')
-    expect(html).toContain('cc-send')
+  it('names files, folders and images, whatever else is installed', () => {
+    /*
+     * The button's name used to grow and shrink with the MCP feature, because
+     * Connectors was a fourth row behind it. It is not any more — the window's
+     * own bar carries a Connectors chip, and a copy of it inside the chat box
+     * was one of the duplicates he asked to have removed. So the name is now a
+     * fact about the three panels this menu opens and nothing else, which is
+     * also the only version of it that is true on a session shown as a terminal.
+     */
+    for (const features of [everythingOff(), everythingOn()]) {
+      const html = withFeatures(features, <ChatComposer {...props} />)
+      expect(html).toContain('Add files, folders or images to this message')
+      expect(html.toLowerCase()).not.toContain('connectors')
+      expect(html).toContain('cc-send')
+    }
   })
 })

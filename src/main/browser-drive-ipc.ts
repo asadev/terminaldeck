@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { IpcMain } from 'electron'
 import { browserTabContents } from './browser-tab'
+import { BLANK_URL } from './browser-url'
 import type { DriveStatus } from './browser-drive'
 import { BrowserDrive } from './browser-driver'
+import { LINK_TAB_CHANNEL } from './link-open'
 
 /**
  * The drive, wired to a window.
@@ -31,10 +33,44 @@ import { BrowserDrive } from './browser-driver'
  * strip, wears a chip saying who is driving, and closing it ends the drive with
  * no confirmation and no argument.
  *
- * **And when there is no browser workspace open, the answer is null and the
- * tool says so.** Not a hidden window, not a silently-created view: a sentence
- * telling the copilot to ask the person to open a browser tab. House rule
- * three — a control that cannot act must say so.
+ * ## And when there is no browser workspace open, it asks the window for one
+ *
+ * This used to be where the feature ended. The push went out, no
+ * `BrowserWorkspace` was mounted to hear it, nobody answered, and the tool told
+ * the copilot to ask the person to press the globe in the sidebar. That is an
+ * honest sentence and it was still the whole of the defect Asad reported: *"it
+ * is not capable to do the thing"* — he asked his copilot to go to a page, and
+ * on an app with no browser page already open the answer was always a refusal.
+ * Reproduced on 2026-08-18 against the packaged build, first ask of a fresh
+ * window: `browser.open` refused, and the copilot fell back to fetching the URL
+ * and said so.
+ *
+ * The fix is not a hidden window — the argument above still holds, and the tab
+ * must land in the strip where somebody can see and close it. It is that the
+ * *renderer* is asked to install a browser page first, through
+ * {@link LINK_TAB_CHANNEL}, which is the one main→renderer channel a window
+ * listens on for the whole of its life rather than only while a browser panel
+ * happens to be mounted. `App.tsx` answers it exactly as it answers the globe:
+ * it installs the browser feature if it is not installed and opens a page. Then
+ * the drive request goes out again and the freshly-mounted workspace answers it.
+ *
+ * Two details make that safe rather than clever:
+ *
+ *  - **`about:blank`, not the target URL.** The link channel would otherwise
+ *    open the page itself and the drive would then open a *second* tab at the
+ *    same address. A blank page is what the globe gives you, so what the person
+ *    sees is the sequence they would have produced by hand.
+ *  - **The retry re-pushes the same request id.** `claimDriveOpen` in
+ *    `renderer/browser/drive-bridge.ts` dedupes by id, so repeating the push
+ *    while React mounts cannot produce one tab per push — the first panel to
+ *    see it claims it and every later copy is ignored.
+ *
+ * **If nothing answers even then, the answer is still null and the tool still
+ * says so.** That state is real: somebody who has switched the browser off in
+ * Features has said what they want, and `App.tsx` routes the link outward
+ * rather than installing a pane they turned off — `about:blank` is in
+ * `link-open.ts`'s `NEVER_LEAVES`, so the outward route is a no-op and nothing
+ * opens anywhere. House rule three — a control that cannot act must say so.
  */
 
 /* -------------------------------------------------------------- channels -- */
@@ -60,6 +96,28 @@ export const DRIVE_RESUME_CHANNEL = 'browser:drive-resume'
  * seconds is far beyond a real answer and far inside any tool timeout.
  */
 export const OPEN_TAB_TIMEOUT_MS = 5_000
+
+/**
+ * How long the second attempt waits, after the window has been asked to install
+ * a browser page.
+ *
+ * Longer than the first, because this one is not waiting for a round trip — it
+ * is waiting for React to mount a `BrowserWorkspace` and for its subscription
+ * effect to run, behind whatever else that render is doing. Still far inside the
+ * sixty seconds an MCP client allows a tool call, which is the number that
+ * actually bounds everything here (see `HANDOVER_WINDOW_MS`).
+ */
+export const INSTALL_BROWSER_TIMEOUT_MS = 8_000
+
+/**
+ * How often the second attempt repeats its push while it waits.
+ *
+ * A push is not a queue: a renderer that has not yet subscribed does not
+ * receive it late, it does not receive it at all. So the request is repeated
+ * rather than sent once and hoped for — with the *same* id, which is what stops
+ * the repeats becoming one browser tab each. See the header.
+ */
+export const INSTALL_REPUSH_MS = 250
 
 /* -------------------------------------------------------------- registry -- */
 
@@ -88,23 +146,55 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
    */
   const pending = new Map<string, (tabId: string | null) => void>()
 
-  drive = new BrowserDrive({
-    openTab: (input) =>
-      new Promise<string | null>((resolve) => {
-        const id = randomUUID()
-        let settled = false
-        const finish = (tabId: string | null): void => {
-          if (settled) return
-          settled = true
-          clearTimeout(timer)
-          pending.delete(id)
-          resolve(tabId)
-        }
-        const timer = setTimeout(() => finish(null), OPEN_TAB_TIMEOUT_MS)
-        timer.unref?.()
-        pending.set(id, finish)
+  /**
+   * Ask the window for a tab, once, and wait for the answer.
+   *
+   * `repeatMs` is what makes the second attempt possible at all — see the
+   * header. The id is minted here and reused by every repeat of the same
+   * attempt, so a workspace that mounts halfway through hears the request once
+   * and every other copy of it is discarded by the claim.
+   */
+  const askForTab = (
+    input: { url: string; isolate: boolean },
+    wait: { waitMs: number; repeatMs?: number },
+  ): Promise<string | null> =>
+    new Promise<string | null>((resolve) => {
+      const id = randomUUID()
+      let settled = false
+      const finish = (tabId: string | null): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (ticker !== null) clearInterval(ticker)
+        pending.delete(id)
+        resolve(tabId)
+      }
+      const push = (): void =>
         deps.send(DRIVE_OPEN_CHANNEL, { id, url: input.url, isolate: input.isolate })
-      }),
+      const timer = setTimeout(() => finish(null), wait.waitMs)
+      timer.unref?.()
+      const ticker = wait.repeatMs === undefined ? null : setInterval(push, wait.repeatMs)
+      ticker?.unref?.()
+      pending.set(id, finish)
+      push()
+    })
+
+  drive = new BrowserDrive({
+    openTab: async (input) => {
+      const answered = await askForTab(input, { waitMs: OPEN_TAB_TIMEOUT_MS })
+      if (answered !== null) return answered
+      /*
+       * Nobody answered, which means no browser page is mounted in the window.
+       * Ask for one on the channel a window listens to for its whole life, then
+       * ask again. A null after this is the honest "there is no browser here"
+       * the tool reports — see the header for why that state is still real.
+       */
+      deps.send(LINK_TAB_CHANNEL, BLANK_URL)
+      return askForTab(input, {
+        waitMs: INSTALL_BROWSER_TIMEOUT_MS,
+        repeatMs: INSTALL_REPUSH_MS,
+      })
+    },
     contentsFor: (tabId) => browserTabContents(tabId),
     publish: (status: DriveStatus) => deps.send(DRIVE_STATE_CHANNEL, status),
     now: () => Date.now(),

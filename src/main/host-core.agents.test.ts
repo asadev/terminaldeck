@@ -10,13 +10,17 @@ import type { ProviderId } from '../shared/types'
  * An added agent, started by the one function that starts sessions.
  *
  * The bug this pins is a silent one and it is the whole reason the wiring goes
- * through `host-core.ts` rather than through the Electron shell.
- * `startSession` chooses its agent with `available[requested] ? requested :
- * 'shell'`, and `detectProviders` answers about the agents in the catalogue —
- * so an id it has never had reads `undefined`, falls to the fallback, and a
- * person who added an agent and pressed Start gets a plain shell with nothing
- * said. `startSession`'s own comments call that failure out twice; this is the
- * third way it could have arrived.
+ * through `host-core.ts` rather than through the Electron shell. `startSession`
+ * used to choose its agent with `available[requested] ? requested : 'shell'`,
+ * and `detectProviders` answers about the agents in the catalogue — so an id it
+ * has never had read `undefined`, fell to the fallback, and a person who added
+ * an agent and pressed Start got a plain shell with nothing said.
+ *
+ * That fallback is gone, and the second half of this file is why: it turned a
+ * failure to start into a *record* of what was open, so the downgrade outlived
+ * the thing that caused it. Asking for an agent that cannot run now refuses and
+ * says so, and the tests below pin both halves — an added agent that is there
+ * runs, and one that is not produces no session and a sentence naming it.
  *
  * A real core, a real pty and a real command, because every part of the chain
  * that could be stubbed here is a part that has been wrong before: the launcher
@@ -131,16 +135,77 @@ describe('starting a session on an agent somebody added', () => {
     expect(meta.provider).not.toBe('shell')
   })
 
-  it('falls back to a shell for an added agent that is no longer there', async () => {
-    // Not a row in the store at all — the same state as an agent removed in
-    // another window, or a session restored from a machine that had one.
-    const meta = await core.startSession({
-      cwd: dir,
-      cols: 80,
-      rows: 24,
-      provider: 'custom:never-existed' as ProviderId,
-    })
+  /**
+   * What happens when the agent that was asked for cannot be run.
+   *
+   * This test used to be called *"falls back to a shell for an added agent that
+   * is no longer there"*, and it passed, and the behaviour it was pinning is the
+   * bug Asad reported on 2026-08-17. A session whose agent could not be started
+   * opened as a plain terminal instead — same tab, same folder, nothing said —
+   * and then the ledger wrote *that* down as what was open. Every launch
+   * afterwards restored a shell, correctly reported that a shell has no
+   * conversation to continue, and never tried the real agent again. A distro
+   * that was asleep for eight seconds became a permanent downgrade.
+   *
+   * So the intent is kept and the answer is inverted: asking for an agent that
+   * cannot run must produce **no session at all**, and a sentence naming the
+   * agent. Refusing is what makes the failure recoverable — nothing is written
+   * down, the request is held as itself (`session-held.ts`), and installing the
+   * CLI tomorrow is enough to make the same session start.
+   *
+   * `custom:never-existed` is not a row in the store at all, which is the same
+   * state as an agent removed in another window, or a session restored from a
+   * machine that had one.
+   */
+  it('refuses, rather than quietly starting something else', async () => {
+    const before = core.ptys.list().length
 
+    await expect(
+      core.startSession({
+        cwd: dir,
+        cols: 80,
+        rows: 24,
+        provider: 'custom:never-existed' as ProviderId,
+      }),
+      'starting an agent that cannot run must not hand back a session',
+    ).rejects.toThrow(/could not be found/)
+
+    // Nothing was spawned. A refusal that still left a process behind would be
+    // the downgrade wearing a different name.
+    expect(core.ptys.list().length).toBe(before)
+  })
+
+  it('names the agent it could not start, and where it looked', async () => {
+    /*
+     * The message is the whole of what most people will ever see of this, so it
+     * is pinned rather than left to whoever edits the throw next. Two facts have
+     * to be in it: *which* agent, because a person with three configured needs
+     * to know which one to install, and *where this app looked* — "on this
+     * machine" and "inside the WSL distribution" are different problems with
+     * different fixes, and the machine whose work lives in Ubuntu is exactly the
+     * machine that would otherwise read a sentence about PATH and check the
+     * wrong PATH.
+     */
+    const error = await core
+      .startSession({ cwd: dir, cols: 80, rows: 24, provider: 'custom:never-existed' as ProviderId })
+      .then(
+        () => null,
+        (thrown: unknown) => thrown,
+      )
+
+    expect(error).toBeInstanceOf(Error)
+    const message = error instanceof Error ? error.message : ''
+    expect(message).toContain('custom:never-existed')
+    expect(message).toContain('on this machine')
+    expect(message, 'the sentence has to say that nothing was started').toMatch(/not started/)
+  })
+
+  it('still starts a shell when a shell is what was asked for', async () => {
+    // The refusal above must not become "this app cannot open a terminal".
+    // `available.shell` is always true, so asking for one can never reach the
+    // throw — pinned because the obvious wrong fix to the test above is a guard
+    // that catches `shell` on its way past.
+    const meta = await core.startSession({ cwd: dir, cols: 80, rows: 24, provider: 'shell' })
     expect(meta.provider).toBe('shell')
   })
 

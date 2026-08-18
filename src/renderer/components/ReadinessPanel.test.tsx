@@ -1,7 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
+  actionFor,
   CheckRow,
+  fileUrlFor,
   ReadinessPanel,
   ScoreRing,
   sortChecks,
@@ -24,6 +26,7 @@ function check(partial: Partial<ReadinessCheck> & { id: string }): ReadinessChec
     detail: 'detail',
     fix: null,
     gate: false,
+    opens: null,
     ...partial,
   }
 }
@@ -90,8 +93,87 @@ describe('ScoreRing', () => {
   })
 })
 
+/**
+ * *"Every not-ready item needs an action button that actually does it, or a way
+ * to dismiss it. They should not see something they cannot do something about
+ * it."*
+ *
+ * The rule has three shapes on a row and all three are pinned below, because
+ * the failure mode is invisible: a row that loses its button looks exactly like
+ * a row that never had one.
+ */
+describe('nothing on this page is un-actionable', () => {
+  const noFix = check({ id: 'git-clean', status: 'warn' })
+
+  it('picks the fix when there is one, the file when there is not', () => {
+    const withFix = check({ id: 'secrets', status: 'fail', fix: DESTRUCTIVE_FIX, opens: '.gitignore' })
+    // Never both. The fix is what repairs the finding, and an Open beside it
+    // invites somebody to do by hand what the button next to it does properly.
+    expect(actionFor(withFix, true)).toBe('fix')
+    expect(actionFor(check({ id: 'readme', status: 'warn', opens: 'README.md' }), true)).toBe('open')
+    // A window that cannot hand a file to the machine draws no Open button,
+    // rather than one that does nothing.
+    expect(actionFor(check({ id: 'readme', status: 'warn', opens: 'README.md' }), false)).toBe('none')
+    expect(actionFor(noFix, true)).toBe('none')
+  })
+
+  it('offers nothing at all on a passing row', () => {
+    // There is nothing to do about good news, and a Dismiss on every green row
+    // is five controls asking to be read on a page whose job is to be skimmed.
+    expect(actionFor(check({ id: 'readme', status: 'pass', opens: 'README.md' }), true)).toBe('none')
+    const html = renderToStaticMarkup(
+      <CheckRow
+        check={check({ id: 'readme', status: 'pass', opens: 'README.md' })}
+        busy={false}
+        result={null}
+        onApply={() => {}}
+        onOpen={() => {}}
+        onDismiss={() => {}}
+      />,
+    )
+    expect(html).not.toContain('<button')
+  })
+
+  it('gives a row with no possible fix a dismissal', () => {
+    const html = renderToStaticMarkup(
+      <CheckRow check={noFix} busy={false} result={null} onApply={() => {}} onDismiss={() => {}} />,
+    )
+    expect(html).toContain('Dismiss')
+    // And it says what dismissing does not do, because a button that quietly
+    // raised the score by looking away would be the fake control this whole
+    // release exists to remove.
+    expect(html).toContain('still counts towards the score')
+  })
+
+  it('gives a row that names a file somewhere to go', () => {
+    const html = renderToStaticMarkup(
+      <CheckRow
+        check={check({ id: 'readme', status: 'warn', opens: 'README.md' })}
+        busy={false}
+        result={null}
+        onApply={() => {}}
+        onOpen={() => {}}
+        onDismiss={() => {}}
+      />,
+    )
+    expect(html).toContain('Open it')
+    expect(html).toContain('Open README.md on this machine')
+  })
+
+  it('builds a file URL a system opener will accept', () => {
+    expect(fileUrlFor('/Users/me/proj', 'README.md')).toBe('file:///Users/me/proj/README.md')
+    expect(fileUrlFor('/Users/me/My Proj/', 'README.md')).toBe('file:///Users/me/My%20Proj/README.md')
+    // Windows. Per-segment encoding turns the drive's colon into %3A, which no
+    // file handler will open — hence `encodeURI` rather than a segment map.
+    expect(fileUrlFor('C:\\Users\\me\\proj', '.gitignore')).toBe('file:///C:/Users/me/proj/.gitignore')
+    // The two characters `encodeURI` deliberately leaves alone, both of which
+    // are legal in a filename here.
+    expect(fileUrlFor('/a', 'note#1?.md')).toBe('file:///a/note%231%3F.md')
+  })
+})
+
 describe('CheckRow', () => {
-  it('renders no button when there is nothing to fix', () => {
+  it('renders no button when there is nothing to fix and no way to dismiss', () => {
     const html = renderToStaticMarkup(
       <CheckRow check={check({ id: 'git-clean', status: 'warn' })} busy={false} result={null} onApply={() => {}} />,
     )

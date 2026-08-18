@@ -7,18 +7,37 @@ import { folderName, MAX_TITLE_LENGTH } from '../session-title'
 import { tip } from '../keymap'
 import { demote, MAX_PROMOTED, promote, usePromotedOrder } from '../browser/workspace-strip'
 import { accountRail, useKnownSignIns } from '../accounts'
+import { heldAgentName, type HeldSessionView } from '../held-sessions'
 import { CopilotEntry } from '../copilot/CopilotEntry'
 import type { CopilotStage, CopilotStateView } from '../copilot/copilot-model'
 import { partitionByOrigin, turnOf } from '../copilot/session-origin'
 import { PANEL_GROUPS, PANELS, type PanelId, type PanelSpec } from './panels'
 import {
   accountsWorthShowing,
+  dragStartedOnControl,
   KIND_ICON,
+  MACHINE_ICON,
   sessionLabel,
   startTabDrag,
   tabQualifiers,
   type WorkspaceTab,
 } from './workspace-tabs'
+
+/**
+ * One reachable machine, as the rail lists it.
+ *
+ * Flattened rather than the `Machine`/`MachineLinkState` pair the machines
+ * bridge answers with, for the reason every other prop on this component is
+ * flattened: the rail draws what it is handed and asks nothing, so a shape that
+ * carried a link's `state`, its `retryAt` and its capabilities would be inviting
+ * this file to start deciding whether a machine is worth listing. That decision
+ * is `reachableMachines`, one level up.
+ */
+export interface SidebarMachine {
+  machineId: string
+  name: string
+  sessions: ReadonlyArray<{ id: string; title: string; cwd: string }>
+}
 
 interface Props {
   width: number
@@ -59,6 +78,26 @@ interface Props {
    */
   browserOffer?: string | null
   /**
+   * The machines this window can reach, and what is running on each.
+   *
+   * A prop rather than a read of `useMachines`, exactly like `panels` and
+   * `browser` above: this component is the window's inventory of what you have
+   * open, and every decision about what *exists* is made one level up. Empty by
+   * default so a `Sidebar` rendered on its own — a test, the harness — draws the
+   * app rather than requiring a machines bridge to exist.
+   */
+  machines?: readonly SidebarMachine[]
+  /**
+   * The remote session on screen right now, or null.
+   *
+   * A pair rather than a composite id, and a prop of its own rather than a value
+   * folded into `activeTabId`. A remote session has two handles — the machine
+   * and the session — and joining them into one string here would mean every
+   * caller had to know the joining rule, which is how two files come to disagree
+   * about a separator.
+   */
+  activeMachineSession?: { machineId: string; sessionId: string } | null
+  /**
    * Whether to draw the bell beside Settings — i.e. whether the Alerts feature
    * is installed and on.
    *
@@ -87,6 +126,26 @@ interface Props {
   alertCount?: number
   /** Session ids with output nobody has looked at yet. */
   unread?: readonly string[]
+  /**
+   * The sessions that were open, did not come back, and are being kept.
+   *
+   * A row under the project it belonged to, saying what did not start and why,
+   * with Try again beside it. `renderer/held-sessions.ts` has the account of the
+   * bug this closes and `main/session-held.ts` the mechanism; what matters here
+   * is that the rail is where it has to be *seen*. When four of Asad's sessions
+   * failed to restart on 2026-08-16 the app wrote a warning to a log nobody had
+   * opened and drew a window that looked completely normal.
+   *
+   * Defaults to none, like every other optional prop on this component, so a
+   * `Sidebar` rendered bare shows the app rather than a subset of it — and so
+   * that the ordinary case, which is every launch where nothing failed, adds
+   * nothing to the rail at all.
+   */
+  held?: readonly HeldSessionView[]
+  /** Held keys with an attempt in flight, so the row can say so and not fire twice. */
+  heldRetrying?: readonly string[]
+  onRetryHeld?(key: string): void
+  onForgetHeld?(key: string): void
   /**
    * Where the top strip's promoted order is kept — session storage, so an
    * arrangement survives a renderer reload and not an app restart; see
@@ -138,7 +197,21 @@ interface Props {
    * copilot's tab is deliberately not in the `tabs` this component draws — see
    * the filter in the body.
    */
-  copilot?: { stage: CopilotStage; state: CopilotStateView | null; active?: boolean } | null
+  copilot?: {
+    stage: CopilotStage
+    state: CopilotStateView | null
+    active?: boolean
+    /**
+     * What it is called — user data, read out of its own instruction file by
+     * `useCopilotSetup` and passed down rather than reached for here.
+     *
+     * A prop and not an import, because a rail mounted on its own in a test or
+     * the harness has nobody to ask; `CopilotEntry` falls back to this app's
+     * word for an unnamed copilot, which is the same fallback every other reader
+     * of the name uses.
+     */
+    name?: string
+  } | null
   /**
    * Open the copilot's window, optionally landing on one turn of its action log.
    *
@@ -175,6 +248,15 @@ interface Props {
    * open — it is a named command with one answer.
    */
   onNewSession(projectPath?: string, resume?: boolean): void
+  /**
+   * Whether the agent a new session would run has a resume command at all.
+   *
+   * Decides whether the Continue-last-session glyph exists on a project heading.
+   * Defaults to false, so a host that does not answer the question draws no
+   * control rather than one that silently starts a fresh session — see the
+   * button itself, and `canResumeDefault` in `App.tsx`.
+   */
+  canResume?: boolean
   onNewBrowserTab(): void
   onOpenProject(): void
   onCloseProject(path: string): void
@@ -188,6 +270,10 @@ interface Props {
    * the window; these two open something over it and leave the window alone.
    */
   onOpenAlerts(): void
+  /** Open a session that is running on another machine. */
+  onOpenMachineSession?(machineId: string, sessionId: string): void
+  /** Start one there — the same dialog, with the machine already chosen. */
+  onNewMachineSession?(machineId: string): void
   /** Keep it open (peeking) or put it away (pinned). */
   onToggleCollapsed(): void
   onPeekStart(): void
@@ -236,6 +322,21 @@ const CHEVRON_LEFT = 'M14.5 6.5 9 12l5.5 5.5'
 const CHEVRON_RIGHT = 'M9.5 6.5 15 12l-5.5 5.5'
 const RESUME = 'M4 12a8 8 0 1 0 2.7-6M4 4.5v4h4'
 const CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
+/**
+ * A session that did not come back: an outline circle with a bar through it.
+ *
+ * Where a live row has its `StatusDot`, so the eye finds the same column, and
+ * deliberately *not* a dot in a warning colour. A held row is not a session in
+ * a bad state — it is the absence of one, and painting it as a running session
+ * that has gone red is the same confusion this whole change is about: the app
+ * answering "we could not start your agent" with something shaped like a
+ * working session.
+ *
+ * Not a ✕ either. That glyph is the close button four pixels to its right, and
+ * a row whose leading mark reads "deleted" beside a button that means "delete"
+ * would say the work is already gone. It is not; that is the point of the row.
+ */
+const HELD = 'M12 3.6a8.4 8.4 0 1 0 0 16.8 8.4 8.4 0 0 0 0-16.8M8.2 12h7.6'
 /**
  * Send this window to the top strip: an arrow to the top-right corner.
  *
@@ -290,9 +391,17 @@ export function Sidebar({
   panels = PANELS,
   browser = true,
   browserOffer = null,
+  machines = [],
+  activeMachineSession = null,
+  onOpenMachineSession = () => {},
+  onNewMachineSession = () => {},
   alerts = true,
   alertCount = 0,
   unread = [],
+  held = [],
+  heldRetrying = [],
+  onRetryHeld,
+  onForgetHeld,
   storage,
   badges,
   peeking = false,
@@ -303,6 +412,7 @@ export function Sidebar({
   onCloseTab,
   onSelectPanel,
   onNewSession,
+  canResume = false,
   onNewBrowserTab,
   onOpenProject,
   onCloseProject,
@@ -366,6 +476,25 @@ export function Sidebar({
   const [draggingId, setDraggingId] = useState<string | null>(null)
 
   const beginDrag = (event: DragEvent<HTMLDivElement>, tab: WorkspaceTab, label: string): void => {
+    /*
+     * A press that landed on one of the row's own buttons is a press, not a drag.
+     *
+     * This is the whole of *"the ✕ sometimes does not work"*. The row is
+     * `draggable`, so four pixels of hand movement between button-down and
+     * button-up turns the press into a drag — and a drag **cancels the click**,
+     * so the ✕ under the finger never hears about it. Measured, with the events
+     * logged, rather than reasoned about; `dragStartedOnControl` carries the
+     * evidence and explains why the check is a hit-test on the press point
+     * instead of the two spellings that look right and are not.
+     *
+     * Refusing here rather than in each button means the guard covers the ✕, the
+     * promote toggle and the "why does this exist" link at once, and covers the
+     * next control anybody adds as soon as it wears `data-no-drag`.
+     */
+    if (dragStartedOnControl(event.clientX, event.clientY)) {
+      event.preventDefault()
+      return
+    }
     startTabDrag(event.dataTransfer, tab.id)
     setDraggingId(tab.id)
 
@@ -503,8 +632,94 @@ export function Sidebar({
       tab.kind === 'session' && !projects.some((project) => project.path === tab.projectPath),
   )
 
+  /** Held sessions for one project, in the order they were tabs in. */
+  const heldIn = (path: string) => held.filter((row) => row.cwd === path)
+  /**
+   * Held sessions with no project heading to sit under.
+   *
+   * The common cause is the one that produced the entry: `restoreOpenSessions`
+   * adds a project row for every remembered folder that still exists, so a held
+   * session with no project is usually a *skipped* one — the folder was not
+   * there when the app looked. Those are the rows it is most important not to
+   * drop, because "the folder it ran in is no longer on this machine" is
+   * frequently a volume that has not mounted or a distribution that has not
+   * woken, and the row is the only offer to try again.
+   */
+  const heldLoose = held.filter((row) => !projects.some((project) => project.path === row.cwd))
+
   const labelFor = (tab: WorkspaceTab, index: number, projectName?: string): string =>
     tab.kind === 'session' ? sessionLabel(tab.label, index, projectName) : tab.label
+
+  /**
+   * One held session, as a row.
+   *
+   * Two lines rather than one, and the second line is the whole reason the row
+   * exists: a rail that said only "Claude Code — did not start" would be the
+   * app admitting a failure and still making somebody go and find out what it
+   * was. The sentence is the main process's own, verbatim, and is the same one
+   * in the app log — one event, one explanation, wherever you read it.
+   *
+   * The folder is named only when there is no heading above already naming it.
+   * Under `terminaldeck`, a row reading "Claude Code — terminaldeck" is the same
+   * word twice, twenty pixels apart; the same argument `rowsFor` makes about
+   * qualifiers.
+   *
+   * When it *is* named, it goes on the second line rather than beside the agent,
+   * and that was measured rather than chosen: `Claude Code — ClaudeImza` on a
+   * 264px rail comes out as **Claude Code — Claude…**, so the one row that has
+   * to identify its own folder was the one row whose folder was cut off. The
+   * second line wraps, so it has the width, and the agent — which is what the
+   * row is *about* — keeps the line it was already readable on.
+   *
+   * Try again is a `sb-row-action` like every other hover control on a rail row,
+   * but this one is drawn always rather than on hover. A control that appears
+   * only under the pointer is fine for closing a tab you can see; it is wrong
+   * for the single offer to recover work, on a row a person is reading precisely
+   * because something went wrong.
+   */
+  const heldRow = (row: HeldSessionView, nameFolder: boolean) => {
+    const agent = heldAgentName(row.provider)
+    const trying = heldRetrying.includes(row.key)
+    return (
+      <li key={row.key} className="sb-held">
+        <div className="sb-row sb-held-row">
+          <Glyph path={HELD} size={15} className="sb-held-mark" />
+          <span className="sb-label">{agent}</span>
+          <button
+            type="button"
+            className="sb-row-action sb-held-retry"
+            // `title` carries the folder as well, because the label above drops
+            // it under a project heading and this is the one control whose
+            // press starts a process somewhere.
+            title={trying ? `Starting ${agent} in ${row.cwd}…` : `Try ${agent} again in ${row.cwd}`}
+            aria-label={`Try ${agent} again in ${row.cwd}`}
+            disabled={trying || !onRetryHeld}
+            onClick={() => onRetryHeld?.(row.key)}
+          >
+            <Glyph path={RESUME} size={13} />
+          </button>
+          <button
+            type="button"
+            className="sb-row-action"
+            title="Stop keeping this session"
+            aria-label={`Stop keeping ${agent} in ${row.cwd}`}
+            disabled={!onForgetHeld}
+            onClick={() => onForgetHeld?.(row.key)}
+          >
+            <Glyph path={CLOSE} size={13} />
+          </button>
+        </div>
+        {/* Not `aria-hidden`, and not a `title`: this sentence is the content of
+            the row for anyone reading it with anything. The folder is a span in
+            front of it rather than words folded into it — the reason is the main
+            process's own sentence, verbatim, and the log carries the same one. */}
+        <p className="sb-held-why">
+          {nameFolder && <span className="sb-held-where">{folderName(row.cwd)}</span>}
+          {trying ? 'Trying again…' : row.reason}
+        </p>
+      </li>
+    )
+  }
 
   /**
    * One run of rows, with a qualifier on any that its name alone cannot
@@ -842,6 +1057,10 @@ export function Sidebar({
             <button
               type="button"
               className="sb-row-action"
+              // See `beginDrag`: the row is draggable, and without this marker a
+              // press that slides a few pixels becomes a drag and this button's
+              // click is cancelled.
+              data-no-drag=""
               aria-label={`Why ${label} exists — open the copilot turn that started it`}
               title="Started by the copilot — open that turn"
               onClick={() => onOpenCopilot(turn)}
@@ -868,6 +1087,10 @@ export function Sidebar({
           <button
             type="button"
             className="sb-row-action sb-promote"
+            // See `beginDrag`. This one is the sharpest case of the defect: the
+            // button exists so the promotion can be done *without* a drag, and a
+            // press on it was being eaten by the drag it was there to replace.
+            data-no-drag=""
             aria-pressed={promoted}
             disabled={!promoted && stripFull}
             aria-label={
@@ -907,6 +1130,10 @@ export function Sidebar({
             <button
               type="button"
               className="sb-row-action sb-close"
+              // See `beginDrag`. This is the control he reported: without the
+              // marker, a press that slides four pixels starts a drag of the row
+              // and the close never happens.
+              data-no-drag=""
               aria-label={`Close ${label}`}
               title={
                 tab.kind === 'session'
@@ -1045,6 +1272,7 @@ export function Sidebar({
           stage={copilot?.stage ?? null}
           state={copilot?.state ?? null}
           active={copilot?.active ?? false}
+          {...(copilot?.name === undefined ? {} : { name: copilot.name })}
           onOpen={() => onOpenCopilot?.()}
         />
 
@@ -1102,7 +1330,13 @@ export function Sidebar({
               the heading opens a project, and the page filling the window says
               so with a button of its own — this line only has to explain why
               the list under it is empty. */}
-          {projects.length === 0 && browserTabs.length === 0 && (
+          {/* `held` counts. A launch where every session failed to come back
+              leaves no projects and no tabs, and without this the rail would
+              print "Nothing open yet." directly above four rows saying your
+              sessions did not start — the app contradicting itself in one
+              glance, in the exact situation where a person is trying to work
+              out what happened. */}
+          {projects.length === 0 && browserTabs.length === 0 && held.length === 0 && (
             <p className="sb-empty">Nothing open yet.</p>
           )}
 
@@ -1126,15 +1360,28 @@ export function Sidebar({
                   />
                   <span className="sb-project-name">{project.name}</span>
                 </button>
-                <button
-                  type="button"
-                  className="sb-row-action"
-                  onClick={() => onNewSession(project.path, true)}
-                  aria-label={`Continue the last session in ${project.name}`}
-                  title={tip('Continue last session', 'session.resume')}
-                >
-                  <Glyph path={RESUME} size={13} />
-                </button>
+                {/*
+                  Continue-last-session, and only where there is one to continue.
+
+                  *"'Continue last conversation' is agent-specific."* It is, and
+                  silently: `host-core.ts` falls back to the ordinary arguments
+                  when the agent has no resume command, so on Gemini or a plain
+                  shell this glyph started a **fresh** session and said nothing.
+                  A control that cannot act is absent rather than live — see
+                  `canResumeDefault` in `App.tsx`, which is where the question is
+                  asked and why it is asked of the default agent.
+                */}
+                {canResume && (
+                  <button
+                    type="button"
+                    className="sb-row-action"
+                    onClick={() => onNewSession(project.path, true)}
+                    aria-label={`Continue the last session in ${project.name}`}
+                    title={tip('Continue last session', 'session.resume')}
+                  >
+                    <Glyph path={RESUME} size={13} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="sb-row-action"
@@ -1157,12 +1404,22 @@ export function Sidebar({
               {!folded.has(project.path) && (
                 <ul className="sb-list sb-sessions">
                   {rowsFor(sessionsIn(project.path), project.name)}
+                  {/* Under the sessions that did come back, not above them: the
+                      list you scan first is the work that is running. Inside the
+                      same `<ul>` so a held row sits exactly where that session's
+                      row was, which is the whole promise the rail is making. */}
+                  {heldIn(project.path).map((row) => heldRow(row, false))}
                 </ul>
               )}
             </div>
           ))}
 
           {orphaned.length > 0 && <ul className="sb-list">{rowsFor(orphaned)}</ul>}
+          {/* Held sessions whose folder has no heading — see `heldLoose`. They
+              name their folder, because nothing above them does. */}
+          {heldLoose.length > 0 && (
+            <ul className="sb-list">{heldLoose.map((row) => heldRow(row, true))}</ul>
+          )}
           {browserTabs.length > 0 && (
             <ul className="sb-list">{browserTabs.map((tab) => tabRow(tab, tab.label))}</ul>
           )}
@@ -1194,6 +1451,78 @@ export function Sidebar({
             </ul>
           </section>
         )}
+
+        {/*
+          Sessions on another machine, beside your own and not on a page of
+          their own.
+
+          Asad, 2026-08-17, having looked at the Remote page: *"The Remote page
+          is for connecting only, not controlling. This is shit."* and then the
+          instruction — *"Remote sessions belong in the sidebar, alongside local
+          ones."* Until now they existed only inside Settings → Remote, in a pane
+          that stopped existing when that panel closed, which is the whole of
+          what he was objecting to.
+
+          One heading per machine rather than one heading called "Remote",
+          because two machines' sessions in one list is a list where the row you
+          want is identified by nothing. The machine's own mark sits on every
+          row for the same reason it sits beside a remote port: remote and local
+          have to be tellable apart at a glance, and the thing that differs is
+          *where it is running*, not what kind of window it is.
+
+          Drawn only when a machine is reachable. A heading over nothing reads as
+          a list that failed to load — the same argument every other section on
+          this rail makes.
+        */}
+        {machines.map((group) => (
+          <section className="sb-group" key={group.machineId}>
+            <h2 className="sb-group-label">
+              <Glyph path={MACHINE_ICON} size={12} className="sb-machine-mark" />
+              {group.name}
+            </h2>
+            {group.sessions.length === 0 ? (
+              // Said rather than left blank. A machine that is connected and has
+              // nothing running is a real and ordinary state, and an empty
+              // heading is indistinguishable from one that failed to fill.
+              <p className="sb-empty">Nothing running there.</p>
+            ) : (
+              <ul className="sb-list">
+                {group.sessions.map((session) => (
+                  <li key={`${group.machineId}\u0000${session.id}`}>
+                    <div
+                      className={`sb-row sb-open${
+                        !activePanel &&
+                        activeMachineSession?.machineId === group.machineId &&
+                        activeMachineSession.sessionId === session.id
+                          ? ' active'
+                          : ''
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        className="sb-row-main"
+                        title={`${session.title} — ${session.cwd} on ${group.name}`}
+                        onClick={() => onOpenMachineSession(group.machineId, session.id)}
+                      >
+                        <Glyph path={MACHINE_ICON} size={15} />
+                        <span className="sb-label">{session.title}</span>
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button
+              type="button"
+              className="sb-row sb-machine-new"
+              onClick={() => onNewMachineSession(group.machineId)}
+            >
+              <Glyph path={PLUS} size={13} />
+              <span className="sb-label">New session on {group.name}</span>
+            </button>
+          </section>
+        ))}
+
       </div>
 
       {/*

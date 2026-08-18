@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { PathRow } from './AdvancedSection'
 import { NotificationsSection, soundHelp } from './NotificationsSection'
 import { GeneralSection } from './GeneralSection'
+import { HelpSection } from './HelpSection'
+import { updateNote } from './AboutSection'
+import { SettingControl } from '../controls'
 import { FeaturesProvider } from '../../features/FeaturesProvider'
-import { getSetting, SETTINGS, type SettingValues } from '../settings-schema'
-import type { ConfigPath } from '../settings-bridge'
+import { SETTINGS, type Setting, type SettingValues } from '../settings-schema'
+import type { AboutInfo, ConfigPath } from '../settings-bridge'
 
 /**
  * Settings panes that used to argue with themselves.
@@ -41,36 +44,67 @@ function render(node: React.ReactElement): string {
 
 /* ------------------------------------------------------- General → Language -- */
 
-describe('a control with one choice is not drawn as a control', () => {
-  it('states the language instead of offering a dropdown that cannot choose', () => {
+/**
+ * The strongest version of this file's rule, and the one that took two passes.
+ *
+ * The language row was the original case here: an enabled `<select>` holding
+ * exactly "English", beside prose saying English is the only one there is. The
+ * first fix drew the row as a *value* instead of a control, which removed the
+ * contradiction and left the row.
+ *
+ * That was not enough, and his answer is why this section now asserts an
+ * absence:
+ *
+ *   > "It will be always English and it is English, so there is no selection.
+ *   > The option should not be there."
+ *
+ * A row that can only ever state a constant is still a row. In a window being
+ * cut down for people who are not programmers, it costs the same reading as a
+ * setting and gives back nothing that can be acted on.
+ */
+describe('a row that can only state a constant is not a row', () => {
+  it('draws no language row at all', () => {
     const html = render(
       <GeneralSection values={values} save={() => {}} bridge={{}} loading={false} goTo={() => {}} reload={() => {}} />,
     )
-    // The answer is still on screen — the row exists to answer the question.
-    expect(html).toContain('English')
-    // But there is no picker to open. This is the whole complaint: an enabled
-    // <select> holding exactly one option, beside a line saying English is the
-    // only one there is.
+    expect(html).not.toContain('Language')
+    expect(html).not.toContain('English')
     expect(html).not.toContain('<select')
   })
 
   /**
-   * And it must come back by itself.
+   * The *rule* the row used to demonstrate outlived it, and is still enforced
+   * where it always was: in `SettingControl`, keyed off the option count rather
+   * than off any particular id.
    *
-   * The rule lives in `SettingControl`, keyed off the option count, rather than
-   * in `GeneralSection` keyed off the id — so a second translation restores the
-   * picker without anybody remembering that a section file was hiding it.
+   * Exercised against a setting made up here, because the real table now has no
+   * one-option select. A rule that can only be tested through whichever row
+   * happens to use it is a rule that quietly stops being tested the day that row
+   * changes — which is exactly what just happened.
    */
-  it('is a rule about option counts, not a special case for the language row', () => {
-    const language = getSetting('general.language')
-    expect(language?.kind).toBe('select')
-    const theme = getSetting('appearance.theme')
+  it('still draws a one-option select as a value, whatever row has one next', () => {
+    const only: Setting = {
+      id: 'general.example',
+      section: 'general',
+      label: 'Example',
+      help: 'One option, on purpose.',
+      store: 'extra',
+      kind: 'select',
+      default: 'a',
+      options: [{ value: 'a', label: 'Only choice' }],
+    }
     const html = render(
-      <GeneralSection values={values} save={() => {}} bridge={{}} loading={false} goTo={() => {}} reload={() => {}} />,
+      <SettingControl setting={only} values={{ 'general.example': 'a' }} save={() => {}} />,
     )
+    expect(html).toContain('Only choice')
     expect(html).not.toContain('<select')
-    // Theme has three, and is drawn as a picker on its own pane.
-    expect(theme?.kind === 'select' && theme.options.length).toBeGreaterThan(1)
+
+    // And a second option brings the picker straight back, with nobody having
+    // to remember that a section file was hiding it.
+    const two: Setting = { ...only, options: [...only.options, { value: 'b', label: 'Second' }] }
+    expect(
+      render(<SettingControl setting={two} values={{ 'general.example': 'a' }} save={() => {}} />),
+    ).toContain('<select')
   })
 })
 
@@ -193,5 +227,71 @@ describe('a path row offers only the actions that can work', () => {
    */
   it('leaves Open live for a folder the app will create on the way', () => {
     expect(row(folder)).not.toMatch(/<button[^>]*disabled[^>]*>Open<\/button>/)
+  })
+})
+
+/* --------------------------------------------------- Help → check for updates -- */
+
+/**
+ * The last contradiction in this window, and the most direct one: a lit button
+ * with **"Press the button to check."** under it, on the one build where
+ * pressing it could answer nothing at all.
+ *
+ * The guard read `about !== null && !checkable`, so a build with no `app:about`
+ * channel — `about === null` — fell through it and stayed pressable, while the
+ * `??` chain beside it ran out of alternatives and printed the instruction. Two
+ * pieces of individually reasonable code, one sentence that could not be true.
+ *
+ * `updateNote` has a case per state now, which is why it is a function rather
+ * than a chain: only one of the three is reachable on any given machine, so the
+ * other two are only ever exercised here.
+ */
+describe('“press this” is only printed beside a button that can be pressed', () => {
+  const packaged: AboutInfo = {
+    name: 'Deck',
+    tagline: '',
+    version: '1.0.0',
+    electron: '',
+    chromium: '',
+    node: '',
+    platform: '',
+    arch: '',
+    license: null,
+    repository: null,
+    homepage: null,
+    updates: { packaged: true, feedPresent: true, checkable: true, detail: '' },
+  }
+
+  it('says why, rather than "press it", when the build details cannot be read', () => {
+    expect(updateNote(null, false)).toBe('Not while the build details cannot be read.')
+  })
+
+  it('prefers the main process’s own sentence wherever it has one', () => {
+    const fromSource = {
+      ...packaged,
+      updates: { packaged: false, feedPresent: false, checkable: false, detail: 'Run from source — updates are not checked.' },
+    }
+    expect(updateNote(fromSource, false)).toBe('Run from source — updates are not checked.')
+  })
+
+  it('says the build cannot tell, when it cannot and has not said why', () => {
+    expect(updateNote({ ...packaged, updates: null }, false)).toBe(
+      'This build cannot tell whether an update exists.',
+    )
+  })
+
+  it('invites the press only where the press does something', () => {
+    expect(updateNote(packaged, true)).toBe('Press the button to check.')
+  })
+
+  it('greys the button in every state that cannot check, and says so on hover', () => {
+    // Rendered through the pane it now lives on, because the button and the
+    // sentence are two elements and the bug was that they disagreed.
+    const html = render(
+      <HelpSection values={values} save={() => {}} bridge={{}} loading={false} goTo={() => {}} reload={() => {}} />,
+    )
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Check for updates<\/button>/)
+    expect(html).toContain('Not while the build details cannot be read.')
+    expect(html).not.toContain('Press the button to check.')
   })
 })

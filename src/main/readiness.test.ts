@@ -16,10 +16,16 @@ import {
   formatBytes,
   ignoreBlockFor,
   ignoreCovers,
+  isUnfilledSkeleton,
   listPaths,
   looksLikeSecretFile,
+  MACHINE_FIX_IDS,
   meaningfulLines,
   registerReadinessIpc,
+  toolMessage,
+  upgradeAgentCli,
+  upgradeCommandFor,
+  upgradeRouteFor,
   samplePathFor,
   scanReadiness,
   scoreChecks,
@@ -29,6 +35,8 @@ import {
   type ReadinessCheckId,
   type ReadinessReport,
   type ReadinessStatus,
+  type ToolRun,
+  type ToolRunner,
 } from './readiness'
 import { parseIgnoreFile } from './fs-tree'
 
@@ -164,7 +172,7 @@ function fake(
   status: ReadinessStatus,
   gate = false,
 ): ReadinessCheck {
-  return { id, title: id, status, weight: CHECK_WEIGHTS[id], detail: '', fix: null, gate }
+  return { id, title: id, status, weight: CHECK_WEIGHTS[id], detail: '', fix: null, gate, opens: null }
 }
 
 describe('scoreChecks', () => {
@@ -902,6 +910,305 @@ function fakeIpc(): { ipcMain: IpcMain; handlers: Map<string, Handler> } {
   } as unknown as IpcMain
   return { ipcMain, handlers }
 }
+
+/* ------------------------------------------------- a fix that fakes a pass -- */
+
+/**
+ * The half of the "create README" button that was missing.
+ *
+ * The review's words: *"The existing 'create README' button is the right idea
+ * but not done properly."* What was not done was the *next scan*. The skeleton
+ * that button writes has thirteen meaningful lines, so it cleared the README
+ * floor of five and the row turned green; the instructions skeleton cleared its
+ * floor of twelve **and** its "names a runnable command" test, on the strength
+ * of the empty fenced blocks in its own template. One click took a project from
+ * a red row to a tick with nothing about the project written anywhere.
+ *
+ * Both cases are pinned, because they failed for two different reasons and
+ * fixing one would look like fixing both.
+ */
+describe('a skeleton this app wrote is not a pass', () => {
+  it('says the README is still the skeleton, and offers to open it', async () => {
+    const dir = await tempProject()
+    const made = await applyReadinessFix(dir, 'create-readme')
+    expect(made.ok).toBe(true)
+
+    const report = await scanReadiness(dir)
+    const readme = byId(report, 'readme')
+    expect(readme.status).toBe('warn')
+    expect(readme.detail).toContain('skeleton')
+    // No machine can write this file for you, so the action is the file itself.
+    expect(readme.fix).toBeNull()
+    expect(readme.opens).toBe('README.md')
+  }, 20_000)
+
+  it('says the same of the instructions file it writes', async () => {
+    const dir = await tempProject()
+    expect((await applyReadinessFix(dir, 'create-claude-md')).ok).toBe(true)
+
+    const report = await scanReadiness(dir)
+    const instructions = byId(report, 'claude-md')
+    expect(instructions.status).toBe('warn')
+    expect(instructions.detail).toContain('skeleton')
+    expect(instructions.opens).not.toBeNull()
+  }, 20_000)
+
+  it('stops saying it the moment a real line is added', async () => {
+    const dir = await tempProject()
+    await applyReadinessFix(dir, 'create-readme')
+    const path = join(dir, 'README.md')
+    await writeFile(path, `${await readFile(path, 'utf8')}\nIt scans projects.\n`, 'utf8')
+
+    const report = await scanReadiness(dir)
+    expect(byId(report, 'readme').status).toBe('pass')
+  }, 20_000)
+
+  it('recognises a skeleton exactly, not by resemblance', () => {
+    const template = '# Name\n\n## Install\n\n<!-- fill me -->\n'
+    expect(isUnfilledSkeleton(template, template)).toBe(true)
+    // Deleting from it leaves it a skeleton; adding to it does not.
+    expect(isUnfilledSkeleton('# Name\n', template)).toBe(true)
+    expect(isUnfilledSkeleton(`${template}\nWhat this is.\n`, template)).toBe(false)
+    // An empty file is nothing rather than a skeleton, and the length checks
+    // that follow have something truer to say about it.
+    expect(isUnfilledSkeleton('   \n\n', template)).toBe(false)
+  })
+})
+
+/* ------------------------------------------------- every row can be acted on -- */
+
+/**
+ * The rule the whole readiness pass turns on: *"Every not-ready item needs an
+ * action button that actually does it, or a way to dismiss it. They should not
+ * see something they cannot do something about it."*
+ *
+ * Dismissal lives in the renderer, because putting a row away is a fact about a
+ * person rather than about a project. What the main process owes is the other
+ * half — a fix where one is possible, and otherwise the file the row is about,
+ * so the panel has something to open. This asserts the second half is present
+ * on every row that names a file, because a `null` there is invisible on screen:
+ * the row simply loses its button and nobody notices which row it was.
+ */
+describe('a row that cannot be fixed still names the file it is about', () => {
+  it('gives every file-shaped check somewhere to go', async () => {
+    const dir = await tempProject()
+    await write(dir, 'package.json', JSON.stringify({ name: 'x', scripts: {} }, null, 2))
+    await write(dir, 'tsconfig.json', '{}')
+    await write(dir, '.gitignore', 'node_modules/\n')
+    await write(dir, 'CLAUDE.md', GOOD_CLAUDE_MD)
+    await write(dir, 'README.md', GOOD_README)
+
+    const report = await scanReadiness(dir)
+    for (const id of ['claude-md', 'readme', 'gitignore', 'test-script', 'lint-script'] as const) {
+      expect(byId(report, id).opens, id).not.toBeNull()
+    }
+    // And the two that are about no single file say so rather than inventing
+    // one. A button that opened the wrong thing would be worse than none.
+    expect(byId(report, 'git-clean').opens).toBeNull()
+    expect(byId(report, 'lockfile').opens).toBeNull()
+  }, 20_000)
+})
+
+/* ------------------------------------------------------- the new two fixes -- */
+
+describe("replacing npm's placeholder test script", () => {
+  const placeholder = 'echo "Error: no test specified" && exit 1'
+
+  it('is offered when a runner is installed, and replaces only the placeholder', async () => {
+    const dir = await tempProject()
+    await write(
+      dir,
+      'package.json',
+      JSON.stringify({ name: 'x', scripts: { test: placeholder }, devDependencies: { vitest: '^4' } }, null, 2),
+    )
+
+    const before = byId(await scanReadiness(dir), 'test-script')
+    expect(before.status).toBe('fail')
+    // It had no button at all before this pass, for no better reason than that
+    // `addScript` refuses a key that exists — while this is the easiest of the
+    // three failures to repair, because the value is a string npm generated.
+    expect(before.fix?.id).toBe('replace-test-script')
+    expect(before.fix?.destructive).toBe(true)
+
+    const result = await applyReadinessFix(dir, 'replace-test-script')
+    expect(result.ok).toBe(true)
+    expect(JSON.parse(await readFile(join(dir, 'package.json'), 'utf8')).scripts.test).toBe('vitest run')
+    expect(byId(await scanReadiness(dir), 'test-script').status).toBe('pass')
+  }, 20_000)
+
+  it('refuses to overwrite a script somebody wrote', async () => {
+    const dir = await tempProject()
+    await write(
+      dir,
+      'package.json',
+      JSON.stringify({ name: 'x', scripts: { test: 'make check' }, devDependencies: { vitest: '^4' } }, null, 2),
+    )
+    const result = await applyReadinessFix(dir, 'replace-test-script')
+    expect(result.ok).toBe(false)
+    expect(JSON.parse(await readFile(join(dir, 'package.json'), 'utf8')).scripts.test).toBe('make check')
+  }, 20_000)
+})
+
+describe('generating a lockfile', () => {
+  it('is offered for an npm project and not for one that declares another tool', async () => {
+    const npmish = await tempProject()
+    await write(npmish, 'package.json', JSON.stringify({ name: 'x' }, null, 2))
+    expect(byId(await scanReadiness(npmish), 'lockfile').fix?.id).toBe('create-lockfile')
+
+    const pnpmish = await tempProject()
+    await write(pnpmish, 'package.json', JSON.stringify({ name: 'x', packageManager: 'pnpm@9.0.0' }, null, 2))
+    const row = byId(await scanReadiness(pnpmish), 'lockfile')
+    // Not a missing button: the row says whose job it is instead, because a
+    // `package-lock.json` in a pnpm project is a worse state than none.
+    expect(row.fix).toBeNull()
+    expect(row.detail).toContain('pnpm@9.0.0')
+  }, 20_000)
+
+  it('refuses rather than writing the wrong kind of lockfile', async () => {
+    const dir = await tempProject()
+    await write(dir, 'package.json', JSON.stringify({ name: 'x', packageManager: 'yarn@4.0.0' }, null, 2))
+    const result = await applyReadinessFix(dir, 'create-lockfile')
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('yarn@4.0.0')
+  }, 20_000)
+
+  it('refuses when a lockfile is already there', async () => {
+    const dir = await tempProject()
+    await write(dir, 'package.json', JSON.stringify({ name: 'x' }, null, 2))
+    await write(dir, 'pnpm-lock.yaml', 'lockfileVersion: 9\n')
+    const result = await applyReadinessFix(dir, 'create-lockfile')
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('pnpm-lock.yaml')
+  }, 20_000)
+})
+
+/* ------------------------------------------------------ the machine-level fix -- */
+
+/**
+ * A stale agent CLI is a readiness problem with no folder attached.
+ *
+ * It is the failure the review actually hit — *"Gemini reports 'authentication
+ * successful'… then fails with 'this client is no longer supported'"* — and it
+ * is the same fact in every project on the machine. `browser-signin.ts` measures
+ * it; this module owns the act, because `readiness:fix` is the only route the
+ * renderer already has that can run something.
+ */
+describe('upgrading the agent CLI', () => {
+  it('asks the package managers rather than guessing', async () => {
+    const asked: string[] = []
+    const probe = async (command: string, args: string[]) => {
+      asked.push(`${command} ${args[0]}`)
+      return { ok: command === 'npm', output: '' }
+    }
+    expect(await upgradeRouteFor(probe)).toBe('npm')
+    // brew first, and npm only because brew said no — a machine where both
+    // claim it runs the one that put the binary on the PATH.
+    expect(asked).toEqual(['brew list', 'npm ls'])
+  })
+
+  it('answers null when neither manager claims it', async () => {
+    expect(await upgradeRouteFor(async () => ({ ok: false, output: '' }))).toBeNull()
+  })
+
+  it('quotes the tool’s diagnosis, not the last thing it printed', () => {
+    /*
+     * Seen on screen before it was fixed. A machine that was already current
+     * printed a download tick and then the warning, and the row quoted both —
+     * "✔︎ JSON API packages.arm64_golden_gate.jws.json Warning: gemini-cli
+     * 0.46.0 already installed". The half that means something is the warning.
+     */
+    expect(
+      toolMessage('==> Downloading\n✔︎ JSON API packages.jws.json\nWarning: x 1.2.3 already installed'),
+    ).toBe('Warning: x 1.2.3 already installed')
+    expect(toolMessage('npm ERR! code EACCES\nnpm ERR! A complete log is in /tmp/log')).toBe(
+      'npm ERR! A complete log is in /tmp/log',
+    )
+    // A tool that prefixes nothing still gets its last word through.
+    expect(toolMessage('one\ntwo\n\n')).toBe('two')
+    expect(toolMessage('   \n\n')).toBe('')
+  })
+
+  it('runs each route with its own command', () => {
+    expect(upgradeCommandFor('brew')).toEqual({ command: 'brew', args: ['upgrade', 'gemini-cli'] })
+    expect(upgradeCommandFor('npm')).toEqual({
+      command: 'npm',
+      args: ['install', '-g', '@google/gemini-cli@latest'],
+    })
+  })
+
+  /**
+   * Everything below runs through the injected runner and never spawns
+   * anything, and that is not a stylistic choice.
+   *
+   * The first draft of this block called the real thing to prove the channel
+   * dispatched — and it worked: it upgraded this machine's agent CLI from
+   * 0.32.1 to 0.46.0 mid-suite. That is the right *outcome* for a person
+   * pressing the button and an unacceptable one for a test, so the seam went in
+   * and the act is exercised against a fake machine instead. `ToolRunner` in
+   * `readiness.ts` carries the same note.
+   */
+  const machine = (script: Record<string, ToolRun>, log: string[] = []): ToolRunner => {
+    return async (command, args) => {
+      const key = `${command} ${args[0]}`
+      log.push(key)
+      return script[key] ?? { ok: false, output: 'not found' }
+    }
+  }
+
+  it('reports the version it moved from and to, read from the binary', async () => {
+    const versions = ['0.32.1', '0.46.0']
+    const exec: ToolRunner = async (command, args) => {
+      if (command === 'gemini') return { ok: true, output: versions.shift() ?? '0.46.0' }
+      if (command === 'brew' && args[0] === 'list') return { ok: true, output: 'gemini-cli 0.32.1' }
+      return { ok: true, output: 'Upgrading gemini-cli' }
+    }
+    const result = await upgradeAgentCli(exec)
+    expect(result.ok).toBe(true)
+    // The package manager saying it succeeded is not the measurement — an
+    // upgrade that installs somewhere the PATH does not reach succeeds by every
+    // measure the package manager has and leaves the person where they were.
+    expect(result.message).toContain('0.32.1')
+    expect(result.message).toContain('0.46.0')
+  })
+
+  it('says nothing moved when the binary still answers the same version', async () => {
+    const exec = machine({
+      'gemini --version': { ok: true, output: '0.32.1' },
+      'brew list': { ok: true, output: 'gemini-cli 0.32.1' },
+      'brew upgrade': { ok: false, output: 'Error: gemini-cli 0.32.1 already installed' },
+    })
+    const result = await upgradeAgentCli(exec)
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('0.32.1')
+    // The tool's own last words, which `execFile` hides on the error object and
+    // which are the whole difference between a bug report and a fix.
+    expect(result.message).toContain('already installed')
+  })
+
+  it('refuses, with both commands, when neither manager claims it', async () => {
+    const exec = machine({ 'gemini --version': { ok: true, output: '0.32.1' } })
+    const result = await upgradeAgentCli(exec)
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('brew upgrade gemini-cli')
+    expect(result.message).toContain('npm install -g @google/gemini-cli@latest')
+  })
+
+  it('refuses when the CLI is not installed at all', async () => {
+    const result = await upgradeAgentCli(machine({}))
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('not installed')
+  })
+
+  it('is the only fix that may arrive without a project path', async () => {
+    // The one line of the channel this pins: a machine fix is dispatched before
+    // the path is validated, and everything else still is not.
+    expect([...MACHINE_FIX_IDS]).toEqual(['upgrade-agent-cli'])
+
+    const { ipcMain, handlers } = fakeIpc()
+    registerReadinessIpc(ipcMain)
+    await expect(handlers.get('readiness:fix')?.(null, '', 'create-readme')).rejects.toThrow(/absolute/)
+  })
+})
 
 describe('registerReadinessIpc', () => {
   it('registers exactly the two channels', () => {

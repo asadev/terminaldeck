@@ -14,16 +14,17 @@
  *
  * ## What this module does do
  *
- * Two translations, and they are separate because they answer to two different
- * modules that must not learn about each other:
+ * One translation: {@link focusOf} turns a stop into a {@link FocusTarget},
+ * which is what the overlay understands. That type is a closed set with no
+ * selector escape hatch, for reasons `focus-target.ts` sets out at length, and
+ * this is the only place a wire stop becomes one.
  *
- *  - {@link focusOf} turns a stop into a {@link FocusTarget}, which is what the
- *    overlay understands. That type is a closed set with no selector escape
- *    hatch, for reasons `focus-target.ts` sets out at length, and this is the
- *    only place a wire stop becomes one.
- *  - {@link pacedOf} turns a stop into a {@link PacedStop}, which is the two
- *    pieces of text the reading-time estimate measures. `estimate.ts` has never
- *    heard of a session.
+ * There used to be a second, `pacedOf`, which reduced a stop to the two pieces
+ * of text the reading-time estimate measured. It went with `estimate.ts` when
+ * driving mode stopped being a read-along: the scan holds every stop for the
+ * same 260 ms whatever it says, so nothing in this feature measures text any
+ * more, and a converter into a shape nobody consumes is dead weight that reads
+ * like an API.
  *
  * ## Why the reason set is written out again here
  *
@@ -37,7 +38,6 @@
  * than one reading "Tool failing" and infinitely better than a blank panel.
  */
 
-import type { PacedStop } from './estimate'
 import type { DriveAnchor, FocusTarget } from '../../driving/focus-target'
 
 /* ------------------------------------------------------------------ shapes -- */
@@ -55,7 +55,7 @@ export type StopReason =
   | 'question-asked'
   | 'decision'
 
-export type TourAnchorAt = 'git-file' | 'usage-strip'
+export type TourAnchorAt = 'git-file' | 'usage'
 
 export interface TourStopBase {
   sessionId: string
@@ -111,6 +111,19 @@ export interface TourRecord {
   askedBy: 'user' | 'offer'
   question: string
   headline: string
+  /**
+   * Whether this scan was put on the screen or done quietly.
+   *
+   * Mirrors `main/deck-control/tour.ts`, which is canonical. Interactive mode
+   * off does the same work and shows none of it, so a background record has no
+   * stop with a `shownAt` — and the answer card has to know that means "nothing
+   * was drawn" rather than "nothing was found", which are opposite claims made
+   * from identical data.
+   *
+   * Optional on the way in, because records written before the toggle existed
+   * are still on disk and are all screen scans.
+   */
+  shown?: 'screen' | 'background'
   stops: TourStopRecord[]
   stoppedAfter: number | null
   dropped: DroppedStop[]
@@ -230,8 +243,8 @@ function anchorOf(
   cwd: string | null,
 ): DriveAnchor | null {
   switch (stop.at) {
-    case 'usage-strip':
-      return { at: 'usage-strip', sessionId: stop.sessionId }
+    case 'usage':
+      return { at: 'usage', sessionId: stop.sessionId }
     case 'git-file':
       if (stop.path === undefined || cwd === null) return null
       return { at: 'git-file', cwd, path: stop.path }
@@ -263,8 +276,8 @@ export function focusOfRecord(stop: TourStopRecord): FocusTarget | null {
         ? null
         : { kind: 'anchor', anchor: { at: 'message', messageId: stop.messageId } }
     case 'anchor':
-      if (stop.at === 'usage-strip') {
-        return { kind: 'anchor', anchor: { at: 'usage-strip', sessionId: stop.sessionId } }
+      if (stop.at === 'usage') {
+        return { kind: 'anchor', anchor: { at: 'usage', sessionId: stop.sessionId } }
       }
       if (stop.at === 'git-file' && stop.path !== undefined && stop.cwd !== '') {
         return { kind: 'anchor', anchor: { at: 'git-file', cwd: stop.cwd, path: stop.path } }
@@ -273,19 +286,6 @@ export function focusOfRecord(stop: TourStopRecord): FocusTarget | null {
     default:
       return null
   }
-}
-
-/**
- * The stop as the reading-time estimate sees it: two pieces of text.
- *
- * An anchor stop has no quote — `main/deck-control/tour.ts` refuses to carry one
- * for it, because there is no source to check "the row in the sidebar" against —
- * so it is paced on its note alone. That is correct rather than a shortfall: the
- * note is all there is to read, and `MIN_DWELL_MS` keeps even a three-word one
- * on screen long enough not to read as a flicker.
- */
-export function pacedOf(stop: TourStop): PacedStop {
-  return { quote: stop.kind === 'anchor' ? '' : stop.quote, note: stop.note }
 }
 
 /**

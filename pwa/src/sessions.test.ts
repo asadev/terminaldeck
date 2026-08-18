@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { ProtocolErrorCode, RemoteSession, ServerMessage } from './protocol-client'
 import {
+  closeOffered,
+  closeQuestion,
   formatSince,
   noticeAfter,
   sessionTone,
@@ -194,5 +196,42 @@ describe('the notice above the session list', () => {
     expect(noticeAfter(standing, { t: 'output', id: 'a', data: 'x' }, 'Mac')).toBe(standing)
     expect(noticeAfter(standing, { t: 'sessions', sessions: [] }, 'Mac')).toBe(standing)
     expect(noticeAfter(standing, { t: 'pong' }, 'Mac')).toBe(standing)
+  })
+})
+
+describe('closing a session from a browser', () => {
+  it('is offered only by a machine that advertised it', () => {
+    /*
+     * The whole of the negotiation, and it matters more for this verb than for
+     * any other: closing is not undoable, so a Close drawn against a host that
+     * would refuse it is a control whose outcome a person cannot predict until
+     * after they have pressed it.
+     */
+    expect(closeOffered(['localhost', 'create', 'upload'])).toBe(false)
+    expect(closeOffered(['create', 'close'])).toBe(true)
+  })
+
+  it('is not implied by being able to start one', () => {
+    // The public demo box is exactly this shape: it hands a stranger a shell and
+    // withholds the verb that would let them end somebody else's.
+    expect(closeOffered(['create'])).toBe(false)
+  })
+
+  it('names the session, the consequence and that it is final', () => {
+    const asked = closeQuestion(session({ title: 'terminaldeck' }))
+    expect(asked).toContain('terminaldeck')
+    // The two facts a person is actually deciding on. Asserted as substrings
+    // rather than as the whole sentence, so this pins the *content* and leaves
+    // the wording free to be improved.
+    expect(asked).toContain('stops')
+    expect(asked).toContain('does not come back')
+  })
+
+  it('asks about the row it is on, not about “this session”', () => {
+    // A confirmation that could not name what it is about is a confirmation
+    // people answer by reflex — and this one is drawn in a list where the row
+    // above and the row below look almost identical.
+    expect(closeQuestion(session({ title: 'invoices-api' }))).toContain('invoices-api')
+    expect(closeQuestion(session({ title: 'invoices-web' }))).toContain('invoices-web')
   })
 })

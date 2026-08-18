@@ -6,9 +6,11 @@ import { SettingsPanel } from '../SettingsWindow'
 import { sectionsFor } from '../settings-schema'
 import { CopilotSection, hasNeverStarted, logTrustLine } from './CopilotSection'
 import {
+  INTERACTIVE_SETTING,
   resolveCopilotBridge,
   toActionLog,
   toCopilotState,
+  toInteractiveDriving,
   toMemoryReport,
   toRoutineRows,
 } from './copilot-bridge'
@@ -63,6 +65,10 @@ function fakeDeck(): Record<string, unknown> {
     routinesPause: answer,
     routinesResume: answer,
     routinesDelete: answer,
+    // The one stored value this pane owns. See "the switch that decides whether
+    // it shows its work" at the foot of this file.
+    getSettings: answer,
+    setSettings: answer,
   }
 }
 
@@ -125,8 +131,7 @@ describe('the claims the pane makes', () => {
     const markup = html()
     for (const heading of [
       'Its session',
-      'What it reads at startup',
-      'Its memory',
+      'Its files',
       'The action log',
       'What it can reach',
       'Routines',
@@ -136,30 +141,39 @@ describe('the claims the pane makes', () => {
   })
 
   it('says the memory is the copilot’s own conversation, and calls that a rule', () => {
-    const markup = html()
-    expect(markup).toContain('One file per fact')
-    // The promise worth making visible, per `COPILOT-DESIGN.md`: what it reads
-    // out of another session is evidence it reports on, never a fact it keeps.
-    expect(markup).toContain('never another session')
-    expect(markup).toContain('evidence it reports on')
     /*
-     * And which *kind* of promise it is. While the copilot was jailed, other
-     * sessions' transcripts sat outside its boundary, so this could be told as
-     * something the machine enforced — and even then it was only half true,
-     * because `sessions.transcript` handed them over by design. It is now a rule
-     * in its instructions and nothing else, and a screen that let a reader go on
-     * believing otherwise would be the defect this whole feature keeps hunting.
+     * Asserted against the source rather than the rendered page, because this
+     * paragraph moved behind the ⓘ when the memory list became a folder button —
+     * and a `HoverNote` renders nothing until somebody hovers it, which is the
+     * whole point of it. The claim is still made, in the same words, one hover
+     * from the row it is about.
+     *
+     * The promise itself, per `COPILOT-DESIGN.md`: what it reads out of another
+     * session is evidence it reports on, never a fact it keeps. And which *kind*
+     * of promise it is — while the copilot was jailed this could be told as
+     * something the machine enforced, and it is now a rule in its instructions
+     * and nothing else. A screen that let a reader go on believing otherwise
+     * would be the defect this whole feature keeps hunting.
      */
-    expect(markup).toContain('a rule in its instructions rather than something the machine refuses')
+    expect(SOURCE).toContain('One file per fact')
+    expect(SOURCE).toContain('never another session')
+    expect(SOURCE).toContain('evidence it reports on')
+    expect(SOURCE).toContain('a rule in its instructions rather than something the machine')
+    // And the row it hangs off is on the page, with its one button.
+    expect(html()).toContain('Its memory')
   })
 
   it('says where the action log lives and why that is the right way round', () => {
-    const markup = html()
-    expect(markup).toContain('kept outside the copilot')
-    // The mechanism, not just the placement. An audit log the audited party can
-    // append to, edit or delete is not one — and the copilot's single way to add
-    // a line is a tool call that is itself recorded.
-    expect(markup).toContain('log.note')
+    // Behind the ⓘ now — see the memory case above for why this reads the
+    // source. The mechanism, not just the placement: an audit log the audited
+    // party can append to, edit or delete is not one, and the copilot's single
+    // way to add a line is a tool call that is itself recorded.
+    expect(SOURCE).toContain('kept outside the copilot')
+    expect(SOURCE).toContain('log.note')
+    // What stays on the page with the list closed: whether the file can be
+    // trusted at all. Hiding *that* behind the same button would hide it exactly
+    // when it matters.
+    expect(html()).toContain('The action log')
   })
 
   it('says out loud that the copilot is not sandboxed, before it names any refusal', () => {
@@ -200,28 +214,35 @@ describe('the claims the pane makes', () => {
     expect(markup).toContain('a permission an agent can grant itself is not a permission')
   })
 
-  it('separates Claude Code’s own prompts from this app’s confirmation', () => {
+  it('separates the CLI’s own prompts from this app’s confirmation', () => {
     /*
-     * Two permission systems that look like one. Claude Code's prompts follow
-     * the person's own `permissions.defaultMode`; this app's confirmation is
-     * asked by the desktop after the tier check and cannot be reached from that
-     * file at all. Somebody who turns off the first and believes they turned off
-     * the second — or who sees the second and assumes the first is on — has been
+     * Two permission systems that look like one. The CLI's prompts follow the
+     * person's own `permissions.defaultMode`; this app's confirmation is asked
+     * by the desktop after the tier check and cannot be reached from that file
+     * at all. Somebody who turns off the first and believes they turned off the
+     * second — or who sees the second and assumes the first is on — has been
      * misled by this screen, so this screen has to say it.
+     *
+     * The path stays and the vendor name goes, which is the naming sweep's line
+     * drawn on the one paragraph where it is genuinely hard: told only that
+     * "some settings file" governs their prompts, nobody can go and change it,
+     * so the prose describes the actor by category and the `<code>` discloses
+     * where the file is. `src/neutral-naming.test.ts` holds both halves.
      */
     const markup = html()
     expect(markup).toContain('~/.claude/settings.json')
     expect(markup).toContain('This app does not change that setting in either direction')
-    expect(markup).toContain('Nothing in your Claude Code settings turns it off')
+    expect(markup).toContain('The CLI the copilot runs on has prompts of its own')
+    expect(markup).toContain('Nothing in that settings file turns it off')
     // And the old half-truth is gone: under a bypassing default the CLI does
     // not ask before it edits a file, so the screen must not say it does.
     expect(markup).not.toContain('Anything it cannot undo, it asks about first')
   })
 
   it('says routines are kept where the copilot cannot write them', () => {
-    const markup = html()
-    expect(markup).toContain('cannot reach them')
-    expect(markup).toContain('the confirmation a person is owed')
+    // The heading line is on the page; the mechanism is behind the ⓘ.
+    expect(html()).toContain('cannot reach them')
+    expect(SOURCE).toContain('may read and cannot write')
   })
 
   it('says the account is one of yours rather than a login the copilot keeps', () => {
@@ -463,41 +484,89 @@ describe('the bridge and its narrowing', () => {
 
 /* ------------------------------------------------------------- editable -- */
 
-describe('the three files a person can change here', () => {
+describe('the files, and the one button on each row that acts', () => {
   const EDITOR = readFileSync(join(SRC, 'renderer/settings/sections/CopilotEditor.tsx'), 'utf8')
+  const markup = (): string => withDeck(fakeDeck(), () => renderToStaticMarkup(<CopilotSection />))
 
-  it('gives all three files an editor, and the log none', () => {
+  /**
+   * The instruction this whole block was rebuilt around.
+   *
+   *   > *"Every file needs an Edit button beside it, opening the same editor
+   *   > style already used, and saving."*
+   *   > *"This is busy for nothing, for no sensible reason."*
+   *
+   * The pane used to draw an ordered list of absolute paths with no controls on
+   * any of them, then a second list of the same memory files with an editor
+   * each. Now every row carries exactly one button and the boxes are behind it.
+   */
+  it('gives every file a button, and the right verb for what the app can do to it', () => {
+    const html = markup()
+    // Edit for the file a person owns and this app writes.
+    expect(html).toContain('>Edit</button>')
+    // View for the two it generates: they are shown in full and cannot be
+    // hand-edited, because they describe what is wired rather than an opinion.
+    expect(html).toContain('>View</button>')
+    // Open for the folder that is not this app's to write into.
+    expect(html).toContain('>Open the folder</button>')
+  })
+
+  it('opens nothing until a button is pressed', () => {
     /*
-     * Asad, 2026-08-17: *"none of them is clickable or editable … I should be
-     * able to click and make changes and click save."* Three `FileEditor`s and
-     * no more: the instruction file, one memory, one routine.
-     *
-     * Counted in the source rather than in the markup, because
-     * `renderToStaticMarkup` runs no effects — so nothing has been read off
-     * disk, and every one of these boxes correctly draws its "reading…" or
-     * "there is no file yet" state instead. `CopilotEditor.test.tsx` exercises
-     * the box itself against props.
+     * Two textareas used to be on screen the moment the pane opened — the
+     * instruction file and the generated tool list — which is most of why it was
+     * a screen and a half long. They are behind their own buttons now, and the
+     * read that fills them happens on the press rather than on mount.
      */
-    expect(SOURCE.match(/<FileEditor/g) ?? []).toHaveLength(3)
-    expect(SOURCE).toContain('label="CLAUDE.md"')
+    expect(markup()).not.toContain('copilot-editor-box')
   })
 
-  it('draws the state it is really in before anything has been read', () => {
-    // And the state a static render *is* in has to be honest rather than an
-    // empty box over a file nobody has looked at — a box somebody would type
-    // into and save.
-    const markup = withDeck(fakeDeck(), () => renderToStaticMarkup(<CopilotSection />))
-    expect(markup).toContain('The file does not exist')
-    expect(markup).not.toContain('copilot-editor-box')
-  })
-
-  it('says a changed CLAUDE.md applies at the next start, not mid-conversation', () => {
+  it('never lists memory as files, and offers the folder instead', () => {
     /*
-     * The claim the whole feature stands or falls on. The CLI reads the file as
-     * the session spawns and never again, so an editor that let somebody save
-     * and walk away believing the running copilot had changed would be worse
-     * than no editor at all. Both branches are pinned: the sentence at rest, and
-     * the Restart offered while something is running.
+     * Asad, 2026-08-17: *"Memory is the exception — do not list dated files. One
+     * Open folder button… They don't need to edit memories. They need to edit the
+     * character, identity and that related stuff only."*
+     *
+     * Checked against a report holding three real memories, because the failure
+     * to catch is the populated pane rather than the empty one. Nothing that
+     * renders may name a memory file, and there is no writer or deleter left in
+     * the source to bring the list back by accident.
+     */
+    const html = markup()
+    expect(html).toContain('Its memory')
+    expect(html).toContain('Open the folder')
+    expect(SOURCE).not.toContain('copilotMemoryWrite')
+    expect(SOURCE).not.toContain('copilotMemoryDelete')
+    expect(SOURCE).not.toContain('copilotMemoryRead')
+    // And the count is drawn from the report rather than a list being mapped.
+    expect(SOURCE).toContain('memory?.facts.length')
+  })
+
+  it('has two editors and no more: its instructions, and one routine', () => {
+    /*
+     * Counted in the source rather than in the markup, because
+     * `renderToStaticMarkup` runs no effects and both boxes are closed anyway.
+     * `CopilotEditor.test.tsx` exercises the box itself against props.
+     */
+    expect(SOURCE.match(/<FileEditor/g) ?? []).toHaveLength(2)
+    /*
+     * No box on this pane spells a filename out; each derives its label from the
+     * path it is actually pointed at. The instructions editor used to be
+     * `label="CLAUDE.md"` — a brand on a control that has nothing to do with any
+     * one agent, and the wrong file besides: the box edits
+     * `<userData>/copilot-layer/instructions.md`, so a screen reader announced a
+     * filename that is not on disk anywhere.
+     */
+    expect(SOURCE).not.toContain('label="CLAUDE.md"')
+    expect(SOURCE.match(/label=\{baseName\(/g) ?? []).toHaveLength(4)
+  })
+
+  it('says a changed instruction file applies at the next start, not mid-conversation', () => {
+    /*
+     * The claim the whole feature stands or falls on. The CLI is handed the file
+     * as the session spawns and never again, so an editor that let somebody save
+     * and walk away believing the running copilot had changed would be worse than
+     * no editor at all. Both branches are pinned: the sentence at rest, and the
+     * Restart offered while something is running.
      */
     expect(SOURCE).toContain('the next time it starts')
     expect(SOURCE).toContain('restart it to hand it the new one')
@@ -508,27 +577,14 @@ describe('the three files a person can change here', () => {
     expect(restart.slice(0, 400)).toContain('ensureCopilot')
   })
 
-  it('never lets a truncated memory be saved back over the whole file', () => {
-    /*
-     * The one way an editor on this pane could destroy data, and it is quiet:
-     * `readMemoryFact` stops at 256 KB, so a Save from a box holding the head of
-     * a longer file would write exactly that head. The reader already reports
-     * `truncated`; this is the pane refusing to act on it, with the sentence
-     * saying where to go instead.
-     */
-    expect(SOURCE).toContain('truncated')
-    expect(SOURCE).toContain('throw the rest of it away')
-  })
-
-  it('says a saved routine takes effect straight away, unlike the other two', () => {
-    // Three editors, three different answers to "when does this apply", and the
-    // pane is not allowed to be quiet about any of them.
+  it('says a saved routine takes effect straight away, unlike the instructions', () => {
+    // Two editors, two different answers to "when does this apply", and the pane
+    // is not allowed to be quiet about either.
     expect(SOURCE).toContain('the next time this routine fires, it fires on the new file')
-    expect(SOURCE).toContain('its memory is read as the session spawns')
   })
 
   it('makes every editor state when its edit takes effect', () => {
-    // `effect` is required on the component rather than optional, so a fourth
+    // `effect` is required on the component rather than optional, so a third
     // editor added later cannot be silent about this by omission.
     const props = EDITOR.slice(EDITOR.indexOf('interface FileEditorProps'), EDITOR.indexOf('export function FileEditor'))
     expect(props).toContain('effect: string')
@@ -545,26 +601,66 @@ describe('the three files a person can change here', () => {
   it('goes clean the moment a save lands, rather than staying dirty', () => {
     /*
      * A real defect, caught on the rendered pane rather than in a test: after a
-     * successful memory save the box still said "Unsaved." and Save was still
-     * blue, because the editor compares its draft against the text the section
-     * last *read* — and that read happened when the fact was opened. Somebody
-     * seeing that presses Save again and then doubts the first press.
-     *
-     * All three writers write verbatim, so the bytes just sent are the bytes on
-     * disk and there is nothing to re-read. One assertion per editor.
+     * successful save the box still said "Unsaved." and Save was still blue,
+     * because the editor compares its draft against the text the section last
+     * *read*. Somebody seeing that presses Save again and then doubts the first
+     * press. Both writers write verbatim, so the bytes just sent are the bytes on
+     * disk and there is nothing to re-read.
      */
-    expect(SOURCE.match(/setText\(next\)/g) ?? []).toHaveLength(3)
+    expect(SOURCE).toContain('yours.accept(next)')
+    expect(SOURCE).toContain('setText(next)')
   })
 
   it('keeps a half-typed draft through a reload that changed nothing', () => {
     /*
      * The pane re-reads everything after every action, so a box controlled
      * directly by the loaded text would lose an edit in progress every time
-     * somebody deleted a memory elsewhere on the pane. A draft survives a reload
-     * that brought back the same bytes and yields to one that did not, because
-     * keeping it there would mean saving over somebody else's write.
+     * something else on the pane finished. A draft survives a reload that brought
+     * back the same bytes and yields to one that did not, because keeping it
+     * there would mean saving over somebody else's write.
      */
     expect(EDITOR).toContain('seen.current !== text')
+  })
+})
+
+describe('the ⓘ opens a popup rather than growing the pane', () => {
+  /**
+   * Asad, 2026-08-17: *"the ⓘ dot shows its detail **on hover, as a popup** —
+   * not by expanding the pane downward."*
+   *
+   * The disclosure this replaced (`Info` + `useMore` + `MoreBody`) inserted the
+   * paragraph into the flow, so reading the second explanation on a six-block
+   * pane moved the third somewhere else. Pinned in the source because a static
+   * render draws no popup at all — which is itself the point: nothing of it is
+   * on the page until somebody hovers.
+   */
+  it('uses HoverNote, and none of the expanding controls', () => {
+    expect(SOURCE).toContain('HoverNote')
+    expect(SOURCE).not.toContain('MoreBody')
+    expect(SOURCE).not.toContain('useMore')
+    expect(SOURCE).not.toMatch(/<Info\b/)
+  })
+
+  it('draws no explanation body on the page itself', () => {
+    const html = withDeck(fakeDeck(), () => renderToStaticMarkup(<CopilotSection />))
+    expect(html).not.toContain('settings-info-body')
+  })
+
+  /**
+   * A popup nobody can read is worse than a paragraph. These are hover-sized —
+   * a ceiling a little above where they actually sit, in the spirit of
+   * `copy-length.test.tsx`: the point is that one cannot quietly double.
+   */
+  it('keeps every popup short enough to read in one', () => {
+    for (const [, text] of SOURCE.matchAll(/more=\{\s*([\s\S]*?)\n\s*\}/g)) {
+      const words = text
+        .replace(/'\s*\+\s*\n?\s*'/g, ' ')
+        .replace(/[`'"]/g, ' ')
+        .trim()
+        .split(/\s+/)
+        .filter((word) => word !== '').length
+      expect(words).toBeLessThanOrEqual(60)
+    }
   })
 })
 
@@ -587,5 +683,76 @@ describe('the action log stays read-only', () => {
     expect(block).toContain('copilotActions')
     expect(block).not.toContain('copilotActionsWrite')
     expect(block).not.toContain('copilotActionsAppend')
+  })
+})
+
+describe('the switch that decides whether it shows its work', () => {
+  /**
+   * Asad, 2026-08-17, asking for it by name and for both halves of it:
+   *
+   *   > *"Interactive mode ON — the visible scan. Interactive mode OFF — it does
+   *   > the work in the background and returns the final answer normally, with
+   *   > none of the driving."*
+   *
+   * Both modes are required, which makes the switch required: a feature with two
+   * intended states and one door into them has one state in practice. The one
+   * door it had was *"Don't show me next time"* in the scan panel — the right
+   * place to turn it off, and no place at all to turn it back on. Somebody who
+   * pressed it once had silently given up the feature.
+   */
+  const markup = (): string => withDeck(fakeDeck(), () => renderToStaticMarkup(<CopilotSection />))
+
+  it('is on the pane, in his words', () => {
+    expect(markup()).toContain('Show me what it is looking at')
+  })
+
+  it('writes the key the main process reads before it stages a scan', () => {
+    /*
+     * The strongest thing this file can pin. The two constants live on opposite
+     * sides of a bridge that carries `unknown`, so a rename on one side is not a
+     * compile error and not a test failure anywhere else — it is a switch that
+     * moves and changes nothing, which is precisely the class of defect this
+     * whole pass is about.
+     */
+    const tool = readFileSync(join(SRC, 'main/deck-control/tour-tool.ts'), 'utf8')
+    const key = /INTERACTIVE_KEY = '([^']+)'/.exec(tool)?.[1]
+    expect(key).toBe(INTERACTIVE_SETTING)
+    expect(INTERACTIVE_SETTING).toBe('copilot.interactive')
+  })
+
+  it('reads the default exactly as the main process reads it', () => {
+    /*
+     * Anything other than an explicit `false` is on. The key is deliberately not
+     * in the settings schema — this pane is handed none of the settings window's
+     * values, so there is no schema row to carry a default — and `settings-extra`
+     * keeps keys it does not know without filling one in. So the default lives in
+     * whoever reads the value, and two readers with two defaults would put a
+     * switch on screen that disagrees with the behaviour it describes.
+     */
+    expect(toInteractiveDriving({ values: {} })).toBe(true)
+    expect(toInteractiveDriving({ values: { [INTERACTIVE_SETTING]: false } })).toBe(false)
+    expect(toInteractiveDriving({ values: { [INTERACTIVE_SETTING]: true } })).toBe(true)
+    // The bare map as well as the envelope, because `settings:get` has answered
+    // with both shapes across builds.
+    expect(toInteractiveDriving({ [INTERACTIVE_SETTING]: false })).toBe(false)
+    // Nothing readable at all is the documented default rather than off, which
+    // would silently withdraw the feature from somebody who never chose to.
+    expect(toInteractiveDriving(null)).toBe(true)
+  })
+
+  it('does not offer a control it cannot act with', () => {
+    /*
+     * The house rule for this pane, and the rule for this whole pass: a control
+     * that cannot act is removed, or disabled with a stated reason. With no
+     * settings channel in the preload the switch is disabled and the row says
+     * why, rather than sitting there looking live.
+     */
+    const noSettings = { ...fakeDeck() }
+    delete noSettings.setSettings
+    delete noSettings.getSettings
+    const html = withDeck(noSettings, () => renderToStaticMarkup(<CopilotSection />))
+    expect(html).toContain('Show me what it is looking at')
+    expect(html).toContain('no settings channel wired into its preload')
+    expect(html).toContain('disabled=""')
   })
 })

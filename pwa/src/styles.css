@@ -1028,6 +1028,76 @@ input[type='text']:focus-visible {
   color: var(--text-muted);
 }
 
+/* The row and its menu button, side by side.
+
+   The rule used to live on `.session` itself, which was the whole `<li>`. It has
+   moved out here because the row is no longer alone on the line: a second
+   control inside a 60-point tappable area is a control people hit by accident
+   and a row people fail to open. The separator belongs to the line so both
+   halves sit above one continuous edge. */
+.session-line {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.session-line .session {
+  border-bottom: none;
+}
+
+/* Same three dots as a port row, in the same place on every row, for the same
+   reason — a menu that moves is a menu people miss. It is only ever drawn
+   against a machine that advertised `close`; there is no greyed-out state,
+   because a disabled control still invites the ask. */
+.session__more {
+  flex: none;
+  min-width: 44px;
+  color: var(--text-muted);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+.session__more:active {
+  background: var(--bg-active);
+}
+
+/* The confirmation, in the row, under the session it names.
+
+   Tinted rather than outlined, and the tint is the critical ink at low alpha:
+   this block is the only thing in the client that ends somebody's work, and it
+   has to read as a different kind of thing from the row above it without a
+   border drawing a box around a list. */
+.session-confirm {
+  padding: 12px 16px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--color-critical) 9%, transparent);
+}
+
+.session-confirm__ask {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+/* Side by side, so the sentence above stays the widest thing in the block. The
+   buttons are `.button`, which is full-width by default; the flex row is what
+   takes that back. */
+.session-confirm__actions {
+  display: flex;
+  gap: 8px;
+}
+.session-confirm__actions .button {
+  flex: 1;
+  margin-top: 10px;
+}
+
+/* Filled, not merely red text. A menu item can wear the critical ink and stay
+   an item in a list; this is the press that stops a process, and it is the one
+   control in the client that should look like it means it. */
+.button--danger {
+  background: var(--color-critical);
+  color: var(--accent-fg);
+}
+
 .empty {
   padding: 40px 16px;
   color: var(--text-muted);
@@ -1128,6 +1198,11 @@ input[type='text']:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* Open, and Check beside it. The same control, with the accent on the one most
+   people came here to press: opening the page on the machine is the answer to
+   "the whole reason localhost exists is to drive them", and Check is the
+   diagnostic you reach for when it does not. */
+.port__open,
 .port__check {
   flex: none;
   min-height: 34px;
@@ -1137,9 +1212,16 @@ input[type='text']:focus-visible {
   color: var(--text-secondary);
   font-size: 13px;
 }
+.port__open {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+.port__open:active,
 .port__check:active {
   background: var(--bg-active);
 }
+.port__open:disabled,
 .port__check:disabled {
   opacity: 0.55;
   cursor: default;
@@ -1914,5 +1996,674 @@ input[type='text']:focus-visible {
      output sits against the edge of the window. */
   .terminal {
     padding: 6px 12px 6px 12px;
+  }
+}
+
+/* Which machine a new session starts on, above which folder it starts in.
+
+   A row of chips rather than a list: there are usually two, and a column would
+   read as a list that will grow — the wrong impression for the one step most
+   people will never use. It wraps rather than scrolls, because a horizontal
+   scroller inside a block on a phone is a control people do not find. */
+.start__machines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.start__machine {
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* The one it is on wears the accent and is not pressable — pressing it would
+   drop a live socket and dial the machine it is already on. Marked rather than
+   dimmed: a disabled chip that looked unavailable would say the opposite of
+   what is true, which is that this is the one you have. */
+.start__machine--here {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+  opacity: 1;
+  cursor: default;
+}
+
+.start__machine:disabled:not(.start__machine--here) {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ========================================================== the copilot ==== */
+
+/* The row that holds the content and, on any screen that is not the copilot's
+   own, the copilot beside it.
+
+   A flex row rather than the content being a direct child of the frame, because
+   the panel has to sit *next to* what is on screen without resizing it out of
+   its own scroll position. On a phone it stacks — see the width query at the
+   foot of this block — and on a window with room it is a real column.
+
+   The name of the frame's own selector is deliberately not written here:
+   `layout.test.ts` reads everything past the first width query as text and
+   refuses to find it, which is what stops a max-width creeping back onto the
+   frame inside a media query. A comment is text like any other. */
+.body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The panel, and the whole of the layout rule he stated twice: it exists on any
+   screen except the copilot's own, where the copilot *is* the page.
+
+   `main.ts` hides it with the attribute, and `display: flex` in an author
+   stylesheet outranks the UA's `hidden` rule — the trap `.header__back` shipped
+   with once and carries a comment about. */
+.dock {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+.dock[hidden] {
+  display: none;
+}
+
+.dock__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px 6px;
+}
+
+.dock__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* The dot beside the name, which is the control rather than an indicator.
+   44px of hit area around an 11px mark: the smallest reliable touch target is
+   the target, not the paint. */
+.dock__dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 32px;
+  margin-right: -10px;
+  color: var(--text-muted);
+}
+.dock__dot::before {
+  content: '';
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.dock__dot:active::before {
+  background: var(--text-muted);
+}
+
+/* -------------------------------------------------------------- the body -- */
+
+.copilot {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px calc(20px + var(--dock-safe));
+}
+
+.copilot-connect {
+  padding-top: 16px;
+}
+
+.copilot-status__desk {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.copilot-status__facts {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* Why a control cannot act, in the machine's own words. Amber rather than red:
+   nothing is broken, something is not set up. */
+.copilot-status__why {
+  margin: 6px 0 0;
+  color: var(--status-waiting);
+  font-size: 13px;
+}
+
+.copilot-note,
+.copilot-notice {
+  margin: 0;
+}
+
+/* ------------------------------------------------------------- the scan --- */
+
+.copilot-scan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.copilot-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.copilot-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.copilot-scan__go {
+  width: auto;
+  min-width: 160px;
+  padding-inline: 20px;
+}
+
+.copilot-scan__none {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* The one line under the controls while a scan is running. It is the only place
+   that says *why* it stopped, which matters more at machine speed than it did at
+   reading speed — the person will not have seen which of their own gestures
+   did it. */
+.copilot-playhead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.copilot-playhead__text {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.copilot-playhead .button {
+  width: auto;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+/* `.button` sets `display: block`, which outranks the UA rule the attribute
+   relies on — the same trap `.header__back` shipped with once. Carry on is drawn
+   for the whole scan and shown only while it is held, because a control that
+   appears between a pointerdown and its own click is a control that cannot be
+   pressed; `paintScan` in main.ts carries the measurement. */
+.copilot-playhead__resume[hidden] {
+  display: none;
+}
+
+.copilot-playhead__bar {
+  flex: 1 0 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+/* How much of the fleet has been visited — `seen / count`, not time passing.
+   The bar fills because the scan is getting through the sessions. */
+.copilot-playhead__fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--dur, 200ms) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .copilot-playhead__fill {
+    transition: none;
+  }
+}
+
+/* --------------------------------------------------------- the fleet rows -- */
+
+.copilot-fleet {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The rows the focus box is measured from. A fill with a radius, never an
+   outline: separate with space, then with a tint, and only then with a line. */
+.copilot-fleet__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+}
+
+/* Visited. A tint rather than a tick, because the whole list fills in as the
+   scan gets through it and a column of ticks would read as a checklist somebody
+   has to finish. */
+.copilot-fleet__row.scan-seen {
+  background: var(--bg-secondary);
+}
+
+/* Where the machine is looking, right now — on whichever list is on screen.
+
+   The two marks are generic rather than named after the copilot's own list,
+   because the scan walks *sessions* and both lists draw the same sessions: the
+   panel is over the session list on every screen but the copilot's own, and the
+   row a person is watching there is the one that has to be marked.
+
+   The ring is CSS rather than canvas for two reasons: a border the browser paints
+   is crisper than one a canvas draws, and it scrolls with the row for free. The
+   canvas's job is the opposite one — everything the focus is *not*. */
+.scan-here {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The session row is a full-bleed button with a hairline under it rather than a
+   card, so the mark has to be drawn without giving it a box it does not have.
+   An inset ring does that: no reflow, no border appearing and pushing the row
+   below it down by two pixels four times a second. */
+.session.scan-here {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* The machine's own word for what the session is doing. Sentence case rather
+   than the small-caps it started as: the reason now comes from `statusLabel`,
+   which is the same string the session list prints six pixels away, and shouting
+   one copy of it made two readings of one fact look like two facts. */
+.copilot-fleet__why {
+  flex: none;
+  min-width: 84px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.copilot-fleet__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.copilot-fleet__title {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copilot-fleet__note {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------- the answer -- */
+
+/* One structured response, read at whatever pace the reader likes, in one place.
+   A card is a fill with a radius, not an outline. */
+.answer {
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.answer__head {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.answer__count {
+  margin: 2px 0 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.answer__session {
+  margin-bottom: 12px;
+}
+
+.answer__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.answer__line {
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+/* A stop a visible scan was stopped before it got to. Dimmed rather than hidden:
+   the count above says how many were shown, and a line that vanished would make
+   the two disagree. */
+.answer__line--missed {
+  opacity: 0.55;
+}
+
+.answer__why {
+  margin-right: 8px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.answer__note {
+  color: var(--text-primary);
+}
+
+/* The machine's own line about a real call. Mono, because it is quoted rather
+   than written — and it is drawn only when there is one. */
+.answer__quote {
+  margin-top: 3px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.answer__missed {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.answer__from {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.answer__ask {
+  width: auto;
+  margin-top: 10px;
+  padding-inline: 16px;
+}
+
+/* --------------------------------------------------------------- the chat -- */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat__bubble {
+  max-width: min(100%, var(--prose));
+  padding: 9px 12px;
+  border-radius: var(--radius-lg);
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat__bubble--you {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.chat__bubble--agent {
+  align-self: flex-start;
+  background: var(--bg-secondary);
+}
+
+.chat__more {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* What the copilot actually did, as it does it — the frame that makes a refusal
+   visible rather than silent. */
+.trail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.trail__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.trail__tool {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.trail__detail {
+  color: var(--text-secondary);
+}
+
+/* A call the grant did not cover. Its own colour, because "it was stopped" and
+   "it happened" must never look the same. */
+.trail__row--refused .trail__detail,
+.trail__row--error .trail__detail {
+  color: var(--color-critical);
+}
+
+.trail__refusal {
+  color: var(--color-critical);
+}
+
+/* ----------------------------------------------------------- the composer -- */
+
+.composer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.composer__field {
+  flex: 1 1 200px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: none;
+  outline: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  resize: vertical;
+}
+
+.composer__field:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.composer__send,
+.composer__start {
+  width: auto;
+  min-width: 110px;
+  padding-inline: 18px;
+}
+
+/* Confirmations waiting at the machine, which this connection may not answer.
+   No button, ever: one would always be refused. */
+.pending {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pending__row {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: 13px;
+}
+
+.pending__tool {
+  margin-right: 8px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pending__where {
+  display: block;
+  margin-top: 2px;
+  color: var(--status-waiting);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------- the sheet --- */
+
+/* A confirmation this connection may answer. Over everything, because a decision
+   about somebody's machine is not something to be scrolled past. */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.sheet[hidden] {
+  display: none;
+}
+
+.sheet__card {
+  width: 100%;
+  max-width: var(--form);
+  max-height: 82vh;
+  overflow-y: auto;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+}
+
+.sheet__title {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.sheet__summary {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.sheet__tool,
+.sheet__origin {
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+/* Every argument, in the tool's own order, verbatim. This is the field that
+   turns a prompt from a shape into a decision. */
+.sheet__args {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: 13px;
+}
+
+.sheet__args dt {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.sheet__args dd {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.sheet__args dd:last-child {
+  margin-bottom: 0;
+}
+
+/* It expires into a *refusal*, so this is not decoration. */
+.sheet__countdown {
+  margin: 0 0 12px;
+  color: var(--status-waiting);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Refusing is at least as easy as accepting: Refuse is first and full width,
+   Allow is the quieter of the two. The safe answer is never the harder gesture. */
+.sheet__refuse {
+  background: var(--color-critical);
+  color: #ffffff;
+}
+
+/* ------------------------------------------------------------- the field --- */
+
+/* The dots. Over the page and under nothing that can be pressed: the whole point
+   is that the focused row stays clear and everything else is dulled, and a
+   canvas that swallowed a tap would take the interruption gesture with it. */
+.scan-field {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+/* On a window with room, the copilot is a real column beside the page rather
+   than a strip under it. Below this it stacks, because a 390px phone has no
+   column to give: a 100px panel is not a panel, it is a rumour of one. */
+@media (min-width: 900px) {
+  .dock {
+    flex: none;
+    width: 360px;
+    max-height: none;
+    border-top: none;
+    border-left: 1px solid var(--border-subtle);
+  }
+}
+
+@media (max-width: 899px) {
+  .dock {
+    max-height: 46vh;
+  }
+  .body {
+    flex-direction: column;
   }
 }

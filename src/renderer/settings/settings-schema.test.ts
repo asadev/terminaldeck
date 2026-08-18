@@ -56,13 +56,14 @@ describe('the table itself', () => {
   })
 
   it('lists the sections that carry stored settings', () => {
-    // The rest are real panes with nothing to persist — About is read-only, and
-    // Tools writes through the feature registry rather than through this table.
+    // The rest are real panes with nothing to persist — Help is read-only (About
+    // is the masthead on it), and Tools writes through the feature registry
+    // rather than through this table.
     expect(settingsIn('general').length).toBeGreaterThan(0)
     expect(settingsIn('appearance').length).toBeGreaterThan(0)
     expect(settingsIn('notifications').length).toBeGreaterThan(0)
     expect(settingsIn('agents').length).toBeGreaterThan(0)
-    expect(settingsIn('about')).toEqual([])
+    expect(settingsIn('help')).toEqual([])
     expect(settingsIn('features')).toEqual([])
   })
 
@@ -78,12 +79,41 @@ describe('the table itself', () => {
      * now *about*: how a session behaves while you work.
      */
     expect(settingsIn('general').map((setting) => setting.id)).toEqual([
-      'general.language',
       'general.restoreSessions',
       'general.autoNameSessions',
       'general.confirmCloseWorking',
       'general.copyOnSelect',
     ])
+  })
+
+  /**
+   * The language row is gone, and this is what stops it coming back.
+   *
+   *   > "It will be always English and it is English, so there is no selection.
+   *   > The option should not be there."
+   *
+   * It had already survived one pass by being softened — the picker became the
+   * word "English" beside a line explaining that English is the only one there
+   * is — so the failure mode this guards against is not somebody re-adding a
+   * dropdown. It is somebody re-adding the *row*, in any form, because a row
+   * that states a constant reads like a reasonable thing to have.
+   */
+  it('declares no language row at all, in General or anywhere else', () => {
+    expect(SETTINGS.map((setting) => setting.id)).not.toContain('general.language')
+    expect(SETTINGS.filter((setting) => /language/i.test(setting.label))).toEqual([])
+  })
+
+  /**
+   * And nobody's stored answer was thrown away on the way out.
+   *
+   * A removed setting is not a renamed one, so there is no `RENAMED_IDS` entry
+   * to carry it — the value survives because `mergeSettings` keeps a key it does
+   * not recognise. That is the clause the whole "a downgrade must not wipe a
+   * setting" rule rests on, and this is the one place it can be checked against
+   * a key that genuinely no longer exists.
+   */
+  it('keeps a stored language value rather than dropping it', () => {
+    expect(mergeSettings({ 'general.language': 'en' })['general.language']).toBe('en')
   })
 
   it('puts every notification row in Notifications, which is the whole point', () => {
@@ -198,14 +228,48 @@ describe('the prefs-backed settings', () => {
   })
 })
 
-describe('the language picker', () => {
-  it('offers English and says nothing it cannot deliver', () => {
-    const language = find('general.language') as SelectSetting
-    expect(language.options.map((option) => option.value)).toEqual(['en'])
-    // A one-option select is deliberate here, so the schema's own check has to
-    // allow it — this is the assertion that catches the rule being tightened
-    // back to "at least two" without anyone noticing this row.
-    expect(settingsSchemaProblems()).toEqual([])
+describe('a select with one option', () => {
+  /**
+   * The rule outlived the row that demonstrated it.
+   *
+   * `general.language` was the only one-option select in the table and it has
+   * been removed outright. The *allowance* stays, because what it protects is a
+   * rendering rule in `SettingControl` — a one-option select is drawn as a
+   * value, never as a dropdown — and a schema that rejected one would push the
+   * next person into inventing a second option to get their row on screen,
+   * which is a fake control arrived at by the tidiest possible route.
+   *
+   * Checked against a table of its own rather than against `SETTINGS`, so it
+   * keeps testing the rule on the day nothing in the real table uses it.
+   */
+  it('is legal in the schema, so nobody has to invent a second option', () => {
+    const only: SelectSetting = {
+      id: 'general.example',
+      section: 'general',
+      label: 'Example',
+      help: 'One option, on purpose.',
+      store: 'extra',
+      kind: 'select',
+      default: 'a',
+      options: [{ value: 'a', label: 'A' }],
+    }
+    expect(settingsSchemaProblems([only])).toEqual([])
+  })
+
+  it('is still a problem with no options at all', () => {
+    const empty: SelectSetting = {
+      id: 'general.example',
+      section: 'general',
+      label: 'Example',
+      help: 'Nothing to choose.',
+      store: 'extra',
+      kind: 'select',
+      default: 'a',
+      options: [],
+    }
+    // Two problems: no option, and a default that cannot survive coercion
+    // because there is no option for it to be.
+    expect(settingsSchemaProblems([empty]).length).toBeGreaterThan(0)
   })
 })
 

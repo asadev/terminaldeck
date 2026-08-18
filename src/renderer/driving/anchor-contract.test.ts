@@ -38,14 +38,15 @@ const ANCHORS: ReadonlyArray<{
   /**
    * The whole JSX attribute, when it is not simply the template inline.
    *
-   * Only `usage-strip` needs it. That component has three separate returns —
-   * populated, "nothing yet", and "not wired into this build" — and all three
-   * carry the anchor, because "this session has spent nothing" is a thing a
-   * tour has a reason to point at. Repeating the expression three times would
-   * be three places for it to drift, and an absent session has to produce an
-   * absent attribute rather than the string `usage-strip:undefined`, which is
-   * an anchor that exists and names nothing. So the value is built once into a
-   * variable and this pins both halves separately.
+   * Only `usage` needs it, and for the reason that outlived the component it
+   * used to name. `UsageBar.tsx` is split into a container that knows the
+   * session and a presentational view that draws the bar — the arrangement its
+   * own tests depend on — so the value is built in the container and handed
+   * over as a prop. That split is what makes the absent case expressible: a
+   * view rendered with no session gets no attribute at all, rather than the
+   * string `usage:undefined`, which is an anchor that exists, matches a
+   * selector and names nothing. So the template and the attribute are pinned
+   * separately, in the two places they now live.
    */
   attribute?: string
 }> = [
@@ -69,10 +70,27 @@ const ANCHORS: ReadonlyArray<{
     file: 'src/renderer/components/GitPanel.tsx',
     written: 'git-file:${cwd}:${file.path}',
   },
+  /*
+   * Retargeted, and renamed with it.
+   *
+   * This entry named `src/renderer/chat/usage/UsageStrip.tsx` and that file is
+   * **deleted** — it was the token and cost readout folded inside the chat
+   * composer, and it went with the composer's control row when the review asked
+   * to *"remove them from the chat box side completely."* This test is the thing
+   * that noticed: `readFileSync` threw ENOENT, which is exactly the failure it
+   * was written to produce rather than a silent stop that no longer boxes.
+   *
+   * The capability had to survive the component, because a tour has a real
+   * reason to point at a session's usage. The reading now lives in the chrome's
+   * `UsageBar`, which takes a `sessionId` and is mounted on every session screen
+   * through `SessionControls` — a wider surface than the one it left, not a
+   * narrower one. So the kind is `usage`, which is what it is, rather than
+   * `usage-strip`, which is a strip that no longer exists.
+   */
   {
-    sample: { at: 'usage-strip', sessionId: 's' },
-    file: 'src/renderer/chat/usage/UsageStrip.tsx',
-    written: 'usage-strip:${sessionId}',
+    sample: { at: 'usage', sessionId: 's' },
+    file: 'src/renderer/shell/UsageBar.tsx',
+    written: 'usage:${sessionId}',
     attribute: `${ANCHOR_ATTR}={anchor}`,
   },
 ]
@@ -106,7 +124,85 @@ describe('the set of anchors is declared, not forgotten', () => {
     // names the gap. Kept as a literal rather than derived from the type,
     // because a type cannot be enumerated at runtime and a derived list would
     // agree with itself no matter what.
-    expect(kinds).toEqual(['alert', 'git-file', 'message', 'session-row', 'usage-strip'])
+    expect(kinds).toEqual(['alert', 'git-file', 'message', 'session-row', 'usage'])
+  })
+})
+
+/**
+ * An anchor kind is spelled in **six** files, and only one of them can fail
+ * loudly on its own.
+ *
+ * The chain a tour stop travels is: the copilot reads the JSON-schema `enum` in
+ * `tour-tool.ts` and picks a word; `tour.ts` in the main process validates that
+ * word against `ANCHORS` and writes it into the plan and into the on-disk
+ * record; the renderer's mirror of that type accepts it; `tour.ts` there turns
+ * it into a `DriveAnchor`; `focus-target.ts` turns that into an attribute
+ * selector; and one component writes the attribute. TypeScript holds three of
+ * those six joins and cannot hold the other three — `tour-tool.ts`'s enum is a
+ * string array inside a JSON schema, the main and renderer types are mirrors
+ * across a bridge that carries `unknown`, and the attribute is a string in JSX.
+ *
+ * The failure mode of a half-rename is therefore not a compile error. It is a
+ * copilot that emits a word the validator refuses (a tour that never starts and
+ * blames the model), or a word the validator accepts and no element carries (a
+ * stop that navigates, boxes nothing, and reports `anchor-missing`). This test
+ * exists because `usage-strip` was renamed to `usage` across exactly these six
+ * files, and reading them back is the only way to know it was done in all six.
+ *
+ * The dead name is asserted absent as well as the live one present. Half of a
+ * rename passing a contains-check on the new name is the whole hazard.
+ */
+describe('the tour and the overlay agree on what an anchor is called', () => {
+  /** The union members out of a `export type TourAnchorAt = 'a' | 'b'` line. */
+  function unionOf(source: string): string[] {
+    const line = /export type TourAnchorAt =([^\n]*)/.exec(source)
+    expect(line, 'TourAnchorAt is declared').not.toBeNull()
+    return [...(line?.[1] ?? '').matchAll(/'([^']+)'/g)].map((match) => match[1]).sort()
+  }
+
+  const anchorKinds = ANCHORS.map((entry) => entry.sample.at)
+
+  it('names the same kinds on both sides of the bridge', () => {
+    const main = unionOf(read('src/main/deck-control/tour.ts'))
+    const renderer = unionOf(read('src/renderer/copilot/driving/tour.ts'))
+    expect(main).toEqual(renderer)
+    // And every one of them is a real place the overlay can point at. A tour
+    // may name fewer kinds than the overlay supports — `session-row` and
+    // `alert` are excluded on purpose, see `tour.ts` — but never a kind that
+    // does not exist.
+    for (const kind of main) expect(anchorKinds).toContain(kind)
+  })
+
+  it('offers the copilot exactly those words, and no stale one', () => {
+    const tool = read('src/main/deck-control/tour-tool.ts')
+    const offered = /enum: \[([^\]]*)\]/g
+    const enums = [...tool.matchAll(offered)].map((match) =>
+      [...match[1].matchAll(/'([^']+)'/g)].map((inner) => inner[1]),
+    )
+    // The anchor enum is the one containing `git-file`; the file carries three
+    // others (stop kinds, reasons, and the tour's own arguments) and picking it
+    // by position would break the next time one is added.
+    const anchors = enums.find((entry) => entry.includes('git-file'))
+    expect(anchors?.sort()).toEqual(unionOf(read('src/main/deck-control/tour.ts')))
+  })
+
+  it('leaves the deleted name nowhere a lookup can reach it', () => {
+    for (const file of [
+      'src/renderer/driving/focus-target.ts',
+      'src/renderer/copilot/driving/tour.ts',
+      'src/main/deck-control/tour.ts',
+      'src/main/deck-control/tour-tool.ts',
+      'src/renderer/shell/UsageBar.tsx',
+    ]) {
+      // The three ways this codebase can spell a *value*: a single-quoted
+      // string, a double-quoted JSX attribute, and the template literal the
+      // selector used to be built from — which is why the backtick form is
+      // matched only with its colon. Everything else is prose, and the essays
+      // above these declarations have to stay free to say what the kind used to
+      // be called and why it is not called that any more. A rule that forbade
+      // naming the old name would make the reason for the rename unwritable.
+      expect(read(file), file).not.toMatch(/'usage-strip'|"usage-strip"|`usage-strip:/)
+    }
   })
 })
 

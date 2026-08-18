@@ -36,7 +36,16 @@ const PNG_URL = `data:image/png;base64,${TINY_PNG.toString('base64')}`
  * session by identity, so a mock handing back a fresh `{}` per call would make
  * every view look foreign and quietly skip the half of this file that matters.
  */
-const GUEST_SESSION = {}
+const GUEST_SESSION = {
+  // Hardening a profile is what `guestSession()` now does on its way to
+  // answering, so the object it hands back has to survive being hardened. It is
+  // still compared by identity, which is the whole of what this fake is for.
+  setPermissionRequestHandler: () => undefined,
+  setPermissionCheckHandler: () => undefined,
+  on: () => undefined,
+  registerPreloadScript: () => 'record-preload',
+  setUserAgent: () => undefined,
+}
 
 /**
  * What `app.getPath('pictures')` answers here, resolved so it is absolute on

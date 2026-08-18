@@ -1,20 +1,16 @@
 import { describe, expect, it } from 'vitest'
+import * as dialog from './NewSessionDialog'
 import {
-  conversationLine,
   isDefaultLogin,
   loginHint,
   loginLine,
   loginOptionLabel,
   matchProjects,
-  olderConversationsLine,
-  parseConversations,
   parseRecentProjects,
   parseSignIn,
   projectShortlist,
   readStartMemory,
-  shortSessionId,
   toStartProviders,
-  transcriptsAreReadable,
   withProject,
   writeStartMemory,
   type RecentProject,
@@ -285,126 +281,6 @@ describe('projectShortlist', () => {
   })
 })
 
-/* ------------------------------------------ which conversation is continued -- */
-
-/**
- * The Conversation section's honesty.
- *
- * The row used to read "Picks up the most recent session in this folder",
- * which restates the flag and answers nothing — his question, in his words,
- * was *"which conversation will it bring?"*. These pin the answer, and pin the
- * two cases where the honest answer is to say less rather than to guess.
- */
-const HOUR = 3_600_000
-const NOW = 1_760_000_000_000
-
-describe('parseConversations', () => {
-  it('names the transcripts, newest written first', () => {
-    const list = parseConversations([
-      { sessionId: 'a3f19c74-1111-2222-3333-444455556666', modifiedAt: NOW - HOUR, bytes: 900 },
-      { sessionId: 'bb0d5e21-1111-2222-3333-444455556666', modifiedAt: NOW - 5 * HOUR, bytes: 40 },
-    ])
-    expect(list.map((c) => shortSessionId(c.sessionId))).toEqual(['a3f19c74', 'bb0d5e21'])
-  })
-
-  it('re-sorts rather than trusting the order it was handed', () => {
-    const list = parseConversations([
-      { sessionId: 'old', modifiedAt: 1, bytes: 5 },
-      { sessionId: 'new', modifiedAt: 9, bytes: 5 },
-    ])
-    expect(list[0].sessionId).toBe('new')
-  })
-
-  it('drops an empty transcript, because --continue at one kills the tab', () => {
-    /*
-     * The CLI opens a transcript before it has a turn to put in it, so a
-     * zero-byte file is a session that started and said nothing.
-     * `newestConversation` in main/transcript.ts skips them for exactly this
-     * reason; naming one here would name a conversation the resume will not
-     * land on.
-     */
-    const list = parseConversations([
-      { sessionId: 'empty', modifiedAt: NOW, bytes: 0 },
-      { sessionId: 'real', modifiedAt: NOW - HOUR, bytes: 120 },
-    ])
-    expect(list.map((c) => c.sessionId)).toEqual(['real'])
-  })
-
-  it('survives a bridge that answered with something other than a list', () => {
-    expect(parseConversations(null)).toEqual([])
-    expect(parseConversations([{ sessionId: 3 }, null, 'x', {}])).toEqual([])
-  })
-})
-
-describe('conversationLine', () => {
-  it('says when, and which', () => {
-    const list = parseConversations([
-      { sessionId: 'a3f19c74-dead-beef-cafe-000000000000', modifiedAt: NOW - 2 * HOUR, bytes: 12 },
-    ])
-    expect(conversationLine(list, NOW)).toBe('2h ago · a3f19c74')
-  })
-
-  it('says nothing at all when there is no conversation to name', () => {
-    expect(conversationLine([], NOW)).toBeNull()
-  })
-})
-
-describe('olderConversationsLine', () => {
-  it('accounts for the ones the resume will not reach', () => {
-    const many = parseConversations(
-      ['a', 'b', 'c', 'd'].map((id, i) => ({ sessionId: id, modifiedAt: NOW - i, bytes: 10 })),
-    )
-    expect(olderConversationsLine(many)).toBe('3 older conversations here. Resume always takes the newest.')
-  })
-
-  it('reads as English for exactly one', () => {
-    const two = parseConversations([
-      { sessionId: 'a', modifiedAt: 2, bytes: 1 },
-      { sessionId: 'b', modifiedAt: 1, bytes: 1 },
-    ])
-    expect(olderConversationsLine(two)).toContain('1 older conversation here')
-  })
-
-  it('stays quiet when there is nothing to explain', () => {
-    // A folder with one conversation has no picker to miss, and a sentence
-    // about the alternatives when there are none is a line for nothing.
-    expect(olderConversationsLine(parseConversations([{ sessionId: 'a', modifiedAt: 1, bytes: 1 }]))).toBeNull()
-    expect(olderConversationsLine([])).toBeNull()
-  })
-})
-
-describe('transcriptsAreReadable', () => {
-  const system: ProfileView = {
-    id: 'system',
-    name: 'Default',
-    provider: 'claude',
-    configDir: '/Users/apple/.claude',
-    system: true,
-    color: '--accent',
-    lastUsedAt: null,
-  }
-  const work: ProfileView = { ...system, id: 'work', name: 'Work', system: false }
-
-  it('reads the store the enumeration actually looks in', () => {
-    expect(transcriptsAreReadable([system, work], 'system')).toBe(true)
-    expect(transcriptsAreReadable([system, work], null)).toBe(true)
-  })
-
-  it('declines to name a conversation from a store it is not reading', () => {
-    /*
-     * `insights:list` reads the default config directory. A profile is a
-     * different `CLAUDE_CONFIG_DIR`, so its transcripts are somewhere nothing
-     * on the bridge can list — and naming "the last conversation" there would
-     * be naming one out of the wrong account's history.
-     */
-    expect(transcriptsAreReadable([system, work], 'work')).toBe(false)
-  })
-
-  it('declines for a login the list no longer has', () => {
-    expect(transcriptsAreReadable([system], 'deleted')).toBe(false)
-  })
-})
-
 /* --------------------------------------------------------- whose login it is -- */
 
 /**
@@ -558,5 +434,42 @@ describe('isDefaultLogin', () => {
 
   it('is false when no login is resolved yet', () => {
     expect(isDefaultLogin(snapshot(null), undefined)).toBe(false)
+  })
+})
+
+/* ------------------------------------------- what this dialog no longer asks -- */
+
+/**
+ * Two sections were removed on 2026-08-18 and must stay removed.
+ *
+ * *"Remove 'first message' from the new-session dialog entirely."* and
+ * *"'Continue last conversation' is agent-specific — either give a real picker
+ * of previous conversations, or remove it and 'start fresh', since fresh is
+ * then the only behaviour."*
+ *
+ * Pinned against the module's exports rather than against rendered markup,
+ * because `Modal` renders through `createPortal` and `react-dom/server` refuses
+ * a portal — the dialog itself cannot be mounted in this suite at all, which is
+ * why `dialog-render.test.tsx` exists and why the helpers were the only handle
+ * this file ever had on those sections. Every one of them existed solely to
+ * describe a conversation the Continue row would land on; an export coming back
+ * means the row came back with it.
+ */
+describe('the removed sections', () => {
+  it('has no conversation-picker helpers left to feed a Continue row', () => {
+    for (const gone of [
+      'parseConversations',
+      'conversationLine',
+      'olderConversationsLine',
+      'transcriptsAreReadable',
+    ]) {
+      expect(dialog).not.toHaveProperty(gone)
+    }
+  })
+
+  it('still re-exports shortSessionId, which the sidebar shares', () => {
+    // Removed alongside the others by mistake once. It is not part of the
+    // Conversation section — `tabQualifiers` cuts a session id with it.
+    expect(typeof dialog.shortSessionId).toBe('function')
   })
 })

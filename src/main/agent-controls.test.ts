@@ -925,11 +925,53 @@ describe('changing the model', () => {
     expect(result.message).toBe("Model 'sonnet' not found")
   })
 
-  it('will not send an alias the CLI does not accept', async () => {
-    const session = fakeClaude()
-    const result = await applyControl(session, { ...CLAUDE, sessionId: 's', control: 'model', value: 'gpt-5' }, QUICK)
-    expect(result.ok).toBe(false)
-    expect(session.typed).toEqual([])
+  /*
+   * This test used to assert the opposite, and the reversal is the point.
+   *
+   * It pinned a hand-written allow-list of five aliases: anything else was
+   * refused here, before the CLI ever saw it, with a message blaming the model
+   * rather than the list. That is exactly the staleness Asad found in the menu
+   * the list was feeding — *"they are just very few, not all of them… there are
+   * more models"* — and it is worse than a stale menu, because it means a model
+   * released tomorrow is unreachable even by a user who knows its name.
+   *
+   * So the guard is now on the *shape* (`isTypeableModelValue`), and a name this
+   * build has never heard of is sent and the CLI's own answer is shown. Driving
+   * the real binary is what settled that this is safe rather than merely
+   * permissive: `/model claude-opus-4-8` answered `Set model to Opus 4.8`,
+   * `/model sonnet46` answered `Model 'sonnet46' not found`, and
+   * `/model claude-mythos-5` answered `Mythos 5 isn't available for your account
+   * yet` — three different real answers this app can print, where before it
+   * printed one invented one.
+   */
+  it('sends a name it has never heard of and lets the CLI be the judge', async () => {
+    const session = fakeClaude({
+      respond: (line, cli) => {
+        if (line === '/model claude-opus-4-8') cli.print('  ⎿  Set model to Opus 4.8 and saved as your default for new sessions')
+      },
+    })
+    const result = await applyControl(
+      session,
+      { ...CLAUDE, sessionId: 's', control: 'model', value: 'claude-opus-4-8' },
+      QUICK,
+    )
+    expect(result.ok).toBe(true)
+    expect(result.reading.label).toBe('Opus 4.8')
+  })
+
+  /*
+   * What the guard is actually for. This string is about to be typed into
+   * somebody's terminal, so a value that would become a second argument, or
+   * submit a line nobody wrote, must not reach the pty at all — and the check
+   * has to happen before any byte is written, not after.
+   */
+  it('refuses a value that would not be a single argument, and types nothing', async () => {
+    for (const value of ['sonnet 5', 'sonnet\rrm -rf ~', '/model sonnet']) {
+      const session = fakeClaude()
+      const result = await applyControl(session, { ...CLAUDE, sessionId: 's', control: 'model', value }, QUICK)
+      expect(result.ok, value).toBe(false)
+      expect(session.typed, value).toEqual([])
+    }
   })
 
   it('does not claim the change was saved when the CLI said session-only', async () => {

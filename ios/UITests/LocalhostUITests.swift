@@ -9,25 +9,52 @@
  * look at one from a phone at all.
  *
  * These drive `scripts/remote-host.sh`, which is the **real** desktop endpoint
- * and the real tunnel hub in a plain Node process, and the harness dev server:
+ * and the real tunnel hub in a plain Node process, and the harness dev server.
+ * It is deliberately **not** `ios/Harness/run.sh host`: that stand-in implements
+ * no `ports` frame and no `tunnel` verb at all, so a suite about tunnelled pages
+ * run against it proves nothing — an earlier localhost pass was reported as
+ * verified against a screen that could not have shown a port.
  *
- *     node .harness/.devsite/server.mjs &     # serves on 127.0.0.1:3210
- *     scripts/remote-host.sh --fresh --approve-after 2000 &
- *     # pair the Simulator with that host, then:
- *     xcodebuild test -project ios/TerminalDeck.xcodeproj -scheme TerminalDeck \
- *       -destination 'platform=iOS Simulator,name=iPhone 17' \
- *       -only-testing:TerminalDeckUITests/LocalhostUITests
+ *     ios/Harness/live-localhost.sh
  *
- * The pairing is not done here, and that is the one awkward thing about this
- * file: `simctl openurl` raises a system *Open in …?* confirmation that nothing
- * in XCUITest can reach, so the code has to be typed into the pairing field.
- * `InspectUITests` does exactly that against the same control server, so running
- * it first leaves this suite a paired app to work with — and it wants the same
- * dev server, which is the other reason the two now name one port:
+ * ## This suite pairs itself now, and why it could not before
  *
- *     TEST_RUNNER_TD_CONTROL=127.0.0.1:8788 xcodebuild test … \
- *       -only-testing:TerminalDeckUITests/InspectUITests \
- *       -only-testing:TerminalDeckUITests/LocalhostUITests
+ * It used to say pairing happened elsewhere — *"`InspectUITests` does exactly
+ * that against the same control server, so running it first leaves this suite a
+ * paired app to work with"*. That was not true, and it could not have been:
+ *
+ *  - every self-pairing suite in this target reads `code` out of the control
+ *    server's `/pair`, and **`scripts/remote-host.ts` still answers
+ *    `{ uri: "terminaldeck://pair?…&t=406403" }`** — the shape from back when
+ *    pairing was a link, which the product has since removed;
+ *  - and even with the digits in hand it would still fail, because **six digits
+ *    do not carry an address**. `Rendezvous.swift` derives a relay slot from the
+ *    code and expects the machine showing it to be *sitting in that slot*, and
+ *    the thing that puts it there is `startBeacon` in
+ *    `src/main/remote/machines/rendezvous.ts` — which `remote-host.ts` never
+ *    calls. Measured: a code minted by that script, typed correctly, inside its
+ *    sixty seconds, on the deployed relay, answers *"No machine is showing that
+ *    code."*
+ *
+ * So the host this runs against is the **product's own headless host**, whose
+ * codes are minted through the same `machines:code` IPC the desktop's Pair
+ * button calls — beacon and all. `ios/Harness/live-localhost.sh` starts it under
+ * its own `HOME`, serves the dev site, erases and boots a Simulator, and answers
+ * this suite's pairing handshake. Two variables carry that handshake, and they
+ * are files because the code is minted *after* the phone reaches the field: see
+ * `readyFile` and `codeFile` below.
+ *
+ * `TD_CONTROL` still works and is still read, for the day `remote-host.ts` grows
+ * a beacon and for `host-standin.ts`, which answers `{ code }`. `freshCode()`
+ * accepts either shape.
+ *
+ * Pairing happens **once**, in the first case that finds the app asking for a
+ * code, because a code is worth sixty seconds and one redemption — a second case
+ * that unpaired and asked again would be typing a code already spent. Making
+ * sure it is the *right* machine is the script's job rather than this file's: it
+ * erases the Simulator, because a pairing lives in the Simulator's keychain and
+ * survives an uninstall, so without an erase a run finds the phone still holding
+ * whichever host it met last — Connected, cheerful, and serving no ports.
  *
  * ## The port used to be 3000, and that was the bug
  *
@@ -90,7 +117,30 @@ final class LocalhostUITests: XCTestCase {
         app = XCUIApplication()
         app.launch()
 
-        let connected = waitForConnected(timeout: Self.reachable == nil ? 45 : 10)
+        /*
+         * Paired here, once, and only while the app is asking to be.
+         *
+         * `setUp` runs per case, and a pairing code is worth **sixty seconds and
+         * one redemption** — so a second case that unpaired and asked again
+         * would be typing a code that had already been spent. The first case
+         * pairs; the ones after it find the host still trusted and come straight
+         * up, which is that claim holding rather than a convenience.
+         *
+         * Nothing is unpaired here for the same reason. Making "which machine is
+         * this" answerable is the *harness's* job and it does it properly:
+         * `live-localhost.sh` erases the Simulator, because a pairing lives in
+         * the Simulator's keychain and survives an uninstall — so without an
+         * erase a run finds the phone still holding whichever host it met last,
+         * Connected, cheerful, and serving no ports.
+         */
+        if canPairItself && !Self.paired {
+            try pairIfTheAppIsAsking()
+        }
+
+        // Long: the device has to redeem its code, be refused because a code
+        // alone admits nobody, and then be approved on the host before the pill
+        // can go green. That refusal is the product declining, not a fault.
+        let connected = waitForConnected(timeout: Self.reachable == nil ? 180 : 60)
         Self.reachable = connected
         try XCTSkipUnless(connected, Self.notRunning)
 
@@ -104,9 +154,141 @@ final class LocalhostUITests: XCTestCase {
     /// server — because the two failures look identical from here and the fix
     /// for one is not the fix for the other.
     private static let notRunning =
-        "This phone is not paired with a running host. Start scripts/remote-host.sh and "
-        + "node .harness/.devsite/server.mjs, then pair the Simulator — running "
-        + "InspectUITests against the same control server does it, and see the header."
+        "This phone is not paired with a running host serving a page on 3210. "
+        + "Run ios/Harness/live-localhost.sh, which starts both and pairs the Simulator — "
+        + "and see the header for why a code from scripts/remote-host.sh cannot work."
+
+    // MARK: - Pairing
+
+    /// The harness control server, e.g. `127.0.0.1:8798`. An address rather than
+    /// a pairing link, because **a pairing token is worth sixty seconds** and one
+    /// redemption: a link handed in when the run started is expired by the time a
+    /// case reaches it, and worse, the pairing desk is only open while a token is
+    /// live — so the refusal reads as a crypto failure and is not one.
+    private var control: String { ProcessInfo.processInfo.environment["TD_CONTROL"] ?? "" }
+
+    /**
+     * The other handshake, and it is the one that works against the real host.
+     *
+     * `live-localhost.sh` runs the **product's own headless host**, whose codes
+     * are minted through the same `machines:code` IPC the desktop's Pair button
+     * calls — which is what publishes the rendezvous beacon a typed code is
+     * looked up at. Nothing else does: a control server can hand out a token all
+     * day and the phone will still say *"no machine is showing that code"*,
+     * because six digits name a relay slot rather than carrying an address.
+     *
+     * It is a pair of files rather than one variable because the code is minted
+     * **after** this test reaches the pairing screen. A code is good for sixty
+     * seconds and a Simulator takes longer than that to build, install and
+     * launch, so one minted before `xcodebuild` started would already be dead.
+     * This test writes `readyFile` when it is standing at the field; the script
+     * answers with six digits in `codeFile`.
+     */
+    private var readyFile: String { ProcessInfo.processInfo.environment["TD_READY_FILE"] ?? "" }
+    private var codeFile: String { ProcessInfo.processInfo.environment["TD_CODE_FILE"] ?? "" }
+
+    /// Whether this run was given any way at all to pair itself.
+    private var canPairItself: Bool { !control.isEmpty || !readyFile.isEmpty }
+
+    /// Set once the phone has been through the field, so the cases after the
+    /// first do not spend eight seconds each looking for a screen that is not
+    /// coming back. Static because XCTest builds a fresh instance per case and
+    /// the app process outlives all of them.
+    private static var paired = false
+
+    /**
+     * Six digits in the field, if the field is what is on screen.
+     *
+     * Typed rather than opened: `simctl openurl` raises a SpringBoard *"Open in
+     * Terminal Deck?"* alert that nothing in XCUITest can reach, and six digits
+     * in a field is the only door the product has anyway. The field submits
+     * itself on the sixth digit, which is why Pair is tapped only when it is
+     * still there — tapping a button that has already gone is a failure, not a
+     * no-op.
+     *
+     * An already-paired phone falls straight through. The short wait is enough:
+     * the pairing screen needs no network to draw, so it is up within a second
+     * of launch on a phone that has nothing stored.
+     */
+    private func pairIfTheAppIsAsking() throws {
+        let field = app.textFields["pairing.field"]
+        guard field.waitForExistence(timeout: 8) else {
+            Self.paired = true
+            return
+        }
+
+        let code = try freshCode()
+        field.tap()
+        field.typeText(code)
+        let submit = app.buttons["pairing.submit"]
+        if submit.exists && submit.isHittable { submit.tap() }
+        Self.paired = true
+    }
+
+    /**
+     * A code from the host, now, in whichever shape that host answers in.
+     *
+     * `code` is what every self-pairing suite in this target expects and what
+     * `ios/Harness/host-standin.ts` sends. `scripts/remote-host.ts` — the real
+     * desktop endpoint, and the only host worth pointing this suite at — still
+     * answers `{ uri: "terminaldeck://pair?…&t=406403" }`, the shape from back
+     * when pairing was a link. Reading both is what makes the real desktop
+     * reachable in one command; see the header. The `t` parameter is not a guess
+     * at a format, it is what `PairingCode.swift` parses in the app.
+     */
+    private func freshCode() throws -> String {
+        if !readyFile.isEmpty { return try codeFromTheScript() }
+        guard let url = URL(string: "http://\(control)/pair") else {
+            throw XCTSkip("\(control) is not an address")
+        }
+        var answer: String?
+        let done = expectation(description: "minted")
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            defer { done.fulfill() }
+            guard let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            if let code = json["code"] as? String, !code.isEmpty {
+                answer = code
+                return
+            }
+            guard let uri = json["uri"] as? String,
+                  let components = URLComponents(string: uri) else { return }
+            answer = components.queryItems?.first { $0.name == "t" }?.value
+        }.resume()
+        wait(for: [done], timeout: 20)
+        guard let answer, !answer.isEmpty else {
+            Self.reachable = false
+            throw XCTSkip("\(Self.notRunning) (\(control) did not answer /pair)")
+        }
+        return answer
+    }
+
+    /**
+     * Say we are at the field, then wait for the script's six digits.
+     *
+     * The whitespace is stripped rather than trusted: a trailing newline typed
+     * into a `.numberPad` field is a character the parser refuses, and that
+     * failure reads as the code being wrong.
+     *
+     * Generous, because the wait is for a person-shaped sequence happening on
+     * the Mac — mint a code, publish a rendezvous beacon, wait for the phone to
+     * redeem it — and the alternative to polling a file is a `DispatchSource` on
+     * a file that does not exist yet.
+     */
+    private func codeFromTheScript() throws -> String {
+        try? "ready\n".write(toFile: readyFile, atomically: true, encoding: .utf8)
+        let deadline = Date().addingTimeInterval(240)
+        while Date() < deadline {
+            if let raw = try? String(contentsOfFile: codeFile, encoding: .utf8) {
+                let digits = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if digits.count == 6 { return digits }
+            }
+            usleep(400_000)
+        }
+        Self.reachable = false
+        throw XCTSkip("\(Self.notRunning) (nothing wrote six digits to TD_CODE_FILE)")
+    }
 
     // MARK: - The list
 
@@ -165,8 +347,12 @@ final class LocalhostUITests: XCTestCase {
         // so by being disabled. The half of "the back button does nothing" that
         // was always correct and has to stay correct.
         let back = app.buttons["localhost.back"]
-        XCTAssertTrue(back.exists, "the page's own Back button should be on the header")
+        XCTAssertTrue(back.exists, "the page's own Back button should be in the bottom toolbar")
         XCTAssertFalse(back.isEnabled, "one page in, there is no history to go back to")
+        // And its new neighbour, for the same reason: nothing has been left, so
+        // there is nothing in front of this page either.
+        XCTAssertFalse(app.buttons["localhost.forward"].isEnabled,
+                       "one page in, there is nothing to go forward to")
 
         // A dev server's socket is the difference between a page and a
         // screenshot. Given a little longer than the document, because it opens
@@ -189,6 +375,148 @@ final class LocalhostUITests: XCTestCase {
         // bug, and it strands somebody on one tab.
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 5),
                       "the tab bar should be back on the list")
+    }
+
+    /**
+     * **The chrome on a page is the platform's, and Done is still last.**
+     *
+     * Asad, after the screen had already been changed from a `fullScreenCover`
+     * into a push: *"Localhost browsing is still not native on iOS."* The
+     * remaining half was that this screen had hidden the system navigation bar
+     * in order to draw its own row of browser controls at the top — which cost
+     * the chevron, the standard title and the interactive pop, all three of
+     * which somebody's thumb expects without being told.
+     *
+     * The resolution is Safari's: the navigation bar stays and the browser's
+     * controls move to a **bottom** toolbar. So there are three claims to make
+     * here and only a running app can make any of them:
+     *
+     *  1. a system navigation bar is on this screen;
+     *  2. every browser control is at the *bottom* of it — measured against the
+     *     middle of the screen, not asserted by looking at the source;
+     *  3. they are in the order he blessed, ending with Done.
+     *
+     * `LocalhostChromeTests` is the tripwire for the same three in the unit
+     * suite, which runs on a laptop with nothing listening. This is the proof.
+     */
+    func testTheChromeIsThePlatformsAndDoneIsLast() throws {
+        let row = portRow()
+        XCTAssertTrue(row.waitForExistence(timeout: 20),
+                      "no row for port \(Self.port) — is .harness/.devsite/server.mjs running?")
+        row.tap()
+
+        let done = app.buttons["localhost.done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 15), "the browser screen should open on the tap")
+        XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 30),
+                      "the page never rendered — the tunnel did not carry the document")
+
+        // 1. The bar the screen used to hide.
+        let bar = app.navigationBars.firstMatch
+        XCTAssertTrue(bar.exists,
+                      "the system navigation bar is gone again — with it go the chevron, the "
+                      + "standard title and the swipe that pops this screen")
+
+        // 2. Every control below the middle of the screen. A toolbar that had
+        //    quietly gone back to the top would still pass an existence check on
+        //    all five buttons, which is how the first version of this screen
+        //    looked correct in a test and wrong in the hand.
+        let middle = app.frame.midY
+        let controls = ["localhost.back", "localhost.forward",
+                        "localhost.reload", "localhost.inspect", "localhost.done"]
+        for identifier in controls {
+            let button = app.buttons[identifier]
+            XCTAssertTrue(button.exists, "\(identifier) is missing from the bar")
+            XCTAssertGreaterThan(button.frame.minY, middle,
+                                 "\(identifier) is in the top half of the screen; browser controls "
+                                 + "belong at the bottom on iOS")
+        }
+        XCTAssertLessThan(bar.frame.maxY, middle, "the navigation bar should be above the page")
+
+        // 3. His order, left to right, Done last — *"last button I think is on
+        //    its correct place."* Read off the real frames rather than the
+        //    declaration order, because a `Spacer` in the wrong place reorders
+        //    what a thumb sees without touching what the source says.
+        let byPosition = controls
+            .map { (id: $0, x: app.buttons[$0].frame.midX) }
+            .sorted { $0.x < $1.x }
+            .map(\.id)
+        XCTAssertEqual(byPosition, controls,
+                       "the bottom bar reads left to right as \(byPosition.joined(separator: ", "))")
+
+        add(screenshot(named: "system bar and bottom toolbar"))
+
+        /*
+         * The control that moved furthest still drives the thing it names, and
+         * its notice moved to the other end of the screen.
+         *
+         * Inspect was in a custom header at the top with its sentence directly
+         * underneath it; it is in the bottom toolbar now and the sentence is a
+         * strip under the navigation bar. That is deliberate — it is a sentence
+         * about *the page*, and the page is where the eye is — but it means the
+         * control and its explanation are as far apart as two things on one
+         * screen can be, so both halves are worth asserting rather than assuming.
+         */
+        let inspect = app.buttons["localhost.inspect"]
+        inspect.tap()
+        let hint = app.staticTexts["localhost.inspectHint"]
+        XCTAssertTrue(hint.waitForExistence(timeout: 5),
+                      "turning inspect on from the bottom bar should say what it is waiting for")
+        XCTAssertLessThan(hint.frame.maxY, middle,
+                          "the notice belongs under the navigation bar, above the page it is about")
+        add(screenshot(named: "inspecting"))
+
+        inspect.tap()
+        XCTAssertFalse(hint.exists,
+                       "turning it off should take the notice with it — a sentence left on screen "
+                       + "for a mode nobody is in is a claim that they are")
+    }
+
+    /**
+     * **The left-edge swipe pops the screen — it does not walk the page.**
+     *
+     * This is the other half of *"still not native"*, and it was the more
+     * confusing half. `allowsBackForwardNavigationGestures` handed the standard
+     * back gesture to the web view's own history, so the one gesture nobody has
+     * to be taught quietly did something else on this screen and there was no
+     * way to leave with a thumb at all.
+     *
+     * A drag from `dx: 0` rather than `swipeRight()`, which starts in the middle
+     * of the element and is a page scroll: the interactive pop is a
+     * `UIScreenEdgePanGestureRecognizer` and it only arms within a few points of
+     * the edge.
+     *
+     * The last assertion matters as much as the first. Popping by gesture has to
+     * take the tunnel down exactly as Done does — see the `onChange` in
+     * `LocalhostListView` — because a page left half-closed leaves the machine
+     * serving a port to a phone that stopped looking.
+     */
+    func testTheLeftEdgeSwipePopsTheScreen() throws {
+        let row = portRow()
+        XCTAssertTrue(row.waitForExistence(timeout: 20),
+                      "no row for port \(Self.port) — is .harness/.devsite/server.mjs running?")
+        row.tap()
+
+        XCTAssertTrue(app.buttons["localhost.done"].waitForExistence(timeout: 15),
+                      "the browser screen should open on the tap")
+        XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 30),
+                      "the page never rendered — the tunnel did not carry the document")
+        add(screenshot(named: "before the edge swipe"))
+
+        let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+        let across = app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        edge.press(forDuration: 0.05, thenDragTo: across)
+
+        XCTAssertTrue(portRow().waitForExistence(timeout: 10),
+                      "the edge swipe did not pop the screen — the web view is taking the gesture "
+                      + "again, which is what \"still not native\" was about")
+        XCTAssertFalse(app.staticTexts["Served from the Mac"].exists,
+                       "the page is still on screen after the swipe")
+        // The tab bar belongs to the list, and it comes back with it. A pill
+        // that stayed hidden after the page had gone would strand somebody on
+        // one tab.
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 5),
+                      "the tab bar should be back on the list")
+        add(screenshot(named: "after the edge swipe"))
     }
 
     /**

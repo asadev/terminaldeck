@@ -231,6 +231,96 @@
   --terminal-bg: #e8e8e8;
   --terminal-fg: #141414;
 
+  /* The sixteen ANSI colours, in the order the wire numbers them: 0–7, then
+     8–15. They are the palette a program picks from when it prints `ESC[31m`,
+     and they are as much a part of this theme as the paper they land on.
+
+     ## Why they exist here at all
+
+     Until now they did not. `@xterm/xterm` ships a Tango-derived default
+     palette and nothing in this app ever overrode it, so the sixteen were
+     whatever the emulator felt like. In the dark theme that was fine by
+     accident — that set was drawn to be read on a near-black ground, which is
+     what `--terminal-bg` is there. In *this* theme it was a real defect: the
+     light terminal is `#e8e8e8` paper with the dark-ground set painted on top
+     of it. Measured on that paper, yellow was 2.05:1, bright green 1.32:1 and
+     bright yellow 1.01:1. The last of those is not a low contrast, it is a
+     blank line — an agent that colours its progress output was printing into
+     an empty window, and the theme's own promise that "both themes are
+     first-class" was false for the one surface this product is named after.
+
+     Declaring them also settles something the desktop was deciding by
+     omission. The phone client renders the same session through SwiftTerm,
+     whose own default palette is Apple Terminal's rather than Tango's, so one
+     session had two colour schemes depending on which screen it was read on —
+     a `#3465a4` blue on the Mac and a `#492ee1` blue on the phone. The desktop
+     is the surface that defines the sixteen and the other clients mirror it;
+     `tokens.test.ts` reads `ios/TerminalDeck/App/Theme.swift`'s own table and
+     holds it against these declarations, the same way it already holds the
+     phone's accent against the desktop's.
+
+     ## How the light sixteen were derived
+
+     Not by eye, and not lifted from another scheme. They are the dark sixteen
+     — the ones the dark block declares, which is what this app has always
+     rendered — walked down in lightness: every channel multiplied by one
+     factor per colour and rounded back to eight bits, which moves value and
+     leaves hue and saturation where they were. It is the transform this sheet
+     already applies to the accent ("walks the same hue (≈213°) down in
+     lightness until it clears WCAG AA as text on paper") and to all five
+     `--status-*` colours, applied to sixteen more values. Red, blue and
+     magenta needed no walk at all — the Tango set's own values already clear
+     AA on this paper at 4.80, 4.84 and 5.37 — so those three are byte
+     identical in both appearances, which is the transform being honest rather
+     than a copy-paste slip.
+
+     Three deliberate exceptions, each a property of what an ANSI palette *is*
+     rather than a colour decision:
+
+      - **The normal eight target 4.6:1; the six chromatic brights target
+        7:1.** On a dark ground "bright" means further from the ground, i.e.
+        lighter. On paper the same idea is also further from the ground, i.e.
+        darker. Given both ends the same target they collapse onto each other:
+        at a shared 4.6 green lands on `#3b7405` and bright green on `#46721a`,
+        eleven levels apart in red and twenty-one in blue, which a diff draws
+        as one colour.
+      - **Black and bright black keep their places on the ramp.** Both already
+        clear on this paper (10.32:1 and 5.96:1), and darkening bright black
+        past black would invert the pair a TUI draws its comments, borders and
+        box-drawing in.
+      - **White and bright white are left alone, and as *foreground* on paper
+        they are unreadable — 1.19:1 and 1.05:1.** That is not an oversight. An
+        ANSI colour is used as a background as often as a foreground, and
+        darkening these two would turn `ESC[47m` from a highlight into a black
+        band. Every light terminal scheme in use makes the same trade. A
+        program that wants "the ordinary foreground" says `ESC[39m`, which is
+        `--terminal-fg` above and 14.8:1 on this paper.
+
+     ## What none of this reaches
+
+     256-colour and 24-bit output, which bypasses the palette entirely.
+     `ESC[38;5;…m` and `ESC[38;2;…m` name a colour outright, so an agent
+     emitting greys chosen for a black background stays hard to read on paper
+     no matter what these sixteen say. That is a property of the programs
+     rather than of this sheet, and it is the one thing worth knowing before
+     choosing light mode — the palette is fixed, the ceiling is not. */
+  --ansi-black: #2e3436;
+  --ansi-red: #cc0000;
+  --ansi-green: #3b7405;
+  --ansi-yellow: #7c6500;
+  --ansi-blue: #3465a4;
+  --ansi-magenta: #75507b;
+  --ansi-cyan: #057375;
+  --ansi-white: #d3d7cf;
+  --ansi-bright-black: #555753;
+  --ansi-bright-red: #951a1a;
+  --ansi-bright-green: #335413;
+  --ansi-bright-yellow: #534d1a;
+  --ansi-bright-blue: #384e65;
+  --ansi-bright-magenta: #5d445b;
+  --ansi-bright-cyan: #135454;
+  --ansi-bright-white: #eeeeec;
+
   /* Ink on a filled count badge (`.sb-badge`), which is always drawn on
      `--color-critical`. It has its own token because it follows the *fill* it
      sits on, not the theme's text colour.
@@ -407,6 +497,45 @@
      the test that keeps the two in step is what makes writing it twice safe. */
   --terminal-bg: #191919;
   --terminal-fg: #ededed;
+
+  /* The sixteen ANSI colours — see the light theme's note for the derivation,
+     the exceptions and the limit.
+
+     These are not new and nothing about the dark terminal changes by writing
+     them down: they are `@xterm/xterm`'s own Tango-derived defaults, which is
+     what this app has rendered since the first session ran in it. They are
+     declared rather than inherited for two reasons. The first is that a
+     default is not a decision — the light theme had to derive its sixteen from
+     *something*, and "whatever the emulator ships this major version" is not a
+     thing to derive from; an xterm upgrade that retuned its palette would have
+     silently moved one appearance and not the other. The second is that the
+     phone and the web client each have their own emulator with its own idea of
+     a default, and one of them has to be the original. This is the original.
+
+     Read as *foreground on this paper* they are not all comfortable: black is
+     1.39:1, magenta 2.67:1, blue 2.97:1 and red 2.99:1. That is the Tango set
+     and every terminal on this machine shows the same numbers — a shell that
+     wants a readable blue prompt picks bright blue (6.34:1), which is what
+     bright is for on a dark ground. Retuning them is a change to what every
+     existing session looks like, and it is not what the light theme needed, so
+     it is not made here. `tokens.test.ts` pins all sixteen as literals so that
+     if it is ever made, it is made on purpose. */
+  --ansi-black: #2e3436;
+  --ansi-red: #cc0000;
+  --ansi-green: #4e9a06;
+  --ansi-yellow: #c4a000;
+  --ansi-blue: #3465a4;
+  --ansi-magenta: #75507b;
+  --ansi-cyan: #06989a;
+  --ansi-white: #d3d7cf;
+  --ansi-bright-black: #555753;
+  --ansi-bright-red: #ef2929;
+  --ansi-bright-green: #8ae234;
+  --ansi-bright-yellow: #fce94f;
+  --ansi-bright-blue: #729fcf;
+  --ansi-bright-magenta: #ad7fa8;
+  --ansi-bright-cyan: #34e2e2;
+  --ansi-bright-white: #eeeeec;
   /* Dark ink, not white — see the light theme's note. `--color-critical` is a
      light coral here, so this is the same trade `--accent-fg` makes. */
   --badge-fg: #0f1114;

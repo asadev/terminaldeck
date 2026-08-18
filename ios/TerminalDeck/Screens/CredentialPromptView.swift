@@ -196,7 +196,6 @@ struct CredentialPromptHost: ViewModifier {
                 approve: { model.approveCredential(remember: $0) },
                 deny: { model.denyCredential() },
             )
-            .preferredColorScheme(.dark)
         }
     }
 }

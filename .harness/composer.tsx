@@ -4,9 +4,14 @@
  * It exists because this composer's failure mode is not a thrown error — it is
  * a control that is no longer on screen. That cannot be seen in a diff and it
  * cannot be seen in a static render either, because a shut popover renders
- * nothing at all: the markup of a composer whose Options panel holds four
- * controls and one whose panel holds two are the same string. So the panel has
- * to be opened and looked at, which needs a DOM, which needs this page.
+ * nothing at all: a menu with three rows behind the plus and a menu with none
+ * are the same string. So the popover has to be opened and looked at, which
+ * needs a DOM, which needs this page.
+ *
+ * The agent's controls used to be handed to this composer as a `controls` slot
+ * and drawn on its bottom row. They are not any more — they are the window
+ * bar's, and `shell/SessionControls.tsx` draws them there — so this page shows
+ * what the box actually is now: text, attach, microphone, send.
  *
  * Two composers side by side, because the regression that prompted it hit only
  * one of them: an agent session kept its plus and its pickers, and a shell
@@ -21,43 +26,8 @@ import { createRoot } from 'react-dom/client'
 import '../src/renderer/styles/tokens.css'
 import '../src/renderer/styles/app.css'
 import { ChatComposer } from '../src/renderer/components/ChatComposer'
-import { AgentControls } from '../src/renderer/chat/controls/AgentControls'
-import { UsageStripView } from '../src/renderer/chat/usage'
 
 const CWD = '/Users/apple/Projects/terminaldeck'
-
-/**
- * A stand-in for the usage strip.
- *
- * The real one reads a transcript through the bridge and this page has none, so
- * it would render its own empty state — which is the wrong thing to look at
- * when the question is how the panel lays out a readout that is present.
- */
-function Usage() {
-  return (
-    <UsageStripView
-      session={{
-        sessionId: 'harness',
-        transcriptPath: `${CWD}/harness.jsonl`,
-        cwd: CWD,
-        models: ['claude-opus-5[1m]'],
-        requests: 37,
-        usage: { input: 18_400, output: 6_210, cacheWrite5m: 44_000, cacheWrite1h: 0, cacheRead: 512_000 },
-        context: { tokens: 96_400, window: 200_000, percent: 48, remaining: 103_600, level: 'ok' },
-        warnings: [],
-        preContextTokens: 12_000,
-        compactions: 0,
-        sidechainRequests: 4,
-        startedAt: Date.now() - 3_600_000,
-        lastActivityAt: Date.now() - 60_000,
-      }}
-      today={{ tokens: 11_400_000, sessions: 3, carriedOver: 0 }}
-      plan={null}
-      scanning={false}
-      now={Date.now()}
-    />
-  )
-}
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -99,13 +69,7 @@ function Harness() {
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 24 }}>
         <Panel title="Agent session">
           <div id="agent">
-            <ChatComposer
-              onSend={(text) => setSent((all) => [...all, text])}
-              cwd={CWD}
-              controls={
-                <AgentControls sessionId="harness" cwd={CWD} provider="claude" extra={<Usage />} />
-              }
-            />
+            <ChatComposer onSend={(text) => setSent((all) => [...all, text])} cwd={CWD} />
           </div>
         </Panel>
 
@@ -116,7 +80,6 @@ function Harness() {
               cwd={CWD}
               shell
               placeholder="Run a command in this shell…"
-              controls={<AgentControls sessionId="harness" cwd={CWD} provider="shell" />}
             />
           </div>
         </Panel>

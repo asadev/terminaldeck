@@ -48,7 +48,7 @@ is his requirement, not elegance:
 | He asked for | A session gives it for free |
 |---|---|
 | *"see all of his files"* | Its cwd is a real folder. Open it in Files. |
-| *"whatever files it reads in the beginning… properly organized"* | Its startup reads **are** `CLAUDE.md` + `memory/`. The settings pane lists the actual files. |
+| *"whatever files it reads in the beginning… properly organized"* | Its startup reads **are** the folder's own `CLAUDE.md` + `memory/`, plus the layer the app hands it. The settings pane lists the actual files, and says whose each one is. |
 | *"see how it started the session, how it worked for us"* | It has a normal transcript. The transcript viewer already exists. |
 | *"proper memory… its own, not the other sessions'"* | A `memory/` folder that only it writes to. **A rule, not a wall** — see below. |
 | *"we can connect any Claude"* | The profile system already built. |
@@ -59,13 +59,66 @@ the exact thing he is asking to escape.
 ### Layout
 
 ```
-<userData>/copilot/          the copilot may write in here
-  CLAUDE.md              instructions — what it is, what it may do
-  memory/                its own memory, one file per fact (the pattern he already uses)
+<working directory>/       the person's folder, or <userData>/copilot
+  CLAUDE.md              THEIRS. Read by the CLI. This app never writes it.
+  memory/                one file per fact — scaffolded only when the folder is ours
+
+<userData>/copilot-layer/  the app's, wherever the folder is
+  instructions.md        the persona, editable, never regenerated over
+  tools.md               the tool contract, generated from the live catalogue, read-only
+  copilot.md             the two composed — handed over with --append-system-prompt-file
 
 <userData>/routines/      one file per routine, human-readable
 <userData>/copilot-log/   actions.jsonl — every action it took, append-only
 ```
+
+> **Corrected 2026-08-17 — the folder is the person's, and the copilot's
+> identity is not on its disk.** Asad: *"What if we want our copilot to have a
+> folder of our choice? … if I point it to your folder, it means everything
+> inside will start from where we left off here."* The obvious implementation —
+> write the copilot's `CLAUDE.md` into that folder — is wrong, and he said why:
+>
+> > *"Everyone would have built their own agents inside those folders, so when
+> > they start from there it will not know anything about the application… If
+> > somebody opens a normal terminal in that folder and it says 'I am a copilot',
+> > that is a nonsense thing. So we cannot keep this kind of thing in the disk
+> > folder — we need to keep it in the app."*
+>
+> Two failures. A chosen folder's own instructions would be overwritten or fought
+> with. And **any** session started in that directory reads a `CLAUDE.md` there —
+> an ordinary terminal, one from the sidebar, one a routine started — so identity
+> kept on disk is identity inherited by processes that are not the copilot.
+>
+> So the split: **the folder is theirs** (their `CLAUDE.md`, their memory, their
+> context; the cwd points at it and the CLI reads it the ordinary way; *nothing*
+> is ever written into it), and **the app owns the copilot layer** — who it is,
+> what tools it has, what it must confirm — handed in at spawn with
+> `--append-system-prompt-file`, stored under `<userData>`, never on the folder's
+> disk. Measured against Claude Code 2.1.233, which accepts that flag and rejects
+> a misspelling of it.
+>
+> The layer is two files and the pane says which is which. **Yours** is the
+> persona and the standing instructions: editable, never regenerated over.
+> **The app's** is the tool contract and the permission rules: *generated from
+> the real catalogue* on every start and read-only, because it describes what is
+> actually wired — hand-edit the tool list and it drifts from the tools that
+> exist, which is this project's stated bug class and a defect this feature has
+> already shipped twice. Nothing is hidden: the founding argument was *"so we can
+> see and learn how our copilot is working"*, and a hidden instruction file
+> contradicts it.
+>
+> `copilot-folder.ts` chooses and validates the folder, `copilot-layer.ts` owns
+> the app half, and `copilot-layer-is-app-side.test.ts` pins the invariant —
+> **a session that is not the copilot must never think it is** — by starting an
+> ordinary session with the copilot's own folder as its working directory,
+> against a real pty, and reading its argv back out of the child.
+>
+> Changing the folder needs a restart: a working directory is fixed at `exec`,
+> and the pane says so rather than implying the app can move a live process. A
+> chosen folder may hold credentials — `~/ClaudeAsad/credentials/` does — which
+> is not a new exposure, because any session in that folder reads the same files;
+> it is said at the picker so it is chosen rather than discovered, and there is
+> deliberately no scanner guessing which folders are sensitive.
 
 All four are shown in **Settings → Copilot**, as files, editable. That pane is
 the answer to *"so we can see and learn how our copilot is working."*
@@ -161,7 +214,7 @@ matters was never about reading. It is `COPILOT-CAPABILITIES.md` §4.1: *it may
 read another session's transcript to answer a question; it may not copy that into
 `memory/`*. No filesystem rule ever enforced that, because both halves happen
 inside the copilot's own folder. It is stated as a rule in the copilot's
-`CLAUDE.md`, in those words, and Settings → Copilot says it is a rule. The
+instruction file, in those words, and Settings → Copilot says it is a rule. The
 mechanism that would make it a wall is a check on the memory-write path
 (§4.5 of the capabilities document); it does not exist yet and nothing pretends
 it does.

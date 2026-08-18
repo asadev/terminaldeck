@@ -5,6 +5,7 @@ import {
   emptyLayout,
   focusedTabId,
   listPanes,
+  setPaneTab,
   tabIds,
   type PaneLayout,
 } from './pane-tree'
@@ -12,6 +13,7 @@ import {
   closePaneOrCollapse,
   isSplit,
   pruneClosedPanes,
+  replaceTabInPanes,
   seedSplit,
   showInFocusedPane,
   splitFocused,
@@ -267,5 +269,64 @@ describe('a pane can hold a page, not only a session', () => {
   it('lets a click put a page into the pane you are looking at', () => {
     const split = seedSplit([session('a'), session('b')], 'a')
     expect(ids(showInFocusedPane(split, 'browser:1'))).toEqual(['browser:1', 'b'])
+  })
+})
+
+/**
+ * A window that has become a different window, without moving.
+ *
+ * Switching the account a running session is on stops its process and starts
+ * another, so the tab keeps its place and its name and gets a *new id*. Panes
+ * are keyed by that id, so without this the switch reads as a close: the prune
+ * finds the old id gone, collapses its pane, and a layout somebody built by hand
+ * falls apart in response to something that was not a drag.
+ */
+describe('one window replaced by another, in place', () => {
+  const split = (): PaneLayout => {
+    const layout = createLayout('a')
+    const focused = layout.focusedPaneId
+    if (!focused) throw new Error('no pane')
+    return splitFocused({ ...layout, focusedPaneId: focused })
+  }
+
+  it('retargets the pane and keeps the geometry', () => {
+    const before = createLayout('a')
+    const after = replaceTabInPanes(before, 'a', 'b')
+    expect(tabIds(after)).toEqual(['b'])
+    expect(listPanes(after)[0].id).toBe(listPanes(before)[0].id)
+    expect(after.focusedPaneId).toBe(before.focusedPaneId)
+  })
+
+  it('retargets every pane showing it, not just the focused one', () => {
+    // `splitFocused` deliberately puts the *same* session in both halves, so you
+    // can watch two ends of one scrollback. Leaving the second on a dead id is
+    // the stale-pane failure `pruneClosedPanes` exists for.
+    const before = split()
+    // `tabIds` deduplicates, which is right for its own callers and wrong here:
+    // the whole point is that *both* panes move.
+    const shown = (layout: PaneLayout): (string | null)[] =>
+      listPanes(layout).map((pane) => pane.tabId)
+    expect(shown(before)).toEqual(['a', 'a'])
+    expect(shown(replaceTabInPanes(before, 'a', 'b'))).toEqual(['b', 'b'])
+  })
+
+  it('leaves the other half of a split alone', () => {
+    const layout = setPaneTab(split(), listPanes(split())[1]?.id ?? '', 'c')
+    const after = replaceTabInPanes(layout, 'a', 'b')
+    expect(tabIds(after).filter((id) => id === 'a')).toEqual([])
+  })
+
+  it('changes nothing, and returns the same layout, when nothing shows it', () => {
+    const before = createLayout('a')
+    expect(replaceTabInPanes(before, 'gone', 'b')).toBe(before)
+  })
+
+  it('survives the switch where the prune would have collapsed the split', () => {
+    // The two run together in the shell — the replacement lands, then the open
+    // list is pruned against — so the order has to leave nothing dangling.
+    const before = split()
+    const after = pruneClosedPanes(replaceTabInPanes(before, 'a', 'b'), [{ id: 'b' }])
+    expect(listPanes(after)).toHaveLength(2)
+    expect(listPanes(after).map((pane) => pane.tabId)).toEqual(['b', 'b'])
   })
 })

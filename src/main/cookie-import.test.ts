@@ -31,6 +31,15 @@ const fakeSession = {
     },
     flushStore: async () => undefined,
   },
+  // The guest session is now the *active browser profile's* session, and a
+  // profile is hardened the moment it is minted — see `browser-profiles.ts`. A
+  // fake that cannot be hardened is one this module cannot reach, which is the
+  // honest shape of the dependency rather than something to mock away.
+  setPermissionRequestHandler: () => undefined,
+  setPermissionCheckHandler: () => undefined,
+  on: () => undefined,
+  registerPreloadScript: () => 'record-preload',
+  setUserAgent: () => undefined,
 }
 
 vi.mock('electron', () => ({

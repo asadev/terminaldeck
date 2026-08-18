@@ -113,8 +113,10 @@ describe('every declared control has a host that checks it', () => {
    */
   const HOSTS: Record<(typeof CONTROL_IDS)[number], string> = {
     'chat.dictate': 'renderer/components/ChatComposer.tsx',
-    'chat.connectors': 'renderer/chat/attach/AttachMenu.tsx',
-    'chat.usage': 'renderer/components/ChatView.tsx',
+    // Moved out of the composer's Add menu with the row itself. The chip that
+    // would be left behind by an uninstalled MCP feature is the window bar's,
+    // and this hook is the only thing that decides whether there is one.
+    'chat.connectors': 'renderer/shell/use-connectors.ts',
     // The chrome's usage bar asks for itself rather than being asked for by the
     // cluster that holds it: `SessionControls` composes it, but the question
     // "is this feature installed" belongs to the thing that would be left

@@ -44,6 +44,48 @@ import './styles.css'
 import { BRAND } from '../../src/shared/brand'
 import { Connection, type ConnectionState, type SocketLike } from './connection'
 import {
+  GO_AND_LOOK,
+  NO_COPILOT,
+  copilotStep,
+  deskSentence,
+  grantSentence,
+  secondsLeft,
+  unavailableSentence,
+  type CopilotAction,
+  type CopilotState,
+} from './copilot'
+import {
+  ANSWER_PROVENANCE,
+  answerSummary,
+  browserScanClock,
+  createScanRunner,
+  isScanning,
+  scanAnswer,
+  scanPlan,
+  statusSentence,
+  type AnswerSession,
+  type ScanRunner,
+  type ScanState,
+  type ScanStop,
+} from './copilot-scan'
+import {
+  clearCopilots,
+  loadCopilots,
+  saveCopilots,
+  withCopilot,
+  withoutCopilot,
+  type CopilotCredentials,
+} from './copilot-store'
+import {
+  SCAN_ATTRIBUTE,
+  focusRect,
+  mountScanField,
+  watchScanInterruption,
+  type FieldReading,
+  type InterruptionWatch,
+  type ScanFieldHandle,
+} from './scan-field'
+import {
   CREDENTIAL_EXPLANATION,
   credentialHeadline,
   type CredentialNotice,
@@ -73,6 +115,8 @@ import {
   cannotServeSentence,
   checkSentence,
   localhostOffered,
+  openSentence,
+  webOfferedHere,
   localhostStep,
   noPortsSentence,
   stalePortsSentence,
@@ -138,7 +182,16 @@ import { browserStores, type Remember } from './remember'
 import { relaySocket } from './relay-socket'
 import { lookupMachine } from './rendezvous'
 import { chunkInput, type DevServerReport, type RemoteSession, type ServerMessage } from './protocol-client'
-import { formatSince, noticeAfter, sessionTone, shortenPath, sortSessions, statusLabel } from './sessions'
+import {
+  closeOffered,
+  closeQuestion,
+  formatSince,
+  noticeAfter,
+  sessionTone,
+  shortenPath,
+  sortSessions,
+  statusLabel,
+} from './sessions'
 import { createTerminal, type TerminalHandle } from './terminal'
 import {
   THEME_CHOICES,
@@ -189,10 +242,10 @@ function socketUrl(location: Location): string {
  * `localhost.ts` for what that screen can honestly do from a browser tab and
  * what it deliberately does not pretend to.
  */
-type Screen = 'pair' | 'sessions' | 'localhost' | 'settings' | 'machines' | 'terminal'
+type Screen = 'copilot' | 'pair' | 'sessions' | 'localhost' | 'settings' | 'machines' | 'terminal'
 
 /**
- * The three tabs, and why Machines is not one of them.
+ * The tabs, and why Machines is not one of them.
  *
  * The phone answered this first and the answer is followed rather than
  * re-litigated — see the header of `ios/TerminalDeck/Screens/DeckTabs.swift`, which
@@ -200,14 +253,21 @@ type Screen = 'pair' | 'sessions' | 'localhost' | 'settings' | 'machines' | 'ter
  * later because pairing a machine is something done once, and a strip of tabs is
  * for the screens somebody moves between all day.
  *
- * So: Sessions, Localhost, Settings — and Machines is a screen pushed from
- * Settings, reached by a chevron row that says how many are paired. The one place
- * this client differs is that the strip stays visible on the Machines screen,
- * which is the same call the phone makes ("Pill should be on here only on the
- * homepage or machines or settings") for the same reason: a person who has pushed
- * one screen deep has not left the app.
+ * So: Copilot, Sessions, Localhost, Settings — and Machines is a screen pushed
+ * from Settings, reached by a chevron row that says how many are paired. The one
+ * place this client differs is that the strip stays visible on the Machines
+ * screen, which is the same call the phone makes ("Pill should be on here only on
+ * the homepage or machines or settings") for the same reason: a person who has
+ * pushed one screen deep has not left the app.
+ *
+ * **Copilot is leftmost**, and that supersedes the three-tab arrangement rather
+ * than being added beside it: *"A fourth pill, and the copilot goes leftmost —
+ * Copilot · Sessions · Localhost · Settings"*, said about the phone after he had
+ * looked at it with the copilot in place. It is drawn only against a machine that
+ * told *this* device it has a copilot, which is never a guest — see
+ * `copilotOffered`.
  */
-const LISTING_SCREENS: readonly Screen[] = ['sessions', 'localhost', 'settings', 'machines']
+const LISTING_SCREENS: readonly Screen[] = ['copilot', 'sessions', 'localhost', 'settings', 'machines']
 
 /**
  * Text on its way into the terminal rather than into the DOM.
@@ -233,6 +293,64 @@ function element<K extends keyof HTMLElementTagNameMap>(
   if (className !== undefined) node.className = className
   if (text !== undefined) node.textContent = text
   return node
+}
+
+/**
+ * One consent argument, as a line somebody reads before deciding.
+ *
+ * `args` is `Record<string, unknown>` on the wire because a tool declares its own
+ * shape, so this has to render a value it has never seen. Objects and arrays are
+ * shown as JSON rather than as `[object Object]`, which is the one rendering that
+ * would hide the very thing being approved — the path a write is about, the text
+ * about to be typed into somebody's session.
+ *
+ * Bounded, because it lands on a screen a decision is made on, and everything
+ * here goes through `plain` at the call site like every other string that came
+ * off this socket. A value too long to show is cut with an ellipsis rather than
+ * silently truncated: a person who cannot see all of an argument needs to know
+ * that, and the machine's own screen has the whole of it.
+ */
+function describeArg(value: unknown): string {
+  if (value === null) return 'null'
+  if (typeof value === 'string') return cut(value)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return cut(JSON.stringify(value) ?? String(value))
+  } catch {
+    // A circular structure, which nothing on this wire produces and which must
+    // not be the reason a consent sheet fails to draw.
+    return '(cannot be shown here — look at the machine)'
+  }
+}
+
+/** 240 characters of an argument, and a mark saying there was more. */
+function cut(text: string): string {
+  return text.length <= 240 ? text : `${text.slice(0, 240)}…`
+}
+
+/**
+ * The scan's answer, restated as a question for the copilot.
+ *
+ * Put into the message box rather than sent, always. What reaches the copilot has
+ * to be something the person read and pressed Send on — a client that composed a
+ * message and dispatched it would be spending somebody's tokens on a sentence
+ * they never saw, which is exactly the kind of thing the consent gate exists to
+ * stop happening elsewhere.
+ *
+ * It carries the same facts the card shows and adds no claim of its own: the
+ * session, the reason, the note. The copilot is on the machine and can read those
+ * sessions for itself; what it cannot do is know which ones this browser was just
+ * looking at.
+ */
+function answerAsQuestion(answer: readonly AnswerSession[]): string {
+  const lines = ['I am looking at these sessions. What should I deal with first?']
+  for (const session of answer) {
+    for (const line of session.lines) {
+      if (!line.shown) continue
+      lines.push(`- ${session.title}: ${line.why} — ${line.note}`)
+    }
+  }
+  return lines.join('\n')
 }
 
 class Deck {
@@ -462,6 +580,20 @@ class Deck {
    * while somebody's finger is still on the button.
    */
   private openRow: string | null = null
+  /**
+   * The session whose Close is waiting for a second press, by id.
+   *
+   * The confirmation he asked for — *"close the session (with a confirmation)"*
+   * — lives in the list rather than in a dialog, and this is what makes it two
+   * steps. Held here for the reason {@link openRow} is: this list is rebuilt from
+   * scratch whenever the machine pushes a `sessions` frame, so a flag kept in the
+   * DOM would be wiped mid-decision by a status change on some unrelated row.
+   *
+   * Cleared on the `closed` answer, on a refusal, and on leaving the screen.
+   * Never on a timer: a question that withdraws itself is a question somebody
+   * answers by accident the next time they look.
+   */
+  private closing: string | null = null
   /** The port being renamed, and the text so far. See `port-book.ts`. */
   private renamingPort: number | null = null
   /** The machine being renamed, by id. */
@@ -487,6 +619,80 @@ class Deck {
    */
   private pairingAnother = false
 
+  /* ------------------------------------------------------------- copilot -- */
+
+  /**
+   * The copilot connection, which is not the pairing and never rides on it.
+   *
+   * `copilot.ts` carries the argument; the short form is that a browser paired to
+   * run terminals has no copilot reach at all — not a tab, not a frame — until
+   * somebody at the machine mints a connect code and it is redeemed here. A guest
+   * is never told the machine has one, so `offered` is false and the tab is
+   * absent rather than drawn and disabled.
+   */
+  private copilot: CopilotState = NO_COPILOT
+  /** The copilot credentials this browser holds, keyed by machine. */
+  private copilots: CopilotCredentials = {}
+  /** What is typed into the connect field, so a redraw does not empty it. */
+  private connectText = ''
+  /**
+   * What is typed into the message box.
+   *
+   * Held here rather than left in the DOM for the reason every other in-progress
+   * value in this class is: the copilot pushes frames unprompted — a tool row, a
+   * chat extension, a state change — and each one rebuilds this screen. A half-
+   * typed question living in a textarea would be erased by the copilot doing
+   * something, which is the one moment somebody is most likely to be typing.
+   */
+  private composerText = ''
+  /**
+   * The panel has been folded away on this visit.
+   *
+   * Not stored, and undone by opening the Copilot tab. It is a way to get the
+   * panel out of the way rather than a preference somebody has to find again —
+   * the desktop's own fold dot works the same way and for the same reason.
+   */
+  private dockFolded = false
+  /**
+   * Show the scan, or do the work with none of the driving.
+   *
+   * > *"Interactive mode ON — the visible scan. Interactive mode OFF — it does the
+   * > work in the background and returns the final answer normally."*
+   *
+   * The answer is the same object either way — `scanAnswer` over the same stops —
+   * so this decides whether anybody watches it being assembled and nothing else.
+   * Held in memory rather than stored: it is a choice about *this* look at the
+   * machine, and a tab reloaded is somebody starting again.
+   */
+  private interactive = true
+  /** The plan being played, or an empty list when no scan has run. */
+  private scanStops: ScanStop[] = []
+  /** The answer, once there is one. Null before the first scan. */
+  private answer: AnswerSession[] | null = null
+  /** The playhead, made on the first scan and kept for the life of the page. */
+  private scan: ScanRunner | null = null
+  private scanState: ScanState | null = null
+  /** The dots, mounted only while a visible scan is running. */
+  private field: ScanFieldHandle | null = null
+  /** The watch that hands the screen back the moment somebody touches it. */
+  private scanWatch: InterruptionWatch | null = null
+  /**
+   * Where the copilot lives while it is not on its own screen.
+   *
+   * A sibling of the content, like the tab strip and the banner, for the same
+   * reason: it has to survive the screens it is drawn over. **It is only ever
+   * populated when the current screen is not the copilot's own**, which is the
+   * layout rule he stated twice:
+   *
+   * > *"When it is interacting it is making two split views even inside its own
+   * > page. It should not make two split views on its own page."*
+   */
+  private readonly dock = element('aside', 'dock')
+  /** The consent sheet, when there is a question this connection may answer. */
+  private readonly sheet = element('div', 'sheet')
+  /** Redraws the countdown on a waiting confirmation, once a second. */
+  private sheetTimer: number | null = null
+
   constructor(root: HTMLElement) {
     this.root = root
     document.title = BRAND.name
@@ -508,7 +714,21 @@ class Deck {
     this.toast.hidden = true
     this.toast.setAttribute('aria-live', 'polite')
 
-    root.append(this.header, this.banner, this.credentialCard, this.tabs, this.content, this.toast)
+    this.dock.hidden = true
+    this.sheet.hidden = true
+
+    /*
+     * The dock sits *inside* a row with the content rather than after it.
+     *
+     * On a phone there is no room for a column, so `styles.css` lays it out as a
+     * strip along the bottom; on a window wide enough it is a real side panel.
+     * Either way it is a sibling of `content`, which is what lets the screen
+     * underneath keep its own scroll position while the copilot talks over it.
+     */
+    const body = element('div', 'body')
+    body.append(this.content, this.dock)
+
+    root.append(this.header, this.banner, this.credentialCard, this.tabs, body, this.toast, this.sheet)
   }
 
   /* ------------------------------------------------------------- startup -- */
@@ -533,6 +753,12 @@ class Deck {
     // The book is written where the pairing chose, so it has to be told which
     // that was before anything can change a name.
     this.portBook.setLifetime(this.remember)
+    // Read here rather than on the first visit to the Copilot screen, because
+    // the first `welcome` is what needs it: a copilot connection is opened by
+    // sending the stored credential the moment a socket says hello, and a client
+    // that read the store later would show a Connect field for the second it took
+    // somebody to look at the tab.
+    this.copilots = loadCopilots(this.stores)
 
     /*
      * Nothing is read out of the URL here any more, and that is a deletion
@@ -652,9 +878,17 @@ class Deck {
     this.notice = null
     this.credentialAsk = null
     this.openRow = null
+    this.closing = null
     this.attachedId = null
     this.destroyTerminal()
     this.forgetLocalhost()
+    // The copilot goes with the machine, and it is the sharpest case of the rule
+    // this method is: a conversation, a run and a grant are each a statement
+    // about *one* desktop, and carrying any of them across would put the previous
+    // machine's copilot on screen under the new one's name. The stored credential
+    // stays — it is keyed by machine, and switching back must not need a new
+    // code — but nothing else does.
+    this.forgetCopilot()
 
     this.hostPlatform = machine.credential.hostPlatform
     this.state = { phase: 'connecting', detail: `Connecting to ${machineLabel(machine, this.origin)}…`, retryAt: null, attempts: 0 }
@@ -680,6 +914,13 @@ class Deck {
       this.forget()
       return
     }
+    // The copilot credential for *that* machine and no other. Forgetting a
+    // machine is the person saying it is not theirs any more, and the copilot
+    // credential is the more powerful of the two secrets this browser held for
+    // it — leaving it behind would be forgetting the half that opens a terminal
+    // and keeping the half that changes settings.
+    this.copilots = withoutCopilot(this.copilots, id)
+    saveCopilots(this.stores, this.remember, this.copilots)
     this.book = next
     this.keep()
     if (!wasCurrent) {
@@ -903,6 +1144,18 @@ class Deck {
     // server itself may well still be starting on the desktop — which is what
     // the re-ask on reconnect below is for.
     if (state.phase !== 'online') this.devDo({ t: 'offline' })
+    // The copilot connection goes with the socket that carried it, and that is
+    // not a client decision — a `copilot.*` verb is refused until this socket has
+    // presented the copilot credential again, so a screen still drawing a
+    // composer would be a control that cannot act. `linked` survives, because it
+    // is a fact about a record on the machine rather than about this socket, so
+    // the next welcome sends a hello instead of asking for a code nobody needs.
+    if (state.phase !== 'online') {
+      this.copilotDo({ t: 'offline' })
+      // A scan is a thing being watched, and what it is watching has gone. Held
+      // rather than abandoned, so the trace and the answer stay readable.
+      if (this.scan !== null && isScanning(this.scan.state())) this.scan.pause('stalled')
+    }
 
     if (state.phase === 'online' && !wasOnline) {
       // Re-attach rather than assume. The desktop kept running while we were
@@ -1085,6 +1338,89 @@ class Deck {
     if (this.screen === 'localhost') this.screen = 'sessions'
   }
 
+  /* ------------------------------------------------------------- copilot -- */
+
+  /**
+   * Everything on screen about a copilot, taken away.
+   *
+   * Called when the machine changes and when the pairing goes. It deliberately
+   * does *not* touch {@link copilots}: those are credentials keyed by machine,
+   * and switching away from a machine and back again must not cost a code minted
+   * at a keyboard. What goes is the conversation, the run, the grant, the scan
+   * and everything drawn from them — each of which is a statement about a
+   * machine this browser is no longer talking to.
+   */
+  private forgetCopilot(): void {
+    this.copilot = NO_COPILOT
+    this.connectText = ''
+    this.composerText = ''
+    this.dockFolded = false
+    this.scan?.destroy()
+    this.scan = null
+    this.scanState = null
+    this.scanStops = []
+    this.answer = null
+    this.endScanVisuals()
+    this.armSheetTimer()
+    if (this.screen === 'copilot') this.screen = 'sessions'
+  }
+
+  /**
+   * One copilot transition: run it, put its frames on the wire, keep what it
+   * hands back, and redraw.
+   *
+   * The same shape as `localhostDo` and `devDo` next door, for the same reason:
+   * every rule about what may be sent lives in a module a test can reach, and
+   * this is the four lines that connect it to a socket. The one thing that is
+   * this method's own is persisting a credential — `copilot.ts` owns no storage
+   * on purpose, because *where a secret lives in this browser* is a question
+   * `remember.ts` answers and it depends on what the person said about this
+   * computer.
+   */
+  private copilotDo(action: CopilotAction): void {
+    const before = this.copilot
+    const step = copilotStep(this.copilot, action)
+    this.copilot = step.state
+    for (const message of step.send) this.connection?.send(message)
+    if (step.credential !== undefined) {
+      this.copilots = withCopilot(this.copilots, this.dialledId, step.credential)
+      saveCopilots(this.stores, this.remember, this.copilots)
+      // A connection that has just been made is one somebody is looking at.
+      // Landing on the copilot's own screen rather than leaving them on the
+      // Connect field with a success message is the difference between a
+      // ceremony that finished and one that appears to have done nothing.
+      this.connectText = ''
+      this.screen = 'copilot'
+    }
+    if (before === this.copilot && step.send.length === 0) return
+    // A question this connection may answer arrives as a sheet over everything,
+    // so the countdown has to start with it and stop with it — a timer left
+    // running is a redraw a second forever on a page nobody is looking at.
+    this.armSheetTimer()
+    this.render()
+  }
+
+  /**
+   * A confirmation expires into a **refusal**, so the countdown is not decoration.
+   *
+   * > *"What happens if you say nothing — `expiresAt`. It expires into a refusal,
+   * > so a person who walks away has decided rather than deferred, and the
+   * > countdown has to be in front of them."*
+   *
+   * One second is the granularity the number is written at, so anything finer
+   * would be redraws nobody can see. The timer exists only while a sheet is up.
+   */
+  private armSheetTimer(): void {
+    const wanted = this.copilot.ask !== null
+    if (wanted === (this.sheetTimer !== null)) return
+    if (!wanted) {
+      if (this.sheetTimer !== null) window.clearInterval(this.sheetTimer)
+      this.sheetTimer = null
+      return
+    }
+    this.sheetTimer = window.setInterval(() => this.renderSheet(), 1000)
+  }
+
   private onCredential(token: string): void {
     const now = Date.now()
     // The machine this token is *for*, which during a second pairing is not the
@@ -1185,6 +1521,13 @@ class Deck {
     // that only ever wrote notices was a client that left the pairing
     // instructions sitting over a live session list. See `noticeAfter`.
     this.notice = noticeAfter(this.notice, message, this.noun)
+    // And the copilot, for the fourth time the same reason: what a frame does to
+    // the copilot is a rule, and a rule written inside the switch below is one
+    // nothing in this repository can check. Nine frame types land here and the
+    // switch has a case for none of them by design. `welcome` is handled
+    // separately below rather than here, because opening a copilot connection
+    // needs the stored credential — which this method has no business reading.
+    if (message.t !== 'welcome') this.copilotDo({ t: 'frame', message })
 
     switch (message.t) {
       case 'welcome':
@@ -1219,11 +1562,32 @@ class Deck {
         }
         this.applySessions(message.sessions, activity)
         if (this.screen === 'pair') this.screen = 'sessions'
+        /*
+         * The copilot connection is opened here, on every welcome, and that is
+         * the rule rather than an optimisation.
+         *
+         * `welcome.copilot.open` is *always* false — a session channel does not
+         * carry the copilot by existing — so a `copilot.hello` has to go out on
+         * every connect and every reconnect, carrying the credential this
+         * browser was given when somebody redeemed a code at the machine. A
+         * client that skipped it would draw a Copilot tab whose every frame came
+         * back refused.
+         */
+        this.copilotDo({
+          t: 'welcome',
+          capabilities: message.capabilities,
+          link: message.copilot ?? null,
+          credential: this.copilots[this.dialledId] ?? null,
+        })
         // A desktop that offers neither tunnelling nor dev servers — a different
         // machine on the same pairing, or one launched with a narrower `offer` —
         // must not leave this browser sitting on a screen whose every control it
         // would now refuse.
         if (this.screen === 'localhost' && !this.servesLocalhost) this.forgetLocalhost()
+        // The same rule for the copilot, and it bites in one more case: a machine
+        // that has *disconnected* this browser's copilot since the last socket.
+        // The tab goes, so the screen it was showing has to go with it.
+        if (this.screen === 'copilot' && !this.copilot.offered) this.screen = 'sessions'
         // Asked on arrival rather than on the first tap, but only for somebody
         // already looking at it — which is the reconnect case, since the tab is
         // what asks otherwise.
@@ -1277,6 +1641,32 @@ class Deck {
         return
       }
 
+      case 'closed': {
+        /*
+         * The machine has ended the session this browser asked it to end.
+         *
+         * The row is removed *here*, on the answer, and never on the tap. Every
+         * other list change in this client works the same way and the reason is
+         * sharper for this one than for any of them: an optimistic removal over
+         * a refusal — a folder taken back a second ago, a session that had
+         * already exited — would leave a person looking at a list with a live
+         * session missing from it and no way to get it back except a reconnect.
+         *
+         * The two-step confirm is torn down with it rather than left holding an
+         * id that no longer names anything, and the terminal goes if this is the
+         * session it was showing: a screen full of a dead session's last paint,
+         * with a keyboard under it, is the shape of every "it works sometimes"
+         * complaint this review is about.
+         */
+        this.closing = null
+        this.openRow = null
+        this.sessions = this.sessions.filter((entry) => entry.id !== message.id)
+        this.activity.delete(message.id)
+        if (this.attachedId === message.id) this.leaveTerminal()
+        else if (this.screen === 'sessions') this.renderContent()
+        return
+      }
+
       case 'output':
         if (message.id !== this.attachedId) return
         this.terminal?.write(message.data)
@@ -1309,6 +1699,11 @@ class Deck {
         // button left reading "Starting…" over a session that will never exist
         // is the same lie as a live-looking cursor over a dead socket.
         this.awaitingCreate = false
+        // And a Close that was refused is a Close that is over. The button is
+        // sitting there reading "Closing…" and disabled; leaving it would be a
+        // control frozen mid-press with the explanation printed above the list
+        // it is in. The question goes and the sentence stays.
+        this.closing = null
         // The sentence itself was set by `noticeAfter` above; what is left here
         // is where it has to be *said*.
         if (message.code === 'unknown-session') {
@@ -1347,6 +1742,23 @@ class Deck {
     this.renderCredentialAsk()
     this.renderTabs()
     this.renderContent()
+    this.renderDock()
+    this.renderSheet()
+    /*
+     * Last, and it has to be last.
+     *
+     * A full render replaces the session list and the copilot's own fleet list
+     * with fresh elements, so every mark a running scan had put on a row is gone
+     * with the row it was on. Without this, switching screens mid-scan left the
+     * playhead pointing at a session nothing on screen was marked as — the hole
+     * in the dot field was cut in the right place and the row under it had no
+     * ring, which reads as the effect being decorative.
+     *
+     * It is class toggles only, so it never tears anything down: see `paintScan`
+     * for why that distinction is the whole reason this is a second method
+     * rather than part of the render.
+     */
+    this.paintScan()
   }
 
   /**
@@ -1372,6 +1784,12 @@ class Deck {
     }
 
     const options: Array<{ screen: Screen; label: string }> = [
+      // Absent — not disabled — for a device the machine did not tell about its
+      // copilot, which is every guest. There is no frame this browser can send
+      // that would measure whether that machine has one, and drawing a dark tab
+      // would be this client making a claim the machine went out of its way not
+      // to make.
+      ...(this.copilot.offered ? [{ screen: 'copilot' as Screen, label: 'Copilot' }] : []),
       { screen: 'sessions', label: 'Sessions' },
       ...(this.servesLocalhost ? [{ screen: 'localhost' as Screen, label: 'Localhost' }] : []),
       { screen: 'settings', label: 'Settings' },
@@ -1411,6 +1829,10 @@ class Deck {
     // is not on this screen. Left set, the next visit to the screen it came from
     // would arrive with a field already open under somebody's finger.
     this.openRow = null
+    // And a half-answered confirmation is abandoned rather than parked. Coming
+    // back to Sessions and finding a Close session button already waiting under
+    // a thumb would be the app holding a question nobody is still asking.
+    this.closing = null
     this.renamingPort = null
     this.renamingMachine = null
     if (
@@ -1427,6 +1849,20 @@ class Deck {
     // the desktop has usually already read — and asking is also what subscribes
     // this connection to the pushes.
     if (screen === 'localhost') this.askDevServers()
+    // Asked on arrival for the same reason the port list is not: these four
+    // frames read state the desktop already holds, and asking is also what
+    // subscribes this connection to the pushes that follow. Refused politely by
+    // `copilotStep` when the connection is not open, so there is no second
+    // condition here to get out of step with the one in that module.
+    if (screen === 'copilot') {
+      // Opening the tab is what un-folds the panel, which is what makes the fold
+      // dot a way to get it out of the way rather than a preference somebody has
+      // to go and find again. It matters here rather than in `renderDock` because
+      // the dock is not drawn on this screen at all — the layout rule — so this
+      // is the only moment the flag can be cleared by a deliberate act.
+      this.dockFolded = false
+      this.copilotDo({ t: 'attach' })
+    }
     this.render()
   }
 
@@ -1504,6 +1940,7 @@ class Deck {
     }
     if (this.screen === 'machines') this.title.textContent = 'Machines'
     if (this.screen === 'settings') this.title.textContent = 'Settings'
+    if (this.screen === 'copilot') this.title.textContent = 'Copilot'
 
     const machine = this.machine
     if (machine === null) {
@@ -1611,6 +2048,9 @@ class Deck {
         return
       case 'sessions':
         this.content.replaceChildren(this.sessionsScreen())
+        return
+      case 'copilot':
+        this.content.replaceChildren(this.copilotScreen())
         return
     }
   }
@@ -1946,7 +2386,63 @@ class Deck {
 
       button.append(dot, body, element('span', 'session__chevron', '›'))
       button.addEventListener('click', () => this.openSession(session.id))
-      row.append(button)
+      /*
+       * How the scan finds this row.
+       *
+       * The focus box is the **measured rectangle of a real row on this page**,
+       * re-read every frame, so it follows the list as it scrolls and reflows.
+       * Stamped on the button rather than on the `<li>` because the button is
+       * what has the row's own bounds — the list item stretches to the column and
+       * a hole cut to that would be a band across the screen rather than a box
+       * around a session.
+       */
+      button.setAttribute(SCAN_ATTRIBUTE, session.id)
+
+      /*
+       * The row, and beside it the one thing a row can do besides open.
+       *
+       * Drawn only when the machine advertised `close` — a session layer that
+       * cannot end a session never offers the method the capability is derived
+       * from, and the public demo box withholds it on purpose — so this is never
+       * a control that discovers it does not work. The line is a flex container
+       * rather than the row being the whole `<li>`, because the tappable area
+       * has to stop before the menu: a 60-point row with a second target inside
+       * it is a row people hit the wrong half of.
+       */
+      const line = element('div', 'session-line')
+      line.append(button)
+      const closable = this.state.phase === 'online' && closeOffered(this.capabilities)
+      if (closable) {
+        const open = this.openRow === session.id
+        const more = element('button', 'session__more', '···')
+        more.type = 'button'
+        more.setAttribute('aria-expanded', open ? 'true' : 'false')
+        more.setAttribute('aria-label', `Actions for ${session.title}`)
+        more.addEventListener('click', () => {
+          this.openRow = open ? null : session.id
+          // A menu opening is a decision abandoned. Leaving the confirm up while
+          // a second row's menu opened would put two live questions on one
+          // screen, with one pair of buttons between them.
+          this.closing = null
+          this.renderContent()
+        })
+        line.append(more)
+      }
+      row.append(line)
+
+      if (closable && this.closing === session.id) row.append(this.closeConfirm(session))
+      else if (closable && this.openRow === session.id) {
+        const menu = element('div', 'port__menu')
+        const close = element('button', 'port__menu-item port__menu-item--warn', 'Close session')
+        close.type = 'button'
+        close.addEventListener('click', () => {
+          this.openRow = null
+          this.closing = session.id
+          this.renderContent()
+        })
+        menu.append(close)
+        row.append(menu)
+      }
       list.append(row)
     }
     screen.append(list)
@@ -1964,6 +2460,64 @@ class Deck {
      * that ends in two settings is the same problem upside down.
      */
     return screen
+  }
+
+  /**
+   * The confirmation, in the row, under the session it is about.
+   *
+   * ## Why it is here rather than in a dialog
+   *
+   * He asked for a confirmation by name — *"close the session (with a
+   * confirmation)"* — and the interesting question is what a confirmation is
+   * *for*. It is not for slowing somebody down; it is so the sentence describing
+   * the consequence and the button causing it are read together. A `confirm()`
+   * would put that sentence in a browser chrome box that names the *origin*
+   * rather than the session, over a list that has scrolled away underneath it —
+   * so the one thing a person needs to check, which row this is about, would be
+   * the one thing they could no longer see.
+   *
+   * In the row, the title is directly above the question, the folder is directly
+   * above that, and the destructive button is the one furthest from the thumb's
+   * resting place. `closeQuestion` composes the sentence in `sessions.ts`,
+   * where a test can hold it.
+   *
+   * ## The two buttons, in this order
+   *
+   * Cancel first. This list is scrolled with a thumb and the trailing edge is
+   * where an accidental tap lands, so the irreversible one goes there only
+   * because the whole strip only exists after a deliberate press on Close
+   * session in the menu — this is already the second step, and the third would
+   * be a control nobody finishes.
+   */
+  private closeConfirm(session: RemoteSession): HTMLElement {
+    const block = element('div', 'session-confirm')
+    block.append(element('p', 'session-confirm__ask', closeQuestion(session)))
+    const actions = element('div', 'session-confirm__actions')
+
+    const cancel = element('button', 'button button--quiet', 'Cancel')
+    cancel.type = 'button'
+    cancel.addEventListener('click', () => {
+      this.closing = null
+      this.renderContent()
+    })
+
+    const confirm = element('button', 'button button--danger', 'Close session')
+    confirm.type = 'button'
+    confirm.addEventListener('click', () => {
+      // Sent, and nothing else. The row stays until the machine answers
+      // `closed` — see that frame's handler for why an optimistic removal is
+      // wrong here in particular. The label changes so the press is visibly
+      // acknowledged on a slow link, and the button is disabled so a second
+      // press cannot send a second frame about a session that is already going.
+      this.connection?.send({ t: 'close', id: session.id })
+      confirm.disabled = true
+      confirm.textContent = 'Closing…'
+      cancel.disabled = true
+    })
+
+    actions.append(cancel, confirm)
+    block.append(actions)
+    return block
   }
 
   /**
@@ -2214,6 +2768,32 @@ class Deck {
       line.append(element('span', named ? 'port__label port__label--named' : 'port__label', portRowTitle(row)))
     }
 
+    /*
+     * Open it — **on the machine**, which is the thing this screen could never do.
+     *
+     * His complaint, in full: *"Localhost lists ports with no way to open any of
+     * them. The whole reason localhost exists is to drive them."* A browser tab
+     * cannot serve a tunnel and the three reasons are at the top of
+     * `localhost.ts`; what it can do is ask the machine to open the page there,
+     * which is the answer he gave for the phone in the same review — *"a browser
+     * started from the phone must run on the machine you are inside."*
+     *
+     * Before Check, because it is what most people came here to press. Drawn only
+     * when the machine advertised `web`, which it withholds from a host with no
+     * window and from a guest device — so this is never a button that discovers
+     * it does not work.
+     */
+    if (online && port !== null && webOfferedHere(this.capabilities)) {
+      const busy = this.localhost.opening
+      const here = busy === port
+      const open = element('button', 'port__open', here ? 'Opening…' : 'Open')
+      open.type = 'button'
+      open.disabled = busy !== null
+      open.title = `Open localhost:${port} on the ${this.noun}`
+      open.addEventListener('click', () => this.localhostDo({ t: 'open', port }))
+      line.append(open)
+    }
+
     // One check at a time, and only with a socket. A second Check pressed while
     // one is running is refused by the machine itself; disabling it is what stops
     // somebody pressing a button that does nothing.
@@ -2286,6 +2866,21 @@ class Deck {
           // refusal is composed on the desktop, and this end is the one that pays
           // if that ever stops being true.
           plain(checkSentence(outcome, this.noun)),
+        ),
+      )
+    }
+
+    // The open's answer, under the same row and beside the check's. Two lines
+    // rather than one shared one: a check proved a port answers and an open put a
+    // page on somebody's screen, and a row that had done both would otherwise
+    // show only whichever finished last.
+    const openOutcome = this.localhost.openOutcome
+    if (openOutcome !== null && openOutcome.port === port) {
+      item.append(
+        element(
+          'p',
+          openOutcome.kind === 'opened' ? 'port__result port__result--ok' : 'port__result',
+          plain(openSentence(openOutcome, this.noun)),
         ),
       )
     }
@@ -2891,6 +3486,776 @@ class Deck {
     return block
   }
 
+  /* -------------------------------------------------- the copilot on screen -- */
+
+  /**
+   * The copilot's own screen, and **no split on it**.
+   *
+   * He said this twice in one recording, which is why it is stated twice here:
+   *
+   * > *"When it is interacting it is making two split views even inside its own
+   * > page. It should not make two split views on its own page."*
+   *
+   * So on this screen the copilot *is* the page — the conversation, the scan and
+   * the answer all in one column — and {@link renderDock} draws nothing. On any
+   * other screen it is the side panel, and only then. The two share
+   * {@link copilotBody} so that what is offered cannot drift between them.
+   */
+  private copilotScreen(): HTMLElement {
+    const screen = element('div', 'screen')
+    screen.style.padding = '0'
+    if (!this.copilot.link.linked) {
+      screen.append(this.copilotConnect())
+      return screen
+    }
+    screen.append(this.copilotBody(false))
+    return screen
+  }
+
+  /**
+   * Six digits, minted at the machine, redeemed here.
+   *
+   * The whole of the second factor. A browser paired to run terminals holds a
+   * credential that says nothing about the copilot; connecting one is a
+   * deliberate act performed at the machine, and this field is the other half of
+   * it. `normaliseCode` before sending, for the reason the pairing screen gives:
+   * the desktop hashes the string it is handed and does not strip separators, so
+   * one place has to decide what a code looks like and it is the client, because
+   * the client is where somebody typed it.
+   */
+  private copilotConnect(): HTMLElement {
+    const block = element('div', 'screen screen--form copilot-connect')
+    block.append(element('h2', undefined, 'Connect the copilot'))
+    block.append(
+      element(
+        'p',
+        'screen__lead',
+        `Open ${BRAND.name} on the ${this.noun} and ask it for a copilot code. It is separate from the code that paired this browser, and it lasts a minute.`,
+      ),
+    )
+
+    const field = asCodeField(element('input', 'code-field'))
+    field.value = this.connectText
+    field.setAttribute('aria-label', 'Copilot code')
+    field.addEventListener('input', () => {
+      this.connectText = field.value
+      const code = normaliseCode(field.value)
+      // Submits itself on the sixth digit, like the pairing field: a code is
+      // exactly six long, so a button press at that point asks a question with
+      // one possible answer.
+      if (code !== null) this.copilotDo({ t: 'connect', code })
+    })
+    block.append(field)
+
+    if (this.copilot.notice !== null) {
+      block.append(element('p', 'note copilot-notice', plain(this.copilot.notice)))
+    }
+    block.append(
+      element(
+        'p',
+        'note',
+        'The copilot can start sessions, read them and change settings on that machine. Connecting a browser gives it whatever the machine chose to grant, and the machine can take it back at any time.',
+      ),
+    )
+    return block
+  }
+
+  /**
+   * Everything a connected copilot offers, on the screen or in the panel.
+   *
+   * One builder for both, and `compact` changes only what is *left out* of the
+   * panel — never what is offered. A side panel that could do something the
+   * screen could not, or the other way round, would be two features wearing one
+   * name.
+   */
+  private copilotBody(compact: boolean): HTMLElement {
+    const body = element('div', 'copilot')
+    const grant = this.copilot.link.grant
+
+    body.append(this.copilotStatus())
+    body.append(this.scanControls())
+
+    const status = this.scanStatusLine()
+    if (status !== null) body.append(status)
+
+    const answer = this.answerCard()
+    if (answer !== null) body.append(answer)
+
+    /*
+     * The fleet, on the copilot's own page, because a scan needs something to
+     * point at and this screen has no session list of its own. On any other
+     * screen the rows are already there — `sessionsScreen` stamps them with the
+     * same attribute — so the panel does not draw a second copy of a list that
+     * is on screen behind it.
+     *
+     * It goes away once there is an answer, and that was found by looking: the
+     * card and the list underneath it were printing the same three sessions with
+     * the same words, which is the duplication his design rules call out by name.
+     * The fleet is the scan's *stage* — it exists to be pointed at — and once the
+     * pointing is over the answer is the better version of the same list. It
+     * comes back the moment another scan starts.
+     */
+    if (!compact && (this.answer === null || this.scanRunning)) body.append(this.scanFleet())
+
+    body.append(this.chatBlock(compact))
+
+    const said = grantSentence(grant)
+    if (said !== null) body.append(element('p', 'note copilot-note', said))
+    if (grant.act) body.append(this.composer())
+
+    const waiting = this.pendingRows()
+    if (waiting !== null) body.append(waiting)
+
+    if (this.copilot.notice !== null) {
+      const notice = element('p', 'note copilot-notice', plain(this.copilot.notice))
+      body.append(notice)
+    }
+    return body
+  }
+
+  /**
+   * What the copilot is, in two lines that are about two different things.
+   *
+   * `desk` is the copilot at the machine — the conversation the person is having
+   * there — and `run` is *this browser's own* run, which is the only thing it can
+   * talk to. The protocol keeps them apart and so does this: a screen that showed
+   * the desk's state on its own Start button would offer to start something that
+   * is already running, or refuse to because something unrelated is.
+   */
+  private copilotStatus(): HTMLElement {
+    const block = element('div', 'copilot-status')
+    const report = this.copilot.report
+    block.append(element('p', 'copilot-status__desk', deskSentence(report)))
+
+    const facts: string[] = []
+    if (report !== null) {
+      facts.push(report.run === null ? 'No run from this browser yet' : 'This browser has its own run')
+      if (report.profile !== null) facts.push(plain(report.profile))
+      // Tokens, never money. This client has never shown a price and
+      // `tests/no-cost.test.ts` is the latch that keeps it that way; the context
+      // a turn costs is a fact about a conversation rather than a bill.
+      if (report.turnTokens > 0) facts.push(`${report.turnTokens.toLocaleString()} tokens a turn`)
+      if (report.tools > 0) facts.push(`${report.tools} tools`)
+    }
+    if (facts.length > 0) block.append(element('p', 'copilot-status__facts', facts.join(' · ')))
+
+    const why = unavailableSentence(report)
+    if (why !== null) block.append(element('p', 'copilot-status__why', plain(why)))
+    return block
+  }
+
+  /**
+   * The toggle and the button that starts a scan.
+   *
+   * The toggle is the whole of *"both modes are required"*, and the promise it
+   * makes is that turning it off changes what you **watch** and not what you
+   * **get**: the answer is the same function over the same stops either way, and
+   * the one field that could differ is handled inside the shared model. So the
+   * label says what it does rather than naming a mode — somebody who reads
+   * "interactive" has to guess, and the guess is usually that it makes the answer
+   * better.
+   */
+  private scanControls(): HTMLElement {
+    const block = element('div', 'copilot-scan')
+
+    const toggle = element('label', 'copilot-toggle')
+    const box = element('input')
+    box.type = 'checkbox'
+    box.checked = this.interactive
+    box.addEventListener('change', () => {
+      this.interactive = box.checked
+      // A scan already running is left running rather than cut off: the switch is
+      // about the next one, and stopping the thing somebody is watching in order
+      // to honour a preference about watching is the wrong way round.
+      this.render()
+    })
+    toggle.append(box, element('span', undefined, 'Show me the scan'))
+    block.append(toggle)
+
+    const running = this.scanRunning
+    const button = element('button', 'button copilot-scan__go', running ? 'Stop' : 'Scan the sessions')
+    button.type = 'button'
+    // Nothing to scan is not a disabled button with no explanation: there is no
+    // button at all, and the sentence under it says what is missing.
+    button.disabled = !running && this.sessions.length === 0
+    button.addEventListener('click', () => (running ? this.stopScan() : this.startScan()))
+    block.append(button)
+
+    if (this.sessions.length === 0) {
+      block.append(
+        element('p', 'copilot-scan__none', `There are no sessions on the ${this.noun} to scan.`),
+      )
+    }
+    return block
+  }
+
+  /**
+   * The one line under the controls while a scan is running, or null.
+   *
+   * `statusSentence` composes it, in the shared model, so the desktop and this
+   * client say the same thing about the same state — including *why* it stopped,
+   * which matters more at machine speed than it did at reading speed: the person
+   * will not have seen which of their own gestures did it.
+   */
+  private get scanRunning(): boolean {
+    return this.scanState !== null && isScanning(this.scanState)
+  }
+
+  private scanStatusLine(): HTMLElement | null {
+    const state = this.scanState
+    if (!this.scanRunning || state === null) return null
+    const line = element('div', 'copilot-playhead')
+    line.append(element('span', 'copilot-playhead__text', statusSentence(state)))
+    const resume = element('button', 'button button--quiet copilot-playhead__resume', 'Carry on')
+    resume.type = 'button'
+    // Drawn always and hidden until it is needed. See `paintScan`: a control that
+    // appears between a pointerdown and its own click is a control that cannot be
+    // pressed, and this one is pressed at exactly the moment somebody has just
+    // touched the screen.
+    resume.hidden = state.status !== 'paused'
+    resume.addEventListener('click', () => this.scan?.resume())
+    line.append(resume)
+    const bar = element('div', 'copilot-playhead__bar')
+    const fill = element('div', 'copilot-playhead__fill')
+    fill.style.width = `${Math.round((state.seen.length / Math.max(1, state.count)) * 100)}%`
+    bar.append(fill)
+    line.append(bar)
+    return line
+  }
+
+  /**
+   * The fleet the scan walks, on the copilot's own page.
+   *
+   * Every row carries {@link SCAN_ATTRIBUTE}, which is what the focus box is
+   * measured from — a real rectangle around a real row, re-read every frame, so
+   * the hole follows the list rather than a remembered position. The row that is
+   * currently focused is marked so the ring is drawn in CSS rather than on the
+   * canvas: a border a browser paints is crisper than one a canvas does, and it
+   * scrolls with the row for free.
+   */
+  private scanFleet(): HTMLElement {
+    const block = element('div', 'copilot-fleet')
+    const state = this.scanState
+    const here = this.scanRunning && state !== null ? (this.scanStops[state.index]?.sessionId ?? null) : null
+    const seen = new Set((state?.seen ?? []).map((index) => this.scanStops[index]?.sessionId))
+
+    for (const stop of this.plannedStops()) {
+      const row = element('div', 'copilot-fleet__row')
+      row.setAttribute(SCAN_ATTRIBUTE, stop.sessionId)
+      if (stop.sessionId === here) row.classList.add('scan-here')
+      if (seen.has(stop.sessionId)) row.classList.add('scan-seen')
+      row.append(element('span', 'copilot-fleet__why', stop.why))
+      const body = element('div', 'copilot-fleet__body')
+      body.append(element('div', 'copilot-fleet__title', plain(stop.sessionTitle)))
+      body.append(element('div', 'copilot-fleet__note', plain(stop.note)))
+      row.append(body)
+      block.append(row)
+    }
+    return block
+  }
+
+  /**
+   * The stops as they would be planned right now.
+   *
+   * Drawn from the live plan while a scan is running so the list under the focus
+   * box cannot reorder itself mid-flight — a session going idle two stops in
+   * would otherwise move the row the box is measured from, and the hole would
+   * jump to a different session with no explanation.
+   */
+  private plannedStops(): ScanStop[] {
+    if (this.scanStops.length > 0) return this.scanStops
+    return scanPlan({
+      sessions: this.sessions,
+      activity: this.activity,
+      started: this.copilot.sessions,
+      tools: this.copilot.tools,
+      now: Date.now(),
+    })
+  }
+
+  /**
+   * The answer: one structured response, grouped by session.
+   *
+   * > *"It returns to its own chat and combines everything into one structured
+   * > response: this session did this, this session did that. Then it stops, and
+   * > he reads at his own pace, in one place."*
+   *
+   * Every line of it is a fact that came off the wire — the status, the exit code,
+   * when the session last did something — and the quoted line, where there is
+   * one, is **the machine's own sentence** about the call that started that
+   * session, joined through `originRunId`. A stop with nothing to quote draws no
+   * quote. See the header of `copilot-scan.ts` for why nothing here is composed.
+   */
+  private answerCard(): HTMLElement | null {
+    const answer = this.answer
+    if (answer === null) return null
+    const card = element('section', 'answer')
+    card.append(element('h3', 'answer__head', 'What the sessions are doing'))
+    card.append(element('p', 'answer__count', answerSummary(answer)))
+
+    for (const session of answer) {
+      const group = element('div', 'answer__session')
+      group.append(element('div', 'answer__title', plain(session.title)))
+      for (const line of session.lines) {
+        const row = element('div', line.shown ? 'answer__line' : 'answer__line answer__line--missed')
+        row.append(element('span', 'answer__why', line.why))
+        row.append(element('span', 'answer__note', plain(line.note)))
+        // Only when there is one. A stop with no quote is a stop this browser has
+        // no line of the machine's own to show, and substituting the folder or
+        // the title would produce something that looks like evidence and is not.
+        if (line.quote !== '') row.append(element('div', 'answer__quote', plain(line.quote)))
+        if (!line.shown) row.append(element('span', 'answer__missed', 'Not reached'))
+        group.append(row)
+      }
+      card.append(group)
+    }
+
+    card.append(element('p', 'answer__from', ANSWER_PROVENANCE))
+
+    // The one thing that turns a reading into a conversation, and it exists only
+    // when this connection may actually send it. The text is put in the composer
+    // rather than sent, so what goes to the copilot is something the person read
+    // and pressed send on rather than something this client said on their behalf.
+    if (this.copilot.link.grant.act) {
+      const ask = element('button', 'button button--quiet answer__ask', 'Ask the copilot about this')
+      ask.type = 'button'
+      ask.addEventListener('click', () => {
+        this.composerText = answerAsQuestion(answer)
+        this.render()
+      })
+      card.append(ask)
+    }
+    return card
+  }
+
+  /** The conversation, oldest first. Empty until a run exists. */
+  private chatBlock(compact: boolean): HTMLElement {
+    const block = element('div', 'chat')
+    const messages = compact ? this.copilot.chat.slice(-6) : this.copilot.chat
+    if (messages.length === 0) {
+      block.append(
+        element(
+          'p',
+          'empty',
+          this.copilot.report?.run === null
+            ? 'No run from this browser yet. Start one to talk to the copilot on that machine.'
+            : 'Nothing said yet.',
+        ),
+      )
+    }
+    for (const message of messages) {
+      const bubble = element('div', `chat__bubble chat__bubble--${message.role}`)
+      bubble.append(element('div', 'chat__text', plain(message.text)))
+      // Said rather than hidden. A cut message is the machine telling this
+      // browser there is more of it, and the honest answer is to say where the
+      // rest is instead of showing a paragraph that stops mid-sentence.
+      if (message.truncated === true) {
+        block.append(bubble)
+        bubble.append(element('div', 'chat__more', `Cut short here. The whole answer is on the ${this.noun}.`))
+        continue
+      }
+      block.append(bubble)
+    }
+
+    const tools = this.toolTrail()
+    if (tools !== null) block.append(tools)
+    return block
+  }
+
+  /**
+   * What the copilot has actually done, as it does it.
+   *
+   * This is the frame that makes a refusal visible: a call the grant did not
+   * cover arrives with `outcome: 'refused'` and the machine's own reason, rather
+   * than as silence. A gate that denies invisibly is indistinguishable from a
+   * gate that was never reached.
+   */
+  private toolTrail(): HTMLElement | null {
+    if (this.copilot.tools.length === 0) return null
+    const trail = element('div', 'trail')
+    for (const row of this.copilot.tools.slice(-8)) {
+      const line = element('div', `trail__row trail__row--${row.outcome}`)
+      line.append(element('span', 'trail__tool', plain(row.tool)))
+      line.append(element('span', 'trail__detail', plain(row.detail)))
+      if (row.refusal !== null) line.append(element('span', 'trail__refusal', plain(row.refusal)))
+      trail.append(line)
+    }
+    return trail
+  }
+
+  /** Talking to the copilot. Drawn only with `act`, because it is an act. */
+  private composer(): HTMLElement {
+    const block = element('form', 'composer')
+    const field = element('textarea', 'composer__field')
+    field.value = this.composerText
+    field.rows = 2
+    field.placeholder = 'Ask the copilot…'
+    field.setAttribute('aria-label', 'Message the copilot')
+    field.addEventListener('input', () => {
+      this.composerText = field.value
+    })
+    const send = element('button', 'button composer__send', this.copilot.sending ? 'Sending…' : 'Send')
+    send.type = 'submit'
+    send.disabled = this.copilot.sending || this.copilot.report?.run === null
+
+    block.append(field, send)
+    block.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const text = this.composerText
+      this.composerText = ''
+      this.copilotDo({ t: 'say', text })
+    })
+
+    // Start is here rather than beside the desk's status, because it is what the
+    // composer needs in order to work: this device's run is what a message goes
+    // to, and a box that could not send until something else was pressed
+    // somewhere else is the shape of a control that appears broken.
+    if (this.copilot.report?.run === null) {
+      const start = element('button', 'button button--quiet composer__start', 'Start a run')
+      start.type = 'button'
+      const why = unavailableSentence(this.copilot.report)
+      // Disabled **with the reason said out loud**, in the machine's own words —
+      // it is the only party that knows whether there is an agent installed and
+      // signed in. A dead button with no sentence is the defect this review is
+      // built on.
+      start.disabled = why !== null
+      start.addEventListener('click', () => this.copilotDo({ t: 'start' }))
+      block.append(start)
+    }
+    return block
+  }
+
+  /**
+   * Confirmations waiting at the machine, which this connection may not answer.
+   *
+   * Watching a question is not judging it, and the row carries no arguments —
+   * a device that cannot answer has no decision to make with them. What it is
+   * worth is the failure the design named: a dialog on a screen nobody is looking
+   * at, timing out in silence two minutes later.
+   */
+  private pendingRows(): HTMLElement | null {
+    const waiting = this.copilot.pending.filter((row) => !row.mine)
+    if (waiting.length === 0) return null
+    const block = element('div', 'pending')
+    for (const row of waiting) {
+      const line = element('div', 'pending__row')
+      line.append(element('span', 'pending__tool', plain(row.tool)))
+      line.append(element('span', 'pending__summary', plain(row.summary)))
+      line.append(element('span', 'pending__where', GO_AND_LOOK))
+      block.append(line)
+    }
+    return block
+  }
+
+  /* ------------------------------------------------------------- the dock -- */
+
+  /**
+   * The copilot on somebody else's screen, and **only** on somebody else's screen.
+   *
+   * The other half of the layout rule. On the copilot's own page this draws
+   * nothing at all — not a collapsed panel, not an empty aside — because the rule
+   * is about the page not splitting, and a hidden splitter is still a splitter
+   * the first time somebody drags it.
+   */
+  private renderDock(): void {
+    const wanted =
+      this.copilot.link.open &&
+      this.screen !== 'copilot' &&
+      this.screen !== 'pair' &&
+      this.screen !== 'terminal' &&
+      !this.dockFolded &&
+      (this.scanState !== null || this.answer !== null || this.copilot.chat.length > 0)
+    this.dock.hidden = !wanted
+    if (!wanted) {
+      this.dock.replaceChildren()
+      return
+    }
+
+    const head = element('div', 'dock__head')
+    head.append(element('span', 'dock__name', 'Copilot'))
+    /*
+     * The dot beside the name is the control, which is his instruction rather
+     * than a flourish:
+     *
+     * > *"The small round dot beside the copilot's name becomes a control — click
+     * > it to fold back, and the side panel returns."*
+     *
+     * Folding is per visit and is undone by opening the Copilot tab, so it is a
+     * way to get the panel out of the way rather than a preference to be found
+     * and un-set later.
+     */
+    const fold = element('button', 'dock__dot')
+    fold.type = 'button'
+    fold.setAttribute('aria-label', 'Fold the copilot away')
+    fold.title = 'Fold the copilot away'
+    fold.addEventListener('click', () => {
+      this.dockFolded = true
+      this.render()
+    })
+    head.append(fold)
+
+    this.dock.replaceChildren(head, this.copilotBody(true))
+  }
+
+  /* ------------------------------------------------------------ the sheet -- */
+
+  /**
+   * A confirmation this connection may answer, with everything needed to judge it.
+   *
+   * The part of this feature worth the most care. A consent prompt without enough
+   * context becomes a reflex Yes, and a gate that is always answered yes is worse
+   * than no gate at all because it looks like protection. So this carries what a
+   * person actually needs: what, with which arguments verbatim, raised by whom,
+   * and what happens if they say nothing.
+   *
+   * **Refusing is at least as easy as accepting.** Refuse comes first and is the
+   * full-width one; Allow is the quieter of the two. The safe answer must never
+   * be the harder gesture.
+   */
+  private renderSheet(): void {
+    const ask = this.copilot.ask
+    this.sheet.hidden = ask === null
+    if (ask === null) {
+      this.sheet.replaceChildren()
+      return
+    }
+
+    const card = element('div', 'sheet__card')
+    card.setAttribute('role', 'dialog')
+    card.setAttribute('aria-modal', 'true')
+    card.append(element('h2', 'sheet__title', 'The copilot wants to do something'))
+    card.append(element('p', 'sheet__summary', plain(ask.summary)))
+    card.append(element('p', 'sheet__tool', `${plain(ask.tool)} · ${plain(ask.tier)}`))
+
+    // Whose run raised it, so *my browser's copilot asked for this* and *the
+    // machine's copilot asked for this* never read the same.
+    card.append(
+      element('p', 'sheet__origin', ask.origin === 'window' ? 'Raised at the machine' : 'Raised by this browser’s run'),
+    )
+
+    // Every argument, in the tool's own order, verbatim. This is the field that
+    // turns a prompt from a shape into a decision.
+    const args = element('dl', 'sheet__args')
+    for (const [name, value] of Object.entries(ask.args)) {
+      args.append(element('dt', undefined, plain(name)))
+      args.append(element('dd', undefined, plain(describeArg(value))))
+    }
+    if (args.childElementCount > 0) card.append(args)
+
+    const left = secondsLeft(ask.expiresAt, Date.now())
+    card.append(
+      element(
+        'p',
+        'sheet__countdown',
+        left > 0 ? `Refused automatically in ${left}s if nobody answers.` : 'Refusing…',
+      ),
+    )
+
+    const actions = element('div', 'sheet__actions')
+    const refuse = element('button', 'button sheet__refuse', 'Refuse')
+    refuse.type = 'button'
+    refuse.addEventListener('click', () => this.copilotDo({ t: 'answer', id: ask.id, approved: false }))
+    const allow = element('button', 'button button--quiet sheet__allow', 'Allow')
+    allow.type = 'button'
+    allow.addEventListener('click', () => this.copilotDo({ t: 'answer', id: ask.id, approved: true }))
+    actions.append(refuse, allow)
+    card.append(actions)
+
+    this.sheet.replaceChildren(card)
+  }
+
+  /* -------------------------------------------------------------- the scan -- */
+
+  /**
+   * Start one. Two paths, one answer.
+   *
+   * Interactive off is the whole of the second mode and it is deliberately three
+   * lines: the plan is the same plan, the answer is the same function over it,
+   * and the only thing that does not happen is the watching. `scanAnswer` takes
+   * the flag so that the shared model decides what "not reached" means rather
+   * than this method — see its note.
+   */
+  private startScan(): void {
+    const stops = scanPlan({
+      sessions: this.sessions,
+      activity: this.activity,
+      started: this.copilot.sessions,
+      tools: this.copilot.tools,
+      now: Date.now(),
+    })
+    this.scanStops = stops
+    if (stops.length === 0) return
+
+    if (!this.interactive) {
+      this.scanState = null
+      this.endScanVisuals()
+      this.answer = scanAnswer(stops, false)
+      this.render()
+      return
+    }
+
+    this.answer = null
+    if (this.scan === null) {
+      this.scan = createScanRunner(browserScanClock(), (state) => this.onScan(state))
+    }
+    // The field goes up before the first stop rather than on the first arrival,
+    // so the page dulls and *then* the box lands — the other order is a flash of
+    // clear page under a box that has already moved.
+    this.mountField()
+    this.scan.play(stops.length)
+    this.render()
+  }
+
+  /** Ended by hand. What was shown is what the answer reports. */
+  private stopScan(): void {
+    this.scan?.stop()
+  }
+
+  /**
+   * One published playhead state.
+   *
+   * Two jobs, and they are separate on purpose. The first is *recording what was
+   * actually shown* — `shownAt` is what makes the summary honest, because it
+   * counts what a person saw rather than what was planned. The second is ending:
+   * a finished scan takes the field down and composes the answer, and it is the
+   * same `scanAnswer` the background path calls.
+   */
+  private onScan(state: ScanState): void {
+    this.scanState = state
+    for (const index of state.seen) {
+      const stop = this.scanStops[index]
+      if (stop !== undefined && stop.shownAt === null) stop.shownAt = Date.now()
+    }
+    if (state.status === 'finished') {
+      this.endScanVisuals()
+      this.answer = scanAnswer(this.scanStops, true)
+      this.render()
+      return
+    }
+    // `arrive` is dispatched from here rather than from a timer, because arriving
+    // *is* being drawn: the box exists once the row it is measured from is on
+    // screen, and asking for that measurement is the cheapest honest test of it.
+    if (state.status === 'travelling') {
+      const stop = this.scanStops[state.index]
+      if (stop !== undefined && focusRect(stop.sessionId) !== null) {
+        this.scan?.dispatch({ kind: 'arrive', at: performance.now() })
+      } else if (stop !== undefined) {
+        // A row that is not on this page — the fleet is longer than a phone
+        // screen, and the scan walks all of it. Counted as an arrival anyway, so
+        // the playhead does not stall on a session somebody would have to scroll
+        // to; the field simply draws with no hole, which reads as the machine
+        // looking at something off screen. True, and better than a hole cut
+        // somewhere arbitrary.
+        this.scan?.dispatch({ kind: 'arrive', at: performance.now() })
+      }
+    }
+    this.paintScan()
+  }
+
+  /**
+   * Update what a running scan changes, and **nothing else**.
+   *
+   * ## The defect this exists to fix, which was found by looking
+   *
+   * This method used to be `this.render()`, and a scan was therefore rebuilding
+   * the whole screen four times a second. That is wasteful, and the waste was
+   * not the problem. The problem was that the interruption watch pauses on
+   * `pointerdown` — which fires *before* `click` — so pressing anything during a
+   * scan tore the DOM down under the finger, the pressed element was replaced,
+   * and the `click` that followed had nothing to land on. Measured: pressing the
+   * Sessions tab mid-scan paused the scan, said *"Held — you clicked"*, and
+   * stayed on the Copilot screen. Every control in the app was dead for as long
+   * as a scan was running, which is the precise failure this whole review is
+   * about — a control that cannot act.
+   *
+   * So a running scan touches only the three things it actually changes: the
+   * status line, the bar, and which rows are lit. Everything that appears or
+   * disappears — the Stop label, the playhead itself, the answer — changes at a
+   * moment that is not mid-gesture (starting, finishing, or a screen change),
+   * and those still go through a full render.
+   *
+   * `querySelectorAll` over the whole frame rather than a held reference,
+   * deliberately: the panel and the screen can each be showing a playhead, the
+   * full render replaces both whenever it runs, and a cached node would be one
+   * detached from the document with no symptom other than a line that stopped
+   * counting.
+   */
+  private paintScan(): void {
+    const state = this.scanState
+    if (state === null) return
+    for (const node of this.root.querySelectorAll('.copilot-playhead__text')) {
+      node.textContent = statusSentence(state)
+    }
+    for (const node of this.root.querySelectorAll<HTMLElement>('.copilot-playhead__fill')) {
+      node.style.width = `${Math.round((state.seen.length / Math.max(1, state.count)) * 100)}%`
+    }
+    // The resume button is drawn once and shown or hidden here, rather than
+    // added and removed: an element that appears mid-scan is an element that can
+    // appear between a pointerdown and the click it belongs to, which is the
+    // same class of bug this method was written for.
+    for (const node of this.root.querySelectorAll<HTMLElement>('.copilot-playhead__resume')) {
+      node.hidden = state.status !== 'paused'
+    }
+    // Only while it is moving. A finished scan leaves its trail — which rows were
+    // covered is worth keeping under the answer — but nothing is being looked at
+    // any more, and a ring left behind would point at a session for no reason.
+    const here = isScanning(state) ? (this.scanStops[state.index]?.sessionId ?? null) : null
+    const seen = new Set(state.seen.map((index) => this.scanStops[index]?.sessionId))
+    /*
+     * Every scannable row, wherever it is drawn — the copilot's own list and the
+     * session list on the screen behind the panel are the same rows by id, and
+     * the machine is looking at *the session*, not at one of two pictures of it.
+     * The classes are generic for exactly that reason: a `copilot-fleet__row--`
+     * name would have marked the copy on the copilot's page and left the row a
+     * person is actually watching unmarked.
+     */
+    for (const row of this.root.querySelectorAll<HTMLElement>(`[${SCAN_ATTRIBUTE}]`)) {
+      const id = row.getAttribute(SCAN_ATTRIBUTE)
+      row.classList.toggle('scan-here', id === here)
+      row.classList.toggle('scan-seen', seen.has(id ?? ''))
+    }
+  }
+
+  /** The dots go up, and the screen is handed back the moment anybody touches it. */
+  private mountField(): void {
+    if (this.field !== null) return
+    this.field = mountScanField(this.root, () => this.scanReading())
+    this.scanWatch = watchScanInterruption(
+      window,
+      (reason) => this.scan?.pause(reason),
+      () => this.scan?.resume(),
+    )
+  }
+
+  private endScanVisuals(): void {
+    this.field?.destroy()
+    this.field = null
+    this.scanWatch?.stop()
+    this.scanWatch = null
+  }
+
+  /**
+   * What the field reads, once a frame.
+   *
+   * The hole is measured from the DOM every time rather than remembered, so it
+   * follows a list that scrolls under a thumb. `arrivals` rather than the stop
+   * index, because a scan can revisit an index and a surge has to fire every time
+   * the machine lands somewhere.
+   */
+  private scanReading(): FieldReading {
+    const state = this.scanState
+    if (state === null || !isScanning(state)) {
+      return { hole: null, seen: 0, count: 0, arrivals: 0 }
+    }
+    const stop = this.scanStops[state.index]
+    return {
+      hole: stop === undefined || state.arrivedAt === null ? null : focusRect(stop.sessionId),
+      seen: state.seen.length,
+      count: state.count,
+      arrivals: state.arrivals,
+    }
+  }
+
   /**
    * Say something that will stop being said.
    *
@@ -2936,6 +4301,50 @@ class Deck {
     if (this.state.phase !== 'online' || !this.capabilities.includes('create')) return null
 
     const block = element('section', 'start')
+
+    /*
+     * Which machine, above which folder — the same order and the same place as
+     * the desktop's.
+     *
+     * *"Everything the desktop can do with a remote connection, the browser must
+     * do too — open a new session, choose the machine, choose the folder, the
+     * same flow. The browser and app side will be the same."*
+     *
+     * It was already possible and it was not the same flow: switching machines
+     * lived on a screen of its own, so starting a session on the other computer
+     * meant leaving Sessions, choosing there, coming back, and pressing New
+     * session. The machine decides which folders exist, so it belongs above them
+     * and in the same block — asking for a folder first and the machine second
+     * would mean answering the folder twice.
+     *
+     * Drawn only when there is more than one, which is the standing rule against
+     * a picker with a single item in it. Switching drops the socket and dials the
+     * other machine, so the folder list below redraws as *its* list — see
+     * `switchTo`, which clears `folders` precisely so that nothing on screen is
+     * ever the previous machine's.
+     */
+    if (this.book.machines.length > 1) {
+      block.append(element('p', 'start__caption', 'On'))
+      const row = element('div', 'start__machines')
+      for (const known of this.book.machines) {
+        const here = known.id === this.book.currentId
+        const pick = element(
+          'button',
+          here ? 'start__machine start__machine--here' : 'start__machine',
+          machineLabel(known, this.origin),
+        )
+        pick.type = 'button'
+        pick.setAttribute('aria-pressed', here ? 'true' : 'false')
+        // The current one is not a control. Pressing it would tear down a live
+        // socket and dial the machine it is already on, which is a press that
+        // costs a reconnection and changes nothing.
+        pick.disabled = here || this.awaitingCreate
+        pick.addEventListener('click', () => this.switchTo(known.id))
+        row.append(pick)
+      }
+      block.append(row)
+    }
+
     // The platform decides how two spellings of one path are compared — NTFS
     // does not distinguish case and a POSIX filesystem does. See `samePath`.
     const offer = folderOffer(this.folders, this.sessions, this.hostPlatform)
@@ -3182,6 +4591,7 @@ class Deck {
     this.book = NO_MACHINES
     this.notice = null
     this.openRow = null
+    this.closing = null
     this.renamingPort = null
     this.renamingMachine = null
     this.pairingAnother = false
@@ -3205,6 +4615,12 @@ class Deck {
     this.picking = false
     this.awaitingCreate = false
     this.forgetLocalhost()
+    // Both secrets, in both stores. A browser somebody has just said is not
+    // theirs must not be left holding a credential that connects to a copilot,
+    // which is the one that can change things rather than merely read them.
+    clearCopilots(this.stores)
+    this.copilots = {}
+    this.forgetCopilot()
     this.sessions = []
     this.activity.clear()
     this.attachedId = null

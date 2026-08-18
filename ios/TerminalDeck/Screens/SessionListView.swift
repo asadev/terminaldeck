@@ -2,30 +2,39 @@
  * The Sessions tab: the sessions on the machine, and only those.
  *
  * It used to be the whole app, and the `…` in its corner used to be the only way
- * to reach anything that was not a session. It is one of three tabs now and that
- * menu holds two items — see `DeckTabs.swift` for where the other seven went and
- * why there are three tabs rather than five.
+ * to reach anything that was not a session. It is one of four tabs now and that
+ * menu holds one item — see `DeckTabs.swift` for where the other eight went.
  *
  * ## What left this screen
  *
- * The dev servers and the list of ports the machine is already serving. They were
- * two more sections under the sessions, they were longer than the sessions on any
- * real machine, and a heading is not a separation: *"I can already see a big list
- * of local hosts. So it should not be like that… no separate two lists already
- * here and no separation here… Sessions separately and local host separately in
- * the pill side so we know to go to the section."* They are the Localhost tab —
+ * **The ports and the dev servers.** They were two more sections under the
+ * sessions, they were longer than the sessions on any real machine, and a
+ * heading is not a separation: *"I can already see a big list of local hosts. So
+ * it should not be like that… no separate two lists already here and no
+ * separation here… Sessions separately and local host separately in the pill
+ * side so we know to go to the section."* They are the Localhost tab —
  * `LocalhostListView` — which also owns the page a tap opens.
  *
- * The one thing that had to be checked in the move is the empty state, which
- * used to count ports and dev servers as *something to show* so that a machine
- * with no sessions did not draw "No sessions" over the top of a Start button.
- * With those rows on their own tab there is nothing underneath to be covered, so
- * the test is the sessions and nothing else again.
+ * **The copilot row**, pinned above the sessions, which is a pill of its own
+ * now: *"a fourth pill, and the copilot goes leftmost."* Its badge went to the
+ * pill with it. See `CopilotView`.
+ *
+ * **Refresh and Reconnect**, which he asked about by name and which turned out
+ * to be a duplicate of the pull gesture and an admission that the transport
+ * might not reconnect by itself. The evidence for both verdicts is written where
+ * the menu is built, below.
+ *
+ * The one thing that had to be checked in each of those moves is the empty
+ * state, which counted the other rows as *something to show* so that a machine
+ * with no sessions did not draw "No sessions" over the top of them. With them
+ * gone the test is the sessions and nothing else again — except for the one
+ * thing that is genuinely new, which is that this phone can now hide sessions
+ * from itself.
  *
  * ## Which buttons exist is decided by the wire, not by the design
  *
  * Protocol v1 carries list, attach, input and resize. A desktop that speaks only
- * that gets a list, a refresh and nothing else — the New Session button is not
+ * that gets a list and nothing else — the New Session button is not
  * greyed out, it is absent, because `parseClientMessage` closes the socket on a
  * verb it does not know and a disabled button for a thing the far end can never
  * do is just a smaller lie. It appears when a desktop advertises `create` in its
@@ -67,6 +76,11 @@ import UIKit
 struct SessionListView: View {
     let model: DeckModel
 
+    /// What this phone has put away and what it has pulled to the top. Injected
+    /// rather than reached for, the same shape `LocalhostListView` takes its
+    /// `PortBook`, so a preview or a test can hand in a store of its own.
+    var shelf: SessionShelf = .shared
+
     /**
      * Which session the details sheet is about, if it is up.
      *
@@ -76,6 +90,22 @@ struct SessionListView: View {
      * whichever machine happened to be current when it was drawn.
      */
     @State private var detailing: SessionRef?
+
+    /// Whether the archived rows are on screen. A flag rather than a route:
+    /// this is a reference somebody opens, acts in and closes, like the details
+    /// sheet next to it — not a place they are going.
+    @State private var showingArchived = false
+
+    /**
+     * The session a Close is waiting to be confirmed for.
+     *
+     * The whole session and not its id, because the alert has to name it and a
+     * row can leave the list between the swipe and the answer — a `status` frame
+     * reorders this list, and an id resolved at draw time would put a different
+     * session's title over a decision about this one. Holding the value means
+     * the question that is on screen is the question that was asked.
+     */
+    @State private var closingSession: RemoteSession?
 
     private struct SessionRef: Identifiable, Hashable {
         let host: String
@@ -88,36 +118,24 @@ struct SessionListView: View {
             Theme.background.ignoresSafeArea()
 
             /*
-             * The sessions, and nothing else.
+             * "Nothing to show" is the sessions this list would **draw**.
              *
-             * This used to also count the ports and the dev servers, because
-             * they were drawn on this screen: a machine whose projects were all
-             * stopped had no sessions and no listening ports, and the screen
-             * would have drawn "No sessions" over the top of the Start buttons
-             * that were the answer to it. Those rows are the Localhost tab now,
-             * so there is nothing under this screen for an empty state to hide.
+             * The test used to be compound — the sessions *and* the copilot row
+             * pinned above them, and before that the ports and the dev servers.
+             * Both of those have moved off this screen: the ports to their own
+             * tab, and the copilot to its own pill. So it is the sessions and
+             * nothing else again, and the empty state has nothing underneath it
+             * to draw over.
+             *
+             * `listed` rather than `model.sessions`, and that is the one thing
+             * this line has to get right now: a machine whose every session has
+             * been archived has sessions and an empty list, and drawing rows
+             * that are not there — or hiding the empty state behind rows that
+             * are hidden — are the two ways to be wrong about it. The archived
+             * ones are reachable from the menu, which is why this is allowed to
+             * say the list is empty rather than having to qualify it.
              */
-            /*
-             * "Nothing to show" is the sessions **and** the copilot row now.
-             *
-             * The compound test came back, and the note above about it being
-             * "the sessions and nothing else again" is why it is worth saying so
-             * here rather than deleting it. It was compound once before, for the
-             * ports and the dev servers, and it was right to become simple when
-             * those moved to their own tab. The copilot row is not moving: it is
-             * pinned to this list on purpose, and a machine that has a copilot
-             * and no sessions — a fresh pairing, a Mac after a restart — would
-             * otherwise draw `ContentUnavailableView` straight over the top of
-             * the one row on this screen that could answer "so what now".
-             *
-             * The connection is in the test as well, and only here. Every
-             * offline and still-connecting empty state is left exactly as it
-             * was — the spinner, the sentence, and the Try again button, which
-             * is the fix for the situation and is only ever drawn by `empty`.
-             * A copilot row over a dead socket is worth keeping *beside* a list
-             * of sessions and is not worth losing that button for.
-             */
-            if model.sessions.isEmpty && !(model.connection.isLive && showsCopilot) {
+            if listed.isEmpty {
                 empty
             } else {
                 list
@@ -142,6 +160,63 @@ struct SessionListView: View {
                               },
                               dismiss: { detailing = nil })
         }
+        /*
+         * The rows this phone has put away.
+         *
+         * A sheet rather than a push, for the same reason the details sheet is
+         * one: it is opened, acted in and closed. Opening a session from it goes
+         * through the same two-step the details sheet uses — take the sheet down
+         * first, then navigate — because a push that happens behind a modal is a
+         * screen nobody sees arriving.
+         */
+        .sheet(isPresented: $showingArchived) {
+            ArchivedSessionsView(sessions: archived,
+                                 machine: model.current?.label ?? "this machine",
+                                 unarchive: { id in
+                                     shelf.setArchived(false, host: hostId, session: id)
+                                 },
+                                 open: { id in
+                                     showingArchived = false
+                                     model.open(session: id, on: hostId)
+                                 },
+                                 dismiss: { showingArchived = false })
+        }
+        /*
+         * The confirmation he asked for, in the platform's own words for it.
+         *
+         * *"Close the session (with a confirmation)."* A system alert rather
+         * than an inline strip in the row, and this is the one place in the app
+         * where that is the right answer: the swipe has already covered the row
+         * it is about, an alert is modal so it cannot be scrolled away from
+         * mid-decision, and iOS draws a `.destructive` role in the platform's
+         * own red at the platform's own weight — which people read faster than
+         * anything this app could compose.
+         *
+         * Three lines, and each carries a different fact. The title names the
+         * session, so a list of eight `agent` rows cannot produce a decision
+         * about the wrong one. The message says what happens on the machine and
+         * that it does not come back. The buttons say *close* rather than *yes*
+         * — a confirm dialog whose affirmative is "OK" is one people answer
+         * without reading the question above it.
+         *
+         * `presenting:` carries the whole session, so the title is drawn from
+         * the value that was swiped and not from a lookup that could resolve
+         * against a list the machine has reordered in between.
+         */
+        .alert("Close \(closingSession?.title ?? "this session")?",
+               isPresented: Binding(get: { closingSession != nil },
+                                    set: { if !$0 { closingSession = nil } }),
+               presenting: closingSession) { session in
+            Button("Close session", role: .destructive) {
+                model.closeSession(session.id)
+                closingSession = nil
+            }
+            .accessibilityIdentifier("close.confirm")
+            Button("Cancel", role: .cancel) { closingSession = nil }
+        } message: { _ in
+            Text("The session stops on \(model.current?.label ?? "the machine") and does not come back. "
+                 + "Anything it was part-way through stops there.")
+        }
         .navigationTitle(Brand.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -154,41 +229,64 @@ struct SessionListView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if model.canStartSomewhere { newSession }
                 /*
-                 * Two items, and it used to be nine.
+                 * One item, and it used to be nine.
                  *
                  * Everything that was about a *machine* — pair another, rename,
                  * forget, which endpoint this is — is on the Machines screen,
                  * and everything that was about the *app* — the GitHub account,
                  * the alert switches — is on Settings, which is also where that
                  * screen is reached from now. Neither is repeated here.
-                 * Asad, on the desktop's equivalent in the same recording:
-                 * *"options is having all of the things that we already have
-                 * here and there. So let's keep everything separate rather than
-                 * having everything on one page."*
+                 * Asad, on the desktop's equivalent: *"options is having all of
+                 * the things that we already have here and there. So let's keep
+                 * everything separate rather than having everything on one
+                 * page."*
                  *
-                 * What is left is the two things that act on *this list*: ask the
-                 * machine for it again, and stop waiting out a backoff. Exactly
-                 * one of them is ever enabled, which is why they are two items
-                 * rather than one — a single "Refresh" that silently meant
-                 * "reconnect" when the socket was down would be a button doing a
-                 * different thing from the one it names.
+                 * ## Refresh and Reconnect are gone, and here is what they did
+                 *
+                 * He asked both questions and both answers are *nothing a person
+                 * needs a button for*.
+                 *
+                 * **Refresh** — *"what does it actually do?"* — called
+                 * `DeckModel.refresh()`, which sends one `list` frame to the
+                 * machine. **The pull gesture on this list sends the identical
+                 * frame**, and has since before the menu item existed: see
+                 * `.refreshable` below. So it was a second control for a gesture
+                 * the platform already owns, in a menu, two taps away, and he
+                 * named the replacement himself: *"pull-to-refresh would be the
+                 * natural gesture."*
+                 *
+                 * **Reconnect now** — *"I don't know why we need it. What will
+                 * it actually do?"* — called `resume()`, which realigns the
+                 * heartbeat and drops the pending backoff on every machine. The
+                 * app already does that by itself in all three of the situations
+                 * where it matters, and each is wired somewhere this file can
+                 * name: coming back to the foreground (`TerminalDeckApp`'s scene
+                 * phase), the network route changing (`NetworkWatch`), and the
+                 * schedule itself, which is capped at twenty seconds
+                 * (`Backoff.reconnect`). A button whose whole job is "do the
+                 * thing that is about to happen anyway" is, as he put it, an
+                 * admission that it might not.
+                 *
+                 * The one place a manual retry still earns its place is the
+                 * empty state's **Try again**, and the difference is the moment:
+                 * it is drawn only when the socket is genuinely down *and* not
+                 * currently trying, which is the one screen where somebody is
+                 * looking at nothing and deserves something to press.
+                 *
+                 * What is left is a *place* rather than an action — the rows
+                 * this phone has put away. It stays in the menu even when there
+                 * are none, because the screen behind it is where the swipe
+                 * gesture is explained, and a control that appears only after
+                 * you have already discovered the thing it explains is no help
+                 * to the person who has not.
                  */
                 Menu {
                     Button {
-                        model.refresh()
+                        showingArchived = true
                     } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
+                        Label(archivedLabel, systemImage: "archivebox")
                     }
-                    .disabled(!model.connection.isLive)
-                    .accessibilityIdentifier("sessions.refresh")
-
-                    Button {
-                        model.resume()
-                    } label: {
-                        Label("Reconnect now", systemImage: "bolt.horizontal")
-                    }
-                    .disabled(model.connection.isLive)
-                    .accessibilityIdentifier("sessions.reconnect")
+                    .accessibilityIdentifier("sessions.archived")
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -307,110 +405,277 @@ struct SessionListView: View {
         }
     }
 
+    /// Which machine these rows belong to. Archives and pins are stored against
+    /// it, so a phone paired with two machines does not hide one's sessions
+    /// because of a swipe on the other. See `SessionShelf`.
+    private var hostId: String { model.current?.id ?? "" }
+
+    /// The rows this screen draws, and the rows it is holding back. One call
+    /// rather than three predicates the view could get out of step with itself
+    /// — see `SessionShelf.split`, which is where the ordering rule lives and
+    /// where it is tested without a simulator.
+    private var shelved: (listed: [RemoteSession], archived: [RemoteSession]) {
+        shelf.split(model.sessions, host: hostId)
+    }
+
+    private var listed: [RemoteSession] { shelved.listed }
+    private var archived: [RemoteSession] { shelved.archived }
+
+    /// What the menu item says. The count is the point of the row: an archive
+    /// nobody can see the size of is a place people stop opening.
+    private var archivedLabel: String {
+        archived.isEmpty ? "Archived" : "Archived (\(archived.count))"
+    }
+
     /**
-     * The list, laid out with space rather than with lines.
+     * The list, laid out with space rather than with lines — and it is a `List`
+     * now, because that is the only thing on iOS that swipes.
      *
-     * Every row used to be separated by a hairline. The design brief's rule is
-     * that whitespace is the layout tool and a divider is what you reach for
-     * when space genuinely cannot do the job — and here it can: a session is a
-     * card, cards have gaps between them, and the gap says the same thing a line
-     * said while leaving the screen quieter. It also gives each row a shape to
-     * respond with when it is pressed, which a row between two lines never had.
+     * Asad: *"swipe left/right on a session row should reveal buttons,
+     * WhatsApp-style… when we will have a lot of sessions we will not like to
+     * have all of them over here."* And on what the gesture used to do: *"swipe
+     * currently just opens the session, which tapping already does. It's
+     * nonsense to keep this feature."* He was right about that in a precise way
+     * — the old body was a `ScrollView` of `NavigationLink`s, so a horizontal
+     * drag was just a sloppy tap, which is the worst kind of gesture: it looks
+     * like it did something.
+     *
+     * `.swipeActions` exists only inside a `List`, and hand-rolling a drag was
+     * never an option — no rubber band at the limit, no interaction with the
+     * back gesture at the left edge, and a different depth from every other app
+     * on the phone. `LocalhostListView` made this exact trade one screen over
+     * and its header argues it; the cards survive the change because the row
+     * background is cleared and the fill comes from `RowButtonStyle` as before.
+     *
+     * ## A button rather than a `NavigationLink`
+     *
+     * Inside a `List`, a `NavigationLink` draws the system's own disclosure
+     * chevron beside whatever it is given — and `SessionRow` already draws one,
+     * so the rows came out with two. `model.open(session:)` appends the identical
+     * route, which is what the link was doing, and it is the shape every other
+     * card in this app already uses.
      */
     private var list: some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                copilot
-                if let session = model.resumable {
-                    ResumeRow(session: session) { model.open(session: session.id) }
-                }
-                ForEach(model.sessions) { session in
-                    NavigationLink(value: DeckModel.Route.session(host: model.current?.id ?? "",
-                                                                  id: session.id)) {
-                        SessionRow(session: session, lastActivity: model.lastActivity[session.id])
-                    }
-                    .buttonStyle(RowButtonStyle())
-                    .accessibilityIdentifier("session.\(session.id)")
-                    /*
-                     * The shortcut to the details sheet.
-                     *
-                     * A long press rather than a second control on the row: the
-                     * row's whole job is to open the session, and a row with two
-                     * tap targets on a phone is a row people hit the wrong half
-                     * of. It is deliberately not the *only* way in — the same
-                     * screen is a named item inside the session, where somebody
-                     * who has never long-pressed anything will find it.
-                     */
-                    .contextMenu {
-                        Button {
-                            detailing = SessionRef(host: model.current?.id ?? "", session: session.id)
-                        } label: {
-                            Label("Details", systemImage: "info.circle")
-                        }
-                        .accessibilityIdentifier("session.details")
-                    }
-                }
-
-                alertsOffer
-
-                // Last, and now unambiguously about the list above it. It used
-                // to be followed by the dev servers and the port list, which is
-                // why it was placed *between* the sessions and those rather than
-                // at the foot — a footnote under a screen's worth of localhost
-                // rows reads as a footnote about localhost. With those on their
-                // own tab the foot is the right place again.
-                scopeNote
+        List {
+            if let session = model.resumable {
+                ResumeRow(session: session) { model.open(session: session.id) }
+                    .plainRow()
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 28)
+
+            ForEach(listed) { session in
+                Button {
+                    model.open(session: session.id)
+                } label: {
+                    SessionRow(session: session,
+                               lastActivity: model.lastActivity[session.id],
+                               pinned: shelf.isPinned(host: hostId, session: session.id))
+                }
+                .buttonStyle(RowButtonStyle())
+                .accessibilityIdentifier("session.\(session.id)")
+                /*
+                 * The shortcut to the details sheet.
+                 *
+                 * A long press rather than a second control on the row: the
+                 * row's whole job is to open the session, and a row with two
+                 * tap targets on a phone is a row people hit the wrong half
+                 * of. It is deliberately not the *only* way in — the same
+                 * screen is a named item inside the session, and it is on the
+                 * trailing swipe below, where somebody who has never
+                 * long-pressed anything will find it.
+                 */
+                .contextMenu {
+                    Button {
+                        detailing = SessionRef(host: hostId, session: session.id)
+                    } label: {
+                        Label("Details", systemImage: "info.circle")
+                    }
+                    .accessibilityIdentifier("session.details")
+                }
+                .plainRow()
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                    pinAction(session)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    // Close first, then Archive, then Details — destructive,
+                    // reversible, harmless, reading outward from the edge. It is
+                    // the platform's own order and it is also the order of how
+                    // much each one costs to get wrong.
+                    closeAction(session)
+                    archiveAction(session)
+                    detailsAction(session)
+                }
+            }
+
+            // Not `.plainRow()`-ed from here: it is a `@ViewBuilder` that is very
+            // often an `EmptyView`, and a modifier applied to one of those still
+            // makes a row — an empty, 44-point-tall row with a separator, in the
+            // middle of the list. The modifier is inside its `if` instead.
+            alertsOffer
+
+            // Last, and now unambiguously about the list above it. It used
+            // to be followed by the dev servers and the port list, which is
+            // why it was placed *between* the sessions and those rather than
+            // at the foot — a footnote under a screen's worth of localhost
+            // rows reads as a footnote about localhost. With those on their
+            // own tab the foot is the right place again.
+            scopeNote.plainRow(top: 18, bottom: 28)
         }
-        .scrollBounceBehavior(.basedOnSize)
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .environment(\.defaultMinListRowHeight, 0)
         .refreshable {
             model.refresh()
             // The pull gesture needs something to hold on to or it snaps back
-            // before the answer arrives and reads as having done nothing.
+            // before the answer arrives and reads as having done nothing. It is
+            // also the *only* refresh on this screen now — see the toolbar for
+            // what was in the menu and why it is not any more.
             try? await Task.sleep(for: .milliseconds(450))
         }
     }
 
     /**
-     * The copilot, above everything else on this screen.
+     * The leading swipe: pin, which is the "move" he asked for.
      *
-     * Absent for a machine that does not speak `copilot.*` — every desktop
-     * shipping today — because there is nothing on that machine to point at and
-     * a row explaining where a missing switch would be is worse than no row.
-     * Present, and honest, the moment a machine has one: including for a phone
-     * that has been granted none of it, which is the state a person can fix and
-     * the state they will never fix if nothing tells them it exists. See
-     * `CopilotListRow` for the wording and `CopilotView` for why the row lives
-     * here rather than on a fourth tab.
+     * `SessionShelf` argues the naming at length. In one line: there is nowhere
+     * on a phone for a session to move *to* — it is a shell in a folder chosen
+     * when it was started — and what somebody dragging a row in a list of forty
+     * wants is that row at the top, which is what this does and what the
+     * platform calls it.
      *
-     * Above Resume deliberately: Resume is where you were, and the copilot is
-     * what to ask before going anywhere. On the morning this feature exists for,
-     * the first thing wanted is a sentence about all the sessions rather than
-     * the one that was open last night.
+     * `allowsFullSwipe: false` on both edges, deliberately, exactly as on the
+     * localhost list: a full swipe fires the first action on release, and
+     * "archive the session I was reaching for" is not a thing to do by accident
+     * with a thumb.
      */
     @ViewBuilder
-    private var copilot: some View {
-        if showsCopilot, let host = model.current {
-            CopilotListRow(host: host) { model.openCopilot(on: host.id) }
+    private func pinAction(_ session: RemoteSession) -> some View {
+        let pinned = shelf.isPinned(host: hostId, session: session.id)
+        Button {
+            shelf.setPinned(!pinned, host: hostId, session: session.id)
+        } label: {
+            Label(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin.fill")
+        }
+        .tint(Theme.accent)
+        .accessibilityIdentifier("session.swipe.pin.\(session.id)")
+    }
+
+    /**
+     * Close, which is the action this gesture was asked for and the one it went
+     * a week without.
+     *
+     * ## What was missing, and what it took to stop missing it
+     *
+     * This doc comment used to argue that the action could not exist. It was
+     * right at the time: protocol v1 carried list, attach, detach, input, resize
+     * and create plus the named extensions, none of them ended a session, and
+     * `SessionAccess` on the desktop had no method to call — a gap on both sides
+     * of the wire rather than a frame nobody had wired up. Two fakes were
+     * available and both were refused. Typing `exit` or a Ctrl-C into the pty is
+     * not closing a session: a full-screen agent CLI ignores both, the row
+     * stays, and the button works *sometimes*, which is worse than not being
+     * there. A Close that only archived would be a label describing something
+     * else, which is the complaint this whole review is built around.
+     *
+     * The shape it named is the shape that shipped — a `close` capability, a
+     * `{t:'close', id}` frame, and an optional `SessionAccess.close` the
+     * capability is derived from, exactly as `create` works.
+     *
+     * ## Why it is conditional, and why that is not a greyed-out button
+     *
+     * `model.canCloseSessions` is the capability, and a machine that never
+     * advertised it gets no Close at all rather than a disabled one — the rule
+     * this whole screen follows, argued in the file header about New Session.
+     * It matters more here than anywhere: this is the only control in the app
+     * whose effect cannot be undone, so a Close whose outcome depends on
+     * something the person cannot see would be the worst possible thing to
+     * offer them.
+     *
+     * ## Red, and it asks
+     *
+     * Red because something on the machine ends — the exact opposite claim from
+     * Archive's orange below, which changes nothing but this phone's own list.
+     * And it opens the alert rather than acting: `role: .destructive` on a swipe
+     * button is *styling*, not a confirmation, and a full swipe is disabled on
+     * this edge precisely because a thumb should not be able to finish this.
+     */
+    @ViewBuilder
+    private func closeAction(_ session: RemoteSession) -> some View {
+        if model.canCloseSessions {
+            Button(role: .destructive) {
+                // Deferred by one turn of the run loop, the same as the details
+                // sheet below and the rename alerts elsewhere in this app:
+                // presenting from inside a swipe handler while the row is still
+                // animating back leaves the alert with no presenter, and the
+                // press does nothing at all.
+                DispatchQueue.main.async { closingSession = session }
+            } label: {
+                Label("Close", systemImage: "xmark.circle.fill")
+            }
+            /*
+             * Tinted explicitly, and it took a screenshot to find out why it has
+             * to be.
+             *
+             * `role: .destructive` on a swipe button is red *by default* — and
+             * only by default. This screen sits under a `.tint(Theme.accent)`,
+             * and an ambient tint wins, so the first build of this rendered a
+             * blue Close sitting beside an orange Archive: the one action that
+             * ends somebody's work was the only one wearing the app's ordinary
+             * accent. Nothing in the build log says so and the code reads
+             * correctly; it was visible in the first frame the simulator took.
+             */
+            .tint(Theme.critical)
+            .accessibilityIdentifier("session.swipe.close.\(session.id)")
         }
     }
 
-    /// Whether this machine has a copilot at all. Written once and read twice —
-    /// by the row and by the empty-state test — because a screen that decided
-    /// twice whether a row exists is a screen that eventually draws "No
-    /// sessions" over the top of it.
-    private var showsCopilot: Bool { model.copilotAccess != .notOffered }
+    /**
+     * The trailing swipe's second action.
+     *
+     * Orange rather than red, and that is a claim about what it does: nothing on
+     * the machine changes. The session keeps running, keeps producing output and
+     * can still raise an alert; what changes is that this phone stops drawing
+     * it. The screen behind the menu says so in a sentence, because an archive
+     * that people believed was a stop would be worse than no archive at all —
+     * and with Close sitting next to it in red, the distinction between the two
+     * is now something the colours themselves make.
+     */
+    @ViewBuilder
+    private func archiveAction(_ session: RemoteSession) -> some View {
+        Button {
+            shelf.setArchived(true, host: hostId, session: session.id)
+        } label: {
+            Label("Archive", systemImage: "archivebox.fill")
+        }
+        .tint(Theme.warning)
+        .accessibilityIdentifier("session.swipe.archive.\(session.id)")
+    }
+
+    /// And the same sheet the long press opens. On the swipe as well because a
+    /// long press is a gesture people either know or never find, and this screen
+    /// now teaches the swipe anyway.
+    @ViewBuilder
+    private func detailsAction(_ session: RemoteSession) -> some View {
+        Button {
+            // Deferred by one turn of the run loop, the same as the rename alerts
+            // elsewhere in this app: presenting from inside a swipe handler while
+            // the row is still animating back leaves the sheet with no presenter.
+            DispatchQueue.main.async {
+                detailing = SessionRef(host: hostId, session: session.id)
+            }
+        } label: {
+            Label("Details", systemImage: "info.circle")
+        }
+        .tint(Theme.neutralAction)
+        .accessibilityIdentifier("session.swipe.details.\(session.id)")
+    }
 
     /**
      * What this list does *not* contain, said once and quietly.
      *
      * The list is every session the desktop started, and people reasonably
-     * expect it to be every session — they have a Claude running in Terminal.app
-     * or in VS Code and they go looking for it here. It is not here and it
-     * cannot be: a session is a pty this product owns, and nothing gives it a
+     * expect it to be every session — they have an agent running in a terminal
+     * window or in their editor and they go looking for it here. It is not here
+     * and it cannot be: a session is a pty this product owns, and nothing gives it a
      * handle on a process some other program spawned. Saying nothing leaves the
      * only available conclusion being that the app is broken, which is the
      * failure this line exists to prevent.
@@ -427,16 +692,31 @@ struct SessionListView: View {
         Text(Self.onlyItsOwnSessions)
             .font(.system(size: 12))
             .foregroundStyle(Theme.faint)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Four points in from the cards above it, the same offset the
+            // localhost list's footnote uses, and the top gap is `plainRow`'s
+            // argument rather than a padding: a `List` row's own insets are what
+            // decide where a separator would be drawn, and padding inside the
+            // row leaves the row taller than its content in a way that shows up
+            // as an uneven gap under the last card.
             .padding(.horizontal, 4)
-            .padding(.top, 18)
     }
 
     /// Written once and read in both places it belongs. Two copies of a sentence
     /// is two sentences that drift.
+    ///
+    /// It used to end "in Terminal or VS Code", and the review took that out by
+    /// name: *"we don't need to mention VS Code because it's another one… but VS
+    /// will be a specific thing."* The sentence is about a **category** — any
+    /// program that is not this one — so naming two members of that category
+    /// both under-describes it (nothing is said about Ghostty, iTerm, a
+    /// JetBrains IDE or a bare ssh) and reads as an endorsement of the two that
+    /// were named. "Your own terminal or editor" is the whole category in four
+    /// words, and it stays true when the next editor ships.
     static let onlyItsOwnSessions =
         "Only sessions started in \(Brand.name) are listed — it cannot see one you are running "
-        + "in Terminal or VS Code."
+        + "in your own terminal or editor."
 
     /**
      * The one place this app mentions notifications before somebody goes looking.
@@ -484,8 +764,8 @@ struct SessionListView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(RowButtonStyle())
-            .padding(.top, 6)
             .accessibilityIdentifier("sessions.alertsOffer")
+            .plainRow(top: 11)
         }
     }
 
@@ -493,10 +773,12 @@ struct SessionListView: View {
      * The screen when there is nothing to list — which is the screen people see
      * when something is wrong, and therefore the one the app is judged on.
      *
-     * Three different situations reach it and each gets its own sentence and its
+     * Four different situations reach it and each gets its own sentence and its
      * own action, because "no sessions" said over a dead socket is a lie by
-     * omission and "no sessions" said over a machine that granted this phone no
-     * folders sends someone looking for a bug that is a setting.
+     * omission, "no sessions" said over a machine that granted this phone no
+     * folders sends someone looking for a bug that is a setting, and "no
+     * sessions" said over a machine whose sessions this phone has itself
+     * archived is a screen blaming the machine for a swipe.
      *
      * ## And a fourth, which says nothing at all
      *
@@ -526,9 +808,28 @@ struct SessionListView: View {
             Text(emptyDetail)
         } actions: {
             if !model.connection.isLive && !model.connection.isTrying {
+                /*
+                 * The one manual retry left in the app, and the reason it
+                 * survived the cull that took Reconnect out of the menu.
+                 *
+                 * The menu item was drawn over a working list and meant "do the
+                 * thing that is about to happen anyway". This is drawn only when
+                 * the socket is down *and* nothing is currently trying, which is
+                 * the one moment somebody is looking at a screen with nothing on
+                 * it — and a screen with nothing on it and nothing to press is
+                 * how people conclude an app is broken.
+                 */
                 Button("Try again") { model.resume() }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
+            } else if everythingIsArchived {
+                // Not a New Session button. There is nothing wrong here and
+                // nothing to start — the sessions exist, this phone put them
+                // away, and the fix is the place they were put.
+                Button("Show archived") { showingArchived = true }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
+                    .accessibilityIdentifier("sessions.showArchivedFromEmpty")
             } else if model.canStartSomewhere && model.connection.isLive {
                 // The empty state is where a first session gets started, so the
                 // action is here as well as in the toolbar — the toolbar's plus
@@ -542,18 +843,35 @@ struct SessionListView: View {
         }
     }
 
+    /// Whether the list is empty *because of this phone* rather than because of
+    /// the machine. Read by all three halves of the empty state, so they cannot
+    /// disagree about which situation they are describing.
+    private var everythingIsArchived: Bool {
+        model.connection.isLive && !model.sessions.isEmpty && listed.isEmpty
+    }
+
     private var emptyTitle: String {
         if !model.connection.isLive { return model.connection.label }
+        if everythingIsArchived { return "All archived" }
         return model.hasNoGrantedFolders ? "No folders shared" : "No sessions"
     }
 
     private var emptyIcon: String {
         if !model.connection.isLive { return "bolt.horizontal.circle" }
+        if everythingIsArchived { return "archivebox" }
         return model.hasNoGrantedFolders ? "folder.badge.questionmark" : "terminal"
     }
 
     private var emptyDetail: String {
         if !model.connection.isLive { return model.connection.detail }
+        if everythingIsArchived {
+            // The count, because the number is the fact somebody is missing, and
+            // the second sentence because the whole risk of an archive is
+            // somebody believing it stopped something.
+            let count = archived.count
+            return "\(count == 1 ? "One session is" : "\(count) sessions are") archived on this phone. "
+                + "They are all still running on \(model.current?.label ?? "the machine")."
+        }
         if model.hasNoGrantedFolders {
             // Named where the fix is. The grant is per device and it is edited
             // on the machine, so a sentence that only said "you cannot start a
@@ -567,6 +885,29 @@ struct SessionListView: View {
         // not one this app started. See `scopeNote`.
         return "Nothing has been started on the \(model.hostPlatform.noun) yet. "
             + Self.onlyItsOwnSessions
+    }
+}
+
+/**
+ * A `List` row that still looks like a card.
+ *
+ * Three modifiers that always travel together, and getting any one of them wrong
+ * undoes the screen: the row background has to be cleared or every card sits on
+ * a white slab, the separator has to go or the gap between cards has a line
+ * through it, and the insets have to be stated or the system's own leading inset
+ * puts the first card 20 points further in than the banner above it.
+ *
+ * Five points top and bottom, so two neighbouring rows leave the ten-point gap
+ * this screen had when it was a `LazyVStack`. `LocalhostListView` open-codes the
+ * same three lines for the same reason; this is written once here because the
+ * session list has five kinds of row and open-coding it five times is how one of
+ * them ends up two points taller than the others.
+ */
+extension View {
+    func plainRow(top: CGFloat = 5, bottom: CGFloat = 5) -> some View {
+        listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: top, leading: 16, bottom: bottom, trailing: 16))
     }
 }
 
@@ -589,8 +930,12 @@ struct RowButtonStyle: ButtonStyle {
         configuration.label
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
+                // `Theme.pressed` rather than white: on paper a white wash over
+                // a near-white card is nothing at all, so this row would have
+                // had no press state in the light appearance while looking
+                // perfectly correct in the dark one. See `Ink.pressed`.
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.06 : 0))
+                    .fill(configuration.isPressed ? Theme.pressed : .clear)
             }
             .scaleEffect(configuration.isPressed ? 0.99 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
@@ -667,6 +1012,10 @@ private struct AccentRowButtonStyle: ButtonStyle {
 private struct SessionRow: View {
     let session: RemoteSession
     let lastActivity: Double?
+    /// Whether this phone has pulled the row to the top. Drawn, because a list
+    /// that reorders itself with nothing to explain why is a list somebody
+    /// assumes is sorting by something they cannot see.
+    let pinned: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -674,10 +1023,21 @@ private struct SessionRow: View {
                 .padding(.top, 7)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(session.title)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Theme.primary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(session.title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.primary)
+                        .lineLimit(1)
+                    if pinned {
+                        // Faint and small: it is a mark on the row rather than a
+                        // second thing to read, and the accent on this screen
+                        // belongs to Resume.
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.faint)
+                            .accessibilityLabel("Pinned")
+                    }
+                }
 
                 Text(session.cwd)
                     .font(.system(size: 12, design: .monospaced))

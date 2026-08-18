@@ -130,6 +130,86 @@
 }
 
 /*
+  …and on this bar the name is not drawn at all.
+
+  Asad, 2026-08-17, on the expanded row:
+
+    > *"No need to show the other things like only show Opus 5. If they drop
+    > down, they know that this is a model. So no need to tell that Model Opus 5
+    > — just Opus 5 with drop down is good enough. Also effort, no need to tell
+    > effort."*
+
+  He is right about his own bar, and the arithmetic says so as well as the
+  reading does: `Model` and `Effort` and `Fast mode` cost 118 pixels between
+  them on a row that has to share 1440 with a session name, a folder, an
+  account, a mode switch and a Stop button — and each of them is a word the
+  reader has already learned from the menu it opens. What is left, `Opus 5 ⌄`
+  and `Ultracode ⌄`, is a value and the mark that says it can be changed, which
+  is the whole of what a person needs from a bar.
+
+  ## Why this is done here in CSS, and not by deleting the span
+
+  Two reasons, and both are about what must survive.
+
+  The first is that the name has three other jobs and only one of them is being
+  dropped. `ControlPicker` builds the chip's hover label as `${name}: ${value} —
+  ${note}`, prints `Now: …` in the menu's foot, and hands the same string to
+  assistive technology. Hiding the drawn copy leaves all three intact, so a
+  reader who does not recognise `Ultracode` still gets *"Effort: Ultracode —
+  from Claude settings"* by resting on it — and a screen-reader user is told
+  what the control is, which "delete the label" would have taken away without
+  anyone noticing for months.
+
+  The second is that `ControlPicker` is shared with the chat composer's own row,
+  which is a different surface with a different width and a different agent
+  working on it. A prop threaded through it would be a change to a file this
+  work does not own; a rule scoped to `.session-controls .ac-picker` cannot
+  reach anything but this cluster, and it keeps applying to whatever chips that
+  cluster ends up carrying.
+
+  The connectors chip is excluded by name, and the exception is the rule's own
+  justification rather than a special case: what is being dropped is a *label on
+  a value*, and connectors has no value. `.ac-name` there is the only text on
+  the chip, so the same rule applied blindly would leave an empty box with a
+  caret in it — a control with nothing on it at all, which is the one thing this
+  bar is audited hardest for.
+*/
+.session-controls .ac-picker:not(.sc-connectors) .ac-name {
+  display: none;
+}
+
+/*
+  …unless there is no value, in which case the name is all there is.
+
+  Found by looking, which is the only way it could have been found. With the
+  names off, a window whose session had gone away drew:
+
+      Unknown ⌄   Unknown ⌄   Not reported ⌄   Unknown ⌄   Connectors ⌄
+
+  — four controls that no longer say what they are, in a row, saying the same
+  word. That is not the bar he asked for; it is the `More` failure again with
+  four buttons instead of one, and it lands hardest on exactly the reader this
+  whole review is about, who cannot recover the answer from context.
+
+  His sentence is the rule and it carries its own condition: *"If they drop
+  down, they know that this is a model… just **Opus 5** with drop down is good
+  enough."* `Opus 5` is good enough because `Opus 5` is a model and says so.
+  `Unknown` is not anything and says nothing, so the label it made redundant
+  stops being redundant the moment the value goes. The chip reads `Model
+  Unknown` again, and goes back to `Opus 5` the instant a value is read.
+
+  `:has()` because that is the shape of the fact: the *chip* is asked whether
+  the value inside it is one this app actually read. `.ac-value-unknown` is set
+  by `ControlPicker` from the one predicate that decides it — `reading.label ===
+  null` — so this cannot come to disagree with the italics beside it, and no
+  second definition of "unread" is introduced here. A sibling combinator could
+  not have done it: the name is drawn *before* the value.
+*/
+.session-controls .ac-picker:not(.sc-connectors) .cc-chip:has(.ac-value-unknown) .ac-name {
+  display: block;
+}
+
+/*
   Values are held shorter on a bar than in the composer.
 
   The composer allows 16ch, which is right there: the box is as wide as the pane
@@ -137,12 +217,18 @@
   its folder, its account and the mode switch, and the model is the one value
   here that can be enormous — the CLI answers "Opus 5 (1M context) (default)".
   Measured, that one name alone was the difference between a row of 478px and
-  one of 544px, which is most of the slack a 1440pt window has. Twelve
-  characters still says which model it is, and the hover label carries the whole
-  of it either way.
+  one of 544px, which is most of the slack a 1440pt window has.
+
+  Fourteen since the names came off the chips above, not twelve. The two
+  numbers describe the same budget: dropping `Model `, `Effort ` and `Fast mode `
+  gave the row back more than it costs to let each value keep two more
+  characters, and those two characters are the difference between `Opus 5 (1M…`
+  and `Opus 5 (1M c…` — which is to say, they are the difference between knowing
+  it is a wide-context model and guessing. The hover label carries the whole of
+  it either way.
 */
 .session-controls .ac-value {
-  max-width: 12ch;
+  max-width: 14ch;
 }
 
 /* --------------------------------------------------------- the folded chip -- */
@@ -229,6 +315,23 @@
   min-width: 30px;
 }
 
+/*
+  …and 25 when the reading beside it has been squeezed to its figures.
+
+  Thirty is the chip's padding plus its caret plus a sliver of a word. Twenty-
+  five is the padding plus the caret and nothing else — still a control, still
+  pressable, still the only way in to everything the fold hid. It is given up
+  for five pixels because of what those five pixels buy on the other side:
+  measured at a 720pt window with a 35-character session name, the whole cluster
+  is floored at 56 by `MIN_CLUSTER_PX`, and at a 30-pixel floor here the reading
+  drew `19%` as `19°`. Half a percent sign is not a smaller reading, it is a
+  wrong one — while a caret with no word beside it is exactly as pressable as a
+  caret with one.
+*/
+.session-controls[data-fit='tight'] .sc-summary {
+  min-width: 25px;
+}
+
 /* The caret is the part that says "this opens something", so it is the one part
    that never gives way and never fades. */
 .sc-summary .ac-caret {
@@ -239,14 +342,105 @@
   flex-shrink: 0;
 }
 
-/* The connectors chip is a door, not a picker, so its one word is the label
-   rather than the quiet prefix `.ac-name` is elsewhere on this row. */
+/* The connectors chip carries a name and no value, so its one word is the
+   label rather than the quiet prefix `.ac-name` is elsewhere on this row. */
 .sc-connectors .ac-name {
   color: var(--text-primary);
 }
 
-.sc-connectors[data-blocked] .ac-name {
+.sc-connectors .cc-chip[data-blocked] .ac-name {
   color: var(--text-muted);
+}
+
+/*
+  What is behind the connectors chip: a reading, then one action.
+
+  Every row here is a `<p>` and not a button, and that is the design rather than
+  an omission. This app can do exactly one thing with a server from a toolbar —
+  open the MCP servers view, which owns adding, inspecting and connecting — and
+  that one thing is not per-server. Rows that were buttons would therefore all
+  go to the same place, which is the fault he reported on another page in the
+  same recording: *"every row opens the same session."* So they do not hover,
+  they do not focus, and they do not pretend.
+*/
+.sc-connectors-menu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 200px;
+}
+
+.sc-connector {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: var(--sp-05) var(--sp-2);
+}
+
+.sc-connector-name {
+  color: var(--text-primary);
+}
+
+/* Scope and transport, or the CLI's own sentence for a server it would skip. */
+.sc-connector-detail {
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+}
+
+/* A server the CLI will not load is still worth listing — knowing it is there
+   and off is the answer to "why can't the agent see my tool" — so it is drawn
+   back rather than dropped, with its reason already in the line below its name. */
+.sc-connector[data-off] .sc-connector-name {
+  color: var(--text-muted);
+}
+
+/* Inside the folded panel the picker is already in a section with a heading, so
+   its own chip sits flush with the words above it rather than indented by the
+   action row's padding. */
+.sc-sheet .sc-connectors .cc-chip {
+  padding-left: 0;
+}
+
+/*
+  The one action under the list.
+
+  A quiet text target rather than a bordered button: nothing above it is an
+  action, so a filled button here would be the only thing in the popover that
+  looks pressable, which is precisely the reading that is wanted. Pulled back by
+  its own padding so its first letter sits on the same vertical line as the
+  server names above it — a text button inset by its own hover area reads as an
+  indent nobody chose.
+*/
+.sc-open {
+  align-self: flex-start;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  margin-left: calc(var(--sp-2) * -1);
+  cursor: pointer;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.sc-open:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sc-open:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.sc-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* ------------------------------------------------------- the folded panel -- */

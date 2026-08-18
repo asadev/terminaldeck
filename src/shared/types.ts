@@ -237,6 +237,17 @@ export interface DeckApi {
   removeProject(path: string): Promise<void>
   getPreferences(): Promise<Preferences>
   setPreferences(patch: Partial<Preferences>): Promise<Preferences>
+  /**
+   * The stored values changed, and this window is not what changed them.
+   *
+   * Both carry the whole store rather than the patch. There is no push for this
+   * window's own writes — those answer with the new values already — so anything
+   * arriving here came from the copilot or from a paired device, and the window
+   * has to take it or go on drawing a value that is no longer stored anywhere.
+   * See `main/live-push.ts` for the failure that produced them.
+   */
+  onPreferencesChanged(cb: (preferences: unknown) => void): () => void
+  onSettingsChanged(cb: (settings: unknown) => void): () => void
   pickProjectFolder(): Promise<string | null>
   createSession(input: CreateSessionInput): Promise<SessionMeta>
   writeToSession(id: string, data: string): void
@@ -248,6 +259,16 @@ export interface DeckApi {
   onSessionData(cb: (id: string, data: string) => void): () => void
   onSessionExit(cb: (id: string, exitCode: number) => void): () => void
   onSessionStatus(cb: (id: string, status: SessionStatus) => void): () => void
+  /**
+   * This app is not holding that session any more, so its row cannot act.
+   *
+   * Not the same fact as {@link onSessionExit}: a process that ends on its own
+   * keeps its place in the manager and its scrollback, and its tab is still
+   * worth having. This one fires when the session is dropped outright — by the
+   * copilot's `sessions.stop`, by a paired phone, by a routine — after which
+   * nothing in this process can answer for it.
+   */
+  onSessionRemoved(cb: (id: string) => void): () => void
   /**
    * A session this window did not start — today, one started from a phone.
    *
@@ -397,6 +418,10 @@ export interface DeckApi {
   writeToMachineSession(id: string, sessionId: string, data: string): Promise<unknown>
   resizeMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
   createMachineSession(id: string, cwd?: string, provider?: string): Promise<unknown>
+  /** Ask that machine again what is listening on it. The list rides on `machines:state`. */
+  refreshMachinePorts(id: string): Promise<unknown>
+  /** Open a page in the browser **on that machine**. Refused unless it advertised `web`. */
+  openOnMachine(id: string, url: string): Promise<unknown>
   onMachinesState(cb: (view: unknown) => void): () => void
   onMachineOutput(cb: (chunk: unknown) => void): () => void
 }

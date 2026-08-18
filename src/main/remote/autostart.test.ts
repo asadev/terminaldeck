@@ -31,6 +31,7 @@ import {
 } from './server'
 import type { RemoteSession } from './protocol'
 import { FolderGrants } from './folder-grants'
+import { DeviceKinds } from './device-kind'
 
 /** Enough of a session layer to construct the server. Nothing attaches here. */
 function fakeSessions(): SessionAccess {
@@ -91,6 +92,9 @@ function register(overrides: Partial<RemoteIpcDeps> = {}): {
     // A real store over a temp directory rather than a stand-in: it writes only
     // when something grants a folder, and nothing in this file does.
     folders: new FolderGrants(mkdtempSync(join(tmpdir(), 'td-autostart-grants-'))),
+    // Likewise, and for the same reason: nothing in this file approves a
+    // device, so the store is constructed and never written.
+    kinds: new DeviceKinds(mkdtempSync(join(tmpdir(), 'td-autostart-kinds-'))),
     webRoot: join(mkdtempSync(join(tmpdir(), 'td-autostart-')), 'nowhere'),
     storageDir: mkdtempSync(join(tmpdir(), 'td-autostart-store-')),
     broadcast: () => {},

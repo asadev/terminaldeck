@@ -52,6 +52,19 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
 
     let view: DeckTerminalView
 
+    /**
+     * What SwiftUI actually lays out: the terminal, inside the view that keeps
+     * its last line off the home indicator.
+     *
+     * Owned here rather than built in `TerminalHostView.makeUIView` for the same
+     * reason the terminal is — that method may be called again at any moment
+     * SwiftUI decides to rebuild the node, and a container built fresh each time
+     * would start with no safe-area measurement and lay the terminal out at full
+     * height for a frame before UIKit told it otherwise. `TerminalContainerView`
+     * holds the argument for the inset itself.
+     */
+    lazy var container = TerminalContainerView(terminal: view)
+
     /// Bytes the user typed, already UTF-8 decoded. The caller chunks and sends.
     var onInput: ((String) -> Void)?
     /// The terminal measured itself. Fires on every layout, including the first.
@@ -104,13 +117,22 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
         super.init()
 
         view.terminalDelegate = self
-        view.backgroundColor = Palette.terminalBackground
-        view.nativeBackgroundColor = Palette.terminalBackground
-        view.nativeForegroundColor = Palette.terminalForeground
-        view.caretColor = Palette.caret
-        // A selection is blue on this platform, and this app's blue is the
-        // icon's. See `Palette.selection` for what the library's default did.
-        view.selectedTextBackgroundColor = Palette.selection
+        applyColors()
+        /*
+         * The terminal is the one view in this app that has to be *told* the
+         * appearance changed. See `applyColors` for why.
+         *
+         * Registered here rather than inside `DeckTerminalView` because the
+         * colours are this object's business and that one's is gestures, and
+         * because registering from outside costs nothing: `registerForTraitChanges`
+         * is a method on the view, and the view keeps the handler for its own
+         * lifetime. `[weak self]` because that handler outlives nothing else —
+         * a strong capture would be the bridge holding the view holding the
+         * bridge, one leaked terminal per session ever opened.
+         */
+        view.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak self] (_: DeckTerminalView, _: UITraitCollection) in
+            self?.applyColors()
+        }
         // Nothing here is a shell running locally, so there is no bell worth
         // ringing on a phone in someone's pocket.
         view.bellStyle = .none
@@ -156,6 +178,60 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
         self.gestures = gestures
 
         watchTheKeyboard()
+    }
+
+    /**
+     * Paint the terminal in the appearance the view is actually in.
+     *
+     * Called once at construction and again on every change of the interface
+     * style, and the second half is not belt and braces — it is the only reason
+     * a light terminal works at all.
+     *
+     * Every other UIKit view in this app can be handed a `UIColor` built from a
+     * `dynamicProvider` and left alone: UIKit keeps the provider and re-resolves
+     * it. SwiftTerm does not keep it. `nativeForegroundColor`'s setter runs
+     * `newValue.getTerminalColor()` immediately and stores the result as
+     * `terminal.foregroundColor`, a 16-bit RGB struct with no notion of a trait
+     * collection; `installColors` does the same to the sixteen ANSI values, and
+     * the view's own `setupOptions` snapshots the background into
+     * `layer.backgroundColor` as a `CGColor`. So a dynamic colour given to the
+     * emulator is resolved once, at whatever appearance happened to be current
+     * at that instant, and then frozen — which on a phone that starts dark and
+     * is switched to light is a light-mode terminal still painting dark-mode
+     * text.
+     *
+     * The resolution is explicit — `resolvedColor(with: view.traitCollection)` —
+     * rather than left to the ambient `UITraitCollection.current`. Inside a
+     * `draw(_:)` UIKit sets that for you; inside a trait-change handler it is
+     * not something to rely on, and the view's own trait collection is the
+     * authority either way.
+     *
+     * `TerminalBridgeTests` drives this with `overrideUserInterfaceStyle` and
+     * reads the colour back out of the emulator, because the failure mode here
+     * is silent: everything compiles, the chrome changes, and only the rectangle
+     * the session is in stays the wrong colour.
+     */
+    private func applyColors() {
+        let traits = view.traitCollection
+        let paper = Palette.terminalBackground.resolvedColor(with: traits)
+        view.backgroundColor = paper
+        view.nativeForegroundColor = Palette.terminalForeground.resolvedColor(with: traits)
+        // Set after the foreground because this setter is the one that calls
+        // SwiftTerm's `colorsChanged()`, which drops the cached attribute runs
+        // and repaints the whole screen. Setting them the other way round
+        // repaints with the old ink and waits for the next output to correct it.
+        view.nativeBackgroundColor = paper
+        view.caretColor = Palette.caret.resolvedColor(with: traits)
+        // A selection is blue on this platform, and this app's blue is the
+        // icon's. See `Palette.selection` for what the library's default did.
+        view.selectedTextBackgroundColor = Palette.selection.resolvedColor(with: traits)
+        // The sixteen ANSI colours. Installed rather than left at SwiftTerm's
+        // default for two reasons, both in `Ink.ansi`: the library's default is
+        // Apple Terminal's set and the desktop renders xterm's, so one session
+        // had two colour schemes depending on which screen it was read on; and
+        // the light half has to be a different sixteen or an agent's coloured
+        // output is invisible on paper.
+        view.installColors(Palette.ansi(for: traits.userInterfaceStyle))
     }
 
     deinit {

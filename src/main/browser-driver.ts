@@ -121,6 +121,20 @@ export const MAX_ACTION_TIMEOUT_MS = 30_000
 /** Longest `browser.open` waits for a page to stop loading. */
 export const DEFAULT_SETTLE_MS = 15_000
 
+/**
+ * How much of a page's rendered text one `browser.read` brings back.
+ *
+ * Four thousand characters is roughly a thousand tokens, which is the figure
+ * `COPILOT-CAPABILITIES.md` §6 arrives at for what a whole-document overview is
+ * worth paying — and a read that costs more than the answer is a read a model
+ * learns to avoid. It is a *default*, not a ceiling: a caller that needs the
+ * long tail of an article passes a larger `textLimit`, and the result says
+ * `textTruncated` either way, so the difference between "that is the page" and
+ * "that is the top of the page" is never a guess.
+ */
+export const DEFAULT_OUTLINE_TEXT_CHARS = 4_000
+export const MAX_OUTLINE_TEXT_CHARS = 40_000
+
 /** How long the box must hold still. Two frames at 60 Hz, with slack. */
 const STABLE_FRAME_MS = 40
 
@@ -373,10 +387,24 @@ export class BrowserDrive {
     if (!wc) {
       const id = await this.host.openTab({ url: normalized.url, isolate: input.isolate })
       if (id === null) {
+        /*
+         * The window was asked to install a browser page and still did not
+         * produce one — see `browser-drive-ipc.ts`, which does that asking.
+         *
+         * The old sentence here told the copilot to have the person press the
+         * globe, because at the time an app with no browser page open was the
+         * ordinary state and this refusal was the ordinary answer. It is not
+         * any more: that case now installs a page and drives it. What is left
+         * is the one state the app genuinely cannot get out of on the person's
+         * behalf — the browser switched off in Features — and telling somebody
+         * to press a button they have deliberately removed is the kind of
+         * advice that makes an assistant look like it is guessing.
+         */
         throw new DriveRefused(
-          'there is no browser open in this window to drive. Ask the person to open a browser tab ' +
-            '(New browser tab in the sidebar), then try again — a page that is not in the tab strip is a ' +
-            'page they cannot see or close, and this app does not make those.',
+          'this window would not give me a browser page, so there is nothing to drive. The usual reason is ' +
+            'that the browser is switched off in Settings → Tools; it cannot be turned back on from here, ' +
+            'because that is the person\'s choice about their own app. Say what you would have opened and ' +
+            'let them decide.',
         )
       }
       this.tabId = id
@@ -411,6 +439,22 @@ export class BrowserDrive {
     // explain.
     if (created || origin !== null) this.secretSelectors.clear()
     this.setStep('')
+    /*
+     * Publish once the page has settled, whatever the step was.
+     *
+     * `setStep('')` above only publishes when the step actually *changes*, and
+     * after an open it usually has not — it was already empty. So the last
+     * status anybody outside this class saw was the one `move('claimed')` sent,
+     * which was taken before the navigation and therefore carries the previous
+     * URL, or none at all.
+     *
+     * Observed on 2026-08-18: a fresh `browser.open` left the drive reporting
+     * `url: ''` while a page was plainly loaded, so both readers of this status
+     * — the banner over the page and the panel beside it — said there was no
+     * page open. The status is meant to be what is true right now, and this is
+     * the moment it becomes true.
+     */
+    this.publish()
     return { url: wc.getURL(), title: wc.getTitle(), settled, created }
   }
 
@@ -578,9 +622,22 @@ export class BrowserDrive {
     ])) as T
   }
 
-  async outline(limit: number): Promise<{
+  /**
+   * The page: what it says, and what can be acted on.
+   *
+   * `textLimit` bounds the prose half. It is a separate argument from `limit`
+   * because the two answer different questions and a page can be extreme in
+   * either direction on its own — a search results page is fifty controls and
+   * two sentences, an article is one control and forty thousand characters.
+   */
+  async outline(
+    limit: number,
+    textLimit = DEFAULT_OUTLINE_TEXT_CHARS,
+  ): Promise<{
     url: string
     title: string
+    text: string
+    textTruncated: boolean
     elements: OutlineElement[]
     matched: number
     truncated: boolean
@@ -588,10 +645,12 @@ export class BrowserDrive {
     const raw = await this.run<{
       url: string
       title: string
+      text?: string
+      textTruncated?: boolean
       elements: OutlineElement[]
       matched: number
       truncated: boolean
-    }>(OUTLINE_SCRIPT, { limit })
+    }>(OUTLINE_SCRIPT, { limit, textLimit })
     const elements = (raw.elements ?? []).map((element) =>
       element.secret || looksSecret({ type: element.type })
         ? { ...element, secret: true, value: undefined }
@@ -601,6 +660,14 @@ export class BrowserDrive {
     return {
       url: String(raw.url ?? ''),
       title: String(raw.title ?? ''),
+      /*
+       * Defaulted rather than required, because the page is what answered.
+       * A document with no body — a bare XML response, a PDF viewer — has no
+       * `innerText`, and the empty string is the true answer for it rather than
+       * a reason for the whole read to throw.
+       */
+      text: typeof raw.text === 'string' ? raw.text : '',
+      textTruncated: raw.textTruncated === true,
       // Belt and braces over the page's own answer. The script never puts a
       // value on a secret field; this drops one if a future edit ever does.
       elements,

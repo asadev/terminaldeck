@@ -34,6 +34,26 @@ export const GUEST_INSPECT_CHANNEL = 'terminaldeck-browser:set-inspect'
 /** Guest → main: the user pressed Escape inside the page. */
 export const GUEST_CANCEL_CHANNEL = 'terminaldeck-browser:inspect-cancelled'
 
+/**
+ * The three channels saved logins need, and why they are here rather than in a
+ * second preload.
+ *
+ * A session-registered preload — the mechanism `browser-record-preload.ts` uses
+ * — runs in *every* frame of the session, including cross-origin iframes. That
+ * is right for a flow recorder, which wants to see everything that happens, and
+ * wrong for a credential filler, which must never type a password into a frame
+ * a third party controls. This preload is attached per view by
+ * `browser-tab.ts`, and `browser-guest-dom.ts`'s own rule already applies here:
+ * only the top document speaks. So the login work lives in the file with the
+ * narrower reach.
+ */
+/** Guest → main: this document has a sign-in form; is there a login for it? */
+export const GUEST_LOGIN_READY_CHANNEL = 'terminaldeck-browser:login-ready'
+/** Main → guest: fill these into the form. Sent only in answer to the above. */
+export const GUEST_LOGIN_FILL_CHANNEL = 'terminaldeck-browser:login-fill'
+/** Guest → main: a sign-in was just submitted with these credentials. */
+export const GUEST_LOGIN_SUBMIT_CHANNEL = 'terminaldeck-browser:login-submit'
+
 export const GUEST_PRELOAD_FILENAME = 'browser-guest-preload.js'
 
 /**
@@ -89,6 +109,9 @@ export const GUEST_PRELOAD_SOURCE = `'use strict'
   var CH_ELEMENT = ${JSON.stringify(GUEST_ELEMENT_CHANNEL)}
   var CH_INSPECT = ${JSON.stringify(GUEST_INSPECT_CHANNEL)}
   var CH_CANCEL = ${JSON.stringify(GUEST_CANCEL_CHANNEL)}
+  var CH_LOGIN_READY = ${JSON.stringify(GUEST_LOGIN_READY_CHANNEL)}
+  var CH_LOGIN_FILL = ${JSON.stringify(GUEST_LOGIN_FILL_CHANNEL)}
+  var CH_LOGIN_SUBMIT = ${JSON.stringify(GUEST_LOGIN_SUBMIT_CHANNEL)}
   var TEST_ATTRS = ${JSON.stringify(TEST_ATTRS)}
   var ATTR_KEYS = ${JSON.stringify(ATTR_KEYS)}
 
@@ -392,6 +415,187 @@ export const GUEST_PRELOAD_SOURCE = `'use strict'
     if (enabled === true) enable()
     else disable()
   })
+
+  /* ------------------------------------------------------------ logins -- */
+
+  /*
+   * Saved logins: filling one in, and noticing a new one.
+   *
+   * The store, the encryption and every decision about *whether* to fill live
+   * in browser-passwords.ts. This end does two mechanical things — find the
+   * fields, and say what was typed into them — and it is deliberately incapable
+   * of anything else: it holds no credentials between page loads, it never
+   * reads a field it was not asked about, and it cannot ask for a password by
+   * origin because the main process decides which origin it is answering for.
+   *
+   * ## Why the visibility test is a security control, not tidiness
+   *
+   * A page that wants somebody's saved password does not have to ask for it. It
+   * can put a password field one pixel wide behind an image and wait for the
+   * browser to fill it, which is why every real password manager refuses
+   * invisible fields. So does this: a field with no client rects, no size, or
+   * hidden by style is never filled and never read. Combined with the top-frame
+   * rule this preload already lives under, and with exact-origin matching in
+   * the store, that closes the three ways a fill turns into a leak.
+   *
+   * ## Why the credentials are remembered on input rather than read on submit
+   *
+   * Half the sign-in forms on the web are not forms. A single-page app clears
+   * its fields, unmounts the component and navigates in JavaScript, so by the
+   * time anything observable happens the values are gone — which is exactly the
+   * case that matters here, because the audience for this app is building
+   * single-page apps. Chrome solves it the same way: watch what is typed, and
+   * offer at the last moment something is known to be happening.
+   */
+
+  var typed = null
+  var offered = ''
+
+  function shown(el) {
+    if (!el || el.disabled || el.readOnly) return false
+    var rects = el.getClientRects()
+    if (!rects || rects.length === 0) return false
+    var box = rects[0]
+    if (box.width < 8 || box.height < 8) return false
+    var style = window.getComputedStyle(el)
+    if (style.visibility === 'hidden' || style.display === 'none') return false
+    return parseFloat(style.opacity || '1') > 0.05
+  }
+
+  function passwordField() {
+    var all = document.querySelectorAll('input[type="password"]')
+    for (var i = 0; i < all.length; i++) {
+      if (shown(all[i])) return all[i]
+    }
+    return null
+  }
+
+  /*
+   * The field that names the account, chosen by what the page says about it.
+   *
+   * In document order and *before* the password field, because a "confirm
+   * password" form has a second text input after it and filling that one is
+   * how a password manager corrupts somebody's profile page. The autocomplete
+   * attribute wins when the page bothered to set it; an email input is the next
+   * best evidence; a plain text input is the fallback.
+   */
+  function usernameFieldFor(pw) {
+    var inputs = document.querySelectorAll('input')
+    var best = null
+    var bestRank = 0
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i]
+      if (el === pw) break
+      if (!shown(el)) continue
+      var type = (el.getAttribute('type') || 'text').toLowerCase()
+      if (type !== 'text' && type !== 'email' && type !== 'tel') continue
+      var auto = (el.getAttribute('autocomplete') || '').toLowerCase()
+      var rank = auto.indexOf('username') >= 0 || auto === 'email' ? 3 : type === 'email' ? 2 : 1
+      if (rank >= bestRank) {
+        best = el
+        bestRank = rank
+      }
+    }
+    return best
+  }
+
+  /*
+   * Set a value the way a person would, so a framework notices.
+   *
+   * This preload runs in an isolated world, where the DOM node carries a
+   * different wrapper prototype from the one the page's own React or Vue
+   * patched. Assigning through it changes the real value without going through
+   * the page's value tracker, so the input and change events below are what
+   * tell the framework anything happened — without them the field shows the
+   * password and the component's state stays empty, and the form submits blank.
+   */
+  function fillField(el, value) {
+    if (!el) return
+    el.focus()
+    el.value = value
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+    el.blur()
+  }
+
+  function announce() {
+    if (window.top !== window) return
+    if (!passwordField()) return
+    ipc.send(CH_LOGIN_READY, location.href)
+  }
+
+  ipc.on(CH_LOGIN_FILL, function (event, username, password) {
+    if (typeof password !== 'string' || password === '') return
+    var pw = passwordField()
+    // Never over the top of something already there. A page that restored a
+    // draft, or a person half way through typing, owns those characters.
+    if (!pw || pw.value !== '') return
+    var user = usernameFieldFor(pw)
+    if (user && user.value === '' && typeof username === 'string' && username !== '') {
+      fillField(user, username)
+    }
+    fillField(pw, password)
+  })
+
+  function remember() {
+    var pw = passwordField()
+    if (!pw || pw.value === '') return
+    var user = usernameFieldFor(pw)
+    typed = { username: user ? user.value : '', password: pw.value }
+  }
+
+  function offer() {
+    if (window.top !== window || typed === null) return
+    // One offer per credential per document. A form that submits, fails
+    // validation and submits again is one sign-in attempt, not three prompts.
+    var key = typed.username + '\\u0000' + typed.password
+    if (key === offered) return
+    offered = key
+    ipc.send(CH_LOGIN_SUBMIT, location.href, typed.username, typed.password)
+  }
+
+  document.addEventListener('input', function (event) {
+    var el = event.target
+    if (el && el.tagName === 'INPUT' && (el.type === 'password' || el.type === 'text' || el.type === 'email')) {
+      remember()
+    }
+  }, true)
+
+  document.addEventListener('submit', offer, true)
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') offer()
+  }, true)
+
+  document.addEventListener('click', function (event) {
+    var el = event.target
+    // Walk up: the click nearly always lands on a span inside the button.
+    for (var i = 0; el && i < 4; i++) {
+      var tag = el.tagName
+      var type = el.getAttribute ? (el.getAttribute('type') || '').toLowerCase() : ''
+      if (tag === 'BUTTON' || (tag === 'INPUT' && (type === 'submit' || type === 'button'))) {
+        offer()
+        return
+      }
+      el = el.parentElement
+    }
+  }, true)
+
+  // The last moment anything is known to be happening. A single-page app that
+  // signs in and then hard-navigates never fires submit, and this is the only
+  // event left before the document is gone.
+  window.addEventListener('pagehide', offer)
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', announce)
+  } else {
+    announce()
+  }
+  // Sign-in forms are routinely rendered after the first paint, so one look at
+  // DOMContentLoaded misses most single-page apps. Two more, cheaply: a
+  // querySelector for one attribute is not something worth debouncing.
+  setTimeout(announce, 700)
+  setTimeout(announce, 2200)
 })()
 `
 

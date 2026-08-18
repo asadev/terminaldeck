@@ -30,6 +30,15 @@
   <key>com.apple.security.inherit</key>
   <false/>
 
+  <!-- Dictation records while the microphone button is held. Under the hardened
+       runtime this is the entitlement that decides whether the recording is
+       silence: without it the capture succeeds and produces nothing, which is
+       the worst of the three possible outcomes because it looks like working.
+       The Info.plist usage string is the other half and lives in
+       electron-builder.yml. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
   <!-- Not sandboxed (this is a Developer ID build, not a Mac App Store one), so
        the entries below are inert today. They are declared anyway so that a
        future sandboxed build fails loudly on something else rather than

@@ -17,6 +17,7 @@ import {
   decodeWslOutput,
   shellCommandLine,
   shellQuote,
+  windowsShellPath,
   wslLaunch,
   type WslTarget,
 } from './wsl'
@@ -158,7 +159,11 @@ function launcher(
       }
     }
     if (!windows) return { command: bin, args, resumeArgs }
-    const shell = env.COMSPEC || 'cmd.exe'
+    // Absolute, always: a *relative* program name handed to a pty on Windows is
+    // resolved by node-pty against the app's own working directory first, and
+    // hands back an empty path when it hits — see `wslExePath` in `wsl.ts` for
+    // the measurement that cost every WSL session its restart.
+    const shell = windowsShellPath(env)
     return {
       command: shell,
       args: ['/c', bin, ...args],
@@ -297,8 +302,22 @@ export function providersFor(
   const wslShell = target
     ? wslLaunch({ distro: target.distro, cwd: target.cwd, inner: '', env })
     : null
-  const shellBin = wslShell ? WSL_EXE : windows ? env.COMSPEC || 'cmd.exe' : env.SHELL || '/bin/zsh'
+  const shellBin = wslShell ? WSL_EXE : windows ? windowsShellPath(env) : env.SHELL || '/bin/zsh'
   const shellArgs = wslShell ? wslShell.args : windows ? [] : ['-l']
+  /*
+   * `bin` and the thing that runs are two different strings for a WSL shell,
+   * and this is the one place they were quietly the same.
+   *
+   * `bin` answers "what opens a shell on this machine" and stays `wsl.exe`,
+   * which is the name a person would type and the name a lookup would use.
+   * `spawn.command` is handed to a pty, and there it has to be the absolute
+   * path — a relative name is resolved by node-pty against the app's own
+   * working directory before anything else, and returns an empty path when
+   * that directory happens to hold a file of the same name. `C:\Windows\System32`
+   * holds `wsl.exe`, and it is the working directory of any launch that did not
+   * choose one. `wslExePath` in `wsl.ts` carries the measurement.
+   */
+  const shellCommand = wslShell ? wslShell.command : shellBin
 
   /**
    * One agent's spec, read out of the catalogue rather than written here.
@@ -336,7 +355,7 @@ export function providersFor(
       resumeArgs: [],
       // Already an executable path, so it needs no command-processor wrapper.
       spawn: {
-        command: shellBin,
+        command: shellCommand,
         args: shellArgs,
         resumeArgs: [],
         ...(wslShell ? { hostCwd: wslShell.hostCwd } : {}),
@@ -411,8 +430,44 @@ export const WSL_FOUND_PREFIX = 'agent-found:'
  * which is the entire question.
  *
  * Nothing here throws: a distro that is missing, refuses to start, or times out
- * answers "none of them", and the caller's existing fallback turns the tab into
- * a plain shell rather than a spawn that dies.
+ * answers with whatever it managed to say, which for those three is nothing.
+ *
+ * ## The exit status is not the answer, and reading it as one hid a whole distro
+ *
+ * Measured on `DESKTOP-DDGMNCV` on 2026-08-17, running this exact command line
+ * by hand against the machine's own Ubuntu-24.04:
+ *
+ *     stdout: "agent-found:claude\n"
+ *     err:    { message: 'Command failed: …', code: 1, killed: false }
+ *
+ * The probe **found Claude Code** and the app reported the distribution as
+ * having no agents at all, because `execFile` rejects on a non-zero exit and the
+ * `catch` threw the answer away with the error.
+ *
+ * The exit status is 1 for a reason that has nothing to do with the question. A
+ * login shell exits with the status of its last command; the last command here
+ * is `command -v` for the last name in the list; so **whenever the last agent
+ * asked about is not installed, the whole probe is discarded**. On a machine
+ * with Claude Code and neither Codex nor Gemini — which is his, and is the
+ * ordinary case — that is every probe, every time. It is also why the WSL branch
+ * of this could look fine in every test: the fixture answers 0.
+ *
+ * Both halves are fixed, and both are needed:
+ *
+ *  - the script ends with `exit 0`, so the *question* stops reporting an answer
+ *    about the last name as the status of the whole probe;
+ *  - and stdout is read off the rejection too, because the far side can still
+ *    exit non-zero for reasons that are none of this app's business — an rc file
+ *    that ends in a failing command, a `wsl.exe` that prints a warning after the
+ *    fact, or the 20-second timeout landing after the answer has been written.
+ *    `execFile` hangs `stdout` on the error object exactly for this, and this
+ *    codebase has been caught by that once already, in `execFile`'s timeout
+ *    path.
+ *
+ * What is *not* done is treating a non-zero exit as a reason to distrust the
+ * marked lines. A line carrying `WSL_FOUND_PREFIX` was printed by the loop,
+ * after `command -v` had already succeeded for that name; nothing about the exit
+ * status makes it less true.
  */
 async function detectInsideDistro(
   target: WslTarget,
@@ -426,12 +481,13 @@ async function detectInsideDistro(
     // happens to survive rather than a thing that is meant to. `printf` turns
     // the two characters into the line break on the far side, where it belongs.
     `command -v $n >/dev/null 2>&1 && printf ${shellQuote(`${WSL_FOUND_PREFIX}%s\\n`)} $n; ` +
-    `done`
+    `done; exit 0`
   // No `--cd`: this asks about the distro, not about a folder, and pointing it
   // at a folder that has since been deleted would fail the probe over something
   // it is not asking about.
   const launch = wslLaunch({ distro: target.distro, cwd: null, inner, env })
 
+  let output: unknown
   try {
     const { stdout } = await run(launch.command, launch.args, {
       timeout: IN_DISTRO_TIMEOUT_MS,
@@ -442,16 +498,32 @@ async function detectInsideDistro(
       // which is plain UTF-8 — is unaffected.
       encoding: 'buffer',
     })
-    const text = decodeWslOutput(Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout)))
-    const found = new Set<string>()
-    for (const line of text.split(/\r?\n/)) {
-      const trimmed = line.trim()
-      if (trimmed.startsWith(WSL_FOUND_PREFIX)) found.add(trimmed.slice(WSL_FOUND_PREFIX.length))
-    }
-    return found
-  } catch {
-    return new Set<string>()
+    output = stdout
+  } catch (error) {
+    // Whatever it printed before it failed. See the note above: the marked lines
+    // are true regardless of how the process ended.
+    output = (error as { stdout?: unknown }).stdout
   }
+  return markedNames(output)
+}
+
+/**
+ * The names an in-distro probe printed, out of whatever came back on stdout.
+ *
+ * Separate from the call so that the parsing can be exercised against the bytes
+ * a real machine produced without spawning anything — which is the only way this
+ * gets checked at all, since `wsl.exe` does not exist on the platform the tests
+ * run on.
+ */
+export function markedNames(stdout: unknown): Set<string> {
+  const found = new Set<string>()
+  if (stdout === undefined || stdout === null) return found
+  const text = decodeWslOutput(Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout)))
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith(WSL_FOUND_PREFIX)) found.add(trimmed.slice(WSL_FOUND_PREFIX.length))
+  }
+  return found
 }
 
 /**

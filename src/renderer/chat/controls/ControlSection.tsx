@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import type { ControlId, ControlOption, ControlReading } from './catalog'
 import { controlName, describeControl, displayValue, isCurrent, sourceNote, unreadNote } from './catalog'
 
@@ -48,23 +49,34 @@ export function ControlSection({ control, reading, options, reach, busy, disable
           {options.map((option) => {
             const current = isCurrent(reading, option)
             return (
-              <button
-                key={option.id}
-                type="button"
-                role="radio"
-                aria-checked={current}
-                className={current ? 'ac-option ac-option-current' : 'ac-option'}
-                disabled={disabled || busy}
-                onClick={() => onPick(option.id)}
-              >
-                <span className="ac-tick" aria-hidden="true">
-                  {current ? '✓' : ''}
-                </span>
-                <span className="ac-option-text">
-                  <span className="ac-option-label">{option.label}</span>
-                  {option.hint ? <span className="ac-option-hint">{option.hint}</span> : null}
-                </span>
-              </button>
+              <Fragment key={option.id}>
+                {/* A caption only where the rows below it are a different kind
+                    of claim from the rows above — see `ControlOption.group`.
+                    It sits inside the radiogroup as a presentational row rather
+                    than outside it, because splitting the group into two would
+                    mean two sets of arrow-key navigation for one control. */}
+                {option.group ? (
+                  <p className="ac-option-group" role="presentation">
+                    {option.group}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={current}
+                  className={current ? 'ac-option ac-option-current' : 'ac-option'}
+                  disabled={disabled || busy}
+                  onClick={() => onPick(option.id)}
+                >
+                  <span className="ac-tick" aria-hidden="true">
+                    {current ? '✓' : ''}
+                  </span>
+                  <span className="ac-option-text">
+                    <span className="ac-option-label">{option.label}</span>
+                    {option.hint ? <span className="ac-option-hint">{option.hint}</span> : null}
+                  </span>
+                </button>
+              </Fragment>
             )
           })}
         </div>

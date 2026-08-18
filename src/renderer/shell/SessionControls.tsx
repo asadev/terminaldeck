@@ -13,10 +13,13 @@ import { ControlSection } from '../chat/controls/ControlSection'
 import {
   controlName,
   displayValue,
+  modelOptions,
   optionsFor,
+  previousModelOptions,
   reachOf,
   unsupportedProviderNote,
   type ControlId,
+  type ControlOption,
 } from '../chat/controls/catalog'
 import {
   chooseLayout,
@@ -28,7 +31,8 @@ import {
 } from './control-room'
 import { useOneMenu } from './one-menu'
 import { panelSpec } from './panels'
-import { UsageBar } from './UsageBar'
+import { UsageBar, type UsageFit } from './UsageBar'
+import { rowDetail, useConnectors } from './use-connectors'
 import { useSessionControls } from './useSessionControls'
 import '../chat/controls/AgentControls.css'
 import './SessionControls.css'
@@ -95,11 +99,11 @@ import './SessionControls.css'
  *
  * ## What is deliberately not in this cluster
  *
- * **Permission mode.** It was not asked for, it is the one control with an
- * in-terminal gesture already (shift+tab, in the very terminal this bar sits
- * over), and it is the most expensive thing in the window to widen: five
- * options, a value that is often unknown, and a name long enough to cost
- * another chip's worth of a narrow bar. It keeps its chip in the composer.
+ * **Permission mode** used to be listed here, and is not any more — it joined
+ * the cluster when the composer's control row was removed and it turned out to
+ * be the one control that had no twin up here. The argument for leaving it out
+ * is still worth reading and is now at `CHROME_CONTROLS`, next to the fact that
+ * overruled it.
  *
  * **Slash commands.** *"Maybe slash commands also somehow — maybe not now,
  * maybe later."* Not now. Nothing here enumerates them and nothing pretends to.
@@ -140,20 +144,49 @@ export interface SessionControlsProps {
  * Model first because it is the one that changes per task and the one he named
  * first. Fast mode last because it is the one that most often has nothing to
  * report — see `unreadLabel` in `catalog.ts`.
+ *
+ * ## Permission mode, which was deliberately not here and now is
+ *
+ * The note further up this file argues it out of this cluster, and every clause
+ * of that argument still holds: it was not asked for, it is the one control with
+ * a gesture in the terminal underneath this bar (shift+tab), and it is the most
+ * expensive thing here to widen. It ended with "it keeps its chip in the
+ * composer", and that is the clause that stopped being true:
+ *
+ *   > *"Options is showing the same options that we already have here… let's
+ *   > not keep them here — remove them from the chat box side completely, only
+ *   > keep the maybe add files or something."*
+ *
+ * The composer's row is gone. Every other control on it had a twin up here;
+ * permission mode did not, so leaving it out would not have been "one home per
+ * control", it would have been none — a working control deleted as a side
+ * effect of removing duplicates of other controls. It is last but one so that
+ * the fold sheds it before Model or Effort in a narrow bar, and
+ * `chat/controls/one-home.test.ts` fails if it ever falls off this list without
+ * gaining a home somewhere else.
  */
-const CHROME_CONTROLS: readonly ControlId[] = ['model', 'effort', 'fast']
+const CHROME_CONTROLS: readonly ControlId[] = ['model', 'effort', 'permission', 'fast']
 
 /**
  * What to believe about the row's own width until it has been measured once.
  *
- * Both figures are read off the running app — the full row at a 1440pt window
- * is Model 118, Effort 118, Fast mode 159, Connectors 77 and the usage chip,
- * plus the gaps; the folded row is the usage chip and one summary chip. They
- * are a starting point and nothing more: `naturalWidth` replaces each with the
- * real thing on the first paint that draws it, because the true width moves
+ * Both figures are read off the running app, and both were re-read on
+ * 2026-08-18 after two changes moved them a long way. Dropping the names from
+ * the chips — *"just Opus 5 with drop down is good enough"* — took roughly 40
+ * pixels off each of the four; the usage reading gained about 40 by becoming
+ * two lines and a wider grid. Measured with a live session reading `Opus 5`,
+ * `Extra high`, `Bypass`, `Off` and two connectors: the full row is **551**
+ * (of which the usage element is 178) and the folded row is **247** (usage
+ * 107).
+ *
+ * They are a starting point and nothing more: `naturalWidth` replaces each with
+ * the real thing on the first paint that draws it, because the true width moves
  * with its own contents. `Opus 5` and `Opus 5 (1M context)` are not the same
  * chip, and a constant that pretends otherwise is a constant that was right on
- * the day it was written.
+ * the day it was written. What a stale guess actually costs is one frame — an
+ * unnecessary fold, or an unnecessary unfold, before the first measurement
+ * lands — which is why these are worth keeping honest and not worth agonising
+ * over.
  *
  * This is the whole of what remains of `FOLD_BELOW_PX`, the single 900px
  * threshold this replaced. That number compared the wrong box — see
@@ -161,7 +194,7 @@ const CHROME_CONTROLS: readonly ControlId[] = ['model', 'effort', 'fast']
  * have described both a 1176px window toolbar carrying a mode switch and a
  * 124px guest-pane bar carrying a close button.
  */
-const FIRST_GUESS: LayoutNeeds = { full: 615, folded: 357 }
+const FIRST_GUESS: LayoutNeeds = { full: 551, folded: 247 }
 
 /**
  * Which arrangement of this cluster fits the bar it is in, kept current.
@@ -322,64 +355,194 @@ export function contentsSentence(withConnectors: boolean): string {
 /**
  * The folded chip's hover label, which is also what a screen reader is told.
  *
- * It names the four controls behind the chip and then states the two values
- * that are on it, so nothing on the bar is a value without a name and nothing
- * behind the fold is a control without a mention. Both readings are quoted
- * whole — the chip itself truncates a long model name to fourteen characters,
- * and this is where the rest of it lives.
+ * It names every control behind the chip and then states the two values that
+ * are on it, so nothing on the bar is a value without a name and nothing behind
+ * the fold is a control without a mention. Both readings are quoted whole — the
+ * chip itself truncates a long model name to fourteen characters, and this is
+ * where the rest of it lives.
+ *
+ * This carries more weight than it did. Since the names came off the chips —
+ * *"no need to tell that Model Opus 5 — just Opus 5 with drop down"* — this
+ * sentence is the only place on the closed bar where the words "model" and
+ * "effort" appear at all, which is exactly why it names the value as well as
+ * quoting it: `Opus 5` alone is a fact with no subject.
  *
  * A function rather than a template in the JSX so that a test can hold it to
  * that, without a DOM and without grepping the file: the failure it guards is a
  * label that stops naming something the chip is still hiding.
  */
-export function summaryLabel(modelValue: string, effortValue: string): string {
-  return `${contentsSentence(true)} — model ${modelValue}, effort ${effortValue}`
+export function summaryLabel(
+  modelValue: string,
+  effortValue: string,
+  withConnectors: boolean,
+): string {
+  return `${contentsSentence(withConnectors)} — model ${modelValue}, effort ${effortValue}`
 }
 
 const CARET = 'M2.5 4.5 6 8l3.5-3.5'
 
 /**
- * The connectors chip.
+ * The connectors chip, which exists only when there are connectors.
  *
- * It is a door rather than a picker: this app already has an MCP surface — the
- * MCP servers view, with its own add form, its own inspector and its own
- * account of what each server exposes — and the thing missing was a way to
- * reach it from the session you are running. So this opens that view. Building
- * a second list of servers in a popover would be a second MCP system, drifting
- * from the first from the day it shipped.
+ * ## What this is answering
  *
- * The label on it is the view's own, and the sentence under it is the view's own
- * blurb, both read from `panels.ts`. That is the same reason the Options button
- * in the composer builds its label from `MENU_CONTROLS`: a hand-typed name
- * outlives the thing it names.
+ * Asad: *"connectors — a dropdown only when some exist. Hide it when empty."*
+ *
+ * It used to be a door, unconditionally: a chip that opened the MCP servers
+ * view whether or not a single server was configured. On a machine with none —
+ * which is every machine on its first day — that is a permanent invitation to
+ * an empty room, holding a chip's width on a bar shared with five other
+ * controls. It is the most repeated finding in his whole review, and the fix is
+ * the one he stated rather than a softening of it: the chip is not greyed out
+ * when there is nothing behind it, it is **not there**.
+ *
+ * ## Why the rows are a list and not a menu
+ *
+ * Because there is exactly one thing this app can do with a server from a
+ * toolbar, and it is not per-server. `onOpenConnectors` opens the MCP servers
+ * view — the surface that already owns adding, inspecting, connecting and
+ * explaining every server — and it takes no argument, so a row that was a
+ * button would take you to the same place as every other row. That is precisely
+ * the fault he reported on another page in the same recording: *"a long list of
+ * old sessions … every row opens the same session."*
+ *
+ * So the rows are what they honestly are — a reading of what this session's
+ * directory resolves to, name and scope and transport, and the CLI's own
+ * sentence for one it would skip — and the single action sits under them, once.
+ * Nothing here hovers, because nothing here is clickable.
+ *
+ * The rows come from `mcp:list`, parsed by the composer's own `readServers`, so
+ * this list and the connector list in the chat box cannot come to disagree
+ * about what a server is.
  */
-function ConnectorsChip({ onOpen, blocked }: { onOpen: (() => void) | null; blocked: string | null }) {
+export function ConnectorsPicker({
+  rows,
+  onOpen,
+  blocked,
+}: {
+  rows: readonly { id: string; name: string; enabled: boolean; disabledReason: string | null; scope: string | null; transport: string | null }[]
+  onOpen: (() => void) | null
+  blocked: string | null
+}) {
   const spec = panelSpec('mcp')
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const shut = useCallback(() => setOpen(false), [])
+  // The window's one-menu-at-a-time rule, the same as every other picker on
+  // this bar. Without it, opening this over the model menu leaves two panels
+  // overlapping on a bar one row tall — see `one-menu.ts`.
+  useOneMenu(open, shut)
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    const onDown = (event: MouseEvent): void => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onDown)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown)
+    }
+  }, [open])
+
   return (
-    <button
-      type="button"
-      className="cc-chip sc-connectors"
-      aria-disabled={blocked !== null ? true : undefined}
-      data-blocked={blocked !== null ? '' : undefined}
-      title={blocked ?? `Connectors — ${spec.blurb}`}
-      onClick={() => {
-        if (blocked === null) onOpen?.()
-      }}
-    >
-      <span className="ac-name">Connectors</span>
-    </button>
+    <div className="ac-picker sc-connectors" ref={root}>
+      <button
+        type="button"
+        className="cc-chip"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={`Connectors — ${spec.blurb}`}
+        onClick={() => setOpen((was) => !was)}
+      >
+        <span className="ac-name">Connectors</span>
+        <svg className="ac-caret" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
+          <path d={CARET} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      </button>
+
+      {open ? (
+        <div className="ac-menu sc-connectors-menu" role="group" aria-label="Connectors">
+          {rows.map((row) => (
+            <p key={row.id} className="sc-connector" data-off={row.enabled ? undefined : ''}>
+              <span className="sc-connector-name">{row.name}</span>
+              {/* The CLI's own reason when it would skip this server, and what
+                  was actually read of it otherwise. Never both, and never a
+                  plausible stand-in for a field the list did not carry — see
+                  `readServers`. */}
+              <span className="sc-connector-detail">{rowDetail(row)}</span>
+            </p>
+          ))}
+          <div className="sc-sheet-actions">
+            <button
+              type="button"
+              className="sc-open"
+              disabled={onOpen === null}
+              title={
+                onOpen === null
+                  ? 'The MCP servers view is not installed in this build, so there is nowhere for this to open.'
+                  : spec.blurb
+              }
+              onClick={() => {
+                setOpen(false)
+                onOpen?.()
+              }}
+            >
+              {blocked === null ? `Open ${spec.label}` : 'Not available in this build'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
 export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: SessionControlsProps) {
   const host = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
-  const { readings, busy, notice, dismissNotice, wired, pick } = useSessionControls(sessionId, cwd, provider)
+  const { readings, busy, notice, dismissNotice, wired, pick, models, discoverModels } = useSessionControls(
+    sessionId,
+    cwd,
+    provider,
+  )
+  /*
+   * The model rows come from the session; every other control's come from the
+   * catalogue.
+   *
+   * `modelOptions` folds the CLI's `Default` row into the model it points at and
+   * labels every row with the model it resolves to — the two things Asad asked
+   * for by name. `previousModelOptions` adds the ones the picker deliberately
+   * hides but `/model` still accepts, which is where "Sonnet 4.6" and "Opus 4.x"
+   * live. Before a session has been asked, `models` is null and the captured
+   * picker stands in; the moment the menu is opened, `discoverModels` replaces
+   * it with that session's own.
+   */
+  const optionsForRow = useCallback(
+    (id: ControlId): ControlOption[] =>
+      id === 'model' ? [...modelOptions(models ?? undefined), ...previousModelOptions()] : optionsFor(id),
+    [models],
+  )
+  /*
+   * What connectors this session's directory actually resolves to.
+   *
+   * Asked here rather than inside the chip because the answer decides whether
+   * there *is* a chip, and a component that decides its own existence cannot be
+   * the one that fetches the fact — it would have to render once to find out.
+   * See `use-connectors.ts`.
+   */
+  const connectors = useConnectors(cwd)
+  const hasConnectors = connectors.loaded && connectors.rows.length > 0
   /*
    * What the row needs changes with what it is saying, and nothing about that
    * resizes the bar — so the widths that decide the fold are re-read whenever
    * one of these labels does. `busy` is in here because "Working…" is drawn in
-   * place of a value and is a different width from every value it replaces.
+   * place of a value and is a different width from every value it replaces, and
+   * the connector count because a chip appearing is a chip's worth of width the
+   * row did not have a moment ago.
    */
   const signature = [
     provider ?? '',
@@ -387,9 +550,58 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
     readings?.model.label ?? '',
     readings?.effort.label ?? '',
     readings?.fast.label ?? '',
+    hasConnectors ? 'mcp' : '',
   ].join('|')
   const { layout, clamp, clipped, attach } = useClusterFit(host, signature)
   const folded = layout === 'folded'
+  /**
+   * How much of itself the usage reading can afford to draw here.
+   *
+   * ## Why the reading does not simply follow the fold
+   *
+   * It used to. `UsageBar` took this cluster's `folded` flag and gave up its
+   * renewal clause whenever the *controls* collapsed — and the real app is where
+   * that showed up as wrong. On a session called "Update Claude Code terminal to
+   * new…" the controls folded at a **1440pt window**, because `control-room.ts`
+   * protects the session name's share of the bar before it gives anything to the
+   * chips; and the reading dutifully dropped `resets 4:40am` with 645 pixels of
+   * room going spare. That is one of the two things he asked for on the
+   * five-hour line — *"it will show the percentage and it will show the time of
+   * reset"* — withheld because a neighbour was short of space and this one was
+   * not.
+   *
+   * ## The three tiers, and where each number comes from
+   *
+   * - **380 and up — `full`.** The renewal clause is either whole or absent;
+   *   there is no third option, because *"resets 4:40am"* drawn as `res…` is an
+   *   ellipsis where a fact should be. 380 is measured rather than reasoned:
+   *   with the reading at its natural 194 and the folded controls chip at its
+   *   natural 137, the clause came out whole at 365 of room and was cut at 325.
+   *   Both of those naturals move with their contents — a longer reset string,
+   *   a longer model name — and the ceilings are `18ch` for the clause and
+   *   `14ch` for each value, which puts the worst case near 370. 380 covers it.
+   *
+   *   The first attempt at this number was 210, from the reading's natural width
+   *   plus the controls chip's *floor*, and it was wrong for a reason worth
+   *   keeping: flex does not hold the neighbour at its floor and hand the rest
+   *   over, it shares the shortfall out proportionally. At 254 of room the
+   *   reading got 158 of the 194 it wanted, and the tail column — the only part
+   *   allowed to give — ate all 36 of the difference.
+   * - **120 to 379 — `dense`.** The clause goes and the meters narrow to 26.
+   *   A renewal time is a caption; the figures are not.
+   * - **Under 120 — `tight`.** The figures alone. At the app's own minimum
+   *   window width — 720, pinned in `src/main/index.ts` — this cluster gets 67
+   *   pixels and flex handed the reading 22.9 of them, which drew the word `5h`
+   *   and no number at all. Stripped, it measures 35, which with the controls
+   *   chip's 30 and the 2-pixel gap is exactly the 67 there are.
+   *
+   * Read off `clamp` rather than off a window width, for the same reason the
+   * fold is: a split pane can be narrow inside a wide window, and it is the bar
+   * this cluster is actually in that decides. `null` — nothing measured yet —
+   * is `full`, because the unclamped row is what the first paint should draw
+   * and what this component's own tests render.
+   */
+  const fit: UsageFit = clamp === null || clamp >= 380 ? 'full' : clamp >= 120 ? 'dense' : 'tight'
 
   const shut = useCallback(() => setOpen(false), [])
   // The window's one-menu-at-a-time rule. This panel and the pickers beside it
@@ -495,6 +707,11 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
       className="session-controls"
       ref={attach}
       data-folded={folded || undefined}
+      /* The reading's tier, published so the *controls* can react to it too —
+         `.sc-summary` gives up five pixels of its floor at `tight`, which is
+         what stops the reading beside it losing a percent sign. See the note
+         beside that rule. */
+      data-fit={fit}
       /*
        * The last line of defence, and the only one that is unconditional.
        *
@@ -519,16 +736,18 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
         rather than a switch.
 
         Outside the fold because folding it would hide it, and a hidden reading
-        and an absent one look the same. It is handed `folded` and gives up its
-        renewal clause instead; see `UsageBar.css`.
+        and an absent one look the same. Instead it is told how much room there
+        is and gives things up in order: `folded` costs it the renewal clause,
+        and `tight` — the state at the narrowest window this app permits —
+        costs it the window name, both meters and the caret, leaving the two
+        percentages, which are the reading. See `UsageBar.css`.
       */}
-      <UsageBar sessionId={sessionId} provider={provider} folded={folded} />
+      <UsageBar sessionId={sessionId} provider={provider} fit={fit} />
 
       {folded ? (
         <>
           {/*
-            One chip, and what is on it is the two values, each under its own
-            name.
+            One chip, and what is on it is the two values.
 
             The failure to avoid is documented at length in `catalog.ts`: a
             button labelled "More" hid two controls and they were reported as
@@ -541,12 +760,22 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
             `Effort Ultracode` off a real settings file, and a bar that has room
             to say so and does not is hiding a fact it knows.
 
-            So both are here, named and valued, in the order the expanded row
-            wears them. What folds away is fast mode — which by its own account
-            in `catalog.ts` spends most of its life with nothing to report — and
-            connectors, which is a door with no value to hide. Both are named in
-            the hover label, built from the cluster's contents rather than typed
-            out, and both are a titled section in the panel this opens.
+            So both values are here, in the order the expanded row wears them —
+            and, since 2026-08-17, without their names. Asad, looking at the
+            expanded row: *"no need to show the other things like only show Opus
+            5. If they drop down, they know that this is a model. So no need to
+            tell that Model Opus 5 — just Opus 5 with drop down is good enough.
+            Also effort, no need to tell effort."* That is a judgement about the
+            *reader*, and it is the same one on this chip: `Opus 5 · Ultracode ⌄`
+            is two values and a caret, and a person who presses it is shown both
+            names a tenth of a second later. What the "More" button lacked was
+            not names on the chip, it was any way at all to find out — and that
+            is covered here twice over, by the hover label below, which names
+            every control behind the fold, and by the panel it opens.
+
+            What folds away entirely is fast mode — which by its own account in
+            `catalog.ts` spends most of its life with nothing to report — and
+            connectors, which is a list with no value to put on a chip.
 
             Below the width where even that fits, the chip clips from its
             trailing edge under a short fade rather than shrinking its words to
@@ -561,15 +790,32 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
             data-clipped={clipped || undefined}
             aria-haspopup="dialog"
             aria-expanded={open}
-            aria-label={`Session controls: ${summaryLabel(modelValue, effortValue)}`}
-            title={summaryLabel(modelValue, effortValue)}
-            onClick={() => setOpen((was) => !was)}
+            aria-label={`Session controls: ${summaryLabel(modelValue, effortValue, hasConnectors)}`}
+            title={summaryLabel(modelValue, effortValue, hasConnectors)}
+            onClick={() =>
+              setOpen((was) => {
+                // The folded sheet draws every control at once, so opening it
+                // is the same moment the model menu's own button would be — see
+                // `onOpen` on `ControlPicker` below.
+                if (!was) discoverModels()
+                return !was
+              })
+            }
           >
+            {/* The same rule the open row's chips follow, and for the same
+                reason: a value that says what it is does not need its label,
+                and `Unknown` does not say what it is. `Opus 5 · Ultracode`
+                needs no words; `Unknown · Unknown` would be a chip that has
+                stopped saying anything at all. See the long note beside
+                `.ac-picker:not(.sc-connectors) .ac-name` in the stylesheet —
+                it is expressed there in CSS because those chips come from a
+                shared component, and here in markup because this one does not,
+                and the two must not drift. */}
             <span className="sc-summary-text">
-              <span className="ac-name">{controlName('model')}</span>
+              {readings?.model.label ? null : <span className="ac-name">{controlName('model')}</span>}
               <span className={readings?.model.label ? 'ac-value' : 'ac-value ac-value-unknown'}>{modelValue}</span>
               <span className="sc-summary-sep" aria-hidden="true" />
-              <span className="ac-name">{controlName('effort')}</span>
+              {readings?.effort.label ? null : <span className="ac-name">{controlName('effort')}</span>}
               <span className={readings?.effort.label ? 'ac-value' : 'ac-value ac-value-unknown'}>{effortValue}</span>
             </span>
             <svg className="ac-caret" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
@@ -591,7 +837,7 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
                   key={id}
                   control={id}
                   reading={readings?.[id]}
-                  options={optionsFor(id)}
+                  options={optionsForRow(id)}
                   reach={reachOf(id)}
                   busy={busy === id}
                   disabled={busy !== null && busy !== id}
@@ -599,13 +845,24 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
                   onPick={(value) => pick(id, value)}
                 />
               ))}
-              <section className="ac-section">
-                <h4 className="ac-section-name">Connectors</h4>
-                <p className="ac-section-desc">{panelSpec('mcp').blurb}</p>
-                <div className="sc-sheet-actions">
-                  <ConnectorsChip onOpen={onOpenConnectors} blocked={connectorsBlocked} />
-                </div>
-              </section>
+              {/* The same rule as on the open row: a section for connectors
+                  only when this session's directory resolves to some. An empty
+                  one used to be a heading, a blurb and a button that opened a
+                  view with nothing in it — three lines of a 340px panel spent
+                  on an absence. */}
+              {hasConnectors ? (
+                <section className="ac-section">
+                  <h4 className="ac-section-name">Connectors</h4>
+                  <p className="ac-section-desc">{panelSpec('mcp').blurb}</p>
+                  <div className="sc-sheet-actions">
+                    <ConnectorsPicker
+                      rows={connectors.rows}
+                      onOpen={onOpenConnectors}
+                      blocked={connectorsBlocked}
+                    />
+                  </div>
+                </section>
+              ) : null}
               <p className="ac-sheet-foot">
                 Every change here is typed into this session, exactly as you would type it.
               </p>
@@ -620,15 +877,28 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
               control={id}
               name={controlName(id)}
               reading={readings?.[id]}
-              options={optionsFor(id)}
+              options={optionsForRow(id)}
               reach={reachOf(id)}
               busy={busy === id}
               disabled={busy !== null && busy !== id}
               blocked={blockedFor(id)}
               onPick={(value) => pick(id, value)}
+              // Opening the model menu is what asks the session for its real
+              // list. Every other control's options are facts about the CLI's
+              // grammar and need no round trip.
+              onOpen={id === 'model' ? discoverModels : undefined}
             />
           ))}
-          <ConnectorsChip onOpen={onOpenConnectors} blocked={connectorsBlocked} />
+          {/* Only when there are some. *"A dropdown only when connectors exist.
+              Hide it when empty."* — and `loaded` is why nothing flickers in
+              and out while the answer is on its way. */}
+          {hasConnectors ? (
+            <ConnectorsPicker
+              rows={connectors.rows}
+              onOpen={onOpenConnectors}
+              blocked={connectorsBlocked}
+            />
+          ) : null}
         </>
       )}
 

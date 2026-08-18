@@ -7,7 +7,44 @@
  * derived here rather than in the DOM code, where they could not be tested.
  */
 
-import type { RemoteSession, ServerMessage } from './protocol-client'
+import { CAPABILITY, type RemoteSession, type ServerMessage } from './protocol-client'
+
+/**
+ * Whether this machine will let this browser end a session.
+ *
+ * Gated on the advertisement, which is the standing rule for every capability in
+ * this client and matters more here than anywhere else: closing is not undoable,
+ * so a Close that turned out to be refused would be a control that either did
+ * nothing or destroyed something, and the person pressing it could not tell
+ * which until afterwards.
+ *
+ * Two hosts withhold it and both are real. A session layer that cannot end a
+ * session does not offer the method the capability is derived from; and the
+ * public demo box, which hands strangers a shell, deliberately offers `create`
+ * without this one — starting something there is additive and bounded by a
+ * container, ending something is neither.
+ */
+export function closeOffered(capabilities: readonly string[]): boolean {
+  return capabilities.includes(CAPABILITY.close)
+}
+
+/**
+ * The sentence above the two buttons, once somebody has asked to close a row.
+ *
+ * Written here rather than in the renderer for the reason `noticeAfter` gives
+ * about itself: there is no DOM under vitest, so copy composed inside a `render`
+ * is copy nothing in this repository can check — and this is the one string in
+ * the client that has to be *exactly* right, because it is the last thing a
+ * person reads before work stops.
+ *
+ * It says three things and no more: which session, what happens to it, and that
+ * it does not come back. It deliberately does not say "are you sure" — the two
+ * buttons underneath already ask that, and a sentence spent on the question is a
+ * sentence not spent on the consequence.
+ */
+export function closeQuestion(session: RemoteSession): string {
+  return `Close ${session.title}? The session stops on the machine and does not come back.`
+}
 
 /**
  * The one sentence standing above the session list, after this frame.

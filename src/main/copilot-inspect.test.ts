@@ -24,6 +24,7 @@ vi.mock('electron', () => ({
 
 import { appendCopilotAction, copilotPaths, scaffoldCopilotHome } from './copilot-home'
 import {
+  copilotPlacePath,
   deleteMemoryFact,
   isMemoryName,
   parseActionRow,
@@ -486,5 +487,60 @@ describe('one row, parsed', () => {
       refusedReason: 'not-permitted-unattended',
       error: 'nobody was at the machine',
     })
+  })
+})
+
+/* --------------------------------------------------------- the reveal list -- */
+
+/**
+ * Every place the pane offers to open, and the one that was a dead button.
+ *
+ * `copilot:reveal` took a place key and checked it against a hand-written
+ * allowlist. `layer`, `contract` and `composed` were added to `CopilotPlace`
+ * when the copilot's instructions moved out of its working folder, and that list
+ * was left at the original five — so Settings → Copilot drew two fully lit "Open
+ * in Finder" buttons that answered *"There is nothing by that name to open."*
+ * every single time they were pressed.
+ *
+ * The fix is a `Record<CopilotPlace, …>` rather than an array, so a place added
+ * to the type without an entry here no longer compiles. This test is the other
+ * half: it proves each key resolves to a real path under a real `<userData>`,
+ * which a type cannot say. `copilotPlacePath` is the pure half of that handler
+ * and is what the handler calls, so testing it needs no `ipcMain`.
+ */
+describe('every place the pane can open', () => {
+  it('resolves each one to a path inside the copilot’s own storage', () => {
+    const paths = copilotPaths(dir, null)
+    const places = [
+      'root',
+      'instructions',
+      'memory',
+      'log',
+      'routines',
+      'layer',
+      'contract',
+      'composed',
+    ] as const
+    for (const place of places) {
+      const path = copilotPlacePath(paths, place, dir)
+      expect(path, place).toBeTruthy()
+      expect(path.startsWith(dir), `${place} → ${path}`).toBe(true)
+    }
+  })
+
+  it('points the two generated files at the layer, not at the working folder', () => {
+    /*
+     * The distinction the dead buttons were hiding. `contract` and `composed`
+     * are app-side files under `<userData>/copilot-layer`, and the whole design
+     * turns on their not being in the folder the copilot works in — an ordinary
+     * terminal opened there must read nothing of ours.
+     */
+    const paths = copilotPaths(dir, null)
+    expect(copilotPlacePath(paths, 'contract', dir)).toBe(paths.layer.contract)
+    expect(copilotPlacePath(paths, 'composed', dir)).toBe(paths.layer.composed)
+    // With a separator on the end, because `<userData>/copilot-layer` is a
+    // string prefix of `<userData>/copilot` and a bare `startsWith` would call
+    // the layer a child of the folder it was deliberately moved out of.
+    expect(copilotPlacePath(paths, 'contract', dir).startsWith(`${paths.root}/`)).toBe(false)
   })
 })

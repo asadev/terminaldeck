@@ -2,12 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Marked, type Renderer, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import { ChatComposer } from './ChatComposer'
-import { AgentControls } from '../chat/controls/AgentControls'
-import { UsageStrip, useTranscriptChanges } from '../chat/usage'
-import { useFeatures } from '../features/FeaturesProvider'
+import { useTranscriptChanges } from '../chat/usage'
 import { useEvery } from '../schedule'
 import { useSessionTranscript, type SessionScope } from '../session-transcript'
 import { useAgentPresence } from '../shell/agent-presence'
+import { CHAT_SESSION_ATTR } from '../driving/where'
 import type { ProviderId } from '@shared/types'
 import './ChatView.css'
 
@@ -358,10 +357,19 @@ export function ChatEmpty({ state }: { state: ChatEmptyState }) {
       title: 'No project open',
       detail: 'Open a folder to see the conversation for its sessions.',
     },
+    /*
+     * The three states below say "an agent" rather than naming one, and the
+     * reason is that this pane does not know which one it is looking at. The
+     * only distinction `runningProvider` draws is shell-or-not: a Codex session
+     * and a Gemini session both land here, and both used to be told that Claude
+     * Code writes the transcript they are waiting for. That is a sentence
+     * somebody can act on — go and check whether the wrong CLI is installed —
+     * and it would send them somewhere there is nothing to find.
+     */
     'no-transcript': {
       title: 'No transcript for this project yet',
       detail:
-        'Claude Code writes one when a session runs. Send a first message in the terminal and it will appear here.',
+        'An agent writes one as it works. Send a first message in the terminal and it will appear here.',
     },
     // Deliberately not "no transcript for this project": there may well be
     // several, and one of them may be being written to right now by a `claude`
@@ -369,7 +377,7 @@ export function ChatEmpty({ state }: { state: ChatEmptyState }) {
     'no-session-transcript': {
       title: 'Nothing from this session yet',
       detail:
-        'Claude Code writes a transcript once a session makes its first request. Send a first message in the terminal and it will appear here.',
+        'An agent writes a transcript once a session makes its first request. Send a first message in the terminal and it will appear here.',
     },
     /*
      * The one state that is an admission rather than a wait.
@@ -388,7 +396,7 @@ export function ChatEmpty({ state }: { state: ChatEmptyState }) {
     ambiguous: {
       title: 'Cannot tell which conversation is this session’s',
       detail:
-        'More than one session is open in this folder, and Claude Code does not record which terminal wrote which conversation — so showing one here would be a guess. The terminal view is exact. Running the second session in its own folder keeps them apart.',
+        'More than one session is open in this folder, and a transcript does not record which terminal wrote it — so showing one here would be a guess. The terminal view is exact. Running the second session in its own folder keeps them apart.',
     },
     silent: {
       title: 'Nothing said yet',
@@ -642,7 +650,6 @@ export function ChatView({
   provider,
 }: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
-  const features = useFeatures()
   const folderSessions = useFolderSessions(cwd)
   const liveSessionId = liveSessionIdOf(folderSessions, sessionId)
 
@@ -876,7 +883,36 @@ export function ChatView({
     : null
 
   return (
-    <div className="chat-view">
+    <div
+      className="chat-view"
+      /*
+       * Which session this conversation is a view of, written where the answer
+       * can be read off the screen rather than out of a state variable.
+       *
+       * `app.where` is the caller. It answers "what am I looking at" by measuring
+       * the DOM — see `driving/where.ts` for why that is the right source and not
+       * a shortcut — and until this attribute existed it could name the session
+       * behind a *terminal* and not the one behind a conversation, because
+       * nothing on this pane carried an id. So the honest answer was "a
+       * conversation is in front, and this app cannot say whose", which is a
+       * strange thing for an app to say about its own window. Asad asked for the
+       * whole capability in one sentence: *"if I ask it where I am right now, it
+       * should be able to answer."*
+       *
+       * `liveSessionId` rather than the `sessionId` prop, deliberately, and the
+       * difference is the point: it is the id of the **pty this pane can actually
+       * act on**, which is the prop when a caller knows it and the folder's one
+       * live session when it does not. Where the folder holds two, it is
+       * `undefined` and the attribute is left off entirely — an absent attribute
+       * reads as "not known" and a guessed one would read as a fact. The composer
+       * two blocks down is handed the same value for the same reason.
+       *
+       * An attribute rather than a class, on the rule `focus-target.ts` states:
+       * a class is styling and belongs to whoever is working on this pane, while
+       * an attribute with no CSS attached to it is obviously a contract.
+       */
+      {...(liveSessionId === undefined ? {} : { [CHAT_SESSION_ATTR]: liveSessionId })}
+    >
       {/* The stage is what "Jump to latest" is pinned to. It used to be pinned
           to the whole pane, 20px off the bottom — which is inside the composer,
           and behind it, since a positioned sibling that comes later wins. The
@@ -894,18 +930,38 @@ export function ChatView({
         ) : null}
       </div>
 
-      {/* One box, with everything it needs inside it. The controls and the
-          usage readout used to be two more bands stacked under the composer —
-          three rows of chrome below the thing you type into. They are still
-          owned here (see `wiring.test.ts`: both shipped mounted nowhere once,
-          and that table is the guard), but they are handed to the composer to
-          draw on its own bottom row instead of hanging beneath it.
+      {/*
+          One box, and only the box.
 
-          The transcript goes with the usage readout. Without one the strip
-          falls back to the project's most recently active session, which is how
-          a tab that had never been prompted came to report a "Session" spend of
-          $48 and a context 47% full — both belonging to somebody else's
-          conversation. */}
+          Two bands of chrome used to hang under the composer — the agent's
+          controls and a usage readout — and then, briefly, they were folded on
+          to the composer's own bottom row, which is where he found them:
+
+            > "Options is showing the same options that we already have here…
+            > since we have it on top we actually don't need them here. Let's
+            > keep them only on top and let's not keep them here — remove them
+            > from the chat box side completely, only keep the maybe add files
+            > or something."
+
+          He is right that they were the same options: `shell/SessionControls.tsx`
+          draws model, effort, fast mode, connectors and the account's usage bar
+          in the window's own bar, over the same session, and does it for
+          *terminal* sessions too — which is the half the composer's copy could
+          never do, because a session shown as a terminal has no composer on
+          screen at all. So the copies here were the redundant pair.
+
+          Two things did not simply have a twin up there, and neither was
+          dropped:
+
+           * **Permission mode** had no chip in the bar. It was given one
+             (`CHROME_CONTROLS`) rather than deleted, and
+             `chat/controls/one-home.test.ts` fails if any control ends up with
+             no home.
+           * **The usage readout** is a different reading from the bar's — this
+             session's tokens, cost and context fill, rather than the account's
+             five-hour and weekly limits. It lives in the session inspector,
+             with the rest of "what has this session done".
+      */}
       <ChatComposer
         onSend={onSend}
         cwd={cwd}
@@ -915,61 +971,14 @@ export function ChatView({
         // message to an agent that is not there.
         placeholder={shell ? 'Run a command in this shell…' : undefined}
         // Switches the menu behind the plus from mentions to plain quoted
-        // paths, and withdraws the two rows that need an agent to mean
-        // anything. It used to withdraw the menu outright, which left a shell
+        // paths. It used to withdraw the menu outright, which left a shell
         // composer with a microphone and a send button — see the `shell` prop.
         shell={shell}
-        // The same live session the controls read, handed over for one
-        // question: is it held inside a folder by the OS? A session a phone or
-        // the copilot started is, and it looks like any other tab from here —
-        // so the composer has to ask before it offers to attach a file from
-        // outside that folder, which such a session cannot read at all.
+        // Handed over for one question: is this session held inside a folder by
+        // the OS? A session a phone or the copilot started is, and it looks like
+        // any other tab from here — so the composer has to know before it
+        // attaches a file the session cannot read.
         sessionId={liveSessionId}
-        controls={
-          <AgentControls
-            sessionId={liveSessionId}
-            cwd={cwd}
-            // What is running in it, not what was launched — see
-            // `effectiveProvider`.
-            provider={effectiveProvider}
-            // The usage strip reads a transcript. With none — a shell — it
-            // falls back to the project's most recent session, which is how a
-            // pane that had never been prompted came to report somebody else's
-            // spend. No transcript, no readout.
-            // …and it belongs to Cost and usage, which can be uninstalled. Two
-            // separate reasons for the same absence, kept separate: one is
-            // about this session, the other about this install.
-            extra={
-              shell || !features.controlOn('chat.usage') ? undefined : (
-                /*
-                 * `scoped` travels with the path, not instead of it.
-                 *
-                 * Without it the strip could not tell "show me this project"
-                 * from "show me this session, which has written nothing yet" —
-                 * both arrive as an absent `transcriptPath` — so it fell back to
-                 * the project's most recent session and printed its money under
-                 * the heading "This session". A session opened under a second
-                 * account, with no transcript of its own, reported $1.74 and a
-                 * 77.1k context while the conversation beside it correctly said
-                 * "Nothing from this session yet". Two halves of one pane
-                 * disagreeing about whether the session had done anything.
-                 */
-                <UsageStrip
-                  cwd={cwd}
-                  transcriptPath={target ?? undefined}
-                  scoped={scoped}
-                  /*
-                   * The session's own id, so the copilot's focus overlay can
-                   * point at this strip and no other. `liveSessionId` and not
-                   * `target`: a strip is on screen from the first frame of a
-                   * session, and the transcript path arrives later or never.
-                   */
-                  sessionId={liveSessionId}
-                />
-              )
-            }
-          />
-        }
       />
     </div>
   )

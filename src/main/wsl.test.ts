@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   APPLIANCE_DISTROS,
   IN_DISTRO_TIMEOUT_MS,
   LOGIN_SHELL_SCRIPT,
   WSL_CHOOSE_CHANNEL,
+  WSL_EXE,
   WSL_STATUS_CHANNEL,
   WslLink,
   chooseDistro,
@@ -20,7 +21,9 @@ import {
   shellCommandLine,
   shellQuote,
   windowsFallbackCwd,
+  windowsShellPath,
   wslEnvBridge,
+  wslExePath,
   wslLaunch,
   wslUncPath,
   type WslExec,
@@ -385,7 +388,17 @@ describe('the wsl.exe command line', () => {
 
   it('names the distribution, the Linux directory, and the login shell', () => {
     const launch = wslLaunch({ distro: 'Ubuntu', cwd: '/home/asad/proj', inner: 'exec claude', env })
-    expect(launch.command).toBe('wsl.exe')
+    /*
+     * `endsWith`, not `toBe('wsl.exe')`, and the difference is the bug.
+     *
+     * This asserted the bare name until 2026-08-17, which was true on a Mac —
+     * `wslExePath` finds no `System32\wsl.exe` here and falls back — and false
+     * on the machine that matters, where the whole point is that the command is
+     * absolute. An assertion that can only hold on the platform the feature does
+     * not run on is not pinning the feature. The absolute form has its own
+     * tests below; what belongs here is that this is still the WSL launcher.
+     */
+    expect(launch.command.endsWith(WSL_EXE)).toBe(true)
     expect(launch.args).toEqual([
       '-d',
       'Ubuntu',
@@ -486,6 +499,104 @@ describe('quoting for the shell on the far side', () => {
 
   it('quotes the empty string rather than dropping it', () => {
     expect(shellQuote('')).toBe("''")
+  })
+})
+
+/* ========================================================= the program name == */
+
+/**
+ * The absolute path to `wsl.exe`, and why a relative one is not good enough.
+ *
+ * This is the cause of the bug Asad reported: a WSL session could not be
+ * restarted after a reboot, and his app log said so once per tab, every launch:
+ *
+ *     [restore] did not come back: it could not be started again: File not
+ *               found: {"folder":"/home/asad/ClaudeImza","agent":"claude"}
+ *
+ * with nothing after the second colon. node-pty's `get_shell_path` resolves a
+ * relative program name against **the calling process's current directory**, and
+ * returns an empty string when it hits — so `conpty.cc` reports "not found" and
+ * cannot name the file. `C:\Windows\System32` is the one directory that contains
+ * `wsl.exe`, and it is the working directory a process inherits when it is
+ * started from a Start-menu entry, a login `Run` key, or a relaunch that named
+ * none. Same binary, same distro, same folder; different inherited cwd.
+ *
+ * The answer is a *Windows* path whichever host is asking — `win32.join` builds
+ * it — so the filesystem probe is injected rather than run: on macOS
+ * `\C:\Windows\System32\wsl.exe` is one filename with backslashes in it and no
+ * fixture on disk can be reached through it. The stand-in below is a set of the
+ * paths that "exist", which is the whole of what the real check contributes.
+ */
+describe('finding wsl.exe', () => {
+  /** A machine on which exactly these paths are present. */
+  const has =
+    (...paths: string[]) =>
+    (path: string): boolean =>
+      paths.includes(path)
+  const WINDOWS = 'C:\\Windows'
+  const system32 = (name: string) => win32.join(WINDOWS, 'System32', name)
+  const sysnative = (name: string) => win32.join(WINDOWS, 'Sysnative', name)
+
+  it('answers with a full path, which is what never reaches the trap', () => {
+    // An absolute program name takes `conpty.cc`'s `PathIsRelativeW` false
+    // branch and is checked as given, so the app's own working directory can no
+    // longer decide whether the launch works.
+    expect(wslExePath({ SystemRoot: WINDOWS }, has(system32(WSL_EXE)))).toBe(system32(WSL_EXE))
+  })
+
+  it('prefers Sysnative, which is the only one a 32-bit process can reach', () => {
+    // Under WOW64 `System32` is redirected to `SysWOW64`, which has no wsl.exe.
+    // This build ships x64 so the redirector is not active today — the check
+    // costs one existsSync and guards the exact class of mistake this whole
+    // function exists because of.
+    const both = has(sysnative(WSL_EXE), system32(WSL_EXE))
+    expect(wslExePath({ SystemRoot: WINDOWS }, both)).toBe(sysnative(WSL_EXE))
+  })
+
+  it('falls back to the bare name when neither is there', () => {
+    /*
+     * Deliberate rather than lazy. A machine whose `wsl.exe` is somewhere this
+     * function does not know about is better served by letting `CreateProcess`
+     * search than by refusing to launch — and the trap only fires when a file of
+     * that name sits next to the process's cwd, which on such a machine it does
+     * not.
+     */
+    expect(wslExePath({ SystemRoot: WINDOWS }, has())).toBe(WSL_EXE)
+  })
+
+  it('reads windir, then a default, when SystemRoot is not set', () => {
+    expect(wslExePath({ windir: 'D:\\Win' }, has('D:\\Win\\System32\\wsl.exe'))).toBe(
+      'D:\\Win\\System32\\wsl.exe',
+    )
+    // No environment at all still produces the ordinary answer rather than
+    // joining onto `undefined`.
+    expect(wslExePath({}, has(system32(WSL_EXE)))).toBe(system32(WSL_EXE))
+  })
+
+  it('hands the launch the resolved path rather than the name', () => {
+    // The assertion that ties the fix to the thing that was broken: `wslLaunch`
+    // builds what a pty is given, and this is the field that was `wsl.exe`.
+    const launch = wslLaunch({
+      distro: 'Ubuntu',
+      cwd: '/home/asad/proj',
+      inner: '',
+      env: { SystemRoot: WINDOWS, USERPROFILE: 'C:\\Users\\Asad' },
+      exists: has(system32(WSL_EXE)),
+    })
+    expect(launch.command).toBe(system32(WSL_EXE))
+  })
+
+  it('resolves cmd.exe the same way, because it is the same trap', () => {
+    // `%COMSPEC%` is set on every Windows install and is already absolute, so
+    // this only ever fires as the fallback — and the fallback used to be the
+    // bare string `cmd.exe`, aimed at the one other file that lives in System32.
+    expect(windowsShellPath({ COMSPEC: 'C:\\Windows\\system32\\cmd.exe' }, has())).toBe(
+      'C:\\Windows\\system32\\cmd.exe',
+    )
+    expect(windowsShellPath({ SystemRoot: WINDOWS }, has(system32('cmd.exe')))).toBe(
+      system32('cmd.exe'),
+    )
+    expect(windowsShellPath({}, has())).toBe('cmd.exe')
   })
 })
 

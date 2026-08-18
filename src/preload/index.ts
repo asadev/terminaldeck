@@ -34,6 +34,39 @@ const api = {
   setPreferences: (patch: Record<string, unknown>): Promise<Record<string, unknown>> =>
     ipcRenderer.invoke('prefs:set', patch),
 
+  /* --------------------------- stored values changed from somewhere else -- */
+  /*
+   * The two channels that close the gap between *saved* and *applied*.
+   *
+   * Until 2026-08-18 a preference could only be learned from the return value of
+   * this window's own `prefs:set`, which meant a value written by anything else
+   * — the copilot, and behind it a paired phone — landed on disk and never
+   * reached React. The copilot was asked in words for a light theme; `state.json`
+   * said `"light"`, the window stayed dark, and it reported the change as done.
+   * True of the file, false of the screen.
+   *
+   * Both carry the **whole** store rather than the patch, so a subscriber merges
+   * one object over what it holds instead of reasoning about which keys were in
+   * flight. The channel names are held against the sender by
+   * `main/live-push.channels.test.ts` — a `send` to a channel nobody listens on
+   * is a silent no-op, which is how the browser's progress bar was dead for a
+   * week.
+   *
+   * Nothing is pushed for this window's *own* writes. Those already answer with
+   * the new values, and a push back down the same wire would be a second update
+   * for one change.
+   */
+  onPreferencesChanged: (cb: (preferences: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, preferences: unknown) => cb(preferences)
+    ipcRenderer.on('prefs:changed', handler)
+    return () => ipcRenderer.off('prefs:changed', handler)
+  },
+  onSettingsChanged: (cb: (settings: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, settings: unknown) => cb(settings)
+    ipcRenderer.on('settings:changed', handler)
+    return () => ipcRenderer.off('settings:changed', handler)
+  },
+
   pickProjectFolder: (): Promise<string | null> => ipcRenderer.invoke('project:pick'),
 
   createSession: (input: CreateSessionInput): Promise<SessionMeta> =>
@@ -71,6 +104,79 @@ const api = {
     ipcRenderer.on('session:status', handler)
     return () => ipcRenderer.off('session:status', handler)
   },
+
+  /**
+   * The app is no longer holding that session at all — take its row away.
+   *
+   * Deliberately a different channel from {@link onSessionExit}, because they
+   * are different facts and only one of them means the row should go. A process
+   * that ends on its own stays in the manager's map with an exit code and keeps
+   * its scrollback, so its tab is still worth having — somebody wants to read
+   * what it printed. This fires when the session is *dropped from the map*, and
+   * after that its scrollback is gone, writes to it go nowhere, and
+   * `session:list` does not mention it.
+   *
+   * Watched on 2026-08-18: the copilot ran `sessions_stop`, `sessions_list` came
+   * back with only the copilot in it, and *"Copilot sessions → Session 1"* was
+   * still in the sidebar pointing at nothing. The window had no way to hear about
+   * a session that ended by any route other than somebody closing its tab.
+   */
+  onSessionRemoved: (cb: (id: string) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string) => cb(id)
+    ipcRenderer.on('session:removed', handler)
+    return () => ipcRenderer.off('session:removed', handler)
+  },
+
+  /* ------------------------------------- sessions that could not be started -- */
+  /*
+   * The sessions that were open, did not come back, and are being kept.
+   *
+   * `unknown` in and `unknown` out, like every other feature module: the shape
+   * lives in `main/session-held.ts` and the renderer narrows it where it draws
+   * it. Deliberately *not* typed as `SessionMeta` here — a held entry has no id
+   * and no process, and the whole fault this closes was an app answering "your
+   * agent would not start" with something that looked like a working session.
+   *
+   * All three requests answer with the new list, so a caller never has to fetch
+   * again to find out what its own press did.
+   */
+  listHeldSessions: (): Promise<unknown> => ipcRenderer.invoke('sessions:held'),
+  retryHeldSession: (key: string): Promise<unknown> =>
+    ipcRenderer.invoke('session:held-retry', key),
+  forgetHeldSession: (key: string): Promise<unknown> =>
+    ipcRenderer.invoke('session:held-forget', key),
+  onHeldSessions: (cb: (held: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, held: unknown) => cb(held)
+    ipcRenderer.on('sessions:held', handler)
+    return () => ipcRenderer.off('sessions:held', handler)
+  },
+
+  /* --------------------------- running the session you have as somebody else -- */
+  /*
+   * Two calls and the order between them is the feature.
+   *
+   * `planSessionSwitch` answers *what would happen* — which account, what
+   * becomes of the conversation, or why it cannot happen at all — and touches
+   * nothing. `switchSessionAccount` is the act. They are separate because the
+   * complaint this closes was a restart nobody expected, and the only cure for
+   * that is a sentence read before the button rather than a result explained
+   * after it.
+   *
+   * `unknown` in and out for the plan, like every other feature module: the
+   * shape lives in `main/session-switch.ts` and `renderer/session-switch.ts`
+   * narrows it where it is drawn. The switch answers with a real `SessionMeta`,
+   * because what it produces genuinely is a session — a new process, a new id,
+   * in the same tab — and the window has to put it there.
+   *
+   * A rejection is *not* swallowed here. A switch that could not start has left
+   * the session it was asked about running, and the message on the error is the
+   * main process's own sentence about why; turning it into `null` would leave
+   * the window with a cancelled action and nothing to say about it.
+   */
+  planSessionSwitch: (sessionId: string, profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('session:switch-plan', sessionId, profileId),
+  switchSessionAccount: (sessionId: string, profileId: string): Promise<SessionMeta> =>
+    ipcRenderer.invoke('session:switch-account', sessionId, profileId),
 
   /**
    * A session started somewhere other than this window — today, from a phone.
@@ -144,8 +250,28 @@ const api = {
    */
   startRemotePairing: (): Promise<unknown> => ipcRenderer.invoke('remote:pair'),
   cancelRemotePairing: (): Promise<unknown> => ipcRenderer.invoke('remote:pair:cancel'),
-  approveRemoteDevice: (deviceId: string): Promise<unknown> =>
-    ipcRenderer.invoke('remote:device:approve', deviceId),
+  /**
+   * Let a device in, saying in the same call what it is and what it may reach.
+   *
+   * Three arguments and no overload that omits them, which is the security fix
+   * rather than an API preference. It used to take an id alone: approval
+   * admitted the device and the folder choice lived in a separate block further
+   * down the settings page that nobody had to visit, so the ordinary path let a
+   * phone in with every open project reachable. The handler writes the kind and
+   * the folders **before** it approves, so there is no instant in which a device
+   * is admitted with nothing decided about it.
+   */
+  approveRemoteDevice: (deviceId: string, kind: string, folders: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('remote:device:approve', deviceId, kind, folders),
+  /**
+   * Which devices are yours and which are guests.
+   *
+   * Read-only, and there is no companion write. A device's kind is decided when
+   * it is approved and changing it means revoking and pairing again — a toggle
+   * would make the distinction one tap deep, which is the escalation this app
+   * has spent a week removing. See `src/main/remote/device-kind.ts`.
+   */
+  listRemoteDeviceKinds: (): Promise<unknown> => ipcRenderer.invoke('remote:kinds'),
   revokeRemoteDevice: (deviceId: string): Promise<unknown> =>
     ipcRenderer.invoke('remote:device:revoke', deviceId),
   disconnectRemoteConnection: (connectionId: string): Promise<unknown> =>
@@ -260,6 +386,17 @@ const api = {
     ipcRenderer.invoke('machines:resize', id, sessionId, cols, rows),
   createMachineSession: (id: string, cwd?: string, provider?: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:create', id, cwd ?? '', provider ?? ''),
+  /*
+   * Remote localhost, in the direction this desktop could not go.
+   *
+   * `web.open` has been on the wire since the web client needed it, and only the
+   * web client sent it — so a Mac reaching a PC could see its sessions and had
+   * nothing to say about what it was serving. The port list rides on
+   * `machines:state`, which the link already pushes; these are the two verbs.
+   */
+  refreshMachinePorts: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:ports', id),
+  openOnMachine: (id: string, url: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:open', id, url),
   onMachinesState: (cb: (view: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, view: unknown) => cb(view)
     ipcRenderer.on('machines:state', handler)
@@ -628,6 +765,36 @@ const api = {
     ipcRenderer.invoke('copilot:actions', limit),
   copilotReveal: (place: string): Promise<unknown> => ipcRenderer.invoke('copilot:reveal', place),
 
+  /**
+   * Which folder the copilot works in — read, choose, or go back to the app's.
+   *
+   * `copilotPickFolder` takes no path, and that is the point rather than an
+   * omission: the panel is opened by the main process, so the only folder that
+   * can ever be stored is one a person picked in a native dialog. A channel that
+   * accepted a path from page code would be a channel for pointing somebody's
+   * assistant at any directory on the machine, which is the same argument that
+   * keeps `copilotReveal` on a fixed set of place keys.
+   *
+   * All three answer with the whole folder report, because a pane that has just
+   * changed it needs the new path, the new problem and the new "restart it"
+   * flag in one round trip.
+   */
+  copilotFolder: (): Promise<unknown> => ipcRenderer.invoke('copilot:folder'),
+  copilotPickFolder: (): Promise<unknown> => ipcRenderer.invoke('copilot:folder:pick'),
+  copilotClearFolder: (): Promise<unknown> => ipcRenderer.invoke('copilot:folder:clear'),
+
+  /**
+   * The generated half of the copilot layer, and the composed text handed over.
+   *
+   * Read-only, and there is no writer behind either of them. The contract is
+   * generated from the live tool catalogue on every start — hand-edit it and it
+   * drifts from the tools that exist, which is the defect this feature has
+   * already shipped twice — and the composed file is what the running copilot
+   * was actually given, which is evidence rather than a setting.
+   */
+  copilotReadContract: (): Promise<unknown> => ipcRenderer.invoke('copilot:read-contract'),
+  copilotReadComposed: (): Promise<unknown> => ipcRenderer.invoke('copilot:read-composed'),
+
   /* ---------------------------------------------------- deck-control -- */
 
   /**
@@ -990,6 +1157,56 @@ const api = {
     return () => ipcRenderer.off('browser:recording', handler)
   },
 
+  /* ------------------------------------- browser profiles and logins -- */
+
+  /*
+   * Profiles are `session.fromPartition` and nothing more exotic — a second
+   * cookie jar, storage and cache on disk. Saved logins are this app's own
+   * encrypted store, because Chromium's password manager is not exposed to
+   * Electron at any version; `browser-passwords.ts` argues that at length.
+   *
+   * Note what is missing and is meant to be: there is no way to *read* a
+   * password from here. `browserPasswordCopy` puts it on the clipboard from the
+   * main process and answers with a boolean, so a password never enters a React
+   * tree, devtools or a crash report — the same rule cookie values live under.
+   */
+  browserProfiles: (): Promise<unknown> => ipcRenderer.invoke('browser-profile:list'),
+  browserProfileCreate: (name: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-profile:create', name),
+  browserProfileRename: (id: string, name: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-profile:rename', id, name),
+  browserProfileActivate: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-profile:activate', id),
+  browserProfileDelete: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-profile:delete', id),
+
+  browserPasswordsAvailable: (): Promise<unknown> =>
+    ipcRenderer.invoke('browser-password:available'),
+  browserPasswords: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-password:list', profileId),
+  browserPasswordForget: (profileId: string, origin: string, username: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-password:forget', profileId, origin, username),
+  browserPasswordForgetAll: (): Promise<unknown> =>
+    ipcRenderer.invoke('browser-password:forget-all'),
+  browserPasswordCopy: (profileId: string, origin: string, username: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-password:copy', profileId, origin, username),
+  browserPasswordAnswer: (keep: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('browser-password:answer', keep),
+  onBrowserPasswordOffer: (
+    cb: (id: string, origin: string, username: string) => void,
+  ): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, origin: string, username: string) =>
+      cb(id, origin, username)
+    ipcRenderer.on('browser:password-offer', handler)
+    return () => ipcRenderer.off('browser:password-offer', handler)
+  },
+
+  browserSignInDiagnose: (url: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-signin:diagnose', url),
+  browserSignInHandover: (url: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-signin:handover', url),
+  browserSignInAgents: (): Promise<unknown> => ipcRenderer.invoke('browser-signin:agents'),
+
   /* -------------------------------------------------- mcp (real names) -- */
 
   listMcpServers: (projectPath?: string | null): Promise<unknown> =>
@@ -1094,6 +1311,29 @@ const api = {
   // shell session, which `src/main/agent-controls.ts` resolves from the screen.
   readAgentControls: (request: { sessionId?: string; cwd?: string; provider?: string }): Promise<unknown> =>
     ipcRenderer.invoke('agent:controls:read', request),
+  // Asks the session's own `/model` picker what it offers, rather than showing a
+  // list written down in this repo — see `shared/model-catalog.ts`. Its own
+  // channel and not a flag on the read above, because this one *types* into the
+  // session, and the read runs every time the session prints anything.
+  discoverAgentModels: (request: { sessionId?: string; provider?: string }): Promise<unknown> =>
+    ipcRenderer.invoke('agent:controls:models', request),
+
+  /*
+   * Dictation. Note what is not here: there is no reader for the key.
+   *
+   * The renderer needs to know *whether* a key exists — that is what decides
+   * whether a microphone appears at all — and it needs somewhere to send audio.
+   * It never needs the key itself, and a bridge method that handed a secret back
+   * to a window that also renders other people's web content would be a hole
+   * opened for nothing. See `src/main/voice.ts`.
+   */
+  voiceProviders: (): Promise<unknown> => ipcRenderer.invoke('voice:providers'),
+  voiceStatus: (): Promise<unknown> => ipcRenderer.invoke('voice:status'),
+  saveVoiceKey: (request: { provider: string; key: string }): Promise<unknown> =>
+    ipcRenderer.invoke('voice:save', request),
+  forgetVoiceKey: (): Promise<unknown> => ipcRenderer.invoke('voice:forget'),
+  transcribeAudio: (request: { audio: Uint8Array; filename: string }): Promise<unknown> =>
+    ipcRenderer.invoke('voice:transcribe', request),
   applyAgentControl: (request: {
     sessionId: string
     cwd?: string

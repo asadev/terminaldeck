@@ -36,6 +36,11 @@
   --git-conflicted: var(--status-input);
   --git-row-height: 28px;
   --git-measure: 900px;
+  /* Wide enough for a long filename plus the status word and the ± counts, and
+     no wider: everything past it is the diff's. */
+  --git-list-w: 420px;
+  --git-diff-add: var(--status-completed);
+  --git-diff-del: var(--color-critical);
 
   display: flex;
   flex-direction: column;
@@ -130,6 +135,47 @@
 }
 
 /* --------------------------------------------------------------- groups -- */
+
+/* ------------------------------------------------------------------ body -- */
+
+/*
+   The list and the change it selects, side by side.
+
+   The page used to be the list alone, capped at `--git-measure`, because a
+   click on a row left for the Files page and there was nothing else to make
+   room for. Now the row's whole purpose is the pane on the right, so the cap
+   moves from the page to the list: `--git-list-w` is what a filename, a word
+   and two counts need, and everything past it belongs to the diff.
+
+   Separated by space, not by a rule — the diff has its own fill, which is the
+   second step of "space, then a tint, then a line" and reaches the answer
+   before the line.
+*/
+.git-body {
+  display: flex;
+  flex: 1;
+  gap: var(--sp-5);
+  min-height: 0;
+  width: 100%;
+}
+
+.git-body[data-diff] .git-groups {
+  flex: 0 0 var(--git-list-w);
+  max-width: var(--git-list-w);
+}
+
+/* One column again below the width where two would each be too narrow to read.
+   The list keeps its height; the diff scrolls under it. */
+@media (max-width: 900px) {
+  .git-body {
+    flex-direction: column;
+  }
+  .git-body[data-diff] .git-groups {
+    flex: 0 0 auto;
+    max-width: none;
+    max-height: 40%;
+  }
+}
 
 .git-groups {
   flex: 1;
@@ -305,6 +351,164 @@
   line-height: var(--git-row-height);
   font-size: var(--t-callout);
   color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- diff pane -- */
+
+/*
+   The change itself, which is the reason a row is worth clicking.
+
+   A fill with a radius, not an outline — the card rule from the design notes.
+   It is what separates this half of the page from the list without drawing a
+   line down the middle of the window.
+*/
+.git-diff {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.git-diff-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  flex: none;
+  padding: var(--sp-3) var(--sp-4) var(--sp-2);
+}
+
+.git-diff-path {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-subhead);
+  font-weight: var(--w-semibold);
+}
+
+.git-diff-meta {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.git-diff-open,
+.git-diff-retry {
+  flex: none;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.git-diff-open:hover,
+.git-diff-retry:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.git-diff-open:focus-visible,
+.git-diff-retry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.git-diff-failed {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) var(--sp-3);
+}
+
+.git-diff-body {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: var(--sp-3);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  tab-size: 2;
+  user-select: text;
+}
+
+/* `width: max-content` with `min-width: 100%` keeps a short removed line tinted
+   all the way across a hunk that scrolls sideways — the same reasoning as the
+   artifact diff, which hit this exact ragged-stripes bug first. */
+.git-diff-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  width: max-content;
+  min-width: 100%;
+  padding: 0 var(--sp-4);
+  white-space: pre;
+  color: var(--text-secondary);
+}
+
+/* Low tints: a hunk is mostly context, and a fifty-line diff must not be two
+   solid slabs of colour. The ink carries the meaning. */
+.git-diff-line[data-kind='add'] {
+  background: color-mix(in srgb, var(--git-diff-add) 12%, transparent);
+}
+
+.git-diff-line[data-kind='del'] {
+  background: color-mix(in srgb, var(--git-diff-del) 12%, transparent);
+}
+
+.git-diff-line[data-kind='add'] .git-diff-text,
+.git-diff-line[data-kind='del'] .git-diff-text {
+  color: var(--text-primary);
+}
+
+/* The `@@` line is the only piece of git's furniture that is worth reading —
+   it is what says where in the file you are. */
+.git-diff-line[data-kind='hunk'] {
+  margin-top: var(--sp-2);
+  color: var(--text-muted);
+}
+
+/* `diff --git`, `index …`, the `+++`/`---` pair: the file's own name, repeated.
+   Kept rather than stripped, because a reader checking the pane against a
+   terminal wants to see the same text — but quiet enough to read past. */
+.git-diff-line[data-kind='meta'] {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.git-diff-mark {
+  flex: none;
+  width: 1ch;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.git-diff-line[data-kind='add'] .git-diff-mark {
+  color: var(--git-diff-add);
+}
+
+.git-diff-line[data-kind='del'] .git-diff-mark {
+  color: var(--git-diff-del);
+}
+
+.git-diff-more {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-4) 0;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
 }
 
 /* -------------------------------------------------------------- messages -- */

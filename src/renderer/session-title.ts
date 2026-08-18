@@ -255,9 +255,24 @@ export function distinguishingIdLength(ids: readonly string[]): number {
   return longest
 }
 
-/** Last path segment — the fallback title, and what the sidebar calls a project. */
+/**
+ * Last path segment — the fallback title, and what the sidebar calls a project.
+ *
+ * Both separators, because this app runs on Windows. Splitting on `/` alone
+ * returns the *whole* path for `C:\Users\Imza\Projects\app`, so every surface
+ * that asks this for a name — a project row, a tab's qualifier, the folder on a
+ * held session's row, the "in <folder>" line in two pickers — printed a full
+ * Windows path where a word belongs. Seen on `DESKTOP-DDGMNCV` on 2026-08-17, in
+ * a rail 264px wide.
+ *
+ * A backslash is a legal character in a POSIX directory name, so this is not
+ * free: a folder literally called `a\b` on a Mac now reads as `b`. That is the
+ * right trade and it is the same one `basename` on Windows makes — the alternative
+ * is a name that is wrong on every path on one of the two platforms this ships
+ * to, rather than on a directory nobody has.
+ */
 export function folderName(path: string): string {
-  const segments = path.split('/').filter(Boolean)
+  const segments = path.split(/[\\/]/).filter(Boolean)
   return segments[segments.length - 1] ?? path
 }
 

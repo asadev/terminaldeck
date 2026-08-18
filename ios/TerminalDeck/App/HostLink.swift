@@ -167,9 +167,19 @@ final class HostLink: Identifiable {
      */
     @ObservationIgnored
     private(set) lazy var copilot: CopilotLink = {
-        let link = CopilotLink(wire: WireProxy { [weak self] message in
-            self?.transport?.send(message) ?? false
-        })
+        let link = CopilotLink(
+            wire: WireProxy { [weak self] message in
+                self?.transport?.send(message) ?? false
+            },
+            // The copilot credential lives in this machine's own Keychain record
+            // — a second secret beside the pairing one, with a separate life:
+            // separately minted, separately revoked, and gone with the pairing.
+            // Reached through closures rather than by handing the link this
+            // object, so that the rule about a view never reaching the transport
+            // holds one layer further in.
+            vault: CopilotVaultProxy(
+                read: { [weak self] in self?.credential.copilotCredential },
+                write: { [weak self] value in self?.storeCopilotCredential(value) }))
         // One error surface per machine. A second `lastError` on the copilot
         // would be a second banner that can disagree with this one about which
         // of them is showing.
@@ -178,6 +188,25 @@ final class HostLink: Identifiable {
         }
         return link
     }()
+
+    /**
+     * The copilot credential, written through the one writer this app has.
+     *
+     * `onCredential` is how every other change to this record reaches the
+     * Keychain — `DeckModel` owns the drawer, because a link that saved for
+     * itself would be N writers and the bug that must not exist is a write for
+     * one host landing on another.
+     *
+     * Guarded on a change, because this is called on every `copilot.grant`
+     * carrying `linked: false` — which is most of them, for a device nobody has
+     * connected — and a Keychain write per frame is a Keychain write nobody
+     * asked for.
+     */
+    private func storeCopilotCredential(_ value: String?) {
+        guard credential.copilotCredential != value else { return }
+        credential = credential.withCopilotCredential(value)
+        onCredential?(credential)
+    }
 
     private var bridges: [String: TerminalBridge] = [:]
     /// Confirmed by the host.
@@ -217,8 +246,42 @@ final class HostLink: Identifiable {
         connection.isLive && (transport?.capabilities.contains(WireCapability.create) ?? false)
     }
 
+    /**
+     * Whether this machine will let this phone end a session.
+     *
+     * Its own capability rather than being read off `canCreateSessions`, and
+     * the two genuinely come apart — the public demo box hands a stranger a
+     * shell and withholds this one. It gates a swipe action, which is the one
+     * place in this app where an ungated control would be worst: closing is not
+     * undoable, so a Close drawn against a machine that would refuse it is a
+     * control whose outcome a person cannot predict until after they have
+     * pressed it.
+     */
+    var canCloseSessions: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.close) ?? false)
+    }
+
     var canBrowseLocalhost: Bool {
         connection.isLive && (transport?.capabilities.contains(WireCapability.localhost) ?? false)
+    }
+
+    /**
+     * Whether this machine will open a page **on its own screen** for this phone.
+     *
+     * A different question from `canBrowseLocalhost`, which is why it is a
+     * different property. A tunnel brings the page here; this puts it there, and
+     * it is the half he asked for by name — *"a browser started from the phone
+     * must run on the machine you are inside."*
+     *
+     * Two hosts withhold it: one with no window to open a page in, and a device
+     * that is a **guest** rather than one of the owner's own. Both arrive
+     * identically, as a name the welcome did not carry, and the button is simply
+     * not drawn — which is the whole of *"the copilot is never shared"* applied
+     * to a second verb that drives somebody's machine rather than reaching a
+     * folder.
+     */
+    var canOpenPagesThere: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.web) ?? false)
     }
 
     var canSendFiles: Bool {
@@ -457,6 +520,47 @@ final class HostLink: Identifiable {
         }
         openWhenCreated = true
         transport?.send(.create(folder: folder, size: pendingSize))
+    }
+
+    /**
+     * End a session on the machine.
+     *
+     * No optimistic removal, and that is the whole of the method's design. The
+     * row stays until `closed` arrives, because the machine is entitled to
+     * refuse — a folder taken back a second ago, a session that had already
+     * exited — and a list that had already dropped the row would leave somebody
+     * looking for a live session that is not on their screen and cannot be got
+     * back without a reconnect.
+     *
+     * The guard is not decoration either. `canCloseSessions` is false when the
+     * socket is down as well as when the machine never offered the verb, and
+     * `Transport.send` would refuse it in both cases — but a refusal there is
+     * silent, and this is the one action in the app where silence after a
+     * confirmed press is indistinguishable from having destroyed something.
+     */
+    func closeSession(_ id: String) {
+        guard canCloseSessions else {
+            lastError = "\(label) cannot close sessions from the phone."
+            return
+        }
+        transport?.send(.close(id: id))
+    }
+
+    /**
+     * Open a page in the browser **on the machine**.
+     *
+     * The URL is composed from a row that is on screen — `http://localhost:<port>/`
+     * for a port this machine itself listed — so this app never has an arbitrary
+     * address to send. The machine checks it anyway, through the same gate an
+     * untrusted link goes through, because a client is not something a machine
+     * gets to trust about what it opens.
+     */
+    func openOnMachine(_ url: String) {
+        guard canOpenPagesThere else {
+            lastError = "\(label) cannot open pages from the phone."
+            return
+        }
+        transport?.send(.webOpen(url: url))
     }
 
     private var pendingSize: TerminalSize? {
@@ -900,23 +1004,29 @@ final class HostLink: Identifiable {
         if upload?.receive(message) == true { return }
 
         switch message {
-        case let .welcome(_, _, _, _, list, capabilities, platform, folders, copilotOffer):
+        case let .welcome(_, _, _, _, list, capabilities, platform, folders, copilotConnection):
             sessions = list
             lastActivity = activity
             lastError = nil
             hostPlatform = platform
             granted = folders
             if capabilities.contains(WireCapability.localhost) { transport?.send(.ports) }
-            // The grant and the subscription together, on every welcome, for the
-            // same reason `askDevServers` is called on every welcome: the
-            // desktop's subscription belongs to the connection this frame
-            // arrived on and a reconnect knows nothing about the last one.
-            //
-            // Both halves of the offer go in, not just the grant: whether the
-            // `copilot` field was there at all is what tells this phone the
-            // machine really has one, and it is a different question from
-            // whether the capability list said so. See `CopilotOffer`.
-            copilot.welcomed(capabilities: capabilities, offer: copilotOffer)
+            /*
+             * The copilot connection is **re-opened** on every welcome, for a
+             * sharper version of the reason `askDevServers` is called on every
+             * welcome: the desktop's subscription belongs to the connection this
+             * frame arrived on, and its copilot access belongs to this *socket*.
+             * `welcome.copilot.open` is always false, so what goes out of here
+             * is a `copilot.hello` carrying the stored credential — not an
+             * `attach`, which would be refused.
+             *
+             * All four parts of the field go in, not just the grant: whether it
+             * was there at all is what tells this phone the machine really has a
+             * copilot, `linked` is what tells it whether to show a code field,
+             * and those are three different questions from what the capability
+             * list claims. See `CopilotConnection`.
+             */
+            copilot.welcomed(capabilities: capabilities, connection: copilotConnection)
             // After `granted` is set, because the folders this asks about are
             // read from it — and on every welcome, because the desktop's
             // subscription belongs to the connection this welcome arrived on.
@@ -965,6 +1075,39 @@ final class HostLink: Identifiable {
             }
             onSessionsChanged?(sessions, .live)
 
+        case let .closed(id):
+            /*
+             * The machine has ended the session this phone asked it to end.
+             *
+             * Removed here, on the answer, and never on the tap — see
+             * `closeSession`. Everything this phone was holding *about* that
+             * session goes with the row: the subscription, so a stale attach
+             * cannot be re-sent on the next reconnect, and the terminal bridge,
+             * so its last paint is not sitting under a keyboard on the next
+             * screen that asks for it.
+             */
+            sessions.removeAll { $0.id == id }
+            lastActivity.removeValue(forKey: id)
+            attached.remove(id)
+            wanted.remove(id)
+            bridges.removeValue(forKey: id)
+            lastError = nil
+            onSessionsChanged?(sessions, .live)
+
+        case .webOpened:
+            /*
+             * The page is open over there, and there is nothing on this screen
+             * to change.
+             *
+             * Deliberately not a banner. The confirmation is the *machine* — a
+             * tab appearing on the screen the person is looking at, or about to
+             * walk over to — and a phone announcing what a desktop just did is
+             * the app narrating itself. A failure is a plain `error` and does
+             * get said, in the line below, which is the asymmetry that matters:
+             * silence means it worked.
+             */
+            break
+
         case let .attached(id):
             attached.insert(id)
             wanted.insert(id)
@@ -1004,6 +1147,13 @@ final class HostLink: Identifiable {
         case let .error(code, text):
             lastError = text.isEmpty ? code.rawValue : text
             openWhenCreated = false
+            // A wrong connect code comes back as a plain `error` — the sentence
+            // is the desktop's and it is already on screen in the banner above,
+            // so all this does is stop the Connect screen spinning over it. The
+            // wire's error frame carries no correlation id, so this cannot be
+            // narrowed to copilot errors without inventing one; see
+            // `CopilotLink.wireErrored`.
+            copilot.wireErrored()
 
         case let .ports(list):
             ports = list
@@ -1073,16 +1223,31 @@ final class HostLink: Identifiable {
         case let .copilotPending(questions):
             copilot.apply(pending: questions)
 
-        case let .copilotGrant(grant):
+        case let .copilotGrant(connection):
+            // Four events on one frame: the connection opened, it closed,
+            // somebody reticked the boxes, or somebody disconnected this device.
             // A revoke lands here without a reconnect, which is the whole point
-            // of the frame — the *rule* is already live because the desktop
-            // re-reads the grant on every call, so all this does is stop the
-            // phone offering a control whose only outcome is a refusal.
+            // — the *rule* is already live because the desktop re-reads the
+            // store on every call, so all this does is stop the phone offering a
+            // control whose only outcome is a refusal.
             //
-            // `pushed` rather than the plain `apply`, because a grant that
+            // `pushed` rather than the plain `apply`, because a connection that
             // arrives as a frame is also proof this machine has a copilot, and
-            // the same grant arriving inside a `welcome` is not.
-            copilot.apply(pushed: grant)
+            // the same object arriving inside a `welcome` is not.
+            copilot.apply(pushed: connection)
+
+        case let .copilotLinked(credential, connection):
+            // The one frame on this wire carrying a secret, and it arrives
+            // exactly once — there is no path on the desktop that can send it
+            // again, because it keeps a scrypt hash. `CopilotLink` stores it
+            // before it does anything else with the frame.
+            copilot.linked(credential: credential, connection: connection)
+
+        case let .copilotAsk(question):
+            copilot.apply(ask: question)
+
+        case let .copilotSettled(settled):
+            copilot.apply(settled: settled)
 
         case .pong:
             break

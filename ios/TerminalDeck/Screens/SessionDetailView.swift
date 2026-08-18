@@ -116,7 +116,6 @@ struct SessionDetailView: View {
             }
         }
         .tint(Theme.accent)
-        .preferredColorScheme(.dark)
     }
 
     // MARK: - Sections

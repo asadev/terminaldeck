@@ -106,6 +106,13 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { IpcMain } from 'electron'
 import { normalizeModelId } from './cost'
+import {
+  foldDefaultRow,
+  isTypeableModelValue,
+  readModelPicker,
+  FALLBACK_MODELS,
+  type ModelRow,
+} from '../shared/model-catalog'
 import { stripAnsi } from './session-activity'
 import { claudeConfigDir, listTranscripts, transcriptDirs } from './transcript'
 
@@ -333,22 +340,19 @@ export const EFFORT_LEVELS = [
   { id: 'auto', label: 'Auto' },
 ] as const
 
-/**
- * Model aliases, each one typed at the real CLI and confirmed by its reply.
- * `opus` and `default` are genuinely different — `default` answered
- * "Opus 5 (1M context)" and `opus` answered "Opus 5" — so both are listed.
+/*
+ * `MODEL_ALIASES` used to be here: five hand-written names — default, opus,
+ * fable, sonnet, haiku — that `applyControl` compared against before it would
+ * type anything. It is deleted rather than left unused, because a stale table
+ * nobody reads is how the next person comes to trust it.
  *
- * This is a list of *aliases the CLI accepts*, not a claim about which models
- * an account may use. A name this account cannot use comes back as
- * `Model 'x' not found`, which is surfaced verbatim rather than swallowed.
+ * What replaced it is two things. The *list a user picks from* is read out of
+ * the session's own `/model` picker (see {@link discoverModels} and
+ * `shared/model-catalog.ts`), so it cannot go stale. The *guard before typing*
+ * is `isTypeableModelValue`, which checks the shape rather than the name — a
+ * value has to be a single argument with no whitespace and no return in it, and
+ * everything past that is the CLI's to refuse in its own words.
  */
-export const MODEL_ALIASES = [
-  { id: 'default', label: 'Default' },
-  { id: 'opus', label: 'Opus' },
-  { id: 'fable', label: 'Fable' },
-  { id: 'sonnet', label: 'Sonnet' },
-  { id: 'haiku', label: 'Haiku' },
-] as const
 
 /* -------------------------------------------------------------------------- */
 /* Screen reading                                                              */
@@ -931,6 +935,81 @@ export function readEffortFromScreen(screen: string): string | null {
 }
 
 /**
+ * The lightning bolt Claude Code draws in its status rule while fast mode is on.
+ *
+ * ## The measurement this replaced a written-down assumption with
+ *
+ * This file used to say that fast mode could not be read at all — that the CLI
+ * "announces fast mode only when it changes", so a session nobody had toggled it
+ * in had nothing on screen to report and the control said `Not reported` for the
+ * whole of its life. That was the state Asad found it in:
+ *
+ *   > *"Fast mode is here, but I can see if the fast mode is available in app,
+ *   > why is it not available in CLI in this terminal? Just look at this — if it
+ *   > is available then let's bring it here, otherwise remove it completely."*
+ *
+ * So it was driven, on `claude 2.1.234`, and the assumption was wrong. `/fast
+ * on` answers `⎿  ↯ Fast mode ON · $10/$50 per Mtok` **and leaves the `↯` in the
+ * rule directly above the command line**, where it stays for as long as fast
+ * mode is on. `/fast off` answers `⎿  Fast mode OFF` and the glyph goes. Then a
+ * brand-new `claude` process, started with fast mode left on, booted with the
+ * `↯` already drawn and no command typed at all — which settles the other half:
+ * the setting outlives the session, and it is legible at any moment rather than
+ * only at the instant it changes.
+ *
+ * Both screens are in `cli-screens.capture.json`, and `agent-controls.test.ts`
+ * reads the state back out of them, so the day the CLI stops drawing this the
+ * test says so instead of the app quietly reporting "off" for ever.
+ */
+const FAST_GLYPH = '↯'
+
+/**
+ * The rule the CLI draws between its transcript and the command line.
+ *
+ * A run of box-drawing dashes that may have a sentence set into it — the update
+ * notice lives there, and so does the `↯`. Matched from the start and the end so
+ * that a line of dashes inside somebody's *answer* (a markdown horizontal rule,
+ * which the CLI renders exactly this way) cannot be mistaken for it: those are
+ * not the line immediately above the composer, which is the only place this is
+ * ever looked for.
+ */
+const STATUS_RULE = /^─{10,}.*─$/
+
+/**
+ * Whether fast mode is on right now, read from the rule above the command line.
+ *
+ * Returns null rather than guessing when the rule cannot be found — an older
+ * CLI that does not draw it, a screen caught mid-repaint, a session that is not
+ * Claude Code at all. That distinction is the whole safety of this: `↯` present
+ * means on, `↯` absent **from a rule that was actually located** means off, and
+ * "no rule" means nothing is claimed. Treating the third case as "off" would
+ * turn every unreadable screen into a confident and wrong reading, which is the
+ * failure this module is arranged against.
+ *
+ * Only the three lines above the composer are searched. The CLI draws a second
+ * rule *below* the command line which never carries the glyph, so a search from
+ * the bottom of the screen would find that one and report "off" always; and the
+ * hint row (`✦ ultracode · xhigh effort …`) can sit between the rule and the
+ * composer, which is why it is three rather than one.
+ */
+export function readFastIndicator(screen: string): 'on' | 'off' | null {
+  const all = lines(screen)
+  let composer = -1
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (COMPOSER_LINE.test(all[i])) {
+      composer = i
+      break
+    }
+  }
+  if (composer < 1) return null
+
+  for (let i = composer - 1; i >= 0 && i >= composer - 3; i--) {
+    if (STATUS_RULE.test(all[i])) return all[i].includes(FAST_GLYPH) ? 'on' : 'off'
+  }
+  return null
+}
+
+/**
  * Fast mode as the CLI last reported it: on, off, or refused.
  *
  * The refusal is a real answer and is kept, because a control that reports
@@ -956,6 +1035,39 @@ export function readFastFromScreen(screen: string): ControlReading | null {
 }
 
 /**
+ * Everything the screen knows about fast mode, in one answer.
+ *
+ * Two readings, and they answer different questions. {@link readFastIndicator}
+ * says what is true **now**; {@link readFastFromScreen} says what the CLI last
+ * *said*, which is where a refusal like "Fast mode requires usage credits"
+ * lives. The state has to come from the first, because an announcement scrolls
+ * up the screen and eventually off it while the glyph stays; the reason has to
+ * come from the second, because the glyph carries no reason.
+ *
+ * A refusal on screen with no glyph beside it is fast mode off *and* the account
+ * being told why it cannot be on, and both halves are kept. A refusal on screen
+ * with the glyph present is stale — it belongs to an earlier attempt that has
+ * since succeeded — so the reason is dropped rather than shown over a control
+ * that is plainly working. That is not hypothetical tidiness: a session
+ * accumulates its refusals, and this module has already shipped one bug where an
+ * old "Fast mode requires usage credits" made a change made minutes later report
+ * failure.
+ */
+export function readFast(screen: string): ControlReading | null {
+  const announced = readFastFromScreen(screen)
+  const now = readFastIndicator(screen)
+  if (now === null) return announced
+
+  const reading: ControlReading = {
+    value: now,
+    label: now === 'on' ? 'On' : 'Off',
+    source: 'screen',
+  }
+  if (now === 'off' && announced?.unavailableReason) reading.unavailableReason = announced.unavailableReason
+  return reading
+}
+
+/**
  * The CLI's reply to a slash command we just typed, if it has landed yet.
  *
  * Every pattern is a string the shipped binary can actually print. The list is
@@ -968,6 +1080,20 @@ const COMMAND_ERRORS: readonly RegExp[] = [
   /Model '[^']*' not found[^\n]*/gi,
   /Model '[^']*' is not in the list of available models/gi,
   /Model '[^']*' is restricted by your organization's settings[^\n]*/gi,
+  // Caught by driving the real binary rather than by reading anything:
+  // `/model claude-mythos-5` answered `Mythos 5 isn't available for your
+  // account yet. Run /model to pick another model.` — a refusal in a shape
+  // none of the patterns above matches, so before this line the picker waited
+  // out its whole timeout and reported "the CLI has not answered yet" over a
+  // perfectly clear explanation the CLI had already given.
+  //
+  // The lookbehind is the difference between this and its neighbours, and it is
+  // here because this one is an ordinary English sentence: a reply *discussing*
+  // model availability contains it word for word, and the others at least
+  // require quoted model names. So it only counts at the start of a line or
+  // immediately after the CLI's own `⎿` result gutter, which is where the CLI
+  // puts a command's answer and where a paragraph of prose never begins.
+  /(?<=^|⎿ {1,3})[A-Z][A-Za-z0-9 .+-]{0,40} isn't available for your account yet\.[^\n]*/gim,
   /Failed to validate model:[^\n]*/gi,
   /Invalid argument:[^\n]*/gi,
   /Unknown model '[^']*'/gi,
@@ -1229,6 +1355,76 @@ export function labelModelId(raw: string): string {
   return `${family} ${version}${long ? ' · 1M' : ''}`
 }
 
+/**
+ * The model named in the CLI's own welcome panel, which every session draws
+ * before it has said anything.
+ *
+ * ## Why a third model source was needed
+ *
+ * Because of what the second one produced on screen. Asad, reading the bar:
+ *
+ *   > *"Unknown should not be there, it should be already selected."*
+ *
+ * He is right that `Unknown` is never the honest answer for a *model* — unlike
+ * fast mode or the permission mode, a session always has one. It was showing
+ * because the two sources this file had could both be silent at once: the
+ * `Set model to …` confirmation only exists in a session somebody has changed
+ * the model in, and the transcript only exists once the agent has replied. A
+ * session opened thirty seconds ago and not yet spoken to has neither, and that
+ * is exactly the session anybody would look at the bar of.
+ *
+ * The welcome panel is the missing one. It is the first thing the CLI paints and
+ * it says the model outright:
+ *
+ *     │      Opus 5 with xhigh effort · Claude Max ·       │
+ *     │      Opus 5 (1M context) with xhig… · Claude Max · │   (narrower window)
+ *
+ * The second line is from the Windows capture and is the reason this stops at
+ * the effort word rather than reading to the separator: at a narrow width the
+ * CLI truncates the *effort* with an ellipsis, and a reader that took everything
+ * up to the `·` would report a model of `Opus 5 (1M context) with xhig…`.
+ *
+ * It is the weakest of the three sources and is consulted last, because the
+ * panel scrolls away and cannot reflect a change made after it was drawn. That
+ * ordering is what keeps it a floor under `Unknown` rather than a source of
+ * stale confidence.
+ */
+export function readModelFromWelcome(screen: string): string | null {
+  for (const line of lines(screen)) {
+    // `effort` is optional because the narrow capture proves it can be the word
+    // that gets truncated: `with xhig… ·`. What is never optional is the panel
+    // border, the word `with`, and the `·` that ends the clause — three anchors
+    // a sentence in a chat reply does not line up with by accident.
+    const match = /│\s*(\S.*?)\s+with\s+\S+(?:\s+effort)?\s*·/.exec(line)
+    if (match) return match[1].trim()
+  }
+  return null
+}
+
+/**
+ * The model Claude Code's own settings file names, as a last resort.
+ *
+ * `settings.json` holds whatever `/model` last saved — an alias like `opus` or
+ * `opusplan`, or a full id like `claude-sonnet-4-6` — because the CLI writes it
+ * there itself every time a pick is made with the default scope. It is a real
+ * reading and it is labelled `settings`, so the caption under the value says
+ * "from Claude settings" and nobody mistakes it for something read off this
+ * session.
+ *
+ * The alias is turned into the name it resolves to where that is known from the
+ * picker capture, and left as-is where it is not: printing `opusplan` is worse
+ * than printing `Opus Plan` but far better than printing a name for it that was
+ * never verified.
+ */
+export function modelFromSettings(settings: Record<string, unknown>): ControlReading {
+  const raw = settings.model
+  if (typeof raw !== 'string' || raw.trim() === '') return { value: null, label: null, source: null }
+  const alias = raw.trim()
+  const row = foldDefaultRow([...FALLBACK_MODELS]).find((entry) => entry.alias === alias)
+  const label = row ? row.model : /^claude-/.test(alias) ? labelModelId(alias) : alias
+  return { value: alias, label, source: 'settings' }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Reading everything                                                          */
 /* -------------------------------------------------------------------------- */
@@ -1295,16 +1491,32 @@ export async function readControls(
     return readPermissionDefault(cwd)
   })()
 
+  const settings = await readClaudeSettings()
+
+  /*
+   * Four sources, newest evidence first, and the fourth is what ends `Unknown`.
+   *
+   * A confirmation on the screen beats everything: it is this session, and it is
+   * a change somebody made. The transcript is next — the model that actually
+   * served the last reply. The welcome panel is third: it is only correct until
+   * the model is changed, so it must never outrank the two that see a change,
+   * but it is drawn by every session before it has said a word, which is exactly
+   * the gap the first two leave. `settings.json` is the floor, and it always
+   * answers on a machine that has ever picked a model.
+   *
+   * Between them a Claude Code session has no state in which nothing can be
+   * read, which is what "a model is always selected" has to mean if it is going
+   * to be true rather than merely displayed.
+   */
   const model = await (async (): Promise<ControlReading> => {
     const confirmed = screen === null ? null : readModelFromScreen(screen)
     if (confirmed) return { value: confirmed, label: confirmed, source: 'screen' }
-    if (!cwd) return UNKNOWN
-    const raw = await readModelFromTranscript(cwd)
-    if (!raw) return UNKNOWN
-    return { value: raw, label: labelModelId(raw), source: 'transcript' }
+    const raw = cwd ? await readModelFromTranscript(cwd) : null
+    if (raw) return { value: raw, label: labelModelId(raw), source: 'transcript' }
+    const welcomed = screen === null ? null : readModelFromWelcome(screen)
+    if (welcomed) return { value: welcomed, label: welcomed, source: 'screen' }
+    return modelFromSettings(settings)
   })()
-
-  const settings = await readClaudeSettings()
 
   const effort = ((): ControlReading => {
     const override = process.env.CLAUDE_CODE_EFFORT_LEVEL?.trim().toLowerCase()
@@ -1320,8 +1532,16 @@ export async function readControls(
     return effortFromSettings(settings)
   })()
 
+  /*
+   * The screen first, and the screen now means the `↯` in the status rule
+   * rather than an announcement that may have scrolled away — see
+   * {@link readFastIndicator} for the drive that established it. The settings
+   * fallback is kept underneath because the CLI *can* write `fastMode` there,
+   * and a machine where it has is one more session this reads rather than
+   * shrugs at.
+   */
   const fast = ((): ControlReading => {
-    const confirmed = screen === null ? null : readFastFromScreen(screen)
+    const confirmed = screen === null ? null : readFast(screen)
     if (confirmed) return confirmed
     return fastFromSettings(settings)
   })()
@@ -1711,8 +1931,21 @@ export async function applyControl(
   }
 
   if (control === 'model') {
-    if (!MODEL_ALIASES.some((alias) => alias.id === value)) {
-      return { ok: false, message: `${value} is not one of the aliases the CLI accepts.`, reading: UNKNOWN }
+    /*
+     * A shape check, not a list.
+     *
+     * This used to compare against five hand-written aliases, which meant this
+     * app refused a model before the CLI ever saw it — with a message blaming
+     * the model rather than the list — every time a new one shipped. The list
+     * is now read out of the CLI's own picker (`model-catalog.ts`), and the
+     * picker can legitimately offer a row nobody here has heard of; the *only*
+     * thing that still has to be enforced locally is that the value cannot
+     * become a second argument or a submitted line, because it is about to be
+     * typed into somebody's terminal. Anything past that is the CLI's to
+     * refuse, and it does so in words worth showing: `Model 'x' not found`.
+     */
+    if (!isTypeableModelValue(value)) {
+      return { ok: false, message: `${value} is not a model name that can be typed at a command line.`, reading: UNKNOWN }
     }
 
     // Counted, not compared. Asking for the model the session is already on
@@ -1795,16 +2028,25 @@ export async function applyControl(
       return { ok: false, message: typed.message, reading: fastFromSettings(await readClaudeSettings()) }
     }
 
-    const answer = await waitForScreen(access, sessionId, timings.command, timings.poll, (screen) =>
-      countFastAnnouncements(screen) > before ? readFastFromScreen(screen) : null,
-    )
+    /*
+     * Two ways to be finished, because the CLI has two ways of being finished.
+     *
+     * A *change* prints `↯ Fast mode ON · $10/$50 per Mtok` or `Fast mode OFF`,
+     * which the announcement count catches. A *no-op* — `/fast on` at a session
+     * that is already on — prints nothing at all, and the old code sat there
+     * until its six-second timeout and then apologised for a state that was
+     * already exactly what had been asked for. The `↯` in the status rule
+     * settles that case without waiting: it is on screen the whole time fast
+     * mode is on, so agreeing with the request *is* the confirmation.
+     */
+    const answer = await waitForScreen(access, sessionId, timings.command, timings.poll, (screen) => {
+      if (countFastAnnouncements(screen) > before) return readFast(screen)
+      return readFastIndicator(screen) === value ? readFast(screen) : null
+    })
     if (!answer) {
       return {
         ok: false,
-        // The CLI only announces fast mode when it *changes* it, so silence
-        // genuinely has two readings and this says both rather than picking
-        // the flattering one.
-        message: `Typed /fast ${value} but the CLI printed nothing — it announces fast mode only when the setting changes, so it was either already ${value} or it is mid-turn.`,
+        message: `Typed /fast ${value} but the session has not shown it taking effect — it is most likely mid-turn, so the command is sitting in its input queue.`,
         reading: fastFromSettings(await readClaudeSettings()),
       }
     }
@@ -1813,6 +2055,82 @@ export async function applyControl(
   }
 
   return { ok: false, message: `Unknown control ${String(control)}.`, reading: UNKNOWN }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Asking the CLI what models it has                                           */
+/* -------------------------------------------------------------------------- */
+
+export interface ModelCatalogResult {
+  /** The rows the CLI offered, `Default` already folded into what it points at. */
+  models: ModelRow[]
+  /** Why the list could not be read, or null when it was. */
+  message: string | null
+}
+
+/**
+ * Open the session's own `/model` picker, read what is in it, and cancel out.
+ *
+ * ## Why this types at a live session instead of probing somewhere quiet
+ *
+ * Because the answer is a property of *this* session and this account, not of
+ * the binary. An organisation that restricts models restricts this picker, and
+ * a list gathered from a throwaway process in a temp directory would confidently
+ * offer models the session in front of the user cannot have. Everything else in
+ * this module already works this way, for the same reason, under the same rule:
+ * a control here is honest exactly when a person could sit at that terminal and
+ * do the same thing. A person opens `/model`, looks, and presses Esc.
+ *
+ * ## Why cancelling is safe
+ *
+ * Esc is the picker's own documented way out — its last line reads
+ * `Enter to set as default · s to use this session only · Esc to cancel` — and
+ * driving it confirms what it does: the session prints `⎿  Kept model as Opus 5`
+ * and nothing changes. That line is a bonus rather than a cost, because
+ * `readModelFromScreen` recognises `Kept model as …` too, so merely opening the
+ * list also settles what the current model is on a session that had never said.
+ *
+ * ## What happens when the session is busy
+ *
+ * Nothing, and it says so. `typeCommand` refuses to write into a session that is
+ * mid-turn, has a draft in the composer, or is waiting on a dialog, and that
+ * refusal is passed straight back for the UI to print. The list then falls back
+ * to the captured one — see `FALLBACK_MODELS` — which is the same picker from a
+ * real CLI, one version old at worst.
+ */
+export async function discoverModels(
+  access: SessionAccess,
+  sessionId: string,
+  provider: string | undefined,
+  timings: ApplyTimings = SHIPPED_TIMINGS,
+): Promise<ModelCatalogResult> {
+  const opening = await access.screen(sessionId)
+  if (opening === null) return { models: [], message: 'That session is no longer running.' }
+
+  const saw = readAgentFromScreen(opening)
+  const foreign = refuseByProvider(provider, saw === null ? NO_AGENT : { running: true, evidence: 'screen', saw })
+  if (foreign !== null) return { models: [], message: foreign }
+
+  const typed = await typeCommand(access, sessionId, '/model', timings)
+  if (!typed.ok) return { models: [], message: typed.message }
+
+  const rows = await waitForScreen(access, sessionId, timings.command, timings.poll, readModelPicker)
+
+  /*
+   * Esc goes out whether or not the picker was read, and that is deliberate.
+   *
+   * If it opened and was parsed, this is the cancel. If it opened and could not
+   * be parsed — a shape this build has not seen — this still closes it, which
+   * matters far more than the reading did: leaving somebody's session sitting in
+   * a modal dialog because an app opened one and walked away is the worst thing
+   * in this file it is possible to do.
+   */
+  access.write(sessionId, '\x1b')
+
+  if (rows === null) {
+    return { models: [], message: 'Opened the model list but could not read it, so it was cancelled and nothing changed.' }
+  }
+  return { models: foldDefaultRow(rows), message: null }
 }
 
 async function currentModel(
@@ -1844,4 +2162,17 @@ export function registerAgentControlsIpc(ipcMain: IpcMain, access: SessionAccess
     readControls(access, request?.sessionId, request?.cwd, request?.provider),
   )
   ipcMain.handle('agent:controls:apply', (_event, request: ApplyRequest) => applyControl(access, request))
+  /*
+   * Its own channel rather than a flag on the read, because the two are
+   * different in the one way that matters: reading is passive and happens every
+   * time the session prints anything, while this **types into the session**.
+   * Folding it into `agent:controls:read` would put a keystroke on a code path
+   * that fires on a timer, which is how an app comes to open a dialog in
+   * somebody's terminal while they are working in it.
+   */
+  ipcMain.handle('agent:controls:models', (_event, request: ReadRequest) =>
+    request?.sessionId
+      ? discoverModels(access, request.sessionId, request.provider)
+      : Promise.resolve<ModelCatalogResult>({ models: [], message: 'No session to ask.' }),
+  )
 }

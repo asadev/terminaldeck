@@ -91,7 +91,7 @@ const PLAN = {
   ],
 }
 
-function build(options: { window?: Partial<TourWindow> } = {}) {
+function build(options: { window?: Partial<TourWindow>; settings?: Record<string, boolean> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'tour-gates-'))
   let onGone: (() => void) | null = null
   const window: TourWindow = {
@@ -114,7 +114,7 @@ function build(options: { window?: Partial<TourWindow> } = {}) {
   }
   const tours = new TourStage({ dir, window })
   const control = new DeckControl({
-    surface: surface(),
+    surface: { ...surface(), readSettings: () => ({ settings: options.settings ?? {}, preferences: {} }) },
     log: new ActionLog({ dir }),
     consent: new ConsentBroker({ ask: () => false, settled: () => undefined }),
     extraTools: [tourTool(tours)],
@@ -282,5 +282,68 @@ describe('what the tool tells the model', () => {
     const result = await rig.control.call('tour.play', many)
     expect(result.refusal).toBe('not-permitted')
     expect(result.error).toContain('refused rather than trimmed')
+  })
+})
+
+
+/* -------------------------------------------------------- the toggle -- */
+
+describe('interactive mode', () => {
+  it('drives by default, because the showing is the feature', async () => {
+    /*
+     * On unless somebody said otherwise. A person who has never opened Settings
+     * asked for a copilot that drives; defaulting to quiet would make the whole
+     * thing invisible until discovered, which is the same failure as shipping it
+     * behind a flag.
+     */
+    const rig = build()
+    const result = await rig.play()
+    expect((result.value as { played?: boolean }).played).toBe(true)
+  })
+
+  it('with it off, does the same work and shows none of it', async () => {
+    /*
+     * *"Interactive mode OFF — it does the work in the background and returns
+     * the final answer normally, with none of the driving. The answer must be
+     * identical either way; only the showing differs."*
+     *
+     * So the plan is still parsed, still validated against the real fleet, and
+     * still recorded with every quote that survived the checks — the record on
+     * disk is the answer, and it is the same answer. What must NOT happen is a
+     * window being offered a tour, or the driving gate closing over a scan with
+     * nothing on screen: that would refuse every tool that changes anything with
+     * nothing anywhere to lift it.
+     */
+    const rig = build({ settings: { 'copilot.interactive': false } })
+    const result = await rig.play()
+    expect(result.ok).toBe(true)
+
+    const value = result.value as { played: boolean; shown: string; found: number; tourId: string }
+    expect(value.played).toBe(false)
+    expect(value.shown).toBe('background')
+    expect(value.found).toBe(1)
+
+    expect(rig.tours.driving()).toBe(false)
+    const record = rig.tours.list().find((entry) => entry.id === value.tourId)
+    expect(record?.shown).toBe('background')
+    // Every stop the checks passed is in the record, with its verbatim quote —
+    // which is what makes the answer identical to the driven one.
+    expect(record?.stops.map((stop) => stop.quote)).toEqual(['the build failed'])
+    expect(record?.endedAt).not.toBeNull()
+  })
+
+  it('does not let the copilot turn the light off itself', async () => {
+    /*
+     * Whether its own work is watched is the person's choice about their own
+     * screen. `PROTECTED_SETTING_PREFIXES` already covers `copilot.`, so the key
+     * is unwritable through `settings.write` with no new mechanism — but the
+     * reason it is unwritable is worth a failing test rather than a comment,
+     * because the prefix list is the kind of thing that gets trimmed.
+     */
+    const rig = build()
+    const result = await rig.control.call('settings.write', {
+      changes: [{ key: 'copilot.interactive', value: false }],
+    })
+    expect(result.ok).toBe(false)
   })
 })

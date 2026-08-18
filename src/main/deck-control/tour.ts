@@ -155,11 +155,16 @@ export const MAX_QUESTION_CHARS = 400
  *    no quote pointing at a bubble would be a stop that says "look at this" and
  *    cannot say what "this" is.
  *
- * Both survivors — a changed file in Source control, the token strip under a
- * chat — sit inside `.main`, which is exactly the half of the window a tour
- * drives.
+ * Both survivors — a changed file in Source control, a session's usage reading —
+ * sit inside `.main`, which is exactly the half of the window a tour drives.
+ *
+ * The second was `usage-strip` until the composer's control row was taken out
+ * *"from the chat box side completely"*, which deleted the strip it was named
+ * after. The reading survived the move into the chrome's `UsageBar`, so the kind
+ * survived under the name that still describes it. See `focus-target.ts`, which
+ * carries the matching union and the longer version of this note.
  */
-export type TourAnchorAt = 'git-file' | 'usage-strip'
+export type TourAnchorAt = 'git-file' | 'usage'
 
 export interface TourStopBase {
   /**
@@ -335,7 +340,7 @@ function parseStop(entry: unknown, index: number): TourStop {
   }
 }
 
-const ANCHORS: readonly TourAnchorAt[] = ['git-file', 'usage-strip']
+const ANCHORS: readonly TourAnchorAt[] = ['git-file', 'usage']
 
 const REASONS: readonly StopReason[] = [
   'blocked-on-you',
@@ -695,6 +700,23 @@ export interface TourRecord {
   askedBy: 'user' | 'offer'
   question: string
   headline: string
+  /**
+   * Whether this scan was put on the screen or done quietly.
+   *
+   * The toggle Asad asked for: *"Interactive mode ON — the visible scan.
+   * Interactive mode OFF — it does the work in the background and returns the
+   * final answer normally, with none of the driving. The answer must be
+   * identical either way; only the showing differs."*
+   *
+   * It is a field on the **record** rather than a branch in the tool because the
+   * two modes must produce the same artefact. Every stop is found, checked and
+   * quoted the same way in both; the only difference is whether a box was ever
+   * drawn around it. That makes this flag the one thing the answer card needs in
+   * order not to lie in either direction — without it, a background scan renders
+   * with "Not reached" against every line, which would say the work was not done
+   * when the work is exactly what is being shown.
+   */
+  shown: 'screen' | 'background'
   stops: TourStopRecord[]
   /** Index of the last stop shown, when a person stopped it early. */
   stoppedAfter: number | null
@@ -710,7 +732,11 @@ export interface TourRecord {
  * going to show and what it had already dropped. A record that only exists once
  * a tour finishes cleanly is a record of the case nobody needs one for.
  */
-export function openRecord(validated: ValidatedTour, at: number): TourRecord {
+export function openRecord(
+  validated: ValidatedTour,
+  at: number,
+  shown: TourRecord['shown'] = 'screen',
+): TourRecord {
   const { plan, dropped, titles } = validated
   return {
     v: 1,
@@ -720,6 +746,7 @@ export function openRecord(validated: ValidatedTour, at: number): TourRecord {
     askedBy: plan.askedBy,
     question: plan.question,
     headline: plan.headline,
+    shown,
     stops: plan.stops.map((stop, index) => ({
       index,
       sessionId: stop.sessionId,

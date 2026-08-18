@@ -30,6 +30,7 @@
  * somebody visits its screen is a feature that is off.
  */
 
+import { MAX_URL_LENGTH } from '../protocol'
 import { DEFAULT_RELAY_URL } from '../../../shared/relay-wire'
 import type { InvokeRegistrar } from '../../ipc-seam'
 import type { PairingToken } from '../device-auth'
@@ -139,6 +140,10 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
             sessions: [],
             folders: null,
             capabilities: [],
+            // A machine with no live link is a machine serving nothing this
+            // desktop can see. Not "unknown": the panel reads the state beside
+            // it, so an empty list under `offline` already says the honest thing.
+            ports: [],
             hostPlatform: machine.platform,
             retryAt: null,
           },
@@ -359,6 +364,36 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
       )
     },
   )
+
+  /**
+   * Ask again what is listening on that machine.
+   *
+   * A refresh rather than the first read: the link asks once on every `welcome`
+   * and pushes the answer, so a panel that has just opened already has a list.
+   * This is the button for *"I have just started my dev server over there"*,
+   * which is the one case a push cannot cover — nothing on the far machine
+   * watches its own process table.
+   */
+  ipcMain.handle('machines:ports', (_event, id: unknown): boolean => {
+    if (typeof id !== 'string') return false
+    return links.get(id)?.ports() ?? false
+  })
+
+  /**
+   * Open a page in the browser **on that machine**.
+   *
+   * The URL is typed here and checked over there, which is the same split every
+   * verb on this wire follows and is not laziness: the far machine puts it
+   * through the gate an untrusted link goes through, and a second check written
+   * on this side would be the one somebody later mistook for the real one. What
+   * this handler owns is the shape — a string, non-empty, under the wire's cap —
+   * because everything past it is an IPC argument from a renderer.
+   */
+  ipcMain.handle('machines:open', (_event, id: unknown, url: unknown): boolean => {
+    if (typeof id !== 'string' || typeof url !== 'string' || url === '') return false
+    if (url.length > MAX_URL_LENGTH) return false
+    return links.get(id)?.openThere(url) ?? false
+  })
 
   /*
    * Every stored machine is dialled here, by the act of registering this — not

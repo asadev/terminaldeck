@@ -22,14 +22,18 @@ import {
   defaultStorage,
   demote,
   dropIndex,
+  keepBesideInStrip,
   keepInStrip,
   keepNewWindowInStrip,
+  keepWindowBesideInStrip,
   MAX_PROMOTED,
   promote,
   promotedStore,
   pruneOrder,
   readPromoted,
   removeFromStrip,
+  replaceInStrip,
+  replaceWindowInStrip,
   shownTabs,
   stripIsPresent,
   stripTabs,
@@ -836,28 +840,44 @@ describe('tabLabel', () => {
     expect(tabLabel(page, [page])).toBe('localhost:5173')
   })
 
-  it('calls the copilot Copilot, never Session N', () => {
+  it('calls the copilot by its name, never Session N', () => {
     /*
      * The copilot is a session, and its title is the name of its own folder —
      * which is exactly the case `sessionLabel` turns into "Session 1". So
      * without the rule in `tabLabel` the pinned row in the rail would read
-     * "Copilot" and the pill three centimetres above it would read "Session 3",
+     * "Nova" and the pill three centimetres above it would read "Session 3",
      * for one window. That is the same defect `tabIdentities` prevents between
      * two different tabs; it would be worse coming from one.
+     *
+     * The name is user data — somebody typed it into the setup flow and it
+     * lives in the copilot's own instruction file — so `App.tsx` puts it on the
+     * tab and this function reads it from there. The label is *not* the folder
+     * name for this tab, and that is the difference from every other session.
      */
     const copilotTab: WorkspaceTab = {
       id: 'cp',
       kind: 'session',
-      label: 'copilot',
+      label: 'Nova',
       projectPath: '/Users/apple/Library/Application Support/terminaldeck/copilot',
       isCopilot: true,
       closable: true,
     }
     const tabs = [inProject('a', 'terminaldeck'), copilotTab]
-    expect(tabLabel(copilotTab, tabs)).toBe('Copilot')
+    expect(tabLabel(copilotTab, tabs)).toBe('Nova')
     // And it is not counted as a sibling of anything: the session beside it is
     // still Session 1.
     expect(tabLabel(tabs[0], tabs)).toBe('Session 1')
+  })
+
+  it('falls back to this app’s word for a copilot nobody has named', () => {
+    /*
+     * A tab assembled without a name — a test, the harness, or a window whose
+     * read of the instruction file has not landed — must not draw an empty pill.
+     * `COPILOT_NAME` is what is left, and it is a description rather than a
+     * name: `shared/copilot-identity.ts` says why the two are different things.
+     */
+    const unnamed: WorkspaceTab = { id: 'cp', kind: 'session', label: '', isCopilot: true, closable: true }
+    expect(tabLabel(unnamed, [unnamed])).toBe('Copilot')
   })
 })
 
@@ -1251,7 +1271,11 @@ describe('every route that opens a window keeps it', () => {
   const app = readFileSync(join(__dirname, '..', 'App.tsx'), 'utf8')
 
   it('keeps a session started from the dialog — the terminal opener, the rail, ⌘T', () => {
-    const onStart = /onStart=\{async \(request\) => \{[\s\S]*?\n {8}\}\}/.exec(app)?.[0] ?? ''
+    // `(request, machineId)` since remote sessions landed: the handler routes a
+    // session on another machine to that machine and returns before any of the
+    // local bookkeeping — which is exactly what this test is guarding, one
+    // branch further down.
+    const onStart = /onStart=\{async \(request, machineId\) => \{[\s\S]*?\n {8}\}\}/.exec(app)?.[0] ?? ''
     expect(onStart, 'the dialog’s onStart has changed shape').not.toBe('')
     expect(onStart).toContain('keepNewWindowInStrip(meta.id)')
   })
@@ -1348,21 +1372,34 @@ describe('every route that opens a window keeps it', () => {
     expect(restore).not.toContain('keepNewWindowInStrip')
   })
 
-  it('promotes on creation and nowhere else, so browsing the rail cannot fill the bar', () => {
+  it('promotes on an opening and nowhere else, so nothing fills the bar on its own', () => {
     /*
      * The one-line version of this feature — promote whatever becomes active —
-     * is the automatic strip this model rejected on its first page. Five calls
-     * is the whole of it, and a sixth appearing beside `selectTab` or `showTab`
-     * is how that mistake would arrive.
+     * is the automatic strip this model rejected on its first page. A call
+     * appearing beside a plain `selectTab` or `showTab` is how that mistake
+     * would arrive, so the count is pinned and each one is accounted for here.
      *
-     * It was three until 2026-08-17, and the two that joined are the same act
-     * arriving twice because the copilot may not exist yet: opening it starts a
-     * CLI, so `openCopilot` keeps its window when there is already a session and
-     * the effect that waits for one keeps it when there is not. Both are the
-     * press, not a navigation — the copilot's pinned row is where a window is
-     * *created* for it, exactly as the strip's terminal glyph is for a session.
+     * It was three until 2026-08-17, and two joined because the copilot may not
+     * exist yet: opening it starts a CLI, so `openCopilot` keeps its window when
+     * there is already a session and the effect that waits for one keeps it when
+     * there is not. Both are the press, not a navigation.
+     *
+     * The sixth arrived on 2026-08-18 and is inside `openTabWindow` — where it
+     * keeps the window you were *already looking at* as a second one opens
+     * beside it. Measured, in the harness: without it, launching and clicking
+     * the second row made `Session 1` vanish from the bar, which is the same
+     * disappearance he reported one window earlier. It is still bounded to an
+     * opening: `openTabWindow` is called from the rail's rows and from nothing
+     * else, and `keepWindowBesideInStrip` on the next line is the new window
+     * itself.
      */
-    expect(app.match(/keepNewWindowInStrip\(/g)).toHaveLength(5)
+    expect(app.match(/keepNewWindowInStrip\(/g)).toHaveLength(6)
+    // And the new one is genuinely inside that handler rather than loose beside
+    // a navigation — the shape the count alone could not tell apart.
+    const opening = /const openTabWindow = useCallback\([\s\S]*?\n {4}\[activeTab, selectTab\],/.exec(app)?.[0] ?? ''
+    expect(opening, 'openTabWindow has changed shape').not.toBe('')
+    expect(opening).toContain('keepNewWindowInStrip(anchor)')
+    expect(opening).toContain('keepWindowBesideInStrip(id, anchor)')
   })
 
   it('takes the copilot off the bar rather than ending it', () => {
@@ -1637,5 +1674,115 @@ describe('the ✕ at the end of a tab', () => {
     expect(strip).toContain('aria-label="Remove Session 1 from the top bar"')
     expect(rule('.strip-tab-close:hover')).toContain('color: var(--text-primary)')
     expect(rule('.strip-tab-close:hover')).not.toContain('--color-critical')
+  })
+})
+
+/**
+ * A window whose id changed under it.
+ *
+ * Switching the account a running session is on stops its process and starts
+ * another, which produces a new id for what the person is still calling the same
+ * tab. The strip holds an arrangement somebody made by hand — this file is
+ * emphatic that it holds what the user *chose* — so the tab has to stay exactly
+ * where it was rather than being taken off the end and pushed back on.
+ */
+describe('an id replaced in place', () => {
+  it('keeps the tab’s position', () => {
+    // The remove-and-add spelling produces the right set and the wrong order.
+    // Invisible until somebody with four tabs switches the account on the first.
+    expect(replaceInStrip(['a', 'b', 'c'], 'a', 'z')).toEqual(['z', 'b', 'c'])
+    expect(replaceInStrip(['a', 'b', 'c'], 'b', 'z')).toEqual(['a', 'z', 'c'])
+  })
+
+  it('leaves an unpromoted window unpromoted', () => {
+    // A switch is not a promotion. The session was transient or it was on the
+    // bar; this changes neither, it only keeps whichever was true from breaking.
+    expect(replaceInStrip(['a'], 'b', 'z')).toEqual(['a'])
+  })
+
+  it('does not mutate the order it was handed', () => {
+    const order = ['a', 'b']
+    replaceInStrip(order, 'a', 'z')
+    expect(order).toEqual(['a', 'b'])
+  })
+
+  it('writes through the store the strip is rendering from', () => {
+    const backing = store({ 'terminaldeck.strip.promoted': '["a","b"]' })
+    replaceWindowInStrip('a', 'z', backing)
+    expect(readPromoted(backing)).toEqual(['z', 'b'])
+  })
+
+  it('survives a window with no storage at all', () => {
+    expect(() => replaceWindowInStrip('a', 'z', null)).not.toThrow()
+  })
+})
+
+/* ------------------------------------------------ opening a window from the rail -- */
+
+/**
+ * *"whenever I click on side panel on anyone, it should open a new window
+ * instead of switching. It should open its own new window next to it."*
+ *
+ * The measured failure, in the harness, before this existed: three clicks down
+ * the rail produced a strip reading `Session 1`, then `Session 2`, then
+ * `Update Claude Code…` — **one** pill, overwritten each time, because none of
+ * them was ever kept and `shownTabs` was drawing whichever happened to be
+ * active. Which is also the whole of *"if I click on commander, they go away."*
+ */
+describe('keepBesideInStrip', () => {
+  it('puts the new window immediately after the one it was opened from', () => {
+    expect(keepBesideInStrip(['a', 'b', 'c'], 'd', 'a')).toEqual(['a', 'd', 'b', 'c'])
+  })
+
+  it('goes to the end when the window you were in is not on the bar', () => {
+    // A transient tab has no place in the order to be next to. So does an
+    // `after` of null, which is a window with nothing selected at all.
+    expect(keepBesideInStrip(['a', 'b'], 'd', 'ghost')).toEqual(['a', 'b', 'd'])
+    expect(keepBesideInStrip(['a', 'b'], 'd', null)).toEqual(['a', 'b', 'd'])
+  })
+
+  it('leaves a window that is already up there exactly where it is', () => {
+    // Re-anchoring a tab somebody placed, in response to something that is not
+    // a drag, is the strip rearranging itself — the one thing this file's
+    // opening note refuses. Clicking a row you already kept must not move it.
+    expect(keepBesideInStrip(['a', 'b', 'c'], 'c', 'a')).toEqual(['a', 'b', 'c'])
+  })
+
+  it('moves nothing else', () => {
+    const before = ['a', 'b', 'c']
+    const after = keepBesideInStrip(before, 'd', 'b')
+    expect(after.filter((id) => id !== 'd')).toEqual(before)
+  })
+
+  it('refuses at the cap, like every other route in', () => {
+    const full = Array.from({ length: MAX_PROMOTED }, (_, i) => `t${i}`)
+    expect(keepBesideInStrip(full, 'extra', 't0')).toEqual(full)
+  })
+
+  it('opening three rows in turn keeps all three, which is the reported bug', () => {
+    let order: readonly string[] = []
+    // Each click opens beside whatever was in front — so they accumulate left
+    // to right in the order they were opened, and the copilot arriving fourth
+    // takes none of them away.
+    order = keepBesideInStrip(order, 'one', null)
+    order = keepBesideInStrip(order, 'two', 'one')
+    order = keepBesideInStrip(order, 'three', 'two')
+    expect(order).toEqual(['one', 'two', 'three'])
+    order = keepBesideInStrip(order, 'copilot', 'three')
+    expect(order).toEqual(['one', 'two', 'three', 'copilot'])
+  })
+})
+
+describe('keepWindowBesideInStrip', () => {
+  it('writes through the shared store the strip renders from', () => {
+    const storage = store()
+    const shared = promotedStore(storage)
+    shared.set(['a', 'b'])
+    keepWindowBesideInStrip('new', 'a', storage)
+    expect(shared.get()).toEqual(['a', 'new', 'b'])
+  })
+
+  it('survives a window with no storage at all', () => {
+    expect(() => keepWindowBesideInStrip('a', null, null)).not.toThrow()
   })
 })

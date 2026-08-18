@@ -84,7 +84,7 @@ enum WireCodec {
                          // which is the whole bug. See `HostPlatform`.
                          hostPlatform: HostPlatform(wire: string(object["hostPlatform"])),
                          folders: folders(object["folders"]),
-                         // Absent is `.none`, and so is malformed — both mean
+                         // Absent is `.silent`, and so is malformed — both mean
                          // "this device may do nothing with the copilot". See
                          // `copilotGrant`, which explains why that collapse is
                          // right here and wrong for `folders` one line up. What
@@ -92,8 +92,8 @@ enum WireCodec {
                          // all: that is the only honest answer to "does this
                          // machine have a copilot", and it is a different
                          // question from what the capability list claims. See
-                         // `CopilotOffer`.
-                         copilot: copilotOffer(object["copilot"])),
+                         // `CopilotConnection`.
+                         copilot: copilotConnection(object["copilot"])),
                 activity: list.activity)
 
         case "sessions":
@@ -164,6 +164,16 @@ enum WireCodec {
             return .ok(.created(session: session),
                        activity: lastActivity(object["session"]).map { [session.id: $0] } ?? [:])
 
+        /* ---- capability `close` -------------------------------------------- */
+
+        case "closed":
+            // The id is the whole frame, so a nameless one is refused rather
+            // than read as "something closed": a client that took it would have
+            // to guess which row to remove, and the only available guess is the
+            // one the person was last looking at.
+            guard let id = string(object["id"]) else { return .failed(reason: "closed without an id") }
+            return .ok(.closed(id: id), activity: [:])
+
         /* ---- capability `localhost` --------------------------------------- */
 
         case "ports":
@@ -186,6 +196,16 @@ enum WireCodec {
             // is not fatal, because the *closing* is the message.
             return .ok(.tunnelClosed(id: id, message: string(object["message"]) ?? "The tunnel closed."),
                        activity: [:])
+
+        /* ---- capability `web` ---------------------------------------------- */
+
+        case "web.opened":
+            // The URL is the whole payload and it is what the confirmation
+            // names, so an absent one is fatal rather than defaulted: a line
+            // reading "Opened" with nothing after it is a claim about a page
+            // this end cannot identify.
+            guard let url = string(object["url"]) else { return .failed(reason: "web.opened without a url") }
+            return .ok(.webOpened(url: url), activity: [:])
 
         case "net.data":
             guard let ch = string(object["ch"]), let encoded = string(object["data"]) else {
@@ -341,10 +361,51 @@ enum WireCodec {
                        activity: [:])
 
         case "copilot.grant":
-            // Unlike the state frame there is nothing here that can be missing:
-            // absent, malformed and "nothing granted" are one answer, and it is
-            // the safe one. See `copilotGrant`.
-            return .ok(.copilotGrant(copilotGrant(object["grant"])), activity: [:])
+            /*
+             * `link`, not `grant`, and the difference is not cosmetic.
+             *
+             * `server.ts` sends `{ t: 'copilot.grant', link: CopilotLinkWire }`
+             * — `linked`, `open` and the grant inside it. This client read
+             * `object["grant"]` for a while against a desktop that has never
+             * sent that key, which decodes as "no access" for every push: a
+             * connection would open and the phone would immediately draw the
+             * not-connected screen over it.
+             *
+             * Absent and malformed collapse to `.silent` one layer down, which
+             * is the safe answer for a frame whose whole job is to say what this
+             * device may do. See `copilotConnection`.
+             */
+            return .ok(.copilotGrant(copilotConnection(object["link"])), activity: [:])
+
+        case "copilot.linked":
+            // The credential is required and is the only thing here that cannot
+            // be recovered: it is sent exactly once, so a frame missing it is a
+            // connection this phone will never be able to reopen, and failing
+            // loudly beats storing an empty string and refusing every frame
+            // afterwards with no explanation.
+            guard let credential = string(object["credential"]), !credential.isEmpty,
+                  credential.count <= Copilot.maxCredentialChars else {
+                return .failed(reason: "copilot.linked without a usable credential")
+            }
+            return .ok(.copilotLinked(credential: credential,
+                                      link: copilotConnection(object["link"])),
+                       activity: [:])
+
+        case "copilot.ask":
+            // `raw` is passed through so the arguments keep the order the tool
+            // wrote them in — Foundation's reader loses it. See
+            // `CopilotArguments`, which is the whole argument for the second
+            // read.
+            guard let question = copilotConsentQuestion(object["question"], raw: raw) else {
+                return .failed(reason: "copilot.ask without a question to judge")
+            }
+            return .ok(.copilotAsk(question), activity: [:])
+
+        case "copilot.settled":
+            guard let settlement = copilotSettlement(object["settled"]) else {
+                return .failed(reason: "copilot.settled without an id")
+            }
+            return .ok(.copilotSettled(settlement), activity: [:])
 
         default:
             return .failed(reason: "unknown message type")
@@ -543,6 +604,8 @@ enum WireCodec {
                 request["rows"] = size.rows
             }
             object = request
+        case let .close(id):
+            object = ["t": "close", "id": id]
         case let .attach(id, size):
             if let size {
                 object = ["t": "attach", "id": id, "cols": size.cols, "rows": size.rows]
@@ -563,6 +626,8 @@ enum WireCodec {
             object = ["t": "tunnel.open", "id": id, "port": port]
         case let .tunnelClose(id):
             object = ["t": "tunnel.close", "id": id]
+        case let .webOpen(url):
+            object = ["t": "web.open", "url": url]
         case let .netOpen(ch, tunnel):
             object = ["t": "net.open", "ch": ch, "tunnel": tunnel]
         case let .netData(ch, data):
@@ -612,6 +677,19 @@ enum WireCodec {
          * ("tap that row to run it again") breaks the property the whole
          * enforcement model rests on.
          */
+        case let .copilotConnect(code):
+            object = ["t": "copilot.connect", "code": code]
+        case let .copilotHello(credential):
+            object = ["t": "copilot.hello", "credential": credential]
+        case .copilotBye:
+            object = ["t": "copilot.bye"]
+        case let .copilotAnswer(id, approved):
+            // `approved` is written either way, unlike `remember` on a
+            // credential answer. There it is a scope the desktop reads as
+            // `=== true`, so a `false` would be a field saying nothing; here it
+            // *is* the decision, and a refusal that travelled as an absence
+            // would be a refusal one lenient parser away from being an approval.
+            object = ["t": "copilot.answer", "id": id, "approved": approved]
         case .copilotAttach:
             object = ["t": "copilot.attach"]
         case .copilotDetach:

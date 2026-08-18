@@ -1,4 +1,4 @@
-import { useEffect, useRef, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, type FormEvent, type ReactNode, type RefObject } from 'react'
 import { securityLabel, type OmniboxResolution, type Security } from './omnibox'
 import type { WorkspaceTab } from './tabs'
 
@@ -38,7 +38,31 @@ interface Props {
   drawing: boolean
   deviceOpen: boolean
   onToggleDevice(): void
-  onOpenSession(): void
+
+  /**
+   * The action group, handed back so the panel can place its popups against it.
+   *
+   * *"Whatever is required should be on the top right corner."* Every popup this
+   * panel opens is anchored to this one rectangle, which is why the ref belongs
+   * to the group rather than to each button: `anchorPopup` slides a popup back
+   * inside the viewport, so a group already at the right edge lands all of them
+   * in the corner without eight refs travelling up through here.
+   */
+  actionsRef?: RefObject<HTMLDivElement | null>
+  /** The overflow menu — profiles, saved logins, cookies, the start page. */
+  onMenu(): void
+  menuOpen: boolean
+  /**
+   * How many steps are in the recording so far.
+   *
+   * On the Stop button, because during a recording there is nowhere else for it
+   * to be: the flow panel used to live in a permanent band at the bottom of this
+   * panel and that band is gone, and it cannot be a popup while recording
+   * because a popup parks the page being recorded. One number on the button that
+   * is already there says the recorder is working, which is what the band was
+   * really being read for.
+   */
+  steps: number
 
   /**
    * Switch this tab between the shared session and one of its own.
@@ -83,7 +107,10 @@ export function Toolbar({
   drawing,
   deviceOpen,
   onToggleDevice,
-  onOpenSession,
+  actionsRef,
+  onMenu,
+  menuOpen,
+  steps,
   onToggleIsolation,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -198,7 +225,7 @@ export function Toolbar({
         purpose: "Inspect" is enough to click, "Inspect an element in the page"
         is what you want when you have hovered because you are not sure.
       */}
-      <div className="bw-actions">
+      <div className="bw-actions" ref={actionsRef}>
         <IsolationToggle tab={tab} onToggle={onToggleIsolation} />
         <IconButton
           label="Inspect an element in the page"
@@ -211,7 +238,7 @@ export function Toolbar({
         </IconButton>
         <IconButton
           label={recording ? 'Stop recording the flow' : 'Record what you do on this page'}
-          word={recording ? 'Stop' : 'Record'}
+          word={recording ? (steps > 0 ? `Stop (${steps})` : 'Stop') : 'Record'}
           pressed={recording}
           disabled={!has}
           onClick={onRecord}
@@ -268,9 +295,24 @@ export function Toolbar({
         >
           <path d="M9 8l-4 4 4 4M15 8l4 4-4 4" />
         </IconButton>
-        <IconButton label="Cookies and site data" word="Cookies" onClick={onOpenSession}>
-          <circle cx="12" cy="12" r="8" />
-          <path d="M9.5 10h.01M14 9h.01M13 14.5h.01M9.5 14h.01" />
+        {/*
+          The overflow, and the last thing on the bar.
+
+          Cookies used to be a button of its own here and is a row in this menu
+          now, along with the start page, the profiles and the saved logins. Not
+          to save width: those four are all answers to *"which of me is this, and
+          what does this browser remember"*, and a menu is where a person looks
+          for that. A toolbar is for things that act on the page in front of you.
+        */}
+        <IconButton
+          label="Profiles, saved logins, cookies and the start page"
+          word="More"
+          pressed={menuOpen}
+          onClick={onMenu}
+        >
+          <circle cx="5" cy="12" r="1.4" />
+          <circle cx="12" cy="12" r="1.4" />
+          <circle cx="19" cy="12" r="1.4" />
         </IconButton>
       </div>
 

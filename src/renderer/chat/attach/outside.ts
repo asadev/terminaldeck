@@ -1,5 +1,4 @@
-import { basename, IMAGE_EXTENSIONS } from './mentions'
-import { machineNoun, type UiPlatform } from '../../platform'
+import { basename, IMAGE_EXTENSIONS, insideRoot } from './mentions'
 
 /**
  * The three ways a file gets into a message from outside the open project.
@@ -10,19 +9,29 @@ import { machineNoun, type UiPlatform } from '../../platform'
  * three files they would grow three slightly different ideas of what a failed
  * attach looks like.
  *
- * ## What this is not
+ * ## This is now the whole feature, not the escape hatch
  *
- * It is not a replacement for `AttachPicker`. That component's header argues for
- * a project-scoped list and the argument holds: it is faster for the common
- * case, every row in it works, and the paths stay short. This is the row
- * underneath it. The default is unchanged; what changed is that there is now a
- * way out.
+ * It used to be the row underneath an in-app, project-scoped file list. That
+ * list is gone — deleted, not hidden — because it was the answer to a question
+ * nobody asked:
+ *
+ *   > *"If I click on add files, it is opening like this. It should open our
+ *   > file manager instead of staying inside. It should be directly browse —
+ *   > not even click. We should not even have this search bar and this button to
+ *   > click at all. Add folder → directly open the file manager. Add file →
+ *   > directly. Add an image → directly. That's it. Simple."*
+ *
+ * The argument for the project list was a good one on its own terms — faster
+ * for the common case, every row valid, short paths — and it lost anyway,
+ * because it made the app's own file browser the thing you meet when you press
+ * a button labelled with the name of a thing the operating system already does.
+ * The three menu rows now call `browseForAttachment` on the click that opens
+ * them; there is no intermediate screen and no search field.
  *
  * ## Everything crosses as `unknown`
  *
  * The main-process module owns these shapes, so they arrive unnarrowed and are
- * read defensively here — the same rule, for the same reason, as
- * `AttachPicker.readFiles`. In the harness an unimplemented bridge method
+ * read defensively here. In the harness an unimplemented bridge method
  * resolves to `null`, and reading `.picks` off that throws inside a promise and
  * takes the composer down through the error boundary, which reads as a broken
  * feature rather than an unwired one.
@@ -151,10 +160,13 @@ export function readBoundary(response: unknown): AttachBoundary {
 
 /* ----------------------------------------------------------------- copy --- */
 
-/** "Browse this Mac…" / "Browse this PC…" — his words: *"browse my file manager"*. */
-export function browseLabel(platform: UiPlatform): string {
-  return `Browse this ${machineNoun(platform)}…`
-}
+/*
+ * `browseLabel` used to live here — "Browse this Mac…" / "Browse this PC…" — for
+ * a row that sat between the project list's search field and its results. Both
+ * the row and the list are gone: every entry in the attach menu opens the
+ * machine's own panel now, so a button whose whole job was to say "the real one
+ * this time" has nothing left to distinguish itself from.
+ */
 
 /**
  * Why Browse is refused on a confined session, naming what it actually holds.
@@ -190,6 +202,93 @@ export function confinedRefusal(folder: string, projects: readonly string[] = []
   const named = folder === '' ? 'its own folder' : basename(folder)
   const also = projects.length > 0 ? ' and the projects you have open' : ''
   return `This session is held inside ${named}${also}, so it cannot read a file from anywhere else.`
+}
+
+/**
+ * The refusal, with the files it is about named first.
+ *
+ * Written after looking at the harness rather than at the code. Picking two
+ * files on a confined session — one it can read, one it cannot — produced a
+ * chip and, underneath it, a sentence beginning "This session is held inside
+ * copilot…". Both halves were true and the pair was unreadable: the chip that
+ * *did* attach is itself marked `outside` (outside the *project*, which is a
+ * different boundary), so the obvious reading is that the sentence is a
+ * complaint about the chip you can see rather than about the file that is
+ * missing. His audience is *"mostly non-technical vibe coders"*; asking them to
+ * hold two boundaries apart to work out which file was dropped is exactly the
+ * kind of inference this review is about.
+ *
+ * So the missing file is named first, and the reason follows it. One name for
+ * one file, a count beyond that: three filenames in a notice line wrap to three
+ * lines and stop being a sentence.
+ */
+export function partialRefusal(refused: readonly OutsidePick[], reason: string): string {
+  if (refused.length === 0) return reason
+  const what =
+    refused.length === 1
+      ? `${basename(refused[0]!.path)} was not attached.`
+      : `${refused.length} of them were not attached.`
+  return `${what} ${reason}`
+}
+
+/**
+ * Can this session actually read that path?
+ *
+ * `true` for every path on an unconfined session, which is every session
+ * started at this keyboard. On a confined one it is containment in the folder
+ * the OS is holding it inside, or in any of the projects it was granted — the
+ * same two terms `confinedRefusal` names in its sentence, so the check and the
+ * explanation cannot come to disagree about what "anywhere else" means.
+ *
+ * It is a *warning*, not a gate. The operating system enforces the boundary
+ * whatever this returns; all this decides is whether the app says so at the
+ * click instead of letting the agent say something stranger a minute later.
+ */
+export function readableOn(boundary: AttachBoundary, path: string): boolean {
+  if (!boundary.confined) return true
+  if (boundary.folder !== '' && insideRoot(boundary.folder, path)) return true
+  return boundary.projects.some((project) => insideRoot(project, path))
+}
+
+/**
+ * A batch of picks split into the ones this session can read and the rest.
+ *
+ * This exists because the in-app project list was removed. Until then a
+ * confined session still had one working door — a list of its own project's
+ * files, every row of which was inside the boundary by construction — and the
+ * whole of Browse could be refused with one sentence without taking anything
+ * away. Now Browse is the *only* door, so refusing the batch whenever the
+ * session is confined would leave a copilot session, or one a phone started,
+ * with no way to attach anything at all, including the files sitting in the
+ * very folder it is held inside.
+ *
+ * So the refusal moved from the button to the pick. The panel opens in the
+ * folder the session can read, most picks are therefore fine, and only the ones
+ * that genuinely fall outside are dropped — with the reason, once for the batch
+ * rather than once per file.
+ */
+export function splitByBoundary(
+  boundary: AttachBoundary,
+  picks: readonly OutsidePick[],
+): { allowed: OutsidePick[]; refused: OutsidePick[] } {
+  const allowed: OutsidePick[] = []
+  const refused: OutsidePick[] = []
+  for (const pick of picks) (readableOn(boundary, pick.path) ? allowed : refused).push(pick)
+  return { allowed, refused }
+}
+
+/**
+ * Where the open panel should start, for this session.
+ *
+ * The project, normally — argued at `browseForAttachment`. On a confined
+ * session the project may be somewhere the session cannot read at all, and
+ * opening a file browser in a directory whose every row will be refused is a
+ * worse first frame than opening in the one directory that certainly works.
+ */
+export function browseStart(boundary: AttachBoundary, root: string): string {
+  if (!boundary.confined) return root
+  if (root !== '' && readableOn(boundary, root)) return root
+  return boundary.folder
 }
 
 /* -------------------------------------------------------------- the calls -- */

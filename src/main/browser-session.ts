@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
-import { app, session, type Cookie, type IpcMain, type Session } from 'electron'
-import { writeRecordPreload } from './browser-record-preload'
+import { app, type Cookie, type IpcMain, type Session } from 'electron'
+import { activeProfile, activeProfileSession } from './browser-profiles'
 
 /**
  * The embedded browser's session: the thing that makes a login survive a
@@ -76,26 +76,46 @@ export interface BrowserSessionInfo {
 
 /* -------------------------------------------------------------- the session -- */
 
-let recorderPreloadId: string | null = null
-
-/** The one guest session. Same object `browser-tab.ts` hardens and uses. */
+/**
+ * The guest session — now *the profile that is switched on*, not a fixed one.
+ *
+ * The signature did not change and neither did anything about the callers, and
+ * that is the point: everything in this file, plus `cookie-import.ts` and the
+ * `isGuest` check in `browser-view.ts`, asks this question and now gets an
+ * answer that follows the profile. Without that the cookie panel would keep
+ * showing the default profile's cookies while the person browsed in another one
+ * — a panel confidently reporting somebody else's logins.
+ *
+ * `browser-profiles.ts` mints and hardens the session; `session.fromPartition`
+ * returns the same object for the same string, so this is still one session per
+ * partition and not a new one per call.
+ */
 export function guestSession(): Session {
-  return session.fromPartition(GUEST_PARTITION)
+  return activeProfileSession(app.getPath('userData'))
+}
+
+/** Which profile the panel is talking about, so a screen can name it. */
+export function guestProfileName(): string {
+  return activeProfile(app.getPath('userData')).name
 }
 
 /**
- * Attach the flow recorder's guest script to every page in the partition.
+ * Make sure the active profile's session exists and is hardened before any page
+ * loads.
  *
- * A session-registered preload is the only way to add a second preload without
- * changing how `browser-tab.ts` constructs its views. It has to be registered
- * before any page loads — which is the case, because IPC registration runs
- * before the first window is created — and only once, or the script runs twice
- * per frame and every interaction is recorded twice.
+ * This used to write and register the flow recorder's preload itself. That work
+ * moved into `browser-profiles.ts`, because a preload registered on one session
+ * is not registered on the others — so a second profile would have looked like
+ * it was recording and captured nothing, which is the exact trap
+ * `browser-isolation.ts` documents for isolated tabs. Registering it in the one
+ * place that mints sessions is the only arrangement where that cannot happen
+ * again.
+ *
+ * The call stays, and is still made before the first window is created, because
+ * hardening has to be in place before a page can ask for a camera.
  */
 export function registerRecorderPreload(): void {
-  if (recorderPreloadId !== null) return
-  const filePath = writeRecordPreload(app.getPath('userData'))
-  recorderPreloadId = guestSession().registerPreloadScript({ type: 'frame', filePath })
+  guestSession()
 }
 
 /* ---------------------------------------------------------------- cookies -- */

@@ -58,6 +58,7 @@ import {
   type CopilotPaths,
   type ScaffoldResult,
 } from './copilot-home'
+import { copilotFolderReport } from './copilot-folder'
 import { userDataDir } from './platform/paths'
 import { routinesDirFor } from './routines/store'
 
@@ -596,7 +597,15 @@ export function readActionLog(paths: CopilotPaths, want = DEFAULT_ACTION_ROWS): 
  * the pane says out loud that they live outside its reach, and a claim about a
  * folder is easier to believe when the folder is one click away.
  */
-export type CopilotPlace = 'root' | 'instructions' | 'memory' | 'log' | 'routines'
+export type CopilotPlace =
+  | 'root'
+  | 'instructions'
+  | 'memory'
+  | 'log'
+  | 'routines'
+  | 'layer'
+  | 'contract'
+  | 'composed'
 
 export function copilotPlacePath(paths: CopilotPaths, place: CopilotPlace, userData: string): string {
   switch (place) {
@@ -610,7 +619,48 @@ export function copilotPlacePath(paths: CopilotPaths, place: CopilotPlace, userD
       return paths.log
     case 'routines':
       return routinesDirFor(userData)
+    /*
+     * The three app-side files, openable for the same reason the log folder is:
+     * the pane makes a claim about them — this half is yours, this half is
+     * generated, and this is the composed text your assistant was actually
+     * handed — and a claim about a file is easier to believe when the file is
+     * one click away.
+     */
+    case 'layer':
+      return paths.layer.dir
+    case 'contract':
+      return paths.layer.contract
+    case 'composed':
+      return paths.layer.composed
   }
+}
+
+/**
+ * Every place, and whether it is a file or a folder — which decides how it is
+ * opened, and is the guard that stops this list falling behind the union.
+ *
+ * It had fallen behind, and it cost two buttons. `layer`, `contract` and
+ * `composed` joined {@link CopilotPlace} when the copilot's instructions moved
+ * out of its working folder, and the allowlist in the `copilot:reveal` handler
+ * was left at the original five — so Settings → Copilot drew two fully lit
+ * "Open in Finder" buttons that answered *"There is nothing by that name to
+ * open."* every single time they were pressed. That is exactly the defect the
+ * 2026-08-17 review kept naming: a control that looks like it acts and does not.
+ *
+ * A `Record` keyed on the union rather than an array of strings, because the
+ * compiler then refuses a build where a new place has been added to the type and
+ * not to this table. An array `satisfies readonly CopilotPlace[]` would only
+ * check that every entry *is* a place, which is the half that was never wrong.
+ */
+const PLACE_KIND: Record<CopilotPlace, 'file' | 'folder'> = {
+  root: 'folder',
+  instructions: 'file',
+  memory: 'folder',
+  log: 'folder',
+  routines: 'folder',
+  layer: 'folder',
+  contract: 'file',
+  composed: 'file',
 }
 
 export interface RevealResult {
@@ -624,11 +674,26 @@ export interface RevealResult {
 export interface CopilotInspectDeps {
   /** `<userData>`. Defaults to this shell's answer, as every other module does. */
   userData?(): string
+  /**
+   * The folder the person chose, as the setting holds it, or null.
+   *
+   * The same dep `copilot-session.ts` takes, and it has to be here too or this
+   * module reads the memory of a folder the copilot is not working in — the pane
+   * would list the default folder's memories beside a session running somewhere
+   * else, which is the kind of quiet disagreement this feature exists to remove.
+   */
+  home?(): string | null
 }
 
 function pathsOf(deps: CopilotInspectDeps): { paths: CopilotPaths; userData: string } {
   const userData = deps.userData?.() ?? userDataDir()
-  return { paths: copilotPaths(userData), userData }
+  return {
+    paths: copilotPaths(
+      userData,
+      copilotFolderReport({ stored: deps.home?.() ?? null, userData }).home,
+    ),
+    userData,
+  }
 }
 
 /**
@@ -694,12 +759,12 @@ export function registerCopilotInspectIpc(ipcMain: IpcMain, deps: CopilotInspect
   ipcMain.handle(
     'copilot:reveal',
     async (_event: IpcMainInvokeEvent, place: unknown): Promise<RevealResult> => {
-      const known: readonly CopilotPlace[] = ['root', 'instructions', 'memory', 'log', 'routines']
-      if (typeof place !== 'string' || !known.includes(place as CopilotPlace)) {
+      const { paths, userData } = pathsOf(deps)
+      if (typeof place !== 'string' || !(place in PLACE_KIND)) {
         return { opened: false, path: null, message: 'There is nothing by that name to open.' }
       }
-      const { paths, userData } = pathsOf(deps)
-      const path = copilotPlacePath(paths, place as CopilotPlace, userData)
+      const known = place as CopilotPlace
+      const path = copilotPlacePath(paths, known, userData)
       try {
         statSync(path)
       } catch {
@@ -709,13 +774,14 @@ export function registerCopilotInspectIpc(ipcMain: IpcMain, deps: CopilotInspect
           message: 'That has not been created yet, so there is nothing to open.',
         }
       }
-      // A file is revealed in its folder rather than opened, because opening
-      // `CLAUDE.md` hands it to whatever the machine has registered for
+      // A file is revealed in its folder rather than opened, because opening a
+      // Markdown file hands it to whatever the machine has registered for
       // Markdown, which on a developer's Mac is as likely to be an editor they
-      // have not used in a year as the one they want.
-      if (place === 'instructions') {
+      // have not used in a year as the one they want. A folder is opened,
+      // because that is what opening a folder means.
+      if (PLACE_KIND[known] === 'file') {
         shell.showItemInFolder(path)
-        return { opened: true, path, message: 'Shown in Finder.' }
+        return { opened: true, path, message: 'Shown in your file manager.' }
       }
       const problem = await shell.openPath(path)
       return problem === ''

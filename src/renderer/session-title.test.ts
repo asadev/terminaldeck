@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   cleanTitleText,
@@ -210,6 +212,39 @@ describe('folderName', () => {
 
   it('falls back to the whole string when there is no segment', () => {
     expect(folderName('/')).toBe('/')
+  })
+
+  it('takes the last segment of a Windows path too', () => {
+    /*
+     * This app runs on Windows, and splitting on `/` alone answers with the
+     * *whole* path there — so every surface that asks this for a name printed
+     * `C:\Users\Imza\Projects\app` where a word belongs. Seen on
+     * `DESKTOP-DDGMNCV` on 2026-08-17, on a held session's row in a 264px rail.
+     */
+    expect(folderName('C:\\Users\\Imza\\Projects\\app')).toBe('app')
+    expect(folderName('C:\\Users\\Imza\\Projects\\app\\')).toBe('app')
+    // The two spellings a folder picker can hand back for one folder.
+    expect(folderName('C:/Users/Imza/Projects/app')).toBe('app')
+    // A drive root has one segment and it is the drive.
+    expect(folderName('C:\\')).toBe('C:')
+  })
+
+  it('is the only one of its name in the renderer', () => {
+    /*
+     * `state/store.tsx` carried a character-for-character copy of this, which is
+     * how it stayed POSIX-only after this one learned about backslashes: a
+     * project on a Windows path was named with its whole path in the rail while
+     * a tab inside that same project — which asks this module — was named with
+     * its last segment. The same folder, two names, one window.
+     *
+     * `remote/DeviceFolders.tsx` has one too and it is deliberately left alone:
+     * it names folders on a *paired device*, which is a different machine with a
+     * possibly different path syntax, and merging the two would be one function
+     * answering about two filesystems.
+     */
+    const store = readFileSync(join(__dirname, 'state', 'store.tsx'), 'utf8')
+    expect(store).not.toMatch(/function folderName\(/)
+    expect(store).toContain("import { folderName } from '../session-title'")
   })
 })
 

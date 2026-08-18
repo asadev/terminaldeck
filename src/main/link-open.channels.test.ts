@@ -74,13 +74,35 @@ describe('nothing routes a link straight to the system browser again', () => {
     )
   })
 
-  it('the guest’s window-open handler routes through openGuestLink', () => {
+  it('the guest’s window-open handler routes a link through openGuestLink', () => {
     const tab = read('browser-tab.ts')
-    const handler = /setWindowOpenHandler\(\(\{ url \}\) => \{([\s\S]*?)\n  \}\)/.exec(tab)
+    // The parameter is `details` rather than `{ url }` since sign-in pop-ups
+    // started being routed on their disposition — the handler needs the frame
+    // name and the features as well as the address. See `browser-popup.ts`.
+    const handler = /setWindowOpenHandler\(\(details\) => \{([\s\S]*?)\n  \}\)/.exec(tab)
     expect(handler, 'browser-tab.ts has no window-open handler any more').not.toBeNull()
     expect(handler?.[1]).toContain('openGuestLink')
     // The refusal has to survive as well: it is what keeps a page from opening
     // anything that is not http(s).
     expect(handler?.[1]).toContain('fail(')
+    expect(handler?.[1], 'a link from a guest page must not go straight out').not.toContain(
+      'openExternal',
+    )
+  })
+
+  /**
+   * A pop-up is allowed, and that is the one thing that must not be undone by
+   * somebody tidying the handler back to a single `deny`.
+   *
+   * The whole of the sign-in complaint in the 2026-08-17 review — the QR that
+   * stopped, the stuck verification link — was `deny` making `window.open()`
+   * return `null`. Reverting to it would look like a simplification and would
+   * break every OAuth flow again, silently, because nothing throws.
+   */
+  it('a genuine sign-in pop-up is still allowed to become a real window', () => {
+    const tab = read('browser-tab.ts')
+    const handler = /setWindowOpenHandler\(\(details\) => \{([\s\S]*?)\n  \}\)/.exec(tab)
+    expect(handler?.[1]).toContain('wantsPopupWindow')
+    expect(handler?.[1]).toContain("action: 'allow'")
   })
 })

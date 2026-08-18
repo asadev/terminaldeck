@@ -1,18 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Explain, Group, LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
-import { useFeatures } from '../../features/FeaturesProvider'
-import { errorText, missingChannelNote, type SectionProps } from '../settings-bridge'
-import {
-  eventState,
-  foreignNote,
-  hookActions,
-  hookSummary,
-  toHookWriteOutcome,
-  toSetupSnapshot,
-  TOOL_STATE_LABEL,
-  type SetupHookBlock,
-  type SetupSnapshot,
-} from '../setup-status'
+import { Button, Group, LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
+import { errorText, type SectionProps } from '../settings-bridge'
+import { toSetupSnapshot, TOOL_STATE_LABEL, type SetupSnapshot } from '../setup-status'
 import './SetupSection.css'
 
 /**
@@ -34,22 +23,6 @@ import './SetupSection.css'
  *    events where Claude has ten. One invented list on this screen would be a
  *    list that matches nobody's CLI.
  */
-
-/**
- * Which write is in flight, so only that provider's buttons go quiet.
- *
- * Install and Repair are the same channel — `hooks:install` rewrites our entries
- * from scratch either way — so the word is kept here rather than derived, and
- * the button the user pressed is the button that says what it is doing.
- */
-type Action = 'install' | 'repair' | 'remove'
-type Busy = { id: string; what: Action } | null
-
-const BUSY_LABEL: Record<Action, string> = {
-  install: 'Installing…',
-  repair: 'Repairing…',
-  remove: 'Removing…',
-}
 
 /**
  * The glyph on a tool row, in the same vocabulary the event rows use.
@@ -102,86 +75,15 @@ function ToolRow({ tool }: { tool: SetupSnapshot['tools'][number] }) {
   )
 }
 
-function HookBlock({
-  block,
-  endpointRunning,
-  busy,
-  canWrite,
-  onRun,
-}: {
-  block: SetupHookBlock
-  endpointRunning: boolean
-  busy: Busy
-  canWrite: boolean
-  onRun(id: string, what: Action): void
-}) {
-  const actions = hookActions(block, endpointRunning)
-  const working = busy?.id === block.id
-  const foreign = foreignNote(block)
+/*
+   `HookBlock` was here, and it is gone with the group it drew.
 
-  return (
-    <div className="setup-hooks" data-state={block.state}>
-      <div className="setup-hooks-head">
-        <span className="setup-hooks-name">{block.label}</span>
-        <span className="settings-tool-state">{hookSummary(block)}</span>
-      </div>
-
-      {block.file && (
-        <span className="settings-path" title={block.file}>
-          {block.file}
-        </span>
-      )}
-
-      {block.events.length > 0 && (
-        <ul className="setup-events">
-          {block.events.map((event) => {
-            const state = eventState(block, event)
-            return (
-              <li key={event} className="setup-event" data-state={state}>
-                <span className="setup-mark" data-state={state} aria-hidden="true">
-                  {state === 'installed' ? '✓' : state === 'stale' ? '!' : '✕'}
-                </span>
-                <span className="setup-event-name">{event}</span>
-                {/* The glyph is decoration; this is what a screen reader reads. */}
-                <span className="setup-sr">
-                  {state === 'installed' ? 'installed' : state === 'stale' ? 'out of date' : 'missing'}
-                </span>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-
-      <p className="settings-tool-note">{block.unsupportedReason ?? block.message}</p>
-      {foreign && <p className="settings-tool-note">{foreign}</p>}
-      {block.requirement && <Notice tone="warn">{block.requirement}</Notice>}
-
-      {block.state !== 'unsupported' && (
-        <div className="settings-actions">
-          <Button
-            disabled={!actions.install || working || !canWrite}
-            onClick={() => onRun(block.id, 'install')}
-          >
-            {working && busy?.what === 'install' ? BUSY_LABEL.install : 'Install'}
-          </Button>
-          <Button
-            disabled={!actions.repair || working || !canWrite}
-            onClick={() => onRun(block.id, 'repair')}
-          >
-            {working && busy?.what === 'repair' ? BUSY_LABEL.repair : 'Repair'}
-          </Button>
-          <Button
-            tone="danger"
-            disabled={!actions.remove || working || !canWrite}
-            onClick={() => onRun(block.id, 'remove')}
-          >
-            {working && busy?.what === 'remove' ? BUSY_LABEL.remove : 'Remove'}
-          </Button>
-        </div>
-      )}
-    </div>
-  )
-}
+   It rendered one agent's hook state — its name, its settings-file path, its
+   event list and the Install / Repair / Remove trio — and the sidebar's
+   Session updates page renders the same three agents from the same `hooks.ts`
+   call with the same three buttons. See the note where the group used to be,
+   at the bottom of this file, for why the page is the copy that survived.
+*/
 
 /**
  * The agent CLIs, which Settings → Agents already lists in full.
@@ -219,20 +121,14 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
    */
   const meta = { label: 'Setup', blurb: 'What this app needs on your machine, and what it found.' }
   /*
-   * Hooks are a feature, and an uninstalled feature gets no settings block.
-   *
-   * `hooks` declares no `sections` of its own — its surface is a sidebar page —
-   * so nothing gated this one, and three paragraphs plus a status line about
-   * session hooks were drawn on the Setup page while Hooks was still sitting in
-   * the store's Available list. FEATURE-STORE.md engineering rule 2: "no
-   * settings sections for something uninstalled".
+   * `useFeatures` was read here to gate the hook group behind the `hooks`
+   * feature. The group is gone — see the note at the bottom of this file — and
+   * with it the only thing on this pane that a feature owned, so the hook is
+   * gone too rather than left as an unread subscription.
    */
-  const features = useFeatures()
   const [snapshot, setSnapshot] = useState<SetupSnapshot | null>(null)
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [outcome, setOutcome] = useState<{ ok: boolean; message: string } | null>(null)
-  const [busy, setBusy] = useState<Busy>(null)
 
   const load = useCallback(() => {
     if (!bridge.setupStatus) return
@@ -254,42 +150,20 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
 
   useEffect(load, [load])
 
-  /**
-   * Writes never patch the snapshot locally.
-   *
-   * `hooks.ts` decides what actually landed — it refuses a config it cannot
-   * parse, skips a file that has nothing of ours in it, and reports the events
-   * it wrote — so the only honest thing to show afterwards is a fresh read.
+  /*
+   * `run` was here: the one write this pane could make, which was installing,
+   * repairing or removing an agent's hooks. It moved with the group that drew
+   * the buttons — this pane probes and reports now, and writes nothing.
    */
-  const run = useCallback(
-    (id: string, what: Action) => {
-      const call = what === 'remove' ? bridge.removeHooks : bridge.installHooks
-      if (!call) return
-      setBusy({ id, what })
-      setOutcome(null)
-      void call(id).then(
-        (raw) => {
-          setBusy(null)
-          setOutcome(toHookWriteOutcome(raw))
-          load()
-        },
-        (cause: unknown) => {
-          setBusy(null)
-          setOutcome({
-            ok: false,
-            message: errorText(cause, `Could not ${what} the hooks for ${id}.`),
-          })
-        },
-      )
-    },
-    [bridge, load],
-  )
 
   if (!bridge.setupStatus) {
     return (
       <>
         {head && <SectionHead title={meta.label} blurb={meta.blurb} />}
-        <Notice tone="warn">{missingChannelNote('The setup check')}</Notice>
+        <Notice tone="warn">
+          This window was opened without the setup check, so there is nothing for this pane to
+          read.
+        </Notice>
       </>
     )
   }
@@ -298,9 +172,6 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
   // CLI, which is what "what this app needs on your machine" means once the
   // agents have a section of their own.
   const tools = (snapshot?.tools ?? []).filter((tool) => !AGENT_TOOL_IDS.includes(tool.id))
-  const hooks = snapshot?.hooks ?? []
-  const endpoint = snapshot?.endpoint ?? { running: false, address: null }
-  const canWrite = Boolean(bridge.installHooks && bridge.removeHooks)
 
   return (
     <>
@@ -375,50 +246,32 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
         </div>
       </Group>
 
-      {features.on('hooks') && (
-      <Group title="Session hooks">
-        {/* Sixty-five words became eleven. What survived is what the buttons
-            below are about; the mechanism — the local endpoint, the tagging
-            that makes Remove safe — is behind the ⓘ, which is exactly the trade
-            he asked for: "one or two liner descriptions and one eye buttons
-            next to them so they can click or hover over there and they can read
-            the full description". */}
-        <Explain
-          title="What a hook does"
-          more="A hook is a command the CLI runs at each step of a session; ours reports that step to a local endpoint, which is how a tab knows an agent is working, waiting on you, or done without anything reading its terminal output. Every entry we write is tagged, so Remove takes back only ours."
-        >
-          Lets a tab tell whether the agent is working, waiting or done.
-        </Explain>
+      {/*
+        The "Session hooks" group was here, and it is gone because it was the
+        second copy of a page.
 
-        {/*
-          The second sentence used to read "It moves to a new port every run,
-          which is why hooks from a previous run need repairing." That was an
-          accurate description of a defect: the pane was explaining, calmly, why
-          the feature above it did not survive a restart. The endpoint no longer
-          moves, so the sentence is gone and the state it described is gone with
-          it — the line now says where it is listening and nothing more.
-        */}
-        <p className="setup-endpoint" data-running={endpoint.running || undefined}>
-          {endpoint.running
-            ? `Local endpoint: listening on ${endpoint.address}. The address stays the same between runs, so installed hooks keep working after a restart.`
-            : 'Local endpoint: not running, so an installed hook has nowhere to report until the app starts it.'}
-        </p>
+        It drew one block per agent — the agent's name, its settings-file path,
+        its event list, and Install / Repair / Remove — from `hooks.ts`. The
+        sidebar's own page draws the same three agents from the same call, with
+        the same three buttons. Two copies of one control in one app, and they
+        met on this screen, directly under a list of the same three agent names:
 
-        {outcome && <Notice tone={outcome.ok ? 'info' : 'error'}>{outcome.message}</Notice>}
-        {!canWrite && <Notice tone="warn">{missingChannelNote('Installing hooks')}</Notice>}
+          > *"Do you think hooks and CLIs are the same thing? Because this is a
+          > hooks folder and we see CLI here."*
 
-        {hooks.map((block) => (
-          <HookBlock
-            key={block.id}
-            block={block}
-            endpointRunning={endpoint.running}
-            busy={busy}
-            canWrite={canWrite}
-            onRun={run}
-          />
-        ))}
-      </Group>
-      )}
+        A fair question, and the honest answer was that one of them should not
+        have existed. The page survives rather than this block, for two reasons:
+        it is a place a person can be sent to and linked to, and Settings is a
+        dialog over whatever you were doing — a control you press once per
+        machine does not belong in the same pane as the switches you flip while
+        working. The page now leads by saying what it is *for*, which is the
+        other half of answering him. See `components/HooksPanel.tsx`.
+
+        `HookBlock`, `hookActions`, `eventState`, `hookSummary` and
+        `toHookWriteOutcome` are still exercised by `SetupSection.test.tsx` and
+        are the shared vocabulary `setup-status.ts` exists to hold; nothing here
+        is orphaned by this deletion except the block itself.
+      */}
     </>
   )
 }

@@ -665,3 +665,54 @@
   font-size: var(--t-footnote);
   color: var(--text-muted);
 }
+
+/* ------------------------------------------------------------------ where -- */
+
+/*
+  Which machine the session runs on.
+
+  A row of cards rather than a column, because there are usually two of them and
+  a column of two full-width cards reads as a list that will grow — which is
+  exactly the impression to avoid on the one step most people will never use.
+  It wraps rather than scrolls: a household with four machines gets two lines,
+  and a horizontal scroller inside a modal is a control people do not find.
+
+  The cards are `.ns-choice`, the same class the Agent rows use, so this borrows
+  the fill, the selected tint and the ring rather than restating them. What is
+  added here is only what is genuinely different: these rows are one line of
+  text, so they centre rather than top-align, and they do not stretch.
+*/
+.ns-where {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.ns-where-row {
+  align-items: center;
+  /* Content-width, so "this Mac" is not a card the width of the panel. The two
+     answers are of very different lengths and equal columns would make the
+     shorter one look like a placeholder. */
+  flex: 0 1 auto;
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.ns-where-row .ns-mark {
+  /* The Agent rows nudge their mark down to meet the first line of a
+     three-line card; this row has one line and the nudge would sit it low. */
+  margin-top: 0;
+}
+
+/* The machine's own mark, and only on a machine. `this Mac` deliberately does
+   not wear one: the row is about *where*, and a mark on every option would stop
+   the mark meaning "somewhere else". */
+.ns-where-glyph {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.ns-where-name {
+  font-size: var(--t-body);
+  color: var(--text-primary);
+  white-space: nowrap;
+}

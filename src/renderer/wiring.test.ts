@@ -85,27 +85,29 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     why: 'without session it reports the folder’s newest transcript under this session’s name — including one belonging to a claude this app never started',
   },
   {
-    file: 'renderer/components/ChatView.tsx',
-    child: 'AgentControls',
-    props: ['sessionId', 'cwd'],
-    why: 'model, effort and permission mode are read off the session screen',
+    file: 'renderer/shell/SessionControls.tsx',
+    child: 'ControlPicker',
+    props: ['control', 'reading', 'onPick'],
+    // These two entries used to name `AgentControls` and `UsageStrip` inside
+    // `ChatView.tsx`, because that is where they were mounted and both had
+    // shipped mounted nowhere at all. They moved out of the composer entirely —
+    // *"since we have it on top we actually don't need them here"* — so the
+    // seam moved with them rather than being deleted, which would have left the
+    // one place these are now drawn with no guard on it.
+    //
+    // `reading` is the prop that makes a picker a picker rather than a label:
+    // without it every chip shows `unreadLabel`, which is the confident-looking
+    // "Not reported" this feature exists to avoid.
+    why: 'model, effort, permission mode and fast mode are read off the session screen and typed back into it; this cluster is the only place any of them can be changed now that the composer has no control row',
   },
   {
-    file: 'renderer/components/ChatView.tsx',
-    child: 'UsageStrip',
-    props: ['cwd', 'scoped'],
-    // `scoped` is the one that keeps the numbers honest. Without it an absent
-    // transcript path reads as "no preference", so the strip picked whichever
-    // session in the folder ran last and printed its spend and context fill
-    // under the heading "This session" — for a tab that had made no request at
-    // all, and, under a second account, for money belonging to another login.
-    //
-    // `sessionId` used to be here too, for the plan limit that was read off the
-    // running session's screen. That reading moved to the session's chrome —
-    // `shell/UsageBar.tsx`, beside the account it is a fact about — so this
-    // strip is once again about a project's transcripts and nothing else. See
-    // the note at the top of `UsageStrip.tsx` for why it did not stay in both.
-    why: 'tokens and context come from the project’s transcripts; scoped decides whether an absent transcript means "the newest one" or "this session has none yet"',
+    file: 'renderer/shell/SessionControls.tsx',
+    child: 'UsageBar',
+    props: ['sessionId', 'provider'],
+    // The reading that replaced the composer's usage strip on screen. It is a
+    // different reading — the account's five-hour and weekly limits rather than
+    // this session's tokens — and it is the one he asked for twice.
+    why: 'a usage bar folded inside a chat composer could not be seen from a terminal session at all, which is how it came to be asked for twice while it already existed',
   },
   {
     file: 'renderer/components/ChatView.tsx',
@@ -119,10 +121,12 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   {
     file: 'renderer/components/ChatComposer.tsx',
     child: 'AttachMenu',
-    props: ['mode'],
+    props: ['mode', 'startIn'],
     why:
-      'the plus button is the only way to attach files, folders or MCP servers, and without mode ' +
-      'a shell session is offered `@"path"` mentions it would type verbatim at its prompt',
+      'the plus button is the only way to attach a file, and without mode a shell session is ' +
+      'offered `@"path"` mentions it would type verbatim at its prompt; without startIn the ' +
+      'operating system’s panel opens on a confined session in a folder that session cannot read, ' +
+      'so every row in the first screen it shows would be refused',
   },
   {
     file: 'renderer/components/ChatComposer.tsx',
@@ -152,7 +156,7 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   {
     file: 'renderer/App.tsx',
     child: 'AccountChip',
-    props: ['current', 'projectPath', 'provider', 'onPick'],
+    props: ['current', 'projectPath', 'provider', 'onPick', 'session', 'onSwitchAccount'],
     // The failure this table exists for, and this feature's own history: the
     // whole account engine — isolated config directories, per-project defaults,
     // a resolution chain, tests — shipped with no way in, and was reported as
@@ -168,10 +172,19 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     // session, `host-core.ts` rightly refused to label it, and the chip snapped
     // back to the default account with nothing said. Passed, the menu explains
     // itself instead of silently ignoring the click.
-    why: 'the only place in the window where the account for a session can be seen or chosen',
+    // `session` and `onSwitchAccount` are the fifth and sixth, and they are one
+    // requirement rather than two: together they are what makes a row switch the
+    // session on screen instead of opening a second one beside it —
+    // *"when I change account from the dropdown it starts a new session with
+    // that account, instead of changing it in the same session."* With only the
+    // first, the chip draws a switch-shaped menu whose rows still open a new
+    // session; with only the second it has nothing to switch and falls back to
+    // the old behaviour silently. Either way the reported bug is still there and
+    // the code looks like it was fixed.
+    why: 'the only place in the window where the account for a session can be seen, chosen, or changed on the session already running',
   },
   {
-    file: 'renderer/settings/sections/AccountsSection.tsx',
+    file: 'renderer/settings/sections/AddAccountDialog.tsx',
     child: 'AccountProviderList',
     props: ['rows', 'selected', 'onSelect'],
     // This exact failure, twice over. The main process has answered
@@ -182,7 +195,25 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     // account a Claude account — "if I add any new account it just redirects me
     // to claude only". `onSelect` is in the list because without it the rows are
     // a picture of a choice.
+    //
+    // The list moved into the popup on 2026-08-18 — *"'Add' and 'Sign in'
+    // should be one thing, called Add account. It must open a small popup with
+    // only the sign-in steps."* The entry below is the other half of that move,
+    // and it is the more important of the two: a dialog rendered by nothing is
+    // the failure this note already records once.
     why: 'the only place in the app where an account can be made for an agent other than Claude',
+  },
+  {
+    file: 'renderer/settings/sections/AccountsSection.tsx',
+    child: 'AddAccountDialog',
+    props: ['open', 'providerRows', 'onSignIn', 'onClose'],
+    // `open` because a dialog that is never opened is the same defect as one
+    // that is never mounted; `providerRows` because without it the popup asks
+    // which agent and offers none; `onSignIn` because it is the whole act, and
+    // a null there is the pane silently declining to make accounts; `onClose`
+    // because a popup over the settings sheet that cannot be closed takes the
+    // sheet with it.
+    why: 'the only route to adding an account at all, and the last one was written and rendered by nothing',
   },
   {
     file: 'renderer/App.tsx',
@@ -407,14 +438,39 @@ describe('the copilot is a window, not a view', () => {
     // no heading, no account chip and no control cluster — one filter withheld
     // all four.
     expect(app).toMatch(/isCopilot: true as const/)
-    const open = /const openCopilot = useCallback\([\s\S]*?\n {2}\)/.exec(app)?.[0] ?? ''
-    expect(open, 'openCopilot has changed shape').not.toBe('')
-    expect(open).toContain('copilot.ensure()')
+    const show = /const showCopilot = useCallback\([\s\S]*?\n {2}\)/.exec(app)?.[0] ?? ''
+    expect(show, 'showCopilot has changed shape').not.toBe('')
+    expect(show).toContain('copilot.ensure()')
     // `selectTab`, not `showTab`: while the window is split a click in the rail
     // fills the pane you are looking at, and pressing Copilot has to obey the
     // same rule or it changes the selection and nothing on screen.
-    expect(open).toContain('selectTab(copilotSessionId)')
-    expect(open).toContain('keepNewWindowInStrip(copilotSessionId)')
+    expect(show).toContain('selectTab(copilotSessionId)')
+    expect(show).toContain('keepNewWindowInStrip(copilotSessionId)')
+  })
+
+  /*
+   * The first-run questions come before the spawn, and this is the assertion
+   * that keeps them there.
+   *
+   * *"Show what it is about to become before it starts, rather than starting and
+   * letting him discover it."* Everything in the app that opens the copilot goes
+   * through `openCopilot`, so the gate is worth exactly as much as that
+   * function's refusal to start anything itself: the moment somebody moves a
+   * `copilot.ensure()` back into it, an install that has never been asked
+   * anything spawns a CLI and bills for it while the dialog is still opening.
+   *
+   * `hasRun()` rather than a piece of state, because the click can land before
+   * the file has been read — `useCopilotSetup` carries that argument.
+   */
+  it('asks the setup questions before it starts anything', () => {
+    const open = /const openCopilot = useCallback\([\s\S]*?\n {2}\)/.exec(app)?.[0] ?? ''
+    expect(open, 'openCopilot has changed shape').not.toBe('')
+    expect(open).toContain('copilotSetup.hasRun()')
+    expect(open).toContain('showCopilot(turn)')
+    expect(open).toContain('setCopilotSetupOpen(true)')
+    expect(open, 'the flow must gate the spawn, not race it').not.toContain('copilot.ensure()')
+    // And the flow is mounted, or the flag would open nothing at all.
+    expect(openingTag(app, 'CopilotSetup') ?? '').toContain('open={copilotSetupOpen}')
   })
 
   it('feeds the bar’s controls from a list the copilot is in', () => {
@@ -828,25 +884,35 @@ describe('every terminal repaints when the theme changes', () => {
 })
 
 /**
- * Nothing the chat composer offers may be simplified away.
+ * Nothing the chat composer offers may be *lost*. Moving it is a different act.
  *
- * This is the only entry in this file that guards against a *deletion made on
- * purpose*, and it is here because that deletion has already happened. Asked
- * for "one large chat box with the options folded neatly inside it", a pass
- * over this composer folded two controls onto the box, put two behind a button
+ * This is the only entry in this file that guards against a deletion made on
+ * purpose, and it is here because that deletion has already happened. Asked for
+ * "one large chat box with the options folded neatly inside it", a pass over
+ * this composer folded two controls onto the box, put two behind a button
  * labelled "More", and withdrew the attach menu from shell sessions entirely —
  * leaving that composer with a microphone and a send button. What came back
  * was: "you actually removed everything rather than making it simple and all
  * the options you have actually removed."
  *
- * Every check below is one of the things that went, expressed as a question
- * about the source, because none of them would fail a single one of the
- * deleted component's own tests. A control that is not rendered still passes
- * everything ever written about it.
+ * The controls row has since gone from the composer altogether, and that is
+ * emphatically not the same event: every control on it is drawn by
+ * `shell/SessionControls.tsx` in the window's own bar, over every session
+ * including the ones shown as a terminal, which never had them here at all.
+ * *"Options is showing the same options that we already have here."*
+ *
+ * So the checks below moved with the controls rather than being deleted with
+ * the row, and the one thing that is still asserted *here* is what stayed: the
+ * attach menu, on a shell as well as an agent. `chat/controls/one-home.test.ts`
+ * is the other half — it fails if a control ends up drawn in neither place.
+ *
+ * Every check is a question about the source, because none of them would fail a
+ * single one of the moved component's own tests. A control that is not rendered
+ * still passes everything ever written about it.
  */
 describe('the chat composer keeps every control it was given', () => {
   const composer = read('renderer/components/ChatComposer.tsx')
-  const controls = read('renderer/chat/controls/AgentControls.tsx')
+  const controls = read('renderer/shell/SessionControls.tsx')
 
   it('draws the attach menu on a shell too, switching its mode instead', () => {
     // `{!shell && <AttachMenu …>}` is the exact line that removed it. Picking a
@@ -859,35 +925,32 @@ describe('the chat composer keeps every control it was given', () => {
     expect(openingTag(composer, 'AttachMenu')).toMatch(/[\s{]mode[=}]/)
   })
 
-  it('builds the options panel from every control, not from the remainder', () => {
-    // `FOLDED_CONTROLS.map` is what made the panel a list of leftovers. The
-    // panel is the complete inventory now, and the row's chips are the
-    // shortcut — see `MENU_CONTROLS` in chat/controls/catalog.ts.
+  it('builds the window bar’s panel from every control it carries, not from a remainder', () => {
+    // `FOLDED_CONTROLS.map` is what once made a panel a list of leftovers, and
+    // nothing on screen named what was in it. The folded cluster draws the same
+    // list it draws open, so the two cannot come apart.
     expect(controls, 'the panel lists only the controls that were folded away').not.toMatch(
       /FOLDED_CONTROLS\.map/,
     )
-    expect(controls).toMatch(/MENU_CONTROLS\.map/)
+    expect(controls).toMatch(/CHROME_CONTROLS\.map/)
   })
 
-  it('names that panel rather than calling it More', () => {
+  it('names what the fold hides, rather than calling it More', () => {
     // A word that names nothing is why the controls behind it were read as
-    // deleted. The button says Options and its hover label lists the contents.
+    // deleted. The folded chip's hover label is built from the contents.
     expect(controls).not.toMatch(/^\s*More$/m)
-    expect(controls).toMatch(/^\s*Options$/m)
-    expect(controls, 'the hover label is typed by hand and will outlive a control it names').toMatch(
-      /title=\{optionsLabel\}/,
-    )
+    expect(controls).toMatch(/contentsSentence\(/)
   })
 
-  it('keeps the pickers, the microphone, the send button and the panel in the box', () => {
-    // Each of these is a control someone can reach today. If one is taken out
-    // to make the row shorter, this is where it is noticed — the alternative
-    // is noticing it in a message from the person using the app.
-    for (const held of ['AttachChips', 'AttachMenu', 'DictateButton', 'cc-send', '{controls}']) {
+  it('keeps attach, the chips, the microphone and the send button in the box', () => {
+    // Each of these is a control someone can reach today, and none of them has
+    // a twin anywhere else — which is exactly what stops this list shrinking to
+    // nothing on the same argument that emptied the controls row.
+    for (const held of ['AttachChips', 'AttachMenu', 'DictateButton', 'cc-send']) {
       expect(composer, `${held} is no longer rendered by the composer`).toContain(held)
     }
     for (const held of ['ControlPicker', 'ControlSection']) {
-      expect(controls, `${held} is no longer rendered by the controls`).toContain(`<${held}`)
+      expect(controls, `${held} is no longer rendered by the window bar`).toContain(`<${held}`)
     }
   })
 
@@ -932,25 +995,153 @@ describe('the composer accepts a file from outside the project', () => {
     expect(composer, 'the textarea has no paste handler').toMatch(/onPaste=\{onPaste\}/)
   })
 
-  it('asks what the session may read before it offers anything from outside', () => {
-    // The honest half of the feature. `browseRefusal` is what disables Browse on
-    // a session the OS is holding inside a folder; `outsideRefusal` is what stops
-    // a drop or a paste onto the same session. Either one going missing turns
-    // this into a feature that fails at the agent instead of at the click.
+  it('asks what the session may read before it attaches anything', () => {
+    // The honest half of the feature. Without the question, a session a phone
+    // or the copilot started is handed a file the OS will not let it open, and
+    // the failure arrives a minute later in the agent's words instead of at the
+    // click.
     expect(composer).toMatch(/sessionBoundary\(/)
-    expect(composer).toMatch(/browseRefusal=\{outsideRefusal\}/)
-    expect(composer, 'a drop or paste could still slip past the boundary').toMatch(
-      /outsideRefusal !== null/,
+  })
+
+  it('applies that answer per pick rather than refusing the session outright', () => {
+    /*
+     * This used to be `browseRefusal={outsideRefusal}` — the whole of Browse
+     * disabled whenever the session was confined — and that was fine only
+     * because a confined session still had the in-app project list to fall back
+     * on. The list is gone (*"we should not even have this search bar"*), so a
+     * blanket refusal would now leave those sessions unable to attach anything
+     * at all, including the files inside the folder they are held in.
+     *
+     * `splitByBoundary` is what replaced it: attach what this session can read,
+     * refuse the rest with the reason. Losing it silently would take the
+     * warning away, not the boundary — the OS still holds that — which is
+     * exactly the kind of regression nobody notices until an agent says it
+     * cannot open a file.
+     */
+    expect(composer, 'the boundary is no longer applied to the picks').toMatch(
+      /splitByBoundary\(boundary, picks\)/,
+    )
+    expect(composer, 'a refused pick no longer says why').toMatch(/outsideRefusal !== null/)
+    expect(composer, 'the panel no longer opens where the session can read').toMatch(
+      /startIn=\{browseStart\(boundary, root\)\}/,
     )
   })
 
   it('reaches outside only where it says it is doing so', () => {
     // `addAttachment` refuses an outside path unless the caller passes
-    // 'anywhere'. If the default ever flips, the project-scoped picker starts
-    // silently accepting paths it was built to exclude.
+    // 'anywhere'. Every route is an outside route now, so the default is no
+    // longer protecting a caller that exists — it is protecting the next one.
     expect(composer).toMatch(/'anywhere'/)
     expect(read('renderer/chat/attach/mentions.ts')).toMatch(
       /scope: AttachScope = 'project'/,
     )
+  })
+})
+
+/* ------------------------------------------- sessions, windows and the copilot -- */
+
+/**
+ * Four seams from his 2026-08-17 review that are wiring rather than logic, and
+ * therefore invisible to every other kind of test in this project.
+ */
+describe('opening a window, and the copilot not swallowing one', () => {
+  const app = read('renderer/App.tsx')
+
+  it('opens a rail row beside the window you are in, rather than replacing it', () => {
+    /*
+     * *"whenever I click on side panel on anyone, it should open a new window
+     * instead of switching. It should open its own new window next to it."*
+     *
+     * The strip drew one pill and overwrote it on every click, because a row
+     * opened from the rail was never *kept* — it rode up as a transient tab and
+     * evaporated the moment the next thing became active. Which is also the
+     * whole of *"if I click on commander, they go away."*
+     *
+     * Wiring, not logic: `keepBesideInStrip` is unit-tested next to the store it
+     * writes to, and `openTabWindow` is what connects it to the rail. Handing
+     * `selectTab` back to `onSelectTab` restores the bug with nothing else
+     * failing.
+     */
+    const tag = openingTag(app, 'Sidebar') ?? ''
+    expect(tag, 'no <Sidebar> in App.tsx').not.toBe('')
+    expect(tag).toMatch(/onSelectTab=\{openTabWindow\}/)
+    expect(app).toMatch(/const anchor = activeTab\?\.id \?\? null/)
+    expect(app).toMatch(/keepWindowBesideInStrip\(id, anchor\)/)
+  })
+
+  it('leaves the strip’s own pills switching rather than promoting', () => {
+    // Moving between windows you already have is not opening one. A strip that
+    // promoted on its own click would pin whatever you glanced at, which is the
+    // automatic strip `workspace-strip.ts` opens by rejecting.
+    const tag = openingTag(app, 'WorkspaceTabStrip') ?? ''
+    expect(tag).toMatch(/onSelect=\{selectTab\}/)
+  })
+
+  it('does not hide a session just for being in the copilot’s folder', () => {
+    /*
+     * *"If I am opening same as copilot folder, it is taking me directly to the
+     * commander… it will just be a normal another session."*
+     *
+     * The filter used to read `session.projectPath !== copilotRoot`, which threw
+     * away any session started in that folder: no row, no tab, and a selection
+     * pointing at nothing — so `resolveActiveTab` fell back to `tabs[0]`, which
+     * with the copilot open is the copilot. Reproduced in the harness before it
+     * was changed.
+     */
+    expect(app, 'the copilot filter is back to hiding a whole folder').not.toMatch(
+      /session\.projectPath !== copilotRoot/,
+    )
+    expect(app).toMatch(/copilotIds\.current\.has\(session\.id\)/)
+  })
+
+  it('remembers an ended copilot so it does not resurface as somebody’s session', () => {
+    // Nothing removes a session from the store when its process ends, while
+    // `copilot:state` drops its `sessionId` the moment it goes — so the live id
+    // alone is not enough at that instant.
+    expect(app).toMatch(/copilotIds\.current\.add\(copilotSessionId\)/)
+  })
+
+  it('gives the copilot’s folder a heading once it holds a session of yours', () => {
+    // Otherwise that session lands in the rail's orphan bucket, which means
+    // "your project was closed out from under this" and is not what happened.
+    expect(app).toMatch(/sessions\.some\(\(session\) => session\.projectPath === copilotRoot\)/)
+  })
+
+  it('sends every New session press through the dialog, including the two that did not', () => {
+    /*
+     * *"It is not asking me for this kind of pop-ups when I am opening from
+     * here. Everywhere it should be consistent."* The swarm grid's empty slot
+     * and the split pane's empty state both spawned straight into the active
+     * folder on the default agent.
+     */
+    expect(app, 'a New session button still spawns without asking').not.toMatch(
+      /onClick: \(\) => newSession\(\)/,
+    )
+    expect(app).not.toMatch(/onNewSession=\{\(\) => newSession\(\)\}/)
+  })
+
+  it('offers Continue-last-session only to an agent that has one', () => {
+    // `host-core.ts` falls back to the ordinary arguments when `resumeArgs` is
+    // empty, so on Gemini or a shell this started a *fresh* session and said
+    // nothing. A control that cannot act is absent.
+    const tag = openingTag(app, 'Sidebar') ?? ''
+    expect(tag).toMatch(/canResume=\{canResumeDefault\}/)
+    expect(app).toMatch(/canResumeDefault\s*\n?\s*\?\s*\[\{ id: 'session\.resume'/)
+  })
+
+  it('asks before closing anything, however calm it looks', () => {
+    /*
+     * *"Always ask."* The project ✕ used to count only the busy sessions and
+     * skip the dialog when there were none — four calm agents, one press, gone
+     * without a word. Reproduced in the harness.
+     */
+    expect(app, 'the project close is gated on busy sessions again').not.toMatch(
+      /if \(risky\.length === 0\)/,
+    )
+    expect(app).toMatch(/if \(!confirmClose\) \{[\s\S]{0,80}closeProjectNow\(path\)/)
+    // And a session whose status has not arrived yet is asked about too — the
+    // old `tab.status &&` skipped exactly the sessions a person knows least
+    // about: one restored at launch, one a phone started.
+    expect(app).toMatch(/needsCloseConfirm\(tab\.status \?\? 'idle', confirmClose\)/)
   })
 })

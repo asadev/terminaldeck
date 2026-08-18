@@ -57,6 +57,7 @@ function link(partial: Partial<MachineLinkState> = {}): MachineLinkState {
     sessions: [],
     folders: ['/Users/a/projects/deck'],
     capabilities: ['create'],
+    ports: [],
     hostPlatform: 'win32',
     retryAt: null,
     ...partial,
@@ -72,6 +73,8 @@ const NOTHING: MachineActions = {
   newSession: () => {},
   open: () => {},
   close: () => {},
+  openPort: () => {},
+  refreshPorts: () => {},
 }
 
 const NOOP_BRIDGE: MachinesBridge = {
@@ -88,6 +91,8 @@ const NOOP_BRIDGE: MachinesBridge = {
   writeToMachineSession: () => Promise.resolve(true),
   resizeMachineSession: () => Promise.resolve(true),
   createMachineSession: () => Promise.resolve(true),
+  refreshMachinePorts: () => Promise.resolve(true),
+  openOnMachine: () => Promise.resolve(true),
   onMachinesState: () => () => {},
   onMachineOutput: () => () => {},
 }
@@ -594,5 +599,108 @@ describe('narrowing what crosses the bridge', () => {
     // a method the preload stopped exposing.
     expect(resolveBridge()).toBeNull()
     expect(resolveBridge(NOOP_BRIDGE)).toBe(NOOP_BRIDGE)
+  })
+})
+
+/**
+ * Remote localhost on the desktop — the half that was one-way.
+ *
+ * `web.open` has been on the wire since the web client needed it and only the
+ * web client sent it, so a Mac reaching a PC could list that PC's sessions and
+ * say nothing at all about what it was serving. What is pinned here is the
+ * three decisions this block makes: whether it is drawn at all, whether the
+ * Open is drawn, and that every row carries the far machine's own icon.
+ */
+describe('what the far machine is serving', () => {
+  const serving = (over: Partial<MachineLinkState> = {}): MachineLinkState =>
+    link({
+      capabilities: ['create', 'localhost', 'web'],
+      ports: [
+        { port: 5173, process: 'node', guessed: false },
+        { port: 8080, process: '', guessed: true },
+      ],
+      ...over,
+    })
+
+  it('lists the ports with the machine’s own icon on every row', () => {
+    /*
+     * On every row and not only on the heading, which is the whole point of the
+     * icon: *"remote localhost should list the remote machine's ports with the
+     * machine's icon"*. This desktop has its own localhost list on the browser's
+     * start page and the rows look identical — a number, a process, an open —
+     * so a row that borrowed its identity from a heading four rows up is a row
+     * that reads as local.
+     */
+    const markup = row(serving())
+    expect(markup).toContain('Localhost on Studio PC')
+    expect(markup).toContain('5173 · node')
+    // The far machine could not name the process, so the row says that rather
+    // than inventing one.
+    expect(markup).toContain('8080 · unknown process')
+    // Heading plus one per row.
+    expect(markup.split('machines-glyph').length - 1).toBe(3)
+  })
+
+  it('is not drawn at all for a machine that does not tunnel', () => {
+    expect(row(link({ capabilities: ['create'] }))).not.toContain('machines-ports')
+  })
+
+  it('is not drawn for a link that is not up', () => {
+    // The list belonged to a connection that has ended. Ports that were open
+    // ten minutes ago on a machine that has since rebooted open nothing.
+    expect(row(serving({ state: 'offline' }))).not.toContain('machines-ports')
+  })
+
+  it('says so rather than drawing an empty list', () => {
+    const markup = row(serving({ ports: [] }))
+    expect(markup).toContain('Nothing is listening on that PC right now')
+  })
+
+  it('offers no Open to a machine that withheld `web`, and says why', () => {
+    // A host with no window and a device treated as a guest arrive identically,
+    // as a capability the welcome did not carry. The button is absent rather
+    // than disabled — a disabled control still invites the ask — and the
+    // sentence names the fix, which is on the other machine.
+    const markup = row(serving({ capabilities: ['create', 'localhost'] }))
+    expect(markup).not.toContain('Open there')
+    expect(markup).toContain('not letting this one open pages on it')
+  })
+
+  it('asks the far machine to open the address, and composes it from the row', async () => {
+    const opened: Array<{ id: string; url: string }> = []
+    const bridge: MachinesBridge = {
+      ...NOOP_BRIDGE,
+      openOnMachine: async (id: string, url: string) => {
+        opened.push({ id, url })
+        return true
+      },
+    }
+    const { actions, settled } = pressing(bridge)
+    actions.openPort(machine(), 5173)
+    await settled()
+
+    expect(opened).toEqual([{ id: 'MACHINE1', url: 'http://localhost:5173/' }])
+  })
+
+  it('refreshes without redrawing from the answer', async () => {
+    // The far machine replies with a `ports` frame, the link publishes it, and
+    // the whole view arrives on `machines:state`. Redrawing from this promise
+    // would be a second path to the same list, and the two would disagree the
+    // first time one was slow.
+    const asked: string[] = []
+    const bridge: MachinesBridge = {
+      ...NOOP_BRIDGE,
+      refreshMachinePorts: async (id: string) => {
+        asked.push(id)
+        return true
+      },
+    }
+    const { actions, state, settled } = pressing(bridge)
+    const before = state.view
+    actions.refreshPorts(machine())
+    await settled()
+
+    expect(asked).toEqual(['MACHINE1'])
+    expect(state.view).toBe(before)
   })
 })

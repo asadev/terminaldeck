@@ -131,6 +131,45 @@ export function showInFocusedPane(layout: PaneLayout, tabId: string): PaneLayout
 }
 
 /**
+ * One window has become another, and every pane showing the first must show the
+ * second — in the same place, at the same size.
+ *
+ * Written for exactly one caller and it is worth naming, because the situation
+ * looks impossible from in here: switching the account a running session is on.
+ * A CLI is authenticated at spawn, so changing account means stopping the
+ * process and starting another, which means a *new session id* for what is, to
+ * the person, the same tab they were already looking at. Everything they can see
+ * is meant to survive that — including a pane arrangement they built by hand.
+ *
+ * Without this the switch would be a prune and an insert: `pruneClosedPanes`
+ * would find the old id gone and collapse its pane, and the replacement would
+ * arrive with nowhere to be. Somebody who split their window and switched the
+ * left half's account would watch the split fall apart, which is the layout
+ * rearranging itself in response to something that was not a drag — the thing
+ * `keepInStrip` refuses to do one file over.
+ *
+ * Every pane, not just the focused one: the same session can legitimately be in
+ * two panes (`splitFocused` puts it there deliberately, so you can watch two
+ * ends of one scrollback), and leaving the second on a dead id is the stale-pane
+ * failure `pruneClosedPanes` exists for.
+ *
+ * Returns the same reference when nothing shows the old id, matching every other
+ * function here, so a render that changes nothing costs no remount.
+ */
+export function replaceTabInPanes(
+  layout: PaneLayout,
+  oldId: string,
+  newId: string,
+): PaneLayout {
+  let next = layout
+  for (const pane of listPanes(layout)) {
+    if (pane.tabId !== oldId) continue
+    next = setPaneTab(next, pane.id, newId)
+  }
+  return next
+}
+
+/**
  * Drop panes whose window no longer exists.
  *
  * Called whenever the open list changes, because a session or a page can leave

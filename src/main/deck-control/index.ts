@@ -139,6 +139,8 @@ import type { ToolSpec } from './catalogue'
 import type { DeckSurface } from './surface'
 import { MAX_TOURS_KEPT, TourStage } from './tour-stage'
 import { tourTool } from './tour-tool'
+import { WHERE_CALL, whereTool } from './where-tool'
+import { browserDrive } from '../browser-drive-ipc'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -482,7 +484,40 @@ export async function registerDeckControlIpc(
     // `catalogue.ts`, because it is a closure over the stage above and
     // `buildCatalogue()` takes no arguments. It is not special in any other
     // way: same tier check, same precheck, same budgets, same log row.
-    extraTools: [tourTool(tours), ...(deps.extraTools ?? [])],
+    /*
+     * Both closures over facts this function holds and nothing below it does:
+     * the tour stage, and the approver window `app.where` reads the screen out
+     * of. Neither is special in any other way — same tier check, same precheck,
+     * same budgets, same log row as a tool declared in `catalogue.ts`.
+     */
+    extraTools: [
+      tourTool(tours),
+      whereTool({
+        window: {
+          /*
+           * Run at the moment the copilot asks, in the page's main world, where
+           * the renderer's own code lives — the preload sits in an isolated
+           * world and cannot see this global, and a web page in a browser tab is
+           * a separate `WebContentsView` with its own globals entirely.
+           *
+           * A window that has not booted far enough for `where.ts` to have
+           * published its reader answers `undefined`, which the tool narrows to
+           * "there is no window to look at". That is a true answer rather than a
+           * fault, and it is the state a headless run is in permanently.
+           */
+          read: async () => {
+            const target = approver
+            if (target === null || target.isDestroyed()) return null
+            return await target.executeJavaScript(WHERE_CALL, true)
+          },
+        },
+        // The drivable browser, when this build registered one. Null is a real
+        // state — the drive is created during boot and a catalogue asked before
+        // that must not crash — so the tool answers "no page" rather than `!`.
+        page: () => browserDrive(),
+      }),
+      ...(deps.extraTools ?? []),
+    ],
     driving: () => tours.driving(),
     ...(deps.budgets === undefined ? {} : { budgets: deps.budgets }),
     onRow: (row: ActionRow) => deps.broadcast(ACTION_CHANNEL, row),

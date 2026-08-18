@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
-import { SessionControls, contentsSentence, summaryLabel } from './SessionControls'
-import { controlName } from '../chat/controls/catalog'
+import { ConnectorsPicker, SessionControls, contentsSentence, summaryLabel } from './SessionControls'
+import { DEFAULT_EFFORT, EFFORT_OPTIONS, controlName } from '../chat/controls/catalog'
+import { preferredEffort } from './useSessionControls'
 
 /**
  * What the session's controls put on the chrome, and what withdraws them.
@@ -61,7 +62,7 @@ function names(html: string): string[] {
 }
 
 describe('what a running Claude session gets on its bar', () => {
-  it('carries model, effort and fast mode, each named on the chip', () => {
+  it('carries model, effort and fast mode', () => {
     withBridge()
     const html = render()
     for (const control of ['model', 'effort', 'fast'] as const) {
@@ -69,20 +70,219 @@ describe('what a running Claude session gets on its bar', () => {
     }
   })
 
-  it('carries a way to reach the connectors this app already has', () => {
-    // Not a second MCP system: the chip opens the MCP servers view, and the
-    // sentence on it is that view's own blurb, read from `panels.ts`.
-    withBridge()
-    const html = render()
-    expect(html).toContain('Connectors')
-    expect(html).toContain('The tools your agents can reach')
-  })
-
   it('gives every button a name a person can read or hear', () => {
     withBridge()
     const html = render()
     expect(names(html).length).toBeGreaterThan(0)
     for (const name of names(html)) expect(name).not.toBe('')
+  })
+})
+
+describe('the names on the chips', () => {
+  /**
+   * Asad, watching the top bar on 2026-08-17:
+   *
+   *   > *"No need to show the other things like only show Opus 5. If they drop
+   *   > down, they know that this is a model. So no need to tell that Model Opus
+   *   > 5 — just Opus 5 with drop down is good enough. Also effort, no need to
+   *   > tell effort."*
+   *
+   * Which is a change to what is *drawn*, and specifically not a change to what
+   * is *said*. This pair of tests is the difference: the name comes off the bar
+   * and stays in the accessible name, so a person who does not recognise
+   * `Ultracode` still gets "Effort: Ultracode — from Claude settings" by resting
+   * on it, and a screen-reader user is still told what the control is.
+   *
+   * The drawn half is a CSS rule and cannot be seen in a rendered string, so it
+   * is asserted against the stylesheet — including its one exception, which is
+   * the exception that stops the rule producing an empty chip.
+   */
+  const css = readFileSync(join(__dirname, 'SessionControls.css'), 'utf8')
+
+  it('is not drawn beside the value on this bar', () => {
+    expect(css).toContain('.session-controls .ac-picker:not(.sc-connectors) .ac-name {')
+    expect(css).toMatch(/\.ac-picker:not\(\.sc-connectors\) \.ac-name \{\s*\n\s*display: none;/)
+  })
+
+  it('is still what the chip is called when you hover it or hear it', () => {
+    // The chip's tooltip is `${name}: ${value} — ${note}`, built in
+    // `ControlPicker`. Hiding the drawn copy must not have been done by
+    // deleting the name, which would have taken this with it.
+    withBridge()
+    const said = names(render()).join(' ')
+    for (const control of ['model', 'effort', 'fast'] as const) {
+      expect(said, control).toContain(`${controlName(control)}:`)
+    }
+  })
+
+  it('comes back the moment there is no value for it to be redundant beside', () => {
+    /*
+     * Found by looking at the rendered toolbar, and it is the reason this rule
+     * has an exception at all. With the names off, a window whose session had
+     * gone away drew `Unknown ⌄  Unknown ⌄  Not reported ⌄  Unknown ⌄` — four
+     * controls in a row that no longer said what any of them were.
+     *
+     * His sentence carries its own condition: *"just **Opus 5** with drop down
+     * is good enough."* `Opus 5` is good enough because it is a model and says
+     * so. `Unknown` is not anything, so the label it made redundant stops being
+     * redundant the instant the value goes.
+     */
+    expect(css).toContain(
+      '.session-controls .ac-picker:not(.sc-connectors) .cc-chip:has(.ac-value-unknown) .ac-name {',
+    )
+    // Keyed on the class `ControlPicker` sets from `reading.label === null`, so
+    // there is no second definition of "unread" for this to drift from.
+    expect(css).toContain('.ac-value-unknown')
+  })
+
+  it('follows the same rule on the folded chip, which is drawn by hand', () => {
+    // The folded chip draws its own spans rather than going through
+    // `ControlPicker`, so the CSS rule above cannot reach it and the same
+    // judgement has to be made in the markup — a name only where the value is
+    // not one this app read. Its hover label names both either way; see
+    // `summaryLabel`.
+    const view = readFileSync(join(__dirname, 'SessionControls.tsx'), 'utf8')
+    expect(view).toContain(
+      "{readings?.model.label ? null : <span className=\"ac-name\">{controlName('model')}</span>}",
+    )
+    expect(view).toContain(
+      "{readings?.effort.label ? null : <span className=\"ac-name\">{controlName('effort')}</span>}",
+    )
+  })
+})
+
+describe('connectors, which exist only when there are connectors', () => {
+  /**
+   * Asad: *"connectors — a dropdown only when some exist. Hide it when empty."*
+   *
+   * The chip used to be on the bar unconditionally, opening the MCP servers
+   * view whether or not a single server was configured — a permanent invitation
+   * to an empty room, on a bar shared with five other controls. It is the most
+   * repeated finding in his review, and the fix is the one he stated rather than
+   * a softening of it: when there is nothing behind it, it is not there.
+   */
+  const view = readFileSync(join(__dirname, 'SessionControls.tsx'), 'utf8')
+
+  it('draws nothing at all until the answer has come back', () => {
+    // `useConnectors` starts `loaded: false`, and effects do not run in a static
+    // render — so this is also the "nothing flickers into the bar and pushes the
+    // mode switch sideways" case.
+    withBridge()
+    expect(render()).not.toContain('Connectors')
+  })
+
+  it('is mounted only under a condition that counts them', () => {
+    expect(view).toContain('const hasConnectors = connectors.loaded && connectors.rows.length > 0')
+    // Both homes: the open row and the folded panel's section. An empty section
+    // in the panel is the same dead invitation one fold further in.
+    expect(view.match(/hasConnectors \? \(/g) ?? []).toHaveLength(2)
+  })
+
+  it('lists what it found, and offers exactly one thing to press', () => {
+    /*
+     * The rows are readings, not buttons. This app can do one thing with a
+     * server from a toolbar — open the view that owns adding, inspecting and
+     * connecting — and that one thing is not per-server, so rows that were
+     * buttons would all go to the same place. That is the fault he reported on
+     * another page in the same recording: *"every row opens the same session."*
+     */
+    const html = renderToStaticMarkup(
+      <ConnectorsPicker
+        rows={[
+          { id: 'user:github', name: 'github', scope: 'user', transport: 'stdio', enabled: true, disabledReason: null },
+        ]}
+        onOpen={noop}
+        blocked={null}
+      />,
+    )
+    expect(html).toContain('Connectors')
+    // One button: the chip that opens the list. Everything inside it is a `<p>`.
+    expect(html.match(/<button/g) ?? []).toHaveLength(1)
+    expect(view).toContain('<p key={row.id} className="sc-connector"')
+  })
+
+  it('says why the one action cannot act, rather than swallowing the click', () => {
+    // A feature can be uninstalled in this app. The control that would have
+    // opened it admits that instead of appearing to work.
+    const html = renderToStaticMarkup(
+      <ConnectorsPicker rows={[{ id: 'a', name: 'a', scope: null, transport: null, enabled: true, disabledReason: null }]} onOpen={null} blocked={null} />,
+    )
+    expect(html).toContain('Connectors')
+    expect(view).toContain('The MCP servers view is not installed in this build')
+  })
+})
+
+describe('the effort default', () => {
+  /**
+   * Asad: *"effort defaults to extra-high, and a change sticks."*
+   *
+   * Both halves are real rather than displayed. The app types `/effort xhigh`
+   * into a session that reports **no** effort from any source, which is what a
+   * machine looks like when nobody has ever set one; and a value picked from the
+   * bar is remembered and used in its place from then on. A control that merely
+   * *printed* `Extra high` over a session running at something else would be the
+   * one thing this whole cluster is built to refuse.
+   */
+  it('is extra high when nothing has ever been chosen', () => {
+    expect(preferredEffort(null)).toBe(DEFAULT_EFFORT)
+    expect(DEFAULT_EFFORT).toBe('xhigh')
+    expect(EFFORT_OPTIONS.some((option) => option.id === DEFAULT_EFFORT)).toBe(true)
+  })
+
+  it('is the row a reader sees first, so the menu and the app agree', () => {
+    // A menu's first row is read as its default whether or not it was meant to
+    // be. `Auto` used to be first and is the one option that *undoes* the
+    // default rather than being it.
+    expect(EFFORT_OPTIONS[0]?.id).toBe(DEFAULT_EFFORT)
+  })
+
+  it('gives way to whatever was chosen last', () => {
+    expect(preferredEffort({ getItem: () => 'max' })).toBe('max')
+  })
+
+  it('applies nothing at all once “auto” has been chosen', () => {
+    /*
+     * `auto` *is* the cleared state — the CLI answers `Cleared effort from
+     * settings` — so a session that has chosen it reports no effort, which is
+     * the very condition that triggers the default. Without this, somebody who
+     * deliberately wants the model's own default would be handed extra-high
+     * again on every new session for ever, with no way to stop it.
+     */
+    expect(preferredEffort({ getItem: () => 'auto' })).toBeNull()
+  })
+
+  it('ignores a value that is not one the CLI accepts', () => {
+    // This string is editable by hand in devtools and can be left behind by an
+    // older build. Anything unrecognised falls back rather than being typed at
+    // somebody's prompt.
+    expect(preferredEffort({ getItem: () => 'turbo' })).toBe(DEFAULT_EFFORT)
+  })
+
+  it('survives a storage that throws rather than taking the bar down', () => {
+    expect(
+      preferredEffort({
+        getItem: () => {
+          throw new Error('blocked')
+        },
+      }),
+    ).toBe(DEFAULT_EFFORT)
+  })
+
+  it('is applied by typing it, and only to a session that reported none', () => {
+    const hook = readFileSync(join(__dirname, 'useSessionControls.ts'), 'utf8')
+    expect(hook).toContain("control: 'effort', value: want")
+    // Every guard that stops it overriding a choice or fighting the user.
+    expect(hook).toContain('if (readings.effort.label !== null')
+    expect(hook).toContain('if (defaulted.has(sessionId)) return')
+    expect(hook).toContain("provider !== 'claude'")
+    expect(hook).toContain('if (!readings.gate.canType) return')
+  })
+
+  it('and the change is what gets remembered, not the reading it produced', () => {
+    // For `auto` the two are different facts: the reading that comes back is an
+    // absence, and storing the absence would lose the choice.
+    const hook = readFileSync(join(__dirname, 'useSessionControls.ts'), 'utf8')
+    expect(hook).toContain("if (control === 'effort' && answer.ok) rememberEffort(storage(), value)")
   })
 })
 
@@ -137,18 +337,6 @@ describe('a build with no bridge', () => {
   })
 })
 
-describe('the connectors chip when there is nowhere for it to go', () => {
-  it('is drawn back and says the view is not installed', () => {
-    // A feature can be uninstalled in this app. A control that would have
-    // opened it must admit that rather than vanish, and must not silently
-    // swallow the click either.
-    withBridge()
-    const html = render({ onOpenConnectors: null })
-    expect(html).toContain('Connectors')
-    expect(names(html).join(' ')).toContain('not installed in this build')
-  })
-})
-
 describe('the sentence the folded chip advertises', () => {
   /**
    * The failure this guards is documented at length in `catalog.ts`: a button
@@ -159,14 +347,17 @@ describe('the sentence the folded chip advertises', () => {
    */
   it('names every control the cluster holds', () => {
     const sentence = contentsSentence(true)
-    for (const control of ['model', 'effort', 'fast'] as const) {
+    // Permission mode joined the cluster when the composer's control row was
+    // removed; it is in this list for the same reason the other three are — the
+    // hover label is the only place the folded chip's contents are named.
+    for (const control of ['model', 'effort', 'permission', 'fast'] as const) {
       expect(sentence.toLowerCase(), control).toContain(controlName(control).toLowerCase())
     }
     expect(sentence.toLowerCase()).toContain('connectors')
   })
 
   it('is prose rather than a row of proper nouns', () => {
-    expect(contentsSentence(true)).toBe('Model, effort, fast mode and connectors')
+    expect(contentsSentence(true)).toBe('Model, effort, permission, fast mode and connectors')
   })
 
   it('never says the word that caused the deletion report', () => {
@@ -187,23 +378,30 @@ describe('what the folded chip still says out loud', () => {
    * not is hiding something it knows.
    */
   it('states both readings, each under its own control’s name', () => {
-    const said = summaryLabel('Opus 5 (1M context)', 'Ultracode')
+    const said = summaryLabel('Opus 5 (1M context)', 'Ultracode', true)
     expect(said).toContain('model Opus 5 (1M context)')
     expect(said).toContain('effort Ultracode')
   })
 
   it('still names every control the fold put away', () => {
-    const said = summaryLabel('Opus 5', 'High').toLowerCase()
+    const said = summaryLabel('Opus 5', 'High', true).toLowerCase()
     for (const control of ['model', 'effort', 'fast'] as const) {
       expect(said, control).toContain(controlName(control).toLowerCase())
     }
     expect(said).toContain('connectors')
   })
 
+  it('does not advertise connectors on a machine that has none', () => {
+    // The same rule the chip obeys, one fold in. Naming a control the panel
+    // does not contain is the mirror image of the "More" failure: a label
+    // pointing at nothing instead of nothing pointing at a label.
+    expect(summaryLabel('Opus 5', 'High', false).toLowerCase()).not.toContain('connectors')
+  })
+
   it('says the unread value rather than inventing one', () => {
     // `displayValue` answers "Unknown" for a model nothing has reported. The
     // label repeats that answer; it never falls back to a plausible name.
-    expect(summaryLabel('Unknown', 'Unknown')).toContain('model Unknown, effort Unknown')
+    expect(summaryLabel('Unknown', 'Unknown', true)).toContain('model Unknown, effort Unknown')
   })
 })
 

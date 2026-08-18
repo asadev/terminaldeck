@@ -14,6 +14,7 @@ import {
   type MachineLinkState,
   type MachinesBridge,
   type MachinesView,
+  type RemotePort,
   type RemoteSession,
 } from './types'
 import { normaliseCode } from '../../shared/short-code'
@@ -65,6 +66,10 @@ export interface MachineActions {
   newSession(machine: Machine, link: MachineLinkState): void
   open(machineId: string, sessionId: string): void
   close(): void
+  /** Open `http://localhost:<port>/` **on that machine**, in its own browser. */
+  openPort(machine: Machine, port: number): void
+  /** Ask that machine again what is listening on it. */
+  refreshPorts(machine: Machine): void
 }
 
 /** The machines half of the merged section, as one bundle. */
@@ -144,6 +149,7 @@ export function linkFor(view: MachinesView, id: string): MachineLinkState {
       sessions: [],
       folders: null,
       capabilities: [],
+      ports: [],
       hostPlatform: '',
       retryAt: null,
     }
@@ -292,6 +298,16 @@ export function MachineRow({
         </ul>
       )}
 
+      {link.state === 'online' && link.capabilities.includes('localhost') && (
+        <RemotePorts
+          machine={machine}
+          link={link}
+          noun={noun}
+          onOpen={(port) => actions.openPort(machine, port)}
+          onRefresh={() => actions.refreshPorts(machine)}
+        />
+      )}
+
       <div className="machines-actions settings-chips">
         {offer.can && (
           <Button onClick={() => actions.newSession(machine, link)}>New session</Button>
@@ -351,6 +367,153 @@ export function SessionRow({
         <span className="machines-session-status">{session.status}</span>
       </button>
     </li>
+  )
+}
+
+/**
+ * That machine's icon, in eleven pixels.
+ *
+ * He asked for it in those words — *"remote localhost should list the remote
+ * machine's ports with the machine's icon"* — and the reason is a real
+ * confusion rather than decoration. This desktop has its own localhost list, on
+ * the browser's start page, and the rows look identical: a number, a process
+ * name, an Open. Without something on the row saying *which computer*, a person
+ * looking at `3000 · node` has no way to know whether pressing it reaches the
+ * thing they are running here or the thing running in the next room.
+ *
+ * Drawn rather than imported because there is no icon set in this codebase and
+ * a downloaded one would drag a licence in — see the ground rule at the top of
+ * CLAUDE.md. Three shapes, and each is the machine's own silhouette: a laptop
+ * for a Mac, a window pane for a PC, a plain screen for anything else.
+ * `currentColor` throughout, so it takes the row's ink in both themes rather
+ * than carrying a colour of its own.
+ */
+export function MachineGlyph({ platform, label }: { platform: string; label: string }) {
+  const kind = /^win/i.test(platform) ? 'windows' : /^darwin|mac/i.test(platform) ? 'mac' : 'other'
+  return (
+    <svg
+      className="machines-glyph"
+      viewBox="0 0 16 16"
+      width="13"
+      height="13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinejoin="round"
+      role="img"
+      aria-label={label}
+    >
+      {kind === 'windows' ? (
+        <>
+          <rect x="2" y="3" width="12" height="10" rx="1.2" />
+          <path d="M8 3v10M2 8h12" />
+        </>
+      ) : (
+        <>
+          <rect x="2.5" y="3" width="11" height="7.5" rx="1.2" />
+          {/* The lid's base, which is what makes the Mac read as a laptop. The
+              plain screen leaves it off rather than drawing a different machine
+              for a platform this app has no build for. */}
+          {kind === 'mac' ? <path d="M1 13h14" strokeLinecap="round" /> : <path d="M6 13h4" strokeLinecap="round" />}
+        </>
+      )}
+    </svg>
+  )
+}
+
+/** `3000 · node`, or `3000 · unknown process` when the far end could not name it. */
+export function portLabel(port: RemotePort): string {
+  if (port.process === '' || port.guessed) return `${port.port} · unknown process`
+  return `${port.port} · ${port.process}`
+}
+
+/**
+ * What that machine is serving, and the one thing this desktop can do about it.
+ *
+ * ## Why Open means "open it there"
+ *
+ * A tunnel would bring the page here, and this end opens no listener — the
+ * desktop's guest link is a socket to one machine, not a proxy. What it can do
+ * is drive: ask that machine to put the page on **its own** screen, which is
+ * the same verb the phone has been sending since the web client needed it and
+ * which nothing on this side had ever sent. That is what made machine-to-machine
+ * localhost one-way, and it is the smaller promise this transport can actually
+ * keep.
+ *
+ * ## Why there is a Refresh and it is not a poll
+ *
+ * The link asks once per connection and pushes the answer, so this list is
+ * already there when the row is drawn. What a push cannot cover is the person
+ * who has just started a dev server over there: nothing on the far machine
+ * watches its own process table, so the only honest options are a timer against
+ * somebody else's computer or a button. It is a button.
+ */
+export function RemotePorts({
+  machine,
+  link,
+  noun,
+  onOpen,
+  onRefresh,
+}: {
+  machine: Machine
+  link: MachineLinkState
+  noun: string
+  onOpen(port: number): void
+  onRefresh(): void
+}) {
+  // A machine with no window to open a page in never advertises `web`, and
+  // neither does one that treats this device as a guest. Both arrive the same
+  // way and the button is simply absent — never disabled, which is a control
+  // that still invites the ask.
+  const canOpen = link.capabilities.includes('web')
+  const label = `on ${machine.name}`
+  return (
+    <div className="machines-ports">
+      <div className="machines-ports-head">
+        <MachineGlyph platform={link.hostPlatform === '' ? machine.platform : link.hostPlatform} label={label} />
+        <span className="machines-ports-title">Localhost on {machine.name}</span>
+        <button type="button" className="machines-ports-refresh" onClick={onRefresh}>
+          Refresh
+        </button>
+      </div>
+
+      {link.ports.length === 0 ? (
+        <p className="machines-note">Nothing is listening on that {noun} right now.</p>
+      ) : (
+        <ul className="machines-portlist">
+          {link.ports.map((port) => (
+            <li key={port.port} className="machines-port">
+              {/* The icon is on every row and not only on the heading, which is
+                  the whole point of it: a row is what gets read, and a row that
+                  borrowed its identity from a heading four rows up is a row that
+                  reads as local. */}
+              <MachineGlyph
+                platform={link.hostPlatform === '' ? machine.platform : link.hostPlatform}
+                label={label}
+              />
+              <span className="machines-port-label">{portLabel(port)}</span>
+              {canOpen && (
+                <button
+                  type="button"
+                  className="machines-port-open"
+                  title={`Open localhost:${String(port.port)} in the browser on ${machine.name}`}
+                  onClick={() => onOpen(port.port)}
+                >
+                  Open there
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {!canOpen && link.ports.length > 0 && (
+        <p className="machines-note">
+          That {noun} is not letting this one open pages on it. Pair this machine as one of your own
+          on {machine.name} to change that.
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -532,5 +695,20 @@ export function machineActions(deps: MachineActionDeps): MachineActions {
     },
     open: (machineId, sessionId) => setOpen({ machineId, sessionId }),
     close: () => setOpen(null),
+    openPort: (machine, port) => {
+      // The address is composed here from a row that is on screen, so nothing
+      // arbitrary is ever sent — and the far machine checks it anyway, through
+      // the same gate an untrusted link goes through. A second, weaker check
+      // written on this side would be the one somebody later mistook for the
+      // real one.
+      if (bridge) void bridge.openOnMachine(machine.id, `http://localhost:${String(port)}/`)
+    },
+    refreshPorts: (machine) => {
+      // Nothing is drawn from the answer: the far machine replies with a `ports`
+      // frame, the link publishes it, and the whole view arrives on
+      // `machines:state`. Redrawing from this promise would be a second path to
+      // the same list and the two would disagree the first time one was slow.
+      if (bridge) void bridge.refreshMachinePorts(machine.id)
+    },
   }
 }

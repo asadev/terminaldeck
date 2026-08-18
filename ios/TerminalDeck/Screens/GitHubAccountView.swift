@@ -73,7 +73,6 @@ struct GitHubAccountView: View {
             }
         }
         .tint(Theme.accent)
-        .preferredColorScheme(.dark)
         // Nothing is cancelled on the way out, deliberately. Closing this sheet
         // used to end a sign-in that was seconds from finishing — see the
         // header, and `GitHubSignIn.cancel`. The flow belongs to the model, ends

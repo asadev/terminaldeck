@@ -1,10 +1,30 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Button, Info, LinkOut, MoreBody, Notice, SectionHead, useMore } from '../controls'
-import { sectionMeta } from '../settings-schema'
+import { Button, Info, LinkOut, MoreBody, Notice, useMore } from '../controls'
 import { asRecord, toAbout, type AboutInfo, type SectionProps } from '../settings-bridge'
 
 /**
- * About.
+ * About — the masthead at the top of Help, and no longer a pane of its own.
+ *
+ * ## Why it moved, and why it did not change
+ *
+ * The rail's rule is that a section is something you *change*. Shortcuts left it
+ * for being a reference, Help left it for being a reference, and this was the
+ * third reference still holding a seat: a version number, a licence, a link to
+ * the source and a button that reports whether an update exists. It is also the
+ * same subject as the help panel's own About card, and this window has removed
+ * that kind of duplication everywhere else it found it.
+ *
+ * So it is rendered *in place* at the top of `HelpSection` rather than rewritten
+ * into it — the trick `AgentsSection` uses for Accounts and Setup, and for the
+ * same stated reason: *"when you reorganize you mostly miss the things and you
+ * drop some stuff."* Nothing here was retyped, so nothing here could be lost in
+ * the retyping, and `openSettings('about')` from the application menu still
+ * lands on exactly this block through `MERGED_SECTIONS`.
+ *
+ * The one thing that did go is the `SectionHead`. The pane has a heading of its
+ * own now ("Help"), and the app's name in display type is this block's heading —
+ * two headings, one above the other, is what a component looks like when it has
+ * been moved without being looked at.
  *
  * Everything shown is read from the running app — the name from `brand.ts`, the
  * version from `app.getVersion()`, the licence and repository from the real
@@ -65,6 +85,24 @@ export function buildLine(about: AboutInfo): string {
   return parts.length === 0 ? 'Not reported by this build.' : parts.join(' · ')
 }
 
+/**
+ * The line beside the update button, in every state it can be in.
+ *
+ * Pure and exported because the states are the whole point and only one of them
+ * is reachable on any given machine: a packaged build with a feed, a build run
+ * from source, and a build whose `app:about` channel is missing entirely. The
+ * rule it enforces is one sentence — **"press this" is only ever printed next to
+ * a button that can be pressed** — and the bug it fixes was the third state
+ * printing exactly that beside a button that could only answer "no idea".
+ */
+export function updateNote(about: AboutInfo | null, checkable: boolean): string {
+  if (about === null) return 'Not while the build details cannot be read.'
+  // The main process's own sentence wins wherever it has one: it knows whether
+  // this is a packaged app, whether a feed sits beside it, and why not.
+  if (about.updates?.detail) return about.updates.detail
+  return checkable ? 'Press the button to check.' : 'This build cannot tell whether an update exists.'
+}
+
 function Fact({ label, more, children }: { label: string; more?: string; children: ReactNode }) {
   const rest = useMore()
   return (
@@ -88,10 +126,10 @@ function Fact({ label, more, children }: { label: string; more?: string; childre
 }
 
 export function AboutSection({ bridge }: SectionProps) {
-  const meta = sectionMeta('about')
   const [about, setAbout] = useState<AboutInfo | null>(null)
   const [fallbackName, setFallbackName] = useState<{ name: string; tagline: string } | null>(null)
-  const [updateNote, setUpdateNote] = useState<string | null>(null)
+  /** What the last press answered. Null until one happens; see `updateNote`. */
+  const [checked, setChecked] = useState<string | null>(null)
 
   useEffect(() => {
     if (bridge.appAbout) {
@@ -122,18 +160,29 @@ export function AboutSection({ bridge }: SectionProps) {
    * update feed beside it", and on a build run from source it is false. The
    * button used to be drawn live regardless — full opacity, pointer cursor,
    * twenty pixels above its own sentence explaining that there is nothing to
-   * update — and pressing it re-set the note to the string already on screen,
-   * so nothing at all changed. A hover state is a promise; this one had nothing
-   * behind it.
+   * update — and pressing it re-set the string already on screen, so nothing at
+   * all changed. A hover state is a promise; this one had nothing behind it.
+   *
+   * The greying now covers the *unread* case too, and that was a real
+   * contradiction on screen rather than a tidy-up. `about === null` is what a
+   * build with no `app:about` channel reports, and the guard used to read
+   * `about !== null && !checkable` — so on that build the button stayed fully
+   * lit while the only sentence beside it read **"Press the button to check."**
+   * and pressing it could answer nothing but "this build cannot tell". A lit
+   * button with an instruction under it is the strongest promise this window
+   * makes; it must not be made by the one state that cannot keep it.
    */
   const checkable = about?.updates?.checkable ?? false
 
   const check = useCallback(() => {
+    // Unreachable while the button is greyed on exactly this condition, and kept
+    // because the guard and the handler are two decisions: a later edit that
+    // re-enables the button must not silently start answering nothing.
     if (!about?.updates) {
-      setUpdateNote('This build cannot tell whether an update exists.')
+      setChecked('This build cannot tell whether an update exists.')
       return
     }
-    setUpdateNote(about.updates.detail)
+    setChecked(about.updates.detail)
   }, [about])
 
   const name = about?.name ?? fallbackName?.name ?? null
@@ -142,8 +191,6 @@ export function AboutSection({ bridge }: SectionProps) {
 
   return (
     <>
-      <SectionHead title={meta.label} blurb={meta.blurb} />
-
       <div className="settings-about">
         <h4 className="settings-about-name">{name ?? 'This app'}</h4>
         {tagline && <p className="settings-about-tagline">{tagline}</p>}
@@ -189,13 +236,17 @@ export function AboutSection({ bridge }: SectionProps) {
       </div>
 
       <div className="settings-actions">
-        <Button onClick={check} disabled={about !== null && !checkable}>
+        <Button
+          onClick={check}
+          disabled={!checkable}
+          // Why it is greyed, on the hover, as well as in the line beside it.
+          // A disabled control with no stated reason is half of a dead control.
+          title={checkable ? undefined : updateNote(about, checkable)}
+        >
           Check for updates
         </Button>
         {releases && <LinkOut href={releases}>Releases</LinkOut>}
-        <span className="settings-help">
-          {updateNote ?? about?.updates?.detail ?? 'Press the button to check.'}
-        </span>
+        <span className="settings-help">{checked ?? updateNote(about, checkable)}</span>
       </div>
     </>
   )

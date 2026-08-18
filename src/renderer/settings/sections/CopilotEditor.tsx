@@ -165,3 +165,77 @@ export function FileEditor({
     </div>
   )
 }
+
+/**
+ * A file this app generates, shown in full and not editable.
+ *
+ * ## Why "shown in full" and not "hidden"
+ *
+ * Asad asked for the copilot's app-side files to be editable in Settings, and
+ * said some should be visible and some not. Nothing is hidden, and the argument
+ * is his own: the founding reason for this whole feature was *"so we can see and
+ * learn how our copilot is working"*, and a hidden instruction file contradicts
+ * it exactly. What replaces hiding is a distinction the pane draws out loud —
+ * one half of the layer is the person's and gets a {@link FileEditor}, the other
+ * describes what is actually wired and gets this.
+ *
+ * ## Why "not editable" is a decision rather than missing work
+ *
+ * The generated half is composed from the live tool catalogue, the tiers those
+ * tools declare, and the paths the kernel actually refuses. Hand-edit it and it
+ * drifts from the thing it describes — which is this project's stated bug class
+ * and a defect this feature has already shipped twice: an instruction file
+ * claiming a jail that had been removed, and one denying powers the copilot had.
+ * Both were hand-written statements of fact about wiring, and both were true the
+ * day they were written.
+ *
+ * So there is no Save here and there is no channel behind one. {@link because}
+ * is required rather than optional, because the pane's house rule is that a
+ * control which cannot act says why next to itself — and a box with no Save
+ * button at all needs the same sentence for the same reason, plus the other half
+ * of it: **what to change instead.**
+ */
+export interface ReadOnlyFileProps {
+  /** The file, as a person names it. */
+  label: string
+  /** What is on disk, or null while it is being read. */
+  text: string | null
+  /** Why it could not be read, or null. Replaces the box entirely. */
+  problem: string | null
+  /** Why this one cannot be edited, and what to change instead. Both halves. */
+  because: string
+  rows?: number
+  /** Anything to put beside it — an Open in Finder, a path. */
+  children?: ReactNode
+}
+
+export function ReadOnlyFile({ label, text, problem, because, rows = 18, children }: ReadOnlyFileProps) {
+  if (problem !== null) {
+    return <p className="settings-prose copilot-editor-problem">{problem}</p>
+  }
+  if (text === null) {
+    return <p className="settings-prose">Reading…</p>
+  }
+  return (
+    <div className="copilot-editor">
+      <textarea
+        className="copilot-editor-box"
+        aria-label={label}
+        value={text}
+        rows={rows}
+        readOnly
+        spellCheck={false}
+        /*
+         * `readOnly` rather than `disabled`, and the difference is not
+         * cosmetic. A disabled textarea cannot be focused, cannot be scrolled
+         * with the keyboard, is skipped by the screen reader's tab order and is
+         * drawn in a greyed-out ink that reads as broken. This file is meant to
+         * be *read* — that is the entire point of showing it — so it stays
+         * selectable, scrollable and copyable, and only refuses the typing.
+         */
+      />
+      {children && <div className="settings-actions">{children}</div>}
+      <span className="settings-help">{because}</span>
+    </div>
+  )
+}

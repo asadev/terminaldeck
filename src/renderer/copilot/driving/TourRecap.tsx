@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { clearFocus, setFocus } from '../../driving/focus-controller'
+import { answerSummary, groupBySession } from '../../../shared/scan'
 import { navigator as driveNavigator } from './navigator'
 import {
   droppedSentence,
@@ -12,14 +13,36 @@ import {
 import './tour-recap.css'
 
 /**
- * What the tour showed, kept where it can be read instead of the sessions.
+ * The answer — phase two, and the only part of driving mode meant to be read.
  *
- * > *"Once it is all done it takes us back to its own chat box, and it keeps
- * > those parts inside its own chat also, so we can just read from there instead
- * > of the other sessions."*
+ * Asad, 2026-08-17, on what should happen when the scan stops:
  *
- * That is the literal ask this component answers, and the shape of the answer is
- * settled by `DRIVING-MODE.md` §6, which splits the artefact in two:
+ *   > *"It returns to its own chat and combines everything into one structured
+ *   > response: this session did this, this session did that. Then it stops and
+ *   > he reads at his own pace, in one place."*
+ *
+ * So the scan is watched and this is read, and the split between the two is the
+ * whole shape of the feature. Nothing on screen during a scan asks anybody to
+ * read anything; everything worth reading ends up here, once, in the copilot's
+ * own window, which is where the scan navigates back to when it finishes.
+ *
+ * ## Why it is grouped by session and not by stop
+ *
+ * Because that is the sentence he used — *"this session did this, this session
+ * did that"* — and because the alternative makes the reader do the work the
+ * feature exists to save. A scan visits stops in **importance** order, and one
+ * session can come up twice with two different reasons; rendering that back as
+ * a flat list means reassembling "what happened in session X" in your head from
+ * rows four apart. `groupBySession` in `shared/scan.ts` does the regrouping, and
+ * it lives there rather than here because the web client will need exactly this
+ * the day it grows a copilot — porting it is how the two come to summarise the
+ * same night differently.
+ *
+ * Sessions keep the order of their first stop, so the most important session is
+ * still first and the grouping never quietly reorders the fleet against what was
+ * just on screen.
+ *
+ * ## Two artefacts, and the split matters
  *
  * - **The copilot's own words go in its own transcript.** The copilot is a real
  *   session; the CLI writes its transcript, and the app must never inject into
@@ -29,29 +52,25 @@ import './tour-recap.css'
  *   which is outside `<userData>/copilot/` — the folder the copilot can write
  *   to. This card renders that file.
  *
- * ## Why it says whose record it is
- *
- * The label is the whole value of writing it outside the copilot's reach. Same
- * argument `COPILOT-CAPABILITIES.md` §7 used to move the action log out: the
+ * The label is the whole value of writing it outside the copilot's reach: the
  * audited party must not be able to author, edit or delete the record of what it
- * did. A tour record is evidence about what the app **showed a person under the
+ * did. A scan record is evidence about what the app **showed a person under the
  * copilot's name**, and a copilot that could rewrite it afterwards makes every
- * quote in it worth nothing. So the card says it is the app's, and the quotes in
- * it are the ones the app checked and drew a box around, not the ones a model
- * remembers writing.
+ * quote in it worth nothing.
  *
  * ## The two honest lines
  *
  * *"Stopped after 4 of 11"* and *"2 stops dropped — the quoted text was not
- * there"*. An interrupted tour still leaves a complete account of what it did
- * and did not show, which is the thing that makes an auto-advancing tour bearable
- * at all: a stop that scrolled past is never lost.
+ * there"*. An interrupted scan still leaves a complete account of what it did
+ * and did not show — which matters more now than it did at reading speed,
+ * because at 260 ms a stop nobody can tell from watching whether something was
+ * skipped.
  */
 
 interface Props {
   /** Injectable for tests and the harness; defaults to the preload bridge. */
   read?: () => Promise<unknown>
-  /** How many past tours to offer. One card each, newest first. */
+  /** How many past scans to offer. One card each, newest first. */
   limit?: number
 }
 
@@ -78,6 +97,7 @@ export function readRecords(value: unknown): TourRecord[] {
 export function TourRecap({ read, limit = 5 }: Props) {
   const [records, setRecords] = useState<TourRecord[]>([])
   const [open, setOpen] = useState<string | null>(null)
+  const [pointed, setPointed] = useState<string | null>(null)
 
   useEffect(() => {
     const reader = read ?? bridgeRead(limit)
@@ -88,13 +108,13 @@ export function TourRecap({ read, limit = 5 }: Props) {
         if (!live) return
         const found = readRecords(value)
         setRecords(found)
-        // The newest one open, the rest folded. A person coming back to this
-        // page wants the tour they just watched; the others are history.
+        // The newest one open, the rest folded. Somebody arriving on this page
+        // has just watched a scan and wants its answer; the others are history.
         setOpen(found[0]?.id ?? null)
       })
       .catch(() => {
-        // No tours yet, or the folder could not be read. The section simply
-        // does not appear — nothing here claims a record it cannot show.
+        // No scans yet, or the folder could not be read. The section simply does
+        // not appear — nothing here claims a record it cannot show.
       })
     return () => {
       live = false
@@ -102,17 +122,18 @@ export function TourRecap({ read, limit = 5 }: Props) {
   }, [read, limit])
 
   /**
-   * Replay one stop: navigate, box, dim, **no timer**.
+   * Take me back to one thing: navigate, box, dim, **no clock**.
    *
-   * Not a tour of one. A tour drives; this points, and then stops, because the
+   * Not a scan of one. A scan drives; this points, and then stops, because the
    * person asked for this specific thing and driving them somewhere they did not
-   * ask to go is the behaviour the whole feature is careful about. There is no
-   * transport, nothing counts down, and the highlight stays until they take it
-   * off — which is what the second press of the same button does.
+   * ask to go is the behaviour the whole feature is careful about. Nothing counts
+   * down, and the highlight stays until they take it off — which is what a second
+   * press of the same button does.
    */
   const takeMeThere = useCallback(
     (stop: TourStopRecord, key: string) => {
-      if (open === key) {
+      if (pointed === key) {
+        setPointed(null)
         clearFocus()
         return
       }
@@ -128,15 +149,16 @@ export function TourRecap({ read, limit = 5 }: Props) {
       }
       const target = focusOfRecord(stop)
       if (target !== null) setFocus(target, true)
+      setPointed(key)
     },
-    [open],
+    [pointed],
   )
 
   if (records.length === 0) return null
 
   return (
     <section className="tr">
-      <h2 className="tr-title">Tours</h2>
+      <h2 className="tr-title">What it found</h2>
       {/*
         Said once, at the top, rather than on every card. It is the sentence that
         makes the quotes below worth reading: they are what the app checked and
@@ -147,10 +169,11 @@ export function TourRecap({ read, limit = 5 }: Props) {
         before it put a box around it.
       </p>
       {records.map((record) => (
-        <TourCard
+        <AnswerCard
           key={record.id}
           record={record}
           open={open === record.id}
+          pointed={pointed}
           onToggle={() => setOpen(open === record.id ? null : record.id)}
           onTakeMeThere={takeMeThere}
         />
@@ -159,27 +182,42 @@ export function TourRecap({ read, limit = 5 }: Props) {
   )
 }
 
-function TourCard({
+function AnswerCard({
   record,
   open,
+  pointed,
   onToggle,
   onTakeMeThere,
 }: {
   record: TourRecord
   open: boolean
+  pointed: string | null
   onToggle(): void
   onTakeMeThere(stop: TourStopRecord, key: string): void
 }) {
   const stopped = stoppedSentence(record)
   const dropped = droppedSentence(record.dropped)
-  const shown = record.stops.filter((stop) => stop.shownAt !== null).length
+  /*
+   * Grouped for the reading, indexed for the pointing.
+   *
+   * `groupBySession` deliberately takes and returns plain text, so it can be
+   * shared with a client that has no `TourStopRecord` — which means the grouped
+   * lines cannot carry a **Take me there**. The record is walked once more here
+   * to pair each line back up with the stop it came from. One extra pass over a
+   * dozen entries, in exchange for the grouping being a fact about scans rather
+   * than a fact about this component.
+   */
+  const background = record.shown === 'background'
+  const grouped = groupBySession(record.stops, { background })
+  const summary = answerSummary(grouped)
 
   return (
     <article className="tr-card">
       <button type="button" className="tr-head" onClick={onToggle} aria-expanded={open}>
         <span className="tr-question">{record.question}</span>
         <span className="tr-when">
-          {when(record.startedAt)} · {shown} of {record.stops.length} shown
+          {when(record.startedAt)} · {summary}
+          {background ? ' Found without driving.' : ''}
         </span>
       </button>
 
@@ -195,41 +233,49 @@ function TourCard({
             </p>
           )}
 
-          <ol className="tr-stops">
-            {record.stops.map((stop) => {
-              const key = `${record.id}:${stop.index}`
-              return (
-                <li key={key} className="tr-stop" data-unseen={stop.shownAt === null || undefined}>
-                  <div className="tr-stop-top">
-                    <span className="tr-where">{stop.sessionTitle}</span>
-                    <span className="tr-badge" data-why={stop.why}>
-                      {reasonLabel(stop.why)}
-                    </span>
-                    {stop.shownAt === null ? <span className="tr-unseen">Not reached</span> : null}
-                  </div>
-                  <p className="tr-note">{stop.note}</p>
-                  {/*
-                    In full and inline, never a link. That is the literal ask —
-                    read it from here instead of going back to the sessions — and
-                    a link back into a session is exactly the trip this exists to
-                    save. Plain text, for the reason in `drive-panel.css`: this
-                    is somebody else's agent's output under the app's chrome.
-                  */}
-                  {stop.quote === '' ? null : <pre className="tr-quote">{stop.quote}</pre>}
-                  {stop.degradedWhy === null ? null : (
-                    <p className="tr-degraded">{stop.degradedWhy}</p>
-                  )}
-                  <button
-                    type="button"
-                    className="tr-goto"
-                    onClick={() => onTakeMeThere(stop, key)}
-                  >
-                    Take me there
-                  </button>
-                </li>
-              )
-            })}
-          </ol>
+          {grouped.map((session) => (
+            <section className="tr-session" key={`${record.id}:${session.sessionId}`}>
+              <h3 className="tr-session-name">{session.title}</h3>
+              <ul className="tr-lines">
+                {session.lines.map((line, position) => {
+                  const stop = nthStopOf(record, session.sessionId, position)
+                  const key = `${record.id}:${session.sessionId}:${position}`
+                  return (
+                    <li key={key} className="tr-line" data-unseen={line.shown ? undefined : ''}>
+                      <div className="tr-line-top">
+                        <span className="tr-badge" data-why={line.why}>
+                          {reasonLabel(line.why as TourStopRecord['why'])}
+                        </span>
+                        {line.shown ? null : <span className="tr-unseen">Not reached</span>}
+                      </div>
+                      <p className="tr-note">{line.note}</p>
+                      {/*
+                        In full and inline, never a link. That is the literal ask —
+                        read it from here instead of going back to the sessions —
+                        and a link back into a session is exactly the trip this
+                        exists to save. Plain text, because this is somebody else's
+                        agent's output under the app's chrome.
+                      */}
+                      {line.quote === '' ? null : <pre className="tr-quote">{line.quote}</pre>}
+                      {stop?.degradedWhy === null || stop === null ? null : (
+                        <p className="tr-degraded">{stop.degradedWhy}</p>
+                      )}
+                      {stop === null ? null : (
+                        <button
+                          type="button"
+                          className="tr-goto"
+                          data-pointed={pointed === key || undefined}
+                          onClick={() => onTakeMeThere(stop, key)}
+                        >
+                          {pointed === key ? 'Take the box off' : 'Take me there'}
+                        </button>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </section>
+          ))}
 
           {record.dropped.length === 0 ? null : (
             <div className="tr-dropped">
@@ -248,6 +294,28 @@ function TourCard({
       ) : null}
     </article>
   )
+}
+
+/**
+ * The nth stop this record holds for one session, in record order.
+ *
+ * The pairing that puts **Take me there** back on a grouped line. It is a
+ * position lookup rather than a match on the note's text, because two stops in
+ * one session can legitimately carry the same note — and matching on text would
+ * silently point the second one at the first one's evidence.
+ */
+export function nthStopOf(
+  record: TourRecord,
+  sessionId: string,
+  position: number,
+): TourStopRecord | null {
+  let seen = 0
+  for (const stop of record.stops) {
+    if (stop.sessionId !== sessionId) continue
+    if (seen === position) return stop
+    seen += 1
+  }
+  return null
 }
 
 function when(at: number): string {

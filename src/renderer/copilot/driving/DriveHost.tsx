@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DriveLayer } from '../../driving/DriveLayer'
 import type { FocusReport } from '../../driving/FocusOverlay'
+import { ScanField, type Rect } from '../../driving/ScanField'
+import { publishWhere, watchCopilotFrontmost } from '../../driving/where'
+import { BrowserWatch, useBrowserWatch, type WatchBridge } from './BrowserWatch'
 import { DrivePanel } from './DrivePanel'
-import { loadSpeed, saveSpeed } from './reading-speed'
 import { readTour } from './tour'
 import { playTour, type RunningTour, type TourCommand, type TourView } from './tour-player'
-import { DEFAULT_SPEED, type ReadingSpeed } from './estimate'
 
 /**
  * Driving mode, mounted once for the window.
@@ -27,20 +28,39 @@ import { DEFAULT_SPEED, type ReadingSpeed } from './estimate'
  * 3. **`App.tsx` is on the parallel-agent forbidden list and `main.tsx` is
  *    not.** A coincidence, and a convenient one.
  *
- * It also mounts the overlay, which is why `main.tsx` renders this instead of
- * `<DriveLayer/>` directly. The overlay's report — *did the box get drawn, and
- * if not, why not* — is what makes a tour arrive at a stop, so the two have to
- * be wired together somewhere, and doing it here keeps exactly one overlay in
- * the window. Two would each cut their own hole in their own scrim, and the
- * second one's scrim would dim the first one's hole.
+ * It mounts three things, and the split between them is the design:
+ *
+ *  - **the overlay**, which cuts the hole and dulls the rest;
+ *  - **the dot field**, which is what the dulled part carries — *"the
+ *    non-focused areas carry the dots treatment; the focus is what stays
+ *    clear"*;
+ *  - **the panel**, which while driving *is* the copilot.
+ *
+ * ## The layout rule, enforced here because this is the only place that can
+ *
+ *   > *"When it is interacting it is making two split views even inside its own
+ *   > page. It should not make two split views on its own page."*
+ *
+ * So: on the copilot's own window there is **no panel**. The page is already the
+ * copilot; a side panel there is the copilot beside itself, and it is the exact
+ * thing he objected to twice. The overlay and the field still run — the scan is
+ * still driving the screen, and a scan with no visible machinery is worse than
+ * one with a panel in the wrong place.
+ *
+ * It is watched rather than read once, because a scan navigates: it walks *off*
+ * the copilot's page at the first stop and back *onto* it at the end, and the
+ * panel has to appear and disappear with it. Watched with a `MutationObserver`
+ * on the rail's own row rather than re-read on every publish, because a **held**
+ * scan publishes nothing — and folding the copilot back while the screen is
+ * stopped is exactly when somebody would notice the panel had stayed.
  *
  * ## Why it holds the tour in a ref and not in state
  *
  * The player is not a value that re-renders; it is a running thing with a frame
  * loop, event listeners and a record. React state is the wrong home for it — a
- * re-render that recreated it would start a second tour on the same screen —
- * and the view it publishes is what state is for. So: the player in a ref, its
- * view in state, and one subscription between them.
+ * re-render that recreated it would start a second scan on the same screen — and
+ * the view it publishes is what state is for. So: the player in a ref, its view
+ * in state, and one subscription between them.
  *
  * ## A tour never survives a reload
  *
@@ -48,16 +68,19 @@ import { DEFAULT_SPEED, type ReadingSpeed } from './estimate'
  * player is created in response to a message and lives in a ref; a reload
  * destroys the renderer and takes it with it. The main process notices
  * separately — `deck-control/index.ts` watches the window and closes the record
- * — so the two halves come to the same conclusion without either having to
- * trust the other. `DRIVING-MODE.md` §8: *"a tour that resumed itself after a
- * crash is a screen that starts moving on its own, which is the single
- * behaviour that would make somebody uninstall this."*
+ * — so the two halves come to the same conclusion without either having to trust
+ * the other. *"A tour that resumed itself after a crash is a screen that starts
+ * moving on its own, which is the single behaviour that would make somebody
+ * uninstall this."*
  */
 
 /** The parts of the preload bridge driving mode uses. */
-interface DriveBridge {
+interface DriveBridge extends WatchBridge {
   onTour(handler: (tour: unknown) => void): () => void
   reportTour(report: unknown): Promise<unknown>
+  copilotState?(): Promise<unknown>
+  writeToSession?(id: string, data: string): void
+  setSettings?(patch: Record<string, unknown>): Promise<unknown>
 }
 
 function bridge(): DriveBridge | null {
@@ -71,35 +94,70 @@ export function DriveHost({ deck = bridge() }: { deck?: DriveBridge | null }) {
   const [view, setView] = useState<TourView | null>(null)
 
   /*
-   * The reader's pace, read once at mount and held in a ref.
+   * The hole, written every time the overlay re-measures and read by the field
+   * every frame.
    *
-   * A ref rather than state because nothing renders from it — the panel reads
-   * the pace out of the pacer's own snapshot — and because it has to be
-   * readable synchronously inside the tour listener, which fires whenever a
-   * plan arrives rather than on a render. Reading it per tour instead would put
-   * an await between the plan landing and the first box, which is the one moment
-   * of this feature that must not have a gap in it.
+   * A ref rather than state, and it is the difference between this feature
+   * costing nothing and costing a re-render per frame: the rectangle changes
+   * whenever a terminal repaints, which on a streaming session is sixty times a
+   * second, and the only thing that needs the new number is a canvas that is
+   * being redrawn anyway.
    */
-  const speed = useRef<ReadingSpeed>(DEFAULT_SPEED)
+  const hole = useRef<Rect | null>(null)
+
+  /**
+   * The copilot's own session id, so a finished scan can go back to its chat.
+   *
+   * Read once at mount and kept in a ref. It has to be readable synchronously
+   * inside the tour listener — which fires when a plan arrives, not on a render
+   * — and putting an await between the plan landing and the first box is the one
+   * moment of this feature that must not have a gap in it.
+   */
+  const copilotId = useRef<string | null>(null)
   useEffect(() => {
+    if (deck?.copilotState === undefined) return
     let live = true
-    void loadSpeed().then((stored) => {
-      if (live) speed.current = stored
-    })
+    void deck
+      .copilotState()
+      .then((state) => {
+        if (!live) return
+        const raw = state as { sessionId?: unknown } | null
+        copilotId.current = typeof raw?.sessionId === 'string' ? raw.sessionId : null
+      })
+      .catch(() => {
+        // No copilot, or the read failed. The scan then simply ends where it is
+        // rather than navigating somewhere it cannot name, which is honest: the
+        // answer is still written to the record either way.
+      })
     return () => {
       live = false
     }
-  }, [])
+  }, [deck])
+
+  /* Publish the "where am I" reader for the whole life of the window. */
+  useEffect(() => publishWhere(), [])
+
+  /*
+   * The layout rule, as state rather than as a read during render.
+   *
+   * Read-during-render is only as current as the last render, and a **held**
+   * scan publishes nothing — so folding the copilot back to its own window while
+   * the screen is stopped would leave the panel up, which is the copilot beside
+   * itself. Watching the attribute instead makes the panel appear and disappear
+   * with the navigation, whatever the playhead is doing.
+   */
+  const [copilotFront, setCopilotFront] = useState(false)
+  useEffect(() => watchCopilotFrontmost(setCopilotFront), [])
 
   /*
    * The overlay's verdict, handed to whichever tour is running.
    *
    * Stable across renders, because `FocusOverlay` lists `onReport` in an effect
    * dependency array — a new function every render would re-run that effect on
-   * every publish, and a publish happens ten times a second while a stop counts
-   * down.
+   * every publish.
    */
   const reported = useCallback((report: FocusReport) => {
+    hole.current = report.rect
     tour.current?.reported(report)
   }, [])
 
@@ -111,23 +169,23 @@ export function DriveHost({ deck = bridge() }: { deck?: DriveBridge | null }) {
       /*
        * One tour at a time.
        *
-       * The main process refuses a second `tour.play` while one is live, so
-       * this should not arrive — but "should not arrive" is not a mechanism,
-       * and the failure it would cause is two players fighting over one focus
-       * store, which on screen is a box that flickers between two places. The
-       * previous one is ended rather than ignored, so whatever is on screen
-       * belongs to the tour that is actually playing.
+       * The main process refuses a second `tour.play` while one is live, so this
+       * should not arrive — but "should not arrive" is not a mechanism, and the
+       * failure it would cause is two players fighting over one focus store,
+       * which on screen is a box that flickers between two places. The previous
+       * one is ended rather than ignored, so whatever is on screen belongs to
+       * the scan that is actually playing.
        */
       tour.current?.end()
 
       const running = playTour(parsed, {
-        speed: speed.current,
+        copilotSessionId: copilotId.current,
         report: (payload) => {
           void deck.reportTour(payload).catch((error: unknown) => {
             /*
              * Not fatal, and not silent either.
              *
-             * The tour is what the person asked for and the record is the
+             * The scan is what the person asked for and the record is the
              * account of it, so a record that cannot be written must not stop
              * the screen mid-stop. But this was written silent first, and the
              * silence cost an hour: the *first* thing a player says is
@@ -150,25 +208,14 @@ export function DriveHost({ deck = bridge() }: { deck?: DriveBridge | null }) {
           off()
           if (tour.current === running) tour.current = null
           setView(null)
-          /*
-           * Keep what the tour learned about this reader.
-           *
-           * Written at the end rather than after every stop: the correction is
-           * an EWMA that converges inside about four stops, so a write per stop
-           * would be a dozen disk writes to persist a number that is still
-           * settling. `pacer.ts` is deliberate about which behaviours count as
-           * evidence — an early advance, a hover past the estimate, a rewind —
-           * and this is where its conclusion is remembered.
-           */
-          speed.current = next.pacer.speed
-          void saveSpeed(next.pacer.speed)
+          hole.current = null
         }
       })
     })
   }, [deck])
 
   useEffect(() => {
-    // A tour must not outlive the window's React tree either — an unmount here
+    // A scan must not outlive the window's React tree either — an unmount here
     // means the app is being torn down, and a frame loop plus four
     // capture-phase window listeners left behind would be the leak this whole
     // module is careful about everywhere else.
@@ -182,7 +229,7 @@ export function DriveHost({ deck = bridge() }: { deck?: DriveBridge | null }) {
    * Focus the panel the moment it appears.
    *
    * Not cosmetic. Without it the keyboard focus stays wherever it was, which in
-   * this app is usually an xterm textarea — and then Space, which is the pause
+   * this app is usually an xterm textarea — and then Space, which is the hold
    * key, is also a space typed into somebody's session. The player's own
    * capture-phase handler stops the key reaching the terminal, but focus is the
    * belt to that brace, and it is also what makes the panel's rows reachable by
@@ -202,10 +249,102 @@ export function DriveHost({ deck = bridge() }: { deck?: DriveBridge | null }) {
     tour.current?.jump(index)
   }, [])
 
+  /**
+   * Say something to the copilot without leaving the scan.
+   *
+   * Written straight down the copilot's own pty, which is what its own window
+   * does — so the turn lands in the copilot's real transcript and there is no
+   * second conversation anywhere. Null when there is no copilot session or no
+   * bridge, in which case the panel draws no chat box at all: a composer that
+   * swallows what somebody typed is worse than no composer.
+   */
+  const say = useCallback(
+    (text: string) => {
+      const id = copilotId.current
+      if (id === null || deck?.writeToSession === undefined) return
+      deck.writeToSession(id, `${text}\r`)
+    },
+    [deck],
+  )
+
+  /**
+   * Open the copilot's own window — what the round dot beside its name does.
+   *
+   * Reached through the rail's own row rather than through a navigation call,
+   * because the rail row *is* the app's answer to "open the copilot" and going
+   * around it would be a second one. `tour-player.ts` uses the navigator for the
+   * same journey at the end of a scan; this is the manual version of it, and
+   * both end in the same place.
+   */
+  const fold = useCallback(() => {
+    document.querySelector<HTMLElement>('[data-copilot-row] button, button[data-copilot-row]')?.click()
+  }, [])
+
+  /**
+   * Turn the showing off and stop this one.
+   *
+   * The setting is what `tour.play` reads before it stages anything, so writing
+   * it here is the same switch Settings would flip — there is no second flag and
+   * no renderer-side branch that could disagree with the main-process one. The
+   * scan then ends, because leaving it running after somebody said they would
+   * rather not watch would be answering "not this" with "this, one more time".
+   */
+  const quiet = useCallback(() => {
+    void deck?.setSettings?.({ 'copilot.interactive': false })?.catch((error: unknown) => {
+      console.error('[driving] could not turn interactive mode off:', error)
+    })
+    tour.current?.end()
+  }, [deck])
+
+  const canSay = view !== null && copilotId.current !== null && deck?.writeToSession !== undefined
+
+  /**
+   * The other thing the copilot drives, and the other way of showing it.
+   *
+   * *"Asked to scrape, it goes, shows the page and how it is scraping, then
+   * returns with the result."* A scan and a scrape are the same promise about two
+   * different subjects, so they share this host, the rail's column and the glass
+   * — and they are never up together, because they would want the same column and
+   * the scan is the one somebody asked to watch.
+   *
+   * Subscribed here rather than inside the panel, because the panel is unmounted
+   * for most of the app's life and a subscription living inside it would miss
+   * everything that happened while it was away. A drive can begin on the
+   * copilot's own page and end somewhere else entirely.
+   */
+  const watch = useBrowserWatch(deck)
+
   return (
     <>
       <DriveLayer onReport={reported} />
-      {view === null ? null : <DrivePanel view={view} onCommand={command} onJump={jump} />}
+      <ScanField
+        hole={hole}
+        active={view !== null}
+        seen={view?.scan.seen.length ?? 0}
+        count={view?.scan.count ?? 0}
+        pulse={view?.scan.arrivals ?? 0}
+      />
+      {view === null || copilotFront ? null : (
+        <DrivePanel
+          view={view}
+          onCommand={command}
+          onJump={jump}
+          onSay={canSay ? say : null}
+          onFold={fold}
+          onQuiet={deck?.setSettings === undefined ? null : quiet}
+        />
+      )}
+      {/*
+        The same layout rule, applied to the same column.
+
+        Not on the copilot's own page — *"it should not make two split views on
+        its own page"* — where its own conversation is already narrating these
+        calls, and not while a scan is playing, which owns this column and this
+        person's attention for as long as it lasts.
+      */}
+      {view !== null || copilotFront ? null : (
+        <BrowserWatch now={watch.now} steps={watch.steps} onPutAway={watch.putAway} />
+      )}
     </>
   )
 }

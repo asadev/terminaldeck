@@ -54,6 +54,23 @@ final class DeckModel {
     var route: [Route] = []
 
     /**
+     * The Copilot tab's navigation stack.
+     *
+     * Its own array rather than a case on the Sessions stack, which is where the
+     * copilot used to live. The copilot is a **tab** now — see `Tab` — and the
+     * one thing that can be pushed on top of it is a session it started, so this
+     * holds the same `Route` the Sessions tab does.
+     *
+     * Two stacks rather than one for the reason `settingsRoute` is separate: a
+     * session opened while somebody is reading the conversation that started it
+     * has to leave that conversation *underneath*, so Back lands on the sentence
+     * explaining why the session exists. Pushing it onto the Sessions tab
+     * instead would move the person to another tab and lose the thread, which is
+     * the failure `open(session:on:)` documents.
+     */
+    var copilotRoute: [Route] = []
+
+    /**
      * The Settings tab's navigation stack.
      *
      * Its own array rather than a second case on `Route`, because the two stacks
@@ -75,11 +92,33 @@ final class DeckModel {
     var tab: Tab = .sessions
 
     /**
-     * The three surfaces this phone genuinely has.
+     * The four surfaces this phone genuinely has, in the order they are drawn.
      *
-     * ## Localhost is a tab; Machines is not, any more
+     * ## Four pills, and the copilot is the first of them
      *
-     * Both changes are his, from the same recording, and they are the same
+     * *"A fourth pill, and the copilot goes leftmost: **Copilot · Sessions ·
+     * Localhost · Settings**."* Said after looking at the app with the copilot
+     * built and reachable, and it supersedes the earlier three-tab decision —
+     * which was itself taken against an earlier *"let's bring four icons in the
+     * pill"*. The later statement wins; the question is not reopened here.
+     *
+     * The argument that put the copilot on the session list — that a tab bar is
+     * for surfaces you move *between* all day and this is one you go *into* —
+     * turned out to be the wrong way round in use. Everything the copilot is for
+     * is a question asked **while** looking at something else (*what happened
+     * overnight*, *why is that one stuck*), which is exactly a thing you move
+     * between; and a row pinned to the top of one list is reachable from one
+     * screen, whereas a pill is reachable from all four.
+     *
+     * Leftmost because it is where a thumb lands and because it is the screen he
+     * described opening the app for. The pinned row on the session list is gone
+     * with this change rather than kept beside it: two doors to one screen, one
+     * of them permanently occupying the top of the list somebody opened to read
+     * their sessions, is the duplication he objects to on every other page.
+     *
+     * ## Localhost is a tab; Machines is not
+     *
+     * Both changes are his, from an earlier recording, and they are the same
      * change: *what is running on the machine* is a subject in its own right and
      * *which machines am I paired with* is not.
      *
@@ -101,10 +140,12 @@ final class DeckModel {
      * machines, *switch to one*, was never on that screen anyway. It is the
      * switcher in the title.
      *
-     * `CaseIterable` so `DeckTabsTests` can enumerate this rather than assert
-     * the two cases somebody happened to think of.
+     * `CaseIterable` so `DeckTabsTests` can enumerate this — including the
+     * **order**, which is half of what he asked for — rather than asserting the
+     * cases somebody happened to think of.
      */
     enum Tab: Hashable, CaseIterable {
+        case copilot
         case sessions
         case localhost
         case settings
@@ -146,11 +187,46 @@ final class DeckModel {
         switch route.last {
         case .none: return .sessions
         case .session: return .session
-        case .copilot: return .copilot
+        }
+    }
+    /// The copilot tab shows the conversation, or a session started from it.
+    /// Both answers matter: the bar belongs over the conversation — it is a tab,
+    /// and a tab that hid its own bar could not be left — and must not be drawn
+    /// over a terminal, which is the rule `DeckChrome` holds.
+    var copilotSurface: DeckSurface {
+        switch copilotRoute.last {
+        case .none: return .copilot
+        case .session: return .session
         }
     }
     var localhostSurface: DeckSurface { localhostPageIsOpen ? .localhostPage : .localhost }
     var settingsSurface: DeckSurface { settingsRoute.isEmpty ? .settings : .machines }
+
+    /**
+     * The terminal actually **on screen**, or nil.
+     *
+     * Two stacks can each be holding one at the same time — a session opened
+     * from the list and another opened from the copilot both survive a tab
+     * switch, which is what a tab bar is for — so this asks the selected tab
+     * rather than looking for the first stack with something on it. A rule that
+     * checked both would say "he is watching that session" about a terminal
+     * sitting behind three other pills, which is exactly the case a notification
+     * is *for*.
+     *
+     * The two tabs that hold no sessions answer nil, and that is the honest
+     * answer: somebody on Localhost or Settings is not looking at a terminal
+     * however many are pushed elsewhere.
+     */
+    var openSession: (host: String, id: String)? {
+        let top: Route?
+        switch tab {
+        case .sessions: top = route.last
+        case .copilot: top = copilotRoute.last
+        case .localhost, .settings: top = nil
+        }
+        if case let .session(host, id)? = top { return (host, id) }
+        return nil
+    }
 
     /**
      * Show the paired machines.
@@ -397,7 +473,10 @@ final class DeckModel {
      */
     private func isBeingWatched(_ alert: SessionAlert) -> Bool {
         guard isForeground else { return false }
-        if case let .session(host, id)? = route.last, host == alert.hostId, id == alert.sessionId {
+        // Either stack: a terminal pushed over the copilot is just as much "the
+        // session he is looking at" as one pushed over the list, and a banner
+        // about it would be the same interruption.
+        if let open = openSession, open.host == alert.hostId, open.id == alert.sessionId {
             return true
         }
         guard let left = leftSessionAt[alert.thread] else { return false }
@@ -451,26 +530,14 @@ final class DeckModel {
      * *across* hosts — they come from each machine's own session layer. A route
      * carrying only an id would attach to whichever machine happened to be
      * current when it was popped, which with two machines paired is a coin flip.
+     *
+     * One case, and it is shared by two stacks — Sessions and Copilot. It used
+     * to carry a second, `.copilot(host:)`, from when the conversation was a
+     * screen pushed onto the session list. The copilot is a tab now, so a route
+     * to it would be a route to a tab, which `Tab` already is.
      */
     enum Route: Hashable {
         case session(host: String, id: String)
-        /**
-         * The copilot on one machine.
-         *
-         * On the **Sessions** stack, and this is the answer to "where does the
-         * copilot go in three tabs" — argued at length in `CopilotView`. The
-         * short version: the desktop pins it above the session list, the phone's
-         * Sessions tab *is* the session list, and everything the copilot is for
-         * is a question about the sessions on that tab. A fourth pill was
-         * considered and dropped once already, on his own instruction, and
-         * Settings is where a thing goes when it is configured once rather than
-         * used all day.
-         *
-         * Named with its machine like a session, and for the same reason: a
-         * route carrying no host would open whichever machine happened to be
-         * current when it was popped, which with two paired is a coin flip.
-         */
-        case copilot(host: String)
     }
 
     /// `makeTransport` is a seam for the tests, which drive this model against a
@@ -539,17 +606,18 @@ final class DeckModel {
         guard hosts.contains(where: { $0.id == hostId }), hostId != currentHostId else { return }
         currentHostId = hostId
         UserDefaults.standard.set(hostId, forKey: Self.selectionKey)
-        route.removeAll { route in
+        let elsewhere: (Route) -> Bool = { route in
             switch route {
             case let .session(host, _): return host != hostId
-            // And the copilot, for a sharper version of the same reason. One
-            // conversation per machine — runs are keyed by device on the far end
-            // — so a copilot screen that survived a switch would be showing one
-            // machine's run under another machine's name, over a composer that
-            // sends to neither.
-            case let .copilot(host): return host != hostId
             }
         }
+        route.removeAll(where: elsewhere)
+        // And the copilot tab's stack, for the same reason. The conversation
+        // itself needs no popping — it is a tab, and the tab redraws for the
+        // machine that is now current — but a terminal pushed over it belongs to
+        // the machine being switched away from, and leaving it up would show one
+        // machine's session under another machine's name.
+        copilotRoute.removeAll(where: elsewhere)
     }
 
     func host(_ id: String) -> HostLink? {
@@ -796,15 +864,16 @@ final class DeckModel {
         // reason: a machine re-paired a minute later gets a fresh start rather
         // than a grace period left over from the last time it was here.
         leftSessionAt = leftSessionAt.filter { !$0.key.hasPrefix("\(hostId).") }
-        route.removeAll { route in
+        // A forgotten machine's terminals go from both stacks. Either would
+        // otherwise stay up over a `HostLink` that is no longer in the
+        // collection, drawing output nothing will ever update again.
+        let itsOwn: (Route) -> Bool = { route in
             switch route {
             case let .session(host, _): return host == hostId
-            // A forgotten machine's copilot goes with its terminals. The screen
-            // would otherwise stay up over a `HostLink` that is no longer in the
-            // collection, drawing a conversation nothing will ever update again.
-            case let .copilot(host): return host == hostId
             }
         }
+        route.removeAll(where: itsOwn)
+        copilotRoute.removeAll(where: itsOwn)
         if currentHostId == hostId {
             currentHostId = hosts.first?.id
             if let next = currentHostId {
@@ -886,38 +955,55 @@ final class DeckModel {
     // MARK: - Navigation
 
     /**
-     * Open the copilot on the machine that is on screen.
+     * Show the copilot for one machine.
      *
-     * A method rather than a bare `NavigationLink`, for the same reason
-     * `showMachines` is one: it has to land on the tab that can show it. It is
-     * pushed onto the Sessions stack, so a person who arrived from a
-     * notification, from Localhost, or from Settings ends up looking at it
-     * rather than at a screen pushed under a tab nobody is on.
+     * A tab selection now rather than a push. It stays a method rather than
+     * becoming `model.tab = .copilot` at the call sites for two reasons that are
+     * both about being asked for *a machine's* copilot: the machine may not be
+     * the one on screen, and anything pushed over the conversation belongs to
+     * whatever was being looked at before.
      *
-     * Idempotent — asking twice does not stack two copies of a live
-     * conversation.
+     * The pop is the part worth stating. A tab keeps its stack across
+     * selections, which is right when somebody taps the pill — they go back to
+     * where they were — and wrong when something has explicitly asked for *the
+     * copilot*, because they would arrive at a terminal instead.
      */
     func openCopilot(on hostId: String? = nil) {
         let host = hostId ?? currentHostId
         guard let host, hosts.contains(where: { $0.id == host }) else { return }
         if host != currentHostId { select(host) }
-        tab = .sessions
-        let next = Route.copilot(host: host)
-        if route.last != next { route.append(next) }
+        tab = .copilot
+        copilotRoute.removeAll()
     }
 
+    /**
+     * Open a terminal, on the stack belonging to whatever is being looked at.
+     *
+     * Two stacks can hold a session and the choice between them is not a detail:
+     * it decides what **Back** does, which is the only navigation gesture on a
+     * phone that everybody uses.
+     *
+     *  - **From the copilot**, the session stays on the copilot's stack, so Back
+     *    lands on the conversation that started it. That is the other half of
+     *    "why does this session exist" being one tap in either direction — the
+     *    desktop's copilot page and its session rows have the same property.
+     *  - **From anywhere else** — a notification tap, a deep link, a dev-server
+     *    row on the Localhost tab — it goes to the Sessions tab and the
+     *    selection moves with it. Without moving the selection the route is
+     *    pushed onto a stack nobody is looking at, and the tap reads as having
+     *    done nothing.
+     */
     func open(session id: String, on hostId: String? = nil) {
         guard SessionID.isValid(id) else { return }
         let host = hostId ?? currentHostId
         guard let host, hosts.contains(where: { $0.id == host }) else { return }
         if host != currentHostId { select(host) }
-        // The stack this route is pushed onto belongs to one tab. A session
-        // opened from a notification tap, a deep link, or a dev-server row on
-        // the Localhost tab while another tab is showing would otherwise be
-        // pushed somewhere nobody is looking, which reads as the tap having done
-        // nothing.
-        tab = .sessions
         let next = Route.session(host: host, id: id)
+        if tab == .copilot {
+            if copilotRoute.last != next { copilotRoute.append(next) }
+            return
+        }
+        tab = .sessions
         if route.last != next { route.append(next) }
     }
 
@@ -965,6 +1051,10 @@ final class DeckModel {
     /// nothing.
     var resumable: RemoteSession? { route.isEmpty ? current?.resumable : nil }
     var canCreateSessions: Bool { current?.canCreateSessions ?? false }
+    /// Whether this machine will let this phone end a session. Its own
+    /// capability, not implied by `canCreateSessions` — see
+    /// `HostLink.canCloseSessions` for the host that has one and not the other.
+    var canCloseSessions: Bool { current?.canCloseSessions ?? false }
     /// Whether there is anywhere to start one. See `HostLink.canStartSomewhere`:
     /// a machine can be perfectly able to start a session and still have granted
     /// this phone no folder to start it in.
@@ -987,6 +1077,10 @@ final class DeckModel {
     /// rather than handed out once.
     var copilot: CopilotLink? { current?.copilot }
     var canBrowseLocalhost: Bool { current?.canBrowseLocalhost ?? false }
+    /// Whether this machine will open a page on **its own** screen for this
+    /// phone. The other half of localhost, and a different question from
+    /// tunnelling one here — see `HostLink.canOpenPagesThere`.
+    var canOpenPagesThere: Bool { current?.canOpenPagesThere ?? false }
     /// Whether this machine will discuss its projects' dev servers. A separate
     /// question from `canBrowseLocalhost` — see `HostLink.canUseDevServers`.
     var canUseDevServers: Bool { current?.canUseDevServers ?? false }
@@ -1020,6 +1114,11 @@ final class DeckModel {
     func detach(_ id: String) { current?.detach(id) }
     func reattach(_ id: String) { current?.reattach(id) }
     func createSession(in folder: String?) { current?.createSession(in: folder) }
+    /// **Not undoable.** Every caller confirms first; see
+    /// `SessionListView.closeAction`.
+    func closeSession(_ id: String) { current?.closeSession(id) }
+    /// Open a page in the browser on the machine, rather than in this app.
+    func openOnMachine(_ url: String) { current?.openOnMachine(url) }
     func openLocalhost(port: Int) -> PortTunnel? { current?.openLocalhost(port: port) }
     func closeLocalhost() { current?.closeLocalhost() }
     /// One project's dev server on the machine on screen, or nil when it has not

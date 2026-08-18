@@ -94,6 +94,8 @@ let root = ''
 let userData = ''
 let paths: CopilotPaths
 let fenced: RecordsFencePaths
+/** A folder of the person's own, outside `<userData>`, chosen as the home. */
+let chosen = ''
 let profile = ''
 
 /** The one row that was in the log before any attempt below. */
@@ -162,6 +164,15 @@ beforeAll(() => {
   mkdirSync(paths.memory, { recursive: true })
 
   /*
+   * A workspace somebody already had, outside `<userData>` entirely — the case
+   * the log fence had never been measured from. See the matching block in
+   * `copilot-writable-boundary.test.ts` for why "it obviously transfers" is not
+   * a thing this directory gets to say.
+   */
+  chosen = realpathSync(mkdtempSync(join(tmpdir(), 'copilot-log-chosen-')))
+  mkdirSync(join(chosen, 'memory'), { recursive: true })
+
+  /*
    * The log, its directory and its rolled generation all exist before anything
    * is attempted, with real rows in them.
    *
@@ -182,7 +193,13 @@ beforeAll(() => {
 
 afterAll(() => {
   if (root !== '') rmSync(root, { recursive: true, force: true })
+  if (chosen !== '') rmSync(chosen, { recursive: true, force: true })
 })
+
+/** A shell line inside the fence, from a *chosen* working directory. */
+function inChosen(line: string): Promise<Ran> {
+  return run(['/bin/sh', '-c', line], chosen)
+}
 
 describe('the fence names the log this app really writes', () => {
   it('agrees with `copilotPaths().log`, resolved', () => {
@@ -334,5 +351,67 @@ describe.skipIf(!onMac)('the copilot, against the log that records it', () => {
     const ran = await sh(`sh -c ${JSON.stringify(`echo forged >> ${paths.actions}`)}`)
     expect(ran.stderr).toMatch(/not permitted/i)
     expect(logOnDisk()).toBe(EXISTING_ROW)
+  })
+})
+
+describe.skipIf(!onMac)('with a home the person chose, outside <userData>', () => {
+  /*
+   * The log fence, measured from a working directory on the other side of the
+   * machine from the file it protects.
+   *
+   * This was never asked before, because the copilot's folder was always
+   * `<userData>/copilot` — a directory inside the same tree as the log. It is
+   * the ordinary case now: a person points the copilot at their own workspace,
+   * and the process being fenced runs there. The control case comes first, for
+   * the same reason it does everywhere else in this file — a profile that
+   * refused everything would pass every denial below while being a broken app.
+   */
+
+  it('can write in the folder it was pointed at', async () => {
+    const ran = await inChosen('echo remembered > memory/a-fact.md && cat memory/a-fact.md')
+    expect(ran.stdout).toContain('remembered')
+    expect(ran.code).toBe(0)
+  })
+
+  it('still cannot append a row that never happened', async () => {
+    const forged = '{"at":"2026-08-17T03:00:00.000Z","action":"tool.settings.write"}'
+    const ran = await inChosen(`echo ${JSON.stringify(forged)} >> ${JSON.stringify(paths.actions)}`)
+    expect(ran.stderr).toMatch(/not permitted/i)
+    expect(logOnDisk()).toBe(EXISTING_ROW)
+  })
+
+  it('still cannot truncate it, or read it', async () => {
+    const wiped = await inChosen(`: > ${JSON.stringify(paths.actions)}`)
+    expect(wiped.stderr).toMatch(/not permitted/i)
+    expect(logOnDisk()).toBe(EXISTING_ROW)
+
+    const read = await inChosen(`cat ${JSON.stringify(paths.actions)}`)
+    expect(read.stdout).not.toContain('session.started')
+    expect(read.stderr).toMatch(/not permitted|Operation not permitted/i)
+  })
+
+  it('cannot reach it through a symlink planted in the chosen folder', async () => {
+    const ran = await inChosen(
+      `ln -sfn ${JSON.stringify(paths.log)} escape && echo forged >> escape/actions.jsonl`,
+    )
+    expect(ran.stderr).toMatch(/not permitted/i)
+    expect(logOnDisk()).toBe(EXISTING_ROW)
+  })
+
+  it('keeps the log under <userData> however the home moves', () => {
+    /*
+     * The path arithmetic the refusals rest on. `copilotPaths` takes the chosen
+     * folder for `root` and ignores it for everything this app keeps *about* the
+     * copilot — because a chosen home that could drag the log along with it
+     * would be a chosen home that could put the log somewhere the fence does not
+     * name, which is not a weaker protection but the absence of one.
+     */
+    const chosenPaths = copilotPaths(userData, chosen)
+    expect(chosenPaths.root).toBe(chosen)
+    expect(chosenPaths.actions).toBe(paths.actions)
+    expect(chosenPaths.actions.startsWith(`${chosen}${sep}`)).toBe(false)
+    // And the copilot's identity did not move into their folder either — the
+    // other half of the same rule, and the one this file's sibling proves.
+    expect(chosenPaths.instructions.startsWith(`${chosen}${sep}`)).toBe(false)
   })
 })

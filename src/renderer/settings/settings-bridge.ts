@@ -52,6 +52,20 @@ export interface SectionProps {
    * every caller meant while Claude was the only agent that could hold one.
    */
   startSession?(request: { profileId: string; provider?: ProviderId }): void
+  /**
+   * Ask the copilot's setup questions again, and close this window on the way.
+   *
+   * The second capability that has to come from the app rather than from a pane,
+   * and for a version of the same reason {@link SectionProps.startSession}
+   * gives: the flow is a dialog, this window is a dialog, and a dialog opened
+   * over another leaves two Escape handlers on one key — pressing it inside the
+   * questions would take the settings sheet with it. The pane knows when to ask;
+   * only the window that owns both can put them in the right order.
+   *
+   * Optional like the rest: a panel rendered without it draws no button rather
+   * than one that does nothing.
+   */
+  setUpCopilot?(): void
 }
 
 /* ------------------------------------------------------------ mirrored -- */
@@ -200,6 +214,27 @@ export interface CookieSource {
   keychainItem: boolean
 }
 
+/**
+ * Mirrors the part of `BrowserSessionInfo` (`src/main/browser-session.ts`) that
+ * a settings pane has any business showing.
+ *
+ * Four of its seven fields are left on the floor deliberately. `partition` and
+ * `storagePath` are the two the browser's own dialog prints as `<code>` — they
+ * are a partition name and a path, which is precisely what this window is being
+ * cleared of, and neither answers a question anybody asks in Settings.
+ * `persistent` is Electron's own answer about the partition rather than the
+ * user's choice, and the row above the summary ("Keep cookies and logins between
+ * runs") is the one they actually control; printing both invites the reader to
+ * work out which of two "does this survive a restart" answers wins.
+ *
+ * What is left is the three numbers that make the red button below honest.
+ */
+export interface BrowserStored {
+  cookieCount: number
+  domainCount: number
+  cacheBytes: number
+}
+
 /** Mirrors `CookieImportStatus` in `src/main/cookie-import.ts`. */
 export interface CookieImportStatus {
   present: number
@@ -232,6 +267,18 @@ export interface CookieImportReport {
 export interface SettingsBridgeMethods {
   getPreferences(): Promise<unknown>
   setPreferences(patch: Record<string, unknown>): Promise<unknown>
+  /**
+   * A stored value changed, and this window is not what changed it.
+   *
+   * The copilot writes settings and preferences, with a confirmation, and a
+   * paired device can behind it. Without these the app repaints while this
+   * dialog goes on showing the values it read when it opened — somebody watching
+   * their app turn light with the Appearance picker still on Dark would
+   * reasonably conclude the picker is broken. Both hand back an unsubscribe
+   * function, like every other `on*` on the bridge. See `main/live-push.ts`.
+   */
+  onPreferencesChanged(cb: (preferences: unknown) => void): () => void
+  onSettingsChanged(cb: (settings: unknown) => void): () => void
 
   getSettings(): Promise<unknown>
   setSettings(patch: Record<string, unknown>): Promise<unknown>
@@ -276,6 +323,19 @@ export interface SettingsBridgeMethods {
   clearImportedCookies(): Promise<unknown>
 
   /**
+   * What the browser tab is currently holding: how many cookies, from how many
+   * sites, and how much cache.
+   *
+   * A read, and the reason it was added to this bridge is the button underneath
+   * it. "Clear stored browsing data" is red, cannot be undone, and said nothing
+   * whatsoever about what it was going to remove — so a person was being asked
+   * to accept an irreversible action against an unknown quantity. The channel
+   * has existed on the preload since the browser's own dialog was built; the
+   * settings pane simply never asked.
+   */
+  browserSessionInfo(): Promise<unknown>
+
+  /**
    * Setup: one read of what is installed and what our hooks look like, and the
    * two writes that change the second half of that. The names are the preload's
    * — `installHooks`, not `hooksInstall` — because the contract test matches
@@ -292,6 +352,8 @@ export type SettingsBridge = Partial<SettingsBridgeMethods>
 const BRIDGE_METHODS: ReadonlyArray<keyof SettingsBridgeMethods> = [
   'getPreferences',
   'setPreferences',
+  'onPreferencesChanged',
+  'onSettingsChanged',
   'getSettings',
   'setSettings',
   'resetSettings',
@@ -316,6 +378,7 @@ const BRIDGE_METHODS: ReadonlyArray<keyof SettingsBridgeMethods> = [
   'browserCookieImportStatus',
   'importBrowserCookies',
   'clearImportedCookies',
+  'browserSessionInfo',
   'setupStatus',
   'installHooks',
   'removeHooks',
@@ -666,6 +729,23 @@ export function toCookieImportReport(raw: unknown): CookieImportReport {
     domains: asNumber(record?.domains),
     keychain: typeof record?.keychain === 'string' ? record.keychain : null,
     message: asString(record?.message, 'The import finished without saying what happened.'),
+  }
+}
+
+/**
+ * Narrowed to zeroes rather than to null.
+ *
+ * A build whose preload predates the channel, or a read that fails, answers
+ * "nothing" — and nothing is also what a fresh install genuinely holds, so the
+ * two are indistinguishable *and it does not matter*: both mean the Clear button
+ * has nothing to promise. The caller decides whether it asked at all.
+ */
+export function toBrowserStored(raw: unknown): BrowserStored {
+  const record = asRecord(raw)
+  return {
+    cookieCount: asNumber(record?.cookieCount),
+    domainCount: asNumber(record?.domainCount),
+    cacheBytes: asNumber(record?.cacheBytes),
   }
 }
 

@@ -1,58 +1,37 @@
-import { useEffect, useState } from 'react'
-import { toAbout, type SettingsBridge } from './settings-bridge'
-
 /**
- * The two things at the bottom of the rail that are not sections.
+ * The one thing at the bottom of the rail that is not a section.
  *
- * Both were rail entries until this pass, and both were the same kind of
- * mistake: a *reference* filed among *settings*. You do not change anything on
- * either of them.
+ * It was a rail entry until this pass, and it was a *reference* filed among
+ * *settings*. You do not change anything on it.
  *
  *   > "this is a huge shortcut page — maybe rather than this we can have
  *   > another pop-up by clicking on this… maybe it can be only an icon here
  *   > where we click and see the shortcut as pop-up."
  *
- *   > "Help — also extend it and make it more proper. Maybe we can make it like
- *   > help button. When they click on it, it should take to terminal website,
- *   > our marketing website… instead of inside the application. Let's make it
- *   > like that. It's more professional."
+ * ## Help was here too, and is not any more
  *
- * ## The Help link goes to a URL this app actually knows
+ * There were two buttons. The second opened the marketing site in the user's own
+ * browser, which was itself a change made on his instruction — *"maybe we can
+ * make it like help button. When they click on it, it should take to terminal
+ * website… instead of inside the application."* He has since asked for the
+ * opposite, in terms that leave no room:
  *
- * `package.json`'s `homepage`, read back through `app:about` — not a string
- * typed here. A hardcoded marketing URL is exactly the kind of copied fact this
- * codebase keeps being bitten by, and it would also be a second place the site
- * address lives. When the read has not landed, or the field is absent, the link
- * is not drawn at all: a Help button that opens nothing is worse than a rail
- * with one icon on it.
+ *   > "We should have a help page where we can see all the help-related
+ *   > features, options — whatever you had before, those kinds of stuff. So
+ *   > this can be a separate page."
  *
- * The in-app help did not go anywhere. `HelpDialog` — the same generated panel
- * this section used to embed a second copy of — is still one keystroke away in
- * the main window, which is why removing the duplicate here loses nothing.
+ * So Help is a pane in the rail again (`HelpSection`), and the website it used
+ * to open is a row on that pane. Keeping the footer link as well would be two
+ * Helps a centimetre apart doing different things, which is the duplication this
+ * footer was invented to remove.
+ *
+ * The `appAbout` read went with it: this component asked the main process for
+ * `package.json`'s `homepage` purely so the link could be drawn only when a real
+ * URL existed. `AboutSection` already makes that same read, and already draws
+ * the website row only when the field is there, so the honesty is not lost —
+ * it moved to the file that was doing it anyway.
  */
-export function RailFooter({
-  bridge,
-  onShortcuts,
-}: {
-  bridge: SettingsBridge
-  onShortcuts(): void
-}) {
-  const [website, setWebsite] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!bridge.appAbout) return
-    let live = true
-    void bridge.appAbout().then(
-      (raw) => {
-        if (live) setWebsite(toAbout(raw)?.homepage ?? null)
-      },
-      () => undefined,
-    )
-    return () => {
-      live = false
-    }
-  }, [bridge])
-
+export function RailFooter({ onShortcuts }: { onShortcuts(): void }) {
   return (
     <div className="settings-rail-foot">
       <button
@@ -74,32 +53,6 @@ export function RailFooter({
         </svg>
         <span className="settings-rail-btn-label">Shortcuts</span>
       </button>
-
-      {website && (
-        <a
-          className="settings-rail-btn"
-          href={website}
-          target="_blank"
-          rel="noreferrer"
-          title={`Help — opens ${website}`}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-            <circle cx="12" cy="12" r="9" strokeWidth="1.6" />
-            <path
-              d="M9.6 9.2a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.7-.9 1.3v.4"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-            />
-            <path d="M12 16.6h.01" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-          <span className="settings-rail-btn-label">Help</span>
-          {/* The arrow is the promise that this leaves the app, made before the
-              click rather than discovered after it. */}
-          <span className="settings-rail-btn-out" aria-hidden="true">
-            ↗
-          </span>
-        </a>
-      )}
     </div>
   )
 }

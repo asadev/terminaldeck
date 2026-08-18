@@ -371,6 +371,33 @@
   color: var(--text-muted);
 }
 
+/* The caption that starts a run of rows making a weaker claim than the ones
+   above — today only "Earlier models", under the models the CLI's own picker
+   offers. See `ControlOption.group`.
+
+   Space above and a quieter colour, and no rule: this window separates with
+   space first, then a tint, and only then a line, and a caption *is* the tint.
+   The left padding lines its first letter up with the option labels rather than
+   with their tick column, so the eye reads one column of words. Used by both the
+   panel's sections and the chip menus, which is why it sits between the two
+   blocks rather than inside either — and `--ac-label` is set identically on
+   both, so one rule lines it up in both. */
+.ac-option-group {
+  margin: var(--sp-2) 0 var(--sp-05);
+  padding-left: var(--ac-label);
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
+  line-height: var(--lh-tight);
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+/* The first caption in a list needs no space above it: it is already the first
+   thing after the description, which brought its own. */
+.ac-option-group:first-child {
+  margin-top: 0;
+}
+
 .ac-sheet-note,
 .ac-sheet-foot {
   margin: 0;

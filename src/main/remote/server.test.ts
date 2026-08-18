@@ -3017,3 +3017,203 @@ describe('a confirmation answered from a device', () => {
     expect(outcome.granted === false && outcome.reason).toBe('no-approver')
   })
 })
+
+/**
+ * *"The copilot is never shared."*
+ *
+ * His sentence about guest devices, and the reason it is enforced as an
+ * **absence** rather than as a grant that happens to be off. A device that is
+ * told the capability exists draws the tab; a tab that refuses on every press
+ * still advertises the feature and invites the ask, and the answer to the ask is
+ * always no. So an ineligible device gets no capability, no `copilot` key in its
+ * welcome, and a refusal if it sends the frame anyway.
+ *
+ * The last one matters most and is the one a client cannot demonstrate: the
+ * advertisement is what a *client of ours* respects, and this is what the
+ * machine does when something that is not a client of ours asks.
+ */
+describe('the copilot is never shared with a guest', () => {
+  /** The eligibility rule a real desktop supplies: `kind === 'mine'`. */
+  const onlyMine = (deviceId: string): boolean => deviceId === 'my-laptop'
+
+  it('does not tell a guest the capability exists', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot, copilotEligible: onlyMine })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.copilot)
+    // The same shape a host with no copilot at all sends, deliberately: from the
+    // guest's point of view those are the same fact, and it is entitled to
+    // neither more nor less than that.
+    expect(welcome.t === 'welcome' && welcome.copilot).toBeUndefined()
+  })
+
+  it('still tells one of the owner’s own machines', async () => {
+    const host = copilotHost()
+    const harness = await serve({
+      copilot: host.copilot,
+      // The authenticator in this file answers `device-1` for the one credential
+      // it knows, so the rule is written round it rather than the reverse.
+      copilotEligible: (deviceId) => deviceId === 'device-1',
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.copilot)
+    expect(welcome.t === 'welcome' && welcome.copilot).toEqual({
+      linked: false,
+      open: false,
+      grant: { read: false, act: false, alter: false },
+    })
+  })
+
+  it('refuses a connect code from a guest, whatever the code is', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot, copilotEligible: onlyMine })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    // A real, freshly minted, correct code — so what is being measured is the
+    // kind and not the code. This is the frame a hand-written client would send
+    // after reading the protocol, and the advertisement never reached it.
+    const offer = host.links.offer({ read: true, act: true, alter: true })
+    client.send({ t: 'copilot.connect', code: offer.code })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unauthorized')
+    expect(error.t === 'error' && error.message).toMatch(/not shared with guest devices/i)
+    // And nothing was linked, which is the part that would otherwise be a
+    // permanent credential handed to somebody else's phone.
+    expect(host.links.linked('device-1')).toBe(false)
+  })
+
+  it('refuses a stored credential from a guest as well', async () => {
+    const host = copilotHost()
+    // Linked while it was still eligible — the shape of a device that was one of
+    // yours, was revoked, and re-paired as a guest under a new id. The record it
+    // is replaying is real; the kind is what refuses it.
+    const offer = host.links.offer({ read: true, act: true, alter: true })
+    const linked = await host.links.redeem(offer.code, 'device-1')
+    expect(linked.ok).toBe(true)
+
+    const harness = await serve({ copilot: host.copilot, copilotEligible: onlyMine })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'copilot.hello', credential: linked.ok ? linked.credential : '' })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unauthorized')
+  })
+})
+
+/**
+ * Opening a page **on the machine**, which is what a browser tab cannot do for
+ * itself.
+ *
+ * The web client's localhost screen could say which ports were open and could
+ * not open one, and `pwa/src/localhost.ts` explains at length why no amount of
+ * cleverness in a tab changes that. His complaint stands anyway — *"the whole
+ * reason localhost exists is to drive them"* — and this is the answer he gave
+ * for the phone in the same review: the page opens there, in a tab of that
+ * machine's own browser.
+ *
+ * Three refusals are pinned here and each closes something different: a host
+ * with no window never advertises the verb, a guest may not put a window on
+ * somebody else's screen, and a URL that is not http(s) is refused by the same
+ * gate the app's own links go through.
+ */
+describe('opening a page on the machine', () => {
+  it('is not advertised by a host that has no window to open one in', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.web)
+  })
+
+  it('opens it, and answers with what was opened', async () => {
+    const opened: string[] = []
+    const harness = await serve({
+      openUrl: (url) => {
+        opened.push(url)
+        return true
+      },
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.web)
+
+    client.send({ t: 'web.open', url: 'http://localhost:5173/' })
+    const done = await client.until((m) => m.t === 'web.opened', 'the confirmation')
+    expect(done).toEqual({ t: 'web.opened', url: 'http://localhost:5173/' })
+    expect(opened).toEqual(['http://localhost:5173/'])
+  })
+
+  it('says nothing opened when no window took it', async () => {
+    // The honest failure: the app is launching, or the window has just closed.
+    // `unavailable` rather than `unauthorized`, because retrying is exactly what
+    // fixes it — the same split `create` makes between the two codes.
+    const harness = await serve({ openUrl: () => false })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'web.open', url: 'http://localhost:5173/' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unavailable')
+    expect(client.received.some((m) => m.t === 'web.opened')).toBe(false)
+  })
+
+  it('refuses anything that is not a web address, without echoing it back', async () => {
+    const opened: string[] = []
+    const harness = await serve({
+      openUrl: (url) => {
+        opened.push(url)
+        return true
+      },
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    // `file:` walks a window onto the user's disk and `javascript:` runs in
+    // whatever is already there. Neither is a document, and neither reaches the
+    // shell — the refusal happens before `openUrl` is called at all.
+    client.send({ t: 'web.open', url: 'file:///Users/apple/.ssh/id_ed25519' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unauthorized')
+    // The attacker's string is not quoted into a sentence that is drawn on a
+    // screen — the same rule the folder refusal follows.
+    expect(error.t === 'error' && error.message).not.toContain('id_ed25519')
+    expect(opened).toEqual([])
+  })
+
+  it('is neither advertised to nor served for a guest', async () => {
+    const opened: string[] = []
+    const harness = await serve({
+      openUrl: (url) => {
+        opened.push(url)
+        return true
+      },
+      // Nobody is eligible: `device-1` is the only device this file's
+      // authenticator knows, so this is "every connection is a guest".
+      copilotEligible: () => false,
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.web)
+
+    // And refused anyway, because the advertisement is what a client of ours
+    // respects and this is what the machine does when something else asks.
+    client.send({ t: 'web.open', url: 'http://localhost:5173/' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unauthorized')
+    expect(opened).toEqual([])
+  })
+})

@@ -532,6 +532,32 @@ export interface DeckSurface {
    * snapshot behind it is the state this exists to prevent.
    */
   snapshotSettings(): SettingsSnapshot
+  /**
+   * Push what was just written into the window that is already open, and say
+   * whether one heard.
+   *
+   * This is the difference between a setting being *saved* and a setting being
+   * *applied*, and until 2026-08-18 this app only ever did the first. The
+   * renderer learns a preference from the return value of its own `prefs:set`
+   * invoke, so a write that arrives from anywhere else — the copilot, a paired
+   * phone — reached the disk and never reached React. Watched live: the copilot
+   * was asked for a light theme, `state.json` said `"light"`, the window stayed
+   * dark, and it reported *"Done — theme is now light."* True of the file, false
+   * of the screen, and the person's reasonable conclusion is that the tool does
+   * not work.
+   *
+   * The **answer matters as much as the push**, because it is what
+   * `settings.write` puts in `appliedToWindow`. `true` means a live renderer was
+   * handed the new values; `false` means there was nothing open to hand them to,
+   * and the honest sentence is then "it is saved and the next launch reads it"
+   * rather than a claim about a screen.
+   *
+   * Optional, and its absence is a true "there is no window here" rather than a
+   * gap to be filled in later: the headless host has no renderer at all, and the
+   * fake surfaces in `control.test.ts` are not pretending to have one. A caller
+   * treats a missing method exactly as it treats `false`.
+   */
+  applyToWindow?(scope: 'settings' | 'preferences', values: Record<string, unknown>): boolean
 
   /* --- transcripts ------------------------------------------------------- */
   /**

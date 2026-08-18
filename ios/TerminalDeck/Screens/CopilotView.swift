@@ -3,43 +3,42 @@
  *
  * Asad, holding the iOS release for this: *"We need to build a copilot in the
  * phone app too, because we need to connect the copilot also and we should be
- * able to control the copilot from the phone also."*
+ * able to control the copilot from the phone also."* And, settling the shape of
+ * it a week later: *"Phones will have full control over copilot, same as the
+ * actual machine app. But connecting copilot will be a separate connection than
+ * the sessions."*
  *
- * ## Where it goes, in three tabs
+ * ## Where it goes: the leftmost pill
  *
- * **A pinned row at the top of the Sessions tab, pushing this screen.** Not a
- * fourth pill, not a Settings row, and the reasoning is worth writing down
- * because all three were live options.
+ * **Copilot · Sessions · Localhost · Settings.** Said while looking at the app
+ * with the copilot built and reachable, and it settles a question that had been
+ * answered twice before in both directions. `DeckModel.Tab` carries the whole
+ * argument; the part that belongs here is what it replaced and why the
+ * replacement is better rather than merely newer.
  *
- * *Not a fourth tab.* He built up to four in one recording — *"four icons in the
- * pill"* — and then took Machines off the bar a minute later and called the
- * result *"a better design"*. Three is a decision he has already made once,
- * against the same pressure. And the pressure is not really about the copilot:
- * it is that a tab bar is for surfaces you move **between** all day, and this is
- * a surface you go **into** and stay in, like a terminal.
+ * It was **a pinned row at the top of the Sessions tab**, pushing this screen.
+ * The case for that was real: the desktop pins the copilot exactly there —
+ * *"Pinned at the top of the sidebar, above the session list"* — and everything
+ * the copilot is good at is a question about the rows underneath it. What that
+ * argument got wrong is that those questions are asked *while looking at
+ * something else*, which is precisely a thing you move between; and a row pinned
+ * to one list is reachable from one screen, whereas a pill is reachable from all
+ * four and carries its badge everywhere.
  *
- * *Not inside Settings.* Machines went there because pairing a machine is done
- * once. Asking the copilot what happened overnight is done every morning, and
- * putting it two taps behind a gear would make the phone worse at the one thing
- * he described wanting the phone for.
+ * The row is gone rather than kept beside the pill. Two doors to one screen, one
+ * of them permanently taking the top of the list somebody opened to read their
+ * sessions, is the duplication he objects to on every other page.
  *
- * *The Sessions tab, at the top of the list.* Three reasons, in order of weight:
- * the desktop already pins it exactly there — *"Pinned at the top of the
- * sidebar, above the session list"* — and the phone's Sessions tab **is** that
- * list, so the two products stay one product; everything the copilot is good at
- * is a question about the rows underneath it (*which of these is stuck, what
- * happened overnight, summarise that run*), so the answer belongs on the screen
- * holding the question; and it costs no chrome at all — one row, above Resume,
- * on a list that already has a pinned row above the sessions and a rule for what
- * earns that position.
+ * ## Which means this screen keeps the tab bar, and used not to
  *
- * The push, rather than a sheet, is the same call `LocalhostListView` had to
- * make and he settled it there: *"it should not come like this up… feels like a
- * browser opens inside. So give it a native feel."* A modal is an interruption;
- * this is where the tap was going. And like a terminal it takes the whole
- * screen and loses the tab bar — see `DeckChrome`, and note that this screen has
- * a text field at the bottom of it, which is the exact frame the pill complaint
- * was about.
+ * As a pushed screen it hid the bar, with the terminal and the localhost page,
+ * and it was right to: it is full height and ends in a text field, which is
+ * exactly the frame the pill complaint was about — *"when this keyboard is down,
+ * see the pill is still there."* A tab cannot do that. There is no chevron over
+ * a tab's root and no gesture that pops one, so a copilot tab that hid the bar
+ * would be a screen with no way out. The footer is in a bottom `safeAreaInset`,
+ * which is measured against the bar's own safe area, so the composer sits above
+ * the pill rather than under it. See `DeckChrome`.
  *
  * ## One list: what it said and what it did, interleaved
  *
@@ -51,21 +50,29 @@
  * machinery in the other and leave a person correlating them by timestamp on a
  * four-inch screen.
  *
- * ## Four states, and none of them is a lie
+ * ## Eight states, and none of them is a lie
  *
- * `CopilotAccess` has four cases and this screen draws four different things.
- * The one worth naming here is `.notGranted`: a machine that **has** a copilot
- * and has given this phone none of it. That is not hidden and it is not a
- * disabled composer — it is a screen that says so and names where the switch is,
- * because it is the one state a person can fix and they fix it on the desktop.
- * It is the same call `SessionListView` makes for a machine that granted no
- * folders, and the same call for the same reason.
+ * `CopilotAccess` has eight cases and this screen draws eight different things.
+ * Three are worth naming here.
  *
- * `.notOffered` — a desktop that does not speak `copilot.*` at all, which is
- * every build shipping today — draws **nothing**, not even a row. That is not
- * the same decision: there is no switch on that machine to point at, so a screen
- * explaining where to find one would be sending somebody to look for a control
- * that does not exist.
+ * `.notConnected` is the one every paired device starts in, and the one this
+ * whole redesign is about: the machine **has** a copilot and this phone has
+ * never been connected to it. That is not hidden, and it is not a disabled
+ * composer — it is a six-digit field and a sentence saying where the code comes
+ * from, because it is the state a person can fix in thirty seconds and the fix
+ * is a deliberate act at their own machine.
+ *
+ * `.notGranted` is *connected, and given nothing*. It is a real state — unticking
+ * every box at the desk leaves a working credential behind — and its remedy is
+ * three checkboxes rather than a code, so it must not say the same thing as the
+ * one above it.
+ *
+ * `.notOffered` — a desktop that does not speak `copilot.*` at all — used to
+ * draw nothing, because the way in was a row and a row could simply be left out.
+ * The way in is a pill now and a pill that came and went as machines were
+ * switched would move the bar under a thumb that had learned where things are.
+ * So it draws the one honest sentence instead: that machine's app is too old,
+ * and updating it is what changes the answer.
  */
 
 import SwiftUI
@@ -85,17 +92,24 @@ struct CopilotView: View {
     @State private var draft = ""
     @FocusState private var composing: Bool
 
-    /// The confirmation being read in full, if any. See `CopilotQuestionSheet`.
-    @State private var reading: CopilotQuestion?
+    /// The six digits somebody is typing into the Connect screen. Same reason
+    /// as the draft: it is a half-typed thing, not a fact about the machine.
+    @State private var code = ""
+    @FocusState private var typingCode: Bool
+
+    /// The question on screen, if any — one to decide or one to go and look at.
+    /// See `CopilotPrompt`, which is one type rather than two `@State`s because
+    /// two sheets that can both be non-nil is two sheets that fight.
+    @State private var prompt: CopilotPrompt?
     @State private var showingActivity = false
     @State private var showingSessions = false
 
     private var host: HostLink? { model.host(hostID) }
-    private var link: CopilotLink? { host?.copilot }
+    private var link: CopilotLink? { model.host(hostID)?.copilot }
 
     /// Whether this phone may see anything on this machine's copilot at all —
-    /// which is what every control in the toolbar needs, since both of them are
-    /// read-tier lists.
+    /// which is what every control in the toolbar needs, since both of the lists
+    /// behind it are read-tier.
     private var isWatching: Bool {
         let access = host?.copilotAccess ?? .notOffered
         return access == .watch || access == .direct
@@ -110,17 +124,33 @@ struct CopilotView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             /*
+             * Which machine's copilot, in the slot the other two tabs use for
+             * the same question.
+             *
+             * It arrived with the pill. While this screen was pushed from the
+             * session list, the machine was decided one screen back and carried
+             * in the route; a tab has no route, so *which machine am I talking
+             * to* is exactly as open a question here as *whose ports are these*
+             * is on Localhost — and it must not be answered by a screen that
+             * cannot be asked. The control is the same one, so the connection
+             * pill under it cannot disagree with the pill on the other tabs
+             * either.
+             *
+             * With one machine paired it falls back to the screen's own name
+             * rather than the product's, which is what `singleHostTitle` is for.
+             */
+            ToolbarItem(placement: .principal) {
+                HostSwitcher(model: model, singleHostTitle: "Copilot")
+            }
+            /*
              * No overflow for a phone that may not watch.
              *
-             * Both items on it are `read` — the action log and the sessions the
-             * copilot started — so on the not-granted screen they were two taps
-             * that could only open an empty sheet. Caught by looking at the
+             * Both lists on it are `read` — the action log and the sessions the
+             * copilot started — so on the not-connected screen they were two
+             * taps that could only open an empty sheet. Caught by looking at the
              * screen rather than by a test: the not-granted case renders a
              * sentence explaining that this phone has been given nothing, with a
              * menu beside it offering it two things anyway.
-             *
-             * `isWatching` and not `!= .notGranted`, so the notOffered screen
-             * loses it too. There is even less behind it there.
              */
             if isWatching {
                 ToolbarItem(placement: .topBarTrailing) { menu }
@@ -128,10 +158,34 @@ struct CopilotView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) { banners }
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
-        .sheet(item: $reading) { question in
-            CopilotQuestionSheet(question: question,
-                                 machine: host?.label ?? "that machine",
-                                 noun: host?.hostPlatform.noun ?? "desktop") { reading = nil }
+        .sheet(item: $prompt) { showing in
+            switch showing {
+            case let .decide(question):
+                CopilotConsentSheet(question: question,
+                                    settlement: link?.settlement(for: question.id),
+                                    machine: host?.label ?? "that machine",
+                                    noun: host?.hostPlatform.noun ?? "desktop",
+                                    answer: { approved in
+                                        // The sheet stays up until the desktop
+                                        // says the question is settled, so the
+                                        // person sees where their answer landed
+                                        // rather than watching it vanish — and
+                                        // it is told whether the frame actually
+                                        // went, because a sheet that dimmed its
+                                        // buttons over a dead socket would be a
+                                        // consent prompt that looks answered and
+                                        // is not.
+                                        link?.answer(question.id, approved: approved) ?? false
+                                    },
+                                    dismiss: {
+                                        link?.dismissSettled(question.id)
+                                        prompt = nil
+                                    })
+            case let .watch(question):
+                CopilotWatchSheet(question: question,
+                                  machine: host?.label ?? "that machine",
+                                  noun: host?.hostPlatform.noun ?? "desktop") { prompt = nil }
+            }
         }
         .sheet(isPresented: $showingActivity) {
             CopilotActivitySheet(model: model, hostID: hostID) { showingActivity = false }
@@ -139,6 +193,34 @@ struct CopilotView: View {
         .sheet(isPresented: $showingSessions) {
             CopilotSessionsSheet(model: model, hostID: hostID) { showingSessions = false }
         }
+        /*
+         * A confirmation raises itself.
+         *
+         * It has a two-minute deadline and it expires into a **refusal**, so a
+         * question that waited politely behind a row somebody had to notice
+         * would be a question that mostly times out. There is no push in this
+         * product — `SessionAlerts` says so plainly — which means this frame
+         * only ever arrives while the app is open in somebody's hand, and that
+         * is exactly the moment putting it in front of them costs nothing.
+         *
+         * Keyed on the ids rather than the count, so a question replaced by
+         * another between two redraws still opens the new one.
+         */
+        .onChange(of: (link?.asked ?? []).map(\.id).joined(separator: ",")) { _, _ in
+            raisePendingDecision()
+        }
+        .onAppear { raisePendingDecision() }
+    }
+
+    /// Put the oldest unanswered question on screen, if nothing else is there.
+    /// Nothing is stolen from a sheet already up: interrupting somebody reading
+    /// one confirmation with another is how both get answered without being
+    /// read.
+    private func raisePendingDecision() {
+        guard prompt == nil,
+              let question = link?.asked.first(where: { link?.settlement(for: $0.id) == nil })
+        else { return }
+        prompt = .decide(question)
     }
 
     // MARK: - The body, per access
@@ -148,12 +230,12 @@ struct CopilotView: View {
         switch host?.copilotAccess ?? .notOffered {
         case .notOffered:
             /*
-             * Reachable only by a route that outlived its machine — the row that
-             * pushes this screen is not drawn for a desktop that never offered
-             * the capability, and a `copilot.grant` cannot take the *capability*
-             * away. So this is the honest thing to say when the machine turned
-             * out not to have one after all, rather than a state anybody
-             * navigates to on purpose.
+             * An ordinary screen now, not a leftover. The copilot is a tab, the
+             * tab is drawn for every machine, and a desktop old enough not to
+             * speak `copilot.*` is the case this answers: it names the machine,
+             * says what is missing, and names the one thing that fixes it. A
+             * blank screen under a pill would read as a bug in this app rather
+             * than as a version gap on that computer.
              */
             ContentUnavailableView {
                 Label("No copilot here", systemImage: "sparkles")
@@ -164,6 +246,18 @@ struct CopilotView: View {
             }
             .accessibilityIdentifier("copilot.notOffered")
 
+        case .notConnected:
+            connectScreen(lostCredential: false)
+
+        case .credentialLost:
+            connectScreen(lostCredential: true)
+
+        case .closed:
+            closedScreen
+
+        case .connecting:
+            connectingScreen
+
         case .notGranted:
             notGranted
 
@@ -173,16 +267,199 @@ struct CopilotView: View {
     }
 
     /**
-     * The machine has a copilot and this phone has not been given any of it.
+     * **The Connect screen.** Six digits, and the sentence that explains them.
      *
-     * Every word here is doing one of two jobs: saying what is true, and saying
-     * where the fix is. It names the machine, because a phone paired with three
-     * of them needs to know which one to walk to; it names the screen on the
-     * desktop, because *"go and change a setting"* with no address is how
-     * somebody concludes the feature is broken; and it says the grant is per
-     * device and off by default, because the natural assumption on finding a
-     * feature switched off is that it failed rather than that it was never
-     * turned on.
+     * This is the screen the whole 2026-08-17 revision produced, so the wording
+     * is doing real work rather than filling a page. It has to say four things
+     * and each of them is a thing somebody would otherwise get wrong:
+     *
+     *  - **the copilot is a second connection**, not a permission on the one
+     *    this phone already has. Somebody who has paired their phone and can run
+     *    ten terminals on it will reasonably assume the copilot came with them;
+     *    it did not, deliberately, and *"connecting copilot will be a separate
+     *    connection than the sessions"* is why.
+     *  - **where the code comes from** — Settings → Remote, on that machine, on
+     *    this phone's own card. A screen that said "enter your code" with no
+     *    address is how somebody concludes the feature is broken.
+     *  - **what connecting hands over**, before it is handed over rather than
+     *    after. The tiers are chosen at the machine when the code is minted, so
+     *    this cannot promise a particular set — what it can say is that the
+     *    person minting it decides, and that confirmations may end up on this
+     *    phone.
+     *  - **the code is short-lived and single-use**, so a person who fumbles it
+     *    knows to ask for another rather than retyping the dead one.
+     *
+     * `lostCredential` is the same screen with the first sentence replaced. The
+     * desktop holds a record for this device and this phone does not hold the
+     * key — restored from a backup, or a Keychain item that would not read — and
+     * the remedy is *a new code*, not a retry, because the credential is sent
+     * exactly once and nothing on that machine can show it again.
+     */
+    private func connectScreen(lostCredential: Bool) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 30))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.bottom, 14)
+
+                Text(lostCredential ? "Connect this phone again" : "Connect the copilot")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Theme.primary)
+                    .padding(.bottom, 8)
+
+                Text(lostCredential
+                     ? "\(host?.label ?? "That machine") still has this phone on its copilot list, "
+                        + "but this phone no longer holds the key it was given. It is sent once and "
+                        // No markdown emphasis: this string is built by
+                        // interpolation, so it is a `String` rather than a
+                        // `LocalizedStringKey`, and SwiftUI would draw the
+                        // asterisks. The word carries itself.
+                        + "cannot be sent again, so ask for a new code at the "
+                        + "\(hostNoun) — Settings, under Remote, on this phone's card."
+                     : "The copilot is a separate connection from your terminals. Pairing this "
+                        + "phone did not include it, on purpose. Open Settings → Remote on "
+                        + "\(host?.label ?? "that machine"), find this phone, and press "
+                        + "“Connect the copilot” — it shows six digits.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 22)
+
+                Text("Connect code")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.faint)
+                    .textCase(.uppercase)
+                    .padding(.bottom, 10)
+
+                // The same field as the pairing screen, deliberately: same
+                // format, same keypad, same self-submit on the sixth digit.
+                // Learning a second shape of code entry for the second thing you
+                // connect would be this app inventing work.
+                TextField("000000", text: $code)
+                    .textFieldStyle(.plain)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                    .kerning(8)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Theme.primary)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($typingCode)
+                    .accessibilityIdentifier("copilot.connect.field")
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
+                    .onChange(of: code) { _, value in
+                        // Trimmed to six, then submitted on six. The trim is not
+                        // cosmetic: a number pad has no length limit of its own,
+                        // and a seventh digit landing after the sixth has already
+                        // gone would leave a field somebody has to clear before
+                        // they can try again.
+                        let digits = String(value.filter { $0.isASCII && $0.isNumber }
+                            .prefix(Copilot.codeLength))
+                        if digits != value { code = digits }
+                        guard digits.count == Copilot.codeLength,
+                              link?.isConnecting != true else { return }
+                        typingCode = false
+                        submitCode()
+                    }
+                    .padding(.bottom, 10)
+
+                Button {
+                    typingCode = false
+                    submitCode()
+                } label: {
+                    HStack(spacing: 7) {
+                        if link?.isConnecting == true {
+                            ProgressView().controlSize(.small).tint(Theme.onAccent)
+                        } else {
+                            Image(systemName: "arrow.right")
+                        }
+                        Text(link?.isConnecting == true ? "Checking that code…" : "Connect")
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                }
+                .background(Theme.accent.opacity(code.isEmpty ? 0.28 : 1),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .foregroundStyle(code.isEmpty ? Theme.secondary : Theme.onAccent)
+                .disabled(code.isEmpty || link?.isConnecting == true)
+                .accessibilityIdentifier("copilot.connect.submit")
+                .padding(.bottom, 14)
+
+                Text("A connect code is good for one minute and one use. What it grants is chosen "
+                     + "at the \(hostNoun) when the code is made — watching, working, or also "
+                     + "answering the confirmations that would otherwise wait at that machine. "
+                     + "Whoever mints it can disconnect this phone again at any time, without "
+                     + "unpairing it.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 28)
+            .padding(.bottom, 32)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .accessibilityIdentifier(lostCredential ? "copilot.credentialLost" : "copilot.notConnected")
+    }
+
+    private func submitCode() {
+        // The field keeps its digits when the frame did not go, and loses them
+        // when it did: a code is single-use, so leaving a spent one in the field
+        // invites a second tap that can only fail.
+        if link?.connect(code: code) == true { code = "" }
+    }
+
+    /// Somebody closed the copilot on this phone. Everything is still in place —
+    /// the record at the machine, the credential here — so this is one tap, and
+    /// it says so rather than looking like a failure.
+    private var closedScreen: some View {
+        ContentUnavailableView {
+            Label("Closed on this phone", systemImage: "moon.zzz")
+        } description: {
+            Text("The copilot connection is shut here. Nothing was disconnected at "
+                 + "\(host?.label ?? "the machine") — this phone can open it again without a "
+                 + "new code.")
+        } actions: {
+            Button("Open the copilot") { link?.reopen() }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .accessibilityIdentifier("copilot.reopen")
+        }
+        .accessibilityIdentifier("copilot.closed")
+    }
+
+    /// The credential is on its way, or the socket is down and it cannot be.
+    /// Drawn as a state rather than left as an empty screen, because an empty
+    /// screen with no explanation is indistinguishable from a broken one.
+    private var connectingScreen: some View {
+        VStack(spacing: 14) {
+            ProgressView().controlSize(.large).tint(Theme.secondary)
+            Text(model.connection.isLive
+                 ? "Opening the copilot on \(host?.label ?? "that machine")…"
+                 : "Waiting for \(host?.label ?? "that machine") to come back.")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 32)
+        .accessibilityIdentifier("copilot.connecting")
+    }
+
+    /**
+     * Connected, and granted nothing.
+     *
+     * A different sentence from the Connect screen and a different remedy, which
+     * is why it is a different case rather than a variant. This phone **has** a
+     * copilot connection — the credential works, the connection is open — and
+     * every box beside it is unticked. Saying "connect the copilot" here would
+     * send somebody to mint a code they do not need.
      *
      * There is deliberately no button. Nothing on this phone can grant this —
      * `settings.write` refuses the `copilot.` prefix, there is no frame that
@@ -193,17 +470,18 @@ struct CopilotView: View {
      */
     private var notGranted: some View {
         ContentUnavailableView {
-            Label("Not shared with this phone", systemImage: "lock")
+            Label("Connected, and given nothing", systemImage: "lock")
         } description: {
-            Text("\(host?.label ?? "That machine") has a copilot, and this phone has not been "
-                 + "given access to it. Copilot access is off for every device until somebody "
-                 + "turns it on at the \(host?.hostPlatform.noun ?? "desktop") — it is in "
-                 + "Settings, under Remote, on this phone's own card.")
+            Text("This phone is connected to \(host?.label ?? "that machine")'s copilot and every "
+                 + "box beside it is unticked, so there is nothing it may do yet. Tick one at the "
+                 + "\(hostNoun) — Settings, under Remote, on this phone's own card. Watching is "
+                 + "the one to start with: it shows what the copilot is doing and carries no "
+                 + "power at all.")
         }
         .accessibilityIdentifier("copilot.notGranted")
     }
 
-    /// The conversation and the machinery, plus whatever is waiting at the desk.
+    /// The conversation and the machinery, plus whatever is waiting.
     private var timeline: some View {
         ScrollViewReader { scroll in
             ScrollView {
@@ -212,8 +490,16 @@ struct CopilotView: View {
 
                     ForEach(link?.pending ?? []) { question in
                         CopilotQuestionCard(question: question,
-                                            noun: host?.hostPlatform.noun ?? "desktop") {
-                            reading = question
+                                            noun: host?.hostPlatform.noun ?? "desktop",
+                                            // Only for a question this device
+                                            // may answer *and* has the full
+                                            // request for. See the card.
+                                            decidable: decision(for: question) != nil) {
+                            if let decision = decision(for: question) {
+                                prompt = .decide(decision)
+                            } else {
+                                prompt = .watch(question)
+                            }
                         }
                     }
 
@@ -253,6 +539,23 @@ struct CopilotView: View {
             }
             .onAppear { scroll.scrollTo(Self.bottom, anchor: .bottom) }
         }
+    }
+
+    /**
+     * The full request behind a watch row, when this phone has one.
+     *
+     * `mine` says the desktop would *accept* an answer from this device. It does
+     * not say this phone was ever sent the question, and the two come apart in a
+     * case that is not rare: **there is no replay.** A phone that reconnects
+     * while a confirmation is outstanding gets the watch row in
+     * `copilot.pending` and no `copilot.ask`, so it holds the id and not the
+     * request — and answering on an id alone is answering blind, which is the
+     * reflex Yes this design exists to refuse. So the Allow button hangs off
+     * having the *question*, never off `mine` by itself.
+     */
+    private func decision(for question: CopilotQuestion) -> CopilotConsentQuestion? {
+        guard question.mine, link?.grant.canAnswer == true else { return nil }
+        return link?.asked.first { $0.id == question.id }
     }
 
     private static let bottom = "copilot.bottom"
@@ -327,6 +630,10 @@ struct CopilotView: View {
                             .foregroundStyle(Theme.warning)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    Text(grantLine)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                        .accessibilityIdentifier("copilot.grantLine")
                 }
 
                 Spacer(minLength: 0)
@@ -354,6 +661,25 @@ struct CopilotView: View {
     private func runLine(_ state: CopilotState) -> String {
         state.hasRun ? "This phone has a copilot of its own running"
                      : "No copilot running for this phone"
+    }
+
+    /**
+     * What this connection may do, in outcomes rather than tier names.
+     *
+     * On the card rather than buried in Settings, because with three tiers the
+     * difference between them is now visible in what the screen offers and a
+     * person should be able to check their reading of it. The third clause is
+     * the one that matters: **a confirmation that would otherwise wait at the
+     * machine will appear here instead** is a thing somebody agreed to at the
+     * desk, and the phone saying it out loud is how they find out it took.
+     */
+    private var grantLine: String {
+        let grant = link?.grant ?? .none
+        var parts = ["Connected"]
+        if grant.canWatch { parts.append("watching") }
+        if grant.canDirect { parts.append("can ask it to work") }
+        if grant.canAnswer { parts.append("answers confirmations here") }
+        return parts.joined(separator: " · ")
     }
 
     /// The account, and whether it is signed in — three answers, because nil is
@@ -394,7 +720,7 @@ struct CopilotView: View {
     @ViewBuilder
     private var footer: some View {
         switch host?.copilotAccess ?? .notOffered {
-        case .notOffered, .notGranted:
+        case .notOffered, .notConnected, .credentialLost, .closed, .connecting, .notGranted:
             EmptyView()
         case .watch:
             watchingNote
@@ -583,7 +909,8 @@ struct CopilotView: View {
 
     /**
      * The overflow menu: the two lists that are references rather than places,
-     * and the two verbs that act on this phone's own run.
+     * the two verbs that act on this phone's own run, and the one that closes
+     * the copilot here.
      *
      * Activity and the session list are sheets rather than pushes for the reason
      * `SessionDetailView` is one — *"a reference somebody opens, reads and
@@ -627,6 +954,30 @@ struct CopilotView: View {
                 }
                 .accessibilityIdentifier("copilot.stop")
             }
+
+            /*
+             * `copilot.bye`, and why it is here rather than on `onDisappear`.
+             *
+             * The design asks for a bye "when a person leaves the Copilot tab on
+             * a shared device", and the shared device is the whole of it: this
+             * is for putting the phone down somewhere somebody else may pick it
+             * up. Sending one every time the screen is popped would be a
+             * different feature and a worse one — the badge on the session list,
+             * which is how anybody learns a confirmation is waiting, is pushed
+             * down the watching subscription, so an automatic bye would switch
+             * off the half of this that works while nobody is looking at it.
+             *
+             * It survives a reconnect (`CopilotLink.isHeldClosed`), because
+             * otherwise the next `welcome` would helpfully re-open the thing
+             * somebody just closed.
+             */
+            Divider()
+            Button {
+                link?.close()
+            } label: {
+                Label("Close the copilot here", systemImage: "lock")
+            }
+            .accessibilityIdentifier("copilot.close")
         } label: {
             Image(systemName: "ellipsis.circle")
         }
@@ -645,127 +996,54 @@ struct CopilotView: View {
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/* The row on the session list                                                 */
-/* -------------------------------------------------------------------------- */
-
 /**
- * The copilot, pinned above the sessions.
+ * What is on screen over the conversation: a decision, or a notice.
  *
- * Above Resume, and that ordering is a claim worth defending: Resume is *where
- * you were*, and the copilot is *what to ask before you go anywhere*. On the
- * morning this feature exists for, the first thing wanted is not the session
- * that was open last night — it is a sentence about all of them.
- *
- * It is a plain card rather than a tinted one. Resume owns the accent on this
- * screen, and the design rule is that a screen where two things are blue has no
- * accent at all. What earns attention here instead is the badge, and only when
- * there is genuinely something waiting at the desk.
- *
- * **Absent when the machine does not offer a copilot** — every desktop shipping
- * today. Present and honest when it does and this phone was granted nothing;
- * see `CopilotView.notGranted` for why that case is drawn rather than hidden.
+ * One type rather than two `@State` optionals, because two of those is two
+ * sheets that can both be non-nil — and SwiftUI resolves that by showing one of
+ * them and quietly dropping the other, which on a consent surface would be a
+ * confirmation that never appeared.
  */
-struct CopilotListRow: View {
-    let host: HostLink
-    let open: () -> Void
+private enum CopilotPrompt: Identifiable {
+    /// This connection may answer it, and holds the whole request.
+    case decide(CopilotConsentQuestion)
+    /// Somebody else's question, or one this phone reconnected in the middle of.
+    /// Watch-only: there is nothing here that settles it.
+    case watch(CopilotQuestion)
 
-    var body: some View {
-        Button(action: open) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 17))
-                    .foregroundStyle(host.copilotAccess == .notGranted ? Theme.faint : Theme.primary)
-                    .frame(width: 22)
-                    .padding(.top, 1)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Copilot")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.primary)
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.secondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 8)
-
-                if host.copilot.waitingCount > 0 {
-                    // The one thing on this row that is allowed to shout, and it
-                    // shouts about the one thing that has a two-minute deadline
-                    // on it. See `CopilotQuestionCard`.
-                    Text("\(host.copilot.waitingCount)")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.onAccent)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Theme.warning, in: Capsule())
-                        .accessibilityLabel("\(host.copilot.waitingCount) waiting for you at the machine")
-                }
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.faint)
-                    .padding(.top, 3)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(RowButtonStyle())
-        .accessibilityIdentifier("copilot.row")
-    }
-
-    /**
-     * One line about what the copilot is doing, or about why this phone cannot
-     * see.
-     *
-     * The `notGranted` wording names the machine's own settings rather than
-     * saying "no access", because a row that only reports a refusal is a row
-     * people tap twice and then stop tapping.
-     */
-    private var subtitle: String {
-        switch host.copilotAccess {
-        case .notOffered:
-            // Not drawn — `SessionListView` leaves the row out entirely for a
-            // machine with no copilot, because there is no switch on it to point
-            // at. Written out rather than folded into the case below so that the
-            // day somebody draws this row unconditionally, the sentence under it
-            // is true instead of sending them to a screen that does not exist.
-            return "Not on this \(host.hostPlatform.noun) yet"
-        case .notGranted:
-            return "Not shared with this phone — turn it on at the \(host.hostPlatform.noun)"
-        case .watch, .direct:
-            var parts: [String] = []
-            if let state = host.copilot.state {
-                // The copilot **at the machine**, which is what the read tier is
-                // for. This phone's own run is not on this row: it is the thing
-                // the screen behind it is about, and a row that said "running"
-                // for a run only this phone has would read, on the session list,
-                // as a claim about the Mac.
-                if state.deskIsRunning {
-                    parts.append("running")
-                } else if state.deskIsStarting {
-                    parts.append("starting")
-                } else if state.deskIsStopped {
-                    parts.append("not running")
-                } else {
-                    parts.append(state.desk)
-                }
-            }
-            let started = host.copilot.sessions.count
-            if started > 0 { parts.append(started == 1 ? "1 session started" : "\(started) sessions started") }
-            if host.copilotAccess == .watch { parts.append("watching only") }
-            // Nothing invented for a machine that has not answered yet. The row
-            // still draws and still opens — the screen behind it says more.
-            return parts.isEmpty ? "Ask it what happened" : parts.joined(separator: " · ")
+    var id: String {
+        switch self {
+        case let .decide(question): return "d:\(question.id)"
+        case let .watch(question): return "w:\(question.id)"
         }
     }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Where the pinned row went                                                   */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * `CopilotListRow` used to be here: the copilot pinned above the sessions, with
+ * a subtitle naming its state and a badge counting questions waiting on an
+ * answer. It is gone, and the two things it carried have gone somewhere better.
+ *
+ * *"A fourth pill, and the copilot goes leftmost."* With a tab of its own, the
+ * row was a second door to one screen, permanently occupying the top of the list
+ * somebody opened to read their sessions — the duplication he objects to on
+ * every other page of the product. So the door is the pill.
+ *
+ * The **badge** moved to the pill as well, and is strictly better placed there:
+ * a consent question has a two-minute deadline and expires into a refusal, and
+ * a badge pinned to the session list could only be seen from the session list.
+ * See `DeckTabs`.
+ *
+ * The **subtitle** — "not connected, get a code at the Mac", "watching only",
+ * "3 sessions started" — is not lost either. Every one of those sentences is the
+ * screen this file draws, in full, one tap away, with the thing that fixes it
+ * underneath. A one-line summary of a screen, on a row that opens that screen,
+ * was only ever earning its place while the screen was hard to reach.
+ */
 
 /* -------------------------------------------------------------------------- */
 /* Rows in the timeline                                                        */

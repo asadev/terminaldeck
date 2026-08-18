@@ -65,6 +65,7 @@ struct PairingView: View {
                     }
 
                     codeEntry
+                    deviceKind
                     identity
                 }
                 .padding(20)
@@ -218,6 +219,103 @@ struct PairingView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.faint)
         }
+    }
+
+    /**
+     * The choice that is about to be made **on the other machine**, said here.
+     *
+     * ## Why this is on the phone at all
+     *
+     * Approving a device is now two decisions rather than one: what kind of
+     * device it is, and — for a guest — which folders it may reach. Both are
+     * made at the desktop, by the person who owns it, and neither is anything
+     * this phone can influence. That is exactly why it belongs on this screen.
+     * The person typing these six digits is usually the person about to be
+     * approved, and until now the next thing they saw was either everything on
+     * the machine or almost nothing on it, with no explanation of which had
+     * happened or why.
+     *
+     * ## Two cards rather than a paragraph
+     *
+     * Because it is a fork, and a fork drawn as prose reads as a list of
+     * features. The wording is the desktop's own, word for word — `device-kind.ts`
+     * and `DeviceApproval.tsx` carry the same two sentences — and that is
+     * deliberate rather than lazy: somebody reads one of them here and then
+     * watches the other person read the identical line over there, which is the
+     * only way two people at two keyboards can be sure they agreed the same
+     * thing.
+     *
+     * *"The copilot is never shared"* is printed here for the same reason it is
+     * printed on the card the owner is choosing from. It is the one property of
+     * the guest tier that is not a folder list, it is not derivable from
+     * anything else on either screen, and a guest who was never told it would
+     * spend the rest of the session looking for a tab that is deliberately not
+     * there.
+     *
+     * ## And that it cannot be changed afterwards
+     *
+     * The last line, because it is the part that turns this from a preference
+     * into a boundary. A kind that could be flipped with one tap on the desktop
+     * would be a default with a delay on it; re-pairing is the whole of the
+     * change, and somebody who is about to be a guest is entitled to know that
+     * before they hand over the code.
+     */
+    private var deviceKind: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("What the machine will ask")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.faint)
+                .textCase(.uppercase)
+
+            kindCard(name: "My device",
+                     note: "Full access. It’s you at another keyboard.",
+                     symbol: "person.fill",
+                     identifier: "pairing.kind.mine")
+            kindCard(name: "Guest",
+                     note: "You choose what they can reach. The copilot is never shared.",
+                     symbol: "person.2",
+                     identifier: "pairing.kind.guest")
+
+            Text("Whoever approves this device picks one, and it is fixed once they do. "
+                 + "Changing it means pairing again.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.faint)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /**
+     * One of the two kinds, as a card that is deliberately not a button.
+     *
+     * Nothing here is selectable and nothing pretends to be: this phone is
+     * reading the choice, not making it. So there is no tint, no selected state
+     * and no tap target — a card that looked pressable and did nothing would be
+     * the exact failure this review is about, one step before it happens.
+     */
+    private func kindCard(name: String, note: String, symbol: String, identifier: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.secondary)
+                // Fixed width so the two names start on the same column; the
+                // glyphs are different widths and a ragged left edge on two
+                // stacked cards reads as a mistake.
+                .frame(width: 18, alignment: .center)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.primary)
+                Text(note)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(identifier)
     }
 
     /// This phone's own fingerprint, shown before pairing rather than after.

@@ -343,3 +343,31 @@
   background: var(--fill-tertiary);
   color: var(--status-input);
 }
+
+/* ------------------------------------------------------- rows that open -- */
+
+/* A row's buttons stay level with its heading, not with the middle of what it
+   opened.
+
+   `.settings-path-row` is `align-items: center`, which is right for a row whose
+   text is two lines and whose actions are one button. It stops being right the
+   moment a row can *grow*: pressing Edit on the instruction file adds a
+   twenty-row textarea to the left column, and the Close button beside it then
+   floats to the vertical centre of that box — a control that has visibly drifted
+   away from the thing it belongs to.
+
+   Only the rows in this pane's own lists are touched, and only their action
+   column, so nothing else in the window moves. Measured on the rendered pane:
+   with `start` the button sits on the same baseline as the row's label, which is
+   where it was before the box opened and where the eye goes back to. */
+.settings-paths > .settings-path-row {
+  align-items: start;
+}
+
+/* The buttons are a control height and the label is a line of text, so without
+   this nudge the two read as misaligned by about three pixels in the other
+   direction. `--sp-05` is the token reserved for exactly this kind of optical
+   correction. */
+.settings-paths > .settings-path-row > .settings-path-actions {
+  margin-top: calc(var(--sp-05) * -1);
+}

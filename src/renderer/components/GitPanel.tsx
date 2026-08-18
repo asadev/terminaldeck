@@ -76,14 +76,40 @@ export interface GitBridge {
   watchGit(cwd: string): Promise<GitStatusResult>
   unwatchGit(cwd: string): void
   onGitStatus(cb: (cwd: string, status: GitStatusResult) => void): () => void
+  /**
+   * Unified diff for one file, as text.
+   *
+   * Optional on the type, present in every real build. `git:diff` has been
+   * registered in the main process and exposed on the preload as `gitDiff`
+   * since Source control was written, and **nothing in the renderer ever
+   * called it** — which is the whole of the defect this pane fixes. A page that
+   * lists changed files and cannot show a change is a page whose every row has
+   * to go somewhere else, and where it went was Files:
+   *
+   *   > *"If I click on source control, click on something, it takes me to
+   *   > files."*
+   *
+   * It is optional rather than required so that `resolveBridge` below does not
+   * start refusing a window whose bridge predates this — a missing `gitDiff`
+   * turns the rows back into the old hand-off, which is a worse page but a
+   * working one, rather than an empty "Source control is not available here".
+   */
+  gitDiff?(cwd: string, path: string, options?: { staged?: boolean; untracked?: boolean }): Promise<string>
 }
 
 export interface GitPanelProps {
   /** Absolute path of the project folder to report on. */
   cwd: string
-  /** Fired when a row is clicked — the host decides what to show. */
+  /**
+   * Open this file on the Files page.
+   *
+   * No longer what a row click does — see `gitDiff` above. It is a button in
+   * the diff pane's header now, so leaving Source control is something a person
+   * asks for rather than something that happens to them when they click a file
+   * on a page whose job is to show that file's changes.
+   */
   onSelectFile?(file: GitFile): void
-  /** Path of the row to highlight, when the host is showing a diff beside it. */
+  /** Path of the row to open on, when the host knows which file is wanted. */
   selectedPath?: string | null
   /**
    * A group to open on, scrolled to and marked.
@@ -217,7 +243,142 @@ function statusKey(cwd: string): string {
   return `git:status:${cwd}`
 }
 
+/* -------------------------------------------------------------------- diff -- */
+
+/**
+ * One line of a unified diff, classified for colour.
+ *
+ * `meta` is everything git prints that is not content — the `diff --git`
+ * header, the index line, the `+++`/`---` pair, and the `\ No newline at end of
+ * file` marker. `hunk` is the `@@ … @@` line, which is the only piece of that
+ * furniture worth keeping visible, because it is what says *where* in the file
+ * you are.
+ */
+export type DiffLineKind = 'add' | 'del' | 'hunk' | 'meta' | 'context'
+
+export interface GitDiffLine {
+  kind: DiffLineKind
+  text: string
+}
+
+/**
+ * Lines rendered before the rest is folded away.
+ *
+ * Every line is its own element with its own colour, and a `replace_all` across
+ * a generated file or a first commit of a vendored directory can be a hundred
+ * thousand of them — enough to lock the window while React reconciles a list
+ * nobody is going to read to the end. The overflow is *stated*, never silently
+ * dropped: a diff that quietly stops is a diff that lies about what changed.
+ */
+export const MAX_DIFF_LINES = 2000
+
+/**
+ * Split `git diff` output into classified lines.
+ *
+ * Deliberately not a diff *algorithm* — git has already done the work and the
+ * text it hands back is the answer. This only decides what colour each line is,
+ * which is why it is a pure function over a string and is pinned by its own
+ * tests rather than by looking at a screenshot.
+ *
+ * The `---`/`+++` check comes before the `-`/`+` check on purpose. Those two
+ * header lines start with the same characters as a removal and an addition, and
+ * classifying them as content paints the file's own name red and green at the
+ * top of every diff.
+ */
+export function parseUnifiedDiff(text: string): GitDiffLine[] {
+  if (text === '') return []
+  const raw = text.split('\n')
+  // A trailing newline terminates the last line rather than starting an empty
+  // one, the same rule the artifact diff uses.
+  if (raw[raw.length - 1] === '') raw.pop()
+
+  return raw.map((line): GitDiffLine => {
+    if (line.startsWith('@@')) return { kind: 'hunk', text: line }
+    if (line.startsWith('+++') || line.startsWith('---')) return { kind: 'meta', text: line }
+    if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('\\')) {
+      return { kind: 'meta', text: line }
+    }
+    if (line.startsWith('new file') || line.startsWith('deleted file') || line.startsWith('similarity')) {
+      return { kind: 'meta', text: line }
+    }
+    if (line.startsWith('rename ') || line.startsWith('old mode') || line.startsWith('new mode')) {
+      return { kind: 'meta', text: line }
+    }
+    if (line.startsWith('+')) return { kind: 'add', text: line.slice(1) }
+    if (line.startsWith('-')) return { kind: 'del', text: line.slice(1) }
+    return { kind: 'context', text: line.startsWith(' ') ? line.slice(1) : line }
+  })
+}
+
+/**
+ * Which of git's three diff modes a file needs.
+ *
+ * The group a file is in *is* the answer, and getting it wrong produces an
+ * empty pane rather than an error: `git diff -- path` on a staged-only change
+ * prints nothing at all, and so does a plain diff of a file git has never
+ * heard of. Both were indistinguishable from "no changes" before the pane
+ * existed to show them.
+ */
+export function diffModeFor(group: GitFileGroup): { staged?: boolean; untracked?: boolean } {
+  if (group === 'staged') return { staged: true }
+  if (group === 'untracked') return { untracked: true }
+  // Conflicts diff like unstaged work: the working tree against the index.
+  return {}
+}
+
+/**
+ * Why a file has no diff to show, in a sentence, or null when it should have
+ * one.
+ *
+ * Every one of these is a *fact about the file*, not a failure — which is the
+ * distinction the pane has to make, because "git printed nothing" is the same
+ * observation for a folder, a binary and a bug. Saying "no changes" for an
+ * untracked folder would be false; the folder is the change.
+ */
+/**
+ * Where a change is waiting, said as a state rather than as a list heading.
+ *
+ * The pane's meta line reused the group's own label and produced "Modified ·
+ * changes" and, worse, "Untracked · untracked" — the heading of the list on the
+ * left, lowercased, standing in for a fact about the file. These are the four
+ * answers to "and then what?", which is what somebody looking at a diff wants
+ * to know before they act on it.
+ */
+export const GROUP_STATE: Record<GitFileGroup, string> = {
+  conflicted: 'needs resolving',
+  staged: 'ready to commit',
+  unstaged: 'not staged yet',
+  untracked: 'not tracked yet',
+}
+
+export function noDiffReason(file: GitFile): string | null {
+  if (file.path.endsWith('/')) {
+    return 'This is a folder git has not looked inside yet — it lists the whole folder as one untracked entry. Commit or ignore it and the files inside get their own rows.'
+  }
+  if (file.binary) return 'A binary file. There is no text to line up side by side.'
+  if (file.kind === 'deleted') return null
+  return null
+}
+
 /* -------------------------------------------------------------- component -- */
+
+interface DiffState {
+  status: 'idle' | 'loading' | 'ready' | 'error'
+  /** The file this text belongs to, so a stale body is never drawn under a new header. */
+  path: string | null
+  text: string
+  message?: string
+}
+
+/**
+ * How long one `git diff` has to come back.
+ *
+ * Shorter than the status read: a diff is one file against one index entry and
+ * comes back in milliseconds even on a large tree. Past ten seconds nothing is
+ * coming, and the pane has to say so with a Retry rather than sit on "Reading
+ * the change…" — the exact failure mode the recording caught on Artifacts.
+ */
+const DIFF_DEADLINE_MS = 10_000
 
 export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }: GitPanelProps) {
   const api = useMemo(() => bridge ?? resolveBridge(), [bridge])
@@ -236,6 +397,21 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
   /** The folder currently on screen, so a slow reply for an old one is dropped. */
   const shownCwd = useRef<string | null>(null)
   const focusRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * The row whose change is in the pane on the right.
+   *
+   * Held here rather than by the host, which is the whole point of the fix: the
+   * host's idea of "selected" was a path on the *Files* page, so selecting
+   * something here meant navigating there. This page shows its own selection's
+   * diff and never moves the window.
+   */
+  const [chosen, setChosen] = useState<string | null>(selectedPath ?? null)
+  const [diff, setDiff] = useState<DiffState>({ status: 'idle', path: null, text: '' })
+  /** Drops a slow diff whose row is no longer the selected one. */
+  const diffRun = useRef(0)
+  /** Bumped to ask for a diff again after one failed. */
+  const [diffAttempt, setDiffAttempt] = useState(0)
 
   useEffect(() => {
     if (!api) {
@@ -333,6 +509,98 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
       ] as Group[]
     ).filter((group) => group.files.length > 0)
   }, [status])
+
+  /** Every changed file in reading order, so a selection can be resolved to a row. */
+  const rows = useMemo(() => groups.flatMap((group) => group.files.map((file) => ({ file, group }))), [groups])
+
+  /**
+   * Whether this window can show a diff at all.
+   *
+   * Read once here rather than at each call site, because it decides two things
+   * that must agree: whether a row is a control that selects, and whether the
+   * pane exists. A build with no `gitDiff` keeps the old hand-off to Files —
+   * worse, but not a row that highlights and does nothing.
+   */
+  const canDiff = typeof api?.gitDiff === 'function'
+
+  /*
+   * The page opens on a change, not on an instruction.
+   *
+   * The same rule Artifacts follows: a pane reading "pick something from the
+   * list and it appears here" is half the window spent telling somebody to do
+   * the obvious. Only when the current pick is gone — committing a file must
+   * not yank the pane off a file that is still listed.
+   */
+  useEffect(() => {
+    if (!canDiff) return
+    if (rows.length === 0) {
+      if (chosen !== null) setChosen(null)
+      return
+    }
+    if (chosen && rows.some((row) => row.file.path === chosen)) return
+    /*
+     * The first row that has a change to show, not simply the first row.
+     *
+     * Groups are listed conflicts-staged-changes-untracked and an untracked run
+     * often begins with a *folder* — git lists a directory it has not looked
+     * inside as one entry ending in `/`, and there is no diff of a directory. So
+     * opening on `rows[0]` landed the page on an explanation of why there is
+     * nothing to see, every time, in a working tree full of new folders.
+     */
+    const first = rows.find((row) => noDiffReason(row.file) === null) ?? rows[0]
+    setChosen(first.file.path)
+  }, [rows, chosen, canDiff])
+
+  const current = useMemo(
+    () => rows.find((row) => row.file.path === chosen) ?? null,
+    [rows, chosen],
+  )
+
+  /**
+   * Read the selected file's diff.
+   *
+   * Keyed on the *group* as well as the path, because the group decides which
+   * of git's three diff modes answers — see `diffModeFor`. A file that moves
+   * from Changes to Staged while the pane is open is the same path and a
+   * different question.
+   */
+  const currentPath = current?.file.path ?? null
+  const currentGroup = current?.group.key ?? null
+  const currentBinary = current?.file.binary ?? false
+  const currentIsFolder = currentPath?.endsWith('/') ?? false
+
+  useEffect(() => {
+    const diffFor = api?.gitDiff
+    if (!diffFor || !currentPath || !currentGroup) {
+      setDiff({ status: 'idle', path: null, text: '' })
+      return
+    }
+    // A folder and a binary have no text to line up, and asking git for one
+    // returns an empty string that would be indistinguishable from "unchanged".
+    // `noDiffReason` says which it is; there is nothing to read.
+    if (currentIsFolder || currentBinary) {
+      setDiff({ status: 'ready', path: currentPath, text: '' })
+      return
+    }
+
+    const id = diffRun.current + 1
+    diffRun.current = id
+    setDiff({ status: 'loading', path: currentPath, text: '' })
+
+    void withDeadline(
+      diffFor(cwd, currentPath, diffModeFor(currentGroup)),
+      'Reading this change',
+      DIFF_DEADLINE_MS,
+    )
+      .then((text) => {
+        if (diffRun.current !== id) return
+        setDiff({ status: 'ready', path: currentPath, text: typeof text === 'string' ? text : '' })
+      })
+      .catch((error: unknown) => {
+        if (diffRun.current !== id) return
+        setDiff({ status: 'error', path: currentPath, text: '', message: readFailure(error) })
+      })
+  }, [api, cwd, currentPath, currentGroup, currentBinary, currentIsFolder, diffAttempt])
 
   if (!api) {
     return (
@@ -471,6 +739,7 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
           Nothing staged, nothing changed, nothing untracked.
         </PageEmpty>
       ) : (
+        <div className="git-body" data-diff={canDiff || undefined}>
         <div className="git-groups">
           {groups.map((group) => (
             <div
@@ -489,7 +758,7 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
                     <button
                       type="button"
                       className="git-row"
-                      data-selected={file.path === selectedPath}
+                      data-selected={canDiff ? file.path === chosen : file.path === selectedPath}
                       /*
                        * How the copilot's focus overlay says "this file
                        * changed".
@@ -508,8 +777,21 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
                        * files.
                        */
                       data-drive-anchor={`git-file:${cwd}:${file.path}`}
-                      onClick={() => onSelectFile?.(file)}
-                      title={`${describe(file)} — git status ${file.code.trim() || '?'}`}
+                      /*
+                       * A click stays on this page.
+                       *
+                       * It used to be `onSelectFile(file)`, which the host
+                       * answered by opening the file on the Files page — so the
+                       * one thing a changed file could not do from Source
+                       * control was show you what changed in it. Leaving is now
+                       * a named button in the pane's header.
+                       */
+                      onClick={() => (canDiff ? setChosen(file.path) : onSelectFile?.(file))}
+                      title={
+                        canDiff
+                          ? `${describe(file)} — git status ${file.code.trim() || '?'}`
+                          : `Open ${describe(file)} on the Files page`
+                      }
                     >
                       {/* No longer `aria-hidden`. It was hidden because a lone
                           `M` read aloud is noise; a word is the one part of the
@@ -541,7 +823,141 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
             </div>
           ))}
         </div>
+
+        {canDiff && current && (
+          <DiffPane
+            file={current.file}
+            group={current.group}
+            state={diff}
+            onRetry={() => setDiffAttempt((n) => n + 1)}
+            onOpenFile={onSelectFile}
+          />
+        )}
+        </div>
       )}
     </section>
+  )
+}
+
+/* ------------------------------------------------------------- diff pane -- */
+
+/**
+ * What actually changed in the selected file.
+ *
+ * The header names the file and what happened to it, and carries the one way
+ * off this page: **Open in Files**, drawn only when the host gave this panel
+ * somewhere to send it. A disabled button here would teach nothing and a live
+ * one that goes nowhere is the defect this pane exists to remove.
+ */
+function DiffPane({
+  file,
+  group,
+  state,
+  onRetry,
+  onOpenFile,
+}: {
+  file: GitFile
+  group: Group
+  state: DiffState
+  onRetry(): void
+  onOpenFile?(file: GitFile): void
+}) {
+  const reason = noDiffReason(file)
+  // Only the body that belongs to this file. Without the guard the previous
+  // file's diff stays on screen under the new file's name for as long as the
+  // read takes, which is a page telling two different truths at once.
+  const mine = state.path === file.path
+  const lines = useMemo(
+    () => (mine && state.status === 'ready' ? parseUnifiedDiff(state.text) : []),
+    [mine, state.status, state.text],
+  )
+  /*
+   * git's file header is dropped, not dimmed.
+   *
+   * Every diff begins with four lines that name the file twice more and then
+   * quote two object hashes: `diff --git a/x b/x`, `index 1c798e5..2e598b3
+   * 100644`, `--- a/x`, `+++ b/x`. The pane's own heading already says which
+   * file this is, so all four are the same fact in a language his audience does
+   * not read — *"my audience will be mostly non-technical vibe coders."* They
+   * were kept and greyed at first, which is four lines of grey at the top of
+   * every single change.
+   *
+   * The `@@` hunk lines stay: they are the only part of git's furniture that
+   * carries information the header does not, namely where in the file you are.
+   */
+  const body = lines.filter((line) => line.kind !== 'meta')
+  const shown = body.slice(0, MAX_DIFF_LINES)
+
+  return (
+    <div className="git-diff" aria-label={`Changes in ${file.path}`}>
+      <header className="git-diff-head">
+        <h3 className="git-diff-path" title={file.path}>
+          {file.path}
+        </h3>
+        <p className="git-diff-meta">
+          {[
+            // What happened to the file, and what happens to it next.
+            `${changeLabel(file.kind, file.code)} · ${GROUP_STATE[group.key]}`,
+            file.binary
+              ? 'binary'
+              : [
+                  file.insertions ? `+${file.insertions}` : null,
+                  file.deletions ? `−${file.deletions}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' ') || null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </p>
+        {onOpenFile && !file.path.endsWith('/') && (
+          <button type="button" className="git-diff-open" onClick={() => onOpenFile(file)}>
+            Open in Files
+          </button>
+        )}
+      </header>
+
+      {reason ? (
+        <PageNote>{reason}</PageNote>
+      ) : !mine || state.status === 'loading' ? (
+        <PageNote busy>Reading this change…</PageNote>
+      ) : state.status === 'error' ? (
+        <div className="git-diff-failed">
+          <PageNote>{state.message}</PageNote>
+          <button type="button" className="git-diff-retry" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      ) : body.length === 0 ? (
+        /*
+         * git printed nothing, and that is a fact rather than a failure.
+         *
+         * The common case is a file whose only change is staged while the row
+         * sits in Changes, or the reverse — the working tree and the index
+         * agree for the mode this group asks about. Saying "no changes" flat
+         * would contradict the row two centimetres to the left.
+         */
+        <PageNote>
+          git reports no text change for this file where it is — {GROUP_STATE[group.key]}. Its
+          counterpart in another group may hold the change.
+        </PageNote>
+      ) : (
+        <div className="git-diff-body">
+          {shown.map((line, index) => (
+            <div className="git-diff-line" data-kind={line.kind} key={index}>
+              <span className="git-diff-mark" aria-hidden="true">
+                {line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ' '}
+              </span>
+              <span className="git-diff-text">{line.text}</span>
+            </div>
+          ))}
+          {body.length > shown.length && (
+            <p className="git-diff-more">
+              {(body.length - shown.length).toLocaleString()} more lines not shown.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

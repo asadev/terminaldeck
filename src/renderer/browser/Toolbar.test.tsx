@@ -43,7 +43,9 @@ function render(
       drawing={draw?.drawing === true}
       deviceOpen={false}
       onToggleDevice={() => {}}
-      onOpenSession={() => {}}
+      onMenu={() => {}}
+      menuOpen={false}
+      steps={0}
       onToggleIsolation={onToggleIsolation}
     />,
   )
@@ -115,5 +117,54 @@ describe('the draw button', () => {
   it('is disabled with no tab open', () => {
     const markup = render(null, () => {}, { onDraw: () => {} })
     expect(markup).toMatch(/aria-label="Mark the page up[^"]*"[^>]*disabled/)
+  })
+})
+
+/**
+ * The bar after the bottom band was removed.
+ *
+ * *"Remove everything from the bottom. I need a clear view of the websites.
+ * Whatever is required should be on the top right corner."* These two pin the
+ * consequences on this bar: the menu that took the band's contents exists, and
+ * the recorder — which no longer has a panel on screen while it runs — reports
+ * its count on the button that is already there.
+ */
+describe('the top-right corner carries what the bottom used to', () => {
+  it('has a menu for the things that are not actions on the page', () => {
+    const markup = render(newTab('tab-1'), () => {})
+    expect(markup).toContain('Profiles, saved logins, cookies and the start page')
+  })
+
+  it('counts the recorded steps on the Stop button, since nothing else shows them', () => {
+    const markup = renderToStaticMarkup(
+      <Toolbar
+        tab={newTab('tab-1')}
+        security="local"
+        progress={1}
+        resolution={{ kind: 'url', url: 'http://localhost:3000/', display: 'localhost:3000' }}
+        focusToken={0}
+        onDraft={() => {}}
+        onEditing={() => {}}
+        onSubmit={() => {}}
+        onBack={() => {}}
+        onForward={() => {}}
+        onReload={() => {}}
+        onStop={() => {}}
+        onHome={() => {}}
+        onInspect={() => {}}
+        onRecord={() => {}}
+        onScreenshot={() => {}}
+        onDevtools={() => {}}
+        devtoolsOpen={false}
+        recording={true}
+        drawing={false}
+        deviceOpen={false}
+        onToggleDevice={() => {}}
+        onMenu={() => {}}
+        menuOpen={false}
+        steps={8}
+      />,
+    )
+    expect(markup).toContain('Stop (8)')
   })
 })

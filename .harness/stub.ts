@@ -42,6 +42,48 @@ const sessions = [
 ]
 let sessionCounter = 0
 /**
+ * Sessions that were open and did not come back, under `?held`.
+ *
+ * Behind a flag because the honest default is none: a launch where everything
+ * restored is the ordinary case, and a harness that always shows two failures
+ * would make a normal rail impossible to look at. Behind a flag *at all*
+ * because this is the state that shipped invisible — four sessions failed to
+ * restart on a real machine, the app wrote a warning to a log nobody had opened,
+ * and the window looked completely normal — so being able to see the rows is
+ * the whole point.
+ *
+ * The two rows are the two real cases: an agent that could not be started in a
+ * folder the rail has a heading for, and one whose folder was not there at all,
+ * which has no heading and has to name itself. Reasons are copied verbatim from
+ * `session-restore.ts` and `host-core.ts`, because a plausible-looking sentence
+ * of the harness's own is how a stub starts inventing a UI the app cannot
+ * produce.
+ */
+let heldSessions: Array<Record<string, unknown>> = new URLSearchParams(location.search).has('held')
+  ? [
+      {
+        key: 'held-1',
+        cwd: '/Users/apple/Projects/terminaldeck',
+        provider: 'claude',
+        reason:
+          'it could not be started again: Claude Code could not be found on this machine, so this session was not started.',
+        at: launchedAt,
+      },
+      {
+        key: 'held-2',
+        cwd: '/home/asad/ClaudeImza',
+        provider: 'claude',
+        reason: 'the folder it ran in is no longer on this machine',
+        at: launchedAt,
+      },
+    ]
+  : []
+/** Subscribers to `sessions:held`. Pushed, exactly as the main process pushes. */
+const heldListeners = new Set<(held: unknown) => void>()
+const announceHeld = (): void => {
+  for (const listener of heldListeners) listener(heldSessions)
+}
+/**
  * The agents "added" in this browser session. See `addAgent` below.
  *
  * Module-level and mutable, because the plus button's whole point is that the
@@ -112,6 +154,97 @@ const remote = {
  * access, so a harness that opened with a device already connected would be
  * showing a state no real machine starts in.
  */
+/**
+ * What each approved device is, and what each guest may open.
+ *
+ * Two lists rather than fields on `remote.devices`, because the main process
+ * keeps them in two files for a reason worth modelling: losing a folder list
+ * costs a preference and losing a kind costs a boundary, so they have opposite
+ * failure directions and never share a parser.
+ *
+ * `dev-2` is a guest with one folder, which is the state the harness should open
+ * in — an approved device that reaches exactly what somebody chose, rather than
+ * whatever the desktop has open.
+ */
+const deviceKinds: Array<{ deviceId: string; kind: 'mine' | 'guest'; decidedAt: number }> = [
+  { deviceId: 'dev-2', kind: 'guest', decidedAt: launchedAt - 6 * 3_600_000 },
+]
+
+const deviceFolders: Array<{ deviceId: string; folders: string[] }> = [
+  { deviceId: 'dev-2', folders: ['/Users/apple/Projects/terminaldeck'] },
+]
+
+/**
+ * One other machine this desktop has paired to, and what is running on it.
+ *
+ * A Linux box, deliberately: the point of the machines section is that remote
+ * and local are tellable apart, and a second Mac named "MacBook Pro" in a list
+ * of Macs is the fixture that makes a broken icon look fine.
+ */
+const machinesView = {
+  machines: [
+    {
+      id: 'mach-1',
+      name: 'office-pc',
+      hostId: 'B2WK6HJN4TDX8CRM3YFQ7PZV9G',
+      fingerprint: 'B2WK-6HJN-4TDX-8CRM-3YFQ-7PZV',
+      platform: 'linux',
+      pairedAt: launchedAt - 3 * 86_400_000,
+      lastConnectedAt: launchedAt - 30_000,
+    },
+  ],
+  links: [
+    {
+      id: 'mach-1',
+      state: 'online',
+      reason: null,
+      sessions: [
+        {
+          id: 'remote-a',
+          title: 'imza-crm',
+          cwd: '/home/asad/ClaudeImzacrm',
+          provider: 'claude',
+          status: 'running',
+          exitCode: null,
+        },
+        {
+          id: 'remote-b',
+          title: 'site',
+          cwd: '/home/asad/site',
+          provider: 'shell',
+          status: 'idle',
+          exitCode: null,
+        },
+      ],
+      folders: ['/home/asad/ClaudeImzacrm', '/home/asad/site'],
+      // `web` is here because the far machine has a window and this device is
+      // one of the owner's own. A guest would get the identical list with `web`
+      // missing, and the Open there button simply absent — which is the state
+      // worth being able to reproduce here, by deleting one string.
+      capabilities: ['create', 'localhost', 'web', 'close'],
+      /*
+       * What that machine is serving, so the remote-localhost block has
+       * something to draw.
+       *
+       * `guessed` on the last one deliberately: it is the far machine saying it
+       * could not name the process, and the row has to read as "something is on
+       * 8080" rather than inventing a name for it.
+       */
+      ports: [
+        { port: 5173, process: 'node', guessed: false },
+        { port: 3000, process: 'node', guessed: false },
+        { port: 8080, process: '', guessed: true },
+      ],
+      hostPlatform: 'linux',
+      retryAt: null,
+    },
+  ],
+  blocked: null,
+}
+
+const machineListeners = new Set<(view: unknown) => void>()
+const machineOutputListeners = new Set<(chunk: unknown) => void>()
+
 /** Who is listening for a device connecting. See `onDeviceCopilotChanged`. */
 const copilotWatchers = new Set<(links: unknown) => void>()
 
@@ -147,6 +280,17 @@ const remoteState = () => ({
   connections: remote.running ? remote.connections : [],
 })
 
+/**
+ * The copilot's own instructions, as the harness holds them.
+ *
+ * A `let` because the setup flow writes it — see `copilotWriteInstructions`
+ * below. The default is a file the flow has never touched, so the questions are
+ * reachable; `?copilot-named` is the other state.
+ */
+let copilotInstructions = new URLSearchParams(location.search).has('copilot-named')
+  ? '# Copilot\n\n## Who you are\n\nYour name is **Nova**. This app reads it from this line — change the\nname here and it changes in the sidebar, on the tab and in Settings.\n\nCall them **Asad**.\n\n---\n\nYou are a developer’s copilot.\n'
+  : '# Copilot\n\nYou are a developer’s copilot.\n'
+
 const api: Record<string, unknown> = new Proxy(
   {
     getBrand: async () => ({ name: 'Deck', tagline: 'Run and watch your Claude sessions' }),
@@ -161,12 +305,25 @@ const api: Record<string, unknown> = new Proxy(
      * which is exactly the pair of statements that were contradicting each other.
      */
     getPreferences: async () => ({
-      theme: 'dark',
+      // `?light` boots the app in the light theme rather than switching it
+      // afterwards. Poking `data-theme` from outside changes the sheet and not
+      // the terminals: xterm paints on a canvas, so its palette is resolved when
+      // it is built and re-resolved by `subscribeTheme` — which an attribute set
+      // behind the app's back never fires. So a light screenshot taken that way
+      // shows a dark terminal in a light window, and the defect is in the
+      // screenshot rather than in the app.
+      theme: new URLSearchParams(location.search).has('light') ? 'light' : 'dark',
       defaultProvider: new URLSearchParams(location.search).has('shell') ? 'shell' : 'claude',
       restoreSessions: true,
       notifyOnComplete: true,
     }),
     setPreferences: async (p: unknown) => p,
+    // The two pushes that tell an open window a stored value changed from
+    // outside it. Nothing in the harness writes settings from a second place, so
+    // they are subscriptions that never fire — but they must exist and must
+    // return an unsubscribe function, because a stub that disagrees with the
+    // preload invents bugs that do not exist and hides ones that do.
+    onPreferencesChanged: noop, onSettingsChanged: noop,
     getSettings: async () => ({}),
     setSettings: async (p: unknown) => p,
     settingsPaths: async () => ({ settings: '~/Library/Application Support/terminaldeck/settings.json' }),
@@ -258,7 +415,7 @@ const api: Record<string, unknown> = new Proxy(
     killSession: async () => {},
     writeToSession: () => {},
     resizeSession: () => {},
-    onSessionData: noop, onSessionExit: noop, onSessionStatus: noop,
+    onSessionData: noop, onSessionExit: noop, onSessionStatus: noop, onSessionRemoved: noop,
     /**
      * A real subscription rather than a noop, because this is the one event
      * nothing in the window can provoke: `session:created` is broadcast only
@@ -272,6 +429,69 @@ const api: Record<string, unknown> = new Proxy(
       sessionCreatedListeners.add(cb)
       return () => sessionCreatedListeners.delete(cb)
     },
+    /*
+     * The sessions that did not come back.
+     *
+     * All three requests answer with the *new* list, which is what the preload
+     * does and what the hook relies on — a stub that answered with the old one
+     * would make a working retry look like a button that does nothing, which is
+     * exactly the class of invented bug `.harness/stub.ts` has produced three
+     * times by disagreeing with the bridge.
+     *
+     * Retry here always succeeds, because out here there is no main process to
+     * fail: the row leaves the list, and no session appears, which is the one
+     * respect in which this cannot be honest. Drive the other outcome with
+     * `emitHeldSessions([...])` from the console.
+     */
+    listHeldSessions: async () => heldSessions,
+    retryHeldSession: async (key: string) => {
+      heldSessions = heldSessions.filter((row) => row.key !== key)
+      announceHeld()
+      return heldSessions
+    },
+    forgetHeldSession: async (key: string) => {
+      heldSessions = heldSessions.filter((row) => row.key !== key)
+      announceHeld()
+      return heldSessions
+    },
+    onHeldSessions: (cb: (held: unknown) => void) => {
+      heldListeners.add(cb)
+      return () => heldListeners.delete(cb)
+    },
+    /*
+     * Running the session you have as a different account.
+     *
+     * The plan is the interesting half out here, because it is what the sheet
+     * is made of: a real main process reads the target account's transcript
+     * store to decide, and there is no store and no disk here. `stays` is the
+     * answer this can give honestly — the other account has no conversation in
+     * this folder — and it is also the answer that exercises the sentence a
+     * person is most likely to read.
+     *
+     * The switch itself resolves with a session that does not exist, which is
+     * the one respect in which this cannot be honest and is the same bargain
+     * `retryHeldSession` above strikes. What it *does* get right is the shape:
+     * a `SessionMeta` with a new id, which is what the window's replace-in-place
+     * path is built around and what a stub answering with the old id would hide.
+     */
+    planSessionSwitch: async (sessionId: string, profileId: string) => ({
+      sessionId,
+      refusal: null,
+      from: { id: 'system', name: 'Default', provider: 'claude' },
+      to: { id: profileId, name: profileId, provider: 'claude' },
+      conversation: 'stays',
+      resume: false,
+    }),
+    switchSessionAccount: async (sessionId: string, profileId: string) => ({
+      id: `${sessionId}-as-${profileId}`,
+      cwd: '/Users/apple/Projects/terminaldeck',
+      title: 'terminaldeck',
+      provider: 'claude',
+      exitCode: null,
+      createdAt: Date.now(),
+      profileId,
+      profileName: profileId,
+    }),
     onCostUpdate: noop, onGitStatus: noop, onBrowserState: noop, onBrowserElement: noop,
     /*
      * Links. `onOpenLinkTab` is an `on*`, so it returns an unsubscribe like
@@ -332,14 +552,48 @@ const api: Record<string, unknown> = new Proxy(
     // the fixture alone made every button on this panel look broken in the
     // harness — pressed, cheerful sentence, row unchanged — which is the exact
     // symptom of the bug the panel's `settle` guard exists to catch.
-    approveRemoteDevice: async (id: string) => {
+    /*
+     * Approving now carries the kind and the folders, and this stub honours the
+     * order the handler uses: record what the device is, record what it may
+     * reach, and only then admit it.
+     *
+     * The order is modelled rather than the end state, because it is the whole
+     * fix. A stub that set `approved` first would let the harness show a flow
+     * that looks identical to the broken build it replaces.
+     */
+    approveRemoteDevice: async (id: string, kind: string, folders: string[]) => {
       const device = remote.devices.find((d) => d.id === id)
-      if (device && device.status !== 'revoked') device.status = 'approved'
+      if (!device || device.status === 'revoked') return remote.devices
+      if (kind !== 'mine' && kind !== 'guest') return remote.devices
+      if (deviceKinds.some((row) => row.deviceId === id)) return remote.devices
+      deviceKinds.push({ deviceId: id, kind, decidedAt: Date.now() })
+      const existing = deviceFolders.findIndex((row) => row.deviceId === id)
+      if (kind === 'guest') {
+        const row = { deviceId: id, folders: [...folders] }
+        if (existing >= 0) deviceFolders[existing] = row
+        else deviceFolders.push(row)
+      } else if (existing >= 0) {
+        deviceFolders.splice(existing, 1)
+      }
+      device.status = 'approved'
       return remote.devices
+    },
+    listRemoteDeviceKinds: async () => deviceKinds,
+    listDeviceFolders: async () => deviceFolders,
+    setDeviceFolders: async (deviceId: string, folders: string[]) => {
+      const at = deviceFolders.findIndex((row) => row.deviceId === deviceId)
+      const row = { deviceId, folders: [...folders] }
+      if (at >= 0) deviceFolders[at] = row
+      else deviceFolders.push(row)
+      return deviceFolders
     },
     revokeRemoteDevice: async (id: string) => {
       const device = remote.devices.find((d) => d.id === id)
       if (device) device.status = 'revoked'
+      // The kind goes with it, which is what makes re-pairing the way to change
+      // one: the same id can be claimed again afterwards, as a different kind.
+      const kindAt = deviceKinds.findIndex((row) => row.deviceId === id)
+      if (kindAt >= 0) deviceKinds.splice(kindAt, 1)
       // Immediate, exactly as `remote:device:revoke` is: the socket goes with
       // the approval rather than at the next connection.
       remote.connections = remote.connections.filter((c) => c.deviceId !== id)
@@ -573,36 +827,87 @@ const api: Record<string, unknown> = new Proxy(
       sessionId: 'copilot-1',
       paths: {
         root: '/Users/apple/Library/Application Support/terminaldeck/copilot',
+        ownFolder: true,
+        // The layer, not the folder. Its instructions moved out of the working
+        // directory so that an ordinary terminal opened there does not inherit
+        // the copilot's identity, and a stub still pointing at `<root>/CLAUDE.md`
+        // made the settings pane look like it was editing the wrong file.
         instructions:
-          '/Users/apple/Library/Application Support/terminaldeck/copilot/CLAUDE.md',
+          '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/instructions.md',
         memory: '/Users/apple/Library/Application Support/terminaldeck/copilot/memory',
         log: '/Users/apple/Library/Application Support/terminaldeck/copilot-log',
         actions:
           '/Users/apple/Library/Application Support/terminaldeck/copilot-log/actions.jsonl',
+        layer: {
+          dir: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer',
+          yours: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/instructions.md',
+          contract: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/tools.md',
+          composed: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/copilot.md',
+        },
       },
-      home: '/Users/apple/Library/Application Support/terminaldeck/remote/homes/copilot',
+      folder: {
+        home: '/Users/apple/Library/Application Support/terminaldeck/copilot',
+        chosen: null,
+        isDefault: true,
+        problem: null,
+        runningIn: '/Users/apple/Library/Application Support/terminaldeck/copilot',
+        restartNeeded: false,
+      },
+      home: '/Users/apple/Library/Application Support/terminaldeck/copilot',
       startedAt: launchedAt - 42 * 60_000,
       problem: null,
-      confinement: { kind: 'seatbelt', enforced: true, reason: null },
+      /*
+       * `records`, not `confinement`. The jail is gone — it cost the copilot its
+       * login and its ability to read a line of anybody's code — and what is left
+       * is five paths the operating system refuses it. A stub still answering the
+       * old field made the pane print "not enforced here" on a machine where the
+       * refusal is held, which is the wrong half of the one claim on that block.
+       */
+      records: {
+        kind: 'seatbelt',
+        enforced: true,
+        reason: null,
+        // Five, because the pane says "five paths, and only five" — a stub that
+        // answered three made the screen contradict itself two lines apart,
+        // which is exactly the defect that block is written to avoid.
+        paths: [
+          '/Users/apple/Library/Application Support/terminaldeck/routines',
+          '/Users/apple/Library/Application Support/terminaldeck/routines-state.json',
+          '/Users/apple/Library/Application Support/terminaldeck/copilot-log/actions.jsonl',
+          '/Users/apple/Library/Application Support/terminaldeck/remote/copilot-grants.json',
+          '/Users/apple/Library/Application Support/terminaldeck/remote/devices.json',
+        ],
+      },
+      profile: { id: 'work', name: 'app.imatch.ae@gmail.com' },
+      instructionsAreDefault: false,
       // `superseded` rather than `current`, because it is the state with an
       // offer attached and the one a pane can get wrong by calling it "edited".
-      instructionsAreDefault: false,
       instructions: 'superseded',
-      projects: {
-        granted: ['/Users/apple/Projects/terminaldeck'],
-        available: ['/Users/apple/Projects/terminaldeck', '/Users/apple/Projects/science-locus'],
-        pending: ['/Users/apple/Projects/science-locus'],
-        enforceable: true,
-        reason: null,
-        excluded: ['.env', '.env.*', 'id_rsa', '*.pem', '.npmrc', '.netrc', '.ssh', '.aws'],
-      },
+      /*
+       * What the *session* reads, in order. The memory files are here because
+       * the session really does load them; the pane no longer draws one row per
+       * file, which is the whole point of the 2026-08-17 pass — but the stub has
+       * to keep answering honestly or the pane would be tested against a folder
+       * with no memory in it.
+       */
       startupFiles: [
         {
-          path: '/Users/apple/Library/Application Support/terminaldeck/copilot/CLAUDE.md',
-          purpose: 'Instructions — what it is and what it may do',
+          path: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/copilot.md',
+          purpose:
+            'The copilot layer — handed to it on the command line, never written into the folder',
           exists: true,
-          size: 9410,
-          modifiedAt: launchedAt - 3 * 3600_000,
+          size: 11_204,
+          modifiedAt: launchedAt - 42 * 60_000,
+          owner: 'app',
+        },
+        {
+          path: '/Users/apple/Library/Application Support/terminaldeck/copilot/CLAUDE.md',
+          purpose:
+            'The folder’s own instructions. This app never writes one here — an empty row means nothing in this folder claims to be the copilot',
+          exists: false,
+          size: null,
+          modifiedAt: null,
+          owner: 'folder',
         },
         {
           path: '/Users/apple/Library/Application Support/terminaldeck/copilot/memory/MEMORY.md',
@@ -610,6 +915,7 @@ const api: Record<string, unknown> = new Proxy(
           exists: true,
           size: 412,
           modifiedAt: launchedAt - 40 * 60_000,
+          owner: 'folder',
         },
         {
           path: '/Users/apple/Library/Application Support/terminaldeck/copilot/memory/science_locus_uses_pnpm.md',
@@ -617,6 +923,34 @@ const api: Record<string, unknown> = new Proxy(
           exists: true,
           size: 286,
           modifiedAt: launchedAt - 40 * 60_000,
+          owner: 'folder',
+        },
+      ],
+      /** The three app-side files, which is what the pane puts editors on. */
+      layerFiles: [
+        {
+          path: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/instructions.md',
+          purpose: 'Yours — the persona and the standing instructions.',
+          exists: true,
+          size: 1_820,
+          modifiedAt: launchedAt - 3 * 3600_000,
+          owner: 'yours',
+        },
+        {
+          path: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/tools.md',
+          purpose: 'The app’s — the tool contract and the permission rules.',
+          exists: true,
+          size: 9_410,
+          modifiedAt: launchedAt - 42 * 60_000,
+          owner: 'app',
+        },
+        {
+          path: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/copilot.md',
+          purpose: 'The two of them composed.',
+          exists: true,
+          size: 11_204,
+          modifiedAt: launchedAt - 42 * 60_000,
+          owner: 'app',
         },
       ],
     }),
@@ -626,6 +960,65 @@ const api: Record<string, unknown> = new Proxy(
       plan: 'max',
       checkedAt: launchedAt,
     }),
+
+    /*
+     * The copilot's instruction file, and the folder it works in.
+     *
+     * Held in a variable rather than answered from a literal, because the setup
+     * flow *writes* here: it splices its answers into this text and saves it
+     * back, and the window then re-reads the file to find out what the copilot
+     * is called. A stub that answered a constant would show the questions being
+     * asked and the name never arriving — a bug that exists only in the harness,
+     * which is exactly what this file's header warns against.
+     *
+     * `?copilot-named` starts from a file that has already been through the
+     * flow. Without it the harness is a first run, which is the more useful
+     * default: the setup questions cannot be reached any other way once they
+     * have been answered.
+     */
+    copilotReadInstructions: async () => ({
+      ok: true,
+      text: copilotInstructions,
+      state: 'edited',
+      path: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/instructions.md',
+    }),
+    copilotWriteInstructions: async (text: string) => {
+      copilotInstructions = text
+      return { saved: true, backup: null, error: null }
+    },
+    copilotFolder: async () => ({
+      home: '/Users/apple/Library/Application Support/terminaldeck/copilot',
+      chosen: null,
+      isDefault: true,
+      problem: null,
+      // Null: nothing is running in the harness, so the flow offers to start one
+      // rather than to save. Both branches are worth being able to see, and this
+      // is the one a first run gets.
+      runningIn: null,
+      restartNeeded: false,
+    }),
+    copilotScaffold: async () => ({ created: [], removed: [], error: null }),
+    /*
+     * The app's half of the layer, and the composition of both. Both are shown
+     * in read-only boxes behind a View button, so a stub that answered nothing
+     * would draw "it could not be read" over a feature that works.
+     */
+    copilotReadContract: async () => ({
+      text:
+        '# Tools\n\nGenerated at start from the tools that are wired.\n\n' +
+        '## read\n- sessions.list — list every session\n- sessions.transcript — read a conversation\n\n' +
+        '## act\n- sessions.start — start a session\n- sessions.send — send text to one\n\n' +
+        '## alter (always confirmed)\n- settings.write — change a setting\n\n' +
+        '## Refused by this machine\n- the routines folder\n- the action log\n- the paired-device trust store\n',
+      path: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/tools.md',
+      error: null,
+    }),
+    copilotReadComposed: async () => ({
+      text: `${copilotInstructions}\n\n---\n\n# Tools\n\nGenerated at start from the tools that are wired.\n`,
+      path: '/Users/apple/Library/Application Support/terminaldeck/copilot-layer/copilot.md',
+      error: null,
+    }),
+
     /*
      * `deck-control`: the copilot's tools, and the gate in front of them.
      *
@@ -1008,6 +1401,110 @@ const api: Record<string, unknown> = new Proxy(
     browserInspect: async () => browserTabState,
     browserState: async () => browserTabState,
     browserCookies: async () => [],
+
+    /*
+     * Profiles and saved logins, as the preload really shapes them.
+     *
+     * Present rather than left off, because leaving them off is the failure
+     * this file's own header warns about: `accounts-bridge.ts` resolves each of
+     * these independently and hides the whole menu section when any is missing,
+     * so a stub without them would draw a browser panel with no profile
+     * switcher and no logins row and look correct doing it.
+     *
+     * The login list carries no password field, which is not an omission — the
+     * real channel has none either. See `browser-passwords.ts`.
+     */
+    browserProfiles: async () => ({
+      profiles: [
+        {
+          id: 'default',
+          name: 'Default',
+          partition: 'persist:terminaldeck-browser',
+          createdAt: 0,
+          isDefault: true,
+        },
+      ],
+      activeId: 'default',
+    }),
+    browserProfileCreate: async () => ({
+      profiles: [
+        {
+          id: 'default',
+          name: 'Default',
+          partition: 'persist:terminaldeck-browser',
+          createdAt: 0,
+          isDefault: true,
+        },
+      ],
+      activeId: 'default',
+    }),
+    /*
+     * These three answered `{ profiles: [], activeId: 'default' }`, which is a
+     * shape the real main process cannot produce and this file's own header
+     * forbids: `profileState()` always includes the default profile, because a
+     * browser cannot have none. `readProfileState` reads an empty list as "this
+     * did not parse" and answers null — correctly — so a panel taking that
+     * answer straight into state emptied its own list the moment anybody
+     * pressed Rename, and looked exactly like a bug in the panel.
+     *
+     * A stub that disagrees with the preload invents bugs that do not exist and
+     * hides ones that do; that has happened three times in this file. They
+     * answer with the same one-profile state everything else here does.
+     */
+    browserProfileRename: async () => ({
+      profiles: [
+        {
+          id: 'default',
+          name: 'Default',
+          partition: 'persist:terminaldeck-browser',
+          createdAt: 0,
+          isDefault: true,
+        },
+      ],
+      activeId: 'default',
+    }),
+    browserProfileActivate: async () => ({
+      profiles: [
+        {
+          id: 'default',
+          name: 'Default',
+          partition: 'persist:terminaldeck-browser',
+          createdAt: 0,
+          isDefault: true,
+        },
+      ],
+      activeId: 'default',
+    }),
+    browserProfileDelete: async () => ({
+      profiles: [
+        {
+          id: 'default',
+          name: 'Default',
+          partition: 'persist:terminaldeck-browser',
+          createdAt: 0,
+          isDefault: true,
+        },
+      ],
+      activeId: 'default',
+    }),
+    browserPasswordsAvailable: async () => true,
+    browserPasswords: async () => [
+      {
+        profileId: 'default',
+        origin: 'http://localhost:3000',
+        username: 'you@example.com',
+        updatedAt: Date.now(),
+      },
+    ],
+    browserPasswordForget: async () => ({ ok: true, message: 'Saved.' }),
+    browserPasswordForgetAll: async () => ({ ok: true, message: 'Cleared.' }),
+    browserPasswordCopy: async () => true,
+    browserPasswordAnswer: async () => ({ ok: true, message: 'Saved.' }),
+    onBrowserPasswordOffer: () => () => {},
+    browserSignInDiagnose: async () => null,
+    browserSignInHandover: async () => null,
+    browserSignInAgents: async () => [],
+
     hooksStatus: async () => [],
     loadBoard: async () => null,
     loadDashboard: async () => null,
@@ -1113,6 +1610,39 @@ const api: Record<string, unknown> = new Proxy(
       message: 'The harness has no terminal to type into, so nothing was changed.',
       reading: { value: null, label: null, source: null },
     }),
+    // The real handler opens the session's own `/model` picker and reads it.
+    // With no pty there is nothing to open, and the honest answer is an empty
+    // list plus the reason — which is what makes the menu fall back to the
+    // captured picker in `shared/model-catalog.ts`, the state worth looking at.
+    discoverAgentModels: async () => ({
+      models: [],
+      message: 'The harness has no terminal to ask, so the captured list is what you are seeing.',
+    }),
+
+    // Dictation. `hasKey: false` is the state the microphone must not appear
+    // in, and the harness is the cheapest place to check that it does not:
+    // `canStore` is true because the question the harness cannot answer is
+    // whether a key exists, not whether this machine has a keychain.
+    voiceProviders: async () => [
+      {
+        id: 'groq',
+        label: 'Groq',
+        model: 'whisper-large-v3',
+        note: 'Whisper large-v3 itself, hosted. Fast, and free at low volume.',
+        keysUrl: 'https://console.groq.com/keys',
+      },
+    ],
+    voiceStatus: async () => ({ provider: null, hasKey: false, canStore: true, reason: null }),
+    saveVoiceKey: async () => ({
+      ok: false,
+      message: 'The harness cannot reach a transcription service, so no key was checked or saved.',
+    }),
+    forgetVoiceKey: async () => ({ ok: true, message: 'Nothing was stored.' }),
+    transcribeAudio: async () => ({
+      ok: false,
+      text: '',
+      message: 'The harness cannot reach a transcription service.',
+    }),
     browserSessionInfo: async () => ({ partition: 'persist:terminaldeck-browser', persistent: true }),
     listBrowsers: async () => ({ browsers: [] }),
     // Per-tab isolation. The Proxy's fallback would resolve these to null, and
@@ -1157,6 +1687,68 @@ const api: Record<string, unknown> = new Proxy(
       message: 'The harness has no keychain, so nothing was imported.',
     }),
     clearImportedCookies: async () => ({ removed: 0 }),
+
+    /*
+     * Another machine, online, with two sessions on it.
+     *
+     * Here because the rail, the New Session dialog and the pane all read it
+     * now — remote sessions moved out of Settings and into the window — and a
+     * harness that answered `null` would draw the app as though nothing were
+     * paired, which is the one state those three screens are least interesting
+     * in.
+     *
+     * It is a real `MachinesView`: a `machines` list and a `links` list keyed by
+     * the same id, exactly as `machines:list` answers, because `asView` narrows
+     * the pair and a stub that flattened them would hide every mismatch between
+     * the two arrays. `folders` is what the far machine advertised to this one —
+     * the list its own `create` rule enforces — so the dialog's remote folder
+     * picker is drawn from the same array a real one would be.
+     */
+    listMachines: async () => machinesView,
+    onMachinesState: (cb: (view: unknown) => void) => {
+      machineListeners.add(cb)
+      return () => machineListeners.delete(cb)
+    },
+    createMachineSession: async (id: string, cwd?: string, provider?: string) => {
+      const link = machinesView.links.find((one) => one.id === id)
+      if (!link) return false
+      // The far machine answers later, not in this call — `machines:create`
+      // returns a boolean and the session arrives on the state push. Modelled
+      // rather than short-circuited, because `useMachines.startSession` exists
+      // precisely to wait for that push, and a stub that returned the session
+      // would leave that wait untested in the one place it can be looked at.
+      setTimeout(() => {
+        link.sessions = [
+          ...link.sessions,
+          {
+            id: `remote-${(sessionCounter += 1)}`,
+            title: (cwd ?? '/home/asad/site').split('/').pop() ?? 'session',
+            cwd: cwd ?? '/home/asad/site',
+            provider: provider ?? 'claude',
+            status: 'idle',
+            exitCode: null,
+          },
+        ]
+        for (const listener of [...machineListeners]) listener(machinesView)
+      }, 120)
+      return true
+    },
+    refreshMachinePorts: async () => true,
+    openOnMachine: async (id: string, url: string) => {
+      // Logged rather than opened. The harness is a browser tab: it has no far
+      // machine to put a window on, and a stub that returned true silently would
+      // let this button be "verified" against nothing at all.
+      console.info(`[harness] ${id} was asked to open ${url} on its own screen`)
+      return true
+    },
+    attachMachineSession: async () => true,
+    detachMachineSession: async () => true,
+    writeToMachineSession: async () => true,
+    resizeMachineSession: async () => true,
+    onMachineOutput: (cb: (chunk: unknown) => void) => {
+      machineOutputListeners.add(cb)
+      return () => machineOutputListeners.delete(cb)
+    },
   },
   {
     // Mirror the real preload's shape: on* methods are subscriptions that
@@ -1215,5 +1807,20 @@ const api: Record<string, unknown> = new Proxy(
     ...request,
   }
   for (const listener of [...consentListeners]) listener(full)
+}
+
+/**
+ * Push a held list, the way the main process pushes one.
+ *
+ * `?held` sets the launch state; this is how the *change* is driven — a retry
+ * that fails and comes back with a new reason, a second failure arriving after
+ * the window is already up. Both are pushes the window cannot provoke, which is
+ * the same reason `emitSessionCreated` exists.
+ */
+;(globalThis as unknown as {
+  emitHeldSessions: (rows?: Array<Record<string, unknown>>) => void
+}).emitHeldSessions = (rows = []) => {
+  heldSessions = rows
+  announceHeld()
 }
 export {}

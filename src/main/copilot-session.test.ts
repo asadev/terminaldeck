@@ -14,7 +14,7 @@
 
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
 import { recordsFenceList, recordsFencePaths, type RecordsFence } from './confine/records'
@@ -55,6 +55,14 @@ interface Recorded {
 }
 
 let userData: string
+/**
+ * A folder outside `<userData>` that a person could plausibly have chosen.
+ *
+ * Made for real, because `copilotFolderReport` refuses a path that is not a
+ * directory — and a fixture that skipped that would be asserting about the
+ * fallback while believing it was asserting about a chosen folder.
+ */
+let elsewhere: string
 let calls: Recorded[]
 let alive: Set<string>
 let stopped: string[]
@@ -125,6 +133,7 @@ function harness(overrides: Partial<CopilotRuntimeDeps> = {}): CopilotRuntimeDep
 beforeEach(() => {
   resetCopilot()
   userData = mkdtempSync(join(tmpdir(), 'copilot-run-'))
+  elsewhere = mkdtempSync(join(tmpdir(), 'copilot-elsewhere-'))
   calls = []
   alive = new Set()
   stopped = []
@@ -269,14 +278,70 @@ describe('it is an ordinary session', () => {
  * re-runnable; these cases are the wiring that carries it.
  */
 describe('the tools it is launched with', () => {
-  it('passes the config it was given, strictly', async () => {
+  it('passes the config it was given, strictly, and its own layer after it', async () => {
     const state = await ensureCopilot(harness({ mcpConfig: () => '/state/copilot/deck-control.json' }))
     expect(state.status).toBe('running')
     expect(calls[0]?.extraArgs).toEqual([
       '--mcp-config',
       '/state/copilot/deck-control.json',
       '--strict-mcp-config',
+      '--append-system-prompt-file',
+      copilotPaths(userData).layer.composed,
     ])
+  })
+
+  it('is told what it is on the command line rather than by a file in its folder', async () => {
+    /*
+     * The flag this whole change exists for, asserted on its own because it is
+     * the one that carries the copilot's identity.
+     *
+     * Its predecessor was a `CLAUDE.md` written into the working directory,
+     * which is read by *every* session started there — so an ordinary terminal
+     * a person opened in the same folder came up believing it was the copilot.
+     * `copilot-layer-is-app-side.test.ts` proves the consequence against a real
+     * spawn; this pins the mechanism, and that the file it points at is under
+     * `<userData>` and really exists by the time the CLI is asked to read it.
+     */
+    await ensureCopilot(deps)
+    const flags = calls[0]?.extraArgs ?? []
+    const at = flags.indexOf('--append-system-prompt-file')
+    expect(at).toBeGreaterThanOrEqual(0)
+
+    const layer = flags[at + 1] ?? ''
+    expect(layer).toBe(copilotPaths(userData).layer.composed)
+    expect(layer.startsWith(`${userData}${sep}`)).toBe(true)
+    expect(layer.startsWith(`${copilotPaths(userData).root}${sep}`)).toBe(false)
+    // The CLI does not check the path when it parses its arguments — measured
+    // against 2.1.233, which accepts a missing file at parse time — so the file
+    // has to be on disk before the spawn or the copilot silently loses its half.
+    expect(readFileSync(layer, 'utf8')).toContain('developer')
+  })
+
+  it('regenerates the layer on every start, because all three of its inputs move', async () => {
+    /*
+     * The tool catalogue changes between builds, the fence between machines, and
+     * the working directory the moment somebody picks one in Settings. A layer
+     * composed once at install time would be wrong about all three, and wrong in
+     * the direction that matters: an agent told it has tools it does not have.
+     */
+    await ensureCopilot(
+      harness({
+        mcpConfig: () => '/state/copilot/deck-control.json',
+        tools: () => [{ wire: 'sessions_list', tier: 'read', title: 'List sessions' }],
+      }),
+    )
+    expect(readFileSync(copilotPaths(userData).layer.contract, 'utf8')).toContain('sessions_list')
+
+    resetCopilot()
+    await ensureCopilot(
+      harness({
+        mcpConfig: () => '/state/copilot/deck-control.json',
+        tools: () => [{ wire: 'log_note', tier: 'act', title: 'Add a note' }],
+      }),
+    )
+    const second = readFileSync(copilotPaths(userData).layer.contract, 'utf8')
+    expect(second).toContain('log_note')
+    expect(second).not.toContain('sessions_list')
   })
 
   it('is strict on purpose, so its powers do not depend on the person’s own MCP servers', async () => {
@@ -302,7 +367,15 @@ describe('the tools it is launched with', () => {
      */
     const state = await ensureCopilot(harness({ mcpConfig: () => null }))
     expect(state.status).toBe('running')
-    expect(calls[0]?.extraArgs).toEqual([])
+    // The layer is still handed over — it is what the copilot *is*, not a tool
+    // — and it says in words that there are no tools rather than listing any.
+    expect(calls[0]?.extraArgs).toEqual([
+      '--append-system-prompt-file',
+      copilotPaths(userData).layer.composed,
+    ])
+    expect(readFileSync(copilotPaths(userData).layer.contract, 'utf8')).toContain(
+      'You have none of this app’s tools right now',
+    )
   })
 
   it('writes which of the two happened into the log, because nothing else records it', async () => {
@@ -340,8 +413,10 @@ describe('the tools it is launched with', () => {
     const flags = calls[0]?.extraArgs ?? []
     expect(flags.some((flag) => flag.includes('permission'))).toBe(false)
     expect(flags.some((flag) => flag.includes('dangerously'))).toBe(false)
-    // Two flags and a path, and nothing else travels on this launch.
-    expect(flags).toHaveLength(3)
+    // The MCP pair, a path, and the layer flag with its path. Nothing else
+    // travels on this launch, and the count is asserted so that a fifth thing
+    // has to be justified here rather than appearing quietly.
+    expect(flags).toHaveLength(5)
   })
 
   it('asks for the config at start time rather than capturing it', async () => {
@@ -355,7 +430,7 @@ describe('the tools it is launched with', () => {
     let config: string | null = null
     const deps = harness({ mcpConfig: () => config })
     await ensureCopilot(deps)
-    expect(calls[0]?.extraArgs).toEqual([])
+    expect(calls[0]?.extraArgs).not.toContain('--mcp-config')
 
     // The server came up while the copilot was stopped.
     resetCopilot()
@@ -563,15 +638,49 @@ describe('the state a window reads', () => {
     expect(state.sessionId).toBeNull()
     expect(state.profile).toBeNull()
     expect(state.paths.root).toBe(copilotPaths(userData).root)
-    expect(state.startupFiles.map((file) => file.exists)).toEqual([false, false])
+    // The layer, the folder's own CLAUDE.md, and the memory index — none of
+    // them there yet, all three listed. See `copilot-home.test.ts` for why the
+    // absent folder row is the reassuring one.
+    expect(state.startupFiles.map((file) => file.exists)).toEqual([false, false, false])
   })
 
   it('lists what it reads at startup once it has a folder', async () => {
     await ensureCopilot(deps)
     const state = copilotState(deps)
-    expect(state.startupFiles[0]?.path).toBe(copilotPaths(userData).instructions)
+    // The composed layer first: it arrives on the command line and is in the
+    // context before the model has read a byte off the working directory.
+    expect(state.startupFiles[0]?.path).toBe(copilotPaths(userData).layer.composed)
     expect(state.startupFiles[0]?.exists).toBe(true)
     expect(state.instructionsAreDefault).toBe(true)
+  })
+
+  it('reports its folder, whose it is, and that nothing is running in an old one', () => {
+    const state = copilotState(deps)
+    expect(state.folder.home).toBe(copilotPaths(userData).root)
+    expect(state.folder.isDefault).toBe(true)
+    expect(state.folder.chosen).toBeNull()
+    expect(state.folder.runningIn).toBeNull()
+    expect(state.folder.restartNeeded).toBe(false)
+  })
+
+  it('says a restart is needed while the running copilot is in the folder it started in', async () => {
+    /*
+     * A working directory is fixed at `exec`. Changing the setting changes what
+     * the *next* start uses, and a pane that read the setting and called it
+     * "where it is running" would be stating something false about a live
+     * process — which is the third time this feature has had to be stopped from
+     * describing something it does not do.
+     */
+    let chosen: string | null = null
+    const moving = harness({ home: () => chosen })
+    await ensureCopilot(moving)
+    expect(copilotState(moving).folder.restartNeeded).toBe(false)
+
+    chosen = elsewhere
+    const state = copilotState(moving)
+    expect(state.folder.home).toBe(elsewhere)
+    expect(state.folder.runningIn).toBe(copilotPaths(userData).root)
+    expect(state.folder.restartNeeded).toBe(true)
   })
 
   it('still reports where a jailed copilot kept its conversations', () => {
@@ -603,6 +712,8 @@ describe('the bridge', () => {
     expect([...handlers.keys()].sort()).toEqual([
       'copilot:ensure',
       'copilot:files',
+      'copilot:read-composed',
+      'copilot:read-contract',
       'copilot:read-instructions',
       // The only ones that write, and only one takes an argument: *which* file
       // is decided in this process either way.

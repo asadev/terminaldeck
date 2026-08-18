@@ -36,11 +36,19 @@
 /* The score column. It was a horizontal bar with a rule under it; a rule that
    spans the window to separate a number from a list is a line doing work that
    a column of white space does better. */
-/* Spans every row the other column can produce — an error, a cap and the list
-   — so the list starts level with the score instead of below it. */
+/* Spans every row the other column can produce, so the list starts level with
+   the score instead of below it. There are five: an error, the cap banner, the
+   machine-level notice, the list and the hidden-row footer.
+
+   It is a count and not `1 / -1`, which was tried and is wrong here: `-1` names
+   the last line of the *explicit* grid, and this grid declares no rows at all,
+   so `1 / -1` resolves to a single row — the score column then only covers the
+   first thing in the right-hand column and everything after it is pushed below
+   the whole 350px header. Add a row to the right column and this number moves
+   with it. */
 .readiness-head {
   grid-column: 1;
-  grid-row: 1 / span 3;
+  grid-row: 1 / span 5;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -191,6 +199,13 @@
   font-weight: var(--w-semibold);
 }
 
+/* The machine-level block (a stale agent CLI). A plain grid cell in the right
+   column; it draws nothing at all when there is nothing to say, and an empty
+   cell costs no height. */
+.readiness-machine {
+  grid-column: 2;
+}
+
 /* The shared empty block, told to ignore the two-column grid it lands in —
    otherwise it renders inside the 13rem score column. */
 .readiness > .page-blank,
@@ -326,6 +341,36 @@
   color: var(--readiness-pass);
 }
 
+/* ------------------------------------------------------------ put away -- */
+
+/* Quiet on purpose. It is a footnote about rows that are not on screen, and it
+   must not compete with the rows that are. */
+.readiness-hidden {
+  grid-column: 2;
+  margin: var(--sp-3) 0 0;
+  max-width: 84ch;
+  font-size: var(--t-callout);
+  color: var(--text-tertiary);
+}
+
+.readiness-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.readiness-link:hover {
+  text-decoration: underline;
+}
+
+.readiness-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* --------------------------------------------------------------- actions -- */
 
 .readiness-actions {
@@ -405,7 +450,9 @@
 
   .readiness-error,
   .readiness-cap,
-  .readiness-list {
+  .readiness-machine,
+  .readiness-list,
+  .readiness-hidden {
     grid-column: 1;
   }
 }

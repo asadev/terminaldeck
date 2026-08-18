@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { withSessionTitle, type Session } from './store'
+import { withReplacedSession, withSessionTitle, type Session } from './store'
 
 /**
  * The rule that makes renaming a session mean anything.
@@ -112,5 +112,65 @@ describe('a session that is not there', () => {
     const next = withSessionTitle(before, 's2', 'Term reports', true)
     expect(titleOf(next, 's1')).toBe('terminaldeck')
     expect(next[0]).toBe(before[0])
+  })
+})
+
+/**
+ * A session replaced in place, which is what switching an account looks like
+ * from up here.
+ *
+ * A CLI is authenticated at spawn, so changing the account under a running agent
+ * means stopping the process and starting another — and that produces a new
+ * session id for what the person is still calling "this session". Everything
+ * they can see is meant to survive it, which is a rule about *position* and
+ * *identity* rather than about contents, and therefore invisible to a test that
+ * only checks the list holds the right sessions.
+ */
+describe('one session standing in for another', () => {
+  const meta = (over: Partial<Session> = {}): Session => session({ id: 's9', ...over })
+
+  it('takes the old one’s place rather than the end of the list', () => {
+    // Remove-then-add produces the right *set* and the wrong *order*, and the
+    // difference is invisible until somebody with three sessions switches the
+    // account on the first one and watches its row jump to the bottom.
+    const before = [session(), session({ id: 's2' }), session({ id: 's3' })]
+    const next = withReplacedSession(before, 's1', meta())
+    expect(next.map((one) => one.id)).toEqual(['s9', 's2', 's3'])
+  })
+
+  it('keeps a name somebody typed', () => {
+    const before = [session({ title: 'Relay handshake', namedByUser: true })]
+    const next = withReplacedSession(before, 's1', meta({ title: 'terminaldeck' }))
+    expect(next[0].title).toBe('Relay handshake')
+    expect(next[0].namedByUser).toBe(true)
+  })
+
+  it('drops a name the app derived, because it describes output that is gone', () => {
+    // `AutoTitler` reads a new one out of the new session's own output within
+    // seconds. Carrying the old derivation across would leave a title describing
+    // a conversation that is no longer on screen.
+    const before = [session({ title: 'Fixing the relay' })]
+    const next = withReplacedSession(before, 's1', meta({ title: 'app' }))
+    expect(next[0].title).toBe('app')
+    expect(next[0].namedByUser).toBeUndefined()
+  })
+
+  it('starts the status clock again, because this is a different process', () => {
+    const before = [session({ status: 'working', statusSince: 1 })]
+    const next = withReplacedSession(before, 's1', meta())
+    expect(next[0].status).toBe('idle')
+    expect(next[0].statusSince).toBeGreaterThan(1)
+  })
+
+  it('invents nothing when the session being replaced has gone', () => {
+    // A caller that raced ahead of its own state would otherwise add a second
+    // row for a session the window is about to be told about anyway.
+    const before = [session()]
+    expect(withReplacedSession(before, 'gone', meta())).toBe(before)
+  })
+
+  it('does nothing twice', () => {
+    const before = [session(), session({ id: 's9' })]
+    expect(withReplacedSession(before, 's1', meta())).toBe(before)
   })
 })

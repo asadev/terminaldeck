@@ -1,15 +1,17 @@
 /* ============================================================================
    The usage bar, in the chrome.
 
-   How much of the account's five-hour window is gone, on the session's own bar,
-   beside the account it belongs to — for a terminal session as much as a chat
-   one. See `UsageBar.tsx` for what it will and will not draw.
+   Two lines, one control: the five-hour window above and the weekly one below,
+   beside the account they belong to, for a terminal session as much as a chat
+   one. See `UsageBar.tsx` for what it will and will not draw and
+   `usage-stack.ts` for which window ends up on which line.
 
-   Almost nothing new is invented here. The chip is `cc-chip`, the shape every
-   labelled control in this app wears, and the panel is the same glass as the
-   cluster's folded sheet next to it. What is below is the meter — the one piece
-   of data on a bar of controls — and the handful of rules that come from living
-   on a row that is one line tall and shared with five other things.
+   Almost nothing new is invented here. The control is `cc-chip`, the shape
+   every labelled control in this app wears, and the panel is the same glass as
+   the cluster's folded sheet next to it. What is below is the grid that keeps
+   the two lines aligned, the meter — the one piece of data on a bar of controls
+   — and the handful of rules that come from living on a row that is 48 pixels
+   tall and shared with five other things.
    ============================================================================ */
 
 .usage-bar {
@@ -18,7 +20,7 @@
   align-items: center;
   /* Gives way before its neighbours do: the pickers beside it have values that
      cannot be shortened past a word, and this one degrades gracefully — the
-     renewal clause ellipsises long before the number does. */
+     renewal clause ellipsises long before either number does. */
   min-width: 0;
   /* Both bars are window drag regions, and a drag region covers its children's
      pixels too, so every control on one subtracts its own rectangle back out or
@@ -26,19 +28,159 @@
   -webkit-app-region: no-drag;
 }
 
-.ub-chip {
-  /* The row this sits in never wraps — a wrapped chip on a one-line bar is
-     drawn over the terminal below it. */
+/*
+  Two lines inside one control's height, and that is the constraint the whole
+  layout is built against.
+
+  `--control-h` is 28px and every chip on this bar is that tall. Two lines of
+  `--t-footnote` at a tight leading come to 26, which is why this can carry twice
+  as much as the single chip did without making the bar taller or standing out
+  from the pickers beside it. The vertical padding therefore goes: the grid's own
+  rows are the height, and the chip keeps only its horizontal padding.
+*/
+.cc-chip.ub-stack {
+  align-items: center;
+  min-width: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  /*
+    1.15, not `--lh-tight`.
+
+    The arithmetic is the reason and it is worth writing down, because the next
+    person to "tidy this back to the token" will make the control 28.5px tall
+    inside a 28px box and the second line's descenders will be clipped. At
+    `--lh-tight` (1.25) an 11px line is 13.75, two of them plus the 1px row gap
+    is 28.5, and `--control-h` is 28. At 1.15 it is 12.65 each, 26.3 in total,
+    which leaves just under a pixel of slack top and bottom. Every other chip on
+    this bar has one line and can afford the token; this one cannot.
+
+    The selector is `.cc-chip.ub-stack` and not `.ub-stack`, which is the other
+    half of the same fix. `.cc-chip` states the token at the same specificity, so
+    a bare `.ub-stack` would win or lose purely on which stylesheet the bundler
+    happened to inject second — and in the harness it lost, giving a 28.5px row
+    inside a 28px box. Measured, not guessed: `.ub-lines` came back 28.5 tall
+    while its parent was 28. A cascade that depends on import order is a bug
+    waiting for somebody to reorder an import.
+  */
+  line-height: 1.15;
+}
+
+/*
+  The four columns both lines share.
+
+  Alignment is not decoration here — it is what lets the weekly line go without
+  a name. Asad: *"for weekly it will show the 55% and no need to say week here."*
+  What identifies that line instead is that its figure sits directly under the
+  five-hour figure, in the same column, with its meter starting at the same
+  pixel; the pair reads as one instrument with two readings rather than as two
+  unrelated numbers. Take the shared grid away and it is two rows of debris.
+
+  `row-gap: 1px` rather than a spacing token on purpose: at this size a 2px gap
+  reads as two separate controls stacked, and 0 makes the two meters touch.
+*/
+.ub-lines {
+  display: grid;
+  /*
+    Every track is spelled out, and each one says what it is allowed to lose.
+
+    `auto auto auto minmax(0, auto)` was tried first and produced the worst
+    frame of this whole redesign, seen at a 720pt window: the element read
+
+        %h
+        %
+
+    — every track had shrunk proportionally and every cell had clipped its own
+    middle, so `5h`, `18%` and `55%` were each cut in half. `flex-shrink: 0` on
+    the cells did not help and could not: they are **grid** items, and
+    `flex-shrink` is not a property of a grid item. The floor of a track is the
+    track's own minimum, so that is where it has to be stated.
+
+     1. the name and the figure are `max-content` — they never give up a pixel,
+        because they are the reading;
+     2. the meter's track may fall from 40px to 12, which is a sliver that still
+        holds its proportion honestly, since the fill is a percentage of
+        whatever track is left;
+     3. the renewal clause may fall to nothing, which is what the fold takes
+        first anyway.
+
+    Below that the grid stops shrinking and the *chip* clips instead — from its
+    trailing edge, under `.session-controls .cc-chip { overflow: hidden }` — so
+    what survives longest is `5h 18%`, which is the answer, rather than four
+    fragments of it.
+  */
+  grid-template-columns: max-content max-content minmax(12px, max-content) minmax(0, max-content);
+  align-items: center;
+  column-gap: var(--sp-1);
+  row-gap: 1px;
+  min-width: 0;
+  text-align: left;
+}
+
+.ub-cell {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/*
+  The window's name — `5h` on the top line, and nothing on the weekly one.
+
+  The empty cell is deliberate and is doing work: it holds the column open so
+  the weekly figure lands under the five-hour figure. Muted, because it is a
+  caption on a reading rather than the reading, exactly as `.ac-name` is on
+  every picker beside this one.
+*/
+.ub-name {
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+}
+
+/*
+  The figure. The one thing on this control that must never be lost.
+
+  Tabular so that a bar ticking 8% → 9% → 10% does not shuffle the meter beside
+  it sideways, and right-aligned so that `9%` and `100%` share a units column —
+  without that the two lines' meters start at different pixels the moment one
+  window crosses a power of ten, which is the alignment this whole grid is for.
+*/
+.ub-figure {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--w-medium);
+}
+
+.ub-figure[data-level='warning'] {
+  color: var(--color-warning);
+}
+
+.ub-figure[data-level='critical'] {
+  color: var(--color-critical);
+}
+
+/*
+  An unread figure: the em dash, and the same muted italic every unread value in
+  this app wears. Colour is not used — nothing is wrong, and a window that has
+  not been asked about yet is the ordinary state of a fresh session.
+*/
+.ub-figure.ac-value-unknown[data-level] {
+  color: var(--text-muted);
+}
+
+/* The track's cell, which stays in the grid even for a line that has no meter:
+   an absent meter must not move the line beside it. */
+.ub-track {
+  display: flex;
+  align-items: center;
   min-width: 0;
 }
 
 /*
-  What gives way inside the chip, in order, and what never does.
+  What gives way inside the control, in order, and what never does.
 
-  Found by looking, in a guest pane at half a 1440pt window: the chip had been
-  squeezed to 30 pixels and drew as `5h ·` — a window name, a meter crushed to a
-  dot, and no number at all. A bar with no measurement on it is worse than no
-  bar, because it still looks like a reading.
+  Found by looking, in a guest pane at half a 1440pt window: the old single chip
+  had been squeezed to 30 pixels and drew as `5h ·` — a window name, a meter
+  crushed to a dot, and no number at all. A bar with no measurement on it is
+  worse than no bar, because it still looks like a reading.
 
   The first fix was `flex-shrink: 0` on the whole chip, and it was wrong. The
   cluster around this one is clamped to the room its bar actually has
@@ -49,78 +191,64 @@
   `.session-controls > *` sets `flex-shrink: 1` on everything, deliberately,
   and this file does not fight it.
 
-  What it does instead is choose the order in which this chip loses things, so
-  that squeezing it degrades rather than truncates:
+  What it does instead is choose the order in which this control loses things,
+  and since the two lines became a grid that order is spelled in the tracks
+  above rather than in `flex-shrink` — which is not a property a grid item has,
+  and whose absence produced `%h / %` at a 720pt window before it was noticed:
 
-   1. the renewal clause goes first — it is capped and ellipsised above, and it
+   1. the renewal clause goes first — it is capped and ellipsised below, and it
       is a caption rather than the reading;
-   2. then the **meter**, which may shrink to a sliver and still be honest,
-      because the fill is a percentage of whatever track is left;
-   3. the window's name and the figure never shrink at all. `5h` and `34%` are
-      the reading. Below the width those two need there is nothing left to draw
-      that would still be true.
+   2. then the **meters**, which may shrink to a sliver and still be honest,
+      because each fill is a percentage of whatever track is left;
+   3. the names and the figures never shrink at all. `5h`, `18%` and `55%` are
+      the reading. Below the width those need there is nothing left to draw that
+      would still be true.
 */
-.ub-chip .ac-name,
-.ub-chip .ub-value,
-.ub-chip .ac-caret {
+.ub-stack .ac-caret {
   flex-shrink: 0;
 }
 
-.ub-chip .ub-meter {
-  flex-shrink: 1;
-  /* Narrower than this it is a dot, and a dot is not a bar. It still holds its
-     proportion — the fill is a percentage of the track — but at that point the
-     figure beside it is doing all the work. */
-  min-width: 10px;
-}
-
 /*
-  The number.
+  The renewal time, which is half of what was originally asked for and belongs
+  to the five-hour line alone.
 
-  Tabular figures so a bar that ticks 8% → 9% → 10% does not shuffle the words
-  after it sideways; every other number in this app that changes in place does
-  the same.
-*/
-.ub-value {
-  font-variant-numeric: tabular-nums;
-}
-
-.ub-value[data-level='warning'] {
-  color: var(--color-warning);
-}
-
-.ub-value[data-level='critical'] {
-  color: var(--color-critical);
-}
-
-/*
-  The renewal time, which is half of what was asked for.
-
-  Muted, because it is a caption on a control rather than the control's value,
-  and allowed to trail off rather than push the chip wider: "Aug 14 at 2pm
+  Muted, because it is a caption on a reading rather than the reading, and
+  allowed to trail off rather than push the control wider: "Aug 14 at 2pm
   (Asia/Dubai)" is a legitimate thing for Claude Code to print and it is longer
-  than the rest of the chip put together. The hover label carries all of it.
+  than the rest of the control put together. The hover label carries all of it.
 */
 .ub-caveat {
+  display: block;
   min-width: 0;
   /* Eighteen characters holds `resets 8:50am` whole, which is the phrase this
-     is for. A weekly reset — `resets Aug 21 at 2pm` — still trails off, and
-     still says the day, which is the part of a weekly answer worth having at a
-     glance. */
+     is for. */
   max-width: 18ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+}
+
+.ub-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow: hidden;
 }
 
 /*
-  A second window, on the bar only when it is in trouble.
+  A window that is on neither line and is not quiet.
 
-  It carries its own colour because the whole reason it is drawn is that the
-  first window is quiet and this one is not — a weekly limit at 100% behind a
-  five-hour bar reading 5%. Drawn back to a caption's weight so it reads as a
-  warning beside the value rather than a second value.
+  Claude Code reports `Current week (all models)` and `Current week (Opus)`, and
+  only the first can have the weekly line — so without this the second would
+  leave the bar altogether, which is the confidently-wrong reading this feature
+  was nearly cancelled for twice. It carries its own colour because the whole
+  reason it is drawn is that the two lines are comfortable and it is not, and it
+  is drawn back to a caption's weight so it reads as a warning beside the
+  readings rather than as a third one.
 */
 .ub-alert {
   flex-shrink: 0;
@@ -147,12 +275,12 @@
 
   Every width rule below therefore names its context. The first version set the
   chip's width on the bare class and the panel's on `.ub-row .ub-meter`, and the
-  folded rule — `.usage-bar[data-folded] .ub-meter` — then outranked the panel's
+  narrow rule — `.usage-bar[data-fit] .ub-meter` — then outranked the panel's
   by one class and shrank the meters *inside the open panel* to 30 pixels. Seen
   in a screenshot, not in a test: a 300px card with three-centimetre bars in it.
 */
 .ub-meter {
-  display: inline-block;
+  display: block;
   position: relative;
   height: 4px;
   border-radius: var(--radius-pill);
@@ -161,15 +289,21 @@
 }
 
 /*
-  44 pixels on the bar, where the usage strip's is 72.
+  40 pixels on the bar, where the chat pane's usage strip is 72.
 
   The strip owns a whole row at the bottom of a pane; this shares a toolbar with
-  a session name, a folder, an account, three pickers and a mode switch. At this
-  size it answers "roughly how far along" — which is what a glance at a bar is
-  for — and the exact figure is printed next to it either way.
+  a session name, a folder, an account, three pickers and a mode switch — and it
+  now draws two of them, one above the other. At this size each answers "roughly
+  how far along", which is what a glance at a bar is for, and the exact figure is
+  printed next to it either way.
 */
-.ub-chip .ub-meter {
-  width: 44px;
+.ub-stack .ub-meter {
+  width: 40px;
+  /* …and follows its track down when the bar squeezes. Without this the meter
+     keeps its 40 pixels inside a 12-pixel track and paints over the renewal
+     clause beside it — the track is allowed to shrink, so the thing in it has
+     to be allowed to as well. */
+  max-width: 100%;
 }
 
 .ub-meter-fill {
@@ -195,7 +329,8 @@
   asked, so a `/usage` reading goes aged twenty-five minutes later and would
   otherwise make the bar disappear while the session carried on — which teaches
   a reader that the feature is broken rather than that the number is old. The
-  age is printed beside it in words, so the dimming is a hint and not the claim.
+  fetch that will replace it is already on its way (see `auto-usage.ts`), and
+  the age is printed in the panel, so the dimming is a hint and not the claim.
 */
 .ub-meter[data-state='aged'] {
   opacity: 0.5;
@@ -315,7 +450,6 @@
 .ub-row-detail,
 .ub-row-reset,
 .ub-empty,
-.ub-refusal,
 .ub-foot {
   margin: 0;
   color: var(--text-muted);
@@ -332,76 +466,109 @@
   color: var(--text-secondary);
 }
 
-/* ------------------------------------------------------------- the action */
-
-.ub-actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  align-items: flex-start;
-}
-
-/* A quiet text target, not a bordered button: nothing in this panel is an
-   action until you point at it. The same shape the strip's Check wore, which is
-   the control this one replaces. */
-.ub-check {
-  height: var(--control-h-sm);
-  padding: 0 var(--sp-2);
-  /* Pulled back by its own padding so the word starts on the same vertical line
-     as every sentence above it. A quiet text button that is inset by its own
-     hover area reads as an indent nobody chose. */
-  margin-left: calc(var(--sp-2) * -1);
-  cursor: pointer;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-secondary);
-  font-family: var(--font-ui);
-  font-size: var(--t-footnote);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.ub-check:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.ub-check:disabled {
-  color: var(--text-muted);
-  cursor: not-allowed;
-}
-
-.ub-check:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.ub-refusal {
-  color: var(--color-warning);
-}
-
 /* --------------------------------------------------------------- folded -- */
 
 /*
-  What survives when the cluster folds.
+  What survives as the room runs out.
 
-  The controls fold into one chip because a control you cannot see can still be
-  reached through the panel behind it. A *reading* cannot: hidden, it is
-  indistinguishable from not being reported, which is the one thing this
-  component exists to keep apart. So the bar stays on screen at every width and
-  gives up its renewal clause instead — that clause is in the hover label and in
-  the panel, and it is the only part of the reading that is a caption rather
-  than the number itself.
+  The controls beside this one fold into a single chip, because a control you
+  cannot see can still be reached through the panel behind it. A *reading*
+  cannot: hidden, it is indistinguishable from one that was never reported,
+  which is the one thing this component exists to keep apart. So both lines stay
+  on screen at every width, and what goes instead is everything around them —
+  the renewal clause first (it is in the hover label and in the panel, and it is
+  a caption rather than a number), then the meters' width.
+
+  Which tier applies is measured, not inherited: see `UsageFit` in
+  `UsageBar.tsx` and the note beside `fitFor` in `SessionControls.tsx`. Reading
+  it off the *controls'* fold was the previous rule and it was wrong — a long
+  session name folds the controls at a 1440pt window, and the renewal time
+  disappeared with 645 pixels of room going spare.
 */
-.usage-bar[data-folded] .ub-chip .ub-meter {
-  width: 30px;
+.usage-bar[data-fit='dense'] .ub-stack .ub-meter {
+  width: 26px;
+}
+
+/* ---------------------------------------------------------------- tight -- */
+
+/*
+  Below the width where even a folded reading fits: the two figures, and nothing.
+
+  Measured at the app's own minimum window width, which `src/main/index.ts` pins
+  at 720. A toolbar carrying a session name, a folder, a long account address and
+  the mode switch leaves this cluster 67 pixels, shared with the folded controls
+  chip — and flex handed the reading 22.9 of them, which drew the word `5h` and
+  no number at all.
+
+  So the window name, both meters and the renewal clause come out of the markup
+  (see the note beside them in `UsageBar.tsx` — they are *not* hidden here,
+  because a hidden grid item shifts every cell after it into the wrong column),
+  the template drops to the two tracks that remain, and the padding halves. The
+  result is 32 pixels wide, which matters for one specific reason: the folded
+  controls chip beside this has a 30-pixel floor of its own, and 32 + 30 + the
+  gap is 64, which fits inside 67. Neither control is clipped at all at the
+  narrowest window this app can be made.
+*/
+.usage-bar[data-fit='tight'] .ub-lines {
+  /* One column, because one cell per line is all that is rendered. A grid whose
+     template has more tracks than a line has cells does not leave a track
+     empty — it wraps the next line's first cell into it, and the two readings
+     stop being one above the other, which is the whole of what holds the
+     unnamed weekly line together. */
+  grid-template-columns: max-content;
+}
+
+.usage-bar[data-fit='tight'] .ub-stack {
+  /* Two pixels a side, not four. Measured at a 720pt window with a 35-character
+     session name, where `control-room.ts` floors the whole cluster at
+     `MIN_CLUSTER_PX` = 56: at four the reading needed 33 and could have 29, and
+     `19%` was drawn as `19°` — half a percent sign, which reads as a different
+     glyph entirely and is the one failure this control is least allowed. */
+  padding-left: var(--sp-05);
+  padding-right: var(--sp-05);
+  gap: var(--sp-05);
+}
+
+
+/*
+  …and in this one state it stops giving way, because there is nothing left to
+  give.
+
+  Everywhere else this control shrinks with the row on purpose, and the note
+  higher up this file explains at length why refusing to was wrong: a chip that
+  held its width inside a clamped row painted `Not reported` thirty-five pixels
+  into the word `Terminal`. That argument does not reach here, and the
+  arithmetic is the reason. Tight, this control measures 35 pixels; the folded
+  controls chip beside it has a 30-pixel floor; the gap is 2. Sixty-seven —
+  which is exactly what the narrowest window this app permits leaves the
+  cluster, so both controls come out whole. Holding its width therefore costs
+  nothing that was ever going to be drawn anyway, while *not* holding it meant
+  flex sharing the shortfall proportionally and handing the reading 13.8 pixels,
+  which is a third of one number.
+
+  `max-width` is what keeps the promise at widths below that, which a long
+  session name at the minimum window width genuinely produces — 56 pixels for
+  the whole cluster, floored there by `MIN_CLUSTER_PX`. Twenty-seven is the
+  controls chip's own tight floor plus the gap, so this can never take so much
+  of the row that the chip is pushed past its own edge: the pair is capped by
+  construction rather than by hoping the numbers stay in range.
+
+  What is left over is honest and worth writing down rather than hiding: at 56
+  pixels a three-digit reading — `100%` over `100%` — needs a few more than the
+  cap allows and will clip. Two accounts at their limit at the app's minimum
+  width with an essay for a session name is not a state worth distorting the
+  other four tiers for, and the panel one click away says the whole thing.
+*/
+.session-controls .usage-bar[data-fit='tight'] {
+  flex-shrink: 0;
+  max-width: calc(100% - 27px);
 }
 
 /* ----------------------------------------------------- inside a pane's bar */
 
 /*
   A pane's bar is set at `--t-caption` and dims to 0.55 when the pane is not
-  focused. The chip inherits the dimming, which is right — it is that pane's
+  focused. The control inherits the dimming, which is right — it is that pane's
   chrome — but not the smaller type, because it is a control and this app draws
   every control at `--t-footnote`. Stated rather than left to inheritance, for
   the same reason `SessionControls.css` states it beside this.

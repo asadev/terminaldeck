@@ -67,7 +67,6 @@ struct AlertsView: View {
             }
         }
         .tint(Theme.accent)
-        .preferredColorScheme(.dark)
         .task { await model.refreshAlertPermission() }
     }
 

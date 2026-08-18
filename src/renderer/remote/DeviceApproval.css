@@ -1,0 +1,239 @@
+/* ============================================================================
+   Letting a device in, one question at a time.
+
+   Only what the shared settings controls do not already cover: the step dots,
+   the two kind cards, and the folder rows inside the flow. Everything else is a
+   `settings-*` class or a `Button`, exactly like `DeviceFolders.css` beside it,
+   so all three panes keep matching the rest of the settings window when that
+   changes rather than drifting into their own look.
+
+   Nothing here is boxed and nothing here has a border, with one exception that
+   earns it: the two kind cards are a choice between two things, and a choice
+   needs a mark that survives being looked at quickly. The mark is the accent on
+   the picked card, not an outline on both.
+   ============================================================================ */
+
+.da {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* ---------------------------------------------------------------- head -- */
+
+.da-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.da-title {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dots rather than "Step 2 of 4". The count is the same information and the
+   number is what makes a short flow feel like paperwork — the same argument
+   that took "there are four questions and they are skippable" out of the
+   copilot setup. The accessible name still says the numbers, for a reader that
+   cannot see three dots. */
+.da-dots {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+}
+
+.da-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fill-secondary);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.da-dot[data-on='yes'] {
+  background: var(--accent);
+}
+
+/* ---------------------------------------------------------------- body -- */
+
+.da-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  align-items: flex-start;
+}
+
+/* The question itself, which is the only thing on the step that has to be read
+   before anything else. One size up from the note under it, not two: this sits
+   inside a settings pane that already has a heading, and a third weight of
+   title on the same surface is the "four headings and five paragraphs" the
+   remote page was rebuilt to lose. */
+.da-lede {
+  margin: 0;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.da-note {
+  margin: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+  line-height: var(--lh-body);
+}
+
+/* Six groups a person compares against a phone held next to the screen. Wide
+   tracking and a fill, because the failure mode is misreading one character of
+   a string nobody would otherwise read at all. */
+.da-fingerprint {
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+}
+
+/* --------------------------------------------------------- the two kinds -- */
+
+/* Side by side on a wide pane, stacked when there is not room. They are two
+   options of equal weight and stacking them permanently would make the top one
+   read as the recommendation. */
+.da-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-2);
+  width: 100%;
+}
+
+.da-choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  text-align: left;
+  padding: var(--sp-3);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: var(--bg-tertiary);
+  color: inherit;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.da-choice:hover {
+  background: var(--bg-hover);
+}
+
+/* The picked one wears the accent, and it is the only border on this screen.
+   Separating with space and then a tint is the house rule; a choice between two
+   cards is the case where neither is enough on its own, because the reader has
+   to be able to answer "which did I pick" from across the desk. */
+.da-choice[data-picked='yes'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.da-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.da-choice-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.da-choice-note {
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+  line-height: var(--lh-body);
+}
+
+/* ------------------------------------------------------------- folders -- */
+
+.da-folders,
+.da-summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.da-folder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  min-width: 0;
+}
+
+.da-folder-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.da-folder-name {
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+}
+
+/* The full path under the name, dimmed and clipped. Two projects can share a
+   last segment, so the path is what makes the row the one they meant — and it
+   is routinely longer than this pane, which is why it ellipsises and carries a
+   `title`. */
+.da-folder-path {
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.da-summary li {
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+}
+
+/* ---------------------------------------------------------------- foot -- */
+
+.da-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  /* Space above it rather than a rule across it. The footer is already the last
+     thing on a fill; a line would be the third separator on one small card. */
+  margin-top: var(--sp-1);
+}
+
+.da-foot-left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}

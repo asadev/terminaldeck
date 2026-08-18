@@ -235,9 +235,14 @@ describe('what the cut was not allowed to take with it', () => {
     // Agents' own two questions.
     expect(html).toContain('Default coding tool')
     expect(html).toContain('What is installed')
-    // Accounts — its own heading, and the group that adds one.
+    // Accounts — its own heading, and the button that adds one. The group that
+    // used to carry the whole add form here is now a popup: *"'Add' and 'Sign
+    // in' should be one thing, called Add account. It must open a small popup
+    // with only the sign-in steps."* Nothing was dropped, which is what this
+    // test is for — the steps are asserted in `AccountsSection.test.tsx`, on
+    // the panel itself.
     expect(html).toContain('>Accounts<')
-    expect(html).toContain('Sign in to another account')
+    expect(html).toContain('Add account')
     // Setup.
     expect(html).toContain('Other coding tools')
   })

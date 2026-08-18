@@ -842,13 +842,59 @@ export interface SessionSummary {
 }
 
 /**
+ * One API request's contribution to a total: which model answered, at which
+ * speed, and what it cost. Held per request rather than only summed, so a
+ * request recorded in two transcripts can be counted once across a project —
+ * see {@link SessionAggregator.contributions}.
+ */
+interface Contribution {
+  model: string
+  speed: TranscriptEvent['speed']
+  usage: TokenUsage
+}
+
+/**
  * Folds a stream of transcript events into one session's totals.
  *
  * Feed it events in file order; it is incremental and safe to keep alive for
  * the lifetime of a session.
  */
 export class SessionAggregator {
-  private seen = new Set<string>()
+  /**
+   * Every API request this transcript records, keyed by the id that identifies
+   * it, with the usage counted once.
+   *
+   * This replaced a bare `Set<string>` of the same keys, and it exists for a
+   * defect one level up: **the same request is recorded in more than one file.**
+   * Resuming or forking a conversation copies the prior history into a new
+   * `.jsonl`, so an assistant turn from Monday appears verbatim in Monday's
+   * transcript and again in every conversation branched off it. Each aggregator
+   * de-duplicated correctly *within* its own file and knew nothing of the
+   * others, so `TranscriptWatcher.summary()` added the same tokens once per copy.
+   *
+   * Measured on this machine, 2026-08-18, over the forty transcripts of
+   * `~/.claude/projects/-Users-apple-ClaudeAsad`: 11,110 distinct requests are
+   * recorded 11,598 times — 488 of them appear in more than one file — which
+   * reported 5,331,624,956 tokens where 5,121,344,002 were spent. A 4.1%
+   * over-count, 210 million tokens, on the figure Asad asked about: *"3.2
+   * billion tokens… I don't know if it is true or not."*
+   *
+   * Holding the usage rather than only the key is what lets the project total
+   * attribute each request to exactly one session. It is the same strings that
+   * were already held, plus five numbers each — a few megabytes for the largest
+   * project on this machine, against a headline figure that was measurably wrong.
+   *
+   * See {@link contributions} and `TranscriptWatcher.summary`.
+   */
+  private counted = new Map<string, Contribution>()
+  /**
+   * Requests with no id of any kind, which cannot be de-duplicated across files
+   * because nothing identifies them. Counted here so a transcript full of them
+   * still reports its own totals, and counted again by the project sum — which
+   * is the honest failure mode: an unidentifiable request cannot be proven to be
+   * a duplicate, and dropping it would under-count a real one.
+   */
+  private anonymous: Contribution[] = []
   private byModel = new Map<string, TokenUsage>()
   private requests = 0
   private sidechainRequests = 0
@@ -904,8 +950,10 @@ export class SessionAggregator {
 
     const key = event.messageId ?? event.requestId ?? event.uuid
     if (key) {
-      if (this.seen.has(key)) return false
-      this.seen.add(key)
+      if (this.counted.has(key)) return false
+      this.counted.set(key, { model: event.model ?? '', speed: event.speed, usage: event.usage })
+    } else {
+      this.anonymous.push({ model: event.model ?? '', speed: event.speed, usage: event.usage })
     }
 
     const model = event.model ?? ''
@@ -954,9 +1002,27 @@ export class SessionAggregator {
     return this.lastActivityAt
   }
 
+  /**
+   * Every request this transcript records, once each.
+   *
+   * Read by `TranscriptWatcher.summary()` to build a project total in which one
+   * API request is counted one time no matter how many files it appears in.
+   * Keys are `message.id` where the transcript carries one, falling back to
+   * `requestId` and then the line's `uuid` — the same order `add` uses, because
+   * the two have to agree or the project sum would credit a request to a key the
+   * session never claimed.
+   */
+  contributions(): {
+    keyed: ReadonlyMap<string, Contribution>
+    anonymous: readonly Contribution[]
+  } {
+    return { keyed: this.counted, anonymous: this.anonymous }
+  }
+
   /** Discard everything — used when a tail reports the file was replaced. */
   reset(): void {
-    this.seen.clear()
+    this.counted.clear()
+    this.anonymous.length = 0
     this.byModel.clear()
     this.requests = 0
     this.sidechainRequests = 0
@@ -1450,18 +1516,69 @@ export class TranscriptWatcher {
 
   /** Current numbers without waiting for the next change. */
   summary(): ProjectSummary {
-    const sessions = [...this.aggregators.values()]
-      .filter((agg) => !agg.isEmpty)
+    const live = [...this.aggregators.values()].filter((agg) => !agg.isEmpty)
+    const sessions = live
       .map((agg) => agg.summary())
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
 
+    /*
+     * The project total counts each API request once, across every transcript.
+     *
+     * This used to be `requests += session.requests` and a sum of each
+     * session's `usageByModel`, which is correct only if no two transcripts
+     * record the same request. They do, routinely: resuming or forking a
+     * conversation copies its history into a new `.jsonl`, so an assistant turn
+     * is written again in every branch taken from it. Each `SessionAggregator`
+     * de-duplicated within its own file and could not see the others, so the
+     * headline figure on the Overview tile counted those turns once per copy.
+     *
+     * Measured before the fix, on the largest project on this machine: 5.33B
+     * tokens reported against 5.12B actually spent, and 11,598 requests against
+     * 11,110. See the comment on `SessionAggregator.counted`.
+     *
+     * The **per-session** figures deliberately do not change. A session's own
+     * total is what that conversation cost, and a resumed conversation really
+     * did re-send the history it inherited; subtracting it would make each
+     * session's tile disagree with its transcript. It is only the *project* sum
+     * that must not add one request to itself twice, and the newest transcript
+     * wins the attribution because `sessions` is sorted newest-first — the copy
+     * a person is most likely looking at.
+     */
+    const seen = new Set<string>()
     const byModel = new Map<string, TokenUsage>()
     let requests = 0
-    for (const session of sessions) {
-      requests += session.requests
-      for (const [model, usage] of Object.entries(session.usageByModel)) {
-        byModel.set(model, addUsage(byModel.get(model) ?? emptyUsage(), usage))
+    const credit = ({ model, speed, usage }: Contribution): void => {
+      requests += 1
+      /*
+       * Bucketed exactly the way `SessionAggregator.add` buckets, including the
+       * `rateKey` split that gives fast mode a column of its own — the project's
+       * `usageByModel` keys have to be the same strings every session's are, or
+       * the Overview tile's "models seen" list and a session's own would name
+       * two different sets of things.
+       */
+      if (!isBillableModel(model) && normalizeModelId(model) === '' && totalTokens(usage) > 0) {
+        byModel.set(UNKNOWN_MODEL, addUsage(byModel.get(UNKNOWN_MODEL) ?? emptyUsage(), usage))
+        return
       }
+      if (!isBillableModel(model)) return
+      const id = rateKey(normalizeModelId(model), speed)
+      byModel.set(id, addUsage(byModel.get(id) ?? emptyUsage(), usage))
+    }
+
+    // Newest first, matching `sessions` above, so a duplicated request is
+    // attributed to the transcript that is still being written to.
+    const newestFirst = [...live].sort((a, b) => b.activityAt - a.activityAt)
+    for (const agg of newestFirst) {
+      const { keyed, anonymous } = agg.contributions()
+      for (const [key, entry] of keyed) {
+        if (seen.has(key)) continue
+        seen.add(key)
+        credit(entry)
+      }
+      // Nothing identifies these, so nothing can prove one is a copy of
+      // another. Counting them is the conservative error: dropping them would
+      // silently lose real spend.
+      for (const entry of anonymous) credit(entry)
     }
 
     return {

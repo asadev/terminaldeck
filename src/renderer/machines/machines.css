@@ -222,6 +222,111 @@
   color: var(--text-muted);
 }
 
+/* --------------------------------------------- localhost, over there -- */
+
+/* What the far machine is serving.
+
+   A tinted block rather than a bordered one, and it is the only tinted thing in
+   a machine's row — which is exactly the separation the design brief asks for:
+   space, then a tint, and only then a line. What it separates is worth the
+   tint, because it is the one part of this row that is not about sessions and
+   the rows inside it look, character for character, like the localhost list on
+   this desktop's own start page. */
+.machines-ports {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+}
+
+.machines-ports-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  min-height: var(--row-h);
+}
+
+.machines-ports-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* Quiet, because it is a *second* way to get a list that arrives by itself.
+   A button drawn like the section's own action would be claiming the list is
+   not already there. */
+.machines-ports-refresh,
+.machines-port-open {
+  flex: none;
+  padding: var(--sp-05) var(--sp-15);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--t-footnote);
+  cursor: pointer;
+}
+
+.machines-ports-refresh:hover,
+.machines-port-open:hover {
+  background: var(--bg-hover);
+}
+
+.machines-ports-refresh:focus-visible,
+.machines-port-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The machine's own silhouette, beside every port. Muted rather than accented:
+   it is an identity, not an action, and an accent here would compete with the
+   Open beside it. */
+.machines-glyph {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.machines-portlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.machines-port {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  min-height: var(--row-h);
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+}
+
+.machines-port:hover {
+  background: var(--bg-hover);
+}
+
+/* A port number and a process name are exact and countable, so mono — the same
+   promise the session's path makes one block up. */
+.machines-port-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+}
+
 /* ------------------------------------------------------------- actions -- */
 
 .machines-actions {

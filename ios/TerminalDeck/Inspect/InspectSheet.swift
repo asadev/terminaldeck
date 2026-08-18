@@ -62,7 +62,6 @@ struct InspectSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .preferredColorScheme(.dark)
     }
 
     // MARK: - What was tapped

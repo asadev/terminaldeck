@@ -83,7 +83,7 @@ describe('the sentence at the top', () => {
    */
   it('on a PC, says plainly that this is not a boundary', () => {
     const said = text(view({ platform: 'windows' }))
-    expect(said).toContain('Pick where each device can start a session')
+    expect(said).toContain('Pick where each guest can start a session')
     expect(said).toContain('that is all this does')
     // The mechanism, in words a non-engineer can act on: it moves.
     expect(said).toContain('it can move to any other folder')
@@ -124,8 +124,11 @@ describe('the sentence at the top', () => {
      * failure the careful old wording existed to avoid.
      */
     const said = text(view({ platform: 'mac' }))
-    expect(said).toContain('a session you started here')
-    expect(said).toContain('yours are not held anywhere')
+    // What confinement does not cover, restated for the two kinds: a guest sees
+    // the sessions *you* started inside a folder it was given, and yours are
+    // your own shell rather than something held anywhere.
+    expect(said).toContain('including ones you started')
+    expect(said).toContain('stops being reachable the moment you take a folder away')
   })
 
   it('on a Mac, does not pretend the tools or the network are gone', () => {
@@ -166,8 +169,12 @@ describe('a device nobody has chosen for', () => {
    */
   it('says so, and says what it gets instead', () => {
     const said = text(view({ grants: new Map() }))
-    expect(said).toContain('Not chosen')
-    expect(said).toContain('whichever project is open on this Mac')
+    // "Not chosen" is no longer a state a device can be approved into: approval
+    // writes a list, including an empty one. What is left is a device approved by
+    // a build older than the choice, and it reaches nothing rather than
+    // everything — which is the whole security fix, said on the row.
+    expect(said).toContain('Approved before this existed')
+    expect(said).toContain('can open nothing on this Mac')
   })
 
   it('is not described as having no folders', () => {
@@ -180,7 +187,7 @@ describe('a device whose folders were all removed', () => {
     const said = text(view({ grants: new Map([['dev-phone', []]]) }))
     expect(said).toContain('No folders. This device cannot start a session.')
     // And the *other* device, which has no row at all, still reads as untouched.
-    expect(said).toContain('Not chosen')
+    expect(said).toContain('Approved before this existed')
   })
 })
 
@@ -236,7 +243,7 @@ describe('before the first read lands', () => {
 
 describe('when there is nothing to choose for', () => {
   it('explains the empty screen instead of drawing an empty list', () => {
-    expect(text(view({ devices: [] }))).toContain('No device has been approved yet')
+    expect(text(view({ devices: [] }))).toContain('No guest device has been let in')
   })
 
   /*
@@ -331,7 +338,7 @@ describe('the line under a device name', () => {
    */
   it('labels the state without explaining it on every card', () => {
     const line = summaryFor(null, true)
-    expect(line).toBe('Not chosen')
+    expect(line).toBe('Approved before this existed — can open nothing')
     expect(line).not.toMatch(/session/)
   })
 })

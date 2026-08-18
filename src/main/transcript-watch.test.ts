@@ -391,6 +391,53 @@ describe('TranscriptWatcher against a live file', () => {
     expect(grown.requests).toBe(2)
   }, 15_000)
 
+  /**
+   * The project total counts one API request once, however many files hold it.
+   *
+   * The number Asad asked about: *"3.2 billion tokens… I don't know if it is
+   * true or not."* It was true in kind — 97% of it is cache reads, re-read every
+   * turn — and wrong in detail, because resuming or forking a conversation
+   * copies its history into a new `.jsonl` and every aggregator de-duplicated
+   * only within its own file.
+   *
+   * Measured on this machine's largest project the day this was written: 11,110
+   * distinct requests recorded 11,598 times across forty transcripts, reporting
+   * 5,331,624,956 tokens where 5,121,344,002 were spent. This is that, in
+   * miniature: `m1` and `m2` are written to the original transcript and then
+   * copied into the resumed one, which adds `m3` of its own.
+   */
+  it('counts a request once even when two transcripts both recorded it', async () => {
+    const config = scratch('terminaldeck-fork-')
+    const cwd = '/fake/project'
+    const dir = join(config, 'projects', encodeProjectPath(cwd))
+    mkdirSync(dir, { recursive: true })
+
+    // The original conversation.
+    appendFileSync(join(dir, 'sess-a.jsonl'), line('m1', 1000) + line('m2', 1000))
+    // Resumed: the CLI copies the history it inherited, verbatim, then carries
+    // on. `m1` and `m2` are now on disk twice.
+    appendFileSync(
+      join(dir, 'sess-b.jsonl'),
+      line('m1', 1000) + line('m2', 1000) + line('m3', 1000),
+    )
+
+    const watcher = new TranscriptWatcher({ cwd, configDir: config, debounceMs: 20, onUpdate: () => {} })
+    await watcher.start()
+    const summary = await until('both transcripts to be read', watcher, (s) => s.sessions.length === 2)
+    watcher.stop()
+
+    // Three real requests, not five.
+    expect(summary.requests).toBe(3)
+    expect(summary.usage.output).toBe(3000)
+
+    // And each session still reports its own honest total — a resumed
+    // conversation really did re-send the history it inherited, so subtracting
+    // it there would make a session's tile disagree with its own transcript.
+    // It is only the project sum that must not add a request to itself twice.
+    const perSession = summary.sessions.map((s) => s.requests).sort()
+    expect(perSession).toEqual([2, 3])
+  }, 15_000)
+
   it('survives a project that has never been opened in Claude Code', async () => {
     const config = scratch('terminaldeck-cost-empty-')
     const updates: ProjectSummary[] = []

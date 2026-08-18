@@ -8,6 +8,35 @@ glance whether your phone is too old to talk to your Mac.
 So everything below is new to you. The previous build looked identical to the
 one before it; this one does not.
 
+LIGHT MODE, AND A SETTING FOR IT
+"Mobile iOS is only dark mode — it should have both, in settings." Settings →
+Appearance → System, Light or Dark. System is the default and it really does
+follow the phone, including when the phone crosses into its own dark schedule
+with the app open.
+
+The app was held dark in three places, not one, and the one that mattered was in
+the bundle: an Info.plist key that forces every window dark before any screen gets
+a say. Nine screens also stated it for themselves. All of it is gone, so please
+be hard on the light half specifically — it is the half that has never shipped.
+Worth looking at: a white band where a grey one should be, a card that looks
+lighter than the page under it, and text sliced at the top or bottom of a scroll.
+
+The terminal is the part to be hardest on. On paper it is a recessed grey, the
+same one the Mac uses, and the sixteen ANSI colours are a different sixteen — a
+light terminal wearing dark-mode colours has yellow at 2:1, which is a colour you
+cannot read. Put a real agent in a session in Light and check its output: diffs,
+prompts, progress bars, anything coloured.
+
+One thing that is a limit rather than a bug, so that it does not get reported as
+one: a program that emits 24-bit colour picks its own greys, and a program that
+picked them for a black background is hard to read on paper. That is the same on
+the Mac in light mode and there is no palette that fixes it — it is the program
+choosing, not us. If a specific tool is unreadable, name it and we can talk about
+what to do for that one.
+
+Also: switch the setting while a session is open. The terminal should change under
+you, immediately, without losing its scrollback.
+
 THREE TABS, MACHINES INSIDE SETTINGS
 Sessions, Localhost, Settings. Machines is a row in Settings that pushes to the
 same screen it always was. You said "four pills" first and then reconsidered;
@@ -15,9 +44,21 @@ this takes the second answer. Say the word if you want it back on the bar.
 
 NO PILL INSIDE A SESSION OR A PAGE
 "Inside the session we don't need the pill." Gone in both, and the content took
-the space back rather than leaving a gap. Check the last line of output really
-sits on the bottom edge with the keyboard down. Still there on the other four
-screens, which is where you said it belongs.
+the space back rather than leaving a gap. Still there on the other four screens,
+which is where you said it belongs.
+
+A LITTLE SPACE AT THE BOTTOM OF A SESSION
+"At the bottom we cannot see some stuff because of the mobile's round corners and
+the running-agents things." Taking the pill's space back had taken the home
+indicator's with it, so the last line was drawn onto the strip the indicator
+crosses and the corners clip. With the keyboard down there is now a clear 34
+points under the last line — put an agent in a session and check its status row
+(the spinner, the token count, "esc to interrupt") is readable end to end,
+including the first and last characters, which is where the corner radius bites.
+
+With the keyboard *up* the terminal should still run right down to the key bar
+with no empty strip above it: the keyboard already covers what the space was for,
+and losing a line of output while typing would be the wrong trade.
 
 LOCALHOST: GROUPED, FOLDED, RENAMEABLE
 Ports are grouped by what holds them: named by you, dev servers, web runtimes,
@@ -33,13 +74,28 @@ full swipe, on purpose.
 If something lands in a group you would not have put it in, tell me the port and
 the process name.
 
-THE PAGE OPENS SIDEWAYS AND ITS BACK BUTTON WORKS
-It slides in like any other screen now, and the left-edge swipe walks the page's
-own history. "The back button here doesn't work at all next to refresh" was real:
-it only re-checked itself when WebKit announced a page load, and WebKit says
-nothing for a route change inside a single-page app, which is every click on a
-dev server. Go two or three routes deep; the arrow should stay live and walk back
-one route per tap.
+THE PAGE OPENS SIDEWAYS, AND ITS CHROME IS THE PHONE'S
+"Localhost browsing is still not native on iOS." Two things were still ours that
+should have been the platform's, and both are fixed.
+
+The screen keeps the normal navigation bar now — a back chevron top left, the
+page's name and address in the title, and the left-edge swipe pops the screen the
+way it pops every other screen on the phone. It used to walk the page's history
+instead, so the one gesture nobody has to be taught did the wrong thing and there
+was no way out with a thumb at all.
+
+Everything a browser needs moved to a toolbar along the bottom, which is where
+iOS has kept browser controls since the first iPhone: back a page, forward a
+page, reload, inspect, and Done last, where you said it belongs. Forward is new,
+and it is there because it had to be — back and forward used to be the two edge
+swipes, and giving the left edge back to the system took the right one with it.
+
+"The back button here doesn't work at all next to refresh" was real and is still
+fixed: it only re-checked itself when WebKit announced a page load, and WebKit
+says nothing for a route change inside a single-page app, which is every click on
+a dev server. Go two or three routes deep; back should stay live and walk one
+route per tap, forward should come alive behind you, and both should go dead at
+the ends.
 
 GITHUB SIGN-IN IS OUR OWN APP NOW
 It used to borrow the GitHub CLI's OAuth client, so the consent page said "GitHub

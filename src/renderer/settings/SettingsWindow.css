@@ -134,9 +134,12 @@
   padding: var(--sp-1) var(--sp-2) var(--sp-4);
 }
 
-/* Deliberately quieter than a nav item: these are not places you can be, so
-   neither of them ever wears the selected fill. Same height and the same
-   indent, so the column still reads as one list. */
+/* Deliberately quieter than a nav item: this is not a place you can be, so it
+   never wears the selected fill. Same height and the same indent, so the column
+   still reads as one list.
+
+   There were two of these. The second was Help, linking out to the marketing
+   site, and Help is a pane again — see `RailFooter`. */
 .settings-rail-btn {
   display: flex;
   align-items: center;
@@ -176,11 +179,10 @@
   white-space: nowrap;
 }
 
-.settings-rail-btn-out {
-  margin-left: auto;
-  font-size: var(--t-caption);
-  opacity: 0.7;
-}
+/* `.settings-rail-btn-out` was here: the ↗ that promised the Help button was
+   about to leave the app. Nothing in the footer leaves the app any more, and a
+   rule for a mark nothing draws is the stylesheet's version of a dead control.
+   The mark itself belongs to whatever draws the next external link. */
 
 .settings-nav-item {
   /* The containing block for the selected marker below. */

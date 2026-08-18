@@ -102,7 +102,12 @@ final class KeyCapButton: UIButton {
         let background: UIColor
         let ink: UIColor
         if !isEnabled {
-            background = Palette.key.withAlphaComponent(0.05)
+            // Its own colour rather than `Palette.key` at a lower alpha:
+            // `withAlphaComponent` on a colour built from a dynamic provider is
+            // not documented to keep the provider, and a disabled cap frozen at
+            // whichever appearance the app launched in would be a wrong-coloured
+            // key that only some people ever see. See `Palette.keyDisabled`.
+            background = Palette.keyDisabled
             ink = Palette.keyLabelFaint
         } else if isArmed {
             background = Palette.keyArmed

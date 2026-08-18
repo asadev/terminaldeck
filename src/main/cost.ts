@@ -286,9 +286,19 @@ export function preContextWarning(
     kind: 'pre-context',
     level: percent >= PRE_CONTEXT_BLOAT_PERCENT * 2 ? 'critical' : 'warning',
     percent,
+    /*
+     * "Your instructions file" rather than the filename it named before.
+     *
+     * This warning is drawn for whatever session is in front of somebody, and
+     * the four agents this build can run each read a differently-named file for
+     * the same purpose. Telling a person looking at a Codex session to go and
+     * trim a CLAUDE.md sends them after a file that is not in their prompt and
+     * may not be on their disk — a warning that cannot be acted on is worse than
+     * no warning, because it is acted on once and then ignored forever.
+     */
     message: `Pre-context is ${Math.round(percent)}% of the window (${formatTokens(
       preContextTokens,
-    )} tokens) before the conversation starts — check CLAUDE.md and MCP tool schemas.`,
+    )} tokens) before the conversation starts — check your instructions file and MCP tool schemas.`,
   }
 }
 

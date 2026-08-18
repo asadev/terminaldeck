@@ -1,60 +1,58 @@
 /**
- * Noticing that the reader is doing something, in the same frame they do it.
+ * Noticing that the person is doing something, in the same frame they do it.
  *
- * The pacing engine's whole promise is that touching anything stops the tour.
- * That promise is only as good as the set of events listened for, so the set is
+ * Driving mode's whole promise is that touching anything stops it dead. That
+ * promise is only as good as the set of events listened for, so the set is
  * declared as data below rather than scattered through a wiring function — a
  * listener quietly dropped in a refactor is invisible in a diff and produces a
- * tour that keeps moving while somebody is trying to read, which is the exact
- * failure Asad named first.
+ * screen that keeps moving under somebody's hands, which is the exact failure
+ * Asad named first.
  *
- * ## Two questions, not one
+ * It matters **more** since driving became a machine-speed scan rather than a
+ * paced read-along, not less. A read-along moved slowly enough to be caught by
+ * hand; a scan is through four sessions before a person has finished deciding
+ * they want it to stop. The one gesture that has to work is *any* gesture.
  *
- * There is a real distinction here that is easy to collapse and expensive to
- * get wrong:
+ * ## What left this file when the reading model did
  *
- * 1. **Did the reader do something?** → pause, immediately, and stay paused.
- * 2. **Is the thing on screen still moving?** → do not advance yet, but do not
- *    pause either.
+ * A second, quieter question: *is the thing on screen still moving?* The old
+ * pacing engine listened for `scroll` and `touchmove` as **movement** — not an
+ * interruption, just a reason to hold off advancing until the pane settled —
+ * because advancing out from under a reader mid-scroll loses their place. There
+ * is no place to lose now. Nobody is reading during a scan; the reading happens
+ * at the end, in one structured answer, in the copilot's own chat.
  *
- * They need different events because they have different sources. A `scroll`
- * event does not say who caused it: the tour's own `scrollIntoView` fires one,
- * a live session appending output fires one, and a reader's trackpad fires one.
- * Listening for `scroll` and pausing on it would make the tour pause itself the
- * instant it moved to a stop, and would freeze permanently on any session that
- * is still printing.
- *
- * So: **`wheel` and `touchmove` are the human**, because nothing in the app
- * synthesises them; **`scroll` is the motion**, whoever caused it. The first
- * pauses. The second only blocks the advance until things settle. That split is
- * what makes "never advance while the user is mid-scroll" implementable without
- * also making "the tour scrolls to a stop" impossible.
+ * So `onSurfaceMoved`, the `MOVEMENTS` table and the settle window are gone
+ * rather than kept at zero. What survived the deletion is the half that carried
+ * real information about a *person*: `touchmove` moved up into the interruption
+ * table, because a finger dragging on the glass is somebody taking over, and it
+ * was only ever in the other table because a trackpad `wheel` covered the same
+ * case on a Mac.
  *
  * ## Capture phase, and why it is load-bearing
  *
  * Every listener is registered with `capture: true`, for two separate reasons.
  *
- * `scroll` **does not bubble**. A capture-phase listener on `window` still sees
- * it, because the capture phase travels down from the window to the target
- * before the target's own handlers run, and that is the only way to hear about
- * a scroll inside a pane without attaching a listener to every pane.
+ * The capture phase travels down from the window to the target before the
+ * target's own handlers run, so a pause lands *before* whatever the click was
+ * going to do. The dim over the app is `pointer-events: none` — driving is a
+ * highlight, not a modal — so clicking a session row during a scan switches to
+ * that session **and** stops the scan. That is what "take over" means, and it
+ * needs no separate gesture.
  *
- * And a pause has to land *before* whatever the click was going to do. The dim
- * over the app is `pointer-events: none` — driving is a highlight, not a modal
- * — so clicking a session row during a tour switches to that session **and**
- * pauses. That is what "take over" means, and it needs no separate gesture.
+ * And it is the only way to hear an event that does not bubble — `blur` — from
+ * one listener on the window rather than one per pane.
  *
  * ## What deliberately does not interrupt
  *
- * The transport's own controls, and the keys they answer to. Pressing Next is
- * the one gesture that unambiguously means "I have finished with this"; making
- * it pause would be perverse, and `pacer.ts` explains at length why the learned
- * speed and the Skim offer both depend on it not doing so. Both exclusions are
- * predicates supplied by the caller, so this module never has to know what the
- * transport is made of or which keys the keymap gave it.
+ * The panel's own controls, and the keys they answer to. Pressing → is the one
+ * gesture that unambiguously means "I am done with this one"; making it stop
+ * everything would be perverse. Both exclusions are predicates supplied by the
+ * caller, so this module never has to know what the panel is made of or which
+ * keys the keymap gave it.
  */
 
-import type { PauseReason } from './pacer'
+import type { PauseReason } from '../../../shared/scan'
 
 /**
  * The parts of a DOM event this module reads.
@@ -115,8 +113,6 @@ export interface InterruptionOptions {
    */
   hasSelection?(): boolean
   onInterrupt(reason: PauseReason, at: number): void
-  /** The driven surface moved. Blocks advancing until it settles; never pauses. */
-  onSurfaceMoved(at: number): void
 }
 
 export interface InterruptionWatch {
@@ -130,33 +126,29 @@ export interface InterruptionWatch {
  * because of a specific way a reader signals they are not finished:
  *
  * - `wheel` — the trackpad. The single most likely one, and the reason
- *   `pointerdown` alone is not enough: reading long output means scrolling, and
- *   scrolling never involves a click.
+ *   `pointerdown` alone is not enough: looking at long output means scrolling,
+ *   and scrolling never involves a click.
+ * - `touchmove` — the same gesture on a touchscreen, and a finger still on the
+ *   glass at that. It was in a second table until the reading model went; the
+ *   distinction that put it there was about *when to advance*, and the only
+ *   thing it says about a person is that they are doing something.
  * - `pointerdown` — clicking anything at all, including the thing being
  *   pointed at. Not `click`: `pointerdown` fires the moment the finger lands,
  *   which is a whole gesture earlier.
  * - `touchstart` — the same on a touchscreen. Windows laptops have them.
- * - `keydown` — any key that is not the transport's. Typing into a session
- *   during a tour is somebody taking over.
+ * - `keydown` — any key that is not the panel's. Typing into a session during a
+ *   scan is somebody taking over.
  * - `blur` — focus left the window entirely. They are looking at something
- *   else, and the tour must not still be moving when they come back.
+ *   else, and the screen must not still be moving when they come back.
  */
 export const INTERRUPTIONS: readonly { type: string; reason: PauseReason }[] = [
   { type: 'wheel', reason: 'scrolled' },
+  { type: 'touchmove', reason: 'scrolled' },
   { type: 'pointerdown', reason: 'clicked' },
   { type: 'touchstart', reason: 'clicked' },
   { type: 'keydown', reason: 'typed' },
   { type: 'blur', reason: 'left-window' },
 ]
-
-/**
- * Events that mean the screen is moving, whoever moved it.
- *
- * `scroll` covers every pane in the window through the capture phase, and
- * `touchmove` is a drag in progress on a touchscreen — a finger still on the
- * glass is a scroll that has not finished, even between two `scroll` events.
- */
-export const MOVEMENTS: readonly string[] = ['scroll', 'touchmove']
 
 /**
  * Watch a window for anything that means the reader is not finished.
@@ -205,17 +197,7 @@ export function watchForInterruption(options: InterruptionOptions): Interruption
       if (type === 'blur' && event.target !== undefined && event.target !== options.window) {
         return
       }
-      // A wheel event is both facts at once: a person did something, and the
-      // screen is now moving. Reporting only the pause would let the tour
-      // advance the moment it resumed, mid-fling.
-      if (type === 'wheel') options.onSurfaceMoved(options.now())
       options.onInterrupt(reason, options.now())
-    })
-  }
-
-  for (const type of MOVEMENTS) {
-    listen(options.window, type, () => {
-      options.onSurfaceMoved(options.now())
     })
   }
 
@@ -255,7 +237,7 @@ export function watchForInterruption(options: InterruptionOptions): Interruption
 }
 
 /**
- * The marker every transport control wears, and the test for it.
+ * The marker every driving control wears, and the test for it.
  *
  * One attribute rather than a list of class names or a ref comparison, because
  * the question is asked of whatever the event happened to hit — an SVG path
@@ -268,23 +250,23 @@ export function watchForInterruption(options: InterruptionOptions): Interruption
  * the alternative — treating an unknown target as a control — would silently
  * stop the tour reacting to real clicks.
  */
-export const PACE_CONTROL_ATTR = 'data-pace-control'
+export const DRIVE_CONTROL_ATTR = 'data-drive-control'
 
 interface Closest {
   closest(selector: string): unknown
 }
 
-export function isPaceControlTarget(target: unknown): boolean {
+export function isDriveControlTarget(target: unknown): boolean {
   if (typeof target !== 'object' || target === null) return false
   const node = target as Partial<Closest>
   if (typeof node.closest !== 'function') return false
-  return node.closest(`[${PACE_CONTROL_ATTR}]`) !== null
+  return node.closest(`[${DRIVE_CONTROL_ATTR}]`) !== null
 }
 
 /**
- * The keys the transport owns, as the default `isCommandKey`.
+ * The keys the panel owns, as the default `isCommandKey`.
  *
- * Space pauses and resumes, the arrows step, Escape ends the tour. They are
+ * Space holds and carries on, the arrows step, Escape ends the scan. They are
  * listed here rather than in the watch so that whoever wires `keymap.ts` has
  * one place to keep in step with — and so that a build where the chords are not
  * wired yet still does not treat them as somebody typing.

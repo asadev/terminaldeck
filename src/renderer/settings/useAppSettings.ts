@@ -76,6 +76,49 @@ export function useAppSettings(): {
   }, [])
 
   /**
+   * A value changed by something that is not this window.
+   *
+   * The copilot can write settings and preferences — with a confirmation, and
+   * with a last-good copy taken first — and so, behind it, can a paired phone.
+   * Until 2026-08-18 none of that reached React: a preference was only ever
+   * learned from the return value of this window's own `prefs:set`, so a write
+   * from anywhere else landed on disk and the running window went on drawing
+   * what it had read at startup. Watched live, in words: *"switch to the light
+   * theme"* → the dialog drew, `state.json` said `"light"`, the window stayed
+   * dark, and the copilot reported it as done. True of the file, false of the
+   * screen — which to the person in front of it is a tool that does not work.
+   *
+   * **This hook rather than `App.tsx`**, which is where the handback proposed
+   * it. This is the module that already owns "the settings the app behaves by",
+   * and it is the one that writes the theme and the density onto `<html>` in the
+   * effect below — so one subscription here repaints the theme, the density and
+   * every behaviour keyed off a setting, while the same subscription in `App.tsx`
+   * would have had to reach back into this hook to do any of it.
+   *
+   * Merged over what is held rather than replacing it, because the two stores
+   * arrive on two channels: a preferences push must not blank the forty values
+   * that live in `settings.json`, and a settings push must not blank the four
+   * that live in `store.ts`.
+   *
+   * Guarded with `?.` on both, and that is not defensiveness about the preload —
+   * it is the harness. `.harness/stub.ts` mounts this same `App` against a
+   * stubbed bridge, and a method it has not grown yet must leave the window
+   * running rather than throw on mount.
+   */
+  useEffect(() => {
+    const offPrefs = window.deck.onPreferencesChanged?.((prefs) => {
+      setValues((prev) => mergeSettings({ ...prev, ...valuesFromPreferences(prefs) }))
+    })
+    const offSettings = window.deck.onSettingsChanged?.((stored) => {
+      setValues((prev) => mergeSettings({ ...prev, ...toStoredSettings(stored) }))
+    })
+    return () => {
+      offPrefs?.()
+      offSettings?.()
+    }
+  }, [])
+
+  /**
    * Theme and density are attributes on <html>, so they are applied here rather
    * than read by a component. Everything else in this table is a value someone
    * asks for. Doing it here is also what makes them apply before Settings has

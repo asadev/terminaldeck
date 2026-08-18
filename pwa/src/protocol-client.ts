@@ -64,6 +64,10 @@ import {
   CAPABILITY,
   CREDENTIAL_OPERATIONS,
   DEV_SERVER_STATUSES,
+  MAX_COPILOT_CODE_CHARS,
+  MAX_COPILOT_CREDENTIAL_CHARS,
+  MAX_COPILOT_MESSAGE_CHARS,
+  MAX_COPILOT_SAY_BYTES,
   MAX_CREDENTIAL_HOST_LENGTH,
   MAX_CREDENTIAL_REPO_LENGTH,
   MAX_CWD_BYTES,
@@ -73,6 +77,16 @@ import {
   parseServerFrame,
   parseSession,
   type ClientMessage,
+  type CopilotActionRow,
+  type CopilotChatMessage,
+  type CopilotConsentQuestion,
+  type CopilotGrantWire,
+  type CopilotLinkWire,
+  type CopilotPendingRow,
+  type CopilotSessionRow,
+  type CopilotSettledRow,
+  type CopilotStateReport,
+  type CopilotTier,
   type CredentialOperation,
   type DevServerReport,
   type DevServerStatus,
@@ -85,6 +99,16 @@ import {
 
 export type {
   ClientMessage,
+  CopilotActionRow,
+  CopilotChatMessage,
+  CopilotConsentQuestion,
+  CopilotGrantWire,
+  CopilotLinkWire,
+  CopilotPendingRow,
+  CopilotSessionRow,
+  CopilotSettledRow,
+  CopilotStateReport,
+  CopilotTier,
   CredentialOperation,
   DevServerReport,
   DevServerStatus,
@@ -94,7 +118,14 @@ export type {
   RemoteSession,
   ServerMessage,
 }
-export { CAPABILITY, PROTOCOL_VERSION }
+export {
+  CAPABILITY,
+  MAX_COPILOT_CODE_CHARS,
+  MAX_COPILOT_CREDENTIAL_CHARS,
+  MAX_COPILOT_MESSAGE_CHARS,
+  MAX_COPILOT_SAY_BYTES,
+  PROTOCOL_VERSION,
+}
 
 /**
  * What this client tells a desktop it can do, in `hello.capabilities`.
@@ -320,6 +351,16 @@ function localhostFrame(parsed: unknown): DecodeResult | null {
     return { ok: true, message: { t: 'ports', ports } }
   }
 
+  if (frame.t === 'web.opened') {
+    // Its only payload is the URL, which is what the confirmation line names —
+    // the machine echoes back what it actually opened rather than what was
+    // asked for, because a redirect or a normalisation there is the truth and
+    // this end's copy is not.
+    const url = typeof frame.url === 'string' ? frame.url : ''
+    if (url === '') return { ok: false, reason: 'web.opened without a url' }
+    return { ok: true, message: { t: 'web.opened', url: url.slice(0, MAX_REFUSAL_CHARS) } }
+  }
+
   if (frame.t === 'tunnel.opened') {
     const id = typeof frame.id === 'string' ? frame.id : ''
     const port = wholePort(frame.port)
@@ -421,6 +462,378 @@ function devStateFrame(parsed: unknown): DecodeResult | null {
 }
 
 /**
+ * The nine `copilot.*` frames, which `parseServerFrame` does not read either.
+ *
+ * ## Why this is the fourth exception and still not a habit
+ *
+ * It is the same argument as `credentialRequest`, `localhostFrame` and
+ * `devStateFrame`, applied to a fourth capability, and it is the same argument
+ * because it is the same seam. `parseServerFrame` was written for a desktop
+ * acting as the **guest** of another desktop; that guest speaks protocol v1 and
+ * negotiates nothing, so refusing a frame it has never heard of is right *for
+ * it*. This client negotiates. It reads `welcome.capabilities`, sends
+ * `copilot.hello` only after seeing `copilot` in there, and sends no other
+ * `copilot.*` verb until a `copilot.grant` says the connection is open — which
+ * makes every frame below one it has agreed to receive.
+ *
+ * The right home for all sixteen branches across these four readers is
+ * `parseServerFrame` itself, the day the guest also connects a copilot. Moving
+ * them there deletes these functions and changes nothing else.
+ *
+ * ## Why there are nine and not ten
+ *
+ * `copilot.log` is deliberately absent, and its absence is a statement about
+ * what this client does rather than an oversight. That frame answers
+ * `copilot.log` and nothing else — it is never pushed — and this client never
+ * sends one: the action log it draws is the *live* one, assembled from the
+ * `copilot.tool` frames that arrive as calls happen, which is what a page
+ * somebody is watching wants. Reading a frame nobody here can provoke would be
+ * a parser for a conversation this client is not in, exactly as `net.*` is for
+ * `localhostFrame`.
+ *
+ * ## What is refused whole and what merely loses a row
+ *
+ * The split follows the rule the three readers above already settled on. A
+ * frame that *is* one fact — `copilot.state`, `copilot.grant`, `copilot.linked`,
+ * `copilot.ask`, `copilot.settled` — is refused whole when that fact is
+ * incomplete, because a half-read one would put a wrong claim on screen: a
+ * consent prompt missing its arguments is the reflex-Yes that
+ * `CopilotConsentQuestion` exists to prevent, and a grant missing a tier is a
+ * control drawn for a permission nobody holds. A frame that carries a *list* —
+ * the chat, the sessions, the pending questions — drops the unreadable row and
+ * keeps the rest, because a screen showing four of five bubbles is useful and
+ * one showing none because the fifth had a null role is not.
+ *
+ * Null means "not one of mine", not "bad frame": the caller then delegates to
+ * the shared parser, which is what every other message type still goes through.
+ */
+function copilotFrame(parsed: unknown): DecodeResult | null {
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const frame = parsed as Record<string, unknown>
+  const type = frame.t
+  if (typeof type !== 'string' || !type.startsWith('copilot.')) return null
+
+  switch (type) {
+    case 'copilot.state': {
+      const state = copilotStateReport(frame.state)
+      return state === null
+        ? { ok: false, reason: 'copilot.state without a state' }
+        : { ok: true, message: { t: 'copilot.state', state } }
+    }
+
+    case 'copilot.chat': {
+      // The run id is what makes a frame from a *previous* run droppable rather
+      // than mergeable, and the protocol says so in as many words: without it a
+      // client that reconnected after the grace window would splice the end of a
+      // dead conversation onto the start of a live one. So a chat frame with no
+      // run is refused rather than accepted with a blank one.
+      const run = typeof frame.run === 'string' ? frame.run : ''
+      if (run === '') return { ok: false, reason: 'copilot.chat without a run' }
+      const rows = frame.messages
+      if (!Array.isArray(rows)) return { ok: false, reason: 'copilot.chat without messages' }
+      const messages: CopilotChatMessage[] = []
+      for (const row of rows) {
+        const message = chatMessage(row)
+        if (message !== null) messages.push(message)
+      }
+      const chat: Extract<ServerMessage, { t: 'copilot.chat' }> = { t: 'copilot.chat', run, messages }
+      // `reset` is an instruction to throw away everything held, so it is acted
+      // on only when the desktop said it in so many words — the same rule
+      // `credential.request.prompt` follows one reader up.
+      if (frame.reset === true) chat.reset = true
+      return { ok: true, message: chat }
+    }
+
+    case 'copilot.tool': {
+      const row = actionRow(frame.row)
+      return row === null
+        ? { ok: false, reason: 'copilot.tool without a row' }
+        : { ok: true, message: { t: 'copilot.tool', row } }
+    }
+
+    case 'copilot.sessions': {
+      const rows = frame.sessions
+      if (!Array.isArray(rows)) return { ok: false, reason: 'copilot.sessions without a list' }
+      const sessions: CopilotSessionRow[] = []
+      for (const row of rows) {
+        const session = copilotSessionRow(row)
+        if (session !== null) sessions.push(session)
+      }
+      return { ok: true, message: { t: 'copilot.sessions', sessions } }
+    }
+
+    case 'copilot.pending': {
+      const rows = frame.questions
+      if (!Array.isArray(rows)) return { ok: false, reason: 'copilot.pending without a list' }
+      const questions: CopilotPendingRow[] = []
+      for (const row of rows) {
+        const question = pendingRow(row)
+        if (question !== null) questions.push(question)
+      }
+      return { ok: true, message: { t: 'copilot.pending', questions } }
+    }
+
+    case 'copilot.grant': {
+      const link = copilotLink(frame.link)
+      return link === null
+        ? { ok: false, reason: 'copilot.grant without a link' }
+        : { ok: true, message: { t: 'copilot.grant', link } }
+    }
+
+    case 'copilot.linked': {
+      const credential = typeof frame.credential === 'string' ? frame.credential : ''
+      const link = copilotLink(frame.link)
+      // The whole value of this frame is the credential, and it is sent exactly
+      // once — the desktop keeps a scrypt hash and cannot show it again. A frame
+      // accepted without one would leave this browser believing it had connected
+      // while holding nothing, and the remedy (ask for another code) would never
+      // be offered because the screen would have moved on.
+      if (credential === '' || credential.length > MAX_COPILOT_CREDENTIAL_CHARS || link === null) {
+        return { ok: false, reason: 'incomplete copilot.linked' }
+      }
+      return { ok: true, message: { t: 'copilot.linked', credential, link } }
+    }
+
+    case 'copilot.ask': {
+      const question = consentQuestion(frame.question)
+      return question === null
+        ? { ok: false, reason: 'copilot.ask without a question' }
+        : { ok: true, message: { t: 'copilot.ask', question } }
+    }
+
+    case 'copilot.settled': {
+      const settled = settledRow(frame.settled)
+      return settled === null
+        ? { ok: false, reason: 'copilot.settled without a row' }
+        : { ok: true, message: { t: 'copilot.settled', settled } }
+    }
+
+    default:
+      // A `copilot.*` type this build has never heard of — `copilot.log`
+      // included, since nothing here asks for one. Refused with a sentence
+      // rather than handed to the shared parser, which would answer "unknown
+      // message type" about a frame that is very much this feature's.
+      return { ok: false, reason: 'a copilot frame this client did not ask for' }
+  }
+}
+
+/** Three booleans, all three of them, or null. Never a partial grant. */
+function copilotGrant(value: unknown): CopilotGrantWire | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  // Every field required and every field a boolean. `CopilotGrantWire` promises
+  // a client exactly one shape to read, and the reason it does is that "no
+  // access" must have one spelling: a grant read as `{read: true}` with the
+  // other two missing would draw a watching surface for a device that may have
+  // been given everything, or nothing.
+  if (typeof row.read !== 'boolean' || typeof row.act !== 'boolean' || typeof row.alter !== 'boolean') {
+    return null
+  }
+  return { read: row.read, act: row.act, alter: row.alter }
+}
+
+function copilotLink(value: unknown): CopilotLinkWire | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  const grant = copilotGrant(row.grant)
+  if (grant === null || typeof row.linked !== 'boolean' || typeof row.open !== 'boolean') return null
+  return { linked: row.linked, open: row.open, grant }
+}
+
+/** The five things the desk can be doing, and only those five. */
+const COPILOT_DESK = ['stopped', 'starting', 'running'] as const
+
+function copilotStateReport(value: unknown): CopilotStateReport | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  const desk = COPILOT_DESK.find((known) => known === row.desk)
+  const grant = copilotGrant(row.grant)
+  // Refused rather than defaulted, and `desk` is the one that matters: a report
+  // drawn as `stopped` because the word was unreadable says the copilot is not
+  // running, which is the one claim on this screen somebody would act on by
+  // pressing Start against something that is already up.
+  if (desk === undefined || grant === null) return null
+  return {
+    desk,
+    run: typeof row.run === 'string' && row.run !== '' ? row.run : null,
+    profile: typeof row.profile === 'string' && row.profile !== '' ? row.profile.slice(0, MAX_COPILOT_LINE_CHARS) : null,
+    // Three states, and null is one of them — "it has not been asked" is not the
+    // same as "no". Anything that is not a boolean folds onto null rather than
+    // onto false, because false is a claim.
+    signedIn: typeof row.signedIn === 'boolean' ? row.signedIn : null,
+    tools: counted(row.tools),
+    turnTokens: counted(row.turnTokens),
+    pending: counted(row.pending),
+    grant,
+    // `available` decides whether a Start button can act, so an unreadable one
+    // is false: offering a control that cannot work is the defect this whole
+    // review is built on, and the reason below says so in the desktop's words
+    // when it sent any.
+    available: row.available === true,
+    reason: typeof row.reason === 'string' && row.reason !== '' ? row.reason.slice(0, MAX_REFUSAL_CHARS) : null,
+  }
+}
+
+/** A whole non-negative count, or zero. Never a negative and never a fraction. */
+function counted(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+  return value < 0 ? 0 : Math.floor(value)
+}
+
+/** Epoch milliseconds as the wire may carry them, or 0 for "no time given". */
+function stamp(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0
+  return Math.floor(value)
+}
+
+function chatMessage(value: unknown): CopilotChatMessage | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  const id = typeof row.id === 'string' ? row.id : ''
+  const text = typeof row.text === 'string' ? row.text : ''
+  // The id is what makes a growing message *replace* rather than duplicate, so a
+  // bubble without one would arrive again on every extension and stack up a
+  // paragraph at a time. Dropped rather than given a generated id, because an id
+  // invented here would never match the next frame's.
+  if (id === '' || (row.role !== 'you' && row.role !== 'agent')) return null
+  const message: CopilotChatMessage = {
+    id,
+    role: row.role,
+    text: text.slice(0, MAX_COPILOT_MESSAGE_CHARS),
+    at: stamp(row.at),
+  }
+  // Carried through rather than recomputed from the slice above: `truncated` is
+  // the desktop saying *there is more of this, go and look on the machine*, and
+  // a client that decided for itself would say it about a message that merely
+  // reached this client's own cap.
+  if (row.truncated === true) message.truncated = true
+  return message
+}
+
+/** The three outcomes an action row can carry. Anything else drops the row. */
+const ACTION_OUTCOMES = ['ok', 'refused', 'error'] as const
+
+function actionRow(value: unknown): CopilotActionRow | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  const id = typeof row.id === 'string' ? row.id : ''
+  const tool = typeof row.tool === 'string' ? row.tool : ''
+  const outcome = ACTION_OUTCOMES.find((known) => known === row.outcome)
+  // An outcome this build has never heard of drops the row rather than being
+  // folded onto `ok`. This is the line in the whole feature where a permission
+  // boundary becomes visible — `outcome: 'refused'` is how somebody finds out
+  // the gate held — and a fourth outcome added on the desktop must produce a
+  // missing row here, never one that says the call succeeded.
+  if (id === '' || tool === '' || outcome === undefined) return null
+  return {
+    id,
+    at: typeof row.at === 'string' ? row.at.slice(0, MAX_COPILOT_LINE_CHARS) : '',
+    tool: tool.slice(0, MAX_COPILOT_LINE_CHARS),
+    tier: typeof row.tier === 'string' ? row.tier.slice(0, MAX_COPILOT_LINE_CHARS) : '',
+    outcome,
+    detail: typeof row.detail === 'string' ? row.detail.slice(0, MAX_REFUSAL_CHARS) : '',
+    refusal: typeof row.refusal === 'string' && row.refusal !== '' ? row.refusal.slice(0, MAX_REFUSAL_CHARS) : null,
+    deviceId: typeof row.deviceId === 'string' && row.deviceId !== '' ? row.deviceId : null,
+  }
+}
+
+function copilotSessionRow(value: unknown): CopilotSessionRow | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  const id = typeof row.id === 'string' ? row.id : ''
+  if (id === '') return null
+  return {
+    id,
+    title: typeof row.title === 'string' ? row.title.slice(0, MAX_COPILOT_LINE_CHARS) : '',
+    cwd: typeof row.cwd === 'string' ? row.cwd.slice(0, MAX_CWD_BYTES) : '',
+    provider: typeof row.provider === 'string' ? row.provider.slice(0, MAX_COPILOT_LINE_CHARS) : '',
+    status: typeof row.status === 'string' ? row.status.slice(0, MAX_COPILOT_LINE_CHARS) : '',
+    startedAt: stamp(row.startedAt),
+    // The join back to the action log, and the reason the scan can quote the
+    // machine's own words about a session instead of inventing a sentence. Null
+    // when the desktop did not say, which is a real state: a session the copilot
+    // started before this build began recording the link has no row to point at.
+    originRunId: typeof row.originRunId === 'string' && row.originRunId !== '' ? row.originRunId : null,
+  }
+}
+
+function pendingRow(value: unknown): CopilotPendingRow | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  const id = typeof row.id === 'string' ? row.id : ''
+  if (id === '') return null
+  return {
+    id,
+    tool: typeof row.tool === 'string' ? row.tool.slice(0, MAX_COPILOT_LINE_CHARS) : '',
+    summary: typeof row.summary === 'string' ? row.summary.slice(0, MAX_REFUSAL_CHARS) : '',
+    requestedAt: stamp(row.requestedAt),
+    expiresAt: stamp(row.expiresAt),
+    // **False unless the desktop said true.** This is the field that decides
+    // whether an Allow button is drawn, and the failure direction is not
+    // symmetric: a row wrongly marked `mine` draws a control that is always
+    // refused, which is the defect this repository has already paid for twice.
+    mine: row.mine === true,
+  }
+}
+
+function consentQuestion(value: unknown): CopilotConsentQuestion | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  const id = typeof row.id === 'string' ? row.id : ''
+  const tool = typeof row.tool === 'string' ? row.tool : ''
+  const args = row.args
+  // Refused whole when anything is missing, and `args` is the field that makes
+  // it so. A consent prompt without the arguments is a shape rather than a
+  // decision, and a gate that is always answered yes because there was nothing
+  // to read is worse than no gate at all — it looks like protection.
+  if (id === '' || tool === '' || typeof args !== 'object' || args === null || Array.isArray(args)) {
+    return null
+  }
+  return {
+    id,
+    tool: tool.slice(0, MAX_COPILOT_LINE_CHARS),
+    tier: typeof row.tier === 'string' ? row.tier.slice(0, MAX_COPILOT_LINE_CHARS) : '',
+    summary: typeof row.summary === 'string' ? row.summary.slice(0, MAX_REFUSAL_CHARS) : '',
+    args: args as Record<string, unknown>,
+    origin: typeof row.origin === 'string' ? row.origin.slice(0, MAX_COPILOT_LINE_CHARS) : '',
+    requestedAt: stamp(row.requestedAt),
+    expiresAt: stamp(row.expiresAt),
+  }
+}
+
+function settledRow(value: unknown): CopilotSettledRow | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  const id = typeof row.id === 'string' ? row.id : ''
+  // `granted` decides what the withdrawn prompt says happened, so it is required
+  // rather than defaulted: "it was allowed" and "it was refused" are the two
+  // sentences a person most needs to be told the truth about, and a missing
+  // boolean read as false would tell somebody their own Allow had been refused.
+  if (id === '' || typeof row.granted !== 'boolean') return null
+  return {
+    id,
+    granted: row.granted,
+    // Null is meaningful and is not the same as an empty string: it is the
+    // timeout, where nobody answered at all, and the sentence for it is
+    // different from the one that names a surface.
+    by: typeof row.by === 'string' && row.by !== '' ? row.by.slice(0, MAX_COPILOT_LINE_CHARS) : null,
+    reason: typeof row.reason === 'string' && row.reason !== '' ? row.reason.slice(0, MAX_REFUSAL_CHARS) : null,
+  }
+}
+
+/**
+ * How long a tool id, a tier, a status, a run id or an origin may be.
+ *
+ * All of them are short in reality and all of them are drawn on one line of a
+ * row, so this is a display bound rather than a security one —
+ * `MAX_MESSAGE_BYTES` has already been applied to the whole frame before any of
+ * this runs. It is the copilot's equivalent of {@link MAX_DEV_FIELD_CHARS} and
+ * is a separate constant only because the two features' rows are separate: the
+ * day one of them wants a longer field, the other should not silently follow.
+ */
+const MAX_COPILOT_LINE_CHARS = 200
+
+/**
  * How long a script name, a command line, a session id or a URL may be.
  *
  * All four are short in reality and all four are drawn on one line of a row, so
@@ -506,10 +919,36 @@ export function decodeServerMessage(raw: string): DecodeResult {
   if (localhost !== null) return localhost
   const dev = devStateFrame(frame)
   if (dev !== null) return dev
+  const copilot = copilotFrame(frame)
+  if (copilot !== null) return copilot
   const parsed = parseServerFrame(frame)
   if (!parsed.ok) return parsed
-  const message = parsed.message
+  let message = parsed.message
   if (message.t !== 'welcome' && message.t !== 'sessions') return { ok: true, message }
+  /*
+   * The copilot link, put back onto a `welcome` the shared parser dropped.
+   *
+   * `ServerMessage` carries `copilot?: CopilotLinkWire` and `parseServerFrame`
+   * does not read it — for the reason the shared parser refuses every other
+   * `copilot.*` frame: it was written for a desktop acting as the guest of
+   * another desktop, and that guest never connects a copilot, so the field is
+   * one it has no use for. This client negotiates and does use it, and the cost
+   * of not reading it is exact: `linked` would be false on every welcome, the
+   * Copilot screen would ask for a connect code on every reload, and the code
+   * would work — producing a second record for a browser that already had one.
+   *
+   * Read defensively and dropped when malformed, which is the same answer as a
+   * desktop too old to send it: ask for a code. That is the safe direction —
+   * the wrong way round would have this browser sending a `copilot.hello` no
+   * machine will honour and counting against its credential limiter.
+   */
+  if (message.t === 'welcome') {
+    const link = copilotLink((frame as Record<string, unknown>).copilot)
+    // `open` forced false whatever arrived, for the reason `copilot.ts` gives at
+    // its own welcome branch: the desktop always sends false, and a client whose
+    // correctness depends on the far end never having a bug is not correct.
+    if (link !== null) message = { ...message, copilot: { ...link, open: false } }
+  }
   const activity = rowActivity(frame)
   return activity === null ? { ok: true, message } : { ok: true, message, activity }
 }
@@ -554,6 +993,23 @@ const encoder = new TextEncoder()
  * not touch `TextEncoder`, and it is denominated in the output cap rather than
  * the input one. This is a browser; `TextEncoder` is free here.
  */
+/**
+ * Whether a message is short enough for `copilot.say`, measured in real bytes.
+ *
+ * The desktop refuses an oversized one and answers a rejected frame by closing
+ * the socket, so a client that merely hoped would lose its connection over a
+ * long paragraph. Unlike a keystroke this is **not** chunked: `chunkInput` splits
+ * a paste because a terminal is a stream and half a paste is still half a paste,
+ * whereas half a sentence to an agent is a different sentence. So the composer
+ * refuses and says so, and the person shortens it.
+ *
+ * `TextEncoder` for the same reason `overMessageCap` uses it: `MAX_COPILOT_SAY_BYTES`
+ * is a byte count and a UTF-16 length is not one.
+ */
+export function copilotSayFits(text: string, maxBytes: number = MAX_COPILOT_SAY_BYTES): boolean {
+  return encoder.encode(text).byteLength <= maxBytes
+}
+
 export function chunkInput(data: string, maxBytes: number = MAX_INPUT_BYTES): string[] {
   if (data === '') return []
   if (encoder.encode(data).byteLength <= maxBytes) return [data]

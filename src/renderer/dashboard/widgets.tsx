@@ -472,13 +472,11 @@ function SessionsWidget({ context }: { context: WidgetContext }): ReactElement {
  * meter. The tile lost a stat and kept its four, so nothing on it is a gap.
  */
 
-/** One row of the breakdown behind the project's totals. */
-interface UsageSessionRow {
-  id: string
-  tokens: number
-  requests: number
-  model: string
-}
+/*
+   `UsageSessionRow` was here — one transcript's id, model, requests and tokens.
+   It fed a thirty-five-row list under the breakdown, which is deleted; see the
+   note where it was rendered in `UsageReadout`.
+*/
 
 /** Which session the context reading belongs to, and what it is measured against. */
 interface ContextOwner {
@@ -511,7 +509,6 @@ export interface UsageView {
   /** Models these transcripts name, heaviest first. */
   models: string[]
   scanning: boolean
-  perSession: UsageSessionRow[]
 }
 
 /** Prompt tokens: everything that was not output. */
@@ -665,21 +662,6 @@ function UsageWidget({ context }: { context: WidgetContext }): ReactElement {
         numberAt(byModel[model], 'cacheRead')
       const models = Object.keys(byModel).sort((a, b) => modelTokens(b) - modelTokens(a))
 
-      const perSession = sessions.filter(isRecord).map((entry, index): UsageSessionRow => {
-        const sessionModels = Array.isArray(entry.models) ? entry.models : []
-        return {
-          id: typeof entry.sessionId === 'string' ? entry.sessionId : `session-${index}`,
-          requests: numberAt(entry, 'requests'),
-          tokens:
-            numberAt(entry, 'usage', 'input') +
-            numberAt(entry, 'usage', 'output') +
-            numberAt(entry, 'usage', 'cacheWrite5m') +
-            numberAt(entry, 'usage', 'cacheWrite1h') +
-            numberAt(entry, 'usage', 'cacheRead'),
-          model: typeof sessionModels[0] === 'string' ? sessionModels[0] : '',
-        }
-      })
-
       return {
         tokens: tokenParts,
         requests: numberAt(raw, 'requests'),
@@ -687,7 +669,6 @@ function UsageWidget({ context }: { context: WidgetContext }): ReactElement {
         context,
         models,
         scanning: isRecord(raw) && raw.scanning === true,
-        perSession,
       }
     }, [projectPath]),
     { what: 'Reading this project’s transcripts' },
@@ -729,7 +710,8 @@ export function UsageReadout({
       <WidgetMessage
         tone="muted"
         title={data.scanning ? 'Still scanning…' : 'Nothing recorded yet'}
-        detail="Usage appears once a Claude Code session has written a transcript for this folder."
+        /* No tool named — same rule as the note below the totals. */
+        detail="Usage appears once an agent session in this folder has recorded its first request."
       />
     )
   }
@@ -739,9 +721,15 @@ export function UsageReadout({
   const percent = data.context?.percent ?? null
   const tone = percent === null ? undefined : percent >= 90 ? 'crit' : percent >= 70 ? 'warn' : undefined
 
+  const tokenTotalForDoor = totalOf(data.tokens)
   // All four totals are the same body of work seen from four sides, so all four
   // open the same breakdown rather than pretending to be four destinations.
-  const open = doorIf(data.perSession.length > 0, onToggle)
+  //
+  // Gated on there being tokens to itemise rather than on there being sessions
+  // to list: the breakdown is the four-line itemisation now, and it is what
+  // makes the headline checkable. It used to be gated on `perSession.length`,
+  // which is gone with the list it counted.
+  const open = doorIf(tokenTotalForDoor > 0, onToggle)
   const goes = expanded ? 'Hide the breakdown' : 'Show what the figures are made of'
 
   const tokenTotal = totalOf(data.tokens)
@@ -803,10 +791,25 @@ export function UsageReadout({
         bill." and went on to explain what a dollar figure did and did not mean;
         with no dollar figure there is nothing to disclaim, only to source.
       */}
+      {/*
+        Where the number came from, and it is the sentence that has to be exact
+        — Asad, on the headline: *"3.2 billion tokens. I don't know if it is
+        true or not."*
+
+        Two things changed in it. It named a specific tool, which is the rule he
+        stated for the whole product: *"you should not mention in any settings
+        or any pop-up a specific tool or LLM, because they can use some other
+        also."* And "counted" was doing a lot of quiet work: each request is
+        counted **once**, which is the whole difficulty — one API request writes
+        many lines into a transcript, and a resumed conversation writes the same
+        request into a second transcript. Saying so is what makes the figure
+        checkable rather than something to be taken on trust. The arithmetic
+        behind it is in `src/main/transcript.ts`.
+      */}
       <p className="widget-note">
         {formatTokens(tokenTotal)} tokens across {data.requests}{' '}
-        {plural(data.requests, 'request')}, counted from the Claude Code transcripts in this
-        folder.
+        {plural(data.requests, 'request')} — every request your agents made in this folder,
+        counted once, from their own session records.
       </p>
 
       {expanded && (
@@ -841,24 +844,33 @@ export function UsageReadout({
             </li>
           </ul>
 
-          <p className="widget-breakdown-label">
-            The same total across {data.perSession.length}{' '}
-            {plural(data.perSession.length, 'session')}, heaviest first
-          </p>
-          <ul className="widget-list widget-list-breakdown">
-            {[...data.perSession]
-              .sort((a, b) => b.tokens - a.tokens)
-              .map((row) => (
-                <li key={row.id}>
-                  <span className="widget-row static">
-                    <span className="widget-row-main mono">{row.id.slice(0, 8)}</span>
-                    <span className="widget-row-side">{row.model || '—'}</span>
-                    <span className="widget-row-side num">{row.requests}</span>
-                    <span className="widget-row-side num">{formatTokens(row.tokens)}</span>
-                  </span>
-                </li>
-              ))}
-          </ul>
+          {/*
+            The per-session list was here, and it is gone.
+
+            It printed one row per transcript in the folder — thirty-five of
+            them, `e79f7c36 · claude-opus-4-8 · 3071 · 1.61B` — under the
+            heading "The same total across 35 sessions, heaviest first". Asad,
+            finding it: a long list of old sessions that is nowhere in the
+            sidebar, where every row opens the same session. *"They make no
+            sense to be here, I think, in that case."*
+
+            He is right on both counts, and the second one was the argument for
+            deleting rather than repairing. A row identified by eight hex
+            characters names nothing a person can recognise — `cost:project`
+            carries no session *title*, only the transcript's id — so even a
+            working row would land you somewhere you could not have chosen on
+            purpose. And it could not be made to work from here: opening one
+            would mean handing a transcript path up through `onOpenInspector`,
+            which takes no argument and is wired in `App.tsx` to open the
+            **most recently active** transcript, whichever row was pressed.
+            Every row opening the same session was not a bug in the list; it
+            was the only thing the list could do.
+
+            What the breakdown is *for* survives intact above: the four-line
+            itemisation adds back up to the headline, which is what makes the
+            headline checkable. The session list added no arithmetic to that —
+            it was the same total, split by a key nobody can read.
+          */}
         </>
       )}
 
@@ -1441,7 +1453,7 @@ export const WIDGET_DEFINITIONS: Readonly<Record<WidgetType, WidgetDefinition>> 
   cost: {
     type: 'cost',
     title: 'Usage',
-    description: 'Tokens, cache hit rate and context-window pressure, read from Claude Code transcripts.',
+    description: 'Tokens, cache hit rate and context-window pressure, read from your agents’ own session records.',
     Component: UsageWidget,
   },
   git: {

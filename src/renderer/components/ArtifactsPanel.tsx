@@ -1,25 +1,55 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { readFailure, withDeadline } from '../deadline'
 import { recall, remember } from '../panel-cache'
+import { renderMarkdown } from './ChatView'
 import { PageEmpty, PageNote } from './PageEmpty'
 import { formatBytes, relativeTime } from './relative-time'
 import './ArtifactsPanel.css'
 
 /**
- * Artifacts — the files an agent actually produced in this project.
+ * Artifacts — the things an agent made in this project.
  *
- * Every row on this page comes from one place: a `Write`, `Edit` or
- * `NotebookEdit` tool call recorded in a session transcript, whose file path
- * landed inside this project. See `src/main/artifacts.ts` for why that is the
- * only honest definition of the word here, and for what is deliberately *not*
- * counted — a `Bash` line that may or may not have redirected into a file is a
- * command string, not evidence.
+ * ## Read this before changing what a row is
  *
- * The page therefore never shows a category it cannot fill. There is no
- * "Images" tab that is always empty and no "Build output" section built on a
- * guess: there is a list of files, when each was touched, and — the part that
- * makes it a review surface rather than a report — the actual text of every
- * change, taken from the same record.
+ * This page has now been reported twice, in the same words both times:
+ *
+ *   > *"Artifacts are still again showing something like before. This issue has
+ *   > been reported to you before too. Now again they are showing some kind of
+ *   > **files** instead of artifacts."*
+ *
+ * It came back because nothing in the code held the *meaning* of the word. The
+ * data underneath — `Write`/`Edit`/`NotebookEdit` calls recorded in a session
+ * transcript — is a list of file paths, so every rewrite that started from the
+ * data arrived back at a file browser, and the second version wrote the
+ * reasoning down as if it were settled: *"the only honest definition"*. It was
+ * honest about the evidence and wrong about the page. What he asked for, the
+ * first time, was: *"bring artifacts over here… they can review artifacts and
+ * browse."* Review, and browse — not audit a path list.
+ *
+ * So the meaning is pinned here, and by `default-scope.test` in
+ * `ArtifactsPanel.test.tsx`, which fails if the default list goes back to being
+ * every touched file:
+ *
+ * **An artifact is a file the agent produced whole.** At least one recorded
+ * `Write` — it put the entire contents there. Those are the documents, plans,
+ * notes, pages and scripts somebody would call "what it made".
+ *
+ * **A file it only edited is not an artifact.** It patched something that
+ * already existed; that is a change to your project, and Source control and
+ * Files are the pages for it. Those files are still reachable here, one chip
+ * away, under the word that describes them — nothing is hidden, and the split
+ * is between two honest words rather than between shown and dropped.
+ *
+ * And the second half of "it looks like Files" was the *presentation*: a
+ * path-shaped list beside a pane of raw monospace source. A row is a thing now
+ * — its name, what kind of thing it is, when, how big — and the pane shows the
+ * artifact **rendered**, with the change record behind a History switch rather
+ * than in front of it.
+ *
+ * The page still never shows a category it cannot fill. There is no "Images"
+ * tab that is always empty and no "Build output" section built on a guess: a
+ * `Bash` line that may or may not have redirected into a file is a command
+ * string, not evidence. See `src/main/artifacts.ts` for what is enumerable.
  */
 
 /* ------------------------------------------------------------------ types -- */
@@ -136,6 +166,15 @@ export interface ArtifactsPanelProps {
   bridge?: ArtifactsBridge
   /** Injected in tests so relative times are deterministic. */
   now?: number
+  /** Reads an artifact's current contents. Defaults to the preload bridge. */
+  fs?: FsReadBridge
+  /**
+   * Markdown → sanitised HTML. Injected so this panel can be rendered without a
+   * DOM: `renderMarkdown` refuses (returns null) outside a browser, and the
+   * preview falls back to plain text, which is the behaviour a static render
+   * should see rather than a throw.
+   */
+  renderDocument?: (text: string) => string | null
 }
 
 /** Drawn on the 24×24 grid the rest of the app uses, at 1.5 stroke. */
@@ -157,9 +196,103 @@ function resolveBridge(): ArtifactsBridge | null {
   return host as ArtifactsBridge
 }
 
+/** Same defensive read, for the channel that hands over a file's contents. */
+function resolveFsBridge(): FsReadBridge | null {
+  if (typeof window === 'undefined') return null
+  const host = (window as unknown as { deck?: { readFile?: unknown } }).deck
+  if (!host || typeof host.readFile !== 'function') return null
+  return host as FsReadBridge
+}
+
 export function directoryOf(relPath: string): string {
   const cut = relPath.lastIndexOf('/')
   return cut === -1 ? '' : relPath.slice(0, cut)
+}
+
+/* ------------------------------------------------------------ what it is -- */
+
+/**
+ * Which half of the page a file belongs on.
+ *
+ * `made` is the default and the whole point — see the header comment. The test
+ * that pins it is the guard against this page becoming a file browser for a
+ * third time.
+ */
+export type ArtifactScopeKind = 'made' | 'changed'
+
+/**
+ * A file the agent produced whole at least once.
+ *
+ * `writes` counts recorded `Write` (and `NotebookEdit` with a whole-cell
+ * rewrite) calls. One is enough: an agent that wrote a file and then refined it
+ * with three edits still *made* that file, and putting it under "changed"
+ * because it was touched again would move an artifact off the page the moment
+ * it got better.
+ */
+export function wasMade(artifact: Artifact): boolean {
+  return artifact.writes > 0
+}
+
+/**
+ * What kind of thing this is, in one word a person already knows.
+ *
+ * Extension-based, deliberately. The alternative — sniffing the content — costs
+ * a read of every file to answer a question the name answers, and would still
+ * be a guess. Anything unrecognised falls through to "File", which is the one
+ * case where the vaguest word is the true one.
+ *
+ * The list is short on purpose. A vocabulary of twenty kinds is a legend
+ * somebody has to learn; six is a glance.
+ */
+const KIND_BY_EXTENSION: Record<string, string> = {
+  md: 'Document', markdown: 'Document', txt: 'Document', rtf: 'Document', pdf: 'Document',
+  doc: 'Document', docx: 'Document',
+  html: 'Web page', htm: 'Web page', xhtml: 'Web page',
+  css: 'Style sheet', scss: 'Style sheet', sass: 'Style sheet', less: 'Style sheet',
+  png: 'Image', jpg: 'Image', jpeg: 'Image', gif: 'Image', webp: 'Image', svg: 'Image',
+  avif: 'Image', ico: 'Image', bmp: 'Image',
+  csv: 'Data', tsv: 'Data', json: 'Data', jsonl: 'Data', ndjson: 'Data', xml: 'Data',
+  yaml: 'Data', yml: 'Data', toml: 'Data', sql: 'Data', geojson: 'Data', parquet: 'Data',
+  ts: 'Code', tsx: 'Code', js: 'Code', jsx: 'Code', mjs: 'Code', cjs: 'Code', py: 'Code',
+  rb: 'Code', go: 'Code', rs: 'Code', java: 'Code', kt: 'Code', swift: 'Code', c: 'Code',
+  h: 'Code', cpp: 'Code', hpp: 'Code', cs: 'Code', php: 'Code', sh: 'Code', bash: 'Code',
+  zsh: 'Code', ps1: 'Code', lua: 'Code', vue: 'Code', svelte: 'Code', ipynb: 'Notebook',
+}
+
+export function kindOf(relPath: string): string {
+  const name = relPath.slice(relPath.lastIndexOf('/') + 1)
+  // A dotfile with no second dot — `.gitignore`, `.claudeignore`, `.env` — has
+  // no extension at all; its whole name is the type. Calling those "File" would
+  // be right and useless, and calling `.gitignore` a "Document" would be wrong.
+  if (name.startsWith('.') && !name.slice(1).includes('.')) return 'Setting'
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return 'File'
+  return KIND_BY_EXTENSION[name.slice(dot + 1).toLowerCase()] ?? 'File'
+}
+
+/** Which artifacts a preview can actually render, rather than describe. */
+export type PreviewKind = 'document' | 'text' | 'image' | 'none'
+
+/**
+ * How the pane should show this artifact.
+ *
+ * `document` is the one that matters: a markdown file rendered as prose is the
+ * difference between reviewing what the agent wrote and reading its source. The
+ * page showed markdown as monospace source before, which is most of the reason
+ * it read as a file browser.
+ */
+export function previewKindOf(relPath: string): PreviewKind {
+  const kind = kindOf(relPath)
+  if (kind === 'Document') {
+    const lower = relPath.toLowerCase()
+    // Only the ones this app can actually turn into prose. A PDF or a .docx is
+    // a document nobody here can render, and a preview that shows its bytes is
+    // worse than one that says what it is and offers to open it.
+    return lower.endsWith('.md') || lower.endsWith('.markdown') ? 'document' : 'text'
+  }
+  if (kind === 'Image') return 'image'
+  if (kind === 'File' || kind === 'Notebook') return 'none'
+  return 'text'
 }
 
 /**
@@ -169,21 +302,20 @@ export function directoryOf(relPath: string): string {
  * many files, from how many sessions, and — when a cap bit — that there are
  * more. A list that quietly stops at four hundred is a list that lies.
  */
-export function summarize(list: ArtifactList, shown: number): string {
+export function summarize(list: ArtifactList, shown: number, kind: ArtifactScopeKind): string {
   if (list.artifacts.length === 0) {
     return list.sessionsScanned === 0
       ? 'No sessions recorded for this project yet.'
       : `Nothing written or edited in ${list.sessionsScanned} session${list.sessionsScanned === 1 ? '' : 's'}.`
   }
+  // Counted against the half of the list that is on screen, not against every
+  // file found — "12 of 33" under a Made chip showing 12 of 12 was the page
+  // reporting a filter as if it were a shortfall.
+  const total = list.artifacts.filter((artifact) => wasMade(artifact) === (kind === 'made')).length
+  const noun = kind === 'made' ? 'made here' : 'changed'
   const parts: string[] = []
-  parts.push(
-    shown === list.artifacts.length
-      ? `${list.artifacts.length} file${list.artifacts.length === 1 ? '' : 's'}`
-      : `${shown} of ${list.artifacts.length} files`,
-  )
-  parts.push(
-    `${list.sessions.length} session${list.sessions.length === 1 ? '' : 's'}`,
-  )
+  parts.push(shown === total ? `${total} ${noun}` : `${shown} of ${total} ${noun}`)
+  parts.push(`${list.sessions.length} session${list.sessions.length === 1 ? '' : 's'}`)
   if (list.truncated) parts.push('older work not read')
   return parts.join(' · ')
 }
@@ -358,6 +490,15 @@ export function ChangeBody({ change }: { change: ArtifactChange }) {
 
 /* --------------------------------------------------------------- sections -- */
 
+/**
+ * One artifact, as a thing rather than as a path.
+ *
+ * What the row says, in order: its **name**, when it last changed, what **kind
+ * of thing** it is, and how big it is. The folder is a trailing note in the
+ * quietest ink on the page, because it is how you tell two files of the same
+ * name apart and nothing more — it used to be the second line of every row,
+ * directly under the name, which made a list of paths out of a list of things.
+ */
 export function ArtifactRow({
   artifact,
   now,
@@ -384,19 +525,166 @@ export function ArtifactRow({
           <span className="artifact-row-when">{relativeTime(artifact.lastAt, now)}</span>
         </span>
         <span className="artifact-row-meta">
+          <span className="artifact-row-kind">{kindOf(artifact.relPath)}</span>
+          {artifact.onDisk ? (
+            <span className="artifact-row-size">{formatBytes(artifact.onDisk.bytes)}</span>
+          ) : (
+            /* Not a warning, a fact: agents write scratch files and delete
+               them, and a row that offered to open one would offer a read
+               error. */
+            <span className="artifact-tag">not on disk</span>
+          )}
           {directory && (
             <span className="artifact-row-dir">
               {/* The inner wrapper is load-bearing — see `.artifact-row-dir-text`. */}
               <span className="artifact-row-dir-text">{directory}</span>
             </span>
           )}
-          <span className="artifact-row-counts">{changeSummary(artifact)}</span>
-          {/* Not a warning, a fact: agents write scratch files and delete them,
-              and a row that offered to open one would offer a read error. */}
-          {!artifact.onDisk && <span className="artifact-tag">not on disk</span>}
         </span>
       </button>
     </li>
+  )
+}
+
+/* ---------------------------------------------------------------- preview -- */
+
+/**
+ * The artifact itself, as it stands now.
+ *
+ * This is the half that was missing, and its absence is most of why the page
+ * read as a file browser: the pane showed a *diff of a change*, in monospace,
+ * as the first and only thing. A person arriving at "Artifacts" wants to see
+ * the thing — the note, the plan, the page — and only then how it got there.
+ *
+ * It reads the file off disk rather than replaying the transcript's `after`
+ * text, because those are two different facts and only one of them is what the
+ * artifact *is*: an agent writes a file and then edits it four times, and the
+ * newest recorded write is several revisions stale. `onDisk` is checked by the
+ * caller, so a file the agent made and later deleted never reaches here.
+ */
+interface FsReadBridge {
+  readFile(root: string, relPath: string): Promise<unknown>
+}
+
+type ReadState =
+  | { status: 'loading' }
+  | { status: 'text'; text: string }
+  | { status: 'note'; message: string }
+  | { status: 'error'; message: string }
+
+/** How long one artifact read has to come back. Same budget as the Files pane. */
+const READ_DEADLINE_MS = 10_000
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Turn `fs:read`'s reply into something to show.
+ *
+ * Exported and pure so the three answers can be pinned without a filesystem:
+ * this project's tests render to static markup and never run an effect, so a
+ * component that reads a file can otherwise only ever be tested in its loading
+ * state.
+ */
+export function describeRead(reply: unknown, bytes: number | null): ReadState {
+  if (!isRecord(reply)) return { status: 'error', message: 'That file could not be read.' }
+  if (reply.kind === 'text' && typeof reply.text === 'string') {
+    return reply.text.trim() === ''
+      ? { status: 'note', message: 'This file is empty.' }
+      : { status: 'text', text: reply.text }
+  }
+  if (reply.kind === 'too-large') {
+    const limit = typeof reply.limit === 'number' ? formatBytes(reply.limit) : 'the preview limit'
+    return { status: 'note', message: `Too big to preview here — over ${limit}. Open it in Files.` }
+  }
+  if (reply.kind === 'binary') {
+    const size = bytes === null ? '' : ` (${formatBytes(bytes)})`
+    return { status: 'note', message: `Not text${size}, so there is nothing to show inline.` }
+  }
+  return { status: 'error', message: 'That file could not be read.' }
+}
+
+function ArtifactPreview({
+  root,
+  artifact,
+  bridge,
+  renderDocument,
+}: {
+  root: string
+  artifact: Artifact
+  bridge: FsReadBridge | null
+  /** Markdown → HTML, injected so the panel can be rendered without a DOM. */
+  renderDocument: (text: string) => string | null
+}) {
+  const [state, setState] = useState<ReadState>({ status: 'loading' })
+  const run = useRef(0)
+  const kind = previewKindOf(artifact.relPath)
+  const bytes = artifact.onDisk?.bytes ?? null
+
+  useEffect(() => {
+    if (!bridge) {
+      setState({ status: 'note', message: 'This window cannot read files.' })
+      return
+    }
+    if (kind === 'image') {
+      // Honest rather than empty: nothing here can turn a path into pixels
+      // without a channel that hands over the bytes, and inventing an
+      // `<img src="file://…">` in a renderer is exactly the kind of escape
+      // hatch this app has spent effort closing. Files opens it.
+      setState({
+        status: 'note',
+        message: `An image${bytes === null ? '' : `, ${formatBytes(bytes)}`}. Open it in Files to look at it.`,
+      })
+      return
+    }
+    if (kind === 'none') {
+      setState({
+        status: 'note',
+        message: `${kindOf(artifact.relPath)}${bytes === null ? '' : `, ${formatBytes(bytes)}`}. Open it in Files to look at it.`,
+      })
+      return
+    }
+
+    const id = run.current + 1
+    run.current = id
+    setState({ status: 'loading' })
+    void withDeadline(bridge.readFile(root, artifact.relPath), 'Reading this file', READ_DEADLINE_MS)
+      .then((reply) => {
+        if (run.current !== id) return
+        setState(describeRead(reply, bytes))
+      })
+      .catch((error: unknown) => {
+        if (run.current !== id) return
+        setState({ status: 'error', message: readFailure(error) })
+      })
+  }, [bridge, root, artifact.relPath, kind, bytes])
+
+  if (state.status === 'loading') return <PageNote busy>Opening it…</PageNote>
+  if (state.status === 'note') return <PageNote>{state.message}</PageNote>
+  if (state.status === 'error') return <PageNote>{state.message}</PageNote>
+
+  if (kind === 'document') {
+    const html = renderDocument(state.text)
+    // `renderMarkdown` returns null when DOMPurify is not initialised, which is
+    // every non-browser render. Falling back to the raw text is the whole point
+    // of that contract: unsanitised HTML never reaches the DOM.
+    if (html !== null) {
+      return (
+        <div
+          className="artifact-doc"
+          // Sanitised by `renderMarkdown` — see its contract. This is the same
+          // arrangement the chat view uses for the same reason.
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      )
+    }
+  }
+
+  return (
+    <pre className="artifact-plain">
+      <code>{state.text}</code>
+    </pre>
   )
 }
 
@@ -493,8 +781,19 @@ export function scanOutcome<T extends { ok: true }>(
   return { failed: response.message }
 }
 
-export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: ArtifactsPanelProps) {
+export function ArtifactsPanel({
+  projectPath,
+  onOpenFile,
+  bridge,
+  now,
+  fs,
+  renderDocument = renderMarkdown,
+}: ArtifactsPanelProps) {
   const [scope, setScope] = useState<ArtifactScope>('project')
+  /** Made or changed. See the header comment — this is the fix that has to hold. */
+  const [made, setMade] = useState<ArtifactScopeKind>('made')
+  /** Whether the pane is showing the artifact or how it got that way. */
+  const [showHistory, setShowHistory] = useState(false)
   const [filter, setFilter] = useState('')
   const [session, setSession] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
@@ -502,6 +801,7 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
   const [history, setHistory] = useState<HistoryState | null>(null)
 
   const host = useMemo(() => bridge ?? resolveBridge(), [bridge])
+  const fsHost = useMemo(() => fs ?? resolveFsBridge(), [fs])
   const clock = now ?? Date.now()
   /** Guards against a slow earlier scan overwriting a newer one's answer. */
   const listRun = useRef(0)
@@ -575,11 +875,23 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
     const artifacts = list.list?.artifacts ?? []
     const needle = filter.trim().toLowerCase()
     return artifacts.filter((artifact) => {
+      // The split that makes this page Artifacts and not Files.
+      if (wasMade(artifact) !== (made === 'made')) return false
       if (session && !artifact.sessionIds.includes(session)) return false
       if (needle === '') return true
       return artifact.relPath.toLowerCase().includes(needle)
     })
-  }, [list.list, filter, session])
+  }, [list.list, filter, session, made])
+
+  /** How many are on the other chip, so it can say so rather than hide them. */
+  const changedCount = useMemo(
+    () => (list.list?.artifacts ?? []).filter((artifact) => !wasMade(artifact)).length,
+    [list.list],
+  )
+  const madeCount = useMemo(
+    () => (list.list?.artifacts ?? []).filter(wasMade).length,
+    [list.list],
+  )
 
   /*
    * The page opens on content, not on an instruction.
@@ -655,65 +967,108 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
           className="artifacts-filter"
           type="search"
           value={filter}
-          placeholder="Filter by path…"
-          aria-label="Filter artifacts by path"
+          placeholder="Filter by name…"
+          aria-label="Filter artifacts by name"
           spellCheck={false}
           autoComplete="off"
           onChange={(event) => setFilter(event.target.value)}
         />
-        <div className="artifacts-scope" role="group" aria-label="Which sessions to read">
-          {/* Words, not glyphs, and the widened one says what it costs. The
-              default is this project's own sessions; an agent launched from a
-              parent workspace records its writes under *that* folder, which is
-              the whole reason the second chip exists. */}
+        {/*
+          The split this page exists on. See the header comment: "Made here" is
+          the default and is what the word Artifacts means; "Changed" is the
+          rest of the record, one chip away rather than deleted, so nothing this
+          page knows is hidden and the two are told apart by two honest words.
+
+          Both carry their count, which is what stops "Changed" from reading as
+          a place things might be — if it is empty it says 0 and you do not
+          press it.
+        */}
+        <div className="artifacts-scope" role="group" aria-label="What to show">
           <button
             type="button"
             className="artifacts-chip"
-            data-on={scope === 'project' ? 'true' : undefined}
-            aria-pressed={scope === 'project'}
-            onClick={() => setScope('project')}
+            data-on={made === 'made' ? 'true' : undefined}
+            aria-pressed={made === 'made'}
+            title="Files an agent wrote whole — the things it produced"
+            onClick={() => setMade('made')}
           >
-            This project’s sessions
+            Made here {madeCount}
           </button>
           <button
             type="button"
             className="artifacts-chip"
-            data-on={scope === 'all' ? 'true' : undefined}
-            aria-pressed={scope === 'all'}
-            title="Also read sessions started elsewhere that wrote into this folder"
-            onClick={() => setScope('all')}
+            data-on={made === 'changed' ? 'true' : undefined}
+            aria-pressed={made === 'changed'}
+            title="Files that already existed and an agent edited"
+            onClick={() => setMade('changed')}
           >
-            Every session
+            Changed {changedCount}
           </button>
         </div>
       </header>
 
-      {sessions.length > 1 && (
-        <div className="artifacts-sessions" role="group" aria-label="Filter by session">
-          <button
-            type="button"
-            className="artifacts-chip"
-            data-on={session === null ? 'true' : undefined}
-            aria-pressed={session === null}
-            onClick={() => setSession(null)}
-          >
-            All sessions
-          </button>
-          {sessions.map((entry) => (
+      {/*
+        The second row is *which work to look at*; the first is *what to show*.
+
+        All four chip groups used to sit on one line beside the filter box —
+        Made/Changed and the two scope chips, in identical pills, so nothing on
+        screen said they answered two different questions. Splitting them by row
+        is the "separate with space" rule doing the work a label would otherwise
+        have to.
+      */}
+      <div className="artifacts-sessions" role="group" aria-label="Which sessions to read">
+        {/* Words, not glyphs, and the widened one says what it costs. The
+            default is this project's own sessions; an agent launched from a
+            parent workspace records its writes under *that* folder, which is
+            the whole reason the second chip exists. */}
+        <button
+          type="button"
+          className="artifacts-chip"
+          data-on={scope === 'project' ? 'true' : undefined}
+          aria-pressed={scope === 'project'}
+          onClick={() => setScope('project')}
+        >
+          This project’s sessions
+        </button>
+        <button
+          type="button"
+          className="artifacts-chip"
+          data-on={scope === 'all' ? 'true' : undefined}
+          aria-pressed={scope === 'all'}
+          title="Also read sessions started elsewhere that wrote into this folder"
+          onClick={() => setScope('all')}
+        >
+          Every session
+        </button>
+
+        {sessions.length > 1 && (
+          <>
+            <span className="artifacts-chip-gap" aria-hidden="true" />
             <button
               type="button"
-              key={entry.sessionId}
               className="artifacts-chip"
-              data-on={session === entry.sessionId ? 'true' : undefined}
-              aria-pressed={session === entry.sessionId}
-              title={entry.sessionId}
-              onClick={() => setSession(session === entry.sessionId ? null : entry.sessionId)}
+              data-on={session === null ? 'true' : undefined}
+              aria-pressed={session === null}
+              onClick={() => setSession(null)}
             >
-              {relativeTime(entry.at, clock)} · {entry.files} file{entry.files === 1 ? '' : 's'}
+              All sessions
             </button>
-          ))}
-        </div>
-      )}
+            {sessions.map((entry) => (
+              <button
+                type="button"
+                key={entry.sessionId}
+                className="artifacts-chip"
+                data-on={session === entry.sessionId ? 'true' : undefined}
+                aria-pressed={session === entry.sessionId}
+                title={entry.sessionId}
+                onClick={() => setSession(session === entry.sessionId ? null : entry.sessionId)}
+              >
+                {relativeTime(entry.at, clock)} · {entry.files} file{entry.files === 1 ? '' : 's'}
+              </button>
+            ))}
+          </>
+        )}
+      </div>
 
       <p className="artifacts-status" role="status" aria-live="polite">
         {list.status === 'loading'
@@ -721,7 +1076,7 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
           : list.status === 'error'
             ? ''
             : list.list
-              ? summarize(list.list, visible.length)
+              ? summarize(list.list, visible.length, made)
               : ''}
       </p>
 
@@ -755,7 +1110,7 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
         </PageEmpty>
       ) : (
         <div className="artifacts-body">
-          <ul className="artifacts-list" aria-label="Files this project’s agents produced">
+          <ul className="artifacts-list" aria-label={made === 'made' ? 'Things this project’s agents made' : 'Files this project’s agents changed'}>
             {visible.map((artifact) => (
               <ArtifactRow
                 key={artifact.relPath}
@@ -767,7 +1122,18 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
             ))}
             {list.status === 'ready' && visible.length === 0 && (
               <li className="artifacts-none">
-                <PageNote>Nothing matches that filter.</PageNote>
+                {/*
+                  Two different absences, and they used to say the same thing.
+                  "Nothing matches that filter" under an empty Changed chip is
+                  false — nothing was filtered, there is nothing of that kind.
+                */}
+                <PageNote>
+                  {filter.trim() !== '' || session !== null
+                    ? 'Nothing matches that filter.'
+                    : made === 'made'
+                      ? 'No agent has written a whole file here yet. What it edited is under Changed.'
+                      : 'Every file here was made by an agent rather than edited into.'}
+                </PageNote>
               </li>
             )}
           </ul>
@@ -775,40 +1141,84 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
           <div className="artifacts-detail">
             {current && (
               <header className="artifacts-detail-head">
-                <h3 className="artifacts-detail-path" title={current.relPath}>
-                  {current.relPath}
+                {/*
+                  The name in the title voice, the folder underneath in the
+                  meta line. It was the whole relative path in monospace, which
+                  is a heading that says "this is a file at a path" before
+                  anything else on the page has spoken.
+                */}
+                <h3 className="artifacts-detail-name" title={current.relPath}>
+                  {current.name}
                 </h3>
                 <p className="artifacts-detail-meta">
                   {[
-                    changeSummary(current),
+                    kindOf(current.relPath),
+                    directoryOf(current.relPath) || 'in the project root',
                     `last ${relativeTime(current.lastAt, clock)}`,
                     current.onDisk
-                      ? `${formatBytes(current.onDisk.bytes)} on disk`
+                      ? formatBytes(current.onDisk.bytes)
                       : 'no longer on disk',
                   ]
                     .filter(Boolean)
                     .join(' · ')}
                 </p>
-                {onOpenFile && current.onDisk && (
+                <div className="artifacts-detail-actions">
+                  {/*
+                    The artifact, or how it came to be. Two words rather than
+                    two panes: the change record is real evidence and worth
+                    keeping, but it is the answer to a second question and it
+                    used to be the only thing this pane ever showed.
+                  */}
                   <button
                     type="button"
-                    className="artifacts-open"
-                    onClick={() => onOpenFile(current.relPath)}
+                    className="artifacts-chip"
+                    data-on={showHistory ? 'true' : undefined}
+                    aria-pressed={showHistory}
+                    onClick={() => setShowHistory((on) => !on)}
                   >
-                    Open in Files
+                    {showHistory ? 'Show the file' : `History ${changeSummary(current)}`}
                   </button>
-                )}
+                  {onOpenFile && current.onDisk && (
+                    <button
+                      type="button"
+                      className="artifacts-open"
+                      onClick={() => onOpenFile(current.relPath)}
+                    >
+                      Open in Files
+                    </button>
+                  )}
+                </div>
               </header>
             )}
 
-            {history?.status === 'loading' && <PageNote busy>Reading the changes…</PageNote>}
+            {/* The thing itself, first. */}
+            {current && !showHistory && (
+              current.onDisk ? (
+                <ArtifactPreview
+                  // Remounted per artifact so a slow read can never land under
+                  // the wrong heading — the effect's own guard covers the
+                  // common case, and the key covers the rest.
+                  key={current.relPath}
+                  root={projectPath}
+                  artifact={current}
+                  bridge={fsHost}
+                  renderDocument={renderDocument}
+                />
+              ) : (
+                <PageNote>
+                  An agent made this and it is not on disk any more. Its history is still here.
+                </PageNote>
+              )
+            )}
+
+            {showHistory && history?.status === 'loading' && <PageNote busy>Reading the changes…</PageNote>}
             {/*
               And a reason with a way out here too. This is the pane the
               recording caught stuck on "Reading the changes…": the main
               process had cancelled the scan and the reply's shape was one this
               component quietly ignored, so the sentence stayed put.
             */}
-            {history?.status === 'error' && (
+            {showHistory && history?.status === 'error' && (
               <div className="artifacts-failed">
                 <PageNote>{history.message}</PageNote>
                 <button
@@ -820,7 +1230,8 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
                 </button>
               </div>
             )}
-            {history?.status === 'ready' &&
+            {showHistory &&
+              history?.status === 'ready' &&
               history.history &&
               (history.history.changes.length === 0 ? (
                 <PageNote>No recorded changes for this file.</PageNote>

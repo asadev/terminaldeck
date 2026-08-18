@@ -34,16 +34,50 @@ import './AccountChip.css'
  * session's name: the folder chip says where, this says who, and both are one
  * click from the same spot.
  *
- * ## It starts a session; it does not switch the one you have
+ * ## Over a running session it switches *that* session
  *
- * Exactly the rule the folder chip already follows, for exactly the same
- * reason. The account is a config directory handed to the agent process at
- * spawn, and a process's environment cannot be rewritten after it starts — so
- * "run this session as someone else" can only mean killing it and starting
- * another. The app cannot tell whether that would throw away work, because
- * keystrokes go from xterm straight to the pty and the renderer never sees
- * them. So the menu says what it really does, and the running session keeps the
- * account it started with.
+ * This is the half that was wrong, and it was wrong in a way that read as a
+ * bug even though every line of it was true. Asad, 2026-08-17:
+ *
+ *   > *"when I change account from the dropdown it starts a new session with
+ *   > that account, instead of changing it in the same session."*
+ *
+ * The constraint the old behaviour was built on is real and has not gone away:
+ * an account is a config directory handed to the agent process at spawn — see
+ * `profiles.ts`, where setting it chooses the credential *store* and not merely
+ * a directory — and a process's environment cannot be rewritten after it
+ * starts. So a running agent genuinely cannot change account. Something has to
+ * restart.
+ *
+ * What was wrong was *which* thing restarted. The menu answered "this session
+ * cannot change" by opening a second session somewhere else, leaving the person
+ * with two tabs, in one folder, on two accounts, and the job of closing the one
+ * they had been using. `main/session-switch.ts` is the other answer: the same
+ * tab, in the same place on the bar, with the process underneath it stopped and
+ * replaced by one running as the other account.
+ *
+ * Three things follow, and they are why this menu now has two modes rather than
+ * one:
+ *
+ *  - **It only switches a session it is actually about.** With `session` and
+ *    `onSwitchAccount` both in hand over a running agent, a row switches. Every
+ *    other caller — the two that ask about a *folder*, and a pane bar that has
+ *    no session to hand — keeps the old behaviour exactly, because for them
+ *    there is nothing to switch and starting one is the only thing a click
+ *    could mean.
+ *  - **An account is a login of one agent**, so only accounts of the agent this
+ *    session is running can run it. A Codex account cannot be handed to a Claude
+ *    session; `resolveProfileId` declines that quietly, which is what used to
+ *    make picking one look like the app ignoring the click. Those rows stay
+ *    visible — they are still worth seeing, and still renameable — and stop
+ *    being buttons, with the reason above them.
+ *  - **Nothing happens until it has been described.** The row opens a sheet
+ *    saying what will be stopped and what becomes of the conversation, and the
+ *    conversation is the part nobody can guess: a transcript lives under the
+ *    *account's* config directory, so it does not travel. That was measured
+ *    rather than assumed — the commands and their output are at the top of
+ *    `main/session-switch.ts` — and a restart nobody expected is the complaint
+ *    itself, so the description comes first or the fix is only half made.
  *
  * ## Nothing here claims a login it has not seen
  *
@@ -228,6 +262,23 @@ interface Props {
    * only honest request this window can make about it.
    */
   onPick(accountId: string, provider?: ProviderId): void
+  /**
+   * Run **this** session as that account, instead of starting another one.
+   *
+   * The whole of the reported fix, and it is optional for a reason rather than
+   * out of caution: two of this component's callers are asking about a folder
+   * and one is a pane bar with no session in hand, and for all three there is
+   * nothing on screen to switch — so a click there can only mean "start one",
+   * which is what {@link onPick} already does. Passing this is what says "there
+   * is a running session here and I can replace it"; without it the menu is
+   * exactly what it was.
+   *
+   * It is handed the session id as well as the account because the switch is a
+   * main-process operation on a specific pty, and this component deliberately
+   * knows nothing about which one is on screen beyond the `session` it was
+   * given.
+   */
+  onSwitchAccount?(sessionId: string, accountId: string): void
   /** Open the Accounts screen — add one, rename one, sign one in. */
   onManage(): void
 }
@@ -262,6 +313,20 @@ const TICK = 'M4.5 10.5 8 14l7.5-8'
  */
 export const RUN_AGENT_COMMAND = 'claude\r'
 
+/**
+ * What the menu is called, and it is not the same question in both modes.
+ *
+ * Declared once and read by the heading and the `aria-label` together, because
+ * those two must never say different things — a sighted user reading "Run this
+ * session as" while a screen reader announces "Start a session as" has been
+ * given two different accounts of what pressing a row does, and only one of
+ * them is true.
+ */
+export const MENU_HEAD = {
+  start: 'Start a session as',
+  switch: 'Run this session as',
+} as const
+
 /** The row being renamed, and what has been typed into it so far. */
 interface Editing {
   id: string
@@ -286,6 +351,7 @@ export function AccountChip({
   session = null,
   onRunAgent,
   onPick,
+  onSwitchAccount,
   onManage,
 }: Props) {
   const agent = useAgentPresence(session)
@@ -495,6 +561,35 @@ export function AccountChip({
   const mode = chipMode(session, agent)
   const showRun = mode === 'run'
   const showAccount = mode === 'account'
+  /**
+   * Whether picking a row switches this session or starts another one.
+   *
+   * Four conditions, and each rules out a case where switching would be a
+   * promise rather than a fact:
+   *
+   *  - a session on screen, because there is otherwise nothing to switch;
+   *  - a handler, because a caller that did not pass one has not built the other
+   *    half and a row that called nothing would be the dead control the design
+   *    brief forbids;
+   *  - an agent actually running in it — `mode === 'account'` — because stopping
+   *    a plain shell and starting an agent in its place is not "the same session
+   *    under another login", it is a different thing wearing the same words;
+   *  - **and the session's own account and agent**, both of which come off
+   *    `SessionMeta` at spawn. Without them this cannot say which accounts are
+   *    even eligible, and a menu that offers every row and lets the main process
+   *    refuse most of them is the silent no-op this chip has already been
+   *    reported for once.
+   */
+  const sessionAgent = current?.provider ?? null
+  const switching =
+    session !== null && onSwitchAccount !== undefined && showAccount && sessionAgent !== null
+  /*
+   * Rows this session cannot be run as, because they are logins of another
+   * agent. Counted rather than described per row: the reason is the same
+   * sentence for every one of them, and repeating it down a list of three is
+   * noise where one line above them is an explanation.
+   */
+  const foreign = switching && rows.some((row) => row.provider !== sessionAgent)
   /*
    * Was the account picker away a moment ago?
    *
@@ -566,14 +661,22 @@ export function AccountChip({
               blocked
             : [
                 /*
-                 * The running session keeps the account it started with — a
-                 * process's environment cannot be rewritten after it starts —
-                 * so the offer is to start one under a different account and
-                 * the wording has to stay that offer and not a promised switch.
+                 * Three sentences for three genuinely different offers, and the
+                 * wording of each has to be the thing that actually happens.
+                 *
+                 * With a switch available it is *this* session that moves — the
+                 * process is stopped and started again under the other account,
+                 * in the same tab. Without one, the old sentence still stands
+                 * and still has to: a running agent cannot change account, so
+                 * the only thing a click can do there is start another session,
+                 * and promising a switch this caller cannot perform would be
+                 * the control lying about itself.
                  */
-                current
-                  ? 'This session is running as this account — start one under a different account.'
-                  : 'A new session here would use this account.',
+                switching
+                  ? 'This session is running as this account — pick another to run this session as instead.'
+                  : current
+                    ? 'This session is running as this account — start one under a different account.'
+                    : 'A new session here would use this account.',
                 chosenName === null ? null : `Account: ${chosenName}.`,
                 identity.detail,
                 /*
@@ -637,14 +740,37 @@ export function AccountChip({
             ref={menu.menuRef}
             className="folder-menu"
             role="menu"
-            aria-label="Start a session as"
+            /* The heading and the label are one string on purpose: the menu is
+               announced by the same words it is titled with, and the two modes
+               are two different promises — "run the session in front of you as"
+               is not "open a new one as", and a screen reader hearing the wrong
+               one has been told the wrong thing about what a press will do. */
+            aria-label={MENU_HEAD[switching ? 'switch' : 'start']}
             style={{ left: menu.at.left, top: menu.at.top }}
           >
-            <p className="folder-menu-head">Start a session as</p>
+            <p className="folder-menu-head">{MENU_HEAD[switching ? 'switch' : 'start']}</p>
 
             {/* Why the rows below cannot be picked, before they are read rather
-                than after one is clicked. */}
-            {blocked && <p className="account-menu-blocked">{blocked}</p>}
+                than after one is clicked.
+
+                `blocked` is a statement about the agent a *new* session here
+                would run, so it has nothing to say while these rows are about
+                switching the session already on screen — that session's agent
+                is running, and is by definition one that takes an account.
+                Printed in switch mode it would be a sentence about a different
+                session, which is exactly the two-subjects-one-control fault
+                `names` exists to prevent, one level down. */}
+            {!switching && blocked && <p className="account-menu-blocked">{blocked}</p>}
+
+            {/* The switch mode's own version of the same courtesy: some of the
+                rows below are logins of another agent and cannot run this
+                session, said once above them rather than repeated on each. */}
+            {foreign && (
+              <p className="account-menu-blocked">
+                Only a {agentLabel(sessionAgent) ?? 'matching'} account can run this session — an
+                account is a login of one agent.
+              </p>
+            )}
 
             {rows.map((account) => {
               const state = accounts.signIn[account.id]
@@ -735,7 +861,11 @@ export function AccountChip({
 
               const line = (
                 <>
-                  <span className="account-menu-line">
+                  {/* The whole login, because the name is ellipsised when the row
+                      runs out of room — see `.account-menu-line > .folder-menu-name`
+                      in `shell.css`. A cut address with no way to read the rest
+                      is a picker you cannot pick from. */}
+                  <span className="account-menu-line" title={login}>
                     {/* The one in force. A fixed slot whether it is drawn or
                         not, so the names below it stay in one column — a tick
                         that shunts its own row 14px right turns a scannable
@@ -797,24 +927,43 @@ export function AccountChip({
               )
 
               /*
+               * Whether this row can be acted on at all, and there are now two
+               * quite different reasons it might not be.
+               *
+               * Starting: the agent a new session here would run cannot be
+               * handed a config directory, so no row means anything — `blocked`
+               * holds that, and the notice above the list says it.
+               *
+               * Switching: a row is a login of another agent, and an account
+               * only means something to the agent it is a login of; or it is the
+               * account this session is *already* running as, where the tick has
+               * already said everything there is to say and a press could only
+               * stop a healthy agent and start it again as itself.
+               */
+              const inert = switching
+                ? account.provider !== sessionAgent || isCurrent
+                : blocked !== null
+
+              /*
                * A paragraph, not a disabled button. The accounts are still worth
                * showing — they are what the Accounts screen would let you sign
-               * in to — but nothing here can act on them while this agent has no
-               * config directory to redirect, and a button that cannot be
-               * pressed still looks like the app's answer to the question.
+               * in to — but nothing here can act on them, and a button that
+               * cannot be pressed still looks like the app's answer to the
+               * question.
                *
-               * Rename stays available even then. Whether this agent can be
-               * given a config directory has nothing to do with whether the
+               * Rename stays available either way. Whether this agent can be
+               * given a config directory, or whether this login can run the
+               * session in front of you, has nothing to do with whether the
                * account's *name* is right, and the name is what is on screen.
                */
               return (
                 <div key={account.id} className="account-menu-row">
-                  {blocked ? (
-                    /* `data-current` here too. The rows are inert because this
-                       agent cannot be handed a config directory, which has
-                       nothing to do with which account the session on screen is
-                       running as — and that was the state the mark disappeared
-                       in, i.e. the state where the question is hardest. */
+                  {inert ? (
+                    /* `data-current` here too. A row is inert for reasons that
+                       have nothing to do with which account the session on
+                       screen is running as — and that was the state the mark
+                       disappeared in, i.e. the state where the question is
+                       hardest. */
                     <p
                       className="folder-menu-item account-menu-item is-inert"
                       data-current={isCurrent || undefined}
@@ -836,7 +985,21 @@ export function AccountChip({
                       className="folder-menu-item account-menu-item"
                       data-current={isCurrent || undefined}
                       onClick={() =>
-                        menu.choose(() => onPick(account.id, account.provider ?? undefined))
+                        menu.choose(() =>
+                          /*
+                           * The one place the two modes diverge in what a press
+                           * *does*. `switching` already required both a session
+                           * and a handler, so the narrowing here is the
+                           * compiler's business rather than a second check —
+                           * but it is spelled out because a row that silently
+                           * fell through to `onPick` would open a second
+                           * session in the same folder, which is the exact
+                           * behaviour this whole change exists to remove.
+                           */
+                          switching && session && onSwitchAccount
+                            ? onSwitchAccount(session.id, account.id)
+                            : onPick(account.id, account.provider ?? undefined),
+                        )
                       }
                     >
                       {line}
@@ -878,15 +1041,26 @@ export function AccountChip({
 
             {accounts.error && <p className="account-menu-empty">{accounts.error}</p>}
 
-            {/* Says what the rows above actually do. The running session keeps
-                the account it started with — see the module note. The second
-                sentence is only true while the rows are pickable, and printing
-                it under a list that cannot be picked was the promise that made
-                the silent no-op read as a bug rather than a rule. */}
+            {/* Says what the rows above actually do — three answers, because
+                the rows do three different things.
+
+                Switching, the sentence has to carry the surprising half up
+                front: something stops. It also has to promise the description
+                that follows, because a menu that both warns and then asks again
+                reads as an app that cannot make up its mind, while a menu that
+                warns and then acts is the restart nobody expected. Saying "it
+                will say what happens first" makes the press safe to make.
+
+                The other two are unchanged. The last clause of the third is only
+                true while the rows are pickable, and printing it under a list
+                that cannot be picked was the promise that made the silent no-op
+                read as a bug rather than a rule. */}
             <p className="account-menu-foot">
-              {blocked
-                ? 'Change the default coding tool in Settings to start a session under one of these.'
-                : 'Opens a new session here under that account. This one keeps the account it started with.'}
+              {switching
+                ? 'Stops the agent in this session and starts it again as that account, in this same tab. It will say what happens to the conversation before anything stops.'
+                : blocked
+                  ? 'Change the default coding tool in Settings to start a session under one of these.'
+                  : 'Opens a new session here under that account. This one keeps the account it started with.'}
             </p>
 
             <button

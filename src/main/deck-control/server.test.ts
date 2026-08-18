@@ -336,7 +336,12 @@ describe('the tool surface as a client sees it', () => {
     // The distinction matters to the model: a tool error is something it can
     // read and respond to, a protocol error is something it can only retry.
     expect(result.isError).toBe(true)
-    expect(String((result.content as Array<{ text: string }>)[0].text)).toContain('no live session')
+    // The sentence names the two ways a session id goes missing — never one of
+    // this app's, or stopped and dropped — because the model's next move
+    // differs between them. See `requireSession`.
+    const said = String((result.content as Array<{ text: string }>)[0].text)
+    expect(said).toContain('not holding a session with id nope')
+    expect(said).toContain('sessions.list')
 
     await client.close()
   })

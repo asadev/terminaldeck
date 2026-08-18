@@ -43,7 +43,7 @@ import { PowerSection } from './sections/PowerSection'
 import { AdvancedSection } from './sections/AdvancedSection'
 import { LinuxSection } from './sections/LinuxSection'
 import { CopilotSection } from './sections/CopilotSection'
-import { AboutSection } from './sections/AboutSection'
+import { HelpSection } from './sections/HelpSection'
 import { ShortcutsPopover } from './ShortcutsPopover'
 import { RailFooter } from './RailFooter'
 import './SettingsWindow.css'
@@ -103,23 +103,30 @@ const LinuxSectionView: ComponentType<SectionProps> = () => <LinuxSection />
  * mistake `RemoteSection` shipped once, and the note above `PowerSectionView`
  * is the record of it.
  */
-const CopilotSectionView: ComponentType<SectionProps> = () => <CopilotSection />
+const CopilotSectionView: ComponentType<SectionProps> = ({ setUpCopilot }) => (
+  // One prop, and it is a capability of the *window* rather than a setting —
+  // see `SectionProps.setUpCopilot` for why the setup flow cannot open from
+  // inside this sheet.
+  <CopilotSection {...(setUpCopilot ? { setUpCopilot } : {})} />
+)
 
 /**
  * One view per pane — and there are four fewer panes than there were views.
  *
- * Accounts and Setup are groups inside `AgentsSection` now, so they have no
- * entry here; Shortcuts is a popover and Help is a link, both off the rail's
- * footer. Every id that used to name one of them still resolves, through
- * `MERGED_SECTIONS`, to the pane its contents went to — which is why this map
- * is keyed on `LiveSectionId` and the props are still typed `SectionId`.
+ * Accounts and Setup are groups inside `AgentsSection`, About is the masthead at
+ * the top of `HelpSection`, and Shortcuts is a popover off the rail's footer, so
+ * none of the four has an entry here. Every id that used to name one of them
+ * still resolves, through `MERGED_SECTIONS`, to the pane its contents went to —
+ * which is why this map is keyed on `LiveSectionId` and the props are still
+ * typed `SectionId`.
  */
 const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   general: GeneralSection,
   appearance: AppearanceSection,
   notifications: NotificationsSection,
-  // Agents, Accounts and Setup, assembled from the three components that were
-  // the three panes. See the note in `AgentsSection.tsx`.
+  // The rail calls it "Assistants"; the id and the file are still `agents`, for
+  // the reason the schema gives beside that entry. Accounts and Setup are
+  // assembled into it — see the note in `AgentsSection.tsx`.
   agents: AgentsSection,
   // The id is `features` and the label is "Tools": `App.tsx` names this id and
   // is a file no agent may edit while others are working here.
@@ -135,7 +142,9 @@ const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   // resolves its own bridge; it wants none of these props.
   power: PowerSectionView,
   advanced: AdvancedSection,
-  about: AboutSection,
+  // Help is a page again, and About is the first block on it. `AboutSection` is
+  // still its own component and is still what `openSettings('about')` reaches.
+  help: HelpSection,
 }
 
 /**
@@ -197,6 +206,17 @@ export interface SettingsPanelProps {
    * running process with no tab.
    */
   onStartSession?(request: { profileId: string; provider?: ProviderId }): void
+  /**
+   * Run the copilot's setup questions again, and close this window.
+   *
+   * The same shape as {@link SettingsPanelProps.onStartSession} and for the same
+   * reason: the flow is a dialog the *app window* owns. Opening it from inside
+   * this sheet would put one dialog over another, where a single Escape reaches
+   * both handlers and takes the sheet away with the flow. So the pane asks, the
+   * app answers, and the questions arrive over the workspace their answers
+   * change.
+   */
+  onSetUpCopilot?(): void
   /** Fired after every accepted write, so the app can react to a changed value. */
   onChange?(values: SettingValues): void
   /** Rendered in the footer by the window; exposed so the panel can drive it. */
@@ -214,6 +234,7 @@ export function SettingsPanel({
   platform = detectPlatform(),
   initialSection = 'general',
   onStartSession,
+  onSetUpCopilot,
   onChange,
   onSaveState,
 }: SettingsPanelProps) {
@@ -340,6 +361,34 @@ export function SettingsPanel({
   }, [bridge])
 
   useEffect(load, [load])
+
+  /**
+   * Somebody else changed a stored value while this window was open.
+   *
+   * The copilot can write settings and preferences, with a confirmation, and so
+   * can a paired device behind it. Without this the app would repaint — the
+   * theme, the density, everything keyed off a setting — while the dialog that
+   * exists to *show* those values went on displaying what it read when it
+   * opened. Somebody watching their app turn light while the Appearance picker
+   * still said Dark would reasonably conclude the picker is broken.
+   *
+   * A re-read rather than a merge of the pushed values, deliberately: `load`
+   * already resolves the two stores against each other, guards against an older
+   * reply landing last, and repaints the theme and the density from what is
+   * actually stored. A second path that merged a payload would be a second
+   * answer to the same question, and this window has had that bug before.
+   *
+   * Guarded with `?.` because the bridge is `Partial` by house rule — a build
+   * without these channels loses the live update and keeps the window.
+   */
+  useEffect(() => {
+    const offPrefs = bridge.onPreferencesChanged?.(() => load())
+    const offSettings = bridge.onSettingsChanged?.(() => load())
+    return () => {
+      offPrefs?.()
+      offSettings?.()
+    }
+  }, [bridge, load])
 
   // The timer outlives the window otherwise, and fires setState into a tree
   // that is no longer mounted.
@@ -481,11 +530,11 @@ export function SettingsPanel({
       </div>
 
       {/*
-        Two icons where two rail entries used to be.
+        One icon where a rail entry used to be.
 
-        Shortcuts was the longest pane in the window and Help was a second copy
-        of the ⌘? panel; both are things you look at rather than things you
-        change, which is the line this rail now draws.
+        Shortcuts was the longest pane in the window and is a thing you look at
+        rather than a thing you change, which is the line this rail draws. Help
+        was the second icon here and is a pane again — see `RailFooter`.
 
         Deliberately a sibling of the tablist rather than one of its children.
         The list handles Arrow, Home and End to move between tabs, and a button
@@ -493,7 +542,7 @@ export function SettingsPanel({
         keys or — worse — change the selected pane under somebody who was
         reaching for the shortcut list.
       */}
-      <RailFooter bridge={bridge} onShortcuts={() => setShortcuts(true)} />
+      <RailFooter onShortcuts={() => setShortcuts(true)} />
       </div>
 
       <div
@@ -528,6 +577,8 @@ export function SettingsPanel({
           // Absent when the host did not pass one, which is what makes the Sign
           // in button disappear rather than sit there doing nothing.
           {...(onStartSession ? { startSession: onStartSession } : {})}
+          // Same rule for the copilot's setup questions: no host, no button.
+          {...(onSetUpCopilot ? { setUpCopilot: onSetUpCopilot } : {})}
         />
       </div>
     </div>

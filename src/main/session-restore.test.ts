@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 import {
   conversationOnDisk,
   folderExists,
+  personalSessions,
   planRestore,
   restoreOpenSessions,
   type Conversation,
@@ -77,6 +78,37 @@ describe('planRestore', () => {
   it('continues a session whose conversation is on disk', async () => {
     const plan = await planRestore([saved()], probes())
     expect(outcomes(plan)).toEqual(['resume'])
+  })
+
+  /**
+   * The finding, as a value, beside the finding as a sentence.
+   *
+   * `reason` is written for a person and is meant to be reworded whenever a
+   * better sentence turns up. `session-switch.ts` has to *branch* on the same
+   * finding — "the other account has a conversation here" and "this agent keeps
+   * its history where the app cannot read it" produce different words on screen
+   * before a switch, and the second is Codex and every session inside WSL. It
+   * used to have no choice but to match on the prose, which breaks silently the
+   * first time somebody improves the prose, and breaks in the direction of a
+   * confident wrong claim.
+   *
+   * Absent is load-bearing and means "never asked", not "nothing found".
+   */
+  it('carries what the disk said, and only when the disk was asked', async () => {
+    const found = await planRestore([saved()], probes())
+    expect(found[0].conversation).toBe('found')
+
+    const empty = await planRestore([saved()], probes({ conversation: async () => 'none' }))
+    expect(empty[0].conversation).toBe('none')
+
+    const unread = await planRestore([saved()], probes({ conversation: async () => 'unknown' }))
+    expect(unread[0].conversation).toBe('unknown')
+
+    const gone = await planRestore([saved()], probes({ folderExists: async () => false }))
+    expect(gone[0].conversation).toBeUndefined()
+
+    const cannot = await planRestore([saved({ provider: 'shell' })], probes())
+    expect(cannot[0].conversation).toBeUndefined()
   })
 
   it('starts clean when the conversation is gone', async () => {
@@ -410,6 +442,69 @@ describe('folderExists', () => {
 
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Sessions this app started for itself, which are not tabs and must not be
+ * restored as if they were.
+ *
+ * On `DESKTOP-DDGMNCV` on 2026-08-17 there were two entries for
+ * `…\terminaldeck\copilot` in `openSessions`, because the copilot had been
+ * restarted once and it goes through the same `startSession` as every tab.
+ * Restoring them would not restore the copilot: a `SavedSession` is a folder, an
+ * agent and an account, so what would come back is two plain Claude Code
+ * sessions in this app's storage with no instruction layer, no `deck-control`
+ * tools and no fence — invisible in the sidebar, because the window filters that
+ * folder out, and billing on every launch.
+ */
+describe('personalSessions', () => {
+  const userData = 'C:\\Users\\Imza\\AppData\\Roaming\\terminaldeck'
+  const copilot = join(userData, 'copilot')
+
+  it('drops the copilot’s own sessions, however many of them there are', () => {
+    const list = [
+      saved({ cwd: '/Users/asad/Projects/terminaldeck' }),
+      saved({ cwd: copilot }),
+      saved({ cwd: copilot }),
+    ]
+    expect(personalSessions(list, [copilot])).toEqual([
+      saved({ cwd: '/Users/asad/Projects/terminaldeck' }),
+    ])
+  })
+
+  it('drops anything under that folder, not only the folder itself', () => {
+    // Nothing in `<userData>` is a project and nobody opens a session in one by
+    // hand, so a saved entry pointing anywhere inside is this app's doing.
+    expect(personalSessions([saved({ cwd: join(copilot, 'memory') })], [copilot])).toEqual([])
+  })
+
+  it('keeps every session when there is nothing to exclude', () => {
+    const list = [saved(), saved({ cwd: '/home/asad/ClaudeImza' })]
+    expect(personalSessions(list, [])).toEqual(list)
+    expect(personalSessions(list, [copilot])).toEqual(list)
+  })
+
+  it('keeps a WSL session, whose path resolves nowhere near the exclusion', () => {
+    // `/home/asad/ClaudeImza` on Windows resolves to `C:\home\asad\ClaudeImza`,
+    // which must not be judged to be inside anything under `%APPDATA%`. This is
+    // the session the whole change exists to bring back.
+    expect(personalSessions([saved({ cwd: '/home/asad/ClaudeImza' })], [copilot])).toHaveLength(1)
+  })
+
+  it('never widens beyond the folders it is given', () => {
+    /*
+     * The failure this rules out is the expensive one. The copilot can be
+     * pointed at a folder of the person's own, and treating "the copilot's
+     * folder" as disqualifying would silently stop restoring their real sessions
+     * in a real workspace the moment they chose it — the app deciding a tab was
+     * never theirs. Only `<userData>` is unambiguous, so only `<userData>` is
+     * ever passed, and this pins that nothing else is inferred.
+     */
+    const workspace = '/Users/asad/Projects/terminaldeck'
+    expect(personalSessions([saved({ cwd: workspace })], [copilot])).toHaveLength(1)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+
 interface Spawned {
   input: CreateSessionInput
 }
@@ -615,6 +710,42 @@ describe('restoring is wired to launch', () => {
   const core = readFileSync(join(ROOT, 'src/main/host-core.ts'), 'utf8')
   const headless = readFileSync(join(ROOT, 'src/headless/host.ts'), 'utf8')
 
+  /**
+   * The function the restore is handed as its plan, found by name and then read.
+   *
+   * This used to read the argument in place, because the plan *was* an inline
+   * object literal. It is a named function now — a retry has to be able to ask
+   * the identical questions, see the test below — and a check that kept reading
+   * the argument would have quietly passed on `plan: planSaved` without ever
+   * looking at what `planSaved` does. That is the exact failure mode this whole
+   * describe block exists to catch, so the name is followed to its definition
+   * rather than trusted.
+   */
+  const planName = (/plan:\s*([A-Za-z_$][\w$]*)\s*,/.exec(
+    index.slice(index.indexOf('restoreOpenSessions({')),
+  ) ?? [])[1]
+  const planSource = ((): string => {
+    if (planName === undefined) {
+      // Still inline: read the argument, which is what this file did before.
+      const call = index.slice(index.indexOf('restoreOpenSessions({'))
+      return call.slice(0, call.indexOf('spawn:'))
+    }
+    const at = index.indexOf(`const ${planName} = `)
+    // A generous window rather than brace matching. The definition is one
+    // expression with three long comments in it, and a regex that counts braces
+    // through comments containing braces is a worse bet than reading too much.
+    return at === -1 ? '' : index.slice(at, at + 3000)
+  })()
+
+  it('hands the restore a plan that exists', () => {
+    // The two tests below both read `planSource`, and an empty one would make
+    // them fail with a message about profiles rather than about the plan having
+    // been renamed out from under them.
+    expect(planName, 'the restore is not given a named plan function').not.toBeUndefined()
+    expect(planSource, `${planName} is not defined in index.ts`).not.toBe('')
+    expect(planSource).toContain('planRestore(')
+  })
+
   it('runs a restore from a window lifecycle event, not from a command', () => {
     /*
      * The assertion that matters. Everything above proves the decision is
@@ -644,14 +775,40 @@ describe('restoring is wired to launch', () => {
      * asserts the other half: that the directory handed over is resolved from the
      * session's own profile rather than a constant someone reached for.
      */
-    const call = index.slice(index.indexOf('restoreOpenSessions({'))
-    const plan = call.slice(0, call.indexOf('spawn:'))
     expect(
-      plan,
+      planSource,
       'the restore plan does not resolve a profile, so a profiled session will be ' +
         'asked about the default config directory and come back blank',
     ).toMatch(/configDir:[\s\S]{0,400}resolveProfile\(/)
-    expect(plan).toMatch(/sessionProfileId: session\.profileId/)
+    expect(planSource).toMatch(/sessionProfileId: session\.profileId/)
+  })
+
+  it('asks the same questions when somebody presses Try again', () => {
+    /*
+     * The plan became a named function when held sessions arrived, and this is
+     * the fact that made it worth naming.
+     *
+     * A retry is the *second* attempt at a session the launch could not start,
+     * so it is the least-exercised path in the app and the worst possible place
+     * for a difference. If it resolved the config directory differently, or
+     * decided `resume` differently, pressing Try again would start a subtly
+     * different session from the one that failed — most concretely, a session
+     * attached to a different login's transcripts, which looks exactly like a
+     * conversation that was lost.
+     *
+     * So both callers go through one function, and this pins that there is only
+     * one: the retry names the same plan the launch was given. Checked as source
+     * text for the same reason the assertion above is — this is a wiring fact,
+     * and every logic test in this file passed while the wiring was wrong.
+     */
+    const retry = index.slice(index.indexOf("ipcMain.handle('session:held-retry'"))
+    expect(
+      retry.slice(0, retry.indexOf('startSession(')),
+      `the retry handler does not call ${planName}, so a second attempt is planned by ` +
+        'code the launch never runs',
+    ).toContain(`${planName}(`)
+    // And through the one session-start path, exactly as the launch does.
+    expect(retry).toMatch(/await startSession\(\{/)
   })
 
   it('restores through the one session-start path', () => {
@@ -661,6 +818,72 @@ describe('restoring is wired to launch', () => {
     // of difference to notice.
     const call = index.slice(index.indexOf('restoreOpenSessions({'))
     expect(call).toMatch(/spawn: startSession,/)
+  })
+
+  it('keeps the sessions that did not come back, instead of forgetting them', () => {
+    /*
+     * The line that stops one bad launch from being permanent, and the reason
+     * it has to be asserted on rather than trusted: `flush()` overwrites
+     * `openSessions` with the live map, so a session that failed to restart
+     * survived only until the next tab opened. Asad lost four Claude sessions in
+     * two WSL folders that way and got two plain terminals in their place —
+     * which were then remembered instead.
+     *
+     * `skip` as well as `failed`, deliberately. "The folder it ran in is no
+     * longer on this machine" is usually temporary too: an unmounted volume, a
+     * share that is not up yet, a WSL distribution that has not woken, which is
+     * exactly the machine this happened on.
+     */
+    const report = index.slice(index.indexOf('report: (decisions) =>'))
+    const body = report.slice(0, report.indexOf('})'))
+    expect(body, 'the restore report does not hold anything').toContain('ledger.held.hold(')
+    expect(body).toMatch(/outcome === 'failed'/)
+    expect(body).toMatch(/outcome === 'skip'/)
+  })
+
+  it('tells the window, on every hydration and not only the first', () => {
+    // A renderer reload throws away the window's copy of the held list exactly
+    // as it throws away its tabs, and those rows are the only place a person is
+    // told a session did not come back.
+    const hydrate = index.slice(index.indexOf('async function hydrateRenderer'))
+    const body = hydrate.slice(0, hydrate.indexOf('\n}\n'))
+    // Once inside the first-run branch, once outside it.
+    expect(body.match(/announceHeld\(\)/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
+  })
+
+  it('does not restore the copilot as if it were somebody’s tab', () => {
+    /*
+     * Two `…\terminaldeck\copilot` entries were in his `state.json`, because the
+     * copilot is started by `ensureCopilot` through the same `startSession` as
+     * every tab and was being written down like one. Restoring them starts two
+     * plain Claude sessions with none of the copilot's layer or tools, hidden
+     * from the sidebar, on every launch. `personalSessions` has the argument for
+     * why only `<userData>` is excluded and never the folder the copilot happens
+     * to be pointed at.
+     */
+    const hydrate = index.slice(index.indexOf('async function hydrateRenderer'))
+    expect(hydrate.slice(0, hydrate.indexOf('restoreOpenSessions('))).toMatch(
+      /personalSessions\(store\(\)\.getOpenSessions\(\), \[\s*copilotPaths\(app\.getPath\('userData'\)\)\.root,?\s*\]\)/,
+    )
+  })
+
+  it('holds a session the window asked for and could not have', () => {
+    /*
+     * The other way a start fails, and the one with no visible path until this
+     * change: `session:create` rejects, and a rejection alone is what the
+     * renderer does nothing with. It did not need one before, because
+     * `startSession` answered "that agent cannot run" by starting a shell — the
+     * downgrade this whole change removes. So the refusal becomes the same row,
+     * in the same place, with the same Try again.
+     */
+    const handler = index.slice(index.indexOf("ipcMain.handle('session:create'"))
+    const body = handler.slice(0, handler.indexOf('\n  })'))
+    expect(body, 'a refused start is not held, so nothing appears anywhere').toContain(
+      'ledger.held.hold(',
+    )
+    // And the rejection still travels, or the window cannot tell a refusal from
+    // a session it simply has not been told about yet.
+    expect(body).toMatch(/throw error/)
   })
 
   it('does not empty the remembered list while it is shutting down', () => {

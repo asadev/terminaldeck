@@ -9,6 +9,7 @@ import {
   isCurrent,
   MENU_CONTROLS,
   MODEL_OPTIONS,
+  modelOptions,
   optionsFor,
   PERMISSION_OPTIONS,
   PRIMARY_CONTROLS,
@@ -37,12 +38,45 @@ describe('what the row is allowed to offer', () => {
     expect(PERMISSION_OPTIONS.map((option) => option.id)).not.toContain('dontAsk')
   })
 
-  it('keeps Default and Opus apart, because the CLI does', () => {
-    // `/model default` answered "Opus 5 (1M context)"; `/model opus` answered
-    // "Opus 5". Collapsing them would silently change the context window.
+  /*
+   * This test used to require a `Default` row, and it was right to: `/model
+   * default` answered "Opus 5 (1M context)" while `/model opus` answered "Opus
+   * 5", so collapsing the two would silently have changed the context window.
+   *
+   * What has changed is that the two context windows are now *both on the list
+   * under their own names*. The real picker offers `Opus (1M context)` and
+   * `Opus` as separate rows — captured in `cli-screens.capture.json` — so the
+   * distinction that made `Default` necessary is carried by rows that say which
+   * model they are, and `Default` is left doing nothing but pointing at one of
+   * them. Which is what Asad saw: *"Default, I think, is nothing… in Claude you
+   * don't see anything default."*
+   *
+   * So the assertion is inverted rather than deleted. The thing that must not
+   * regress is the distinction, not the row.
+   */
+  it('offers both context windows by name, and no Default row', () => {
     const ids = MODEL_OPTIONS.map((option) => option.id)
-    expect(ids).toContain('default')
+    expect(ids).toContain('opus[1m]')
     expect(ids).toContain('opus')
+    expect(ids).not.toContain('default')
+  })
+
+  it('names a version on every model row', () => {
+    // "Opus 4 should be Opus 5" — a row labelled with a bare family name cannot
+    // answer that question, which is what made the old list unreadable to him.
+    for (const option of MODEL_OPTIONS) {
+      if (option.id === 'opusplan') continue // "Opus in plan mode, else Sonnet"
+      expect(option.label, option.id).toMatch(/\d/)
+    }
+  })
+
+  it('builds its rows from a picker the CLI drew, when it has one', () => {
+    const live = modelOptions([
+      { alias: 'sonnet', name: 'Sonnet', model: 'Sonnet 6', note: 'the new one', current: true, recommended: false },
+      { alias: 'haiku', name: 'Haiku', model: 'Haiku 5', note: '', current: false, recommended: true },
+    ])
+    expect(live.map((option) => option.label)).toEqual(['Sonnet 6', 'Haiku 5'])
+    expect(live[1].hint).toBe('your account’s default')
   })
 
   it('routes each control to its own option list', () => {
@@ -130,8 +164,16 @@ describe('how far a change reaches', () => {
     }
   })
 
-  it('says nothing at all about fast mode, which announces no scope', () => {
-    expect(reachOf('fast')).toBeNull()
+  /*
+   * This asserted `null` — "fast mode announces no scope, so say nothing" —
+   * until the scope was measured instead of reasoned about. Fast mode was
+   * turned on, the `claude` process was killed, and a brand-new one booted with
+   * the `↯` still in its status rule. It survives the session, so there is a
+   * scope to state and it is worth stating: leaving a higher credit draw
+   * switched on by accident is exactly what a missing sentence here costs.
+   */
+  it('says that fast mode outlives the session, because it was watched doing so', () => {
+    expect(reachOf('fast')).toMatch(/until you turn it off/i)
   })
 })
 
@@ -202,16 +244,43 @@ describe('which option gets the tick', () => {
     expect(isCurrent(reading('plan', 'Plan'), { id: 'auto', label: 'Auto' })).toBe(false)
   })
 
-  it('matches the model on the family word, since it reads back as a display name', () => {
-    expect(isCurrent(reading('Sonnet 5', 'Sonnet 5'), { id: 'sonnet', label: 'Sonnet' })).toBe(true)
-    expect(isCurrent(reading('claude-opus-5[1m]', 'Opus 5 · 1M'), { id: 'opus', label: 'Opus' })).toBe(true)
-    expect(isCurrent(reading('Sonnet 5', 'Sonnet 5'), { id: 'haiku', label: 'Haiku' })).toBe(false)
+  /*
+   * Every row of the model menu now names the model it resolves to rather than
+   * its family, so the match is between two display names rather than between a
+   * family word and the front of a reading. The four spellings below are the
+   * four this app genuinely receives, from four different sources — the CLI's
+   * confirmation, its picker, its welcome panel, and the transcript — and they
+   * all have to land on the same row.
+   */
+  it('matches the model however the source happened to spell it', () => {
+    const sonnet = { id: 'sonnet', label: 'Sonnet 5' }
+    expect(isCurrent(reading('Sonnet 5', 'Sonnet 5'), sonnet)).toBe(true)
+    expect(isCurrent(reading('Sonnet 5 (default)', 'Sonnet 5 (default)'), sonnet)).toBe(true)
+    expect(isCurrent(reading('Sonnet 5', 'Sonnet 5'), { id: 'haiku', label: 'Haiku 4.5' })).toBe(false)
   })
 
-  it('gives the CLI\'s "(default)" marker to Default and not to Opus', () => {
-    const asDefault = reading('Opus 5 (1M context) (default)', 'Opus 5 (1M context) (default)')
-    expect(isCurrent(asDefault, { id: 'default', label: 'Default' })).toBe(true)
-    expect(isCurrent(asDefault, { id: 'opus', label: 'Opus' })).toBe(false)
+  it('reads back from an alias in Claude’s settings file too', () => {
+    // `modelFromSettings` reports the alias as the value, so the id comparison
+    // is what ticks the row on a session that has said nothing at all.
+    expect(isCurrent(reading('opus[1m]', 'Opus 5 with 1M context'), { id: 'opus[1m]', label: 'Opus 5 with 1M context' })).toBe(true)
+  })
+
+  /*
+   * The distinction `Default` used to exist to preserve, now carried by two rows
+   * that say which window they are. `Opus 5` and `Opus 5 (1M context)` are
+   * different models to be on, and a tick on the wrong one would be a lie about
+   * the context window — so the long-context marker has to survive whichever way
+   * the source spelled it.
+   */
+  it('never confuses the 1M-context model with the ordinary one', () => {
+    const long = { id: 'opus[1m]', label: 'Opus 5 with 1M context' }
+    const plain = { id: 'opus', label: 'Opus 5' }
+    for (const spelling of ['Opus 5 (1M context)', 'Opus 5 (1M context) (default)', 'Opus 5 · 1M']) {
+      expect(isCurrent(reading(spelling, spelling), long), spelling).toBe(true)
+      expect(isCurrent(reading(spelling, spelling), plain), spelling).toBe(false)
+    }
+    expect(isCurrent(reading('Opus 5', 'Opus 5'), plain)).toBe(true)
+    expect(isCurrent(reading('Opus 5', 'Opus 5'), long)).toBe(false)
   })
 })
 

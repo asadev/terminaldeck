@@ -107,7 +107,15 @@ describe('the layout decisions that cannot be seen from a test', () => {
       .map((match) => match[1])
 
     // Hidden by main.ts, so each needs its own `[hidden]` rule.
-    const hidden = ['.tabs', '.ask']
+    //
+    // `.dock` is the copilot's side panel and `.sheet` is the confirmation it
+    // raises, and both are hidden far more often than they are shown — the dock
+    // is absent on the copilot's own screen by the layout rule, and the sheet
+    // exists only while a question is waiting. Each is a flex container, so each
+    // would ignore the attribute without a rule of its own, and the failure would
+    // be the worst one in this client: a permission dialog that stays on screen
+    // after it has been answered.
+    const hidden = ['.tabs', '.ask', '.dock', '.sheet']
     for (const selector of hidden) {
       expect(flexBlocks, `${selector} should still be a flex container`).toContain(selector)
       expect(styles, `${selector} is hidden by main.ts and needs a [hidden] rule`).toContain(`${selector}[hidden] {`)
@@ -126,16 +134,33 @@ describe('the layout decisions that cannot be seen from a test', () => {
     // either a chevron or a stepper. It is never hidden: a row that would have
     // nothing to say is not drawn at all, which is the same rule the tab strip
     // and the folder picker follow.
+    //
+    // The copilot's blocks are all on this list and none is on the other one,
+    // which is the point of listing them: everything inside the panel is drawn or
+    // not drawn by the builder that assembles it, so none of them is ever hidden
+    // by an attribute. The two that are — the panel itself and the sheet — are
+    // above.
     const never = [
       '#app',
       '.appearance',
       '.banner',
+      '.body',
+      '.chat',
+      '.composer',
       '.content',
+      '.copilot',
+      '.copilot-fleet',
+      '.copilot-playhead',
+      '.copilot-scan',
+      '.copilot-toggle',
       '.header',
       '.keybar',
+      '.pending',
       '.session',
+      '.session-line',
       '.setting',
       '.terminal-screen',
+      '.trail',
     ]
     expect(flexBlocks.filter((selector) => !hidden.includes(selector)).sort()).toEqual(never)
   })

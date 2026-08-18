@@ -12,10 +12,18 @@
    attachments above the text, one row of controls below it, all inside the same
    frame. Underneath the box there is nothing at all.
 
-   `.cc-chip` is the shape every labelled control in that row wears — the plus,
-   the model and permission pickers (chat/controls) and the "More" button. One
-   family, deliberately: a row where each control is drawn its own way is a row
-   you have to read rather than glance at.
+   The row is now three things: the plus, the microphone and send. The model and
+   permission pickers and the Options panel that used to sit between them were
+   copies of what the window's own bar carries — *"since we have it on top we
+   actually don't need them here"* — and they are drawn there, over every
+   session, including the ones shown as a terminal, which never had them here at
+   all. `chat/controls/one-home.test.ts` is what stops a control losing both
+   homes at once.
+
+   `.cc-chip` is the shape a labelled control in that row wears. Only the plus
+   wears it today; the class stays a family rather than becoming "the plus
+   button", because the one thing this row keeps being asked for is that
+   whatever lands on it looks like the rest of it.
    ============================================================================ */
 
 .chat-composer {
@@ -31,7 +39,34 @@
   align-self: center;
   margin-inline: auto;
   padding: var(--sp-2) var(--sp-6) var(--sp-5);
-  background: var(--bg-primary);
+  /*
+    No background. This element is the padding around the box, and it used to
+    paint `var(--bg-primary)` — an opaque, square-cornered rectangle 48px wider
+    and 28px taller than the rounded box inside it, sitting directly behind it:
+
+      > "there is a square sharp-corner box and then under this we have this
+      > round-corner box separately with blue line. The other one should not be
+      > there… Overall it should be the same colour as surface of back."
+
+    Measured in the running app rather than judged by eye, because the whole
+    complaint is that it is barely visible. On a session's pane the surface
+    behind it is `--bg-primary` too, so the two matched by coincidence and the
+    rectangle was invisible: dark `#191919` on `#191919`, light `#ffffff` on
+    `#ffffff`. On the copilot's pane the surface is `--terminal-bg`, and there
+    the coincidence runs out — dark `#191919` on `#191919` still, but light
+    `#ffffff` on `#e8e8e8`, which is a square block of a barely-different colour
+    behind a rounded one. Exactly what he described.
+
+    Transparent is not "the same value written once instead of twice": it is the
+    only version that cannot be wrong. A wrapper that inherits whatever it is
+    over agrees with every pane, in every theme, and stays agreeing after the
+    next token change. Matching by value agreed with two of the four and had
+    already stopped agreeing with the third.
+
+    Nothing was relying on the paint. `.cv-stage` is a flex sibling that stops
+    where this begins, so no conversation scrolls under this box and there is
+    nothing here to hide.
+  */
 }
 
 /* The field. Depth by layering rather than by outline: it is a surface lifted
@@ -130,18 +165,16 @@
   gap: var(--sp-2);
 }
 
-/* The left half gives way first: it holds the model name, which can be long,
-   while the right half holds two fixed-width controls that must never move.
+/* The left half gives way first; the right half holds two fixed-width controls
+   that must never move.
 
-   It wraps, and that is a bug fix rather than a nicety. Measured in the
-   composer harness: in a 520px pane — an ordinary width in split view, or with
-   the sidebar pinned open — this row wanted 214px inside 174px, and a flex row
-   that cannot wrap does not scroll, it overlaps. The Options button was the one
-   that lost, sitting underneath the Permission chip and refusing every click,
-   which is a control that exists and cannot be reached: the exact failure this
-   whole pass is about, arrived at through CSS instead of through a deletion.
-   Wrapping spends a line of height in a narrow pane and keeps everything
-   pressable at every width. */
+   It still wraps, even though only the plus is left in it. The rule was written
+   against a measured failure — in a 520px pane this row wanted 214px inside
+   174px, and a flex row that cannot wrap does not scroll, it overlaps, so the
+   Options button ended up underneath the Permission chip refusing every click —
+   and the reason it stays is that the failure was never about how many controls
+   there were. It was about a row that cannot give way. Anything added back here
+   inherits the fix instead of rediscovering it. */
 .cc-foot-left {
   display: flex;
   align-items: center;

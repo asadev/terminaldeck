@@ -11,49 +11,43 @@ import type { SessionStatus } from '@shared/types'
 
 /**
  * Pure logic only — this project has no DOM in its test setup and the dialog
- * portals through `Modal`. The rule worth protecting is which states are worth
- * interrupting for, because getting it wrong in either direction destroys the
- * dialog: too eager and it gets clicked through, too shy and it never appears
- * when it matters.
+ * portals through `Modal`.
+ *
+ * The rule worth protecting used to be *which* states are worth interrupting
+ * for. It is now that there is no such rule: *"Always ask."* — Asad, 2026-08-17,
+ * about closing anything from the side panel. What the status still decides is
+ * the **wording**, and these pin both halves, because the failure mode of the
+ * change is a dialog that fires on a session that exited an hour ago while
+ * telling the reader they are about to lose work.
  */
 
 const ALL: SessionStatus[] = ['idle', 'working', 'waiting', 'input', 'completed', 'exited']
 
 describe('needsCloseConfirm', () => {
-  it('asks about a session that is mid-task', () => {
-    expect(needsCloseConfirm('working', true)).toBe(true)
-  })
-
-  it('asks about a session blocked on a question', () => {
-    expect(needsCloseConfirm('input', true)).toBe(true)
-  })
-
-  it('never asks about an idle session', () => {
-    expect(needsCloseConfirm('idle', true)).toBe(false)
-  })
-
-  it('never asks about a session whose process has exited', () => {
-    expect(needsCloseConfirm('exited', true)).toBe(false)
-  })
-
-  it('never asks about a completed session', () => {
-    expect(needsCloseConfirm('completed', true)).toBe(false)
-  })
-
-  it('never asks about `waiting`, which is an empty prompt and not a wait on the user', () => {
-    // session-activity.ts classifies a bare `❯` as `waiting`. That is the
-    // resting state of every healthy session, so confirming on it would fire on
-    // nearly every close.
-    expect(needsCloseConfirm('waiting', true)).toBe(false)
+  it('asks about every state there is', () => {
+    /*
+     * *"Always ask before closing anything from the side panel."*
+     *
+     * This replaced a rule that asked about `working` and `input` only. The old
+     * rule was defensible — a dialog on every close trains the muscle memory
+     * that dismisses it — and it lost to the audience: *"mostly non-technical
+     * vibe coders"*, for whom a safeguard that only appears in states they
+     * cannot name is no safeguard at all. Closing a project used to take four
+     * calm agents with no confirmation whatsoever; that is what this fixes.
+     */
+    for (const status of ALL) expect(needsCloseConfirm(status, true)).toBe(true)
   })
 
   it('asks about nothing once the user has turned it off', () => {
     for (const status of ALL) expect(needsCloseConfirm(status, false)).toBe(false)
   })
 
-  it('covers exactly two of the six statuses', () => {
-    expect(ALL.filter((status) => needsCloseConfirm(status, true))).toEqual(['working', 'input'])
-    expect(RISKY_STATUSES.size).toBe(2)
+  it('keeps the two costly states named, because the wording still depends on them', () => {
+    // `RISKY_STATUSES` stopped deciding *whether* to ask and now decides *what
+    // is at stake* — `closeWarning` below is what reads it. Losing the set would
+    // lose the distinction between "this agent is mid-edit" and "this terminal
+    // has been sitting idle".
+    expect([...RISKY_STATUSES].sort()).toEqual(['input', 'working'])
   })
 })
 
@@ -94,8 +88,27 @@ describe('closeWarning', () => {
   })
 
   it('always says what is actually lost', () => {
-    for (const status of ['working', 'input'] as SessionStatus[]) {
+    for (const status of ALL) {
       expect(closeWarning(status).detail.length).toBeGreaterThan(20)
+    }
+  })
+
+  it('does not claim work is being lost when the process has already gone', () => {
+    /*
+     * The sharpest case of asking about every state: an exited session has no
+     * agent to stop, and telling somebody it does is how a confirmation becomes
+     * a thing you click through without reading — which is precisely the
+     * objection the old two-state rule was built on. Answering it in the wording
+     * rather than by declining to appear is what lets the dialog be universal.
+     */
+    const gone = closeWarning('exited')
+    expect(gone.headline).toContain('already ended')
+    expect(gone.detail).not.toContain('agent stops')
+  })
+
+  it('describes a calm session as an ending rather than an interruption', () => {
+    for (const status of ['idle', 'waiting', 'completed'] as SessionStatus[]) {
+      expect(closeWarning(status).headline).toBe('This ends the session.')
     }
   })
 })
@@ -107,7 +120,7 @@ describe('closeWarning for a whole project', () => {
     // is the wrong sentence for four of them.
     const warning = closeWarning('working', 4)
     expect(warning.headline).toContain('4 sessions')
-    expect(warning.detail).toContain('project')
+    expect(warning.headline).toContain('project')
   })
 
   it('still describes one session as one session', () => {

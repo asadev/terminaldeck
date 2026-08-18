@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { useOneMenu } from '../../shell/one-menu'
 import type { ControlId, ControlOption, ControlReading } from './catalog'
 import { displayValue, isCurrent, sourceNote, unreadNote } from './catalog'
@@ -18,6 +18,15 @@ interface Props {
   /** Why the control cannot be used, when that is known. Shown instead of the menu. */
   blocked: string | null
   onPick: (optionId: string) => void
+  /**
+   * Called the moment the menu opens, before it is drawn.
+   *
+   * The model picker uses it to ask the session what models it actually has —
+   * see `discoverModels` in `useSessionControls.ts`. It is on the *open* rather
+   * than on a timer because asking types into the session, and it is here rather
+   * than in the parent because only this component knows when it opened.
+   */
+  onOpen?: () => void
 }
 
 /**
@@ -34,12 +43,26 @@ interface Props {
  * all one family, because they sit on one row and a family of one-offs is what
  * made that row look like a control panel.
  *
- * An unread control also gets to say *why* where there is a real reason. Fast
- * mode is the only one that has one, and it is permanent rather than a hiccup —
- * see `unreadLabel` in `catalog.ts`. Printing "Unknown" beside three siblings
- * that always resolve made a working control look broken.
+ * An unread control also gets to say *why* where there is a real reason.
+ * Permission mode is the only one left that has one — a session nobody has
+ * pressed shift+tab in, on a machine with no `permissions.defaultMode` written
+ * anywhere, genuinely has nothing to report — see `unreadLabel` in
+ * `catalog.ts`. Fast mode used to be in that sentence and is not any more: it
+ * turned out to be readable at any moment from the `↯` the CLI leaves in its
+ * status rule, so it resolves like its siblings.
  */
-export function ControlPicker({ control, name, reading, options, reach, busy, disabled, blocked, onPick }: Props) {
+export function ControlPicker({
+  control,
+  name,
+  reading,
+  options,
+  reach,
+  busy,
+  disabled,
+  blocked,
+  onPick,
+  onOpen,
+}: Props) {
   const [open, setOpen] = useState(false)
   const [above, setAbove] = useState(true)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -119,7 +142,16 @@ export function ControlPicker({ control, name, reading, options, reach, busy, di
         aria-disabled={blocked !== null ? true : undefined}
         data-blocked={blocked !== null ? '' : undefined}
         title={blocked ?? `${name}: ${value} — ${note}`}
-        onClick={() => setOpen((was) => !was)}
+        onClick={() => {
+          setOpen((was) => {
+            // Only on the way open, and never when the menu has nothing to show
+            // but a reason: a blocked control that still asked the session
+            // would be typing into it on behalf of a control it has already
+            // said cannot act.
+            if (!was && blocked === null) onOpen?.()
+            return !was
+          })
+        }}
       >
         <span className="ac-name">{name}</span>
         <span className={unknown ? 'ac-value ac-value-unknown' : 'ac-value'}>{busy ? 'Working…' : value}</span>
@@ -136,25 +168,35 @@ export function ControlPicker({ control, name, reading, options, reach, busy, di
             options.map((option) => {
               const current = isCurrent(reading, option)
               return (
-                <button
-                  key={option.id}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={current}
-                  className={current ? 'ac-item ac-item-current' : 'ac-item'}
-                  onClick={() => {
-                    setOpen(false)
-                    onPick(option.id)
-                  }}
-                >
-                  <span className="ac-tick" aria-hidden="true">
-                    {current ? '✓' : ''}
-                  </span>
-                  <span className="ac-item-text">
-                    <span className="ac-item-label">{option.label}</span>
-                    {option.hint ? <span className="ac-item-hint">{option.hint}</span> : null}
-                  </span>
-                </button>
+                <Fragment key={option.id}>
+                  {/* Only where the rows below make a weaker claim than the ones
+                      above — see `ControlOption.group`. The model menu ends with
+                      names the CLI's picker does not list and an account may not
+                      be entitled to, and run together they read as one list. */}
+                  {option.group ? (
+                    <p className="ac-option-group" role="presentation">
+                      {option.group}
+                    </p>
+                  ) : null}
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={current}
+                    className={current ? 'ac-item ac-item-current' : 'ac-item'}
+                    onClick={() => {
+                      setOpen(false)
+                      onPick(option.id)
+                    }}
+                  >
+                    <span className="ac-tick" aria-hidden="true">
+                      {current ? '✓' : ''}
+                    </span>
+                    <span className="ac-item-text">
+                      <span className="ac-item-label">{option.label}</span>
+                      {option.hint ? <span className="ac-item-hint">{option.hint}</span> : null}
+                    </span>
+                  </button>
+                </Fragment>
               )
             })
           )}

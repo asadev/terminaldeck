@@ -222,6 +222,32 @@ export class TourStage {
     return this.finish(merged)
   }
 
+  /**
+   * Do the same work, and put none of it on the screen.
+   *
+   * Interactive mode off. Asad: *"it does the work in the background and returns
+   * the final answer normally, with none of the driving. The answer must be
+   * identical either way; only the showing differs."*
+   *
+   * So this is deliberately **not** a different code path for building the
+   * answer — the plan arriving here has already been through the same
+   * validation, with every quote checked against a real transcript or a real
+   * terminal and every reason re-checked against this app's own data. The only
+   * thing that changes is that nothing is offered to a window: no gate closes,
+   * no panel opens, and no stop is ever marked as shown, because none was.
+   *
+   * The record is written and closed in one step. There is no live tour to keep
+   * progress for, and leaving one open would make `driving()` true for a scan
+   * with nothing on screen — which would refuse every tool that changes anything
+   * with nothing anywhere to lift the gate.
+   */
+  quietly(validated: ValidatedTour): TourRecord {
+    const at = this.now()
+    const record: TourRecord = { ...openRecord(validated, at, 'background'), endedAt: at }
+    this.write(record)
+    return record
+  }
+
   /** Every tour on disk, newest first. What the recap card and Settings read. */
   list(limit = MAX_TOURS_KEPT): TourRecord[] {
     let names: string[]

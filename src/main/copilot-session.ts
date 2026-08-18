@@ -183,6 +183,14 @@ import {
   type InstructionsState,
   type StartupFile,
 } from './copilot-home'
+import { copilotFolderReport, type CopilotFolderReport } from './copilot-folder'
+import {
+  copilotLayerArgs,
+  readComposedLayer,
+  readLayerFile,
+  writeCopilotLayer,
+  type LayerTool,
+} from './copilot-layer'
 import { currentPlatform, type Platform } from './platform/host'
 import { userDataDir } from './platform/paths'
 import { readSignIn } from './profiles-signin'
@@ -271,6 +279,16 @@ export interface CopilotState {
   /** Its folder, its instructions, its memory, its log. */
   paths: CopilotPaths
   /**
+   * Which folder it works in, whether that folder was chosen, and whether the
+   * running copilot is still in the old one.
+   *
+   * On the state rather than fetched separately because every sentence the pane
+   * writes about the folder needs two of these fields at once — "you chose X,
+   * it is running in Y, restart it" is three — and two round trips is how a
+   * pane ends up drawing a contradiction for one frame.
+   */
+  folder: CopilotFolderReport
+  /**
    * Where a jailed copilot kept its login and its transcripts.
    *
    * Still reported, and still on disk on an upgraded install, because that is
@@ -303,6 +321,8 @@ export interface CopilotState {
   instructions: InstructionsState
   /** The files it reads at startup, in order. */
   startupFiles: StartupFile[]
+  /** The three app-side files: yours, the generated one, and the composition. */
+  layerFiles: StartupFile[]
 }
 
 /* ------------------------------------------------------------------- deps -- */
@@ -364,6 +384,29 @@ export interface CopilotRuntimeDeps {
   mcpConfig?(): string | null
   /** `<userData>`. Defaults to this shell's answer. */
   userData?(): string
+  /**
+   * The folder the person chose, as the setting holds it, or null.
+   *
+   * Asked on every read rather than captured, because a person can change it in
+   * Settings while the app is running and the pane's next frame has to show the
+   * new answer — even though the *running* copilot is still in the old folder,
+   * which is exactly the state {@link CopilotFolderReport.restartNeeded} is for.
+   *
+   * A dep rather than a read of `settings-extra.ts`, for the reason every other
+   * field here is one: this module is imported by tests that never boot a shell,
+   * and by a headless build whose settings live somewhere else.
+   */
+  home?(): string | null
+  /**
+   * The live tool catalogue, for the generated half of the layer.
+   *
+   * `DeckControl.tools()`, handed in by whichever shell built the server, so the
+   * file the copilot is told about its tools in is composed from **the tools
+   * that exist** rather than from a list somebody maintained. Absent, or empty,
+   * means no `deck-control` server is running — a real state, said plainly in
+   * the generated file rather than papered over with a stale list.
+   */
+  tools?(): readonly LayerTool[]
   /** Where remote and confinement storage lives — `<userData>/remote`. */
   storageDir?(): string
   /** Which agent CLIs this machine has. Defaults to the real probe. */
@@ -409,6 +452,7 @@ export interface SpawnFence {
 
 interface Resolved {
   paths: CopilotPaths
+  folder: CopilotFolderReport
   userData: string
   storageDir: string
   platform: Platform
@@ -418,8 +462,25 @@ interface Resolved {
 
 function resolve(deps: CopilotRuntimeDeps): Resolved {
   const userData = deps.userData?.() ?? userDataDir()
+  /*
+   * The folder decision, made here and nowhere else.
+   *
+   * `copilotFolderReport` is what turns a stored string into a usable one: a
+   * chosen folder that has since been unmounted, deleted or pointed inside this
+   * app's own storage falls back to the default and reports why, rather than
+   * refusing to start. An assistant that will not run because an external drive
+   * is missing is worse than one that runs in its own folder and says so — and
+   * `folder.problem` is drawn in the pane, so nothing about the fallback is
+   * quiet.
+   */
+  const folder = copilotFolderReport({
+    stored: deps.home?.() ?? null,
+    userData,
+    runningIn: live?.root ?? null,
+  })
   return {
-    paths: copilotPaths(userData),
+    folder,
+    paths: copilotPaths(userData, folder.home),
     userData,
     storageDir: deps.storageDir?.() ?? join(userData, 'remote'),
     platform: deps.platform ?? currentPlatform(),
@@ -437,6 +498,17 @@ function resolve(deps: CopilotRuntimeDeps): Resolved {
 interface Live {
   sessionId: string
   startedAt: number
+  /**
+   * The folder it was actually started in.
+   *
+   * Recorded rather than recomputed, and for the same reason `fenced` is: a
+   * working directory is fixed at `exec`. Somebody who changes the folder in
+   * Settings changes what the *next* start will use, and a pane that read the
+   * setting and called it "where it is running" would be stating something
+   * false about a live process. This is the field that lets it say the true
+   * thing instead — "it is still working in X" — and offer a restart.
+   */
+  root: string
   /**
    * Whether *this* process was started inside a proven records fence.
    *
@@ -552,7 +624,7 @@ function recordsState(deps: CopilotRuntimeDeps, alive: boolean): CopilotRecords 
  * made) and those are already `stopped` with a `problem`.
  */
 export function copilotState(deps: CopilotRuntimeDeps): CopilotState {
-  const { paths, storageDir } = resolve(deps)
+  const { paths, folder, storageDir } = resolve(deps)
   const report = copilotHomeReport(paths)
   const alive = live !== null && deps.isAlive(live.sessionId)
   if (live !== null && !alive) live = null
@@ -578,6 +650,15 @@ export function copilotState(deps: CopilotRuntimeDeps): CopilotState {
     status,
     sessionId: alive && live !== null ? live.sessionId : null,
     paths,
+    /*
+     * Recomputed against the *live* session rather than reusing the one
+     * `resolve` made, because `resolve` ran before the liveness check above and
+     * a copilot that has since exited must not still be reported as "running in
+     * the old folder" — that is the sentence that puts a Restart button in front
+     * of somebody with nothing to restart.
+     */
+    folder: { ...folder, runningIn: alive && live !== null ? live.root : null,
+      restartNeeded: alive && live !== null && live.root !== folder.home },
     home: copilotHome(storageDir),
     startedAt: alive && live !== null ? live.startedAt : null,
     problem,
@@ -586,6 +667,7 @@ export function copilotState(deps: CopilotRuntimeDeps): CopilotState {
     instructionsAreDefault: report.instructionsAreDefault,
     instructions: report.instructions,
     startupFiles: report.startupFiles,
+    layerFiles: report.layerFiles,
   }
 }
 
@@ -653,8 +735,23 @@ export async function ensureCopilot(deps: CopilotRuntimeDeps): Promise<CopilotSt
 }
 
 async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
-  const { paths, userData, platform, cols, rows } = resolve(deps)
+  const { paths, folder, userData, platform, cols, rows } = resolve(deps)
   problem = null
+
+  /*
+   * A chosen folder that could not be used, recorded before anything else runs.
+   *
+   * The start does not fail for this — see `copilotFolderReport` — so without a
+   * row here the only evidence would be a sentence in a settings pane nobody has
+   * open. "Why is my assistant suddenly not remembering anything" has an answer,
+   * and this is where it is kept.
+   */
+  if (folder.problem !== null) {
+    appendCopilotAction(paths, {
+      action: 'folder.unusable',
+      detail: `${folder.chosen ?? 'the chosen folder'} — ${folder.problem} Starting in ${paths.root} instead.`,
+    })
+  }
 
   const scaffolded = scaffoldCopilotHome(paths)
   if (scaffolded.error !== null) {
@@ -743,6 +840,51 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
   const config = deps.mcpConfig?.() ?? null
   const mcpArgs = config === null ? [] : ['--mcp-config', config, '--strict-mcp-config']
 
+  /*
+   * Its identity, composed now and handed over on the command line.
+   *
+   * This is the change the whole folder feature turns on. The copilot used to be
+   * told what it was by a `CLAUDE.md` in its working directory, which is fine
+   * while that directory belongs to nobody and wrong the moment a person can
+   * choose it: their folder already has instructions, and — the worse half — a
+   * `CLAUDE.md` on disk is read by *every* session started there, so an ordinary
+   * terminal in the same folder would come up believing it was the copilot.
+   *
+   * So the layer is regenerated here, on every start, and handed to exactly this
+   * process. Regenerated rather than cached because all three of its inputs can
+   * have changed since the last start: the tool catalogue between builds, the
+   * fence between machines, and the working directory ten seconds ago in
+   * Settings.
+   *
+   * The tool list comes from the live server rather than from `buildCatalogue()`
+   * — the same array `tools/list` answers with — so the file that tells the
+   * copilot what it can do and the surface it actually has cannot disagree. With
+   * no server, both `config` and this are empty, and the generated file says so
+   * in words rather than listing tools that are not there.
+   */
+  const layer = writeCopilotLayer(paths.layer, {
+    root: paths.root,
+    actionsLog: paths.actions,
+    chosenFolder: !paths.ownFolder,
+    userData,
+    tools: deps.tools?.() ?? [],
+    toolsAttached: config !== null,
+    platform,
+  })
+  if (layer.composed === null) {
+    /*
+     * Refused rather than started without it, and this is the one place in this
+     * function that trades availability for correctness.
+     *
+     * A copilot spawned with no layer is not a diminished copilot. It is a plain
+     * Claude Code session in somebody's workspace, wearing this app's name in
+     * the sidebar, with this app's tools attached and none of the instructions
+     * that say what to confirm before using them. A refusal a person can read is
+     * better than that.
+     */
+    return refuse(deps, `The copilot's instructions could not be prepared: ${layer.error}`)
+  }
+
   let meta: SessionMeta
   try {
     meta = await deps.startSession(
@@ -781,7 +923,7 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
       undefined,
       undefined,
       measured.fence ?? undefined,
-      mcpArgs,
+      [...mcpArgs, ...copilotLayerArgs(layer.composed)],
     )
   } catch (error) {
     return refuse(deps, error instanceof Error ? error.message : String(error))
@@ -804,6 +946,7 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
   live = {
     sessionId: meta.id,
     startedAt: meta.createdAt,
+    root: paths.root,
     fenced: measured.fence !== null,
     profile: { id: profile.id, name: profile.name },
   }
@@ -821,11 +964,23 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
      * once, in the place that keeps it.
      */
     detail:
+      /*
+       * Whose folder it started in, on the same row and before anything else.
+       *
+       * A person reading the Activity pane after the fact needs to be able to
+       * tell a copilot that ran in this app's own directory from one that ran
+       * inside a workspace of theirs, because the second one had their notes,
+       * their context and whatever else is in that folder in front of it. The
+       * state is recomputed and forgets which folder a past session used; the
+       * log is the only place that is durable, which is the same argument the
+       * fence note below is written for.
+       */
+      `cwd ${paths.root}${paths.ownFolder ? '' : ' (your folder — nothing of this app’s was written into it)'}` +
       (measured.fence === null
-        ? `cwd ${paths.root}, as ${profile.name}, routines and this log NOT held against it${
+        ? `, as ${profile.name}, routines and this log NOT held against it${
             measured.reason === null ? '' : ` — ${measured.reason}`
           }`
-        : `cwd ${paths.root}, as ${profile.name}, routines and this log held against it (${measured.fence.kind})`) +
+        : `, as ${profile.name}, routines and this log held against it (${measured.fence.kind})`) +
       /*
        * And whether it has this app's tools at all, on the same row.
        *
@@ -1013,6 +1168,30 @@ export function registerCopilotIpc(ipcMain: IpcMain, deps: CopilotRuntimeDeps): 
     'copilot:read-instructions',
     (): InstructionsReadResult => readCopilotInstructions(resolve(deps).paths),
   )
+  /*
+   * The app's half, and the composed whole, both read-only.
+   *
+   * There is no `write-contract` channel and there is not going to be one. The
+   * contract describes what is wired — the tools that exist, their tiers, the
+   * paths the kernel refuses — and a hand-edited copy of that drifts from the
+   * thing it describes. This project has shipped exactly that defect twice: an
+   * instruction file claiming a jail that had been removed, and one denying
+   * powers the copilot had. Generated and unwritable is the fix, and the pane
+   * says so beside the box rather than greying out a Save nobody can explain.
+   *
+   * They are read off disk rather than recomposed for the pane, because the
+   * question a person is asking is *what was my assistant told*, and that is a
+   * fact about the file the last start wrote — not about what a start would
+   * write now, which differs the moment somebody edits their half.
+   */
+  ipcMain.handle('copilot:read-contract', () => {
+    const { paths } = resolve(deps)
+    return readLayerFile(paths.layer.contract)
+  })
+  ipcMain.handle('copilot:read-composed', () => {
+    const { paths } = resolve(deps)
+    return readComposedLayer(paths.layer)
+  })
   ipcMain.handle('copilot:write-instructions', (_event, text: unknown) => {
     const { paths } = resolve(deps)
     const result = writeCopilotInstructions(paths, text)

@@ -341,10 +341,6 @@ describe('the usage tile, rendered on a real project', () => {
     },
     models: ['claude-opus-5', 'claude-sonnet-5'],
     scanning: false,
-    perSession: [
-      { id: 'eb23b15c-0000-0000-0000-000000000000', requests: 20, tokens: 1_500_000, model: 'claude-opus-5' },
-      { id: '554a0694-0000-0000-0000-000000000000', requests: 4, tokens: 120_000, model: 'claude-opus-5' },
-    ],
   }
 
   function render(overrides: Partial<UsageView> = {}, expanded = false): string {
@@ -365,11 +361,18 @@ describe('the usage tile, rendered on a real project', () => {
     }
   })
 
-  it('leads with the tokens and says where they came from', () => {
+  it('leads with the tokens and says where they came from, naming no tool', () => {
     const markup = render()
     expect(markup).toContain('2.07M')
     expect(markup).toContain('tokens')
-    expect(markup).toContain('counted from the Claude Code transcripts in this folder')
+    // The source, and the one word that makes the figure checkable: an API
+    // request appears many times in a session record and again in every resumed
+    // copy of it, so "counted once" is the claim the arithmetic has to earn.
+    // See the cross-file de-duplication in `src/main/transcript.ts`.
+    expect(markup).toContain('counted once, from their own session records')
+    // *"You should not mention in any settings or any pop-up a specific tool or
+    // LLM, because they can use some other also."*
+    expect(markup).not.toMatch(/Claude|Codex|Gemini/)
   })
 
   it('puts the cache hit rate beside the counts it explains', () => {
@@ -422,7 +425,25 @@ describe('the usage tile, rendered on a real project', () => {
     // Cache reads are 93% of everything this folder moved, which is the line
     // that makes the total legible.
     expect(markup).toContain('93%')
-    expect(markup).toContain('heaviest first')
+    // The four lines add back up to the headline, which is the entire job of
+    // this breakdown.
+    expect(markup).toContain('How 2.07M tokens is made up')
+    /*
+     * And nothing else.
+     *
+     * A thirty-five-row list of transcript ids used to follow — "The same total
+     * across 35 sessions, heaviest first" — rows reading `e79f7c36 ·
+     * claude-opus-4-8 · 3071 · 1.61B`. Asad: a long list of old sessions that
+     * is not in the sidebar, where every row opens the same session. *"They
+     * make no sense to be here, I think, in that case."*
+     *
+     * They could not have opened their own: `cost:project` carries no session
+     * title, so a row names nothing recognisable, and `onOpenInspector` takes
+     * no argument — it opens the most recently active transcript whichever row
+     * is pressed. Asserted as an absence so it cannot quietly return.
+     */
+    expect(markup).not.toContain('heaviest first')
+    expect(markup).not.toContain('widget-list-breakdown')
   })
 
   it('withholds the context meter entirely rather than drawing an anonymous one', () => {

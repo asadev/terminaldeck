@@ -337,6 +337,19 @@ describe('what a public host offers', () => {
     const withheld = CAPABILITIES.filter((name) => !PUBLIC_HOST_OFFER.includes(name))
     expect(withheld).toEqual([
       CAPABILITY.localhost,
+      /*
+       * `close` is withheld even though `create` is not, and the pair is the
+       * clearest statement of what this list is for.
+       *
+       * A visitor to the demo box is given a shell so they can see the product
+       * work. Ending a session is the one verb on this wire that destroys
+       * somebody else's work in progress, and the box is a *shared* machine in
+       * the only sense that matters here: the broker allocates it, the owner's
+       * own tooling runs on it, and there is no human at the screen to notice a
+       * session going away. Starting something is additive and bounded by the
+       * container; ending something is not either of those.
+       */
+      CAPABILITY.close,
       CAPABILITY.upload,
       CAPABILITY.credential,
       // `devserver` joined this list the day it was built, and it is exactly the
@@ -365,6 +378,22 @@ describe('what a public host offers', () => {
        * thing it advertises.
        */
       CAPABILITY.copilot,
+      /*
+       * `web` is withheld for the same reason and by the same two mechanisms.
+       *
+       * It opens a page **on the host's screen**, in a tab of that machine's own
+       * browser. On a box handed to a stranger for an App Store review, that is
+       * a way to put an arbitrary website in front of whoever is watching it —
+       * and there is no folder grant, no confinement and no session boundary
+       * that has anything to say about a window.
+       *
+       * Twice over, again: the demo assembly passes no `openUrl`, and
+       * `server.ts` reads the capability off that function rather than off a
+       * constant, so a demo host could not advertise it even if this list were
+       * wrong. The headless daemon is in the same position for a duller reason
+       * — it has no window at all.
+       */
+      CAPABILITY.web,
     ])
   })
 })

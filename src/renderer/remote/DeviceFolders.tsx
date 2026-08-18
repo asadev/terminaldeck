@@ -211,8 +211,8 @@ export function DeviceFoldersView({
     return (
       <Group title="Folders">
         <p className="settings-prose">
-          Choosing folders per device is not available in this build. Every approved device can
-          start a session in whichever project is open on {machine}.
+          Choosing folders per device is not available in this build, so nothing on this screen
+          would change what a device can open on {machine}.
         </p>
       </Group>
     )
@@ -226,7 +226,7 @@ export function DeviceFoldersView({
       {confinesSessions(platform) ? (
         <>
           <p className="settings-prose">
-            Pick which folders each device can use. On {machine} a session started from a device is{' '}
+            Pick which folders each guest can use. On {machine} a session started from a device is{' '}
             <strong>held inside them</strong> — it can read and write those folders and nothing
             else. Not your other projects, not your home folder, not your keys, not the accounts
             you are signed in to.
@@ -237,13 +237,14 @@ export function DeviceFoldersView({
             signs in. If a session cannot be held inside its folder, it does not start at all.
           </p>
           <p className="settings-prose">
-            One thing this does not cover: a device can also open a session <em>you</em> started
-            here, in any folder, and yours are not held anywhere — they are your own shell.
+            A guest only sees the sessions running inside these folders — including ones{' '}
+            <em>you</em> started. Everything else on {machine} is invisible to it, and stops being
+            reachable the moment you take a folder away.
           </p>
         </>
       ) : (
         <p className="settings-prose">
-          Pick where each device can start a session. On {machine}, <strong>that is all this
+          Pick where each guest can start a session. On {machine}, <strong>that is all this
           does</strong> — a session is a shell, and once it is running it can move to any other
           folder, the same as one you start here. Holding a session inside its folder has only been
           built for macOS, so this is for keeping your own devices tidy, not for keeping anyone
@@ -262,13 +263,16 @@ export function DeviceFoldersView({
           is the exact lie the per-card line is tested against. */}
       {grants !== null && devices.some((device) => (grants.get(device.id) ?? null) === null) && (
         <p className="settings-prose">
-          A device marked <strong>Not chosen</strong> can start a session in whichever project is
-          open on {machine}.
+          A device paired before folder approval existed has nothing chosen for it, so it can open
+          nothing on {machine}. Add a folder here, or revoke it and pair it again.
         </p>
       )}
 
       {devices.length === 0 ? (
-        <p className="settings-prose">No device has been approved yet, so there is nothing to choose for.</p>
+        <p className="settings-prose">
+          No guest device has been let in, so there is nothing to choose for. Your own devices have
+          full access and are not listed here.
+        </p>
       ) : (
         <ul className="df-list">
           {devices.map((device) => {
@@ -338,7 +342,12 @@ export function summaryFor(chosen: string[] | null, loaded: boolean): string {
   // list — see `NOT_CHOSEN_NOTE`. It used to be spelled out in full on every
   // card, so three devices in the ordinary state printed the same 17-word
   // sentence three times down one column.
-  if (chosen === null) return 'Not chosen'
+  // Was 'Not chosen', which used to be an ordinary state meaning "gets whatever
+  // this desktop has open". It is not a state a device can be approved into any
+  // more — approval writes a list, including an empty one — so the only devices
+  // left in it were approved by a build older than the choice, and the honest
+  // summary says what that costs them rather than sounding like a preference.
+  if (chosen === null) return 'Approved before this existed — can open nothing'
   if (chosen.length === 0) return 'No folders. This device cannot start a session.'
   return chosen.length === 1 ? '1 folder' : `${chosen.length} folders`
 }

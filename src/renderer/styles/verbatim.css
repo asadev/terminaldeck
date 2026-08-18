@@ -105,6 +105,19 @@
 .artifact-diff,
 .artifacts-detail-path,
 .artifact-change-tool,
+/* Four surfaces that arrived with the Artifacts and Source-control rebuilds.
+   Both panes stopped showing a path over raw markdown and started showing the
+   artifact rendered, with the change record behind a switch — which created
+   new mono surfaces rather than reusing the old ones. `.artifact-plain` is a
+   file shown as-is when it is not markdown; `.artifact-doc code` is the inline
+   code inside one that is; `.git-diff-path` is the filename heading now that
+   the diff lives beside the list; `.git-diff-body` is the hunk text itself,
+   which is the single worst place in the app to redraw a character — a diff
+   whose `!=` reads as `≠` is a diff nobody can trust. */
+.artifact-plain,
+.artifact-doc code,
+.git-diff-path,
+.git-diff-body,
 .git-track,
 .git-stat,
 .widget-branch-name,
@@ -123,6 +136,19 @@
 .gh-asks-body code,
 .settings-account-blocked code,
 .settings-code,
+/* The stale-CLI row on AI readiness and on Accounts, and the sign-in dialog's
+   warning. All three quote a machine back at the reader: a command name and a
+   version in the title (`gemini 0.32.1`), and in the detail the upgrade line
+   read from brew or npm — `npm install -g @google/gemini-cli@latest`, which
+   this font would weld at the `@`-adjacent pairs and at `--`. A command a
+   person is about to retype is the plainest case in this whole file. */
+.agent-cli-title code,
+.agent-cli-detail code,
+.add-account-warn code,
+/* A port on a remote machine's localhost list — `127.0.0.1:5199`, and the path
+   beside it. A redrawn character in an address is an address that does not
+   resolve, and the reader cannot see why. */
+.machines-port-label,
 
 /*
    The box in Settings → Copilot that edits the copilot's `CLAUDE.md`, one of
@@ -186,6 +212,16 @@
 .dp-quote,
 .tr-quote,
 
+/* The element the copilot's browser driver resolved, in the panel beside the
+   page it is working on. The same case as the driving quote above, arriving from
+   further away: this is a label read off *somebody else's website* — a button's
+   own text, or the CSS selector that found it — rendered under this app's chrome
+   as the app's account of what it just clicked. A welded `=>` or `!=` in a
+   selector like `[data-x!=y]` would make the panel name an element that is not
+   the one the click landed on, which is the single claim this whole panel
+   exists to make. */
+.bw-step-on,
+
 .debug-pre,
 .debug-channel,
 .debug-number,
@@ -223,6 +259,12 @@
 .machine-entry-box,
 .machines-key,
 .df-folder-path,
+/* The copilot setup flow: the folder it will work in. `.cs-preview` used to be
+   listed here too — the block of instructions the summary screen showed byte for
+   byte — and that screen was deleted on 2026-08-17 (*"this whole card is not
+   required… Just Start"*), so the selector went with it rather than sitting here
+   as a rule for an element nothing renders. */
+.cs-path,
 .settings-path,
 .settings-profile-path,
 .settings-url-address,
@@ -266,6 +308,12 @@
 .ub-row-value,
 
 .remote-fingerprint,
+/* The same six groups, on the screen where a person actually compares them
+   against a phone. `.remote-fingerprint` is the row in the device roster; this
+   is the one inside the approval flow, and a fingerprint whose ligatures were
+   left on is a string that redraws itself while somebody is reading it
+   character by character — which is the one job it has. */
+.da-fingerprint,
 .remote-tunnel-port,
 .bw-start-port-num,
 .bw-zoom-value,

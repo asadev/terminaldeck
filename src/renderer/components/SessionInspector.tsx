@@ -864,13 +864,19 @@ export function ContextTab({ insights }: { insights: SessionInsights }) {
           <span className="si-context-percent">
             {formatTokens(insights.preContextTokens)}
           </span>
+          {/*
+            "Instructions file", not a filename, and the same words `cost.ts`
+            uses for the same three things — this label and that warning are read
+            within a few seconds of each other, on the same number, and two names
+            for one thing is how somebody concludes they are two things.
+          */}
           <span className="si-muted">
             {context && context.window > 0
               ? `${formatPercent((insights.preContextTokens / context.window) * 100)} of the window`
-              : 'system prompt, CLAUDE.md and tool schemas'}
+              : 'system prompt, instructions file and tool schemas'}
           </span>
         </div>
-        <p className="si-note" title="Usually CLAUDE.md and MCP tool schemas.">
+        <p className="si-note" title="Usually your instructions file and MCP tool schemas.">
           Every turn re-pays it, so it is the one number worth trimming.
         </p>
       </section>
@@ -950,7 +956,12 @@ export function describeSource(
   insights: { sessionId: string; startedAt: number } | null,
   attribution: Attribution | null,
 ): string | undefined {
-  if (!insights) return sessionTitle ? `${sessionTitle} — from its Claude Code transcript` : undefined
+  // "Its transcript", matching the three branches below, none of which has ever
+  // named a vendor — they say "continued transcript", "newest transcript in this
+  // folder", "transcript". This one line said "its Claude Code transcript" and
+  // was the odd one out in its own function, so the dialog's subtitle changed
+  // vocabulary depending on whether the read had landed yet.
+  if (!insights) return sessionTitle ? `${sessionTitle} — from its transcript` : undefined
   const short = insights.sessionId.slice(0, 8)
   const began = formatClock(insights.startedAt, true)
   const lead =

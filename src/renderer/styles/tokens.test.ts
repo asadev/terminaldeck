@@ -483,6 +483,313 @@ describe('every colour copied out of the sheet still matches it', () => {
   })
 })
 
+/* ----------------------------------------------------------- the ANSI set */
+
+/**
+ * The sixteen colours a program actually prints in, held to the same standard
+ * as everything above.
+ *
+ * This is the part of the palette that had no mechanism at all, and it had none
+ * because it had no *values*: `terminalTheme()` handed xterm a background, a
+ * foreground, a cursor and a selection, and left the sixteen to whatever
+ * `@xterm/xterm` ships. In the dark theme that was harmless — the emulator's
+ * Tango defaults were drawn for a near-black ground and `--terminal-bg` is one.
+ * In the light theme it was the whole of the appearance being wrong: the same
+ * dark-ground set on `#e8e8e8` paper measured 2.05:1 for yellow, 1.32:1 for
+ * bright green and 1.01:1 for bright yellow, which is a program colouring its
+ * output and the window printing nothing.
+ *
+ * So the numbers below are the point. A palette is the one part of a design
+ * where "looks fine" is a genuinely unreliable instrument: bright yellow on
+ * paper looked like nothing at all, which reads as "no output" rather than as
+ * "bad colour", and the fault therefore survived every time anyone looked at
+ * the window. A ratio does not survive it.
+ */
+describe('the terminal renders sixteen colours this app chose', () => {
+  /** Token name, and the `ITheme` key it is handed to xterm as. */
+  const ANSI: ReadonlyArray<readonly [string, string]> = [
+    ['--ansi-black', 'black'],
+    ['--ansi-red', 'red'],
+    ['--ansi-green', 'green'],
+    ['--ansi-yellow', 'yellow'],
+    ['--ansi-blue', 'blue'],
+    ['--ansi-magenta', 'magenta'],
+    ['--ansi-cyan', 'cyan'],
+    ['--ansi-white', 'white'],
+    ['--ansi-bright-black', 'brightBlack'],
+    ['--ansi-bright-red', 'brightRed'],
+    ['--ansi-bright-green', 'brightGreen'],
+    ['--ansi-bright-yellow', 'brightYellow'],
+    ['--ansi-bright-blue', 'brightBlue'],
+    ['--ansi-bright-magenta', 'brightMagenta'],
+    ['--ansi-bright-cyan', 'brightCyan'],
+    ['--ansi-bright-white', 'brightWhite'],
+  ]
+
+  /**
+   * The two ends of the ramp, by wire number.
+   *
+   * White and bright white are excluded from every readability check below,
+   * and the exclusion is the honest part of this palette rather than a hole in
+   * the test. An ANSI colour is used as a *background* as often as a
+   * foreground — darkening these two would turn `ESC[47m` from a highlight
+   * into a black band — so on paper they stay near-white and are unreadable as
+   * text, at 1.19:1 and 1.05:1. Every light terminal scheme in use makes the
+   * same trade. What a program that wants the ordinary foreground says is
+   * `ESC[39m`, which is `--terminal-fg` and is checked above at better than
+   * 7:1.
+   */
+  const WHITE = 7
+  const BRIGHT_WHITE = 15
+
+  /** HSV saturation. Unchanged by a scale toward black, which is the point. */
+  const saturation = (colour: Rgb): number => {
+    const [r, g, b] = colour.map((c) => c / 255)
+    const max = Math.max(r, g, b)
+    return max === 0 ? 0 : (max - Math.min(r, g, b)) / max
+  }
+
+  /** Straight-line distance in sRGB. A crude metric, and enough to catch two
+   *  slots that have landed on the same colour. */
+  const apart = (a: Rgb, b: Rgb): number =>
+    Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+
+  const light = (index: number): string => get(LIGHT, ANSI[index][0])
+  const dark = (index: number): string => get(DARK, ANSI[index][0])
+
+  it('declares all sixteen in both appearances', () => {
+    for (const [token] of ANSI) {
+      expect({ token, light: LIGHT.has(token), dark: DARK.has(token) }).toEqual({
+        token,
+        light: true,
+        dark: true,
+      })
+    }
+  })
+
+  /**
+   * The dark set is what the app has always rendered, pinned as literals.
+   *
+   * These are `@xterm/xterm`'s own defaults, which is what a session in this
+   * window looked like before the sheet declared anything. Writing them down
+   * changes nothing on screen and that is the claim being made: the light
+   * theme got a palette, the dark theme kept the one it had. Pinned by value
+   * rather than read back out of `node_modules`, because the emulator's
+   * default is no longer what this app renders — it is only where these came
+   * from — and a test that followed the dependency would turn an upstream
+   * retune into a silent change of the product's own colours.
+   */
+  it('keeps the dark sixteen exactly as the app has always rendered them', () => {
+    expect(ANSI.map(([token]) => get(DARK, token).toLowerCase())).toEqual([
+      '#2e3436',
+      '#cc0000',
+      '#4e9a06',
+      '#c4a000',
+      '#3465a4',
+      '#75507b',
+      '#06989a',
+      '#d3d7cf',
+      '#555753',
+      '#ef2929',
+      '#8ae234',
+      '#fce94f',
+      '#729fcf',
+      '#ad7fa8',
+      '#34e2e2',
+      '#eeeeec',
+    ])
+  })
+
+  /**
+   * Every one of them actually reaches the emulator.
+   *
+   * The defect this whole section exists for was not a wrong colour, it was
+   * sixteen colours that were never passed — so the check that matters most is
+   * the plumbing one, and it is the one a reviewer looking at a swatch cannot
+   * make. Each slot has to be named in `terminalTheme()`, read from its token,
+   * and carry the dark theme's own value as the fallback for the boot where
+   * the sheet has not been applied yet.
+   */
+  it('hands xterm every one of them, with the dark theme as the fallback', () => {
+    const source = read('src/renderer/components/TerminalView.tsx')
+    for (const [token, slot] of ANSI) {
+      const pattern = new RegExp(`\\b${slot}: token\\('${token}', *'(#[0-9a-f]{6})'\\)`, 'i')
+      const match = pattern.exec(source)
+      expect(match, `${slot} is not handed to xterm from ${token}`).not.toBeNull()
+      expect(match![1].toLowerCase(), `${slot}'s fallback has drifted from the dark theme`).toBe(
+        get(DARK, token).toLowerCase(),
+      )
+    }
+  })
+
+  /**
+   * The light sixteen are the dark sixteen walked down, not a second palette.
+   *
+   * The transform is a scale of all three channels toward black by one factor,
+   * which in arithmetic preserves hue and HSV saturation exactly and moves
+   * only value. Both are asserted because both are what makes this a *derived*
+   * set: a palette picked by eye would drift on one or the other, and drifting
+   * means red stops being the red the dark theme shows.
+   *
+   * Two degrees rather than zero, and a hundredth of saturation rather than
+   * nothing, because the channels are eight-bit and the factor is not. Thirteen
+   * of the sixteen land dead on; the worst is bright magenta at 1.72°, which is
+   * rounding — it is the palest and least saturated of the nine that move, so
+   * half a level on a channel is a wider angle there than anywhere else.
+   */
+  it('walks each light colour down its own hue line', () => {
+    for (let i = 0; i < ANSI.length; i += 1) {
+      const l = rgb(light(i))
+      const d = rgb(dark(i))
+      if (saturation(d) < 0.02) continue // a grey has no hue to preserve
+      let drift = Math.abs(hue(l) - hue(d))
+      if (drift > 180) drift = 360 - drift
+      expect({ slot: ANSI[i][1], ok: drift < 2 }).toEqual({ slot: ANSI[i][1], ok: true })
+      expect({ slot: ANSI[i][1], ok: Math.abs(saturation(l) - saturation(d)) < 0.01 }).toEqual({
+        slot: ANSI[i][1],
+        ok: true,
+      })
+    }
+  })
+
+  it('never walks a light colour upward', () => {
+    // Down or nowhere. Red, blue and magenta already clear AA on this paper, so
+    // three of the sixteen are byte identical in both appearances — that is the
+    // derivation being honest rather than a copy-paste slip, and it is asserted
+    // as "not lighter" rather than "darker" so it stays true.
+    for (let i = 0; i < ANSI.length; i += 1) {
+      expect({
+        slot: ANSI[i][1],
+        ok: luminance(rgb(light(i))) <= luminance(rgb(dark(i))),
+      }).toEqual({ slot: ANSI[i][1], ok: true })
+    }
+  })
+
+  /**
+   * The normal eight are readable as text on the light terminal's paper.
+   *
+   * AA, the same bar the rest of this sheet is held to. They were derived
+   * against 4.6:1 rather than 4.5 to leave the eight-bit rounding somewhere to
+   * land; the assertion is the standard's number, because that is the claim —
+   * the extra tenth is headroom, not a promise.
+   */
+  it('clears AA for every normal colour on the light paper', () => {
+    const paper = get(LIGHT, '--terminal-bg')
+    for (let i = 0; i < 8; i += 1) {
+      if (i === WHITE) continue
+      const ratio = contrast(light(i), paper)
+      expect({ slot: ANSI[i][1], ok: ratio >= 4.5, ratio: Number(ratio.toFixed(2)) }).toEqual({
+        slot: ANSI[i][1],
+        ok: true,
+        ratio: Number(ratio.toFixed(2)),
+      })
+    }
+  })
+
+  /**
+   * And the chromatic brights clear AAA, deliberately higher.
+   *
+   * On a dark ground "bright" means further from the ground, i.e. lighter; on
+   * paper the same idea is darker. Give both ends the same target and they
+   * collapse onto each other — at a shared 4.6:1, green lands on #3b7405 and
+   * bright green on #46721a, eleven levels apart in red and twenty-one in blue,
+   * which a diff draws as one colour. So the brights are walked further, and
+   * the separation that buys is asserted below rather than assumed.
+   *
+   * Bright black is not in this range: it keeps its place on the ramp as the
+   * dim grey a TUI draws its comments and box-drawing in, and darkening it to
+   * 7:1 would have taken it past black and inverted the pair.
+   */
+  it('clears AAA for every chromatic bright colour on the light paper', () => {
+    const paper = get(LIGHT, '--terminal-bg')
+    for (let i = 9; i < 15; i += 1) {
+      const ratio = contrast(light(i), paper)
+      expect({ slot: ANSI[i][1], ok: ratio >= 7, ratio: Number(ratio.toFixed(2)) }).toEqual({
+        slot: ANSI[i][1],
+        ok: true,
+        ratio: Number(ratio.toFixed(2)),
+      })
+    }
+  })
+
+  it('keeps black and bright black in their places, and in that order', () => {
+    // Both already clear on paper — 10.32:1 and 5.96:1 — so neither moves, and
+    // the pair must not invert: bright black is the *lighter* of the two, which
+    // is what makes it the quiet one.
+    expect(light(0).toLowerCase()).toBe(dark(0).toLowerCase())
+    expect(light(8).toLowerCase()).toBe(dark(8).toLowerCase())
+    for (const [name, theme] of THEMES) {
+      const paper = get(theme, '--terminal-bg')
+      expect(contrast(get(theme, '--ansi-bright-black'), paper), name).toBeGreaterThan(
+        name === 'light' ? 4.5 : 2,
+      )
+      expect(
+        luminance(rgb(get(theme, '--ansi-black'))) <
+          luminance(rgb(get(theme, '--ansi-bright-black'))),
+        name,
+      ).toBe(true)
+    }
+  })
+
+  /**
+   * White and bright white are the same in both appearances, on purpose.
+   *
+   * See the note on `WHITE` above: these two are backgrounds as often as they
+   * are foregrounds, so on paper they stay near-white and are not readable as
+   * text. This asserts the *decision* rather than a ratio — if someone darkens
+   * them to make `ESC[37m` readable, this fails and points them at the trade
+   * they are about to make on the other side of it.
+   */
+  it('leaves white and bright white alone in both appearances', () => {
+    for (const i of [WHITE, BRIGHT_WHITE]) {
+      expect(light(i).toLowerCase(), ANSI[i][1]).toBe(dark(i).toLowerCase())
+    }
+  })
+
+  it('keeps normal and bright tellable apart on paper', () => {
+    // The other half of the two-target rule. Six chromatic pairs; black and
+    // white are the ends of the ramp and are argued about above.
+    for (let i = 1; i < 7; i += 1) {
+      const distance = apart(rgb(light(i)), rgb(light(i + 8)))
+      expect({ slot: ANSI[i][1], ok: distance > 25 }).toEqual({ slot: ANSI[i][1], ok: true })
+    }
+  })
+
+  /**
+   * The phone renders the same sixteen.
+   *
+   * Same class of problem as the accent check above, and worse in kind: the
+   * phone's emulator is SwiftTerm, whose own default palette is Apple
+   * Terminal's rather than Tango's, so one session used to have two colour
+   * schemes depending on which screen it was read on — a #3465a4 blue on the
+   * Mac and a #492ee1 blue on the phone. There is no import path between a
+   * stylesheet and a Swift file, so this is the only thing holding them
+   * together, and the direction is deliberate: the desktop declares, the phone
+   * mirrors.
+   */
+  it('the phone mirrors the desktop set, in both appearances', () => {
+    const swift = read('ios/TerminalDeck/App/Theme.swift')
+    const header = 'static let ansi: [Duo] = ['
+    const start = swift.indexOf(header)
+    expect(
+      start,
+      'Ink.ansi is no longer a literal table — has Theme.swift been restructured?',
+    ).toBeGreaterThan(-1)
+    // From past the header's own `[Duo] = [`, or the slice ends on the bracket
+    // in the type rather than on the one that closes the table.
+    const open = start + header.length
+    const table = swift.slice(open, swift.indexOf(']', open))
+    const rows = [
+      ...table.matchAll(/Duo\(light: Shade\(0x([0-9a-f]{6})\), dark: Shade\(0x([0-9a-f]{6})\)\)/gi),
+    ]
+    expect(rows.length, 'the phone no longer declares sixteen ANSI colours').toBe(ANSI.length)
+    for (let i = 0; i < ANSI.length; i += 1) {
+      expect(`#${rows[i][1].toLowerCase()}`, `${ANSI[i][1]} light`).toBe(light(i).toLowerCase())
+      expect(`#${rows[i][2].toLowerCase()}`, `${ANSI[i][1]} dark`).toBe(dark(i).toLowerCase())
+    }
+  })
+})
+
 /* --------------------------------------------------- no retired colour left */
 
 describe('no retired accent survives anywhere', () => {

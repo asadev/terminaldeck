@@ -224,21 +224,50 @@ var labelFor = function (el) {
 /* ----------------------------------------------------------- the scripts -- */
 
 /**
- * What is on this page that can be acted on.
+ * What is on this page — what it says, and what can be acted on.
  *
  * The compact outline is what lets a model act without spending a screenshot,
  * which matters more than it sounds: an image is thousands of tokens and it
  * does not carry a selector, so a model given only pictures has to guess at
  * names. Role, label and selector is the whole of what an action needs.
  *
+ * ## Why the page's own words are in here as well
+ *
+ * They were not, and the tool that returns this is described as *"what is on
+ * the page"*, which it was not delivering: an outline of the controls says what
+ * you can press and nothing at all about what the page is *saying*. Watched on
+ * 2026-08-18, asked in words to read a form's result line, the copilot spent
+ * four calls guessing selectors — `#result`, `p`, `body`, `p:last-of-type` —
+ * because the only route to any text was to name an element it had not been
+ * shown. On a page that is mostly prose, which is most pages, the honest
+ * summary of the old outline was "there is a link called Learn more".
+ *
+ * It is also the concrete half of what Asad asked for after finding the copilot
+ * could not use the browser — *"it should know what I am looking at"*. A page
+ * you can only click is not a page you can talk about.
+ *
+ * So the script returns `text` as well: `innerText` of the body, which is the
+ * *rendered* text — it honours `display:none`, collapses runs of whitespace the
+ * way the layout does, and puts line breaks where the page puts them.
+ * `textContent` was the alternative and is wrong for this: it returns the
+ * contents of every `<script>` and `<style>` and every hidden template on the
+ * page, which is both enormous and misleading.
+ *
+ * Bounded by `textLimit`, cut at the *end* and flagged, because the top of a
+ * document is its heading and its lede while the bottom is the footer.
+ *
  * `secret: true` fields are listed **with no value**, deliberately. The agent
  * has to know the password box is there — that is how it knows to call
- * `browser.handover` — and it must never learn what is in it.
+ * `browser.handover` — and it must never learn what is in it. The text above is
+ * not a hole in that: a password field's *value* is never rendered text on any
+ * page, and a page that printed one into its own body has already disclosed it
+ * to anyone looking at the screen.
  */
 export const OUTLINE_SCRIPT = `(function () {
 ${PREAMBLE}
 var args = ${ARGS_TOKEN} || {};
 var limit = typeof args.limit === 'number' ? args.limit : 60;
+var textLimit = typeof args.textLimit === 'number' ? args.textLimit : 4000;
 var sel = 'a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="checkbox"],[role="tab"],[contenteditable="true"]';
 var out = [];
 var seen = 0;
@@ -266,9 +295,15 @@ for (var i = 0; i < all.length && out.length < limit; i++) {
   }
   out.push(entry);
 }
+var body = document.body;
+var full = '';
+try { full = body && typeof body.innerText === 'string' ? body.innerText : '' } catch (e) { full = '' }
+full = full.replace(/[ \\t]+/g, ' ').replace(/\\n{3,}/g, '\\n\\n').trim();
 return {
   url: String(location.href),
   title: String(document.title || ''),
+  text: full.length > textLimit ? full.slice(0, textLimit) : full,
+  textTruncated: full.length > textLimit,
   elements: out,
   matched: seen,
   truncated: seen > out.length,

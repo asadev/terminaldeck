@@ -1,0 +1,103 @@
+/* ============================================================================
+   The ⓘ dot and the box it opens.
+
+   Two elements, and they live in different places in the document: the dot is
+   inline in whatever heading or label it belongs to, and the box is portalled
+   under <body> so its glass has the page to frost rather than the backdrop root
+   it was declared inside.
+
+   The box borrows the app's floating-surface recipe exactly — `--material-bg`
+   over `--material-filter`, a hairline drawn as an inset shadow rather than a
+   border, `--shadow-lg` to lift it — because it *is* one of those surfaces, and
+   a second recipe is a second thing to keep in step with the theme.
+
+   Every value is a token. Both themes come from the tokens, so there is no
+   `[data-theme]` block here and there must never be one.
+   ============================================================================ */
+
+.hovernote-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Sized off the type scale rather than in pixels: it sits on a label line and
+     has to stay the same size relative to it when the scale moves. */
+  width: 1.15em;
+  height: 1.15em;
+  margin: 0 0 0 var(--sp-1);
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: 1;
+  cursor: help;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.hovernote-dot:hover,
+.hovernote-dot[aria-expanded='true'] {
+  color: var(--text-secondary);
+}
+
+.hovernote-dot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hovernote {
+  position: fixed;
+  /* Above the modals and the command palette, which sit at 100 under <body>.
+     The setup flow is a modal and its ⓘ has to draw over it, so anything lower
+     would be a coin toss with the sheet the dot is standing on. The app's own
+     tooltip is 200 and never shares an anchor with this — see HoverNote.tsx on
+     why there is no `title` here. */
+  z-index: 200;
+  box-sizing: border-box;
+  /* Wide enough for a real paragraph at this size — roughly 48 characters a
+     line, which is inside the readable measure — and never wider than a narrow
+     window. */
+  width: max-content;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+
+  background: var(--material-bg-strong);
+  backdrop-filter: var(--material-filter);
+  -webkit-backdrop-filter: var(--material-filter);
+  box-shadow:
+    inset 0 0 0 1px var(--material-hairline),
+    var(--shadow-lg);
+
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  /* It explains the thing under the pointer; it must never *be* the thing under
+     the pointer, or opening it would end the hover that opened it. */
+  pointer-events: none;
+
+  /* Hidden until it has been measured and placed — `visibility` rather than
+     `display`, because a box that is not laid out cannot be measured. */
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+/* It rises two pixels out of the dot it belongs to, so it reads as having come
+   from there. `data-side` flips the direction when it opens upwards. */
+.hovernote[data-side='below'] {
+  transform: translateY(-2px);
+}
+
+.hovernote[data-side='above'] {
+  transform: translateY(2px);
+}
+
+.hovernote[data-placed='true'] {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}

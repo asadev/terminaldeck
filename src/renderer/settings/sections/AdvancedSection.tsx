@@ -13,25 +13,60 @@ import {
 } from '../settings-bridge'
 
 /**
- * Advanced — diagnostics, the files on disk, and starting over.
+ * Advanced — what to do when something is wrong, and starting over.
  *
- * "Pick up where you left off" has gone back to General. It landed here when
- * General was cut down to "the settings people change while working", on the
- * reasoning that it is a once-and-forget launch choice — but the subject of a
- * setting is not how often you change it:
+ * ## The pane this replaces was written for the wrong reader
  *
- *   > "Pick up where you left off on launch — I don't know if this one also
- *   > need to be not here, it is somewhere at wrong place I think, maybe it
- *   > belongs to some other section."
+ *   > "Advanced is confusing. You are giving JSONs and this kind of things for
+ *   > the settings. For important parts of the application we don't need to give
+ *   > the folders and file paths… The things which will not grow, they are
+ *   > one-time things — they just need to modify them. They need to be on
+ *   > application, not on disk."
  *
- * It does. What happens to your sessions is General's subject; what is left
- * here is the pane you open when something is wrong.
+ * Read that against the audience the whole pass is for — *"my audience will be
+ * mostly non-technical vibe coders"* — and it is not a complaint about six
+ * rows, it is a rule. **A settings file path is only ever an answer to "how do I
+ * change this?", and it is the wrong answer whenever the app can change it.**
  *
- * The paths come from the main process rather than being rebuilt here: only it
- * knows where Electron put `userData` on this machine, and a settings panel
- * that guessed would send people to a folder that does not exist. Opening one
- * goes by key, never by path, so this is not a channel for opening arbitrary
+ * Every path this pane used to list failed that test:
+ *
+ *   - `settings.json` holds exactly the rows of this window;
+ *   - `state.json` holds the theme (Appearance), the default assistant
+ *     (Assistants), the project list (the sidebar) and the window size;
+ *   - `profiles.json` holds the accounts, which the Assistants pane creates,
+ *     renames, deletes and picks a default from;
+ *   - `settings.last-good.json` is a copy of the first of those.
+ *
+ * So all four were a person being sent to a text editor to do something the app
+ * does better three clicks away, and the *only* reason to know where they sit is
+ * to attach one to a bug report. That is a different job, it belongs to a
+ * different reader, and it now lives behind the switch named after that reader.
+ *
+ * ## What stayed a path, and why exactly those
+ *
+ * **The log folder.** It is a folder, it grows, nothing in the app can show you
+ * what is in it, and "where are the logs" is a real question with a path as its
+ * real answer. It keeps its button *and* its path in plain sight.
+ *
+ * Everything else is behind **Debug mode**, together with the raw JSON and the
+ * IPC trace, because that is the switch a person is told to turn on when they
+ * are already talking to somebody about a fault. Nothing was deleted — the file
+ * list, the Copy and Reveal buttons and the whole `PathRow` treatment are
+ * untouched — it just stopped being the first thing an ordinary person meets on
+ * this pane.
+ *
+ * The paths still come from the main process rather than being rebuilt here:
+ * only it knows where Electron put `userData` on this machine, and a settings
+ * panel that guessed would send people to a folder that does not exist. Opening
+ * one goes by key, never by path, so this is not a channel for opening arbitrary
  * files.
+ *
+ * ## What did not change
+ *
+ * "Pick up where you left off" is still in General, where it went when he said
+ * this pane was the wrong place for it, and Reset is still here — it is the
+ * in-app action for "put it back how it was", which is precisely the shape the
+ * quote above asks for.
  */
 /**
  * One row of "where things are kept", split out so its rules can be read.
@@ -207,12 +242,17 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
     <>
       <SectionHead title={meta.label} blurb={meta.blurb} />
 
-      <Group title="Diagnostics">
+      <Group title="When something goes wrong">
         {/* One list again. There were two, with `omit` on each, because two
             settings on this pane belonged to two different groups; the launch
             one has gone to General and left this section with a single
             subject. */}
         <SettingList section="advanced" values={values} save={save} disabled={loading} />
+        {/*
+          The one path on this pane that a person who is not a programmer might
+          genuinely need, kept in plain sight for exactly that reason: a folder,
+          it grows, and nothing in the app can show you what is in it.
+        */}
         <div className="settings-actions">
           <Button onClick={() => open('logs')} disabled={!bridge.openSettingsPath}>
             Open the log folder
@@ -251,29 +291,44 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
         </Group>
       )}
 
-      <Group title="Where things are kept">
-        {!bridge.settingsPaths ? (
-          <Notice tone="warn">{missingChannelNote('Showing the config paths')}</Notice>
-        ) : files.length === 0 ? (
-          /* A heading over an empty list is a section that looks broken. The
-             read can legitimately come back with nothing — a build whose main
-             process has not registered the channel's contents yet — and saying
-             so is shorter than leaving the reader to wonder. */
-          <p className="settings-prose">No config files have been reported yet.</p>
-        ) : (
-          <ul className="settings-paths">
-            {files.map((entry) => (
-              <PathRow
-                key={entry.key}
-                entry={entry}
-                canOpen={Boolean(bridge.openSettingsPath)}
-                onCopy={copy}
-                onOpen={open}
-              />
-            ))}
-          </ul>
-        )}
-      </Group>
+      {/*
+        The file list, behind the switch rather than in front of everybody.
+
+        This is the change the pane exists for. It is not hidden because it is
+        secret — it is hidden because it is an answer to "what would you like me
+        to attach to this bug report", and it was standing where the answer to
+        "how do I change this?" belongs. Every setting these files hold is
+        changed in this window, in Appearance, or in Assistants, and being sent
+        to a text editor instead is the thing he objected to.
+      */}
+      {debug && (
+        <Group title="Files on disk">
+          <p className="settings-prose">
+            For a bug report. Everything in them is changed in the app, not here.
+          </p>
+          {!bridge.settingsPaths ? (
+            <Notice tone="warn">{missingChannelNote('Showing the config paths')}</Notice>
+          ) : files.length === 0 ? (
+            /* A heading over an empty list is a section that looks broken. The
+               read can legitimately come back with nothing — a build whose main
+               process has not registered the channel's contents yet — and saying
+               so is shorter than leaving the reader to wonder. */
+            <p className="settings-prose">No config files have been reported yet.</p>
+          ) : (
+            <ul className="settings-paths">
+              {files.map((entry) => (
+                <PathRow
+                  key={entry.key}
+                  entry={entry}
+                  canOpen={Boolean(bridge.openSettingsPath)}
+                  onCopy={copy}
+                  onOpen={open}
+                />
+              ))}
+            </ul>
+          )}
+        </Group>
+      )}
 
       <Group title="Start over">
         {/* Held at two clauses rather than one, and exempt from the cutting

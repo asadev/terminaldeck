@@ -43,13 +43,20 @@ describe('a control with room to explain itself', () => {
     expect(html.match(/aria-checked="true"/g)).toHaveLength(1)
   })
 
+  /*
+   * This used to be written against fast mode, whose silence was believed to be
+   * permanent. It is not — the CLI draws a `↯` in its status rule for as long as
+   * fast mode is on, so fast mode always reads back now and never lands here.
+   * Permission mode is the control that genuinely can have nothing to report:
+   * no confirmation on screen and no `permissions.defaultMode` written anywhere.
+   */
   it('ticks nothing when the value was never read — a tick is a claim', () => {
-    const html = render('fast', undefined)
+    const html = render('permission', undefined)
     expect(html).not.toContain('aria-checked="true"')
-    // And it says which kind of "unknown" this is. Fast mode's is permanent,
-    // not a failure, which is the whole reason `unreadNote` exists.
+    // And it says which kind of "unknown" this is: one nothing can currently
+    // answer, with the thing to press about it, which is why `unreadNote` exists.
     expect(html).toContain('Not reported')
-    expect(html).toContain('announces fast mode only when it changes')
+    expect(html).toContain('prints the permission mode only when it changes')
   })
 
   it('names where the value came from, not just what it is', () => {

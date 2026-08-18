@@ -329,6 +329,14 @@ describe('the app shows no prices', () => {
      *
      * Comments are stripped for the same reason as above: each of these files
      * explains, in prose, what was deleted and why.
+     *
+     * `chat/usage/UsageStrip.tsx` used to be the last entry. It is deleted —
+     * it was the per-session readout folded inside the chat composer, and the
+     * composer's whole control row went with *"remove them from the chat box
+     * side completely."* The reading it drew is now the chrome's `UsageBar`,
+     * so the entry moved to that file rather than being dropped: the surface
+     * still exists, it just lives somewhere else, and a list that quietly
+     * shortened would stop checking the one place money could reappear.
      */
     const files = [
       join(__dirname, '..', 'renderer', 'chat', 'usage', 'usage-model.ts'),
@@ -336,7 +344,7 @@ describe('the app shows no prices', () => {
       join(__dirname, '..', 'renderer', 'dashboard', 'widgets.tsx'),
       join(__dirname, '..', 'renderer', 'dashboard', 'board.ts'),
       join(__dirname, '..', 'renderer', 'dashboard', 'SessionBoard.tsx'),
-      join(__dirname, '..', 'renderer', 'chat', 'usage', 'UsageStrip.tsx'),
+      join(__dirname, '..', 'renderer', 'shell', 'UsageBar.tsx'),
     ]
     for (const file of files) {
       const code = stripComments(readFileSync(file, 'utf8'))

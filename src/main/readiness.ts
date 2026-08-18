@@ -50,8 +50,32 @@ export type ReadinessFixId =
   | 'ignore-secrets'
   | 'untrack-secrets'
   | 'add-test-script'
+  | 'replace-test-script'
   | 'add-typecheck-script'
   | 'add-lint-script'
+  | 'create-lockfile'
+  | 'upgrade-agent-cli'
+
+/**
+ * Fixes that are about the machine rather than about one project.
+ *
+ * There is one of them and it is {@link upgradeAgentCli}. It rides this channel
+ * because this is the only route the preload already exposes that can *run*
+ * something on the person's behalf, and because the alternative — a button that
+ * copies a command for somebody to paste into a terminal — is precisely the
+ * shape of help the audience for this app cannot use. The review's words about
+ * readiness were "an action button that actually does it", and a machine-level
+ * problem does not stop being actionable because it is not a property of a
+ * folder.
+ *
+ * The consequence for the channel is small and deliberate: a machine fix is
+ * dispatched *before* the project path is validated, so the caller can send an
+ * empty one. Nothing else about the contract moves — the id still comes from a
+ * closed set, and this module still owns what the id means.
+ */
+export const MACHINE_FIX_IDS: ReadonlySet<ReadinessFixId> = new Set<ReadinessFixId>([
+  'upgrade-agent-cli',
+])
 
 /**
  * A fix is a *description* of an action, not the action itself. It is rendered
@@ -85,6 +109,20 @@ export interface ReadinessCheck {
   fix: ReadinessFix | null
   /** True only for the check that caps the whole score when it is not passing. */
   gate: boolean
+  /**
+   * The project-relative file this row is *about*, when there is exactly one.
+   *
+   * Carried so that a row with no automatic fix still has something to press.
+   * "Your instructions file is a stub" and "your README is effectively a title"
+   * are both true, both worth saying, and neither can be repaired by a machine —
+   * what a person needs there is the file open in front of them, which the
+   * renderer can do with the path and nothing else.
+   *
+   * Null wherever a row is not about one file. A dirty working tree is about
+   * twenty of them and a missing lockfile is about none, and inventing a path
+   * for those would put a button on a row that opens the wrong thing.
+   */
+  opens: string | null
 }
 
 export type ReadinessBand = 'strong' | 'fair' | 'weak' | 'at-risk'
@@ -251,6 +289,15 @@ async function exists(root: string, relPath: string): Promise<boolean> {
 interface PackageJson {
   scripts: Record<string, string>
   deps: Record<string, string>
+  /**
+   * Corepack's `packageManager` field, verbatim, or null when there is none.
+   *
+   * Read for exactly one decision: whether the lockfile fix is allowed to run
+   * npm. A project that declares `pnpm@9` and has no lockfile would get a
+   * `package-lock.json` from an npm run, which is not the file it wanted and is
+   * a worse state than the one it was in.
+   */
+  packageManager: string | null
   /** Raw text, so a fix can rewrite it without losing formatting choices. */
   raw: string
 }
@@ -277,8 +324,22 @@ async function readPackageJson(root: string): Promise<PackageJson | null> {
   return {
     scripts: stringMap(root_.scripts),
     deps: { ...stringMap(root_.dependencies), ...stringMap(root_.devDependencies) },
+    packageManager: typeof root_.packageManager === 'string' ? root_.packageManager : null,
     raw,
   }
+}
+
+/**
+ * Would running npm here produce the lockfile this project actually wants?
+ *
+ * Only when nothing says otherwise. An undeclared project gets npm because npm
+ * is what ships with Node and is what an undeclared project is overwhelmingly
+ * likely to be using; a project that names a different manager is left alone
+ * rather than handed a file from the wrong tool.
+ */
+export function npmIsTheManager(pkg: PackageJson | null): boolean {
+  if (pkg === null) return false
+  return pkg.packageManager === null || /^npm@/.test(pkg.packageManager)
 }
 
 function stringMap(value: unknown): Record<string, string> {
@@ -294,6 +355,35 @@ function stringMap(value: unknown): Record<string, string> {
  * Lines that carry information: blanks, horizontal rules and HTML comments are
  * not context, and a 200-line file of them is still a stub.
  */
+/**
+ * Is this file still exactly the skeleton one of the fixes below wrote?
+ *
+ * This is the half of the "create README" button that was missing, and it is
+ * the reason the review says that button "is the right idea but not done
+ * properly". Pressing it wrote a file of headings and `<!-- fill this in -->`
+ * comments, and the very next scan counted thirteen meaningful lines and turned
+ * the row green. One click took a project from "no README" to "README for
+ * humans ✓" without a single word about the project existing anywhere on disk.
+ * The score went up and nothing got better, which is the definition of a fake
+ * control — and the same was true of the instructions file, which cleared both
+ * its length floor and its "names a runnable command" test on the strength of
+ * the empty fenced blocks in its own template.
+ *
+ * The test is exact rather than heuristic: every non-blank line of the file has
+ * to be a line the template already contained. Add one sentence of your own and
+ * it is no longer a skeleton; delete half of it and it still is. That way the
+ * finding cannot misfire on a real README that happens to share a heading, and
+ * it cannot be satisfied by whitespace.
+ */
+export function isUnfilledSkeleton(text: string, template: string): boolean {
+  const written = new Set(template.split(/\r?\n/).map((line) => line.trim()))
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+  return lines.length > 0 && lines.every((line) => written.has(line))
+}
+
 export function meaningfulLines(text: string): number {
   let count = 0
   for (const line of text.split(/\r?\n/)) {
@@ -448,8 +538,9 @@ function check(
   detail: string,
   fix: ReadinessFix | null = null,
   gate = false,
+  opens: string | null = null,
 ): ReadinessCheck {
-  return { id, title, status, weight: CHECK_WEIGHTS[id], detail, fix, gate }
+  return { id, title, status, weight: CHECK_WEIGHTS[id], detail, fix, gate, opens }
 }
 
 const FIX_IGNORE_SECRETS: ReadinessFix = {
@@ -549,11 +640,46 @@ export const CLAUDE_MD_BLOAT_LINES = 400
 const COMMAND_HINT_RE =
   /```|(^|[\s`("'])(npm|pnpm|yarn|bun|npx|make|cargo|pytest|uv|dotnet|gradle|mvn|docker|deno|rake|tox|go (run|test|build)|python3? -m|\.\/[\w.-]+\.sh)\b/i
 
+/**
+ * What this check is called on screen, written once because it is said eight
+ * times.
+ *
+ * It was a literal title spelled out at every
+ * return in {@link checkClaudeMd} and once more in `scanReadiness`, and the
+ * naming sweep is only half the reason it is a constant now. Nine copies of a
+ * title is nine chances for one of them to drift, and a readiness row whose
+ * heading changes depending on *which* branch answered is a row that looks like
+ * two different checks.
+ *
+ * The name describes the category rather than one vendor's filename. This check
+ * already accepts three different files — see {@link CLAUDE_MD_CANDIDATES} —
+ * so it was never really about CLAUDE.md, and titling it that told somebody
+ * whose project carries an `AGENTS.md` that they had failed a check they had in
+ * fact passed. The `id` stays `claude-md`: ids are not read, and changing one
+ * would orphan the score history keyed on it.
+ */
+const AGENT_INSTRUCTIONS_TITLE = 'Agent instructions present and useful'
+
 const FIX_CREATE_CLAUDE_MD: ReadinessFix = {
   id: 'create-claude-md',
-  label: 'Create CLAUDE.md',
+  label: 'Create instructions file',
+  /*
+   * The label names the category; the description names the file, because the
+   * description is where a person finds out what is about to appear on their
+   * disk. That is disclosure rather than branding — the sweep's rule is about
+   * prose that describes a mechanism, and "a file called CLAUDE.md will be
+   * created at your project root" is a fact about their filesystem that they
+   * are entitled to before they press the button.
+   *
+   * It stays CLAUDE.md rather than becoming AGENTS.md, and that is a decision
+   * rather than an oversight. Both are read: `claude` 2.1.234 on this machine
+   * carries the string "Claude Code hardcodes CLAUDE.md / AGENTS.md discovery",
+   * so either would work for the CLI this build leans on. Changing which file
+   * a fix writes is a change to what lands in somebody's repository, and that
+   * belongs to whoever owns this feature, not to a pass over its wording.
+   */
   description:
-    'Writes a CLAUDE.md skeleton at the project root with the sections an agent reads first — what this is, how to run it, how to test it, layout and conventions — each left as a prompt for you to fill in. Refuses if CLAUDE.md already exists.',
+    'Writes an instructions skeleton at the project root — what this is, how to run it, how to test it, layout and conventions — each section left as a prompt for you to fill in. The file is CLAUDE.md. Refuses if one is already there.',
   touches: ['CLAUDE.md'],
   destructive: false,
 }
@@ -567,9 +693,12 @@ async function checkClaudeMd(root: string): Promise<ReadinessCheck> {
     if (entry.kind === 'too-big') {
       return check(
         'claude-md',
-        'CLAUDE.md present and useful',
+        AGENT_INSTRUCTIONS_TITLE,
         'warn',
         `${candidate} is ${formatBytes(entry.bytes)}. It is re-read on every prompt, so at that size it crowds out your own source — and it is too large for this scan to read at all. Cut it to the essentials and link the rest.`,
+        null,
+        false,
+        candidate,
       )
     }
     if (entry.kind === 'text') {
@@ -580,12 +709,36 @@ async function checkClaudeMd(root: string): Promise<ReadinessCheck> {
   }
 
   if (text === null || found === null) {
+    /*
+     * The only branch that cannot name a real file, because there is not one —
+     * every other branch interpolates `found` or `candidate`, which is the
+     * filename actually on the person's disk. So this one leads with the
+     * category and then lists the three paths that would satisfy it, in that
+     * order. Listing them is the actionable half: "no instructions file" with no
+     * accepted names is a finding somebody cannot act on, and a person whose
+     * project carries an `AGENTS.md` deserves to see that it counts.
+     */
     return check(
       'claude-md',
-      'CLAUDE.md present and useful',
+      AGENT_INSTRUCTIONS_TITLE,
       'fail',
-      'No CLAUDE.md, .claude/CLAUDE.md or AGENTS.md. Every session starts by re-deriving your build commands, your layout and your conventions from scratch — slower, more expensive, and wrong more often.',
+      'No instructions file — none of CLAUDE.md, .claude/CLAUDE.md or AGENTS.md is here. Every session starts by re-deriving your build commands, your layout and your conventions from scratch — slower, more expensive, and wrong more often.',
       FIX_CREATE_CLAUDE_MD,
+    )
+  }
+
+  // Before the length and the command test, both of which this app's own
+  // template passes on the strength of its empty fenced blocks. See
+  // `isUnfilledSkeleton`.
+  if (isUnfilledSkeleton(text, CLAUDE_MD_TEMPLATE)) {
+    return check(
+      'claude-md',
+      AGENT_INSTRUCTIONS_TITLE,
+      'warn',
+      `${found} is still the skeleton this app wrote — every line in it is a heading or a placeholder. Fill in what the project is, how to run it, how to test it and the conventions you enforce; until then it tells an agent nothing it could not guess.`,
+      null,
+      false,
+      found,
     )
   }
 
@@ -593,33 +746,45 @@ async function checkClaudeMd(root: string): Promise<ReadinessCheck> {
   if (lines < CLAUDE_MD_MIN_LINES) {
     return check(
       'claude-md',
-      'CLAUDE.md present and useful',
+      AGENT_INSTRUCTIONS_TITLE,
       'warn',
       `${found} exists but holds only ${lines} meaningful line${lines === 1 ? '' : 's'}. A stub is barely better than nothing: cover what the project is, how to run it, how to test it, and the conventions you actually enforce.`,
+      null,
+      false,
+      found,
     )
   }
   if (lines > CLAUDE_MD_BLOAT_LINES) {
     return check(
       'claude-md',
-      'CLAUDE.md present and useful',
+      AGENT_INSTRUCTIONS_TITLE,
       'warn',
       `${found} is ${lines} meaningful lines. It is re-read on every prompt, so past roughly ${CLAUDE_MD_BLOAT_LINES} lines it competes with your own source for context. Move the depth into linked files.`,
+      null,
+      false,
+      found,
     )
   }
   if (!COMMAND_HINT_RE.test(text)) {
     return check(
       'claude-md',
-      'CLAUDE.md present and useful',
+      AGENT_INSTRUCTIONS_TITLE,
       'warn',
       `${found} is a good length (${lines} lines) but names no runnable commands. Without the exact build and test commands an agent guesses, and guesses badly on anything with custom scripts.`,
+      null,
+      false,
+      found,
     )
   }
 
   return check(
     'claude-md',
-    'CLAUDE.md present and useful',
+    AGENT_INSTRUCTIONS_TITLE,
     'pass',
     `${found} is ${lines} meaningful lines and documents commands an agent can run.`,
+    null,
+    false,
+    found,
   )
 }
 
@@ -649,7 +814,12 @@ async function checkReadme(root: string): Promise<ReadinessCheck> {
       'readme',
       'README for humans',
       'fail',
-      'No README. It is the file an agent opens when CLAUDE.md does not answer the question, and the one a new contributor opens first.',
+      // "The instructions file", not one agent's name for it. This sentence is
+      // about the *relationship* between two documents, and it reads a line
+      // under the instructions check, which now calls the thing by the same
+      // words. Two names for one file across two adjacent rows is how somebody
+      // concludes their project is missing a third document.
+      'No README. It is the file an agent opens when the instructions file does not answer the question, and the one a new contributor opens first.',
       FIX_CREATE_README,
     )
   }
@@ -664,6 +834,23 @@ async function checkReadme(root: string): Promise<ReadinessCheck> {
       entry.kind === 'too-big'
         ? `${name} is ${formatBytes(entry.bytes)} — too large to measure here, but nobody could call it a stub.`
         : `${name} is present but could not be read; taking it at face value.`,
+      null,
+      false,
+      name,
+    )
+  }
+
+  // The skeleton this app writes clears the line floor comfortably, so this has
+  // to be asked before the count is. See `isUnfilledSkeleton`.
+  if (isUnfilledSkeleton(entry.text, readmeTemplate(basenameOf(root)))) {
+    return check(
+      'readme',
+      'README for humans',
+      'warn',
+      `${name} is still the skeleton this app wrote — headings and placeholders, and nothing about this project. Open it and say what this is, how to install it and how to run it.`,
+      null,
+      false,
+      name,
     )
   }
 
@@ -674,9 +861,20 @@ async function checkReadme(root: string): Promise<ReadinessCheck> {
       'README for humans',
       'warn',
       `${name} has ${lines} meaningful line${lines === 1 ? '' : 's'} — effectively a title. Say what this is and how to run it.`,
+      null,
+      false,
+      name,
     )
   }
-  return check('readme', 'README for humans', 'pass', `${name} is ${lines} meaningful lines.`)
+  return check(
+    'readme',
+    'README for humans',
+    'pass',
+    `${name} is ${lines} meaningful lines.`,
+    null,
+    false,
+    name,
+  )
 }
 
 /* ------------------------------------------------------- package scripts -- */
@@ -724,6 +922,26 @@ function fixAddScript(id: ReadinessFixId, label: string, runner: ScriptRunner): 
     description: `Adds "${runner.script}": "${runner.command}" to the scripts block in package.json, using the tool already in your dependencies. Existing scripts are left alone, and it refuses if "${runner.script}" is already defined.`,
     touches: ['package.json'],
     destructive: false,
+  }
+}
+
+/**
+ * Overwrite npm's own placeholder with the runner that is actually installed.
+ *
+ * Marked destructive so the panel asks a second time, and the second question
+ * is worth asking even though the line being replaced does nothing: a value in
+ * somebody's package.json is being changed, and a fix that edits an existing key
+ * without saying so is how one-click repairs lose people's trust. The refusal
+ * side is what keeps the promise narrow — it will only ever replace the exact
+ * string npm generates, never a script anybody wrote.
+ */
+function fixReplaceScript(runner: ScriptRunner): ReadinessFix {
+  return {
+    id: 'replace-test-script',
+    label: 'Replace the placeholder',
+    description: `Replaces npm's placeholder test script with "${runner.command}", the runner already in your dependencies. It refuses unless the current value is still that placeholder, so a script you wrote yourself cannot be overwritten.`,
+    touches: ['package.json'],
+    destructive: true,
   }
 }
 
@@ -775,12 +993,28 @@ async function checkTestScript(root: string, pkg: PackageJson | null): Promise<R
       ? `No test script, although \`${runner.command.split(' ')[0]}\` is installed. Without one, an agent writes code it has no way to verify.`
       : 'No test script and no test runner in the dependencies. An agent cannot verify its own changes, so every mistake reaches you instead of the test output.'
 
+  /*
+   * The placeholder used to be the one shape of this finding with no button,
+   * and there was no reason for it beyond `addScript` refusing to touch a key
+   * that already exists. A project with a runner installed and npm's stub still
+   * in the scripts block is the *easiest* of the three to repair — the value
+   * being replaced is a string npm generated, matched exactly, that has never
+   * run a test in its life. It gets its own fix id rather than a flag, because
+   * "add" and "overwrite what is there" are different promises and a person is
+   * entitled to see which one they are pressing.
+   */
   return check(
     'test-script',
     'Tests can be run with one command',
     'fail',
     detail,
-    runner && !placeholder ? fixAddScript('add-test-script', 'Add test script', runner) : null,
+    runner
+      ? placeholder
+        ? fixReplaceScript(runner)
+        : fixAddScript('add-test-script', 'Add test script', runner)
+      : null,
+    false,
+    'package.json',
   )
 }
 
@@ -801,6 +1035,9 @@ async function checkTypecheckScript(root: string, pkg: PackageJson | null): Prom
       'Types can be checked without building',
       'warn',
       'A tsconfig.json is present but there is no package.json to hang a typecheck script on.',
+      null,
+      false,
+      'tsconfig.json',
     )
   }
 
@@ -811,6 +1048,9 @@ async function checkTypecheckScript(root: string, pkg: PackageJson | null): Prom
       'Types can be checked without building',
       'pass',
       `\`npm run ${found}\` type-checks the project. That is the fastest signal an agent has that an edit is sound.`,
+      null,
+      false,
+      'package.json',
     )
   }
 
@@ -825,6 +1065,8 @@ async function checkTypecheckScript(root: string, pkg: PackageJson | null): Prom
           command: 'tsc --noEmit',
         })
       : null,
+    false,
+    'package.json',
   )
 }
 
@@ -844,6 +1086,9 @@ function checkLintScript(pkg: PackageJson | null): ReadinessCheck {
       'Lint or format check',
       'pass',
       `\`npm run ${found}\` checks style, so generated code lands in your house style rather than the model's.`,
+      null,
+      false,
+      'package.json',
     )
   }
 
@@ -856,6 +1101,8 @@ function checkLintScript(pkg: PackageJson | null): ReadinessCheck {
       ? 'A linter is installed but no script exposes it. An agent will not find it, so nothing it writes is checked.'
       : 'No lint or format script. Without one, every agent edit drifts a little further from your conventions and reviews get noisier.',
     linter ? fixAddScript('add-lint-script', 'Add lint script', linter) : null,
+    false,
+    'package.json',
   )
 }
 
@@ -908,6 +1155,9 @@ async function checkGitignore(root: string, pkg: PackageJson | null): Promise<Re
       '.gitignore covers the basics',
       'pass',
       `.gitignore has ${rules.length} rule${rules.length === 1 ? '' : 's'} and covers ${wanted.join(', ')}.`,
+      null,
+      false,
+      '.gitignore',
     )
   }
 
@@ -917,6 +1167,8 @@ async function checkGitignore(root: string, pkg: PackageJson | null): Promise<Re
     'warn',
     `.gitignore does not cover ${missing.join(', ')}. Uncovered paths become noise in every diff an agent reads — and one of them is where credentials live.`,
     FIX_PATCH_GITIGNORE,
+    false,
+    '.gitignore',
   )
 }
 
@@ -990,6 +1242,23 @@ async function checkGitClean(root: string, gitDir: string | null): Promise<Readi
   )
 }
 
+const FIX_CREATE_LOCKFILE: ReadinessFix = {
+  id: 'create-lockfile',
+  label: 'Generate the lockfile',
+  /*
+   * `--package-lock-only` is the whole reason this fix is safe enough to offer
+   * behind one button. It resolves the dependency tree and writes the lockfile
+   * and nothing else: no download of packages, no `node_modules`, no install
+   * scripts from the registry running on somebody's machine at the press of a
+   * button in a settings pane. `--ignore-scripts` is belt and braces on the
+   * last of those.
+   */
+  description:
+    'Works out the exact version of every dependency and writes package-lock.json. It does not download packages, create node_modules or run any install scripts — it needs the network to ask the registry, and it can take a minute on a large project.',
+  touches: ['package-lock.json'],
+  destructive: false,
+}
+
 const LOCKFILES = [
   'package-lock.json',
   'npm-shrinkwrap.json',
@@ -1028,7 +1297,10 @@ async function checkLockfile(root: string, pkg: PackageJson | null): Promise<Rea
     'lockfile',
     'Dependencies are pinned',
     'warn',
-    'No lockfile. An agent that runs an install can pull different versions than you have, and the failure it then debugs is not the one you would see. Commit the lockfile your package manager generates.',
+    npmIsTheManager(pkg)
+      ? 'No lockfile. An agent that runs an install can pull different versions than you have, and the failure it then debugs is not the one you would see.'
+      : `No lockfile, and package.json declares ${pkg.packageManager ?? 'another package manager'} — so generating one is that tool's job, not this app's. Run its install once and commit the file it writes.`,
+    npmIsTheManager(pkg) ? FIX_CREATE_LOCKFILE : null,
   )
 }
 
@@ -1089,7 +1361,7 @@ export async function scanReadiness(projectPath: string): Promise<ReadinessRepor
 
   const checks = await Promise.all([
     guard('secrets', 'No secrets committed', () => checkSecrets(root, tracked), true),
-    guard('claude-md', 'CLAUDE.md present and useful', () => checkClaudeMd(root)),
+    guard('claude-md', AGENT_INSTRUCTIONS_TITLE, () => checkClaudeMd(root)),
     guard('test-script', 'Tests can be run with one command', () => checkTestScript(root, pkg)),
     guard('git-repo', 'Git repository initialised', () => checkGitRepo(root, gitDir)),
     guard('gitignore', '.gitignore covers the basics', () => checkGitignore(root, pkg)),
@@ -1334,11 +1606,21 @@ export function detectJsonIndent(text: string): string {
  * The file is re-parsed and re-serialised rather than patched textually: a
  * regex insertion into JSON that already has a scripts block is the kind of
  * clever that eventually eats someone's manifest.
+ *
+ * `over` is the one value this is allowed to overwrite, and it exists so that
+ * "replace npm's placeholder" can share every line of this function while still
+ * being unable to touch anything else. Undefined means the ordinary promise:
+ * refuse if the key is taken.
  */
-async function addScript(root: string, runner: ScriptRunner): Promise<ReadinessFixResult> {
+async function addScript(
+  root: string,
+  runner: ScriptRunner,
+  over?: RegExp,
+): Promise<ReadinessFixResult> {
   const pkg = await readPackageJson(root)
   if (pkg === null) return refuse('package.json is missing or unreadable — nothing was changed.')
-  if (pkg.scripts[runner.script] !== undefined) {
+  const existing = pkg.scripts[runner.script]
+  if (existing !== undefined && !(over !== undefined && over.test(existing))) {
     return refuse(`package.json already defines a "${runner.script}" script — nothing was changed.`)
   }
 
@@ -1349,7 +1631,237 @@ async function addScript(root: string, runner: ScriptRunner): Promise<ReadinessF
   const trailing = pkg.raw.endsWith('\n') ? '\n' : ''
 
   await writeFile(safeJoin(root, 'package.json'), `${JSON.stringify(next, null, indent)}${trailing}`, 'utf8')
-  return ok(`Added "${runner.script}": "${runner.command}" to package.json.`, ['package.json'])
+  return ok(
+    existing === undefined
+      ? `Added "${runner.script}": "${runner.command}" to package.json.`
+      : `Replaced the placeholder with "${runner.script}": "${runner.command}" in package.json.`,
+    ['package.json'],
+  )
+}
+
+/* ------------------------------------------------------- running a tool -- */
+
+/** What a spawned tool did, whether or not it succeeded. */
+export interface ToolRun {
+  ok: boolean
+  output: string
+}
+
+/**
+ * Anything that can run a command line tool.
+ *
+ * The seam exists for one reason and it is not tidiness: without it, a test of
+ * the upgrade path upgrades the machine the test is running on. That happened
+ * once here — a first draft of `readiness.test.ts` moved this machine's agent
+ * CLI from 0.32.1 to 0.46.0 while asserting that the channel dispatched — and a
+ * suite with a side effect that large is a suite nobody can run twice.
+ */
+export type ToolRunner = (
+  command: string,
+  args: string[],
+  options: { cwd?: string; timeout: number },
+) => Promise<ToolRun>
+
+/**
+ * Run a command line tool and keep what it said, including when it failed.
+ *
+ * The output matters on the failure path more than on the success path, and
+ * `execFile` hides it there: a non-zero exit, and a timeout in particular,
+ * arrives as a thrown `Error` carrying `stdout` and `stderr` as properties of
+ * the error rather than as a resolved value. Code that only reads the resolved
+ * value turns "npm said EACCES on /usr/local/lib" into "Command failed", which
+ * is the difference between a person fixing their own machine and a person
+ * filing a bug. This app has already shipped that mistake once, in a place where
+ * a package manager's prompt was reported as a fifteen-second hang.
+ */
+async function runTool(
+  command: string,
+  args: string[],
+  options: { cwd?: string; timeout: number },
+): Promise<ToolRun> {
+  const PATH = await loginPath()
+  const spawn = {
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    timeout: options.timeout,
+    maxBuffer: MAX_BUFFER,
+    windowsHide: true,
+    env: { ...withPath(process.env, PATH, currentPlatform()), LC_ALL: 'C' },
+  }
+  try {
+    const { stdout, stderr } = await run(command, args, spawn)
+    return { ok: true, output: `${stdout}${stderr}`.trim() }
+  } catch (error) {
+    const carried = error as { stdout?: string; stderr?: string; message?: string }
+    const said = `${carried.stdout ?? ''}${carried.stderr ?? ''}`.trim()
+    return { ok: false, output: said === '' ? (carried.message ?? '') : said }
+  }
+}
+
+/**
+ * The one line of a tool's output worth putting on a row.
+ *
+ * Its *diagnosis*, preferred over its last words, and the difference showed up
+ * the first time this was looked at on screen. Pressing Upgrade on a machine
+ * that was already current printed "✔︎ JSON API packages.arm64_golden_gate.
+ * jws.json Warning: gemini-cli 0.46.0 already installed" — the tail of the
+ * output was two lines, and the first of them was a progress tick from a
+ * download that had nothing to do with the answer. The sentence a person needs
+ * is the one the tool prefixed as a warning or an error, wherever in the stream
+ * it landed; the last line is the fallback for a tool that prefixes nothing.
+ */
+export function toolMessage(output: string): string {
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+  if (lines.length === 0) return ''
+  const diagnosis = [...lines]
+    .reverse()
+    .find((line) => /^(error|warning|fatal|npm err!)\b/i.test(line))
+  return diagnosis ?? lines[lines.length - 1]
+}
+
+/* -------------------------------------------------------------- lockfile -- */
+
+/** Long enough for a cold registry resolve on a big tree, short enough to end. */
+const LOCKFILE_TIMEOUT_MS = 5 * 60 * 1000
+
+async function createLockfile(root: string): Promise<ReadinessFixResult> {
+  const pkg = await readPackageJson(root)
+  if (pkg === null) return refuse('package.json is missing or unreadable — nothing was changed.')
+  if (!npmIsTheManager(pkg)) {
+    return refuse(
+      `package.json declares ${pkg.packageManager ?? 'another package manager'}, so this would write the wrong kind of lockfile — nothing was changed.`,
+    )
+  }
+  for (const name of LOCKFILES) {
+    if (await exists(root, name)) return refuse(`${name} is already here — nothing was changed.`)
+  }
+
+  const result = await runTool('npm', ['install', '--package-lock-only', '--ignore-scripts'], {
+    cwd: root,
+    timeout: LOCKFILE_TIMEOUT_MS,
+  })
+  // Asked of the disk rather than of the exit code. npm can exit 0 having
+  // decided there was nothing to resolve, and a message claiming a file that is
+  // not there is worse than the missing file was.
+  if (!(await exists(root, 'package-lock.json'))) {
+    const said = toolMessage(result.output)
+    return refuse(
+      said === ''
+        ? 'The resolve did not produce a lockfile — nothing was changed.'
+        : `No lockfile was written. npm said: ${said}`,
+    )
+  }
+  return ok('Wrote package-lock.json. Commit it — that is what makes it a pin.', ['package-lock.json'])
+}
+
+/* ----------------------------------------------------- the agent CLI --- */
+
+/**
+ * The one agent CLI on this machine whose own server turns it away when it is
+ * out of date, and the two routes people install it by.
+ *
+ * These are identifiers, not copy. Which CLI it is, what it is measured
+ * against, and the sentence a person reads about it all live in
+ * `browser-signin.ts`, which owns that subject and records what was run on this
+ * machine on 2026-08-18 to establish it. What lives here is only the *act* —
+ * because this module owns the one channel the renderer already has that can
+ * run something, and a button that copies a command for somebody to paste into
+ * a terminal is not an answer for the people this app is for.
+ *
+ * The route is asked, never assumed. Telling somebody on one package manager to
+ * upgrade through the other produces either a failure or, worse, a second copy
+ * of the tool further down the PATH than the one that is actually running — at
+ * which point the version reads the same afterwards and the app looks broken
+ * rather than the advice.
+ */
+const AGENT_CLI = 'gemini'
+const AGENT_CLI_FORMULA = 'gemini-cli'
+const AGENT_CLI_PACKAGE = '@google/gemini-cli'
+
+/** A package manager knows about it; there is no third answer worth guessing. */
+export type UpgradeRoute = 'brew' | 'npm' | null
+
+/** Detection is quick or it is not an answer — this is two `list` calls. */
+const ROUTE_TIMEOUT_MS = 20 * 1000
+/**
+ * Ten minutes, because one of the two routes updates its whole formula index
+ * before it upgrades anything and that is a git fetch of a large repository on
+ * a slow morning. Leaving auto-update on is deliberate: with it off, the
+ * upgrade consults a stale local index, finds nothing newer, exits 0, and the
+ * person is told they are up to date while the sign-in keeps failing.
+ */
+const UPGRADE_TIMEOUT_MS = 10 * 60 * 1000
+
+/**
+ * How this machine installed the CLI, asked of the package managers themselves.
+ *
+ * Split out and exported so the branch can be tested with an injected runner:
+ * the interesting case is a machine where *neither* manager claims it, which is
+ * a real state — a manual install, a version manager, a vendored copy — and the
+ * only honest thing to do there is to refuse and say so rather than run
+ * something and hope.
+ */
+export async function upgradeRouteFor(exec: ToolRunner = runTool): Promise<UpgradeRoute> {
+  const probe = (command: string, args: string[]): Promise<ToolRun> =>
+    exec(command, args, { timeout: ROUTE_TIMEOUT_MS })
+  if ((await probe('brew', ['list', '--formula', '--versions', AGENT_CLI_FORMULA])).ok) return 'brew'
+  if ((await probe('npm', ['ls', '-g', '--depth=0', AGENT_CLI_PACKAGE])).ok) return 'npm'
+  return null
+}
+
+/** What a route runs, in one place, so the message and the act cannot differ. */
+export function upgradeCommandFor(route: Exclude<UpgradeRoute, null>): {
+  command: string
+  args: string[]
+} {
+  return route === 'brew'
+    ? { command: 'brew', args: ['upgrade', AGENT_CLI_FORMULA] }
+    : { command: 'npm', args: ['install', '-g', `${AGENT_CLI_PACKAGE}@latest`] }
+}
+
+/** What the CLI answers `--version` with, or null when it will not say. */
+async function agentCliVersion(exec: ToolRunner): Promise<string | null> {
+  const result = await exec(AGENT_CLI, ['--version'], { timeout: ROUTE_TIMEOUT_MS })
+  if (!result.ok) return null
+  const match = /(\d+\.\d+\.\d+)/.exec(result.output)
+  return match ? match[1] : null
+}
+
+/**
+ * Upgrade the agent CLI, and report what actually changed.
+ *
+ * The version is read before and after, from the binary rather than from the
+ * package manager, because those two can disagree — an upgrade that installs a
+ * new copy somewhere the PATH does not reach succeeds by every measure the
+ * package manager has and leaves the person exactly where they were. Comparing
+ * what the command *answers* is the only measurement that matches what breaks.
+ */
+export async function upgradeAgentCli(exec: ToolRunner = runTool): Promise<ReadinessFixResult> {
+  const before = await agentCliVersion(exec)
+  if (before === null) {
+    return refuse('That agent is not installed on this machine, so there is nothing to upgrade here.')
+  }
+
+  const route = await upgradeRouteFor(exec)
+  if (route === null) {
+    return refuse(
+      'Neither package manager on this machine claims that agent, so upgrading it is not something this app can do for you. Run `brew upgrade gemini-cli` or `npm install -g @google/gemini-cli@latest` in your own terminal, whichever matches how you installed it.',
+    )
+  }
+
+  const { command, args } = upgradeCommandFor(route)
+  const result = await exec(command, args, { timeout: UPGRADE_TIMEOUT_MS })
+  const after = await agentCliVersion(exec)
+
+  if (after !== null && after !== before) {
+    return ok(`Upgraded from ${before} to ${after}. Sign in again and it should hold.`, [])
+  }
+  const said = toolMessage(result.output)
+  return refuse(
+    `It still reports ${before} afterwards, so nothing moved.${said === '' ? '' : ` The upgrade said: ${said}`}`,
+  )
 }
 
 /**
@@ -1435,6 +1947,23 @@ export async function applyReadinessFix(
       return addScript(root, runner)
     }
 
+    case 'replace-test-script': {
+      const pkg = await readPackageJson(root)
+      const runner = pkg && detectTestRunner(pkg.deps)
+      if (!runner) return refuse('No test runner found in the dependencies — nothing was changed.')
+      // The pattern is the promise: this may overwrite npm's placeholder and
+      // nothing else, so a script written by a person is refused here rather
+      // than by the caller remembering to check.
+      return addScript(root, runner, PLACEHOLDER_TEST_RE)
+    }
+
+    case 'create-lockfile':
+      return createLockfile(root)
+
+    case 'upgrade-agent-cli':
+      // Nothing to do with `root`. See `MACHINE_FIX_IDS`.
+      return upgradeAgentCli()
+
     case 'add-typecheck-script': {
       const pkg = await readPackageJson(root)
       if (!pkg?.deps.typescript) return refuse('TypeScript is not a dependency here — nothing was changed.')
@@ -1470,8 +1999,11 @@ const FIX_IDS: ReadonlySet<string> = new Set<ReadinessFixId>([
   'ignore-secrets',
   'untrack-secrets',
   'add-test-script',
+  'replace-test-script',
   'add-typecheck-script',
   'add-lint-script',
+  'create-lockfile',
+  'upgrade-agent-cli',
 ])
 
 function asProjectPath(value: unknown): string | null {
@@ -1501,13 +2033,19 @@ export function registerReadinessIpc(ipcMain: Electron.IpcMain): void {
   })
 
   ipcMain.handle('readiness:fix', async (_event, projectPath: unknown, fixId: unknown) => {
-    const root = asProjectPath(projectPath)
-    if (root === null) throw new Error('readiness: an absolute project path is required')
     if (typeof fixId !== 'string' || !FIX_IDS.has(fixId)) {
       return refuse('That fix is not one this version knows how to apply.')
     }
+    const id = fixId as ReadinessFixId
+    // The id is checked first, and the *machine* fixes are answered before the
+    // path is: they are about this computer rather than about a folder, so the
+    // caller has no project to name and sending a made-up one would be worse
+    // than sending none. Every other fix still needs a real absolute path and
+    // is refused without one. See `MACHINE_FIX_IDS`.
+    const root = MACHINE_FIX_IDS.has(id) ? '' : asProjectPath(projectPath)
+    if (root === null) throw new Error('readiness: an absolute project path is required')
     try {
-      return await applyReadinessFix(root, fixId as ReadinessFixId)
+      return await applyReadinessFix(root, id)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       return refuse(`The fix could not be applied: ${message}`)

@@ -388,9 +388,7 @@ describe('describeSource', () => {
   })
 
   it('falls back to the tab name while there is nothing read yet', () => {
-    expect(describeSource('terminaldeck', null, null)).toBe(
-      'terminaldeck — from its Claude Code transcript',
-    )
+    expect(describeSource('terminaldeck', null, null)).toBe('terminaldeck — from its transcript')
     expect(describeSource(undefined, null, null)).toBeUndefined()
   })
 })

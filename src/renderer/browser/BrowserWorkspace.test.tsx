@@ -155,7 +155,10 @@ describe('the wired panel', () => {
       'Screenshot the page',
       'Show the page at a phone or tablet size',
       'Open Chrome devtools for the page',
-      'Cookies and site data',
+      // Cookies is a row in the More menu now rather than a button of its own.
+      // Its accessible name moved with it; what has to be nameable here is the
+      // control that reaches it.
+      'Profiles, saved logins, cookies and the start page',
       'Address and search',
     ]) {
       expect(html, `no control named ${label}`).toContain(`aria-label="${label}"`)
@@ -173,7 +176,7 @@ describe('the wired panel', () => {
     // Six unlabelled icons sat here on 2026-08-16 and he could not name one of
     // them. The accessible name above is the sentence; this is the word on
     // screen, and a tooltip is not a substitute for it.
-    for (const word of ['Inspect', 'Record', 'Shot', 'Size', 'Devtools', 'Cookies']) {
+    for (const word of ['Inspect', 'Record', 'Shot', 'Size', 'Devtools', 'More']) {
       expect(html, `no visible label for ${word}`).toContain(
         `<span class="bw-icon-word">${word}</span>`,
       )
@@ -188,12 +191,26 @@ describe('the wired panel', () => {
     expect(html).not.toContain('<span class="bw-icon-word">Home</span>')
   })
 
-  it('has one bottom panel, and it is the recorder', () => {
-    // There were two tabs down here — Element and Flow — and a capture forced
-    // the strip onto Element. An element is a popup at the element now, so the
-    // strip has one thing in it and nothing to switch with.
-    expect(html).toContain('<span class="bw-bottom-title">Flow')
+  it('has nothing at the bottom at all', () => {
+    /*
+     * *"Remove everything from the bottom. I need a clear view of the websites.
+     * Whatever is required should be on the top right corner."*
+     *
+     * The band under the stage held four things across three redesigns — two
+     * tabs, then one, then a heading and a start-page button — and it is gone.
+     * This is asserted as the absence of the class rather than as the absence of
+     * any one of its contents, because each of those contents was moved
+     * somewhere else and would otherwise pass this test from its new home.
+     */
+    expect(html).not.toContain('bw-bottom')
     expect(html).not.toContain('role="tab"')
+  })
+
+  it('puts what the band held in the top right corner instead', () => {
+    // The menu that took the start page, the cookies dialog, the profiles and
+    // the saved logins. It is the last control on the toolbar's action group,
+    // which is the rectangle every popup in this panel is anchored to.
+    expect(html).toContain('Profiles, saved logins, cookies and the start page')
   })
 
   it('does not print a second instruction under the first', () => {

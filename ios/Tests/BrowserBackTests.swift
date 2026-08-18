@@ -48,6 +48,17 @@
  *
  * **`pushState`, not `location.hash`.** A hash change is only *sometimes* a new
  * history entry. `pushState` is what a router calls and it is unambiguous.
+ *
+ * ## And Forward, which is here for a reason of its own
+ *
+ * `allowsBackForwardNavigationGestures` is a single property buying two
+ * gestures — back on the left edge, forward on the right. It was turned off so
+ * that the left edge could go back to meaning *leave this pushed screen*, which
+ * is what it means everywhere else on iOS, and that took the forward swipe with
+ * it. Forward is a button in the bottom toolbar now, `canGoForward` is observed
+ * beside `canGoBack`, and it would have had the identical same-document bug for
+ * the identical reason had it been read off the delegate instead.
+ * `LocalhostChromeTests` owns the rest of that decision.
  */
 
 import UIKit
@@ -199,6 +210,47 @@ final class BrowserBackTests: XCTestCase {
         }
         XCTAssertFalse(bridge.address.hasSuffix("?p=2"),
                        "the address followed the history back, address: \(bridge.address)")
+    }
+
+    /**
+     * **Forward, which exists because a gesture stopped existing.**
+     *
+     * `allowsBackForwardNavigationGestures` is one property and it buys two
+     * gestures: back on the left edge and forward on the right. Turning it off
+     * — so that the left edge means *leave this screen*, which is what it means
+     * everywhere else on iOS — therefore took the only way forward with it. A
+     * Back button with no Forward beside it strands somebody the first time they
+     * press it by accident.
+     *
+     * So this walks the same history the case above does and then walks back up
+     * it, and it asserts both halves of the state at every step. The `canGoBack`
+     * assertions are not padding: `goForward` landing on the second entry is
+     * only correct if there is now something *behind* it, and a forward that
+     * quietly reloaded the first page instead would satisfy every assertion
+     * about the address alone.
+     *
+     * Same file, same `pushState`, same reason as the case above — see the type
+     * header for why a real web view and why `document.URL` is what tells us the
+     * page is here.
+     */
+    func testForwardComesAliveAfterGoingBackAndWalksTheHistoryUpAgain() async throws {
+        let bridge = try await loadedBridge()
+        XCTAssertFalse(bridge.canGoForward, "a page nobody has left has nothing in front of it")
+
+        _ = try await bridge.webView.evaluateJavaScript("history.pushState({}, '', '?p=2'); 1")
+        try await waitUntil("Back came alive after the page moved") { bridge.canGoBack }
+        XCTAssertFalse(bridge.canGoForward,
+                       "pushing a new entry puts it *behind* nothing — forward is still empty")
+
+        bridge.goBack()
+        try await waitUntil("Forward came alive once there was a page ahead") { bridge.canGoForward }
+        XCTAssertFalse(bridge.canGoBack, "back at the first entry, with nowhere further back to go")
+
+        bridge.goForward()
+        try await waitUntil("the page came forward again") { bridge.address.hasSuffix("?p=2") }
+        try await waitUntil("Forward went dead at the end of the history") { !bridge.canGoForward }
+        XCTAssertTrue(bridge.canGoBack,
+                      "and Back is live again, because the first entry is behind this one")
     }
 
     // MARK: - Helpers

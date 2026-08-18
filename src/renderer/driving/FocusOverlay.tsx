@@ -71,6 +71,18 @@ export interface FocusReport {
   why?: FocusFailure
   /** Surfaces on screen the scrim does not reach. */
   undimmable: readonly Undimmable[]
+  /**
+   * The hole, in window coordinates, or null when there is not one.
+   *
+   * Published because the dot field has to cut the same rectangle out of itself
+   * that the scrim cuts out of the dulling, and two independent measurements of
+   * one rectangle is how a field comes to disagree with the box it is drawn
+   * around. This report already fires exactly when the geometry changes —
+   * `sameResolution` gates it — so it is the cheapest place to hand the number
+   * over, and the field reads it out of a ref rather than a prop so that a
+   * terminal repainting sixty times a second does not re-render anything.
+   */
+  rect: { x: number; y: number; width: number; height: number } | null
 }
 
 /**
@@ -277,8 +289,12 @@ export function FocusOverlay({ target, lit = true, onReport, dom }: Props) {
     if (onReport === undefined || resolution === null) return
     onReport(
       resolution.ok
-        ? { drawn: true, undimmable: resolution.focus.undimmable }
-        : { drawn: false, why: resolution.why, undimmable: resolution.undimmable },
+        ? {
+            drawn: true,
+            undimmable: resolution.focus.undimmable,
+            rect: resolution.focus.rect,
+          }
+        : { drawn: false, why: resolution.why, undimmable: resolution.undimmable, rect: null },
     )
   }, [resolution, onReport])
 

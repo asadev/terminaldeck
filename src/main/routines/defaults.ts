@@ -304,9 +304,9 @@ For each problem, one line: the file, what is wrong, and what should replace it.
 - Two files saying the same thing.
 - Two files contradicting each other.
 - Anything with an \`expires:\` date in the past.
-- Anything that is a rule about your own behaviour. Those belong in CLAUDE.md,
-  because memory is not always loaded — which is the whole point of memory not
-  being always loaded.
+- Anything that is a rule about your own behaviour. Those belong in your
+  instructions, because memory is not always loaded — which is the whole point
+  of memory not being always loaded.
 
 ## Do not
 
@@ -336,8 +336,9 @@ stop — there is nothing to check.
 If it did change files:
 
 1. Call git_diff and read what changed.
-2. Read the project's own gate — its package.json scripts, its CLAUDE.md — and
-   work out what "it passes" means here. For this repository that is
+2. Read the project's own gate — its package.json scripts, its agent
+   instructions file — and work out what "it passes" means here. For this
+   repository that is
    \`npm run typecheck\` and \`npm test\`.
 3. Start a session with sessions_start to run that gate, with a brief that says
    exactly which command to run, that it must report the output verbatim, and

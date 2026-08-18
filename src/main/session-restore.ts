@@ -1,5 +1,6 @@
 import { access } from 'node:fs/promises'
 import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
+import { isWithinRoot } from './fs-tree'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
 import { newestConversation, transcriptDir } from './transcript'
 import { isLinuxPath } from './wsl'
@@ -149,6 +150,50 @@ export interface SavedSession {
   lastSeenAt: number
 }
 
+/**
+ * The remembered sessions, minus any that are not somebody's tab.
+ *
+ * ## Why a filter exists at all
+ *
+ * `openSessions` is a list of what a *person* had open, and for one class of
+ * session that was not true. The copilot is a singleton: `ensureCopilot` starts
+ * exactly one, in this app's own storage, with an instruction layer and a
+ * `--mcp-config` composed at start time. It was also being written into
+ * `openSessions` like any tab, because it goes through the same `startSession`.
+ *
+ * Restoring one of those is not restoring the copilot. A `SavedSession` carries
+ * a folder, an agent and an account and nothing else, so what would come back is
+ * a plain Claude Code session in `<userData>/copilot` — no layer, no
+ * `deck-control` tools, no fence — hidden from the sidebar, because the window
+ * filters that folder out, and *billing*. On `DESKTOP-DDGMNCV` there were two of
+ * them in `state.json`, because the copilot had been restarted, so every launch
+ * would have started two invisible agents alongside the real one.
+ *
+ * `host-core.ts` stops writing them (see the note about `appComposed` beside
+ * `ledger.note`). This is the other half: the entries already on disk, on the
+ * machines where it happened, which no amount of not-writing-them-again
+ * removes. Filtered rather than migrated, because the ledger rewrites
+ * `openSessions` wholesale on the next change — so a launch that skips them is a
+ * launch after which they are gone.
+ *
+ * ## Why only the folder this app owns
+ *
+ * `folders` is `<userData>/copilot`, and deliberately *not* whichever folder the
+ * copilot is currently pointed at. Since the copilot can be given a folder of
+ * the person's own, treating "the copilot's folder" as disqualifying would throw
+ * away their real sessions in a real workspace the moment they chose it — the
+ * app deciding a tab was never theirs. Inside `<userData>` there is no such
+ * ambiguity: nothing there is a project, nobody opens a session in it by hand,
+ * and anything that ended up on this list from there was put there by this app.
+ */
+export function personalSessions(
+  saved: readonly SavedSession[],
+  folders: readonly string[],
+): SavedSession[] {
+  if (folders.length === 0) return [...saved]
+  return saved.filter((session) => !folders.some((dir) => isWithinRoot(dir, session.cwd)))
+}
+
 /* -------------------------------------------------------------------------- */
 /* Deciding                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -199,6 +244,27 @@ export interface RestoreDecision {
    * default, it is the honest answer that nothing was asked.
    */
   configDir?: string
+  /**
+   * What the disk actually said, when it was asked.
+   *
+   * The reason above is a sentence for a person and is meant to be reworded
+   * whenever a better one turns up. This is the same finding as a value, for the
+   * one caller that has to *branch* on it — `session-switch.ts`, which has to
+   * tell "the other account has a conversation here" apart from "this agent
+   * keeps its history somewhere this app cannot read" in order to say the right
+   * thing on screen before anything is stopped.
+   *
+   * It exists because the alternative was matching on the reason string, and a
+   * decision that hangs on prose breaks silently the next time somebody improves
+   * the prose — in the direction of a confident wrong claim, which is the one
+   * direction this file spends its whole length avoiding.
+   *
+   * Absent exactly when `probes.conversation` was never called: the folder is
+   * gone, this agent cannot continue anything, or another tab already holds the
+   * claim. Absent is therefore *not* "no conversation" — `'none'` is that — and
+   * nothing may read it as such.
+   */
+  conversation?: Conversation
 }
 
 export interface PlanProbes {
@@ -324,10 +390,12 @@ export async function planRestore(
             outcome: 'fresh',
             reason: 'no earlier conversation was found on disk for this folder',
             configDir,
+            conversation: found,
           }
         : {
             session,
             outcome: 'resume',
+            conversation: found,
             reason:
               found === 'found'
                 ? 'continuing the conversation on disk'

@@ -504,18 +504,44 @@ describe('the localhost frames', () => {
     expect(result).toEqual({ ok: true, message: { t: 'ports', ports: [{ port: 5173, process: 'node', guessed: false }] } })
   })
 
-  it('is the only reader of them — the shared parser refuses all three', () => {
-    // Not a criticism of that parser: this is what makes the branch necessary
-    // rather than redundant, and the day it moves there this assertion is the
-    // one that says so.
+  it('still owns the two the shared parser will not read', () => {
+    /*
+     * This assertion used to cover three frames and now covers two, and the one
+     * that left is the interesting half.
+     *
+     * The note above said the branch would stop being necessary "the day it
+     * moves there". `ports` moved: a **desktop** reaching another desktop now
+     * lists what is listening over there, so `parseServerFrame` reads that frame
+     * for its own caller and this client gets it either way. `web.opened` moved
+     * with it, for the same reason.
+     *
+     * `tunnel.opened` and `tunnel.closed` did not, and their absence is still a
+     * statement rather than an omission: they announce a byte stream into a
+     * listening socket, and a desktop guest opens no listener. A parser that
+     * read them would be a parser for a conversation that end is not in.
+     */
     for (const frame of [
-      { t: 'ports', ports: [] },
       { t: 'tunnel.opened', id: 'a', port: 5173 },
       { t: 'tunnel.closed', id: 'a', message: 'no' },
     ]) {
       expect(parseServerMessage(JSON.stringify(frame)).ok).toBe(false)
       expect(decodeServerMessage(JSON.stringify(frame)).ok).toBe(true)
     }
+  })
+
+  it('agrees with the shared parser about a port list, now that both read one', () => {
+    // Two readers of one frame is two chances to disagree, and the disagreement
+    // would be invisible: this client's own branch runs first and would simply
+    // win. Asserted as equality so a change to either produces a failure rather
+    // than a desktop and a browser drawing different port lists off one machine.
+    const raw = JSON.stringify({
+      t: 'ports',
+      ports: [
+        { port: 5173, process: 'node', guessed: false },
+        { port: 8080, process: 'unknown', guessed: true },
+      ],
+    })
+    expect(decodeServerMessage(raw)).toEqual(parseServerMessage(raw))
   })
 
   it('drops one unusable row rather than the whole list', () => {

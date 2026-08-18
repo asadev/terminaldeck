@@ -13,25 +13,26 @@
  * which is where features go to be undiscovered. Nine items in one menu is not a
  * menu, it is a drawer.
  *
- * ## Which three, and why Machines is not one of them any more
+ * ## Which four
  *
  * | Tab | What is on it |
  * |---|---|
+ * | **Copilot** | the conversation with the machine, and what it has been doing |
  * | **Sessions** | the machine's sessions, and nothing else |
  * | **Localhost** | its dev servers, and every port it is already serving |
  * | **Settings** | machines, GitHub, alerts, terminal text size, what the app is |
  *
- * Two of those moved in the same recording and the reasoning for both is on
- * `DeckModel.Tab`. In short: the localhost list was a second list underneath the
- * sessions — *"no separate two lists already here"* — and is now the subject of
- * its own tab; the Machines screen is *"a section, we click and we reach to this
- * page"* inside Settings, because pairing a machine is something done once and
- * a bottom tab is for the screens somebody moves between all day.
+ * *"A fourth pill, and the copilot goes leftmost: Copilot · Sessions · Localhost
+ * · Settings."* Said with the copilot built and in front of him, so it settles a
+ * question that had been answered twice before in both directions; the ordering
+ * and the reasoning are on `DeckModel.Tab`.
  *
- * The count is a consequence rather than a target. He asked for *"four icons in
- * the pill"* while adding Localhost to the three that existed, and then moved
- * Machines off the bar a minute later — the two cannot both be built, and the
- * second was the one he called *"a better design"*.
+ * The other two moved in an earlier recording. In short: the localhost list was
+ * a second list underneath the sessions — *"no separate two lists already here"*
+ * — and is now the subject of its own tab; the Machines screen is *"a section,
+ * we click and we reach to this page"* inside Settings, because pairing a
+ * machine is something done once and a bottom tab is for the screens somebody
+ * moves between all day.
  *
  * What is **not** here is anything the phone cannot do. The desktop's sidebar has
  * ten entries and most of them are a file tree, a diff, a search box or a
@@ -49,14 +50,14 @@
  * brief's rule for iOS is *native materials for chrome*, and a tab bar is the
  * most native piece of chrome there is.
  *
- * ## What did not move
+ * ## What is left of the session list's `…`
  *
- * The session list's `…` menu still holds **Refresh** and **Reconnect now**,
- * because those act on the list that is on screen. Everything in it that was
- * about a machine or about the app has moved to a tab and is not duplicated
- * there — *"options is having all of the things that we already have here and
- * there. So let's keep everything separate rather than having everything on one
- * page."*
+ * One item, and it is a place rather than an action: **Archived**. Refresh and
+ * Reconnect were in it and both are gone — *"Refresh, what does it actually do?
+ * Pull-to-refresh would be the natural gesture. Reconnect, I don't know why we
+ * need it… if they are useless and everything is automatically working, we need
+ * to remove them."* Both verdicts, and the evidence behind them, are written
+ * where the menu is built.
  */
 
 import SwiftUI
@@ -66,26 +67,54 @@ struct DeckTabs: View {
 
     var body: some View {
         TabView(selection: $model.tab) {
+            /*
+             * The copilot, first, because that is where he put it.
+             *
+             * It reads the *current* machine rather than a machine named in a
+             * route, which is the one thing that changed about the screen when
+             * it stopped being pushed: a tab has no argument. The switcher in
+             * its own title is how the machine is chosen, exactly as on the
+             * Sessions and Localhost tabs, and `DeckModel.select` clears
+             * anything pushed here that belonged to the machine being left.
+             *
+             * A machine that has no copilot at all still gets the tab, and the
+             * screen says so — see `CopilotView`'s `.notOffered`. Hiding a pill
+             * for some machines and not others would make the bar move under a
+             * thumb that had learned where things are, which is a worse failure
+             * than a screen that has to explain itself.
+             */
+            NavigationStack(path: $model.copilotRoute) {
+                CopilotTabScreen(model: model)
+                    .navigationDestination(for: DeckModel.Route.self) { route in
+                        switch route {
+                        case let .session(host, id):
+                            TerminalScreen(model: model, hostID: host, sessionID: id)
+                        }
+                    }
+            }
+            .toolbar(DeckChrome.tabBar(on: model.copilotSurface), for: .tabBar)
+            .tabItem { Label("Copilot", systemImage: "sparkles") }
+            /*
+             * The count of questions waiting on an answer, on the pill.
+             *
+             * This is where the badge from the old pinned row went. It is
+             * strictly better placed: a question raised while somebody is
+             * reading a terminal has a two-minute deadline and expires into a
+             * **refusal**, and the row could only be seen by going back to the
+             * list it was pinned to. A tab badge is on screen from every tab.
+             *
+             * `.badge(0)` draws nothing at all, so there is no empty dot on a
+             * machine with nothing pending and no condition to get wrong here.
+             */
+            .badge(model.copilot?.waitingCount ?? 0)
+            .tag(DeckModel.Tab.copilot)
+
             NavigationStack(path: $model.route) {
                 SessionListView(model: model)
                     .navigationDestination(for: DeckModel.Route.self) { route in
                         switch route {
                         case let .session(host, id):
                             TerminalScreen(model: model, hostID: host, sessionID: id)
-                        /*
-                         * The copilot is on this stack and not on a fourth tab.
-                         *
-                         * He reconsidered a four-pill layout once already, in the
-                         * recording this file's header quotes, and settled on
-                         * three. The argument for putting it *here* rather than
-                         * anywhere else is in `CopilotView`; in one line, the
-                         * desktop pins the copilot above the session list, this
-                         * tab is the session list, and every question the
-                         * copilot exists to answer is a question about the rows
-                         * underneath it.
-                         */
-                        case let .copilot(host):
-                            CopilotView(model: model, hostID: host)
                         }
                     }
             }
@@ -143,6 +172,43 @@ struct DeckTabs: View {
             .toolbar(DeckChrome.tabBar(on: model.settingsSurface), for: .tabBar)
             .tabItem { Label("Settings", systemImage: "gearshape") }
             .tag(DeckModel.Tab.settings)
+        }
+    }
+}
+
+/**
+ * The Copilot tab's root: the conversation on whichever machine is current.
+ *
+ * A wrapper of four lines, and it exists because `CopilotView` takes a host id
+ * and a tab has none to give it. Resolving it here rather than making the id
+ * optional inside that screen keeps the screen's own rule intact — *"named
+ * rather than taken from `model.current`… the switcher can move underneath a
+ * pushed view"* — which is still exactly right for the terminal pushed on top of
+ * this stack, and would be wrong to relax for one caller.
+ *
+ * The id is read on every redraw rather than captured, so switching machines in
+ * the title redraws this tab against the new one. That is the same rule every
+ * facade on `DeckModel` follows and for the same reason: a screen holding a
+ * `HostLink` across a switch is a screen showing one machine under another's
+ * name.
+ */
+private struct CopilotTabScreen: View {
+    let model: DeckModel
+
+    var body: some View {
+        if let host = model.current {
+            CopilotView(model: model, hostID: host.id)
+        } else {
+            // Unreachable while `RootView` gates on `isPaired`, and written out
+            // rather than left as an `EmptyView` so that the day something else
+            // presents this tab, it says something true instead of drawing a
+            // blank screen under a pill.
+            ContentUnavailableView {
+                Label("No machine", systemImage: "sparkles")
+            } description: {
+                Text("Pair a machine and its copilot appears here.")
+            }
+            .accessibilityIdentifier("copilot.noMachine")
         }
     }
 }
@@ -422,6 +488,19 @@ struct DeckSettingsView: View {
     @State private var textSize = TextSize.stored
 
     /**
+     * Light, dark, or the phone's own setting.
+     *
+     * `@AppStorage` rather than the `@State`-mirror shape the row above uses,
+     * and the difference is which way the value has to travel. Text size is read
+     * by the terminal when a session opens, so a store write is enough. This one
+     * has to reach `RootView` — three screens up, above the `TabView` — on the
+     * same frame as the tap, and `@AppStorage` on both ends is a live view of
+     * the same defaults key rather than a binding threaded through four screens
+     * that do not care.
+     */
+    @AppStorage(Appearance.key) private var appearance: Appearance = .system
+
+    /**
      * Bumped when the alerts sheet closes, and read by nothing.
      *
      * `AlertSettings` is a `UserDefaults` façade with no observation on it, so
@@ -472,6 +551,54 @@ struct DeckSettingsView: View {
                             DispatchQueue.main.async { model.showingAlerts = true }
                         }
                         .accessibilityIdentifier("settings.alerts")
+                    }
+
+                    SectionCaption("Appearance")
+
+                    SettingsGroup {
+                        /*
+                         * Three segments rather than a switch, because there are
+                         * three answers and one of them is the important one:
+                         * *System*, which is the default and the only choice
+                         * that keeps tracking the phone after it is made. A
+                         * two-state control would have had to drop it, and an
+                         * app that cannot follow the phone's own setting is an
+                         * app that comes up white at midnight.
+                         *
+                         * The picker takes the whole width on its own line
+                         * rather than sitting beside a title. Rendered the other
+                         * way at 375 points — the narrowest phone this app
+                         * supports — the three segments were 190 points between
+                         * them and "System" was clipped to "Syste".
+                         *
+                         * Writing to it writes the defaults key, which is the
+                         * same key `RootView` reads, so the window repaints on
+                         * the same frame and the choice is already saved. There
+                         * is no Apply and nothing to confirm.
+                         */
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "circle.lefthalf.filled")
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(Theme.secondary)
+                                    .frame(width: 18)
+                                Text("Theme")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(Theme.primary)
+                                Spacer(minLength: 8)
+                            }
+
+                            Picker("Theme", selection: $appearance) {
+                                ForEach(Appearance.allCases) { choice in
+                                    Text(choice.label).tag(choice)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .accessibilityIdentifier("settings.appearance")
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                     }
 
                     SectionCaption("Terminal")

@@ -350,6 +350,92 @@ final class WireCodecTests: XCTestCase {
         XCTAssertFalse(SessionID.isValid(String(repeating: "a", count: 65)))
     }
 
+    // MARK: - close
+
+    func testCloseCarriesAnIdAndNothingElse() {
+        // No signal, no force flag, no reason string. Choosing how somebody
+        // else's editor is killed is not a phone's decision, and a reason would
+        // be text from this device printed into the desktop's own chrome.
+        let object = decodeOutbound(WireCodec.encode(.close(id: "s1")))
+        XCTAssertEqual(object["t"] as? String, "close")
+        XCTAssertEqual(object["id"] as? String, "s1")
+        XCTAssertEqual(object.keys.count, 2)
+    }
+
+    func testClosedNamesTheSessionThatWent() {
+        guard case let .ok(message, _) = WireCodec.decode(#"{"t":"closed","id":"s1"}"#),
+              case let .closed(id) = message else {
+            return XCTFail("expected a closed")
+        }
+        XCTAssertEqual(id, "s1")
+    }
+
+    func testClosedWithoutAnIdIsRefused() {
+        // The id is the whole frame. A client that accepted a nameless one would
+        // have to guess which row to remove, and the only available guess is the
+        // one the person was last looking at.
+        guard case let .failed(reason) = WireCodec.decode(#"{"t":"closed"}"#) else {
+            return XCTFail("expected a refusal")
+        }
+        XCTAssertEqual(reason, "closed without an id")
+    }
+
+    func testCloseIsNotDetach() {
+        // Two frames, two verbs, and the difference is what they end: detach
+        // stops this phone watching, close ends the process for everybody.
+        // Asserted because they are one word apart in every call site.
+        XCTAssertNotEqual(WireCodec.encode(.close(id: "s1")), WireCodec.encode(.detach(id: "s1")))
+        XCTAssertTrue(WireCodec.encode(.detach(id: "s1")).contains("\"t\":\"detach\""))
+    }
+
+    // MARK: - web
+
+    func testWebOpenCarriesTheAddress() {
+        let object = decodeOutbound(WireCodec.encode(.webOpen(url: "http://localhost:5173/")))
+        XCTAssertEqual(object["t"] as? String, "web.open")
+        XCTAssertEqual(object["url"] as? String, "http://localhost:5173/")
+    }
+
+    func testWebOpenedIsWhatTheMachineActuallyOpened() {
+        // The machine echoes what it opened rather than what was asked for: a
+        // redirect or a normalisation there is the truth and this end's copy is
+        // not.
+        guard case let .ok(message, _) = WireCodec.decode(#"{"t":"web.opened","url":"http://localhost:5173/app"}"#),
+              case let .webOpened(url) = message else {
+            return XCTFail("expected a web.opened")
+        }
+        XCTAssertEqual(url, "http://localhost:5173/app")
+    }
+
+    func testWebOpenedWithoutAUrlIsRefused() {
+        // A line reading "Opened" with nothing after it is a claim about a page
+        // this end cannot identify.
+        guard case let .failed(reason) = WireCodec.decode(#"{"t":"web.opened"}"#) else {
+            return XCTFail("expected a refusal")
+        }
+        XCTAssertEqual(reason, "web.opened without a url")
+    }
+
+    // MARK: - capability names
+
+    func testTheTwoNewCapabilitiesAreSpelledAsTheDesktopSpellsThem() {
+        /*
+         * A capability string is a promise about a wire shape, so a typo here is
+         * a button that never appears — silently, on every machine, with nothing
+         * logged anywhere. These two are checked as literals because there is
+         * nothing else on this side of the wire to check them against; the
+         * desktop's own `protocol.ts` is the other half and cannot be imported
+         * into Swift.
+         */
+        XCTAssertEqual(WireCapability.close, "close")
+        XCTAssertEqual(WireCapability.web, "web")
+        // And neither is claimed outbound: both are verbs this phone *asks for*
+        // and are gated on what the desktop advertised, so claiming them would
+        // say nothing. See `WireCapability.claimed`.
+        XCTAssertFalse(WireCapability.claimed.contains(WireCapability.close))
+        XCTAssertFalse(WireCapability.claimed.contains(WireCapability.web))
+    }
+
     // MARK: -
 
     private func decodeOutbound(_ text: String) -> [String: Any] {

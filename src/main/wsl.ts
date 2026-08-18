@@ -56,6 +56,7 @@
  */
 
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { win32 } from 'node:path'
 import type { InvokeRegistrar } from './ipc-seam'
 import { currentPlatform, isWindows, type Env, type Platform } from './platform/host'
@@ -476,6 +477,133 @@ export function linuxPathFromUnc(path: string): { distro: string; path: string }
 }
 
 /**
+ * The full path to `wsl.exe`, because a **relative** program name handed to a
+ * pty on Windows is a coin toss this app kept losing.
+ *
+ * ## The bug, measured on `DESKTOP-DDGMNCV` on 2026-08-17
+ *
+ * Asad's app log had this, once per WSL tab, every launch:
+ *
+ *     [restore] did not come back: it could not be started again: File not found:
+ *               {"folder":"/home/asad/ClaudeImza","agent":"claude"}
+ *     [ipc] session:create failed File not found:
+ *
+ * Note what is *after* the colon: nothing. That is the whole clue, and it names
+ * the mechanism exactly. `conpty.cc` builds that sentence as
+ * `"File not found: " + shellpath`, and it reaches it when `shellpath` is empty
+ * — so the app was not being told that `wsl.exe` is missing, it was being told
+ * that node-pty could not say *what* was missing. `node-pty/src/win/path_util.cc`:
+ *
+ *     std::wstring get_shell_path(std::wstring filename) {
+ *       std::wstring shellpath;              // empty
+ *       if (file_exists(filename)) {
+ *         return shellpath;                  // ← still empty
+ *       }
+ *       … search %Path% …
+ *     }
+ *
+ * `file_exists` is `GetFileAttributesW`, which resolves a relative name against
+ * **the calling process's current directory**. So when the Electron process's
+ * cwd happens to be a directory that contains a file of that name, the early
+ * return fires and hands back the empty string, and `conpty.cc` immediately
+ * reads that empty string as "not found" and throws. The one directory on a
+ * Windows machine that contains `wsl.exe` is `C:\Windows\System32` — and that is
+ * precisely the working directory a process inherits when it is started by the
+ * shell verb behind a Start-menu entry, by the login `Run` key, or by a
+ * relaunch that did not name one. Which is why this failed after a restart and
+ * worked when the app was opened from Explorer: same binary, same distro, same
+ * folder, different inherited cwd.
+ *
+ * Reproduced directly, on that machine, against the very `node-pty` this app
+ * ships (`C:\Users\Imza\td-verify\node_modules\node-pty`, prebuild `win32-x64`):
+ *
+ *     cwd = C:\Users\Imza\tdfix        pty.spawn('wsl.exe', …)  → runs, prints PROBE-HI
+ *     cwd = C:\Windows\System32        pty.spawn('wsl.exe', …)  → throws "File not found: "
+ *     cwd = C:\Windows\System32        pty.spawn('C:\Windows\System32\wsl.exe', …) → runs
+ *
+ * The third line is the fix. An **absolute** program name never reaches
+ * `get_shell_path` at all — `conpty.cc` takes the `PathIsRelativeW` false branch
+ * and checks the path it was given — so the trap cannot fire however the app was
+ * launched.
+ *
+ * ## Why this is resolved here rather than left to PATH
+ *
+ * Because the launch this module builds is the *only* one in the app that ever
+ * handed a pty a bare name. Everything else on Windows goes through `%COMSPEC%`,
+ * which Windows sets to `C:\WINDOWS\system32\cmd.exe` — already absolute, and
+ * therefore already immune. So "the WSL session is the one that dies" is not a
+ * coincidence about WSL; it is the one code path with a relative command in it.
+ *
+ * ## Why `System32` and not a PATH search
+ *
+ * `wsl.exe` is a Windows component, not something a user installs somewhere:
+ * it ships in `%SystemRoot%\System32` and the copy under `WindowsApps` is an
+ * execution alias for the same thing. Searching PATH to find it again would be
+ * this app reimplementing `CreateProcess`'s own rules, badly, for a file whose
+ * location is defined by the operating system.
+ *
+ * `Sysnative` is checked first and it is not superstition: a 32-bit process on
+ * 64-bit Windows has `System32` redirected under it to `SysWOW64`, which has no
+ * `wsl.exe`, and `Sysnative` is the alias that reaches the real one. This build
+ * ships x64 so the redirector is not active today — but the whole reason this
+ * function exists is that a path assumption held on one machine and not on
+ * another, and `Sysnative` is one `existsSync` against that same class of
+ * mistake.
+ *
+ * Falling back to the bare name is deliberate rather than lazy: if neither path
+ * exists, this machine's `wsl.exe` is somewhere this function does not know
+ * about, and letting `CreateProcess` search is a better answer than refusing to
+ * launch. The trap only fires when the file *does* exist next to the process's
+ * cwd, which on a machine with no `System32\wsl.exe` it does not.
+ *
+ * ## Why `exists` is a parameter
+ *
+ * Because the answer is a *Windows* path however this file is being read, and
+ * every test in `wsl.test.ts` runs on a Mac — that is the premise the whole test
+ * file is written on. `win32.join('/tmp/x', 'System32', 'wsl.exe')` is
+ * `\tmp\x\System32\wsl.exe`, which is one filename with backslashes in it as far
+ * as macOS is concerned, so a fixture on disk cannot be reached through the real
+ * `existsSync` and the branch that matters could only ever be exercised on the
+ * platform where finding out is a bug report. The default is the real check, so
+ * nothing in the app passes one.
+ */
+export function wslExePath(env: Env, exists: (path: string) => boolean = existsSync): string {
+  return systemFile(env, WSL_EXE, exists) ?? WSL_EXE
+}
+
+/**
+ * The command processor, as an absolute path.
+ *
+ * `%COMSPEC%` is set on every Windows install and is already absolute, so this
+ * is only ever the fallback — and the fallback used to be the bare string
+ * `cmd.exe`, which is the same relative-name trap {@link wslExePath} exists to
+ * close, aimed at the one other file that lives in `System32`. A machine with no
+ * `COMSPEC` is rare enough that nobody would have found it; that is exactly the
+ * kind of path this codebase has been wrong about before.
+ */
+export function windowsShellPath(env: Env, exists: (path: string) => boolean = existsSync): string {
+  if (env.COMSPEC) return env.COMSPEC
+  return systemFile(env, 'cmd.exe', exists) ?? 'cmd.exe'
+}
+
+/**
+ * One of Windows' own programs, by absolute path, or null if it is not where
+ * Windows keeps them.
+ *
+ * Shared by the two above rather than written twice, because they are the same
+ * question about two files and the interesting part — `Sysnative` before
+ * `System32` — is the part that would drift if it were duplicated.
+ */
+function systemFile(env: Env, name: string, exists: (path: string) => boolean): string | null {
+  const root = env.SystemRoot || env.windir || 'C:\\Windows'
+  for (const dir of ['Sysnative', 'System32']) {
+    const candidate = win32.join(root, dir, name)
+    if (exists(candidate)) return candidate
+  }
+  return null
+}
+
+/**
  * A Windows directory that certainly exists, for the process that *is* wsl.exe.
  *
  * node-pty on Windows calls `path.resolve(cwd)` before handing the value to
@@ -555,7 +683,15 @@ export const LOGIN_SHELL_SCRIPT =
 const LOGIN_SHELL_NAME = 'wsl-login'
 
 export interface WslLaunch {
-  /** Always `wsl.exe`. */
+  /**
+   * `wsl.exe`, as an absolute path wherever one can be found.
+   *
+   * Absolute rather than the bare name because a relative program name handed
+   * to a pty on Windows fails whenever the app's own working directory happens
+   * to contain a file of that name — which for `wsl.exe` means every launch
+   * whose cwd is `C:\Windows\System32`. See {@link wslExePath} for the
+   * measurement; it is the whole reason WSL sessions did not survive a restart.
+   */
   command: string
   args: string[]
   /**
@@ -582,6 +718,14 @@ export function wslLaunch(input: {
   cwd: string | null
   inner: string
   env: Env
+  /**
+   * How to check whether a file is there, for {@link wslExePath}.
+   *
+   * Only ever passed by a test, and only because the one thing worth pinning
+   * here — that the command handed to a pty is the *resolved* path and not the
+   * bare name — cannot be observed on a Mac otherwise. See `wslExePath`.
+   */
+  exists?: (path: string) => boolean
 }): WslLaunch {
   const args: string[] = []
   if (input.distro !== null && input.distro !== '') args.push('-d', input.distro)
@@ -608,7 +752,11 @@ export function wslLaunch(input: {
    * chooses on the far side, deliberately, rather than one wsl.exe picked.
    */
   args.push('-e', 'sh', '-c', LOGIN_SHELL_SCRIPT, LOGIN_SHELL_NAME, input.inner)
-  return { command: WSL_EXE, args, hostCwd: windowsFallbackCwd(input.env) }
+  return {
+    command: wslExePath(input.env, input.exists),
+    args,
+    hostCwd: windowsFallbackCwd(input.env),
+  }
 }
 
 /* -------------------------------------------------------------------- env -- */

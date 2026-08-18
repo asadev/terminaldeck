@@ -39,6 +39,14 @@ export interface RemoteSession {
 
 export type MachineState = 'offline' | 'connecting' | 'awaiting-approval' | 'online' | 'error'
 
+/** One port listening on a remote machine, as that machine reported it. */
+export interface RemotePort {
+  port: number
+  process: string
+  /** True when the far machine could not name the process holding it. */
+  guessed: boolean
+}
+
 export interface MachineLinkState {
   id: string
   state: MachineState
@@ -46,6 +54,14 @@ export interface MachineLinkState {
   sessions: RemoteSession[]
   folders: string[] | null
   capabilities: string[]
+  /**
+   * What is listening on that machine, as it last answered.
+   *
+   * Pushed with the rest of the link's state rather than fetched by the panel:
+   * the link asks once per connection and publishes the answer, so a panel that
+   * has just mounted already has a list instead of being empty for a round trip.
+   */
+  ports: RemotePort[]
   hostPlatform: string
   retryAt: number | null
 }
@@ -91,6 +107,8 @@ export interface MachinesBridge {
   writeToMachineSession(id: string, sessionId: string, data: string): Promise<unknown>
   resizeMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
   createMachineSession(id: string, cwd?: string, provider?: string): Promise<unknown>
+  refreshMachinePorts(id: string): Promise<unknown>
+  openOnMachine(id: string, url: string): Promise<unknown>
   onMachinesState(cb: (view: unknown) => void): () => void
   onMachineOutput(cb: (chunk: unknown) => void): () => void
 }
@@ -109,6 +127,8 @@ const BRIDGE_METHODS = [
   'writeToMachineSession',
   'resizeMachineSession',
   'createMachineSession',
+  'refreshMachinePorts',
+  'openOnMachine',
   'onMachinesState',
   'onMachineOutput',
 ] as const
@@ -164,6 +184,17 @@ function asSession(value: unknown): RemoteSession | null {
   }
 }
 
+function asPort(value: unknown): RemotePort | null {
+  if (!isRecord(value)) return null
+  const port = whole(value.port)
+  // A port number that is not a whole number in range is a row that cannot be
+  // opened, so it is dropped rather than drawn — the same rule `asSession`
+  // applies to a row with no id.
+  if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return null
+  const process = text(value.process)
+  return { port, process, guessed: value.guessed === true }
+}
+
 function asLink(value: unknown): MachineLinkState | null {
   if (!isRecord(value)) return null
   const id = text(value.id)
@@ -183,6 +214,12 @@ function asLink(value: unknown): MachineLinkState | null {
     folders: Array.isArray(value.folders) ? value.folders.map(text).filter((folder) => folder !== '') : null,
     capabilities: Array.isArray(value.capabilities)
       ? value.capabilities.map(text).filter((name) => name !== '')
+      : [],
+    // One unreadable row does not discard the list, for the reason the sessions
+    // above do not: a panel showing nine of ten ports is useful and one showing
+    // none because the tenth had a null process name is not.
+    ports: Array.isArray(value.ports)
+      ? value.ports.map(asPort).filter((port): port is RemotePort => port !== null)
       : [],
     hostPlatform: text(value.hostPlatform),
     retryAt: whole(value.retryAt),

@@ -32,6 +32,7 @@ import { RemoteAuth } from '../device-auth'
 import { loadHostIdentity } from '../host-identity'
 import { createRelayClient } from '../relay-client'
 import { FolderGrants } from '../folder-grants'
+import { DeviceKinds } from '../device-kind'
 import {
   authenticatorFor,
   createRemoteEndpoint,
@@ -258,6 +259,7 @@ async function thisDesktop(options: { relay?: boolean } = {}): Promise<{
     {
       sessions: fakeSessions(),
       folders: new FolderGrants(tempDir()),
+      kinds: new DeviceKinds(tempDir()),
       webRoot: join(dir, 'nowhere'),
       storageDir: dir,
       broadcast: () => {},

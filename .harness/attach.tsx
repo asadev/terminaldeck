@@ -13,11 +13,12 @@
  * The third panel is the point of this page. A session is confined only when a
  * paired device or the copilot started it, and on a confined session a file from
  * outside the granted folder cannot be read at all — measured, see
- * `src/main/session-boundary.test.ts`. So the composer disables Browse and says
- * why. Reproducing that in the app needs a phone on the other end of a pairing
- * code; here it needs one stub returning `confined: true`, which is exactly what
- * the real `attach:boundary` answers for the copilot's own session — checked
- * against a live one rather than imagined.
+ * `src/main/session-boundary.test.ts`. The composer therefore attaches the picks
+ * that fall inside the boundary and refuses the ones that do not, saying why.
+ * Reproducing that in the app needs a phone on the other end of a pairing code;
+ * here it needs one stub returning `confined: true`, which is exactly what the
+ * real `attach:boundary` answers for the copilot's own session — checked against
+ * a live one rather than imagined.
  *
  * The stub's browse and drop return real-looking picks so the chips can be
  * looked at. It cannot open an NSOpenPanel or read the pasteboard, and it does
@@ -53,6 +54,8 @@ const OPEN_BRIDGE: AttachOutsideBridge = {
   pathForDroppedFile: () => '',
 }
 
+const COPILOT_FOLDER = '/Users/apple/Library/Application Support/terminaldeck/copilot'
+
 /**
  * What it answers for the copilot's own session, copied from a live one.
  *
@@ -60,12 +63,32 @@ const OPEN_BRIDGE: AttachOutsideBridge = {
  * rather than about confinement in general, and the projects list is what stops
  * the sentence being wrong: the copilot really can read the projects you have
  * open, and saying otherwise would be a worse failure than saying nothing.
+ *
+ * ## Why this panel returns a *mixed* batch now
+ *
+ * Because the refusal moved from the button to the pick. It used to be the whole
+ * of Browse that was disabled on a confined session, and that was affordable
+ * only while the in-app project list existed as a second door. That list is gone
+ * — *"we should not even have this search bar"* — so refusing everything would
+ * leave the copilot unable to attach even the files inside the folder it is
+ * held in, which is a control that cannot act.
+ *
+ * So the panel hands back one file the session genuinely can read and one it
+ * cannot, and this page is where you look to see that the first becomes a chip
+ * and the second becomes a sentence.
  */
 const CONFINED_BRIDGE: AttachOutsideBridge = {
   ...OPEN_BRIDGE,
+  browseForAttachment: async () => ({
+    ok: true,
+    picks: [
+      { path: `${COPILOT_FOLDER}/memory/today.md`, isDirectory: false },
+      { path: '/Users/apple/Desktop/screenshot.png', isDirectory: false },
+    ],
+  }),
   sessionAttachBoundary: async () => ({
     confined: true,
-    folder: '/Users/apple/Library/Application Support/terminaldeck/copilot',
+    folder: COPILOT_FOLDER,
     projects: [CWD],
   }),
 }
@@ -123,7 +146,7 @@ function Harness() {
           </div>
         </Panel>
 
-        <Panel title="Confined session — Browse is refused, and says why">
+        <Panel title="Confined session — attaches what it can read, refuses the rest">
           <div id="confined">
             <ChatComposer
               onSend={() => {}}

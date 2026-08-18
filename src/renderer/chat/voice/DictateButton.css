@@ -1,4 +1,9 @@
-/* The dictation popover. No recording state, because there is no recording. */
+/* The microphone, which now records — and the one thing it has to say when a
+   recording does not turn into words.
+
+   The popover this file used to hold is gone with the button that opened it:
+   dictation is no longer a signpost to the operating system, so there are no
+   steps to print. What is left is the live state and the failure line. */
 
 /* Centred on the composer's control row, like everything else on it. */
 .dc-host {
@@ -8,50 +13,56 @@
   flex-shrink: 0;
 }
 
-/* A floating surface, so it wears the app's glass like every other popover. */
-.dc-pop {
+/* Recording. A tint and a slow pulse rather than a red dot: the square icon
+   already says "press to stop", and the button is 28px — a badge on it would be
+   three pixels of meaning. Colour is `--status-error` because that is this
+   app's "live and costing you something" red, and a recording microphone is the
+   one control where a person's next question is always "is it still on". */
+.cc-tool.dc-live {
+  color: var(--status-error);
+  background: color-mix(in srgb, var(--status-error) 14%, transparent);
+  animation: dc-pulse 1.6s var(--ease-standard) infinite;
+}
+
+@keyframes dc-pulse {
+  0%,
+  100% {
+    background: color-mix(in srgb, var(--status-error) 14%, transparent);
+  }
+  50% {
+    background: color-mix(in srgb, var(--status-error) 28%, transparent);
+  }
+}
+
+/* Nobody watching a 1.6s pulse learns anything they cannot also read from the
+   square icon and the colour, so it is the first thing to go. */
+@media (prefers-reduced-motion: reduce) {
+  .cc-tool.dc-live {
+    animation: none;
+  }
+}
+
+/* Why a recording produced no words, floating above the row rather than pushing
+   it. It is a sentence a person needs once and then acts on — permission,
+   silence, a provider refusing — so it wears the same glass as every other
+   floating surface and does not take space from the composer while it waits. */
+.dc-problem {
   position: absolute;
   bottom: calc(100% + var(--sp-2));
   right: 0;
   z-index: 20;
-  width: 296px;
-  max-width: min(296px, calc(100vw - var(--sp-8)));
-  padding: var(--sp-3) var(--sp-4) var(--sp-4);
-  border-radius: var(--radius-lg);
+  width: max-content;
+  max-width: min(320px, calc(100vw - var(--sp-8)));
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
   background-color: var(--material-bg-strong);
   background-image: var(--material-sheen);
   -webkit-backdrop-filter: var(--material-filter);
   backdrop-filter: var(--material-filter);
   border: 1px solid var(--material-hairline);
   box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
-}
-
-.dc-summary {
-  margin: 0 0 var(--sp-2);
   color: var(--text-primary);
-  font-family: var(--font-ui);
-  font-size: var(--t-callout);
-  line-height: var(--lh-body);
-}
-
-.dc-steps {
-  margin: 0;
-  padding-left: var(--sp-4);
-  color: var(--text-secondary);
-  font-family: var(--font-ui);
-  font-size: var(--t-callout);
-  line-height: var(--lh-body);
-}
-
-.dc-steps li {
-  padding-left: var(--sp-05);
-}
-
-/* Space rather than a rule: the aside is already the smallest, quietest text
-   in the popover. */
-.dc-why {
-  margin: var(--sp-3) 0 0;
-  color: var(--text-muted);
   font-family: var(--font-ui);
   font-size: var(--t-footnote);
   line-height: var(--lh-body);

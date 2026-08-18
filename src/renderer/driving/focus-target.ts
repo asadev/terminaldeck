@@ -65,8 +65,25 @@ export type DriveAnchor =
    * The data was always folder-shaped; only the anchor disagreed.
    */
   | { at: 'git-file'; cwd: string; path: string }
-  /** The token/cost strip under a chat. */
-  | { at: 'usage-strip'; sessionId: string }
+  /**
+   * A session's usage reading — the two stacked limit bars in the chrome.
+   *
+   * It was called `usage-strip` and pointed at `chat/usage/UsageStrip.tsx`,
+   * which was the token and cost readout folded inside the chat composer. That
+   * component is gone: the review asked for the composer's control row to be
+   * *"removed from the chat box side completely"*, and the reading it drew moved
+   * up into `shell/UsageBar.tsx`, which is mounted on every session screen
+   * rather than only under a chat.
+   *
+   * So the kind is renamed rather than repointed, because the old name had
+   * stopped describing anything. There is no strip; there is a session's usage,
+   * and that is what a tour is pointing at when it stops here. A half-rename
+   * would be the worst outcome available — `anchorSelector` would build
+   * `[data-drive-anchor="usage-strip:…"]`, no element would carry it, and the
+   * only symptom is a stop that quietly stops boxing. `anchor-contract.test.ts`
+   * holds both ends of that together.
+   */
+  | { at: 'usage'; sessionId: string }
 
 export type FocusTarget =
   /**
@@ -120,8 +137,8 @@ export function anchorId(anchor: DriveAnchor): string {
       return `alert:${anchor.alertId}`
     case 'git-file':
       return `git-file:${anchor.cwd}:${anchor.path}`
-    case 'usage-strip':
-      return `usage-strip:${anchor.sessionId}`
+    case 'usage':
+      return `usage:${anchor.sessionId}`
   }
 }
 

@@ -43,10 +43,19 @@
 	<key>UILaunchScreen</key>
 	<dict/>
 
-	<!-- A terminal is white-on-black whatever the phone is set to; declaring it
-	     stops the system chrome from arriving in light mode around a dark app. -->
-	<key>UIUserInterfaceStyle</key>
-	<string>Dark</string>
+	<!-- There is deliberately no UIUserInterfaceStyle here.
+
+	     It used to say Dark, on the reasoning that a terminal is white-on-black
+	     whatever the phone is set to. That reasoning was wrong twice: a terminal
+	     on paper is a real thing this app now draws (see Theme.swift), and the
+	     key is not a hint — it is the operating system overriding every window in
+	     the process before any view is asked. While it was here the Appearance
+	     setting could not have worked no matter what any view stated, which is
+	     why it is the first of the three pins that had to come out.
+
+	     Absent means "follow the phone", which is what a person who has chosen
+	     nothing gets. The choice, when there is one, is stated once by RootView.
+	     See Appearance.swift. -->
 
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>

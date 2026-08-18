@@ -57,6 +57,7 @@
  * change — without a keyboard.
  */
 
+import { spawn } from 'node:child_process'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer as createHttpServer } from 'node:http'
 import { connect as netConnect, type Socket } from 'node:net'
@@ -98,6 +99,7 @@ import {
     COPILOT_FRAME_TIER,
     type CopilotActionRow,
     type CopilotChatMessage,
+    type CopilotConsentQuestion,
     type CopilotGrantWire,
     type CopilotLinkWire,
     type CopilotPendingRow,
@@ -242,25 +244,38 @@ function foldersField(): { folders?: string[] } {
 }
 
 /**
- * What this stand-in does about the copilot, in four states.
+ * What this stand-in does about the copilot, in five states.
  *
  *     --copilot absent   no `welcome.copilot` key at all — a machine with no
- *                        copilot layer, which is what the shipping desktop is
- *     --copilot none     the key, all false — a machine that has one and has
- *                        given this device nothing. **The product default.**
+ *                        copilot layer, which is what a 0.3.0 desktop is
+ *     --copilot none     the key, all false — a machine that has one and would
+ *                        connect this device to none of it
  *     --copilot read     watching: the state, the sessions, the log, the pending
  *     --copilot act      watching, and able to start a run and talk to it
  *     --copilot alter    all of that, and able to answer its own confirmations
  *
- * `alter` is new and it is the one that exercises the path most likely to be
- * got wrong: a device that may answer a question draws a dialog with the
- * arguments in it, and `COPILOT-REMOTE.md` §4 requires refusing to be at least
- * as easy as accepting. The stand-in does **not** reproduce the separate copilot
- * connection — it accepts any `copilot.hello` — because it is a client harness
- * rather than a security model, and a client that only worked against a
- * permissive host is the failure this file exists to catch. What it does
- * reproduce is the shape: `open` is false on every welcome, so a client that
- * skips `copilot.hello` sees nothing.
+ * The flag says **what a connect code grants**, not what this device already
+ * holds. Every device starts unconnected — `linked: false` — exactly as a real
+ * desktop starts it, because that is the state the whole 2026-08-17 revision is
+ * about: *"connecting copilot will be a separate connection than the sessions."*
+ * A code is minted through the control server (`/copilot-code`) and redeemed by
+ * `copilot.connect`, and only then does this host serve a `copilot.*` verb.
+ *
+ * `alter` is the one that exercises the path most likely to be got wrong: a
+ * device that may answer a question draws a dialog with the arguments in it, and
+ * `COPILOT-REMOTE.md` §4 requires refusing to be at least as easy as accepting.
+ *
+ * **This is a client harness, not a security model** — the code is not
+ * rate-limited here, the credential is not scrypt-hashed, and the ownership rule
+ * for confirmations is enforced with a field rather than by a broker. What it
+ * *does* reproduce is every shape a client has to get right: `open` false on
+ * every welcome, a hello required after every reconnect, a credential sent
+ * exactly once, a `mine: false` question that carries no arguments, and a
+ * settlement that says where an answer came from. A client that has only ever
+ * been driven against a permissive host is the failure this file exists to
+ * catch, and it was one: before this pass the stand-in served every copilot verb
+ * without a hello, which is precisely the shape that would let a client ship
+ * having never sent one.
  *
  * `absent` and `none` are the pair that matters and they are the reason this
  * flag exists rather than a boolean. **This file sends `CAPABILITIES` verbatim**
@@ -268,17 +283,24 @@ function foldersField(): { folders?: string[] } {
  * per-connection list `server.ts` assembles — so it advertises `copilot`
  * whatever this flag says. That is precisely the host a client must survive: one
  * whose capability list is ahead of what it can actually serve. With `absent`
- * the honest client draws nothing about a copilot; if it draws "not shared with
- * this phone" it is sending somebody to look for a switch on a machine that has
- * no such screen, and if it draws an empty timeline it is the localhost pass
- * that was reported as verified against a blank screen.
+ * the honest client draws nothing about a copilot; if it draws a Connect screen
+ * it is sending somebody to look for a control on a machine that has no such
+ * screen, and if it draws an empty timeline it is the localhost pass that was
+ * reported as verified against a blank screen.
  *
  * The default is `absent`, so an ordinary `run.sh host` keeps reproducing the
  * desktop everybody is actually on.
  */
 const COPILOT = flag('copilot', 'absent')
 
-let copilotGrant: CopilotGrantWire | null =
+/**
+ * What a connect code hands over, or null for a host with no copilot at all.
+ *
+ * Not what any device holds. See `copilotLinks`, which is the equivalent of
+ * `remote/copilot-link.json` — the store that decides, per device, whether there
+ * is a connection to grant anything through.
+ */
+const copilotOffer: CopilotGrantWire | null =
     COPILOT === 'absent'
         ? null
         : {
@@ -290,16 +312,43 @@ let copilotGrant: CopilotGrantWire | null =
               alter: COPILOT === 'alter',
           }
 
+const NO_COPILOT: CopilotGrantWire = { read: false, act: false, alter: false }
+
+/**
+ * Devices with a copilot connection, and the credential each was given.
+ *
+ * `remote/copilot-link.json` in one line. The credential is stored in the clear
+ * here and is a scrypt hash on the desktop; what matters for a client is that it
+ * is **issued once**, that a socket has to present it before any verb is served,
+ * and that dropping the record takes the grant with it without touching the
+ * pairing.
+ */
+const copilotLinks = new Map<string, string>()
+
+/** The one live connect code, minted at the "machine". Single use, sixty seconds. */
+let copilotCode: { code: string; expiresAt: number } | null = null
+
+/** What this device may do **right now**, read per frame as the desktop reads it. */
+function copilotGrantFor(deviceId: string): CopilotGrantWire {
+    if (copilotOffer === null) return NO_COPILOT
+    return copilotLinks.has(deviceId) ? copilotOffer : NO_COPILOT
+}
+
 /**
  * `{ copilot }`, or `{}` for a machine with no copilot layer.
  *
- * `open` is false on every welcome, always: a copilot connection is opened by
- * `copilot.hello`, not by having said hello to the session channel. This
- * stand-in accepts any credential — it is a client harness, not a security model
- * — but it reproduces the *shape*, which is the part a client has to get right.
+ * `open` is a parameter and is false from every caller but one, because that is
+ * the rule the client has to be built against: a copilot connection is opened by
+ * `copilot.hello`, never by having said hello to the session channel. The
+ * exception is the `copilot.grant` that answers a hello or a connect.
  */
-function copilotField(): { copilot?: CopilotLinkWire } {
-    return copilotGrant === null ? {} : { copilot: { linked: true, open: false, grant: copilotGrant } }
+function copilotField(deviceId: string, open = false): { copilot?: CopilotLinkWire } {
+    if (copilotOffer === null) return {}
+    return { copilot: copilotLink(deviceId, open) }
+}
+
+function copilotLink(deviceId: string, open: boolean): CopilotLinkWire {
+    return { linked: copilotLinks.has(deviceId), open, grant: copilotGrantFor(deviceId) }
 }
 
 /**
@@ -762,10 +811,36 @@ const MAX_DEV_FOLDERS = 8
 const copilotRuns = new Map<string, { id: string; messages: CopilotChatMessage[] }>()
 
 let copilotActions: CopilotActionRow[] = []
-let copilotQuestions: CopilotPendingRow[] = []
+
+/**
+ * A waiting confirmation, as this host holds it.
+ *
+ * `owner` rather than `mine`, and the difference is the point: `mine` is a
+ * *per-device* answer computed when the row is sent, and a host that stored it
+ * would have one boolean for a question two devices can see. `null` is the desk,
+ * which nobody but the desk may answer.
+ */
+interface HarnessQuestion {
+    id: string
+    tool: string
+    summary: string
+    requestedAt: number
+    expiresAt: number
+    owner: string | null
+}
+
+let copilotQuestions: HarnessQuestion[] = []
+/** The full request behind each answerable question. Never sent to a watcher. */
+const copilotAsks = new Map<string, CopilotConsentQuestion>()
+let copilotAskSeq = 0
 
 /** Minted rather than constant, so the countdown on the phone actually runs. */
 function seedCopilot(): void {
+    // Always, before the early return: the desk's question is the one a client
+    // must draw with no Allow on it, and it expires like any other — so a
+    // stand-in that seeded it once would serve a screen with nothing to look at
+    // two minutes into any session.
+    ensureDeskQuestion()
     if (copilotActions.length > 0) return
     /*
      * One real session, so "sessions it started" is a list rather than an empty
@@ -808,21 +883,151 @@ function seedCopilot(): void {
             detail: 'Wrote memory/build-status.md', refusal: null, deviceId: null,
         },
     ]
-    copilotQuestions = [
-        {
-            id: 'q1',
-            tool: 'settings.write',
-            summary: 'Change the default agent for new sessions to codex',
-            requestedAt: Date.now(),
-            // Two minutes, which is the broker's, and not one second more for a
-            // phone — the design refuses the longer window on purpose.
-            expiresAt: Date.now() + 120_000,
-            // Answerable here, so a client can be driven through the whole
-            // Allow/Refuse path against the stand-in. On the real desktop this
-            // is true only for a question this device's own run raised.
-            mine: true,
+}
+
+/**
+ * One confirmation waiting **at the desk**, if there is not one already.
+ *
+ * Raised by nobody's device, so every connected phone sees it and none of them
+ * may answer it — `owner: null`. This is the row a client must draw with no
+ * Allow button on it: one would always be refused, and the desktop strips its
+ * arguments for the same reason. It exists without being asked for because *go
+ * and look* is half of what the watching tier is worth, and a screen that only
+ * ever showed answerable questions would never show that half.
+ */
+function ensureDeskQuestion(): void {
+    pruneExpiredQuestions()
+    if (copilotQuestions.some((row) => row.owner === null)) return
+    copilotQuestions.push({
+        id: 'q-desk',
+        tool: 'settings.write',
+        summary: 'Change the default agent for new sessions to codex',
+        requestedAt: Date.now(),
+        // Two minutes, which is the broker's, and not one second more for a
+        // phone — the design refuses the longer window on purpose.
+        expiresAt: Date.now() + 120_000,
+        owner: null,
+    })
+}
+
+/**
+ * Raise a confirmation **for one device's own run**, with its arguments.
+ *
+ * The half of the consent path a stand-in can honestly reproduce: the shape of
+ * `copilot.ask`, the ownership rule that decides who may answer, the countdown
+ * that expires into a refusal, and the `copilot.settled` that says where an
+ * answer came from. What it cannot reproduce is a real tool wanting to run,
+ * which is why the summary and the arguments below are fixed and marked.
+ *
+ * Sent **only** to the connections of the device that owns it, exactly as
+ * `CopilotRuns.ask` does — a question that reached every watcher with its
+ * arguments on it would be the harness teaching a client a habit the desktop
+ * refuses.
+ */
+function raiseCopilotQuestion(deviceId: string): CopilotConsentQuestion | null {
+    if (!copilotGrantFor(deviceId).alter) return null
+    copilotAskSeq += 1
+    const id = `q${copilotAskSeq}`
+    const now = Date.now()
+    const question: CopilotConsentQuestion = {
+        id,
+        tool: 'settings.write',
+        tier: 'alter',
+        summary: 'Change the default agent for new sessions to codex',
+        // Verbatim, in the order a tool would declare them — which is the order
+        // a client must show them in. See `CopilotArguments.swift`: Foundation's
+        // JSON reader loses it, so this ordering is one of the few things about
+        // this frame a harness can genuinely check a client against.
+        args: {
+            key: 'defaultProvider',
+            value: 'codex',
+            scope: 'app',
+            previous: 'claude',
+            note: 'Applies to every new session started on this machine, including yours.',
         },
-    ]
+        origin: `device:${deviceId}`,
+        requestedAt: now,
+        expiresAt: now + 120_000,
+    }
+    copilotQuestions.push({
+        id, tool: question.tool, summary: question.summary,
+        requestedAt: now, expiresAt: question.expiresAt, owner: deviceId,
+    })
+    copilotAsks.set(id, question)
+    for (const channel of channels.values()) {
+        if (channel.copilotWatching && channel.deviceId === deviceId) channel.send({ t: 'copilot.ask', question })
+    }
+    copilotPushPending()
+    // **It expires into a refusal.** The client draws a countdown off
+    // `expiresAt`, and a host that let the number reach zero and then did
+    // nothing would be teaching that countdown to lie.
+    setTimeout(() => settleCopilotQuestion(id, false, null, 'timeout'), 120_000).unref()
+    return question
+}
+
+/**
+ * Drop every question whose deadline has passed, once.
+ *
+ * Written as a sweep rather than as a `settleCopilotQuestion` per row inside
+ * `copilotPending`, because that function is what `copilotPushPending` calls —
+ * so settling from inside it re-enters itself once per expired row and sends the
+ * same list several times. Removing them all first and announcing afterwards is
+ * one pass and one push.
+ */
+function pruneExpiredQuestions(): void {
+    const now = Date.now()
+    const gone = copilotQuestions.filter((row) => row.expiresAt <= now)
+    if (gone.length === 0) return
+    copilotQuestions = copilotQuestions.filter((row) => row.expiresAt > now)
+    for (const row of gone) {
+        copilotAsks.delete(row.id)
+        copilotPush({ t: 'copilot.settled', settled: { id: row.id, granted: false, by: null, reason: 'timeout' } })
+        log(`copilot question ${row.id} ran out`)
+    }
+}
+
+/** Close one question, and tell everybody who could see it **where** it went. */
+function settleCopilotQuestion(id: string, granted: boolean, by: string | null,
+                               reason: string | null): boolean {
+    if (!copilotAsks.has(id) && !copilotQuestions.some((row) => row.id === id)) return false
+    copilotAsks.delete(id)
+    copilotQuestions = copilotQuestions.filter((row) => row.id !== id)
+    copilotPush({ t: 'copilot.settled', settled: { id, granted, by, reason } })
+    copilotPushPending()
+    log(`copilot question ${id} ${granted ? 'allowed' : 'refused'} by ${by ?? 'nobody (timeout)'}`)
+    return true
+}
+
+/**
+ * The pending list, per device, because `mine` is — and pruned, because an
+ * expiry means something.
+ *
+ * A question whose deadline has passed **has been refused**, by the timeout, and
+ * a host that went on listing it would teach a client's countdown to lie: the
+ * card would sit there reading "expired" forever, which is a screen claiming
+ * something needs a person when nothing does any more. The real broker refuses
+ * it and pushes the list; this is the same behaviour with a lazier clock.
+ */
+function copilotPending(deviceId: string): CopilotPendingRow[] {
+    pruneExpiredQuestions()
+    return copilotQuestions.map((row) => ({
+        id: row.id,
+        tool: row.tool,
+        summary: row.summary,
+        requestedAt: row.requestedAt,
+        expiresAt: row.expiresAt,
+        // Computed on this host and never inferred by a client, exactly as
+        // `CopilotRuns.pending` computes it: a question may only be answered by
+        // the surface that owns the run that raised it.
+        mine: row.owner !== null && row.owner === deviceId,
+    }))
+}
+
+function copilotPushPending(): void {
+    for (const channel of channels.values()) {
+        if (!channel.copilotWatching || !channel.deviceId) continue
+        channel.send({ t: 'copilot.pending', questions: copilotPending(channel.deviceId) })
+    }
 }
 
 /** What `copilot.state` answers, in the desktop's own `CopilotStateReport`. */
@@ -836,7 +1041,7 @@ function copilotState(deviceId: string): CopilotStateReport {
         tools: 14,
         turnTokens: 3200,
         pending: copilotQuestions.length,
-        grant: copilotGrant ?? { read: false, act: false, alter: false },
+        grant: copilotGrantFor(deviceId),
         available: true,
         reason: null,
     }
@@ -878,10 +1083,17 @@ function copilotPush(message: ServerMessage): void {
  * which controls a read-only phone may draw, and a rule written as an `if` in
  * one server is a rule they can only guess at.
  */
-function copilotAllows(verb: string): boolean {
+function copilotAllows(verb: string, deviceId: string): boolean {
     const needs: CopilotTier | undefined = COPILOT_FRAME_TIER[verb]
-    if (needs === undefined || copilotGrant === null) return false
-    return needs === 'read' ? copilotGrant.read : copilotGrant.read && copilotGrant.act
+    // A verb with no entry is not part of the tiered surface — **including the
+    // three untiered ones**, which are the ceremony and reach the switch below
+    // by a different door. Asking this function about them must not accidentally
+    // allow them on the strength of a grant they exist to establish.
+    if (needs === undefined) return false
+    const grant = copilotGrantFor(deviceId)
+    if (needs === 'read') return grant.read
+    if (needs === 'act') return grant.act
+    return grant.alter
 }
 
 /** A chat message id that sorts and merges the way the real parser's do. */
@@ -1049,6 +1261,19 @@ class Channel {
      * pushed to a channel that never asked.
      */
     copilotWatching = false
+
+    /**
+     * Has this socket opened its copilot connection?
+     *
+     * **The gate in front of every `copilot.*` verb, read tier included**, and
+     * the thing this file did not have before: it used to serve the whole
+     * surface to any connected device, which is exactly the permissive host that
+     * lets a client ship having never sent a `copilot.hello`. False until the
+     * client sends one with the credential it was given, and false again on
+     * every new socket — a session channel does not carry the copilot by
+     * existing.
+     */
+    copilotOpen = false
 
     constructor(readonly key: string, readonly channel: Buffer, private readonly link: HostLink) {}
 
@@ -1218,11 +1443,13 @@ class Channel {
                 ...foldersField(),
                 // And the copilot, spread for a third version of the same
                 // reason and the sharpest one: absent means *this machine has no
-                // copilot*, while an all-false object means *it has one and you
-                // have none of it*. Those are two different screens on the
-                // phone, and only the second of them names a switch somebody can
-                // go and flip. See `copilotField`.
-                ...copilotField(),
+                // copilot*, while `linked: false` means *it has one and this
+                // device has never been connected to it*. Those are two
+                // different screens on the phone, and only the second of them
+                // names something somebody can go and do. See `copilotField` —
+                // and note the `open` it sends, which is false here and on every
+                // welcome a real desktop ever writes.
+                ...copilotField(outcome.device.id),
             })
             return
         }
@@ -1360,6 +1587,75 @@ class Channel {
                 // already called by `startSession`, and it sends `sessions`.
                 return
             }
+            /* ---- capability `close` ------------------------------------- */
+            /*
+             * End a session, which this file has to actually do.
+             *
+             * This host sends `CAPABILITIES` verbatim, so it advertises every
+             * name the build knows — and an advertised verb that falls through
+             * this switch answers nothing at all, which on a phone is a
+             * confirmed Close followed by a row that stays. That is exactly the
+             * false verification this file's header warns about, so the verb is
+             * served rather than left to the gap.
+             *
+             * The pty is killed and nothing here removes the row: `onExit` fires
+             * and the session goes with the announcement, which is the real
+             * desktop's ordering — `PtyManager.kill` drops it and the list
+             * refresh follows. A stand-in that deleted the row itself would let
+             * a client ship having never handled `exit` for a session it closed.
+             */
+            case 'close': {
+                const target = sessions.get(message.id)
+                if (!target) {
+                    return this.send({
+                        t: 'error',
+                        code: 'unknown-session',
+                        message: `No session ${message.id} is running.`,
+                    })
+                }
+                log(`close ${message.id} for ${this.deviceId}`)
+                try {
+                    target.process.kill()
+                } catch {
+                    /* already gone; the exit handler has run or is about to */
+                }
+                sessions.delete(message.id)
+                this.send({ t: 'closed', id: message.id })
+                announce()
+                return
+            }
+
+            /* ---- capability `web` --------------------------------------- */
+            /*
+             * Open a page on **this** machine, because a phone asked.
+             *
+             * Genuinely opened, through the OS's own opener, for the reason
+             * `close` above is genuinely killed: a stand-in that answered
+             * `web.opened` without a tab appearing would let the phone's whole
+             * "drive the machine" story be verified against nothing. The harness
+             * runs on somebody's Mac, so there is a real browser to open it in.
+             *
+             * The scheme is checked here rather than trusted, which is the
+             * desktop's rule and matters more in a file that hands a string to a
+             * subprocess: only http(s) is opened, so a `file:` or a custom
+             * scheme off the socket cannot walk a window onto this disk.
+             */
+            case 'web.open': {
+                if (!/^https?:\/\//i.test(message.url)) {
+                    return this.send({
+                        t: 'error',
+                        code: 'unauthorized',
+                        message: 'That is not a web address this machine will open.',
+                    })
+                }
+                log(`web.open ${message.url}`)
+                const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
+                // Arguments as an array, never a shell string: the URL came off
+                // a socket and a shell would give it a second reading.
+                spawn(opener, [message.url], { stdio: 'ignore', detached: true }).unref()
+                return this.send({ t: 'web.opened', url: message.url })
+            }
+
             case 'ping':
                 return this.send({ t: 'pong' })
 
@@ -1471,9 +1767,87 @@ class Channel {
                 return
             }
 
-            /* ---- capability `copilot` ----------------------------------- */
+            /* ---- capability `copilot`: the ceremony ---------------------- */
             /*
-             * Refused per verb, per device, read on every message.
+             * Three frames that carry **no tier** and cannot: they *are* the
+             * authorisation. A device with no copilot connection has no tiers,
+             * so requiring one to send the frame that establishes the connection
+             * would mean no device could ever connect. They are handled here,
+             * before the tier switch below, so that the code which assumes an
+             * open connection does not also contain the code that opens one —
+             * which is the shape in which somebody eventually moves a check to
+             * the wrong side of it.
+             */
+            case 'copilot.connect': {
+                if (copilotOffer === null) {
+                    return this.send({
+                        t: 'error', code: 'unavailable',
+                        message: 'There is no copilot to reach on this machine.',
+                    })
+                }
+                const device = this.deviceId ?? ''
+                const live = copilotCode
+                const ok = live !== null && live.code === message.code && Date.now() < live.expiresAt
+                if (!ok) {
+                    // One sentence, three causes — unknown, spent, expired —
+                    // exactly as `CopilotRuns.connect` answers, and for its
+                    // reason: telling a client which one it hit tells a guesser
+                    // whether they were close.
+                    log(`copilot connect refused for ${device.slice(0, 8)}`)
+                    return this.send({
+                        t: 'error', code: 'unauthorized',
+                        message: 'That connect code did not work. Ask for a new one on the machine itself.',
+                    })
+                }
+                // Burned before anything else. Single use is half of what makes
+                // six digits enough.
+                copilotCode = null
+                const credential = randomBytes(32).toString('base64url')
+                copilotLinks.set(device, credential)
+                // Redeeming opens this socket as well: it has just proved it
+                // holds a code minted seconds ago, which is a stronger claim
+                // than the credential it is about to be given.
+                this.copilotOpen = true
+                log(`copilot connected ${device.slice(0, 8)}`)
+                this.send({ t: 'copilot.linked', credential, link: copilotLink(device, true) })
+                return this.send({ t: 'copilot.grant', link: copilotLink(device, true) })
+            }
+            case 'copilot.hello': {
+                const device = this.deviceId ?? ''
+                const held = copilotLinks.get(device)
+                // Checked rather than waved through, which this file used to do.
+                // A harness that accepts any credential is one a client can pass
+                // while sending the wrong bytes — or none — and the whole point
+                // of the hello is that it is presented on **every** socket.
+                if (held === undefined || held !== message.credential) {
+                    this.copilotOpen = false
+                    log(`copilot hello refused for ${device.slice(0, 8)}`)
+                    return this.send({
+                        t: 'error', code: 'unauthorized',
+                        message: 'This device is not connected to the copilot. '
+                            + 'Connect it on the machine itself, in Settings → Remote.',
+                    })
+                }
+                this.copilotOpen = true
+                log(`copilot open on ${this.key.slice(0, 8)} for ${device.slice(0, 8)}`)
+                return this.send({ t: 'copilot.grant', link: copilotLink(device, true) })
+            }
+            case 'copilot.bye': {
+                const device = this.deviceId ?? ''
+                this.copilotOpen = false
+                // The subscription goes too. Leaving it would push chat and tool
+                // rows down a socket that has just said it is done with the
+                // copilot — a subscription outliving the access that justified
+                // it.
+                this.copilotWatching = false
+                log(`copilot closed on ${this.key.slice(0, 8)}`)
+                return this.send({ t: 'copilot.grant', link: copilotLink(device, false) })
+            }
+
+            /* ---- capability `copilot`: the tiered surface ---------------- */
+            /*
+             * Refused per verb, per device, read on every message — and only
+             * after this socket has opened its copilot connection.
              *
              * `unauthorized` and the socket stays open, which is `server.ts`'s
              * own choice and its reason: a client drawing a control it may not
@@ -1481,6 +1855,7 @@ class Channel {
              * comes from `COPILOT_FRAME_TIER` rather than from an `if` here —
              * see `copilotAllows`.
              */
+            case 'copilot.answer':
             case 'copilot.attach':
             case 'copilot.detach':
             case 'copilot.state':
@@ -1491,15 +1866,33 @@ class Channel {
             case 'copilot.say':
             case 'copilot.cancel':
             case 'copilot.stop': {
-                if (!copilotAllows(message.t)) {
+                const device = this.deviceId ?? ''
+                /*
+                 * Layer zero, and it is the one this file was missing.
+                 *
+                 * Before any tier: has this **socket** presented the credential.
+                 * A device paired to run terminals reaches nothing here — not a
+                 * frame, not a refusal it could measure the shape of — until it
+                 * has redeemed a code and said hello on this connection. The
+                 * sentence is the desktop's own, because it is the sentence a
+                 * person acts on.
+                 */
+                if (!this.copilotOpen) {
                     return this.send({
                         t: 'error',
                         code: 'unauthorized',
-                        message: 'This device has not been given copilot access on this '
-                            + `${hostNoun()}. It is a switch in Settings, under Remote.`,
+                        message: 'This device is not connected to the copilot. '
+                            + 'Connect it on the machine itself, in Settings → Remote.',
                     })
                 }
-                const device = this.deviceId ?? ''
+                if (!copilotAllows(message.t, device)) {
+                    return this.send({
+                        t: 'error',
+                        code: 'unauthorized',
+                        message: 'This device has not been given that much access to the copilot on '
+                            + `this ${hostNoun()}. The boxes are in Settings, under Remote.`,
+                    })
+                }
                 seedCopilot()
 
                 switch (message.t) {
@@ -1529,7 +1922,38 @@ class Channel {
                     case 'copilot.sessions':
                         return this.send({ t: 'copilot.sessions', sessions: copilotSessionRows() })
                     case 'copilot.pending':
-                        return this.send({ t: 'copilot.pending', questions: copilotQuestions })
+                        return this.send({ t: 'copilot.pending', questions: copilotPending(device) })
+                    case 'copilot.answer': {
+                        /*
+                         * The ownership rule, which is the one that is not
+                         * obvious: **a question may only be answered by the
+                         * surface that owns the run that raised it, or by the
+                         * desktop.** Otherwise device A approves device B's
+                         * action, which is a permission model with a shared
+                         * password.
+                         *
+                         * A question this device does not own and one that has
+                         * already been settled get the **same** answer, so
+                         * probing for another device's question ids learns
+                         * nothing here that this device's own pending list did
+                         * not already tell it.
+                         */
+                        const row = copilotQuestions.find((one) => one.id === message.id)
+                        const accepted = row !== undefined && row.owner === device
+                            && settleCopilotQuestion(message.id, message.approved,
+                                                     `device:${device}`,
+                                                     message.approved ? null : 'declined')
+                        if (!accepted) {
+                            this.send({
+                                t: 'error', code: 'unavailable',
+                                message: 'That confirmation is no longer waiting for this device.',
+                            })
+                        }
+                        // The list either way, answered or not: a client whose
+                        // answer was too late has to see the question go rather
+                        // than be left holding a dialog.
+                        return this.send({ t: 'copilot.pending', questions: copilotPending(device) })
+                    }
                     case 'copilot.log': {
                         const limit = message.limit ?? 50
                         const before = message.before
@@ -1566,14 +1990,25 @@ class Channel {
                         // The scripted half. See the section header: this is the
                         // part no harness can produce honestly, and it exists
                         // only so a screen has something on it.
+                        // The last paragraph differs with the tier, and that is
+                        // not decoration: an `act` device's alter call is
+                        // refused at the gate, while a device holding `alter`
+                        // gets a **question** on the screen it is holding. The
+                        // two must not read the same, because they are the two
+                        // halves of what ticking that third box changes.
+                        const mayDecide = copilotGrantFor(device).alter
                         const answer: CopilotChatMessage = {
                             id: copilotMessageId(),
                             role: 'agent',
                             text: 'Two sessions ran overnight.\n\n“api” finished its migration and '
                                 + 'is idle. “app” is still working — it has been on the same test '
                                 + 'file for forty minutes, which is longer than the other nine took '
-                                + 'together.\n\nI also tried to switch the default agent and was '
-                                + 'refused; that one needs you at the machine.',
+                                + 'together.\n\n'
+                                + (mayDecide
+                                    ? 'I also want to switch the default agent for new sessions. '
+                                        + 'That one needs a yes — I have asked you for it.'
+                                    : 'I also tried to switch the default agent and was refused; '
+                                        + 'that one needs you at the machine.'),
                             at: Date.now(),
                         }
                         const row: CopilotActionRow = {
@@ -1590,6 +2025,11 @@ class Channel {
                         setTimeout(() => {
                             copilotPush({ t: 'copilot.tool', row })
                             copilotPush({ t: 'copilot.chat', run: run.id, messages: [answer] })
+                            // After the sentence that mentions it, not before: a
+                            // consent sheet that appeared over an empty screen
+                            // would be a person deciding about something they
+                            // have not been told the context of.
+                            if (mayDecide) raiseCopilotQuestion(device)
                         }, 600).unref()
                         run.messages.push(answer)
                         return
@@ -1932,7 +2372,8 @@ relay.server.listen(PORT, '0.0.0.0', async () => {
     log(`host id      ${HOST_ID}`)
     log(`key          ${fingerprint(macStatic.publicKey)}`)
     log(`devices      ${devices.size} known, ${[...devices.values()].filter((d) => d.approved).length} approved`)
-    log(`control      http://127.0.0.1:${CONTROL_PORT}/state | /approve | /pair | /folders | /quit`)
+    log(`control      http://127.0.0.1:${CONTROL_PORT}/state | /approve | /pair | /folders`
+        + ' | /copilot-code | /copilot-ask | /quit')
     log(`pairing code ${token}`)
 })
 
@@ -2051,9 +2492,63 @@ createHttpServer((req, res) => {
             return tick()
         }
 
+        /**
+         * Mint a connect code, the way pressing **Connect the copilot…** does.
+         *
+         *     curl 127.0.0.1:8788/copilot-code
+         *
+         * The copilot is a separate connection and connecting is a deliberate
+         * act *at the machine* — which is exactly the kind of act a script
+         * cannot perform, and exactly why this control surface exists. What it
+         * grants is the `--copilot` flag; six digits, sixty seconds, single use,
+         * as `copilot-link.ts` mints them.
+         *
+         * A host started with `--copilot absent` refuses, because there is
+         * nothing on it to connect to and a harness that handed out a code
+         * anyway would be teaching a client that the ceremony works on a machine
+         * with no copilot.
+         */
+        case '/copilot-code': {
+            if (copilotOffer === null) {
+                return reply({ error: 'this host was started with --copilot absent' })
+            }
+            const digits = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
+            copilotCode = { code: digits, expiresAt: Date.now() + 60_000 }
+            log(`copilot connect code ${digits} (60s, one use) granting `
+                + `${Object.entries(copilotOffer).filter(([, on]) => on).map(([tier]) => tier).join('+') || 'nothing'}`)
+            return reply({ code: digits, grants: copilotOffer, expiresInMs: 60_000 })
+        }
+        /**
+         * Raise a confirmation for whichever connected device holds `alter`.
+         *
+         *     curl 127.0.0.1:8788/copilot-ask
+         *
+         * The consent sheet is the part of this feature worth the most care and
+         * the part hardest to photograph, because on a real machine it appears
+         * when an agent decides to change something. This puts one on screen on
+         * demand, with the arguments a real `settings.write` would carry.
+         */
+        case '/copilot-ask': {
+            const raised: string[] = []
+            for (const deviceId of copilotLinks.keys()) {
+                const question = raiseCopilotQuestion(deviceId)
+                if (question) raised.push(`${deviceId}:${question.id}`)
+            }
+            return reply({ raised })
+        }
+        /** Every waiting confirmation, so a script can see what the phone sees. */
+        case '/copilot-pending':
+            return reply({ questions: copilotQuestions })
+
         case '/state':
             return reply({
                 hostId: HOST_ID,
+                copilot: {
+                    offers: copilotOffer,
+                    connected: [...copilotLinks.keys()],
+                    open: [...channels.values()].filter((c) => c.copilotOpen).length,
+                    pending: copilotQuestions.length,
+                },
                 fingerprint: fingerprint(macStatic.publicKey),
                 channels: channels.size,
                 devices: [...devices.values()].map(({ id, name, approved }) => ({ id, name, approved })),

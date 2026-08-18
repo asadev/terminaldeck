@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { SessionMeta, SessionStatus } from '@shared/types'
+import { folderName } from '../session-title'
 
 export interface Project {
   /** Absolute path — also the identity of the project. */
@@ -106,6 +107,51 @@ export function withSessionTitle(
   return sessions.map((session) => (session.id === id ? renamed : session))
 }
 
+/**
+ * The session list with one session standing in for another, in its place.
+ *
+ * Pulled out of the provider for the same reason {@link withSessionTitle} is:
+ * it is a *rule*, it has edges worth driving directly, and a rule inside a
+ * `useCallback` inside a context provider cannot be tested at all in a project
+ * with no DOM in its test setup.
+ *
+ * Three edges, and all three have a wrong answer that looks reasonable:
+ *
+ *  - **The old id is not in the list.** Return the list unchanged rather than
+ *    appending the replacement. A caller that has raced ahead of its own state
+ *    would otherwise add a second row for a session the window is about to be
+ *    told about anyway, and two rows for one pty is worse than a missing one.
+ *  - **The new id is already in the list.** Same answer, same reason: this has
+ *    already happened, and doing it twice would drop the row that is standing
+ *    there correctly.
+ *  - **The old session had a name somebody typed.** It carries over, flag and
+ *    all. A derived name does not — see the interface note.
+ *
+ * `status` starts at `idle` and `statusSince` at now, exactly as {@link
+ * StoreProvider}'s `addSession` does, because this genuinely is a new process
+ * and carrying the old one's status would date a fresh session's clock to
+ * whatever the last one was doing when it was stopped.
+ */
+export function withReplacedSession(
+  sessions: Session[],
+  oldId: string,
+  meta: SessionMeta,
+): Session[] {
+  const at = sessions.findIndex((session) => session.id === oldId)
+  if (at < 0) return sessions
+  if (sessions.some((session) => session.id === meta.id)) return sessions
+
+  const previous = sessions[at]
+  const replacement: Session = {
+    ...meta,
+    projectPath: meta.cwd,
+    status: 'idle',
+    statusSince: Date.now(),
+    ...(previous.namedByUser === true ? { title: previous.title, namedByUser: true } : {}),
+  }
+  return sessions.map((session, index) => (index === at ? replacement : session))
+}
+
 interface StoreValue {
   projects: Project[]
   sessions: Session[]
@@ -121,6 +167,30 @@ interface StoreValue {
    * whatever they were typing into.
    */
   addSession(meta: SessionMeta, options?: { focus?: boolean }): void
+  /**
+   * One session has been replaced by another, and to the person it is the same
+   * tab.
+   *
+   * The only thing that does this is switching the account a running session is
+   * on: a CLI is authenticated at spawn, so the account cannot change under a
+   * live process — the process is stopped and another is started in its place,
+   * which means a new id for what the person is still calling "this session".
+   *
+   * Deliberately not `removeSession` followed by `addSession`. That pair is
+   * correct about the *contents* of the list and wrong about everything else a
+   * person can see: the row moves to the bottom of its project, the active
+   * session falls through to a neighbour on the way past, and a name somebody
+   * typed is thrown away. Each of those is somebody's arrangement being rebuilt
+   * because a process restarted, which is the mechanism showing through the
+   * product.
+   *
+   * A name a person typed survives; a name the app derived does not. `AutoTitler`
+   * will read a new one out of the new session's own output within a second or
+   * two, and carrying the old derivation across would leave a title describing
+   * output that is no longer on screen. {@link withSessionTitle} holds the same
+   * rule for the same reason.
+   */
+  replaceSession(oldId: string, meta: SessionMeta): void
   removeSession(id: string): void
   setActiveSession(id: string | null): void
   setSessionStatus(id: string, status: SessionStatus): void
@@ -140,10 +210,16 @@ interface StoreValue {
 
 const StoreContext = createContext<StoreValue | null>(null)
 
-function folderName(path: string): string {
-  const parts = path.split('/').filter(Boolean)
-  return parts[parts.length - 1] ?? path
-}
+/*
+ * Imported rather than declared here, and it used to be declared here — a
+ * character-for-character copy of the one in `session-title.ts`.
+ *
+ * Which is how it stayed POSIX-only after the shared one learned about
+ * backslashes: two identical functions are one function that will be fixed once.
+ * A project on a Windows path was named with its whole path in the rail, while a
+ * tab in that same project — which asks `session-title.ts` — was named with its
+ * last segment. The same folder, two names, in one window.
+ */
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([])
@@ -177,6 +253,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // widely, and two rows for one pty is worse than a missed one.
     setSessions((prev) => (prev.some((s) => s.id === meta.id) ? prev : [...prev, session]))
     if (options?.focus !== false) setActiveSessionId(meta.id)
+  }, [])
+
+  const replaceSession = useCallback((oldId: string, meta: SessionMeta) => {
+    setSessions((prev) => withReplacedSession(prev, oldId, meta))
+    // The tab you were looking at is still the tab you are looking at. Guarded
+    // on it actually having been the active one, so switching the account on a
+    // session in the background does not pull the window onto it.
+    setActiveSessionId((current) => (current === oldId ? meta.id : current))
   }, [])
 
   const removeSession = useCallback((id: string) => {
@@ -233,6 +317,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addProject,
       removeProject,
       addSession,
+      replaceSession,
       removeSession,
       setActiveSession: setActiveSessionId,
       setSessionStatus,
@@ -246,6 +331,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addProject,
       removeProject,
       addSession,
+      replaceSession,
       removeSession,
       setSessionStatus,
       setSessionTitle,

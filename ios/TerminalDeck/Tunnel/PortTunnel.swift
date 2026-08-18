@@ -83,10 +83,47 @@ final class PortTunnel: Identifiable {
     private var connections: [String: Stream] = [:]
     private var finished = false
 
-    init(port: Int, wire: TunnelWire) {
+    /// `openTimeout` is a seam for the tests, which prove the deadline against a
+    /// wire that deliberately never answers. A test that used the real twenty
+    /// seconds would either be twenty seconds long or be proving a different
+    /// number; overriding it is the fake clock this repository's rule about
+    /// timing asks for.
+    init(port: Int, wire: TunnelWire, openTimeout: TimeInterval = PortTunnel.openTimeout) {
         self.port = port
         self.wire = wire
+        self.openTimeout = openTimeout
     }
+
+    private let openTimeout: TimeInterval
+
+    /**
+     * How long the machine has to answer `tunnel.open` before this gives up.
+     *
+     * Twenty seconds, and it is four times the longest the far end can honestly
+     * take: `tunnel.ts` re-scans the machine's ports and then makes a real TCP
+     * connection to prove the address answers, with a `DIAL_TIMEOUT_MS` of five
+     * seconds, and the relay round trip is milliseconds either side of that. So
+     * this cannot fire on a slow-but-working machine, and the margin is
+     * deliberately wide because the cost of firing early is a page somebody has
+     * to open twice.
+     *
+     * ## Why there is a deadline at all
+     *
+     * Because without one there is a state with no exit. Every *answered*
+     * outcome is already handled — `tunnel.opened` binds, `tunnel.closed` says
+     * why, a dropped socket calls `connectionLost` — and the case that was
+     * missing is the machine saying **nothing at all**, which is what a desktop
+     * old enough to advertise the `localhost` capability without having the
+     * tunnel hub wired does with this frame: it parses it and drops it.
+     *
+     * Measured, not imagined. Driving this from the Simulator against a paired
+     * desktop on 2026-08-18, a typed port sat on *"Opening port 4398 on the
+     * Mac…"* with a spinner for as long as it was left there. That is the exact
+     * shape the review is about — a control that looks like it is working and is
+     * not — and the honest version is a sentence and a Close button, which is
+     * what `.ended` already draws.
+     */
+    static let openTimeout: TimeInterval = 20
 
     /// Ask the Mac for the port. Nothing is bound until it says yes: a listener
     /// standing open for a tunnel that was refused would accept a browser
@@ -96,7 +133,33 @@ final class PortTunnel: Identifiable {
             end("The connection to the Mac is not up.", tellMac: false)
             return
         }
+        /*
+         * The deadline is armed by the *send*, not by the initialiser, so a
+         * tunnel that was never asked for cannot expire — and it is cancelled by
+         * `end`, so a tunnel that opened and was later closed does not have a
+         * task still holding a reference to it twenty seconds later.
+         *
+         * `tellMac: true`, because from this end the frame was sent and may well
+         * have arrived: a machine that is merely slow would otherwise be left
+         * holding a tunnel this phone has forgotten, and it has no way to
+         * discover that on its own.
+         */
+        deadline = Task { @MainActor [weak self, openTimeout] in
+            try? await Task.sleep(for: .seconds(openTimeout))
+            guard let self, !Task.isCancelled, case .opening = self.phase else { return }
+            self.end("\(self.hostNoun) did not answer about port \(self.port). It may be running a "
+                     + "version that cannot share its ports.", tellMac: true)
+        }
     }
+
+    /// Whatever the machine is called in that sentence. A noun rather than a
+    /// name: this type is handed a wire and a port and has never known which
+    /// machine it belongs to, and inventing one would be worse than a neutral
+    /// word.
+    private var hostNoun: String { "The machine" }
+
+    /// Cancelled the moment the tunnel settles either way. See `start`.
+    private var deadline: Task<Void, Never>?
 
     /// The user closed the view, or the app is going away.
     func stop() {
@@ -148,6 +211,12 @@ final class PortTunnel: Identifiable {
 
     private func begin() {
         guard !finished, case .opening = phase else { return }
+        // The machine answered, so the deadline has nothing left to protect
+        // against. Its own guard would already refuse to fire once the phase
+        // moves on; cancelling here means the task is gone the moment it is
+        // pointless rather than twenty seconds later.
+        deadline?.cancel()
+        deadline = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard let url = await self.bind() else { return }
@@ -393,6 +462,13 @@ final class PortTunnel: Identifiable {
     private func end(_ detail: String, tellMac: Bool) {
         guard !finished else { return }
         finished = true
+        // Before anything else, and unconditionally: this runs on every path out
+        // of `opening` — the machine answering, the machine refusing, the socket
+        // dropping, the person pressing Done — and a deadline left armed would
+        // fire twenty seconds later into a `guard` that has to be right rather
+        // than into nothing.
+        deadline?.cancel()
+        deadline = nil
         if tellMac { wire?.send(.tunnelClose(id: id)) }
         for ch in connections.keys { connections[ch]?.cancel() }
         connections = [:]

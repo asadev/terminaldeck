@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   browseForAttachment,
-  browseLabel,
+  browseStart,
   confinedRefusal,
   pasteAttachment,
   picksFromDrop,
@@ -9,8 +9,11 @@ import {
   readBrowse,
   readPaste,
   readPicks,
+  partialRefusal,
+  readableOn,
   resolveOutsideBridge,
   sessionBoundary,
+  splitByBoundary,
   UNCONFINED,
   type AttachOutsideBridge,
 } from './outside'
@@ -23,8 +26,7 @@ import {
  * something it did not promise. The answer has to be a sentence, never a throw —
  * a rejected promise inside a composer callback takes the whole box down through
  * the error boundary, and a broken-looking composer is how an unwired feature
- * gets mistaken for a broken one. That has happened here before; `AttachPicker`
- * carries the same guard for the same reason.
+ * gets mistaken for a broken one. That has happened here before.
  */
 
 function bridgeOf(overrides: Partial<AttachOutsideBridge>): AttachOutsideBridge {
@@ -131,14 +133,86 @@ describe('reading a boundary', () => {
   })
 })
 
-describe('the words on screen', () => {
-  it('names the machine the way its owner would', () => {
-    // His words: "browse my file manager of the PC or Windows or MacBook".
-    expect(browseLabel('mac')).toBe('Browse this Mac…')
-    expect(browseLabel('windows')).toBe('Browse this PC…')
-    expect(browseLabel('other')).toBe('Browse this computer…')
+describe('what a confined session may attach', () => {
+  const boundary = {
+    confined: true,
+    folder: '/Users/apple/Library/Application Support/terminaldeck/copilot',
+    projects: ['/Users/apple/Projects/thing'],
+  }
+
+  it('lets a confined session attach the files it can actually read', () => {
+    /*
+     * The regression this replaced a blanket refusal to avoid. While the in-app
+     * project list existed, refusing the whole of Browse on a confined session
+     * cost nothing — the list was still there and every row of it was inside the
+     * boundary. With the list deleted, a blanket refusal means a copilot session
+     * cannot attach anything at all, including what is sitting in its own
+     * folder. That is a control that cannot act.
+     */
+    expect(readableOn(boundary, `${boundary.folder}/memory/today.md`)).toBe(true)
+    expect(readableOn(boundary, '/Users/apple/Projects/thing/src/index.ts')).toBe(true)
+    expect(readableOn(boundary, '/Users/apple/Desktop/shot.png')).toBe(false)
   })
 
+  it('does not accept a sibling folder whose name merely starts the same way', () => {
+    // `insideRoot` compares with the separator for exactly this reason;
+    // asserted here too because this is the call that decides what gets attached.
+    expect(readableOn(boundary, '/Users/apple/Projects/thing-secrets/.env')).toBe(false)
+  })
+
+  it('waves everything through when the session is not confined', () => {
+    expect(readableOn(UNCONFINED, '/anywhere/at/all')).toBe(true)
+  })
+
+  it('splits a batch rather than refusing all of it for one bad pick', () => {
+    const { allowed, refused } = splitByBoundary(boundary, [
+      { path: `${boundary.folder}/notes.md`, isDirectory: false },
+      { path: '/Users/apple/Desktop/shot.png', isDirectory: false },
+    ])
+    expect(allowed.map((p) => p.path)).toEqual([`${boundary.folder}/notes.md`])
+    expect(refused.map((p) => p.path)).toEqual(['/Users/apple/Desktop/shot.png'])
+  })
+
+  it('names the file that did not arrive, not just the rule', () => {
+    /*
+     * Found by looking at the harness. A confined session picking two files —
+     * one readable, one not — showed a chip *and* the bare rule, and the chip
+     * that succeeded is itself marked `outside` because it is outside the
+     * project. Two boundaries, one word, and the obvious reading is that the
+     * sentence is complaining about the chip you can see.
+     */
+    const reason = confinedRefusal(boundary.folder, boundary.projects)
+    const one = partialRefusal([{ path: '/Users/apple/Desktop/shot.png', isDirectory: false }], reason)
+    expect(one.startsWith('shot.png was not attached.')).toBe(true)
+    expect(one).toContain(reason)
+
+    const many = partialRefusal(
+      [
+        { path: '/a/one.png', isDirectory: false },
+        { path: '/a/two.png', isDirectory: false },
+        { path: '/a/three.png', isDirectory: false },
+      ],
+      reason,
+    )
+    // A count, not three filenames: three names wrap a notice line to three
+    // lines and stop being a sentence.
+    expect(many.startsWith('3 of them were not attached.')).toBe(true)
+
+    // Nothing refused, nothing added.
+    expect(partialRefusal([], reason)).toBe(reason)
+  })
+
+  it('opens the panel somewhere the session can read', () => {
+    // A file browser whose first screen is a directory every row of which will
+    // be refused is a worse opening frame than one that starts where the session
+    // genuinely works.
+    expect(browseStart(boundary, '/Users/apple/Projects/other')).toBe(boundary.folder)
+    expect(browseStart(boundary, '/Users/apple/Projects/thing')).toBe('/Users/apple/Projects/thing')
+    expect(browseStart(UNCONFINED, '/Users/apple/Projects/other')).toBe('/Users/apple/Projects/other')
+  })
+})
+
+describe('the words on screen', () => {
   it('names the folder in the refusal, so the sentence is about this tab', () => {
     // The last segment, not the whole path: the copilot's folder is five
     // directories deep inside Application Support, and the full string wrapped

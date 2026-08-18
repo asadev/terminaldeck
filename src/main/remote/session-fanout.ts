@@ -1,4 +1,5 @@
 import type { RemoteSession } from './protocol'
+import { reachesFolder } from './device-reach'
 import type { CreateOutcome, CreateRequest, SessionAccess, SessionHandle } from './server'
 
 /**
@@ -44,6 +45,22 @@ import type { CreateOutcome, CreateRequest, SessionAccess, SessionHandle } from 
  *    would then refuse to start there, which is the right answer arriving in the
  *    wrong place: a picker should not show a row whose only outcome is a
  *    refusal.
+ *
+ * ## And the same hole again, one step out: every *ordinary* session
+ *
+ * The paragraph above closed the copilot's terminal and stopped there, because
+ * the question it was asking was "which sessions are nobody's business". The
+ * question it did not ask is "whose business is the rest of them", and the
+ * answer until now was *everyone's*: `list()` took no device id, so a phone
+ * paired to open one shared folder was sent every session running on the
+ * machine, and `attach()` admitted any id from that list.
+ *
+ * So starting a new shell in an ungranted folder was refused while typing into
+ * an agent already running in one was not. {@link PtySource.reach} is the fix,
+ * `device-reach.ts` is the rule, and {@link SessionFanout.visible} is the door.
+ * It is asked again on every keystroke rather than only at attach, which is what
+ * makes taking a folder back immediate instead of taking effect at the next
+ * reconnection — the same property `hidden` has, for the same reason.
  */
 
 /** The slice of `PtyManager` this needs. Narrow so tests can supply a literal. */
@@ -60,6 +77,21 @@ export interface PtySource {
    * method that exists and always refuses.
    */
   create?(request: CreateRequest): Promise<CreateOutcome>
+  /**
+   * End a session. Absent when this host will not let a device end one.
+   *
+   * Its absence is what stops the desktop advertising the `close` capability —
+   * see `SessionAccess.close` — so it is optional here rather than a method that
+   * exists and always refuses. Separate from {@link create} rather than implied
+   * by it, because the two are genuinely separable: the public demo box starts
+   * sessions for strangers and must not hand a stranger the ✕ on somebody
+   * else's.
+   *
+   * Returns whether a session was actually ended, so "no such session" is a
+   * distinct answer from "it worked". `PtyManager.kill` returns void and answers
+   * this by whether the id was in its map.
+   */
+  close?(id: string): boolean
   /**
    * The folders one device may start a session in — the list `create` enforces,
    * sent to that device so its picker matches. Optional and absent together
@@ -86,6 +118,23 @@ export interface PtySource {
    * implementations wrap it; see {@link SessionFanout.isHidden}.
    */
   hidden?(sessionId: string): boolean
+  /**
+   * What one device may touch — the answer `device-reach.ts` computes from its
+   * kind and its granted folders.
+   *
+   * **Optional, and its absence means no per-device rule at all**, which is what
+   * a host with no grant system honestly wants: `scripts/remote-host.ts` and the
+   * public demo box have a session layer and no notion of who is asking, and a
+   * missing key there must not be read as "this device may see nothing". A host
+   * that knows about kinds supplies it and every door is enforced; a host that
+   * does not supplies nothing and behaves exactly as it did.
+   *
+   * That is the one fail-open in this file and it is bounded by construction: a
+   * `PtySource` either has the concept or does not, decided at assembly by the
+   * code that also builds the stores, and there is no input from the network
+   * that can turn the first into the second.
+   */
+  reach?(deviceId: string): { unrestricted: boolean; folders: string[] }
 }
 
 interface Listener {
@@ -113,15 +162,50 @@ export class SessionFanout implements SessionAccess {
   readonly create?: (request: CreateRequest) => Promise<CreateOutcome>
 
   /**
+   * Present only when the source can end a session, assigned for the reason
+   * {@link create} is: `server.ts` decides whether to advertise the `close`
+   * capability by asking whether this method exists, and a prototype method
+   * always exists.
+   *
+   * It refuses a hidden session outright, whatever the caller learned the id
+   * from, and that is not redundant with the reach check in `server.ts`. The
+   * copilot's own terminal is hidden from *every* device including the owner's
+   * own machines, which reach everything — so without this line the one session
+   * a phone must never touch would be the one session any of the owner's devices
+   * could end. Refused with `false`, which is the same answer an unknown id
+   * gets, and deliberately: a distinct one would confirm that the id names
+   * something real. The same argument `attach` makes above, at the door that
+   * matters most.
+   */
+  readonly close?: (id: string) => boolean
+
+  /**
    * Present exactly when {@link create} is, and assigned the same way for the
    * same reason: `server.ts` reads whether these methods exist to decide what to
    * advertise, and a prototype method always exists.
    */
   readonly folders?: (deviceId: string) => string[]
 
+  /**
+   * Whether one device may see and touch one session, present exactly when the
+   * source knows about device kinds — assigned rather than declared on the
+   * prototype for the same reason {@link create} is, and here it decides more
+   * than an advertisement: `server.ts` reads its presence to know whether this
+   * host enforces per-device reach at all, and a prototype method that always
+   * existed would make a host with no grants look like one that grants nothing.
+   */
+  readonly visible?: (deviceId: string, sessionId: string) => boolean
+
   constructor(private readonly ptys: PtySource) {
     const start = ptys.create
     if (start) this.create = (request) => start(request)
+    const end = ptys.close
+    if (end) {
+      this.close = (id) => {
+        if (this.isHidden(id)) return false
+        return end(id)
+      }
+    }
     const offer = ptys.folders
     /*
      * The offered folder list has the hidden sessions taken out of it.
@@ -144,6 +228,38 @@ export class SessionFanout implements SessionAccess {
         const offered = offer(deviceId)
         const secret = this.hiddenFolders()
         return secret.size === 0 ? offered : offered.filter((folder) => !secret.has(folder))
+      }
+    }
+
+    /*
+     * The per-device door, built once and only when the host has the concept.
+     *
+     * It answers about a *session id* rather than a folder because this class is
+     * the only thing that knows the mapping, and asking `server.ts` to look up a
+     * cwd before every check would put half the rule in the file that is not
+     * allowed to have any of it. An id that names nothing is refused — a caller
+     * asking about a session that is not running has no business being told
+     * whether it would have been allowed.
+     */
+    const reach = ptys.reach
+    if (reach) {
+      this.visible = (deviceId, sessionId) => {
+        if (this.isHidden(sessionId)) return false
+        const session = this.ptys.list().find((s) => s.id === sessionId)
+        if (!session) return false
+        /*
+         * Fails **closed**, the same way {@link isHidden} does and for the same
+         * reason: this is consulted on the read path of a socket, an exception
+         * here is a main process that dies over a `list` from a phone on a bad
+         * network, and the safe reading of "I do not know whether this device
+         * may see this" is that it may not.
+         */
+        try {
+          return reachesFolder(reach(deviceId), session.cwd)
+        } catch (error) {
+          console.error('[remote] the device-reach rule threw; refusing the session:', error)
+          return false
+        }
       }
     }
   }

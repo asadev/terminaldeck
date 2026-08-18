@@ -62,6 +62,11 @@ import { MAX_FAILED_ATTEMPTS, RemoteAuth, type Device, type PairingToken } from 
 // `registerRemoteIpc`; importing the class here would put a second constructor
 // for the same file in the one module that must not own it.
 import type { DeviceFolderGrant, FolderGrants } from './folder-grants'
+// `asDeviceKind` is a value because the approve handler has to narrow whatever
+// came across the bridge, and it is three comparisons over a string literal
+// union — importing it pulls in the store's module but not its file, and the
+// store itself stays type-only for the reason `FolderGrants` above does.
+import { asDeviceKind, type DeviceKindRecord, type DeviceKinds } from './device-kind'
 // Type-only for the same reason `FolderGrants` is: `index.ts` owns the one
 // instance, and `copilotFrameAllowed` is a pure function over a table, so
 // importing it pulls in nothing but `protocol.ts` — which this file already has.
@@ -95,6 +100,20 @@ import {
 // `session-create.ts`'s only runtime dependency in this direction is a type, so
 // there is no cycle.
 import { sameFolder } from './session-create'
+/*
+ * The scheme gate, from `browser-url.ts` and deliberately **not** from
+ * `link-open.ts`.
+ *
+ * `routeGuestLink` is the rule this wants and it lives in a module that imports
+ * Electron, and this file may not: it is bundled by `scripts/remote-host.sh` and
+ * by the headless build, both of which run under plain Node. Importing it cost
+ * exactly that — `Dynamic require of "fs" is not supported`, from an
+ * `electron/index.js` that had been dragged into an esbuild bundle by one
+ * import. The predicate underneath is the same one either way: `routeGuestLink`
+ * *is* `isNavigationAllowed`, and that is pure by design so it can be tested
+ * without a window.
+ */
+import { BLANK_URL, isNavigationAllowed } from '../browser-url'
 import {
   MAX_STREAMS_TOTAL,
   createTunnelHub,
@@ -219,6 +238,22 @@ export type CreateOutcome =
  */
 export interface SessionAccess {
   list(): RemoteSession[]
+  /**
+   * May this device see and touch this session at all?
+   *
+   * **Optional, and absent means this host has no per-device rule** — see
+   * `SessionFanout`'s `reach`, which is what its presence is derived from. A
+   * host with a session layer and no notion of who is asking (the demo box,
+   * `scripts/remote-host.ts`) supplies neither and behaves as it always did.
+   *
+   * Consulted at four doors in this file — the welcome frame, `list`, `attach`
+   * and every `input`/`resize` — rather than once at attach. That is not
+   * belt-and-braces, it is the difference between a folder being taken back now
+   * and being taken back at the next reconnection: a device holding a handle
+   * would otherwise keep a keyboard on a session in a folder somebody had just
+   * removed, and the person removing it would have no way to tell.
+   */
+  visible?(deviceId: string, sessionId: string): boolean
   /** Null when there is no such session. Callbacks fire until `detach`. */
   attach(
     id: string,
@@ -245,6 +280,30 @@ export interface SessionAccess {
    * spawns anything, and both of those are `execFile`.
    */
   create?(request: CreateRequest): Promise<CreateOutcome>
+  /**
+   * End a session. **Optional, and its absence is the switch**, exactly as
+   * {@link create}'s is.
+   *
+   * A session layer that cannot end anything simply does not have this method,
+   * the `close` capability is then never advertised, and a client talking to
+   * such a host never draws a Close button and never sends a frame that would be
+   * refused. `scripts/remote-host.ts` is the host that makes the split real
+   * rather than theoretical: it can start a session for a stranger and must not
+   * offer that stranger a way to end somebody else's.
+   *
+   * Returns whether a session was actually ended. False means there was no such
+   * session — already exited, or never there — and the caller turns it into the
+   * same sentence an unknown id gets on `attach`. It is **not** the refusal path:
+   * whether this device may touch this session is decided by {@link visible}
+   * before this is ever called, because a method that answered both questions
+   * with one boolean would make "you may not" and "it is gone" the same fact.
+   *
+   * Synchronous, unlike `create`. Ending a session is signalling a process this
+   * app already holds a handle to and forgetting it; nothing here resolves a
+   * PATH or probes for a CLI, and a promise would only be a promise the caller
+   * has to remember not to leave unhandled on a socket's data handler.
+   */
+  close?(id: string): boolean
   /**
    * The folders one device may start a session in, most relevant first.
    *
@@ -448,6 +507,47 @@ export interface RemoteEndpointOptions {
    * for why the two must not be folded together.
    */
   copilot?: CopilotRemote
+  /**
+   * May this particular device be offered the copilot at all?
+   *
+   * **Optional, and absent means every paired device may** — which is what every
+   * host written before device kinds existed does, and what the tests and
+   * `scripts/remote-host.ts` still supply. A desktop that knows about kinds
+   * answers it `kind === 'mine'`.
+   *
+   * This is his sentence, and it is the reason the answer is *absence* rather
+   * than a grant defaulted off:
+   *
+   *   > **Guest** — You choose what they can reach. The copilot is never shared.
+   *
+   * So an ineligible device is not sent the `copilot` capability, is not sent a
+   * `copilot` key in its welcome, and is refused `copilot.connect` outright. It
+   * has no frame it can send that measures whether this machine has a copilot,
+   * and its client draws no tab, no switch and no greyed-out row — because a
+   * greyed-out row still advertises the feature and invites the ask, and the
+   * answer to the ask is always no.
+   *
+   * It is a callback rather than a set for the reason `folders` is: the kind is
+   * decided when a device is approved, which can happen while another device is
+   * connected, and a snapshot taken at construction would be answering about a
+   * roster that has changed.
+   */
+  copilotEligible?(deviceId: string): boolean
+  /**
+   * Open a page on this machine, and say whether a window took it.
+   *
+   * **Optional, and absent is the switch** — the same negotiation `uploadsDir`,
+   * `credentials`, `devServers` and `copilot` get. A host with no window has
+   * nowhere to put a page, so it never advertises `web` and never receives the
+   * verb; the Electron shell supplies `openAppLink` against its own window,
+   * which is what makes the page appear as a tab of this app's browser rather
+   * than as a launch of somebody's default browser.
+   *
+   * Synchronous and boolean, because the honest answer is available immediately:
+   * the shell either had a window to push the URL to or it did not. What happens
+   * to the page after that is the browser's business and not this socket's.
+   */
+  openUrl?(url: string): boolean
   /**
    * The most this host is willing to advertise, whatever it is able to do.
    *
@@ -1216,6 +1316,11 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // its own loopback.
     if (options.offer !== undefined && !options.offer.includes(name)) return false
     if (name === CAPABILITY.create) return typeof options.sessions.create === 'function'
+    // Its opposite number, negotiated the same way and separately from it. A
+    // host can genuinely start sessions and refuse to end them — the public demo
+    // box is exactly that — so the two are two methods and two capabilities
+    // rather than one flag read twice.
+    if (name === CAPABILITY.close) return typeof options.sessions.close === 'function'
     // Same rule, same reason: the thing that makes the feature possible is the
     // thing that decides whether it is offered. A host with nowhere to put a file
     // must not draw a Send File button on somebody's phone.
@@ -1256,8 +1361,67 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      * because the only frame carrying it would be a `welcome`.
      */
     if (name === CAPABILITY.copilot) return options.copilot !== undefined
+    /*
+     * Same rule as every one above it: the thing that makes the feature possible
+     * decides whether it is offered. A host with no window has nowhere to put a
+     * page — the headless daemon and the demo box are both in that position —
+     * and a client told otherwise would draw an Open button whose only outcome
+     * is a refusal.
+     *
+     * Note what this is *not* gated on: which devices may use it. That is
+     * `copilotEligible`, read per message, for the reason the copilot's own note
+     * gives — a capability says what the machine can do and a grant says who may
+     * ask, and folding them together makes "too old" and "not yours" the same
+     * sentence. The difference is that `web` is stripped per device in
+     * `capabilitiesFor`, because unlike a copilot grant there is no push frame
+     * that could correct it later.
+     */
+    if (name === CAPABILITY.web) return typeof options.openUrl === 'function'
     return true
   })
+
+  /**
+   * Whether this device may be told the copilot exists.
+   *
+   * Absent callback means yes, for every device — see
+   * {@link RemoteEndpointOptions.copilotEligible}. Wrapped in a `try` because it
+   * reaches a store on disk and it is consulted on the read path of a socket; an
+   * exception here would be a main process that dies on a hello, and the safe
+   * reading of "I do not know what kind of device this is" is the one that
+   * offers nothing.
+   */
+  function copilotEligible(deviceId: string): boolean {
+    const ask = options.copilotEligible
+    if (!ask) return true
+    try {
+      return ask(deviceId) === true
+    } catch (error) {
+      console.error('[remote] the copilot-eligibility rule threw; treating the device as a guest:', error)
+      return false
+    }
+  }
+
+  /**
+   * What *this* device is told this host can do.
+   *
+   * The list is computed once for the endpoint, above, because it describes the
+   * machine. This narrows it for one device, and there is exactly one thing in
+   * it that is per-device: a guest is never told there is a copilot here. Every
+   * other capability is a property of the host and is the same for everyone.
+   *
+   * Filtering the advertisement rather than only refusing the verb is the whole
+   * of *"the copilot is never shared"* — a client that is told the capability
+   * exists draws the tab, and a tab that refuses on every press is a worse
+   * answer than a client that never knew.
+   */
+  function capabilitiesFor(deviceId: string): string[] {
+    if (copilotEligible(deviceId)) return advertised
+    // `web` goes with it, and for the same reason: opening a page puts a window
+    // on the owner's screen, which is driving the machine rather than reaching a
+    // folder. One eligibility question behind both, so a device cannot be a
+    // guest for one and an owner for the other.
+    return advertised.filter((name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web)
+  }
 
   /**
    * Push a folder's new state to every connection that has asked about it.
@@ -1482,8 +1646,53 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     return pieces.length > MAX_REPLAY_CHUNKS ? pieces.slice(-MAX_REPLAY_CHUNKS) : pieces
   }
 
+  /**
+   * The sessions one device is allowed to know about.
+   *
+   * Every frame that carries a session list goes through here — the welcome, the
+   * answer to `list`, and the refresh everyone else gets when somebody starts
+   * one. Three call sites and one filter, because a list assembled in three
+   * places is three chances to send one unfiltered, and the one that gets missed
+   * is always the one nobody is looking at.
+   *
+   * A host with no per-device rule has no `visible` and the list is unchanged.
+   */
+  function sessionsFor(deviceId: string): RemoteSession[] {
+    const all = options.sessions.list()
+    const may = options.sessions.visible
+    if (!may) return all
+    return all.filter((session) => may.call(options.sessions, deviceId, session.id))
+  }
+
+  /**
+   * May this device touch this session? True when the host has no such rule.
+   *
+   * Written once rather than inlined at each of the three verbs, so that the
+   * `!may` default cannot be spelled one way in `attach` and the other way in
+   * `input` — which is the shape of every "enforced in one place" bug in this
+   * subsystem's history.
+   */
+  function mayTouch(deviceId: string, sessionId: string): boolean {
+    const may = options.sessions.visible
+    return may ? may.call(options.sessions, deviceId, sessionId) === true : true
+  }
+
   function attach(connection: LiveConnection, message: Extract<ClientMessage, { t: 'attach' }>): void {
     const id = message.id
+    /*
+     * The device's own reach, before anything is subscribed.
+     *
+     * The refusal is deliberately the same sentence an unknown id gets, and the
+     * reason is the one `SessionFanout.attach` gives about hidden sessions: a
+     * distinct message would confirm that the id names something real, and these
+     * ids are guessable from an alert, a transcript path or an older list. A
+     * device that was never meant to see it is told the truth it is entitled to
+     * — there is no such session, as far as this connection is concerned.
+     */
+    if (connection.deviceId && !mayTouch(connection.deviceId, id)) {
+      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${id} is running.` })
+      return
+    }
     // Re-attaching is how a phone asks for its context again after a reconnect,
     // so it is not an error — it is a fresh subscription with a fresh replay.
     const existing = connection.handles.get(id)
@@ -1619,8 +1828,8 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       deviceName: outcome.deviceName,
       // Present exactly once, on the connection that paired.
       token: outcome.credential,
-      sessions: options.sessions.list(),
-      capabilities: advertised,
+      sessions: sessionsFor(outcome.deviceId),
+      capabilities: capabilitiesFor(outcome.deviceId),
       hostPlatform: currentPlatform(),
       // Spread rather than sent as `undefined`, so a host that cannot start
       // sessions sends no key at all — the same shape a desktop from before this
@@ -1663,7 +1872,11 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    */
   function copilotFrame(deviceId: string, open: boolean): { copilot?: CopilotLinkWire } {
     const copilot = options.copilot
-    return copilot ? { copilot: copilotLink(copilot, deviceId, open) } : {}
+    // A guest is sent no key at all, which is the same shape a host with no
+    // copilot sends — deliberately, because those are the same fact from the
+    // device's point of view and it is entitled to neither more nor less.
+    if (!copilot || !copilotEligible(deviceId)) return {}
+    return { copilot: copilotLink(copilot, deviceId, open) }
   }
 
   /**
@@ -1765,6 +1978,24 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       })
       return null
     }
+    /*
+     * And the kind, on every verb, after the connection and before the tier.
+     *
+     * Unreachable today by construction — a guest cannot open a copilot
+     * connection, and a device's kind cannot change without it being revoked and
+     * re-paired under a new id. It is here anyway, and the reason is the one this
+     * file gives about `SessionFanout.write`: this is the single gate in front of
+     * ten verbs, and a rule that holds only because of what a *different*
+     * function refuses is a rule the eleventh verb does not have.
+     */
+    if (!copilotEligible(deviceId)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'The copilot is not shared with guest devices.',
+      })
+      return null
+    }
     if (!copilotFrameAllowed(copilot.granted(deviceId), verb)) {
       /*
        * `unauthorized`, and the sentence names the remedy rather than the tier.
@@ -1848,6 +2079,28 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     deviceId: string,
     message: Extract<ClientMessage, { t: 'copilot.connect' | 'copilot.hello' | 'copilot.bye' }>,
   ): Promise<void> {
+    /*
+     * A guest is refused before the code is even looked at.
+     *
+     * The capability was never advertised and the welcome carried no copilot
+     * key, so no client of ours sends this — which is exactly why the refusal
+     * has to exist anyway. The advertisement is what a *client* respects; this
+     * is what the machine does. `copilot.bye` is exempt because closing
+     * something you do not have is a no-op that costs nothing to serve, and
+     * refusing it would be a way to ask this question.
+     *
+     * The sentence names the remedy, and the remedy is re-pairing rather than a
+     * setting, because there is no setting: a device's kind is fixed when it is
+     * approved. See `device-kind.ts` for why there is no toggle.
+     */
+    if (message.t !== 'copilot.bye' && !copilotEligible(deviceId)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'The copilot is not shared with guest devices. Pair this device again as your own to use it.',
+      })
+      return
+    }
     switch (message.t) {
       case 'copilot.connect': {
         const outcome = await copilot.connect(deviceId, message.code, connection.address)
@@ -2083,11 +2336,117 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     for (const connection of live.values()) {
       if (connection.deviceId !== deviceId) continue
       const frame = foldersFrame(deviceId)
+      /*
+       * The session list goes with it, and that is not a bonus refresh.
+       *
+       * Folders now decide which *running* sessions a device may see, so taking
+       * one back has to take the rows off its screen in the same breath as it
+       * takes the folder off its picker. Sent before the folders so that a
+       * client redrawing on either frame never has a moment where it is showing
+       * a session it may no longer touch.
+       *
+       * Unconditional, unlike the folder frame below: a host with no per-device
+       * rule sends the same list it always did, which is a harmless refresh.
+       */
+      send(connection, { t: 'sessions', sessions: sessionsFor(deviceId) })
       if (frame.folders === undefined) continue
       send(connection, { t: 'folders', folders: frame.folders })
       told += 1
     }
     return told
+  }
+
+  /**
+   * Open a page on **this** machine because a device asked.
+   *
+   * ## What it is for
+   *
+   * A browser tab cannot listen on a socket, so the web client can tell somebody
+   * which ports are open and cannot serve through one. His complaint about that
+   * screen is exact — *"localhost lists ports with no way to open any of them;
+   * the whole reason localhost exists is to drive them"* — and the answer is the
+   * one he gave for the phone in the same review: the page opens **here**, on
+   * the machine, in a tab of its own browser. The device is driving rather than
+   * viewing, which is a smaller promise than a tunnel and one this transport can
+   * actually keep.
+   *
+   * ## Three gates, and each closes something different
+   *
+   * **The capability**, first: a host with nowhere to put a page — the headless
+   * daemon, the demo box — never advertises `web`, so a verb arriving at one is
+   * a client that is not ours and is refused rather than served.
+   *
+   * **The kind**, second. This opens a window on somebody's screen, and no
+   * folder grant says anything about that: a guest is granted *folders*, and a
+   * page appearing on the owner's desktop is not in a folder. So it is `mine`
+   * only, the same rule and the same sentence as the copilot's.
+   *
+   * **The scheme**, last, and it is `isNavigationAllowed` — the predicate behind
+   * `routeGuestLink`, which is the rule for an *untrusted page* and not the one
+   * for the app's own links. The difference matters: `routeAppLink` hands a
+   * `file:` to Launch Services, because code we wrote asking to reveal a file
+   * means it, and a URL that arrived over a socket is not code we wrote. So
+   * http(s) opens in a tab and everything else — `file:`, `javascript:`, a
+   * custom scheme somebody registered — is refused. A URL off a network gets the
+   * strictest answer this app has, not a new one.
+   *
+   * The confirmation carries what was opened rather than what was asked for, and
+   * nothing is sent at all when the open did not happen — a client that drew
+   * "opened" over a press that did nothing is the failure this whole review is
+   * about.
+   */
+  function webOpen(connection: LiveConnection, deviceId: string, url: string): void {
+    const open = options.openUrl
+    if (!open || !advertised.includes(CAPABILITY.web)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: `This ${machineNoun(currentPlatform())} cannot open pages for a device.`,
+      })
+      return
+    }
+    if (!copilotEligible(deviceId)) {
+      // The same eligibility question the copilot asks, deliberately: both are
+      // "may this device drive the machine itself", as against "which folders
+      // may it reach". One rule, one answer, so a device cannot be a guest for
+      // one and an owner for the other.
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Only your own devices can open pages on this machine.',
+      })
+      return
+    }
+    // `about:blank` passes `isNavigationAllowed` because that is what an empty
+    // view holds, and a device asking to open it is asking for nothing — so it
+    // is excluded here rather than in the shared predicate, where it is correct.
+    if (url === BLANK_URL || !isNavigationAllowed(url)) {
+      // The URL is not echoed back. It came off the network and this sentence is
+      // both sent over the wire and drawn on a screen; quoting attacker-chosen
+      // text into it buys nothing and costs an output channel — the same rule
+      // the folder refusal follows.
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'That is not a web address this machine will open.',
+      })
+      return
+    }
+    let opened = false
+    try {
+      opened = open(url)
+    } catch (error) {
+      console.error('[remote] could not open a page for a device:', error)
+    }
+    if (!opened) {
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: 'The page did not open. There may be no window to open it in.',
+      })
+      return
+    }
+    send(connection, { t: 'web.opened', url })
   }
 
   /**
@@ -2319,11 +2678,106 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // capability frame and the phone that did not ask for it may never have
     // heard of it; `sessions` is v1 and every client back to the first one
     // understands it.
-    const sessions = options.sessions.list()
+    // Per connection rather than once, now that two devices watching the same
+    // machine are entitled to two different lists. One `sessions` value shared
+    // across the loop was correct while everybody saw everything and is a leak
+    // the moment they do not.
     for (const other of live.values()) {
       if (other.id === connection.id || !other.deviceId) continue
-      send(other, { t: 'sessions', sessions })
+      send(other, { t: 'sessions', sessions: sessionsFor(other.deviceId) })
     }
+  }
+
+  /**
+   * End a session because a device asked.
+   *
+   * ## The fourth door, and why it needed its own gate
+   *
+   * `list`, `attach` and `create` are the three doors onto a machine's running
+   * work, and all three grew a per-device rule tonight — `sessionsFor` filters
+   * the list, `attach` refuses an id outside the device's reach, `create`
+   * refuses a folder it was not granted. This is the fourth, and it is the one
+   * that is not recoverable: reading somebody else's session is a leak, typing
+   * into it is an intrusion, and ending it destroys work that was in progress.
+   * So `mayTouch` is asked here as it is at the other three, and
+   * `guest-close.test.ts` drives a real socket to prove a guest with one granted
+   * folder cannot end a session running in another.
+   *
+   * ## The order of the three checks, which is not arbitrary
+   *
+   * The capability first, because a verb this host never advertised is a client
+   * that is not ours and gets a refusal rather than a lookup. Then the device's
+   * reach, and it is deliberately checked **before** the session layer is asked
+   * anything at all — a desktop that ended the session and then decided whether
+   * it was allowed to would have already done the thing. Then the outcome, which
+   * is the only question left: was there a session there.
+   *
+   * ## Two refusals, one sentence
+   *
+   * A device that may not touch the session and a device naming an id that does
+   * not exist are told the same thing, in the same words `attach` uses, for the
+   * reason its own comment gives: a distinct message would confirm that the id
+   * names something real, and these ids are recoverable from an alert, a
+   * transcript path or a list taken before a folder was removed. A device that
+   * was never meant to see it is told the truth it is entitled to — as far as
+   * this connection is concerned, there is no such session.
+   */
+  function closeSession(connection: LiveConnection, deviceId: string, id: string): void {
+    const end = options.sessions.close
+    if (!end || !advertised.includes(CAPABILITY.close)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Sessions cannot be closed from a device here.',
+      })
+      return
+    }
+    if (!mayTouch(deviceId, id)) {
+      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${id} is running.` })
+      return
+    }
+    let ended = false
+    try {
+      ended = end.call(options.sessions, id) === true
+    } catch (error) {
+      // The session layer threw while killing a process. That is this machine's
+      // problem and not the device's, and it must not take the socket down.
+      console.error('[remote] could not close a session for a device:', error)
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: 'That session could not be closed.',
+      })
+      return
+    }
+    if (!ended) {
+      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${id} is running.` })
+      return
+    }
+
+    // This connection's own subscription goes with it. The pty's exit will empty
+    // the fanout's listener set anyway, but the handle in this map is what
+    // `input` and `resize` check first, and leaving it behind would mean a
+    // keystroke arriving for a session that no longer exists passed the first
+    // gate on the strength of a handle to a dead process.
+    const handle = connection.handles.get(id)
+    if (handle) {
+      options.sessions.detach(handle)
+      connection.handles.delete(id)
+    }
+
+    send(connection, { t: 'closed', id })
+    // Everyone else hears about it as an ordinary list refresh, exactly as they
+    // do for `created` and for the same reason: `closed` is a capability frame
+    // that names *this* device's action, and `sessions` is v1, so a client that
+    // has never heard of closing still watches the row disappear. Per connection
+    // rather than once, because two devices watching the same machine are
+    // entitled to two different lists.
+    for (const other of live.values()) {
+      if (other.id === connection.id || !other.deviceId) continue
+      send(other, { t: 'sessions', sessions: sessionsFor(other.deviceId) })
+    }
+    announce()
   }
 
   function onMessage(connection: LiveConnection, raw: string): void {
@@ -2364,7 +2818,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         refuse(connection, 'bad-message', 'Already said hello.', CLOSE.protocolError)
         return
       case 'list':
-        send(connection, { t: 'sessions', sessions: options.sessions.list() })
+        send(connection, { t: 'sessions', sessions: sessionsFor(connection.deviceId) })
         return
       case 'attach':
         attach(connection, message)
@@ -2391,6 +2845,24 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           })
           return
         }
+        /*
+         * And the device's reach again, on every keystroke.
+         *
+         * A handle is proof of an attach that was allowed *then*. Folders are
+         * edited from the settings panel while a phone is connected — that is
+         * the whole reason `SessionStarter.folders` is called per request rather
+         * than captured once — so a handle taken before a folder was removed
+         * would otherwise stay a live keyboard on somebody's agent until they
+         * happened to reconnect. Removing a folder has to mean removing it.
+         */
+        if (!mayTouch(connection.deviceId, message.id)) {
+          send(connection, {
+            t: 'error',
+            code: 'unauthorized',
+            message: 'That folder is no longer shared with this device.',
+          })
+          return
+        }
         options.sessions.write(message.id, message.data)
         return
       case 'resize':
@@ -2402,6 +2874,9 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           })
           return
         }
+        // Same check as `input` above, and the same reason. A resize reshapes
+        // the pty everyone else is looking at, including the person at the desk.
+        if (!mayTouch(connection.deviceId, message.id)) return
         options.sessions.resize(message.id, message.cols, message.rows)
         return
       case 'ping':
@@ -2425,6 +2900,9 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           })
         })
         return
+      case 'close':
+        closeSession(connection, connection.deviceId, message.id)
+        return
       case 'ports':
       case 'tunnel.open':
       case 'tunnel.close':
@@ -2436,6 +2914,9 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         // verb to the protocol without deciding where it belongs stops the
         // build instead of quietly falling through to the tunnel hub.
         hubFor(connection).handle(message satisfies LocalhostMessage)
+        return
+      case 'web.open':
+        webOpen(connection, connection.deviceId, message.url)
         return
       case 'dev.status':
       case 'dev.start':
@@ -3473,6 +3954,24 @@ export interface RemoteIpcDeps {
    * instance, owned by the caller that needs it first.
    */
   folders: FolderGrants
+  /**
+   * Whether each device is one of the owner's own or a guest.
+   *
+   * Passed in for exactly the reason `folders` beside it is: `index.ts` needs
+   * this object *before* this function is called, because the reach rule the
+   * session layer closes over reads it. A second store built here would answer
+   * the approval screen from one copy of the file and every connection from
+   * another, and the two would agree right up until somebody approved a device.
+   */
+  kinds: DeviceKinds
+  /**
+   * Open a page on this machine, for a device that asked. Absent is the switch.
+   *
+   * The Electron shell passes `openAppLink` against its own window, so the page
+   * becomes a tab of *this app's* browser rather than a launch of the system
+   * one. The headless daemon passes nothing and never advertises `web`.
+   */
+  openUrl?(url: string): boolean
   /** Built PWA directory. */
   webRoot: string
   /** Directory for the device trust file and the certificate pair, under userData. */
@@ -3755,6 +4254,21 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     // Asad's constraint on this feature demands: *"we don't want to give this
     // copilot to others."*
     ...(deps.copilot ? { copilot: deps.copilot } : {}),
+    /*
+     * And who it is shared with, which is a narrower question than whether it
+     * exists.
+     *
+     * Read live rather than snapshotted, because a device is approved while
+     * other devices are connected and the answer for a device paired a minute
+     * from now has to be right without a restart. His sentence — *"the copilot
+     * is never shared"* — is enforced here as an absence: an ineligible device
+     * is never told the capability exists, so nothing on its screen offers it.
+     */
+    copilotEligible: (deviceId) => deps.kinds.kindOf(deviceId) === 'mine',
+    // Spread, so a shell with no window advertises no `web` capability at all —
+    // the headless daemon is exactly that, and a page it could not open must
+    // not appear as a button on somebody's phone.
+    ...(deps.openUrl ? { openUrl: deps.openUrl } : {}),
     ...(deps.offer ? { offer: deps.offer } : {}),
     port: deps.port,
     onConnections: (connections) => deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, connections),
@@ -3869,10 +4383,69 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
   )
 
   ipcMain.handle('remote:devices', (): Device[] => auth.listDevices())
-  ipcMain.handle('remote:device:approve', (_event, id: unknown): Device[] => {
-    if (typeof id === 'string') auth.approveDevice(id)
-    return auth.listDevices()
-  })
+
+  /**
+   * Approving a device is now three writes, and the order is the whole fix.
+   *
+   * What it used to be: one call, `auth.approveDevice(id)`, after which the
+   * device was in. The folder list was a *separate* block further down the same
+   * settings page that nobody had to visit, and a device with no entry in it
+   * fell back to "whatever this desktop is offering" — its open projects and the
+   * folder of every running session. So the observed behaviour was exactly what
+   * he reported: six digits typed into a phone, Approve pressed, and every
+   * folder immediately reachable. The mechanism existed and was enforced; the
+   * flow that would have closed it was optional and elsewhere.
+   *
+   * Now the kind and the folders are written **first** and the approval last, so
+   * there is no instant, however short, in which the device is admitted with
+   * nothing decided about it. That ordering is the property, not a tidiness
+   * preference: `RemoteAuth.verify` is what a connection waits on, and it starts
+   * answering yes the moment the third write lands.
+   *
+   * A malformed request approves nothing. It is an IPC channel from this app's
+   * own window, so this should not happen — and "should not happen" is precisely
+   * when a handler that half-completed would leave a device admitted with no
+   * kind, which reads as a guest with no folders and looks to its owner like a
+   * device that paired and then broke.
+   */
+  ipcMain.handle(
+    'remote:device:approve',
+    (_event, id: unknown, kind: unknown, folders: unknown): Device[] => {
+      if (typeof id !== 'string' || id === '') return auth.listDevices()
+      const decided = asDeviceKind(kind)
+      if (decided === null) return auth.listDevices()
+      // Refused rather than overwritten: a kind is decided once, and a second
+      // approval naming a different one is either a stale window or a mistake.
+      // Either way the answer is the same and it is not "quietly promote it".
+      if (!deps.kinds.claim(id, decided)) return auth.listDevices()
+      if (decided === 'guest') {
+        // Always written, including an empty list, because an empty list is a
+        // real answer — "this guest may reach nothing yet" — and it is the
+        // *absence* of a record that used to mean "everything". A guest approved
+        // without choosing a folder now has a row saying so rather than a hole
+        // that reads as consent.
+        deps.folders.set(id, Array.isArray(folders) ? folders : [])
+      } else {
+        // One of your own has no list. `device-reach.ts` never consults it for a
+        // `mine` device, and leaving a stale one behind would be a set of
+        // folders in the file that nothing reads and that would come back to
+        // life if the kind were ever mis-read.
+        deps.folders.forget(id)
+      }
+      auth.approveDevice(id)
+      return auth.listDevices()
+    },
+  )
+
+  /**
+   * Which devices are yours and which are guests, for the panel.
+   *
+   * Read-only. There is deliberately no channel that changes a kind — see
+   * `device-kind.ts`. The only way a device's kind changes is revoke and pair
+   * again, and the screen says that in words rather than offering a control it
+   * would refuse.
+   */
+  ipcMain.handle('remote:kinds', (): DeviceKindRecord[] => deps.kinds.list())
   ipcMain.handle('remote:device:revoke', (_event, id: unknown): Device[] => {
     if (typeof id === 'string' && auth.revokeDevice(id)) {
       // A revoke that only applied to the next connection would not be one:
@@ -3899,6 +4472,16 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
        * channel again, so the copilot record could not be reached by anything.
        */
       deps.copilotLinks?.forget(id)
+      /*
+       * And its kind, which is what makes re-pairing the way to change one.
+       *
+       * Same garbage-collection argument as the two above — a revoked device id
+       * is never reachable again — and one extra consequence worth naming: this
+       * is the *only* thing that ever removes a kind, so "revoke, pair again,
+       * choose again" is not a workaround for a missing toggle, it is the
+       * supported path and the file has no other door.
+       */
+      deps.kinds.forget(id)
     }
     return auth.listDevices()
   })

@@ -153,6 +153,17 @@ interface Harness {
   body: FakeElement
   docListeners: Listener[]
   winListeners: Listener[]
+  /**
+   * The listeners the script installs at load and never removes.
+   *
+   * Saved logins put four of them on the document — input, submit, keydown and
+   * click — because a password manager cannot wait for a mode to be switched
+   * on; it has to see the sign-in that is happening now. The inspector's
+   * listeners come and go on top of these, so every assertion about *its*
+   * lifecycle is written against this baseline rather than against zero.
+   */
+  atRest: Listener[]
+  atRestWin: Listener[]
   sent: Array<{ channel: string; payload: unknown }>
   fire: (target: 'document' | 'window', type: string, event: Record<string, unknown>) => void
   setInspect: (enabled: boolean) => void
@@ -221,6 +232,10 @@ function boot(build: (body: FakeElement) => void): Harness {
   // eslint-disable-next-line no-new-func -- running the generated script is the point
   const run = new Function('require', 'document', 'window', 'CSS', GUEST_PRELOAD_SOURCE)
   run(require, document, window, CSS)
+  // Snapshotted immediately after the script runs and before anything is
+  // switched on. See `atRest` on the harness.
+  const atRest = [...docListeners]
+  const atRestWin = [...winListeners]
 
   const fire = (target: 'document' | 'window', type: string, event: Record<string, unknown>) => {
     const list = target === 'document' ? docListeners : winListeners
@@ -234,6 +249,8 @@ function boot(build: (body: FakeElement) => void): Harness {
     body,
     docListeners,
     winListeners,
+    atRest,
+    atRestWin,
     sent,
     fire,
     setInspect: (enabled: boolean) => {
@@ -287,11 +304,22 @@ function clickEvent(target: FakeElement) {
 }
 
 describe('guest preload lifecycle', () => {
-  it('adds nothing until inspection is switched on', () => {
+  it('adds nothing of its own until inspection is switched on', () => {
     const h = boot(listPage)
-    expect(h.docListeners).toHaveLength(0)
-    expect(h.winListeners).toHaveLength(0)
+    expect(h.docListeners).toEqual(h.atRest)
+    expect(h.winListeners).toEqual(h.atRestWin)
     expect(h.overlay()).toBeUndefined()
+  })
+
+  it('always watches for a sign-in, because that cannot wait for a mode', () => {
+    // The four the saved-login half needs. They are on from the moment the
+    // document exists: a person signs in when they sign in, and a password
+    // manager that only worked while some other mode was on would never see it.
+    const h = boot(listPage)
+    expect(h.atRest.map((l) => l.type).sort()).toEqual(['click', 'input', 'keydown', 'submit'])
+    // Capture phase, like everything else this script installs, so a page that
+    // stops propagation on its own form cannot blind it.
+    expect(h.atRest.every((l) => l.capture)).toBe(true)
   })
 
   it('installs listeners, the overlay and a crosshair when switched on', () => {
@@ -312,8 +340,8 @@ describe('guest preload lifecycle', () => {
     h.setInspect(true)
     h.setInspect(false)
 
-    expect(h.docListeners).toEqual([])
-    expect(h.winListeners).toEqual([])
+    expect(h.docListeners).toEqual(h.atRest)
+    expect(h.winListeners).toEqual(h.atRestWin)
     expect(h.overlay()).toBeUndefined()
     // The page's own cursor is restored, not blanked.
     expect(h.documentElement.style.cursor).toBe('progress')
@@ -327,7 +355,7 @@ describe('guest preload lifecycle', () => {
     expect(h.docListeners).toHaveLength(count)
     h.setInspect(false)
     h.setInspect(false)
-    expect(h.docListeners).toEqual([])
+    expect(h.docListeners).toEqual(h.atRest)
   })
 
   it('rebuilds the overlay after a single-page app wipes the DOM', () => {
@@ -511,7 +539,7 @@ describe('guest preload capture', () => {
     })
     expect(prevented).toBe(1)
     expect(h.sent.some((m) => m.channel === GUEST_CANCEL_CHANNEL)).toBe(true)
-    expect(h.docListeners).toEqual([])
+    expect(h.docListeners).toEqual(h.atRest)
     expect(h.overlay()).toBeUndefined()
   })
 

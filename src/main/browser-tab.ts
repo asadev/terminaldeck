@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import {
   app,
   BrowserWindow,
-  session,
   WebContentsView,
   type IpcMain,
   type IpcMainEvent,
@@ -17,12 +16,32 @@ import {
   GUEST_CANCEL_CHANNEL,
   GUEST_ELEMENT_CHANNEL,
   GUEST_INSPECT_CHANNEL,
+  GUEST_LOGIN_FILL_CHANNEL,
+  GUEST_LOGIN_READY_CHANNEL,
+  GUEST_LOGIN_SUBMIT_CHANNEL,
   writeGuestPreload,
 } from './browser-preload'
 import { composeAgentContext, parseCapture, type ElementCapture } from './selector'
 import { disposeIsolatedSession, isolatedSession } from './browser-isolation'
 import { onWebContentsDestroyed } from './web-contents-teardown'
 import { openGuestLink, showLinkMenu } from './link-open'
+import { cleanUserAgent } from './browser-user-agent'
+import { activeProfile, DEFAULT_PARTITION, sessionForPartition } from './browser-profiles'
+import {
+  closePopupsWith,
+  popupWindowOptions,
+  wantsPopupWindow,
+  wirePopupWindow,
+  type WindowOpenAsk,
+} from './browser-popup'
+import {
+  allLogins,
+  isNewLogin,
+  loginsFor,
+  originOf,
+  setPendingOffer,
+  type SavedLogin,
+} from './browser-passwords'
 
 /**
  * The embedded browser tab: a real Chromium view, hosted inside the app window,
@@ -300,18 +319,43 @@ interface BrowserTab {
   failedUrl: string | null
   /** The app's own canvas colour, for a view with nothing loaded in it. */
   emptyBackground: string | null
+  /**
+   * The browser profile this tab's session belongs to, stamped at creation.
+   *
+   * Stamped and never updated, for the same reason `bornInto` is: a session is
+   * fixed when the view is constructed, so a tab opened in one profile stays in
+   * it even after somebody switches. Read when a saved login is looked up, so
+   * that switching profile while a sign-in page is open cannot offer the other
+   * profile's password to it.
+   */
+  profileId: string
 }
 
 /**
  * Separate from the app's own session so guest cookies, storage and — most
  * importantly — response headers are handled independently of Deck's.
+ *
+ * This is now the *default profile's* partition rather than the only one. A
+ * second profile is a second `persist:` string and a second directory — see
+ * `browser-profiles.ts`, which owns the list and is careful never to mint one
+ * that could collide with this. The literal stays spelled out here because
+ * `browser-session.test.ts` reads this file looking for it, and because the one
+ * partition that predates profiles is worth being able to find by eye.
  */
 const GUEST_PARTITION = 'persist:terminaldeck-browser'
 
 const tabs = new Map<string, BrowserTab>()
 
 let guestPreloadPath: string | null = null
-let guestSession: Session | null = null
+
+/**
+ * Sign-in windows a guest page opened, so they can be closed with it.
+ *
+ * Keyed by the host renderer rather than by the tab: a pop-up outlives the tab
+ * that opened it often enough — some flows close the opener and finish in the
+ * pop-up — and what it must not outlive is the window it belongs to.
+ */
+const popupsByHost = new Map<number, Set<BrowserWindow>>()
 
 /* ------------------------------------------------------- who owns a view -- */
 
@@ -403,17 +447,35 @@ function preloadPath(): string {
   return guestPreloadPath
 }
 
+/**
+ * The session a new tab joins: whichever profile is switched on.
+ *
+ * The hardening — no camera, no clipboard, no notifications, no downloads —
+ * moved into `browser-profiles.ts` so that every profile gets it rather than
+ * only the first one, and so there is one copy of the list instead of two that
+ * can drift. `sessionForPartition` is idempotent per partition.
+ *
+ * The user agent is set here, on the session, and it is not cosmetic: with
+ * Electron's own token in the string Google routes every sign-in down its
+ * restricted path. `browser-user-agent.ts` carries the measurement.
+ */
 function hardenedGuestSession(): Session {
-  if (guestSession) return guestSession
-  const ses = session.fromPartition(GUEST_PARTITION)
-  // A page being looked at has no business asking for the camera, the
-  // clipboard or a notification, and there is no UI here to ask the user.
-  ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
-  ses.setPermissionCheckHandler(() => false)
-  ses.on('will-download', (event) => event.preventDefault())
-  guestSession = ses
+  const profile = activeProfile(app.getPath('userData'))
+  const ses = sessionForPartition(profile.partition)
+  ses.setUserAgent(cleanUserAgent(app.userAgentFallback))
   return ses
 }
+
+/**
+ * The partition constant above and the profiles module have to agree.
+ *
+ * A compile-time assertion rather than a comment, because the failure it
+ * prevents is silent: two spellings of the default partition would give the
+ * cookie panel one cookie jar and the tabs another, and everything would look
+ * like it worked until somebody signed in and the login was not there.
+ */
+const _partitionsAgree: typeof DEFAULT_PARTITION = GUEST_PARTITION
+void _partitionsAgree
 
 /**
  * The tab's WebContents, or null once it has gone.
@@ -787,11 +849,72 @@ function wireGuestEvents(tab: BrowserTab): void {
    * process give it to Launch Services would step over all three navigation
    * guards at once — see the asymmetry note in `link-open.ts`.
    */
-  wc.setWindowOpenHandler(({ url }) => {
-    if (openGuestLink(tab.host, url) === 'refused') {
-      fail(tab, `Blocked a pop-up to ${shortLabel(url) || 'another scheme'} — only http and https open here.`)
+  /*
+   * ...and the exception that turned out to be most of what he hit.
+   *
+   * A **sign-in pop-up is not a link**, and answering it `deny` is what broke
+   * every sign-in in the recorded review. `deny` makes the page's own
+   * `window.open()` return `null` — measured on Electron 41.10.5 — so the
+   * library that opened it waits forever for a `postMessage` from a window it
+   * was never given. The destination did open, as a tab in the strip, and
+   * finished the sign-in perfectly; it simply had no way to say so to the page
+   * that asked. That is *"the verification link gets stuck"*, and the QR that
+   * *"appeared and then stopped"*, and it is one bug.
+   *
+   * So a genuine pop-up — sized, or named, per the dispositions measured in
+   * `browser-popup.ts` — is allowed and becomes a real child window with a real
+   * opener, on this tab's own session, carrying the same navigation refusals
+   * and its address in its title bar. Everything else is still a link and still
+   * becomes a tab here, because that behaviour is right and he did not complain
+   * about it.
+   */
+  wc.setWindowOpenHandler((details) => {
+    const ask: WindowOpenAsk = {
+      url: details.url,
+      frameName: details.frameName,
+      disposition: details.disposition,
+      features: details.features,
+    }
+    if (wantsPopupWindow(ask)) {
+      const guest = liveContents(tab)
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: popupWindowOptions(
+          ask,
+          guest ? guest.session : hardenedGuestSession(),
+        ),
+      }
+    }
+    if (openGuestLink(tab.host, details.url) === 'refused') {
+      fail(
+        tab,
+        `Blocked a pop-up to ${shortLabel(details.url) || 'another scheme'} — only http and https open here.`,
+      )
     }
     return { action: 'deny' }
+  })
+
+  /*
+   * The window Electron just made, given the guards the handler promised.
+   *
+   * It has to happen here rather than inside the handler: the handler runs
+   * *before* the window exists and may only return options. A pop-up wired
+   * nowhere would be the bare Electron window this module has always refused to
+   * hand a guest — no navigation checks, no address on screen.
+   */
+  wc.on('did-create-window', (popup) => {
+    const guest = liveContents(tab)
+    wirePopupWindow(popup, guest ? guest.session : hardenedGuestSession())
+    const hostId = tab.host.id
+    let owned = popupsByHost.get(hostId)
+    if (!owned) {
+      owned = new Set<BrowserWindow>()
+      popupsByHost.set(hostId, owned)
+      closePopupsWith(tab.host, owned)
+      tab.host.once('destroyed', () => popupsByHost.delete(hostId))
+    }
+    owned.add(popup)
+    popup.once('closed', () => owned?.delete(popup))
   })
 
   /*
@@ -982,6 +1105,12 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
       error: null,
       failedUrl: null,
       emptyBackground,
+      // An isolated tab is nobody's profile: its partition is in memory and dies
+      // with the process, so a saved login must never be offered to it. The
+      // empty string matches no profile id, which is exactly the behaviour
+      // wanted and is why it is not defaulted to 'default'.
+      profileId:
+        isolatedSession(opts.isolationKey) !== null ? '' : activeProfile(app.getPath('userData')).id,
     }
     tabs.set(tab.id, tab)
 
@@ -1134,4 +1263,67 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
     tab.inspecting = false
     push(tab)
   })
+
+  /*
+   * A page saying it has a sign-in form, answered with a login if there is one.
+   *
+   * The origin is taken from *our* view and not from the message, exactly as the
+   * element capture above does and for a sharper version of the same reason: a
+   * page that could forge this message would otherwise name the origin whose
+   * password it wants. `wc.getURL()` is what Chromium committed, so the worst a
+   * hostile page can do by forging this is ask for the password it is already
+   * entitled to be filled with.
+   *
+   * A tab that was opened Isolated has no profile and is skipped — an in-memory
+   * partition thrown away at quit is not somewhere a saved credential belongs.
+   */
+  ipcMain.on(GUEST_LOGIN_READY_CHANNEL, (event: IpcMainEvent) => {
+    const tab = tabForSender(event)
+    if (!tab || tab.profileId === '') return
+    const wc = liveContents(tab)
+    if (!wc) return
+    const origin = originOf(wc.getURL())
+    if (origin === null) return
+    const matches = loginsFor(allLogins(app.getPath('userData')), tab.profileId, origin)
+    if (matches.length === 0) return
+    // The most recently saved one when there are several. That is the account
+    // last used here, which is the right guess and the one Chrome makes; the
+    // manager is where a different one is chosen.
+    const best = matches.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a))
+    wc.send(GUEST_LOGIN_FILL_CHANNEL, best.username, best.password)
+  })
+
+  /*
+   * A sign-in that was just submitted, held for the person to approve.
+   *
+   * It goes into a single pending slot in `browser-passwords.ts` and the
+   * *renderer* is told only that an offer exists, with the origin and the
+   * username. The password never crosses that bridge — see the note at the top
+   * of that module. Nothing is stored until somebody presses Save.
+   */
+  ipcMain.on(
+    GUEST_LOGIN_SUBMIT_CHANNEL,
+    (event: IpcMainEvent, _url: unknown, username: unknown, password: unknown) => {
+      const tab = tabForSender(event)
+      if (!tab || tab.profileId === '') return
+      const wc = liveContents(tab)
+      if (!wc) return
+      const origin = originOf(wc.getURL())
+      if (origin === null) return
+      if (typeof password !== 'string' || password === '') return
+      const entry: SavedLogin = {
+        profileId: tab.profileId,
+        origin,
+        username: typeof username === 'string' ? username : '',
+        password,
+        updatedAt: Date.now(),
+      }
+      // A form that submits the credentials it was just filled with is not a new
+      // login, and prompting there would put a dialog in front of somebody every
+      // single time they sign in to anything.
+      if (!isNewLogin(allLogins(app.getPath('userData')), entry)) return
+      setPendingOffer(entry)
+      if (!tab.host.isDestroyed()) tab.host.send('browser:password-offer', tab.id, origin, entry.username)
+    },
+  )
 }
