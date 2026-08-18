@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-18
+
 ### Fixed
 
 - **The app was typing `/usage` into your session and leaving the panel open on
@@ -1234,7 +1236,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.5.0
 [0.4.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.4.0
 [0.3.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.3.0
 [0.1.9]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.9
