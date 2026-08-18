@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, appendFileSync, realpathSync, utimesSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, appendFileSync, readFileSync, realpathSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -611,4 +611,38 @@ describe('TranscriptWatcher against a live file', () => {
     expect(summary.usageByModel).toEqual({})
     expect(totalTokens(summary.usage)).toBe(0)
   }, 10_000)
+})
+
+describe('what the cap counts as unread', () => {
+  it('tallies only the files it never opened', () => {
+    /*
+     * A source-level pin, in the shape `wiring.test.ts` and `finish.test.ts`
+     * already use here, because the failure it guards cannot be provoked on
+     * demand: it needs a watcher event to arrive for a file the scan has already
+     * finished with, and that arrival is the operating system's decision.
+     *
+     * It does arrive. On macOS FSEvents can deliver an event for a write made
+     * moments before the watch was attached, and the initial-scan suppression
+     * does not cover it, because a replayed event is a real event. The file goes
+     * back in the queue, the cap is already met, and the branch below counted it
+     * as a transcript whose requests are missing from the total — when they were
+     * in the total, put there by the same scan a moment earlier.
+     *
+     * `unread` is not a statistic. It is what decides whether the overview may
+     * say "every request your agents made in this folder", so a number inflated
+     * this way makes an honest total describe itself as partial. It failed the
+     * sibling test above about one run in three on a folder where nothing was
+     * left unread at all.
+     */
+    const source = readFileSync(new URL('./transcript.ts', import.meta.url), 'utf8')
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    expect(
+      code,
+      'the cap adds the whole queue to `unread` again — files it already read are counted as missing',
+    ).not.toMatch(/this\.unread \+= this\.queue\.size/)
+    expect(
+      code,
+      'the cap no longer skips files that already have an aggregator',
+    ).toMatch(/for \(const path of this\.queue\) if \(!this\.aggregators\.has\(path\)\) this\.unread \+= 1/)
+  })
 })

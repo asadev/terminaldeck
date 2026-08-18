@@ -1786,7 +1786,26 @@ export class TranscriptWatcher {
          * are already resident would freeze the number they are looking at.
          */
         if (this.scanning && max > 0 && this.carrying >= max) {
-          this.unread += this.queue.size
+          /*
+           * Only the files that were never opened count as unread.
+           *
+           * `unread` is the number this project's total is *missing*, and the
+           * tile uses it to decide whether it may say "every request". A file
+           * already in `aggregators` has been read and its requests are in the
+           * total, so counting it here would make an honest total describe
+           * itself as partial.
+           *
+           * That is not hypothetical, and it is not only a wording problem. A
+           * file already consumed can be back in this queue: `enqueue` runs on a
+           * watcher event, and on macOS FSEvents can deliver an event for a
+           * write that happened moments *before* the watch was attached — the
+           * initial-scan suppression does not cover a replayed event, because it
+           * is a real event. So one of the transcripts this scan had already
+           * finished with would reappear behind the cap and be tallied as
+           * missing. It showed up as a test that failed about one run in three,
+           * on a folder where nothing at all was actually left unread.
+           */
+          for (const path of this.queue) if (!this.aggregators.has(path)) this.unread += 1
           this.queue.clear()
           break
         }
