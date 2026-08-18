@@ -11,7 +11,7 @@
 
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, parse } from 'node:path'
+import { join, normalize, parse } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { CHOOSING_A_FOLDER } from '../shared/copilot-text'
 import {
@@ -161,7 +161,16 @@ describe('the report a pane draws', () => {
     // unmounted since it was picked must still read back as the person's choice,
     // so the pane can say "the folder you chose is not there" rather than
     // silently reverting and starting a copilot somewhere else.
-    expect(chosenCopilotHome('  /Volumes/Work/ClaudeAsad  ')).toBe('/Volumes/Work/ClaudeAsad')
+    //
+    // The expectation is built with `normalize` rather than written as a POSIX
+    // literal. `chosenCopilotHome` normalises, and on Windows that turns
+    // `/Volumes/Work/ClaudeAsad` into `\Volumes\Work\ClaudeAsad` — which is
+    // correct behaviour and used to fail this test on the Windows runner only.
+    // Writing the separator by hand tests which machine the suite is on; asking
+    // for the same normalisation tests the rule the function actually holds.
+    const picked = normalize('/Volumes/Work/ClaudeAsad')
+    expect(chosenCopilotHome(`  ${picked}  `)).toBe(picked)
+    expect(chosenCopilotHome('  /Volumes/Work/ClaudeAsad  ')).toBe(picked)
     expect(chosenCopilotHome('')).toBeNull()
     expect(chosenCopilotHome(7)).toBeNull()
   })

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   MAX_TICK_GAP_MS,
   SCAN_HOLD_MS,
@@ -298,7 +299,12 @@ describe('the reading-time model is gone, not turned down', () => {
      * genuinely need to estimate reading time, this test is where the argument
      * for it has to be made.
      */
-    const root = new URL('../renderer/copilot/driving', import.meta.url).pathname
+    // `fileURLToPath`, not `.pathname`. On Windows a file URL's pathname is
+    // `/D:/a/terminaldeck/…` — leading slash and all — so `readdirSync` on it
+    // and then `join(root, name)` produced `D:\D:\a\…`, which is how this
+    // test passed on macOS and failed on the Windows runner. The conversion
+    // is what the URL-to-path direction is for.
+    const root = fileURLToPath(new URL('../renderer/copilot/driving', import.meta.url))
     const files = readdirSync(root)
     expect(files).not.toContain('estimate.ts')
     expect(files).not.toContain('pacer.ts')

@@ -73,7 +73,7 @@ targets:
         # through 0.1.5, 0.1.6, 0.1.7 and 0.1.8 because nothing but a release
         # reads it, and preflight is a `fail` rather than a warning precisely so
         # the drift cannot reach an upload.
-        MARKETING_VERSION: "0.3.0"
+        MARKETING_VERSION: "0.4.0"
         # A stamp in the same yymmddHHMM shape release.sh generates, not a
         # counter. "1" was not merely stale, it was a collision waiting: build
         # number 1 has already been uploaded to this app record, and App Store
@@ -83,8 +83,8 @@ targets:
         # build number has to have. Refresh it whenever the marketing version
         # moves; a fixed number here can only ever go stale.
         #
-        # Refreshed to 2608170549 because the marketing version moved. The desktop
-        # tagged 0.3.0, and `preflight.sh` fails the run when MARKETING_VERSION
+        # Refreshed to 2608180034 because the marketing version moved. The desktop
+        # tagged 0.4.0, and `preflight.sh` fails the run when MARKETING_VERSION
         # and package.json disagree — one product, one version number — so this
         # file follows rather than drifts. It drifted once already, sitting at
         # 0.1.4 through four desktop releases because nothing but a release
@@ -92,8 +92,8 @@ targets:
         #
         # Matching costs nothing in flexibility, and the asymmetry is the reason:
         # App Store Connect enforces uniqueness and increase on the *build*
-        # number only. 0.3.0 can carry as many builds as it needs. So this is
-        # 0.3.0 build 2608170549, later than the 2608161932 already on Apple's
+        # number only. 0.4.0 can carry as many builds as it needs. So this is
+        # 0.4.0 build 2608180034, later than the 2608161532 already on Apple's
         # side, which is the only comparison App Store Connect makes.
         #
         # **UTC**, because `build_number()` in scripts/ios/common.sh is
@@ -102,7 +102,7 @@ targets:
         # Mac — which reads as a later build than the one that actually shipped.
         # The stamp already on Apple's side, 2608161932, is a local-clock one;
         # both compare correctly against it, and the convention is worth keeping.
-        CURRENT_PROJECT_VERSION: "2608170549"
+        CURRENT_PROJECT_VERSION: "2608180034"
         # 1 = iPhone only, and the asymmetry in Apple's rules is the whole
         # reason. A device family can be *added* to a shipped app whenever the
         # layout is ready for it; it cannot be taken away — App Store Connect
