@@ -10,7 +10,88 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Security
+
+- **A paired device could reach every session on the machine, whatever folders
+  it had been granted.** Three doors lead in and only one was locked. Creating a
+  session checked the grant correctly. Listing sessions took no device id at
+  all, so every paired device was sent every session running on the machine, and
+  attaching admitted any id off that list — so starting a *new* shell in an
+  ungranted folder was refused while typing into an agent **already running** in
+  one was not. Underneath all three, a device with no grant record on file was
+  read as "fall back to whatever this desktop is offering", which is every open
+  project plus the working directory of every running session.
+
+  Approving a device wrote nothing: six digits, Approve, and the folder picker
+  was a separate block further down a page nobody had to visit.
+
+  Approval is now the choice, and it writes before it admits — the kind of
+  device, then its folders, then the approval, in that order, held by a test
+  that reads the call order rather than the end state, because the end state
+  looks identical when the approval comes first.
+
+  **Devices paired by an earlier version have no kind recorded, so they become
+  guests with nothing.** That is deliberate. A fix that keeps working for
+  everyone who already had everything has not fixed anything. Re-pair them; the
+  desktop names them and the refusal says which machine to go and do it on.
+
+- **A device is either yours or a guest, and it cannot change kind afterwards.**
+  *My device* is you at another keyboard — every session, any folder, the
+  copilot. *Guest* reaches only what you tick, and **is never offered the
+  copilot at all**: not a permission defaulted off, absent, because an unchecked
+  box still advertises the thing and invites the ask. Changing kind means
+  pairing again, which is the honest cost of not making an escalation one tap
+  deep. Folder containment is re-checked on every keystroke, so removing a
+  folder takes effect immediately rather than at the next reconnect.
+
+- **Saved logins in the built-in browser never reach the renderer.** The summary
+  type has no field for a password to be forgotten out of; matching is on exact
+  origin rather than Chrome's public-suffix grouping, so a subdomain a stranger
+  controls cannot ask for a password stored for the parent; and autofill refuses
+  invisible or tiny fields and subframes and never overwrites a field that
+  already has something in it. On a machine with no secure store, saving is
+  refused rather than written in the clear.
+
 ### Added
+
+- **The copilot can drive a browser, and now it actually does.** It was
+  reported as unable to, and it was right. `browser_open` refused whenever no
+  browser tab happened to be open already and told the copilot to ask a person
+  to open one — so it quietly fell back to fetching the page and said it had not
+  used the browser. `browser_read` returned an outline with no page text in it
+  at all, leaving the model to guess CSS selectors to read a single line. And
+  handing control back always failed, because the ninety-second window it waited
+  in outlives the sixty-second limit on the call itself. All three are fixed and
+  all twenty of its tools were then re-checked by asking a running copilot to use
+  them in words, rather than by testing them against a stand-in.
+
+- **It knows where you are.** Ask it what you are looking at and it can answer:
+  which page, which pane, and the address and text of a page it is driving.
+
+- **Driving mode scans instead of reading to you.** It used to stop at each
+  place and hold it long enough for a person to read. Now it goes through every
+  session at machine speed — including the ones you started yourself — with the
+  rest of the window under a field of dots and the quoted line cut clear of
+  them, and comes back to its own conversation with one answer grouped by
+  session. Interactive mode can be turned off, in which case the same work
+  happens with none of the showing and the same answer arrives.
+
+- **A phone gets the copilot in full**, over its own connection rather than the
+  one carrying sessions, and four tabs with the copilot leftmost. Session rows
+  take swipes: pin, archive, details, close.
+
+- **Remote machines are in the sidebar next to local ones**, under a heading per
+  machine. New session asks where, then which folder, then starts — the same
+  three steps whether the machine is this one or another. Controls that cannot
+  act on a remote machine are absent there rather than drawn and inert.
+
+- **The web app can open a page on the machine it is connected to**, and pick
+  which machine to start a session on.
+
+- **Dictation, once you give it a key.** Three transcription services, each
+  checked against its real endpoint before the key is stored, so a key that does
+  not work can never be the thing that makes a microphone appear. Until one is
+  stored the microphone is absent rather than greyed out.
 
 - **A short setup flow the first time you open the copilot.** Four questions,
   every one of them skippable, in front of the first start rather than after it:
@@ -35,6 +116,55 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   a copilot that is already running only at its next start.
 
 ### Fixed
+
+- **Every sign-in that got stuck was the same bug.** A page's request to open a
+  window was always refused, and refusing it makes the page's own call return
+  nothing — so a sign-in library opened its popup, was handed nothing back, and
+  waited forever for a message from a window it never had. The destination did
+  open, as a tab, and the sign-in did complete. It had no way to say so. That is
+  the QR code that appeared and stopped and the verification link that hangs.
+
+- **Google sign-in works.** It was being served a cut-down flow because the
+  browser announced itself as Electron. Nothing else about the browser is
+  disguised — the platform, engine and version stay true. If a site still
+  refuses, there is now a deliberate handover: open it in your own browser,
+  finish, and press a button to bring the session back.
+
+- **A sign-in that succeeds and then fails is explained.** One agent CLI's
+  sign-in genuinely completes and is then turned away on its first API call
+  because the installed version is no longer supported — which is why the
+  browser said it worked while the app showed nothing. The app now reports the
+  version it found, says it is too old, and offers to upgrade it with the
+  package manager that installed it.
+
+- **Token totals were over-counted by about 4%.** Resuming or forking a
+  conversation copies its history into a new session record, and each record was
+  de-duplicated only against itself. On one real folder that was 11,110 distinct
+  requests counted 11,598 times — 210 million tokens that had not been spent.
+  Per-session figures are unchanged, because a resumed conversation really did
+  re-send everything it inherited.
+
+- **Artifacts shows artifacts.** It kept coming back as a file browser because
+  nothing in the code held the meaning of the word, and the underlying data is a
+  list of file paths. An artifact is a file an agent produced whole; a file it
+  only edited is a change to your project and sits one chip away with its count.
+
+- **Source control opens the diff instead of jumping to Files.** The panel had
+  no way to show a diff — the function that fetches one had no callers anywhere
+  in the interface — so every row could only leave the page.
+
+- **A setting the copilot changes takes effect on the open window.** It would
+  write the change, report success, and leave the screen exactly as it was until
+  the app was reloaded. It now says which of the two happened, and it measures
+  that rather than claiming it.
+
+- **A session that ends stops being drawn.** A row could survive in the sidebar
+  after the session behind it was gone.
+
+- **The file pickers open the real one.** Add file, add folder and add an image
+  open the system dialog directly, with no in-app browser and no extra click,
+  and the copilot's folder picker is a proper window rather than a panel clipped
+  to the app's edges with its buttons outside.
 
 - **A session in a WSL folder can be restarted again, and a session that fails
   to start is no longer turned into a shell.** Three faults on one Windows
@@ -120,6 +250,31 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
   The sheet and the bell now read one report, so they cannot disagree about how
   many there are.
+
+### Removed
+
+Each of these was drawn, looked usable, and could not do what it appeared to.
+Removing them is the change, not a side effect of one.
+
+- **The row of controls inside the message box.** It repeated what the bar above
+  already carried. Attaching a file stays; everything else in that row is gone,
+  along with the two components behind it.
+- **Refresh and Reconnect on the phone.** Refresh sent exactly the frame that
+  pulling the list down already sends. Reconnect asked for something the app
+  does by itself on foreground, on a network change, and on a backoff — a button
+  for it is an admission that it might not. The one manual retry left appears
+  only when the connection is down *and* not already retrying.
+- **The pace controls in driving mode**, and the reading-time estimate they were
+  built on. Nothing measures how long text takes to read any more, so the dial
+  had nothing left to turn.
+- **The language picker**, which had one option.
+- **The bottom band of the browser.** What was there moved to the top right;
+  what was a label for a single tab is gone.
+- **The copy of the hooks page inside Settings.** It drew the same three
+  providers with the same three buttons as the page of the same name.
+- **A list of past sessions on the overview**, where every row opened the same
+  session — which was not a bug in the list, it was the only thing the list
+  could do. The itemisation it belonged to still adds up to the headline.
 
 ## [0.3.0] — 2026-08-17
 
