@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-18
+
 ### Security
 
 - **A paired device could reach every session on the machine, whatever folders
@@ -1149,7 +1151,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.4.0
 [0.3.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.3.0
 [0.1.9]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.9
 [0.1.8]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.8
