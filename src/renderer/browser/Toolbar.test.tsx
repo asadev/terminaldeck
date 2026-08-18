@@ -168,3 +168,97 @@ describe('the top-right corner carries what the bottom used to', () => {
     expect(markup).toContain('Stop (8)')
   })
 })
+
+/**
+ * The machine picker's place, and the badge that says where a page came from.
+ *
+ * *"Maybe give a drop down next to somewhere here with the bar, to choose which
+ * device we are talking to right now."*
+ *
+ * The picker itself is `MachinePicker`; what is held here is the toolbar's half
+ * of the bargain — that it makes room for one beside the address bar and not
+ * inside the field, and that a page served from another machine says so where
+ * somebody looks to find out where they are.
+ */
+
+function withMachines(
+  machinePicker?: React.ReactNode,
+  servedBy?: { name: string; port: number; localPort: number; sameNumber: boolean } | null,
+): string {
+  return renderToStaticMarkup(
+    <Toolbar
+      tab={newTab('tab-1')}
+      security="local"
+      progress={1}
+      resolution={{ kind: 'url', url: 'http://127.0.0.1:53412/', display: '127.0.0.1:53412' }}
+      focusToken={0}
+      onDraft={() => {}}
+      onEditing={() => {}}
+      onSubmit={() => {}}
+      onBack={() => {}}
+      onForward={() => {}}
+      onReload={() => {}}
+      onStop={() => {}}
+      onHome={() => {}}
+      onInspect={() => {}}
+      onRecord={() => {}}
+      onScreenshot={() => {}}
+      onDevtools={() => {}}
+      devtoolsOpen={false}
+      recording={false}
+      drawing={false}
+      deviceOpen={false}
+      onToggleDevice={() => {}}
+      onMenu={() => {}}
+      menuOpen={false}
+      steps={0}
+      machinePicker={machinePicker}
+      servedBy={servedBy}
+    />,
+  )
+}
+
+describe('the toolbar with another machine in play', () => {
+  it('is exactly the bar it always was when nothing is paired', () => {
+    // The whole point of the item: *"shape of the application should not be
+    // changing for local and remote devices."* With one computer there is
+    // nothing to choose between, so there is nothing extra on the bar.
+    const bare = withMachines(undefined, null)
+    expect(bare).not.toContain('bw-served')
+    expect(bare).toContain('aria-label="Address and search"')
+  })
+
+  it('places the picker outside the address field, not inside its focus ring', () => {
+    const markup = withMachines(<span data-test-picker="1">office-pc</span>, null)
+    const picker = markup.indexOf('data-test-picker')
+    const field = markup.indexOf('class="bw-address"')
+    expect(picker).toBeGreaterThan(-1)
+    expect(field).toBeGreaterThan(-1)
+    // Before the form opens. A button living inside that ring reads as part of
+    // the text being typed, and pressing it would take the ring with it.
+    expect(picker).toBeLessThan(field)
+  })
+
+  it('names the machine a loopback page is really being served from', () => {
+    const markup = withMachines(undefined, {
+      name: 'office-pc',
+      port: 3000,
+      localPort: 3000,
+      sameNumber: true,
+    })
+    expect(markup).toContain('office-pc')
+    expect(markup).toContain('3000')
+    expect(markup).toContain('carried to this machine')
+  })
+
+  it('says why the numbers differ, on the one page where they do', () => {
+    const markup = withMachines(undefined, {
+      name: 'office-pc',
+      port: 3000,
+      localPort: 53412,
+      sameNumber: false,
+    })
+    expect(markup).toContain('53412')
+    expect(markup).toContain('already in use on this machine')
+  })
+})

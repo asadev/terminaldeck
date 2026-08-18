@@ -261,22 +261,36 @@ final class CopilotLink {
     /// A `copilot.hello` is on the wire. Same rules.
     private(set) var isOpening = false
 
-    /**
-     * Somebody closed the copilot on this phone, deliberately.
+    /*
+     * **There is no `isHeldClosed` any more, and this is the note explaining
+     * why, so that nobody adds it back by reading the desktop's wire.**
      *
-     * `copilot.bye` is not sent when a person leaves the Copilot screen, and
-     * that is a decision: the badge on the session list — *a confirmation is
-     * waiting at your Mac* — is pushed down the watching subscription, so an
-     * automatic bye on `onDisappear` would switch off the half of this feature
-     * that works while nobody is looking at it. What `bye` is *for* is the
-     * shared device: a person putting the phone down where somebody else may
-     * pick it up, who wants the copilot shut rather than one tap away.
+     * There used to be a *"Close the copilot here"* item in this screen's
+     * overflow menu. It sent `copilot.bye`, held the connection shut across
+     * reconnects so that the next `welcome` could not helpfully re-open it, and
+     * had a whole `CopilotAccess` case of its own to draw. Its justification was
+     * the shared device: a person putting the phone down where somebody else may
+     * pick it up.
      *
-     * So it is an explicit act, and it has to survive a reconnect — otherwise
-     * the next `welcome` would helpfully re-open the thing they just closed.
-     * Cleared by `reopen()` and by `forget()`, and by nothing else.
+     * Asad, looking at it: *"Why do we have Close the copilot here? It doesn't
+     * make any sense."* And he is right about a phone specifically. A phone is
+     * locked by a face; the thing that keeps somebody else out of this app is
+     * the lock screen, not a menu item three taps in that a person would have to
+     * remember to press. Meanwhile the item was the only way to reach a state
+     * this app then had to explain — a whole screen saying "closed on this
+     * phone, and nothing happened at the machine" — which is a screen that only
+     * ever existed because of the button above it.
+     *
+     * What *is* still reachable, because each of these is a different verb and
+     * each is real: **Stop this phone's copilot** ends the run that spends money
+     * (`stop()`, still in the menu); **Forget this machine** on the Machines
+     * screen drops the credential along with everything else; and the connection
+     * itself is granted and revoked **at the machine that minted the code**,
+     * which is what the connect screen has always said. `copilot.bye` remains in
+     * the wire vocabulary — the browser client sends it, and `WireCodec` still
+     * pins its encoding — this client simply no longer has a control that means
+     * it.
      */
-    private(set) var isHeldClosed = false
 
     /// What the copilot is, or nil when the machine has not said yet — which is
     /// also what it is after a drop. Nil draws "not known", never "stopped".
@@ -426,7 +440,6 @@ final class CopilotLink {
             if grant.canWatch { return .watch }
             return .notGranted
         }
-        if isHeldClosed { return .closed }
         // Only now. Not holding the credential matters exactly when the phone
         // needs to *use* it, which is when it is not already in.
         guard holdsCredential else { return .credentialLost }
@@ -496,7 +509,7 @@ final class CopilotLink {
      * what a recovered socket produces.
      */
     private func openConnection() {
-        guard isOffered, isImplemented, linked, !isHeldClosed, !isOpen else { return }
+        guard isOffered, isImplemented, linked, !isOpen else { return }
         guard let credential = vault.copilotCredential(), !credential.isEmpty else { return }
         isOpening = true
         guard wire.send(.copilotHello(credential: credential)) else {
@@ -558,29 +571,6 @@ final class CopilotLink {
     }
 
     /**
-     * Close the copilot on this phone, deliberately.
-     *
-     * See `isHeldClosed` for why this is a button rather than an `onDisappear`.
-     * The credential and the record survive — this is the connection ending, not
-     * the authorisation — so `reopen()` needs no code and no ceremony.
-     */
-    func close() {
-        guard isOpen || isOpening else { return }
-        // Held first, so that a `copilot.grant` racing this frame cannot re-open
-        // what somebody just closed.
-        isHeldClosed = true
-        wire.send(.copilotBye)
-        closeLocally()
-    }
-
-    /// Open it again after a deliberate close. No code: the record is still
-    /// there and this phone still holds the credential.
-    func reopen() {
-        isHeldClosed = false
-        openConnection()
-    }
-
-    /**
      * Ask for the stream, and for the two things it does not replay.
      *
      * `copilot.attach` is answered with the state and, when there is a run, the
@@ -625,7 +615,7 @@ final class CopilotLink {
     }
 
     /// Everything that belongs to an open connection rather than to the phone.
-    /// Shared by `close()` and `connectionLost()` so the two cannot drift about
+    /// Shared by `connectionLost()` and `forget()` so the two cannot drift about
     /// what a closed connection means on screen.
     private func closeLocally() {
         isOpen = false
@@ -652,7 +642,6 @@ final class CopilotLink {
         // one entirely.
         isImplemented = false
         linked = false
-        isHeldClosed = false
         vault.storeCopilotCredential(nil)
         state = nil
         timeline = []
@@ -731,7 +720,6 @@ final class CopilotLink {
 
         if !linked {
             vault.storeCopilotCredential(nil)
-            isHeldClosed = false
         }
         if !connection.open, wasOpen { closeLocally() }
         if connection.open, !wasOpen { subscribe() }
@@ -1135,20 +1123,29 @@ final class CopilotLink {
 }
 
 /**
- * The eight things this phone can be, with respect to one machine's copilot.
+ * The seven things this phone can be, with respect to one machine's copilot.
  *
  * One type rather than a capability flag and five booleans at every call site,
- * because there are eight states and the screens have to draw eight different
+ * because there are seven states and the screens have to draw seven different
  * things — and the failure mode of re-deriving it is drawing the *third* answer
  * for the *fourth* state, which is a phone hiding a feature that a person could
  * have turned on in ten seconds if anything had told them it existed.
  *
  * They are ordered as the ceremony runs: no copilot, no connection, no
- * credential, closed on purpose, opening, open-and-empty, watching, directing.
- * Reading the list top to bottom is reading what has to be true before the next
- * line is reachable.
+ * credential, opening, open-and-empty, watching, directing. Reading the list top
+ * to bottom is reading what has to be true before the next line is reachable.
+ *
+ * There were eight. `closed` — *shut on this phone on purpose, one tap to
+ * re-open* — went with the menu item that was the only way to reach it; the
+ * removal and the sentence behind it are recorded on `CopilotLink`, where the
+ * `isHeldClosed` flag used to be.
+ *
+ * `CaseIterable` so `CopilotPillTests` can walk all of them rather than the two
+ * that are interesting today. A state added later and not thought about is a
+ * fourth pill appearing or not appearing for it by accident, which is the whole
+ * class of failure this review is about.
  */
-enum CopilotAccess: Equatable {
+enum CopilotAccess: Equatable, CaseIterable {
     /// The machine does not speak `copilot.*`. Nothing is drawn — there is no
     /// switch on that machine to point at, so a screen explaining where to find
     /// one would be a screen sending somebody to look for a control that is not
@@ -1165,9 +1162,6 @@ enum CopilotAccess: Equatable {
     /// is sent exactly once and cannot be asked for again, so the remedy is a
     /// **new** code rather than a retry.
     case credentialLost
-    /// Somebody closed the copilot on this phone. Everything is still in place;
-    /// one tap re-opens it with no code. See `CopilotLink.isHeldClosed`.
-    case closed
     /// The credential is on its way, or the socket is down and it cannot be. A
     /// state with nothing to do in it, drawn as such rather than as an empty
     /// screen that looks like a broken one.
@@ -1185,4 +1179,49 @@ enum CopilotAccess: Equatable {
     /// read where the buttons are drawn rather than folded in here: a phone can
     /// hold `act` without `alter`, and that is the ordinary careful setup.
     case direct
+
+    /**
+     * **Whether the copilot is connected, in the sense a person means it** —
+     * and therefore whether this machine gets a fourth pill in the tab bar.
+     *
+     * Asad: *"if the copilot is not connecting, this icon should not be inside
+     * the pill — then it will be three icon pill. Otherwise if the copilot is
+     * connected, then four icon pill, automatically, like that way."* So the bar
+     * asks this question of the current machine, and `DeckModel.showsCopilotTab`
+     * is where the asking happens.
+     *
+     * Written as a `switch` over every case rather than as `self != .notConnected
+     * && …`, so that a state added later cannot inherit an answer by accident:
+     * the compiler makes somebody decide which side of the line it falls on, and
+     * "which side of the line" here is a whole pill appearing or not appearing.
+     *
+     * **Two of the answers are worth arguing about.**
+     *
+     * `connecting` counts as **connected**, and that is the important one. It
+     * means *this phone holds a working credential and the socket is not up
+     * right now* — a machine asleep, a phone on a train, a relay reconnecting.
+     * The alternative would be a tab bar that adds and removes a pill every time
+     * the network blinks, sliding the other three pills sideways under a thumb
+     * that had learned where they are. The pill follows **the authorisation, not
+     * the socket**, which is also how the Sessions and Localhost tabs behave when
+     * a machine goes away: they stay, and they say so.
+     *
+     * `notGranted` also counts as connected, because it *is*: the credential
+     * works and the connection is open, and every box beside it is unticked. The
+     * screen behind the pill says exactly that and names the switch to tick.
+     * Hiding the tab would hide the only sentence that explains the situation.
+     *
+     * And `credentialLost` counts as **not** connected, even though the machine
+     * still holds a record for this phone, because the remedy is the same one
+     * `notConnected` has — a new six-digit code, minted at the machine — and
+     * that lives in Settings now.
+     */
+    var isConnected: Bool {
+        switch self {
+        case .notOffered, .notConnected, .credentialLost:
+            return false
+        case .connecting, .notGranted, .watch, .direct:
+            return true
+        }
+    }
 }

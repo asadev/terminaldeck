@@ -72,6 +72,31 @@ interface Props {
    * silently vanishes is worse than one that says it is unavailable.
    */
   onToggleIsolation?: () => void
+
+  /**
+   * The machine picker, built by the panel and placed here.
+   *
+   * A slot rather than five more props, and the reason is ownership: which
+   * machines exist, which one is chosen and what happens when one goes offline
+   * are all the workspace's business, and threading them through a presentation
+   * component would make this file the second place that had an opinion about
+   * remote machines. What this file owns is *where it sits* — beside the address
+   * bar, which is what he asked for and where it belongs, because it says what
+   * the thing next to it means.
+   *
+   * Absent when no other machine is paired, and then the bar is the bar it has
+   * always been.
+   */
+  machinePicker?: ReactNode
+  /**
+   * The machine behind the page in the bar, when the page came from one.
+   *
+   * Read from the URL rather than remembered, so it survives links, Back and a
+   * reload — see `servedBy` in `machines-bridge.ts`. It is here rather than in a
+   * band because it is a fact about the address, and the address bar is where
+   * somebody looks to find out where they are.
+   */
+  servedBy?: { name: string; port: number; localPort: number; sameNumber: boolean } | null
 }
 
 /**
@@ -112,6 +137,8 @@ export function Toolbar({
   menuOpen,
   steps,
   onToggleIsolation,
+  machinePicker,
+  servedBy = null,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -157,6 +184,12 @@ export function Toolbar({
         </IconButton>
       </div>
 
+      {/* Outside the field, not inside it. The field carries one focus ring
+          around one text input; a button living inside that ring reads as part
+          of the text you are typing, and pressing it would take the ring with
+          it. */}
+      {machinePicker}
+
       <form className="bw-address" onSubmit={submit}>
         <span className="bw-security" data-level={security} title={securityTitle(security)}>
           {security === 'secure' ? (
@@ -181,6 +214,29 @@ export function Toolbar({
           )}
           <span className="bw-security-text">{securityLabel(security)}</span>
         </span>
+
+        {/*
+          Where this loopback page actually comes from.
+
+          Only ever drawn for a page this window opened a tunnel for, so it is
+          never a decoration: the address really does read `127.0.0.1:<n>` and
+          the server really is on another computer, and without this line
+          nothing on screen says which one. The title carries the port
+          arithmetic, because that is the part that only matters when it goes
+          wrong.
+        */}
+        {servedBy && (
+          <span
+            className="bw-served"
+            title={
+              servedBy.sameNumber
+                ? `Served from port ${servedBy.port} on ${servedBy.name}, carried to this machine.`
+                : `Served from port ${servedBy.port} on ${servedBy.name}. It is on port ${servedBy.localPort} here because ${servedBy.port} is already in use on this machine.`
+            }
+          >
+            {servedBy.name}:{servedBy.port}
+          </span>
+        )}
 
         <input
           ref={inputRef}

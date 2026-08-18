@@ -70,6 +70,7 @@
  * would accept every frame it sends.
  */
 
+import { shortAddress } from './browse'
 import { CAPABILITY, type ClientMessage, type LocalPort, type ServerMessage } from './protocol-client'
 
 /**
@@ -110,7 +111,14 @@ export interface LocalhostState {
   /** The last finished check, kept on screen until the next one starts. */
   outcome: CheckOutcome | null
   /**
-   * The port whose page is being opened **on the machine**, or null.
+   * The **address** being opened, or null.
+   *
+   * A URL rather than a port number, and that widening is the whole of the
+   * browse bar: a port is what a row knows about itself, and a person typing
+   * into a field knows about `localhost:3000/admin`, `192.168.1.9:8080` and the
+   * internal hostname their team uses. One field for both is what makes a row's
+   * Open and the bar's Open the same press with the same answer, rather than two
+   * features that agree until one of them is changed.
    *
    * Separate from {@link checking} and never folded into it. A check dials a
    * port and closes; an open puts a tab on somebody's screen and leaves it
@@ -118,9 +126,9 @@ export interface LocalhostState {
    * field would have the second overwriting the first the moment anybody used
    * both on the same row.
    */
-  opening: number | null
+  opening: string | null
   /** The last open that finished, kept on screen until another starts. */
-  openOutcome: { port: number; kind: 'opened' } | { port: number; kind: 'refused'; detail: string } | null
+  openOutcome: { url: string; kind: 'opened' } | { url: string; kind: 'refused'; detail: string } | null
 }
 
 export const NO_LOCALHOST: LocalhostState = {
@@ -141,14 +149,19 @@ export type LocalhostAction =
    */
   | { t: 'check'; port: number; id: string }
   /**
-   * Open `http://localhost:<port>/` **on the machine**, in its own browser.
+   * Open an address **on the machine**, in its own browser.
+   *
+   * The URL is composed by the caller — `localhostUrl` for a row, `parseAddress`
+   * for the browse bar — rather than assembled here from a port, because the two
+   * callers know different things and only one of them has a port at all. What
+   * this machine owns is *one open at a time and one answer for it*.
    *
    * No id, unlike a check: there is one of these in flight at a time and the
    * confirmation names the URL rather than a handle, so there is nothing to
    * correlate. A second press while one is outstanding is dropped for the same
    * reason a second `list` is — one press, one page.
    */
-  | { t: 'open'; port: number }
+  | { t: 'open'; url: string }
   | { t: 'frame'; message: ServerMessage }
   /** {@link CHECK_PATIENCE_MS} elapsed with nothing back for this check. */
   | { t: 'silence'; id: string }
@@ -202,8 +215,8 @@ export function localhostStep(state: LocalhostState, action: LocalhostAction): L
         // The previous answer goes now rather than when the new one arrives, the
         // same rule the check follows: "opened port 3000" left under a spinner
         // for port 5173 is a stale truth that reads as a live one.
-        state: { ...state, opening: action.port, openOutcome: null },
-        send: [{ t: 'web.open', url: localhostUrl(action.port) }],
+        state: { ...state, opening: action.url, openOutcome: null },
+        send: [{ t: 'web.open', url: action.url }],
       }
     }
 
@@ -253,7 +266,7 @@ function afterFrame(state: LocalhostState, message: ServerMessage): LocalhostSte
   const opening = state.opening
   if (opening !== null) {
     if (message.t === 'web.opened') {
-      return { state: { ...state, opening: null, openOutcome: { port: opening, kind: 'opened' } }, send: [] }
+      return { state: { ...state, opening: null, openOutcome: { url: opening, kind: 'opened' } }, send: [] }
     }
     /*
      * An `error` while an open is in flight is that open's refusal.
@@ -267,7 +280,7 @@ function afterFrame(state: LocalhostState, message: ServerMessage): LocalhostSte
      */
     if (message.t === 'error') {
       return {
-        state: { ...state, opening: null, openOutcome: { port: opening, kind: 'refused', detail: message.message } },
+        state: { ...state, opening: null, openOutcome: { url: opening, kind: 'refused', detail: message.message } },
         send: [],
       }
     }
@@ -359,18 +372,21 @@ export function openSentence(
   outcome: NonNullable<LocalhostState['openOutcome']>,
   noun: string,
 ): string {
+  // The address the way anybody says it — `localhost:3000`, not
+  // `http://localhost:3000/`. The long form is what goes on the wire and the
+  // short one is what somebody typed, and reading their own input back to them
+  // in a longer spelling is how a confirmation stops looking like one.
+  const said = shortAddress(outcome.url)
   if (outcome.kind === 'opened') {
     // Precise about what happened and where. Not "port 3000 is open" — the page
     // was opened on somebody else's screen, which is the smaller claim and the
     // true one, and the whole difference between this and a tunnel.
-    return `Opened localhost:${outcome.port} on the ${noun}.`
+    return `Opened ${said} on the ${noun}.`
   }
   // The machine's own words when it gave any. A refusal from there is about that
   // machine — no window, not your device, a URL it will not open — and inventing
   // a sentence here would replace a specific remedy with a general one.
-  return outcome.detail === ''
-    ? `The ${noun} did not open localhost:${outcome.port}.`
-    : outcome.detail
+  return outcome.detail === '' ? `The ${noun} did not open ${said}.` : outcome.detail
 }
 
 /** What a finished check says, in one line. */
@@ -405,20 +421,57 @@ export function stalePortsSentence(noun: string): string {
 }
 
 /**
- * Why there is no button that opens the page.
+ * The answer to the question he asked, in one sentence he can act on.
  *
- * This is the sentence the whole module is accountable to, so it says what
- * cannot be done, why, and what can be done instead — in that order, and without
- * apologising for a limitation that is a property of browsers rather than of
- * this app. The alternative named is real: the desktop opens localhost in its
- * own browser and the phone app serves it on the phone's loopback, and both of
- * those are things the reader may already have.
+ * He asked for it directly, and it is the only real architectural question on
+ * this screen:
+ *
+ *   > *"Maybe we can give our domain to them to utilise, to see the localhost —
+ *   > like `app.terminaldeck.dev/something`, and they can browse on those links
+ *   > by clicking here and it can open to another new tab… or subdomains or
+ *   > something kind of technology, just like ngrok."*
+ *
+ * The answer is no, and the reason is not effort. A public web address for
+ * somebody's dev server means a server of ours accepting an ordinary HTTPS
+ * request from an ordinary visitor who holds no key, and forwarding it to that
+ * machine — which means terminating the encryption and reading the traffic in
+ * the clear, both directions, for as long as the link is up. That is what ngrok
+ * is and it is a legitimate product; it is not what the relay is. The relay
+ * carries frames it cannot open, so that the honest sentence on the security
+ * page — *the relay never holds a key* — stays true, and a feature that quietly
+ * made it false for one kind of traffic would make the whole claim unverifiable
+ * for every kind. It would also mean this project hosting whatever strangers
+ * point at it, on this domain, with the takedowns and the phishing reports that
+ * come with that.
+ *
+ * So it stays a separate thing if it is ever built at all, with its own promise
+ * printed on it, and this screen opens pages on machines the reader already has
+ * instead. That is what the sentence says, and it says the *whole* of it rather
+ * than "not supported", because a limitation nobody can see the shape of is one
+ * that gets re-proposed every month.
+ */
+export const PUBLIC_ADDRESS_ANSWER =
+  'These addresses have no public web link, and will not get one from here: publishing your localhost on a ' +
+  'terminaldeck.dev address would mean this service decrypting and serving your site to strangers, which is the ' +
+  'one thing the relay is built to be unable to do — so a page opens on a machine you already have instead.'
+
+/**
+ * Why this browser cannot show the page inside itself.
+ *
+ * Kept, shortened, and moved out of the way. It used to be four sentences at the
+ * bottom of the screen explaining a limitation, which was the right content in
+ * the wrong quantity: it is the answer to a question somebody asks once, so it
+ * belongs where a question gets asked and not under every visit.
+ *
+ * The obstacle is real and is a property of browsers rather than of this app — a
+ * tab cannot listen on `127.0.0.1`, so it cannot be the origin a dev server's own
+ * links, cookies and hot-reload socket resolve against — and the two clients
+ * named can genuinely do it.
  */
 export function cannotServeSentence(noun: string): string {
   return (
-    'A browser tab cannot open one of these pages. Serving it means listening on 127.0.0.1 at the same port ' +
-    "number, so the site's own links, cookies and hot-reload socket still find it — the phone app and the " +
-    `${noun} itself can do that and a web page cannot. What this can do is check a port: the ${noun} dials it ` +
-    'and says whether anything answered.'
+    'A browser tab cannot open one of these pages inside itself: that means listening on 127.0.0.1 at the same ' +
+    `port number, so the site's own links and hot-reload socket still find it, and only the phone app and the ` +
+    `${noun} itself can do that.`
   )
 }

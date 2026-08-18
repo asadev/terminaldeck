@@ -33,6 +33,22 @@ import './StartPage.css'
  * `src/main/browser-error.ts` above the list. That is deliberate rather than
  * decorative: "nothing is listening on localhost:3000" is most useful directly
  * above the list of what IS listening.
+ *
+ * ## And the machine the list is about
+ *
+ * It said **"Listening on this machine right now"** and meant it, which is the
+ * whole of the third item in the 2026-08-18 review:
+ *
+ *   > *"When I click on browser there is no way for me to find all the localhost
+ *   > pages of the remote device. I should be able to see the available whole
+ *   > ports."*
+ *
+ * So the list has a {@link PortSource} now. Absent, it is this machine's own
+ * scan and the page is the page it always was. Present, it is whatever another
+ * machine last said it was serving — same page, same rows, same click, with the
+ * machine's name in the sentence that used to say "this machine". One list, one
+ * shape, because *"shape of the application should not be changing for local and
+ * remote devices"*.
  */
 
 /**
@@ -61,6 +77,33 @@ export interface StartPageBridge extends DevServerBridge {
   devPorts(force?: boolean): Promise<unknown>
 }
 
+/**
+ * Where the port list comes from, when it is not this machine's own scan.
+ *
+ * An interface rather than a machine id, so this page never learns what a
+ * machine is. It draws a name, a list and two verbs; whether those cross a relay
+ * is the workspace's business, and keeping it that way is what stops a second
+ * copy of the remote plumbing growing inside a page whose job is to be a new
+ * tab.
+ */
+export interface PortSource {
+  /** The machine's name, as it appears in the sentences that name one. */
+  name: string
+  /**
+   * What it says it is serving.
+   *
+   * Null means it has not answered, and the page waits rather than claiming
+   * nothing is listening — the difference between a machine with no dev server
+   * and a machine that has not been asked yet is the difference between a
+   * sentence and a lie.
+   */
+  ports: DevPort[] | null
+  /** Open one of them. The page never builds a remote address itself. */
+  open(port: number): void
+  /** Ask it again — the "I have just started my dev server over there" button. */
+  refresh(): void
+}
+
 /** A load that failed, as the main process described it. */
 export interface StartPageFailure {
   /** One written sentence — see `src/main/browser-error.ts`. */
@@ -78,6 +121,12 @@ interface Props {
   failure?: StartPageFailure | null
   /** Reload the address that failed. Absent hides the button rather than disabling it. */
   onRetry?: () => void
+  /**
+   * Another machine's ports instead of this one's.
+   *
+   * Null — the default — is this machine, scanned here, exactly as before.
+   */
+  source?: PortSource | null
   /** Injectable for tests; defaults to the preload bridge. */
   bridge?: StartPageBridge
 }
@@ -127,6 +176,23 @@ export function splitOwnPorts(ports: readonly DevPort[]): { open: DevPort[]; our
 }
 
 /**
+ * Whether the "start a dev server" rows belong on this page right now.
+ *
+ * They do only when the list above them is this machine's. Every row in that
+ * panel is a folder on *this* disk with a script *this* process would run, so
+ * pressing Start while the list is about another computer would spawn a server
+ * on the wrong one — and there is no verb on the wire for starting one on the
+ * right one, so the honest amount to show is none.
+ *
+ * Pure and exported for the reason `splitOwnPorts` is: the panel decides what to
+ * draw inside an effect, which this project's test run cannot reach, so the rule
+ * has to be somewhere a test can see it or it is not pinned at all.
+ */
+export function offersDevServers(source: PortSource | null): boolean {
+  return source === null
+}
+
+/**
  * How a port is described in one line: `5037 adb`, or the port alone.
  *
  * Exported so the wording is testable without a DOM. The process name is
@@ -138,7 +204,7 @@ export function portSummary(entry: DevPort): string {
   return entry.process ? `${entry.port} ${entry.process}` : String(entry.port)
 }
 
-export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
+export function StartPage({ onOpen, failure = null, onRetry, source = null, bridge }: Props) {
   const api = bridge ?? (globalThis as { deck?: StartPageBridge }).deck
   const [load, setLoad] = useState<Load>({ state: 'loading' })
   const [address, setAddress] = useState('')
@@ -160,7 +226,18 @@ export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
     [api],
   )
 
-  useEffect(() => scan(false), [scan])
+  /*
+   * Only when the list is this machine's.
+   *
+   * `lsof` reads *this* process table, so running it while the page is about
+   * another computer would be a scan whose answer is thrown away — and, worse,
+   * a scan whose answer would appear for a frame if the source ever went away
+   * mid-render.
+   */
+  useEffect(() => {
+    if (source) return
+    scan(false)
+  }, [scan, source])
 
   /*
    * Rescan whenever a *different* load fails.
@@ -172,8 +249,32 @@ export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
    */
   const failedUrl = failure?.url ?? ''
   useEffect(() => {
+    if (source) return
     if (failedUrl) scan(true)
-  }, [failedUrl, scan])
+  }, [failedUrl, scan, source])
+
+  /*
+   * The one list, from whichever machine it is about.
+   *
+   * Assembled here rather than branched three times in the tree below, so that
+   * the rows, the empty sentence, the "Scan again" button and the heading can
+   * only ever describe the same computer. They used to be able to disagree
+   * because there was only one computer they could describe.
+   */
+  const shown: Load = source
+    ? source.ports === null
+      ? { state: 'loading' }
+      : { state: 'ready', ports: source.ports }
+    : load
+  /** What the sentences call it. "this machine" is the words that were there. */
+  const where = source ? source.name : 'this machine'
+  const openPort = source
+    ? source.open
+    : // The local row is a plain navigation, and stays one: `localhost:<port>`
+      // is what a person would have typed, so it is what goes in the bar and
+      // what ends up in history.
+      (port: number): void => onOpen(`http://localhost:${port}`)
+  const rescan = source ? source.refresh : (): void => scan(true)
 
   const submit = (event: FormEvent): void => {
     event.preventDefault()
@@ -223,14 +324,19 @@ export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
           </p>
         )}
 
-        {load.state === 'loading' && <p className="bw-start-note">Looking for dev servers…</p>}
+        {shown.state === 'loading' && (
+          <p className="bw-start-note">
+            {source ? `Asking ${source.name} what it is serving…` : 'Looking for dev servers…'}
+          </p>
+        )}
 
-        {load.state === 'failed' && <p className="bw-start-note">{load.message}</p>}
+        {shown.state === 'failed' && <p className="bw-start-note">{shown.message}</p>}
 
-        {load.state === 'ready' && (
+        {shown.state === 'ready' && (
           <PortList
-            ports={load.ports}
-            onOpen={onOpen}
+            ports={shown.ports}
+            where={where}
+            onOpenPort={openPort}
             oursOpen={oursOpen}
             onToggleOurs={() => setOursOpen((open) => !open)}
           />
@@ -242,11 +348,20 @@ export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
           projects whose links would work if something were running. The panel
           draws nothing at all when there is no project with a dev script, so on
           a machine this does not apply to the page is exactly as it was.
-        */}
-        <DevServerPanel onOpen={onOpen} bridge={api} />
 
-        {load.state !== 'loading' && (
-          <button type="button" className="bw-start-refresh" onClick={() => scan(true)}>
+          Not drawn at all when the page is about another machine, and that is
+          not a shortcut. Every row in it is a project folder on *this* disk with
+          a dev script this process can run; pressing Start would spawn a server
+          here while the list above it is over there, which is the one thing this
+          page must never do. There is no verb on the wire for starting a dev
+          server on a machine this desktop is a guest of, so the honest amount to
+          show is none — see `offersDevServers`, which is where that rule lives so
+          that a test can hold it.
+        */}
+        {offersDevServers(source) && <DevServerPanel onOpen={onOpen} bridge={api} />}
+
+        {shown.state !== 'loading' && (
+          <button type="button" className="bw-start-refresh" onClick={rescan}>
             Scan again
           </button>
         )}
@@ -275,15 +390,31 @@ export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
  * Split out and given its own props so the three states it has — nothing at
  * all, nothing but ours, and a real list — are one component's job rather than
  * three conditions inline in a page.
+ *
+ * ## `where`, and why it is a word rather than a flag
+ *
+ * The rows are identical whichever machine they came from, which is the point:
+ * *"same type of same browser window… shape of the application should not be
+ * changing for local and remote devices."* The only thing that differs is the
+ * name in the sentence above them, so that name is the only thing passed in. A
+ * boolean would have invited a second layout for the remote case, which is the
+ * change he has now objected to three nights running.
+ *
+ * The fold below is empty for a remote machine and is therefore never drawn —
+ * the far end filters its own listeners out before it sends the list, so there
+ * is nothing to account for. See `asDevPorts` in `machines-bridge.ts`.
  */
 function PortList({
   ports,
-  onOpen,
+  where,
+  onOpenPort,
   oursOpen,
   onToggleOurs,
 }: {
   ports: readonly DevPort[]
-  onOpen(url: string): void
+  /** The machine the list is about, as the two sentences name it. */
+  where: string
+  onOpenPort(port: number): void
   oursOpen: boolean
   onToggleOurs(): void
 }) {
@@ -294,20 +425,20 @@ function PortList({
       {open.length === 0 ? (
         <p className="bw-start-note">
           {ours.length === 0
-            ? 'Nothing is listening on this machine. Start your dev server, then scan again — or type an address above.'
-            : `Nothing is listening here but ${BRAND.name} itself. Start your dev server, then scan again — or type an address above.`}
+            ? `Nothing is listening on ${where}. Start a dev server, then scan again — or type an address above.`
+            : `Nothing is listening on ${where} but ${BRAND.name} itself. Start a dev server, then scan again — or type an address above.`}
         </p>
       ) : (
         <>
-          <p className="bw-start-note">Listening on this machine right now:</p>
+          <p className="bw-start-note">Listening on {where} right now:</p>
           <ul className="bw-start-list">
             {open.map((p) => (
               <li key={p.port}>
                 <button
                   type="button"
                   className="bw-start-port"
-                  aria-label={`Open localhost port ${portSummary(p)}`}
-                  onClick={() => onOpen(`http://localhost:${p.port}`)}
+                  aria-label={`Open port ${portSummary(p)} on ${where}`}
+                  onClick={() => onOpenPort(p.port)}
                 >
                   <span className="bw-start-port-num">:{p.port}</span>
                   {p.process && <span className="bw-start-port-cmd">{p.process}</span>}

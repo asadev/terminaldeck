@@ -1429,62 +1429,23 @@
 
 /* --------------------------------------------------------------- the ⓘ -- */
 
-/* A label and its ⓘ on one line, with the opened body wrapping onto the next.
-   `flex-basis: 100%` on the body is what puts it there without a second
-   container: the row is the flex line, the body is a line of its own. */
+/* A label and its ⓘ on one line.
+
+   The line used to have to accommodate an opened paragraph wrapping under it,
+   because the dot was a disclosure that grew the pane. Every ⓘ in this window is
+   a popup now — `components/HoverNote.tsx` — so nothing of the explanation is
+   ever in this flex line, and the dot's own shape lives in `HoverNote.css` with
+   it. What is left here is the one thing that is genuinely this window's: how a
+   label and its dot share a baseline.
+
+   `flex-wrap` stays. A long label in a narrow sheet still has to wrap, and it
+   has to take its dot with it rather than pushing it off the edge. */
 .settings-label-line {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
   gap: var(--sp-1);
   min-width: 0;
-}
-
-/* Sized to the type rather than to a button: it sits inside a sentence, so a
-   32px hit target would push the label off its own baseline. The padding is
-   what makes it clickable without making it look like a control. */
-.settings-info {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-family: var(--font-ui);
-  font-size: var(--t-caption);
-  line-height: 1;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
-}
-
-.settings-info:hover,
-.settings-info[aria-expanded='true'] {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.settings-info:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* The same sentence the tooltip carries, for a click rather than a hover.
-   Placed by its host *after* the help line rather than inside the label line —
-   a disclosure that opens above the text it is expanding reads as an
-   interruption. A step dimmer than the help line, and held to the reading
-   measure so it does not run under the control on the right. */
-.settings-info-body {
-  display: block;
-  margin-top: var(--sp-15);
-  max-width: 62ch;
-  font-size: var(--t-caption);
-  line-height: var(--lh-body);
-  color: var(--text-tertiary);
 }
 
 /* ------------------------------------------------------------- popover -- */

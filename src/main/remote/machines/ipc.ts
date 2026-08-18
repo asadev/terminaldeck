@@ -30,6 +30,7 @@
  * somebody visits its screen is a feature that is off.
  */
 
+import { createRemoteReach, type RemoteReach } from '../../localhost-reach'
 import { MAX_URL_LENGTH } from '../protocol'
 import { DEFAULT_RELAY_URL } from '../../../shared/relay-wire'
 import type { InvokeRegistrar } from '../../ipc-seam'
@@ -116,6 +117,8 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   const makeLink = deps.createLink ?? createMachineLink
   const pair = deps.pair ?? pairWithCode
   const links = new Map<string, MachineLink>()
+  /** One reach per machine — the loopback listeners this desktop serves *its* ports on. */
+  const reaches = new Map<string, RemoteReach>()
 
   function relayUrl(): string {
     // This desktop's own relay when it has one, because two machines belonging
@@ -170,13 +173,40 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     if (existing) return existing
     const secrets = store.secrets(machine.id)
     if (secrets === null) return null
+    /*
+     * The reach is made with the link and lives exactly as long as it does.
+     *
+     * It holds loopback listeners on *this* machine that carry bytes to that
+     * one, so it is meaningless without a channel — and dangerous to outlive
+     * one: a listener still accepting connections after the link has gone is an
+     * address in somebody's address bar that answers and then hangs.
+     */
+    const reach = createRemoteReach({ send: (message) => links.get(machine.id)?.localhost(message) ?? false })
+    reaches.set(machine.id, reach)
     const link = makeLink({
       id: machine.id,
       secrets,
-      onState: () => announce(),
+      onState: (state) => {
+        /*
+         * A link that is no longer online takes its tunnels with it.
+         *
+         * Not a tidying-up: the state that has just changed is the *only* thing
+         * that could still be carrying those bytes, so every page open on one of
+         * these listeners is already dead. Closing the listener turns a page
+         * that hangs into a page that says the connection was refused, which is
+         * a thing a browser can explain and a hang is not. They come back the
+         * moment somebody opens a port again — the reach re-opens on demand and
+         * a redial is one handshake.
+         */
+        if (state.state !== 'online') {
+          reach.closeAll('The connection to that machine dropped, so its pages are no longer being served here.')
+        }
+        announce()
+      },
       onOutput: (sessionId, data, replay) => {
         deps.broadcast(MACHINES_OUTPUT_CHANNEL, { machineId: machine.id, sessionId, data, replay })
       },
+      onLocalhost: (message) => reach.handle(message),
       onWelcome: (platform) => store.sawWelcome(machine.id, platform),
       now,
     })
@@ -284,13 +314,33 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
       // socket open to a machine this desktop no longer claims to know.
       links.get(id)?.disconnect()
       links.delete(id)
+      // And its listeners, which are the same argument one layer down: a machine
+      // this desktop has forgotten must not still be serving pages here.
+      reaches.get(id)?.closeAll('That machine was removed.')
+      reaches.delete(id)
       store.forget(id)
     }
+    /*
+     * Broadcast as well as answered, and the difference is a whole window.
+     *
+     * The reply goes to whoever called — the Remote screen, which redraws from
+     * it. Every *other* surface reading machines learns about them only from
+     * this channel, and since the browser panel grew a machine picker that list
+     * is on screen in more than one place at once. Without this, forgetting a
+     * machine in Settings left it in the picker beside the address bar until
+     * some unrelated link state happened to change, offering an address on a
+     * computer this desktop had just been told to forget.
+     */
+    announce()
     return view()
   })
 
   ipcMain.handle('machines:rename', (_event, id: unknown, name: unknown): MachinesView => {
     if (typeof id === 'string') store.rename(id, name)
+    // The same argument as `forget` above: a machine's name is drawn in the
+    // sidebar, in the picker and on its own row, and only one of those three
+    // called this.
+    announce()
     return view()
   })
 
@@ -366,6 +416,35 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   )
 
   /**
+   * End one session on another machine.
+   *
+   * Its own channel rather than a flag on `machines:detach`, and the difference
+   * is the whole point of the verb: `detach` says *stop sending me this
+   * session's bytes* and leaves the process running, which is what closing a
+   * screen does. This kills it, for everyone attached to it, and it cannot be
+   * undone. Two acts that far apart sharing one channel is how a client comes
+   * to end somebody's work by passing the wrong argument.
+   *
+   * The boolean is *the request left this machine*, exactly as `create`'s is —
+   * the session ends on the other computer, and whether it did comes back as a
+   * `closed` frame that empties the row out of the link's session list. A
+   * renderer that treated `true` as "it is gone" would be drawing an answer it
+   * has not been given; `useMachines` waits for the row to disappear instead.
+   *
+   * `false` means the link refused to send: the machine is not linked, the id
+   * names nothing, or that machine never advertised `close` — an older build
+   * over there, which the window has already asked about before drawing the
+   * control. See `MachineLink.close`.
+   */
+  ipcMain.handle(
+    'machines:close',
+    (_event, id: unknown, sessionId: unknown): boolean =>
+      typeof id === 'string' &&
+      typeof sessionId === 'string' &&
+      (links.get(id)?.close(sessionId) ?? false),
+  )
+
+  /**
    * Ask again what is listening on that machine.
    *
    * A refresh rather than the first read: the link asks once on every `welcome`
@@ -377,6 +456,32 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   ipcMain.handle('machines:ports', (_event, id: unknown): boolean => {
     if (typeof id !== 'string') return false
     return links.get(id)?.ports() ?? false
+  })
+
+  /**
+   * Give a port on that machine an address in this window's browser.
+   *
+   * The verb behind *"I should be able to type and reach the devices which are
+   * not here on this device but they are from the other remote device"*. What
+   * comes back is an ordinary `http://` URL on this machine's loopback, which
+   * the browser opens exactly the way it opens anything else — that sameness is
+   * the whole requirement, and it is why this answers with a URL rather than
+   * with some second kind of tab.
+   *
+   * Answers a refusal *with its sentence* rather than a bare false. Every other
+   * verb here can afford a boolean because a boolean means "the request went",
+   * and the failure a person needs explaining is on the far machine. This one
+   * can fail in four ways that are all this end's business — the link is down,
+   * that machine no longer serves the port, it never answered, or this machine
+   * could not open an address — and each of them is a different sentence.
+   */
+  ipcMain.handle('machines:reach', async (_event, id: unknown, port: unknown): Promise<unknown> => {
+    if (typeof id !== 'string' || typeof port !== 'number') {
+      return { ok: false, message: 'That is not a machine and a port.' }
+    }
+    const reach = reaches.get(id)
+    if (!reach) return { ok: false, message: 'This desktop is not connected to that machine.' }
+    return reach.open(port)
   })
 
   /**
@@ -415,6 +520,11 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
       deps.desk.cancel()
       for (const link of links.values()) link.disconnect()
       links.clear()
+      // After the links, because a reach sends a `tunnel.close` through one on
+      // its way out and a closed link simply refuses it — which is fine, and the
+      // other order would be a frame sent into a socket that is being torn down.
+      for (const reach of reaches.values()) reach.closeAll('This desktop is shutting down.')
+      reaches.clear()
     },
   }
 }

@@ -1139,6 +1139,24 @@ export interface ProjectSummary {
   activeSessionId: string | null
   /** True while the initial pass over historical transcripts is still running. */
   scanning: boolean
+  /**
+   * Whether transcripts in this folder were left unread, so the totals above
+   * describe *some* of its work rather than all of it.
+   *
+   * This exists because the Overview tile prints a sentence over these numbers
+   * — *"every request your agents made in this folder, counted once"* — and
+   * that sentence was written as though the figures were exhaustive. They are
+   * capped two ways, by {@link TranscriptWatcherOptions.maxSessions} and by
+   * {@link TranscriptWatcherOptions.maxAgeMs}, and a claim of "every" over a
+   * capped number is the exact class of thing the 2026-08-17 review is about.
+   *
+   * True when either cap actually bit — not whenever a cap merely exists. A
+   * folder whose whole history was read says nothing, because there is nothing
+   * to say; the caveat appears only where something was genuinely left out.
+   * `ArtifactsPanel` already words the same fact as *"older work not read"* and
+   * the tile borrows that phrasing, so one idea is said one way in this app.
+   */
+  truncated: boolean
   updatedAt: number
 }
 
@@ -1162,13 +1180,62 @@ export interface TranscriptWatcherOptions {
   debounceMs?: number
   /** Ignore transcripts older than this. Default 90 days; 0 keeps everything. */
   maxAgeMs?: number
-  /** Cap on transcripts indexed, newest first. Default 40. */
+  /**
+   * Cap on transcripts indexed, newest first. Default 40.
+   *
+   * Counted in transcripts that **recorded a request**, not in files. See
+   * {@link SCAN_FACTOR} for why the difference is not a nicety.
+   */
   maxSessions?: number
 }
 
 const DEFAULT_DEBOUNCE_MS = 300
 export const DEFAULT_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
 export const DEFAULT_MAX_SESSIONS = 40
+
+/**
+ * How many files the opening scan will open to find `maxSessions` that carry work.
+ *
+ * ## The measurement this exists for
+ *
+ * The cap used to be applied to the *file list*: sort every `.jsonl` newest
+ * first, take forty, read those. That reads as reasonable right up until you
+ * look at what is actually in a project directory, which on 2026-08-18 was this
+ * — `~/.claude/projects/-Users-apple-Projects-terminaldeck`, the folder this app
+ * is built in, 104 transcripts:
+ *
+ *   - **94 of them contain no request at all.** They are 256 bytes each and hold
+ *     four metadata lines — `ai-title`, `agent-name`, `mode`, `permission-mode`
+ *     — and nothing else. Every time a session is opened and closed without
+ *     being given anything to do, the CLI writes one.
+ *   - The newest transcript that records a single request is **number 79** of
+ *     104 by modification time. The one holding the folder's real history — 70
+ *     requests, 370 KB — is number 96.
+ *
+ * So all forty slots went to files describing nothing, and the Overview tile
+ * read **"Nothing recorded yet"** over a folder with three months of work in it.
+ * Not a wrong number: no number, on the busiest folder on the machine.
+ *
+ * ## Why the cap is now counted in work rather than in files
+ *
+ * Because "the forty most recent conversations" is what a reader assumes the
+ * figure covers, and an opened-and-abandoned session is not a conversation. The
+ * scan therefore keeps opening files, newest first, until forty of them have
+ * actually contributed something — and this constant is the ceiling on how far
+ * it will go looking, so a directory holding thousands of transcripts still
+ * costs a bounded number of reads.
+ *
+ * Ten is measured against the same folder and is not a guess: it needed to open
+ * 102 files to find its ten real ones, a ratio of about 10:1, and that is the
+ * worst case this machine offers. The files that make the ratio bad are the
+ * cheap ones — a transcript with no request in it is 256 bytes, because what
+ * makes a transcript big is requests — so a scan that runs the ceiling out has
+ * read a few hundred kilobytes, not a few hundred megabytes.
+ *
+ * When the ceiling does bite, {@link ProjectSummary.truncated} says so and the
+ * tile stops claiming to have counted everything.
+ */
+export const SCAN_FACTOR = 10
 
 /**
  * How long `start()` will wait for the file watcher to actually be watching.
@@ -1237,9 +1304,42 @@ export class TranscriptWatcher {
   /** The `depth: 1` watch over every device's store. Made when there is one. */
   private stores: FSWatcher | null = null
   private timer: NodeJS.Timeout | undefined
-  private draining = false
+  /**
+   * The drain in flight, or null when none is running.
+   *
+   * A boolean here used to be enough and stopped being enough the moment
+   * `start()` began awaiting `drain()` for its result rather than firing it off.
+   * The old guard was `if (this.draining) return`, which resolves the caller
+   * *immediately* — so a drain kicked off by a watcher event that arrived during
+   * startup made `start()`'s own `await this.drain()` a no-op, and `start()`
+   * resolved with the scan still running.
+   *
+   * That is not a test problem, though a test is what found it: the app awaits
+   * `start()` before it shows a project, so on a machine busy enough for a
+   * chokidar event to land inside that window, a project could be drawn with a
+   * partial usage figure and no indication that it was partial. It showed up
+   * here as two *different* tests in one file failing on two full-suite runs and
+   * passing alone, which is the signature of a race rather than a wrong number.
+   *
+   * Holding the promise instead means a second caller waits for the first
+   * caller's work, which is what "the scan is done" has to mean for everybody
+   * who asks.
+   */
+  private draining: Promise<void> | null = null
   private scanning = true
   private stopped = false
+  /**
+   * How many of this folder's transcripts were never opened.
+   *
+   * Set by the opening scan and only ever added to: a file excluded by the age
+   * cutoff, or left in the queue when the scan had found as much work as it was
+   * asked for, is a file whose requests are not in any figure this watcher
+   * reports. It is what {@link ProjectSummary.truncated} is derived from, and it
+   * is a count rather than a flag because the count is the thing that is
+   * actually known — the flag is a reading of it, and readings belong at the
+   * edge where the sentence is written.
+   */
+  private unread = 0
 
   constructor(private readonly options: TranscriptWatcherOptions) {
     this.dir = transcriptDir(options.cwd, options.configDir)
@@ -1410,11 +1510,26 @@ export class TranscriptWatcher {
     const found = await Promise.all(
       transcriptDirs(this.options.cwd, this.scope).map((dir) => listTranscripts(dir)),
     )
-    const files = found
-      .flat()
-      .sort((a, b) => b.modifiedAt - a.modifiedAt)
-      .filter((file) => file.modifiedAt >= cutoff)
-      .slice(0, maxSessions)
+    const all = found.flat().sort((a, b) => b.modifiedAt - a.modifiedAt)
+    const recent = all.filter((file) => file.modifiedAt >= cutoff)
+    /*
+     * Newest first, and as many as the ceiling allows rather than exactly
+     * `maxSessions` of them.
+     *
+     * The cap counts transcripts that recorded a request, and whether a file did
+     * cannot be known from its name, its size or its timestamp — only from
+     * reading it. So the queue is the candidate list and `drain()` is what
+     * stops, the moment it has found as much work as it was asked for. See
+     * {@link SCAN_FACTOR} for the folder that forced this and the measurements
+     * behind the ceiling.
+     */
+    const files = recent.slice(0, Math.max(maxSessions, maxSessions * SCAN_FACTOR))
+
+    // Everything ruled out before a single byte was read: too old to be inside
+    // the window, or past the ceiling on how far back the scan will look. Both
+    // are requests this watcher will never see, and the tile has to be able to
+    // say so rather than calling its total "every request".
+    this.unread += all.length - recent.length + (recent.length - files.length)
 
     for (const file of files) this.queue.add(file.path)
 
@@ -1590,6 +1705,9 @@ export class TranscriptWatcher {
       requests,
       activeSessionId: sessions[0]?.sessionId ?? null,
       scanning: this.scanning,
+      // A count is what is known; "some of this folder was not read" is what the
+      // tile needs to say. See the field's own note.
+      truncated: this.unread > 0,
       updatedAt: Date.now(),
     }
   }
@@ -1609,12 +1727,69 @@ export class TranscriptWatcher {
     this.emit()
   }
 
+  /**
+   * How many of the transcripts read so far actually recorded a request.
+   *
+   * This, and not `aggregators.size`, is what the cap counts. The two used to be
+   * the same number by assumption and are nowhere near it in practice — see
+   * {@link SCAN_FACTOR}, where the folder this app is built in had 94 of its 104
+   * transcripts contribute nothing at all.
+   */
+  private get carrying(): number {
+    let count = 0
+    for (const aggregator of this.aggregators.values()) if (!aggregator.isEmpty) count += 1
+    return count
+  }
+
   /** Process every queued file to EOF, one at a time so memory stays bounded. */
-  private async drain(): Promise<void> {
-    if (this.draining) return
-    this.draining = true
-    try {
+  private drain(): Promise<void> {
+    // Join the drain already running rather than returning as though it had
+    // finished. See the field's own note for the startup race this closes.
+    const running = this.draining
+    if (running !== null) return running
+    /*
+     * `.finally` rather than clearing the field inside `drainOnce`, and the
+     * ordering is the whole reason.
+     *
+     * An async function whose body reaches no `await` — an empty queue, which is
+     * the common case — runs to completion *synchronously*, so a `finally` block
+     * inside it would clear the field before the line below ever set it, and the
+     * watcher would then hold a promise that never becomes null again. A
+     * `.finally` callback is always a microtask, so the assignment below is
+     * guaranteed to happen first.
+     */
+    const started = this.drainOnce().finally(() => {
+      this.draining = null
+    })
+    this.draining = started
+    return started
+  }
+
+  private async drainOnce(): Promise<void> {
+    {
+      const max = this.options.maxSessions ?? DEFAULT_MAX_SESSIONS
       while (this.queue.size > 0 && !this.stopped) {
+        /*
+         * Enough work found, so stop opening files — during the opening scan
+         * only.
+         *
+         * The queue at this point holds candidates the scan never needed, and
+         * they are dropped rather than left behind: a file still sitting in the
+         * queue would be read by the next append's drain, quietly pushing the
+         * project past its own cap hours later. Whatever is dropped here is a
+         * transcript whose requests are not in the totals, which is exactly what
+         * `unread` is for.
+         *
+         * `scanning` is the guard because live appends must always be consumed.
+         * A session that is being written to right now is one a person is
+         * watching, and refusing to read it because forty older conversations
+         * are already resident would freeze the number they are looking at.
+         */
+        if (this.scanning && max > 0 && this.carrying >= max) {
+          this.unread += this.queue.size
+          this.queue.clear()
+          break
+        }
         const path = this.queue.values().next().value as string
         this.queue.delete(path)
         try {
@@ -1628,28 +1803,54 @@ export class TranscriptWatcher {
         if (this.scanning) this.emit()
       }
       this.prune()
-    } finally {
-      this.draining = false
     }
   }
 
   /**
-   * Keep at most `maxSessions` transcripts resident.
+   * Keep at most `maxSessions` transcripts of each kind resident.
    *
    * The cap was only ever applied to the initial scan, so a watcher left
    * running on a busy project grew a tail and an aggregator — each holding a
    * dedup set of every request id it ever saw — for every new session forever.
    * Oldest activity is dropped first; if that file is appended to again it is
    * simply re-read from the start.
+   *
+   * ## Why the two kinds are counted separately
+   *
+   * This used to keep the `max` most recently active aggregators whatever was in
+   * them, which would undo the opening scan's work one level up: a transcript
+   * that recorded nothing could evict one that recorded a day's work, purely for
+   * having been touched more recently.
+   *
+   * Which needs a transcript that is empty and yet has *activity*, and there is
+   * an ordinary one: a session given a prompt and killed before it was answered
+   * writes a timestamped `user` line and no usage at all. It sorts newest, it
+   * carries no requests, and it would take a slot from the conversation whose
+   * numbers are on screen. The 256-byte transcripts in {@link SCAN_FACTOR} are
+   * not that case — their four metadata lines carry no timestamp, so they sort
+   * last and were already being dropped first — which is precisely why this had
+   * never been noticed: the common empty transcript happens to be harmless here
+   * and the uncommon one is not.
+   *
+   * The empty ones are still kept, up to the same number, and that is deliberate
+   * rather than generous: the newest transcript in a folder is usually the live
+   * session, which is empty for as long as it takes somebody to type their first
+   * prompt, and a watcher that discarded it would have to re-read it from the
+   * start the moment it filled. They cost almost nothing to hold — an aggregator
+   * with no requests in it is a handful of empty maps.
    */
   private prune(): void {
     const max = this.options.maxSessions ?? DEFAULT_MAX_SESSIONS
     if (max <= 0 || this.aggregators.size <= max) return
 
-    const stale = [...this.aggregators.entries()]
-      .sort((a, b) => b[1].activityAt - a[1].activityAt)
-      .slice(max)
-    for (const [path] of stale) {
+    const byRecency = [...this.aggregators.entries()].sort((a, b) => b[1].activityAt - a[1].activityAt)
+    const keep = new Set([
+      ...byRecency.filter(([, agg]) => !agg.isEmpty).slice(0, max),
+      ...byRecency.filter(([, agg]) => agg.isEmpty).slice(0, max),
+    ].map(([path]) => path))
+
+    for (const [path] of byRecency) {
+      if (keep.has(path)) continue
       this.aggregators.delete(path)
       this.tails.delete(path)
     }

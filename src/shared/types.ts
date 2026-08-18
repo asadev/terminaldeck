@@ -418,6 +418,17 @@ export interface DeckApi {
   writeToMachineSession(id: string, sessionId: string, data: string): Promise<unknown>
   resizeMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
   createMachineSession(id: string, cwd?: string, provider?: string): Promise<unknown>
+  /**
+   * End one session on another machine. Refused unless it advertised `close`.
+   *
+   * Not `detachMachineSession`, which is the line above and means the opposite
+   * of this: that one stops this window receiving a session's bytes and leaves
+   * the process running; this kills the process on the far machine for everyone
+   * attached to it. The boolean that comes back is *the request left this
+   * machine* — the row disappearing from `machines:state` is what says it
+   * happened.
+   */
+  closeMachineSession(id: string, sessionId: string): Promise<unknown>
   /** Ask that machine again what is listening on it. The list rides on `machines:state`. */
   refreshMachinePorts(id: string): Promise<unknown>
   /** Open a page in the browser **on that machine**. Refused unless it advertised `web`. */

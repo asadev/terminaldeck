@@ -114,6 +114,35 @@ const browserTabState = {
   inspecting: false,
   error: null,
 }
+
+/**
+ * Where the one browser tab has been sent, and the state that describes it.
+ *
+ * This used to be a constant: **every** call — create, navigate, reload, back —
+ * answered `http://localhost:3000/`, whatever it had been asked for. Two things
+ * were invisible because of it. A new tab is created with no URL and shows the
+ * start page, and out here it never did, so the start page could not be looked
+ * at in the harness at all. And a navigation that changed the address could not
+ * be told from one that was ignored, which is exactly the difference the machine
+ * picker is: typing `localhost:3000` while another machine is chosen has to end
+ * up somewhere else, and a stub that pins the answer would show it working while
+ * it did nothing.
+ *
+ * `about:blank` becomes the empty string here for the same reason the real one
+ * does — `browser-tab.ts` line 498 — because that empty string is what the panel
+ * reads as "this tab has not been anywhere".
+ */
+let browserUrl = ''
+
+function browserTab(url: string): typeof browserTabState {
+  browserUrl = url === 'about:blank' ? '' : url
+  return {
+    ...browserTabState,
+    url: browserUrl,
+    label: browserUrl === '' ? 'New tab' : browserUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+    title: browserUrl === '' ? '' : browserTabState.title,
+  }
+}
 /**
  * The remote-access world, mutable so the panel's buttons do something.
  *
@@ -200,11 +229,24 @@ const machinesView = {
       reason: null,
       sessions: [
         {
+          /*
+           * `working`, not `running`, and the difference is the harness being
+           * honest rather than plausible.
+           *
+           * The status on this wire is typed `string` — *"the status vocabulary
+           * belongs to the session layer"* — but the vocabulary a real desktop
+           * puts on it is `SessionStatus`, because `SessionFanout.list` reads
+           * whatever `PtyManager` last reported. `running` is not one of those,
+           * so a stub sending it exercised only the *unknown* branch of
+           * `asSessionStatus`, and the rail drew a grey dot for a session an
+           * actual machine would have shown as busy. A stub that disagrees with
+           * the wire invents bugs that do not exist and hides ones that do.
+           */
           id: 'remote-a',
           title: 'imza-crm',
           cwd: '/home/asad/ClaudeImzacrm',
           provider: 'claude',
-          status: 'running',
+          status: 'working',
           exitCode: null,
         },
         {
@@ -290,6 +332,20 @@ const remoteState = () => ({
 let copilotInstructions = new URLSearchParams(location.search).has('copilot-named')
   ? '# Copilot\n\n## Who you are\n\nYour name is **Nova**. This app reads it from this line — change the\nname here and it changes in the sidebar, on the tab and in Settings.\n\nCall them **Asad**.\n\n---\n\nYou are a developer’s copilot.\n'
   : '# Copilot\n\nYou are a developer’s copilot.\n'
+
+/**
+ * The *folder's* own instruction file, which is a different file and a different
+ * owner.
+ *
+ * Empty means "there is none", not "it is blank" — the pane draws those two
+ * states differently and the row that says nothing in this folder claims to be
+ * the copilot is the one worth being able to see. `?folder-instructions` starts
+ * from a folder that already has one, which is the case somebody who pointed the
+ * copilot at their own workspace is actually in.
+ */
+let folderInstructions = new URLSearchParams(location.search).has('folder-instructions')
+  ? '# CLAUDE.md\n\nYou are Nova, the assistant for this workspace. Call them Asad.\n\nAlways read `README.md` before answering.\n'
+  : ''
 
 const api: Record<string, unknown> = new Proxy(
   {
@@ -726,7 +782,18 @@ const api: Record<string, unknown> = new Proxy(
     // The harness has no live session, so the plan half reports "not available"
     // — which is the state worth being able to look at anyway.
     watchPlanLimits: async () => null,
-    refreshPlanLimits: async () => ({ ok: false, reason: 'unwired', snapshot: null }),
+    // Every field the real result carries, `unwired` included: `typed` says
+    // whether anything went into the session, `residue` whether a panel was left
+    // behind. A stub that omits them reads as `undefined`, which the bar takes
+    // for "no", which is right here and would hide the two states the bar most
+    // needs to be looked at in.
+    refreshPlanLimits: async () => ({
+      ok: false,
+      reason: 'unwired',
+      typed: false,
+      residue: false,
+      snapshot: null,
+    }),
     unwatchPlanLimits: () => {},
     onUsage: noop,
     // Same reasoning for the usage windows: there is no terminal to read a
@@ -985,6 +1052,27 @@ const api: Record<string, unknown> = new Proxy(
     copilotWriteInstructions: async (text: string) => {
       copilotInstructions = text
       return { saved: true, backup: null, error: null }
+    },
+    /*
+     * The folder's own instruction file, which in the harness starts out absent.
+     *
+     * Absent is the honest default for a stub whose folder is the app's own: the
+     * pane's row for it says "nothing in that folder claims to be the copilot",
+     * and a stub that handed back text would draw the wrong one of the two
+     * states this row exists to tell apart. Writing it flips that, so the empty
+     * box, the first save and the edit of an existing file are all reachable
+     * without touching a real disk.
+     */
+    copilotReadFolderInstructions: async () => ({
+      path: '/Users/apple/Library/Application Support/terminaldeck/copilot/CLAUDE.md',
+      text: folderInstructions,
+      exists: folderInstructions !== '',
+      error: null,
+    }),
+    copilotWriteFolderInstructions: async (text: string) => {
+      const created = folderInstructions === ''
+      folderInstructions = text
+      return { saved: true, backup: null, created, error: null }
     },
     copilotFolder: async () => ({
       home: '/Users/apple/Library/Application Support/terminaldeck/copilot',
@@ -1392,14 +1480,17 @@ const api: Record<string, unknown> = new Proxy(
     // every field onto the strip entry, so a missing `title` overwrote the real
     // empty string with undefined and `tabTitle` threw on `.trim()`. The real
     // main process always sends all of it; a stub that sends less invents a bug.
-    browserCreate: async () => browserTabState,
-    browserNavigate: async () => browserTabState,
-    browserBack: async () => browserTabState,
-    browserForward: async () => browserTabState,
-    browserReload: async () => browserTabState,
-    browserStop: async () => browserTabState,
-    browserInspect: async () => browserTabState,
-    browserState: async () => browserTabState,
+    browserCreate: async (options?: { url?: string }) =>
+      browserTab(typeof options?.url === 'string' ? options.url : ''),
+    browserNavigate: async (_id: string, url: string) => browserTab(url),
+    // The four that do not change where the tab is. They answer about the page
+    // it is already on, which is what the real ones do.
+    browserBack: async () => browserTab(browserUrl),
+    browserForward: async () => browserTab(browserUrl),
+    browserReload: async () => browserTab(browserUrl),
+    browserStop: async () => browserTab(browserUrl),
+    browserInspect: async () => browserTab(browserUrl),
+    browserState: async () => browserTab(browserUrl),
     browserCookies: async () => [],
 
     /*
@@ -1733,7 +1824,64 @@ const api: Record<string, unknown> = new Proxy(
       }, 120)
       return true
     },
+    /*
+     * Ending a session over there, modelled the way the real one behaves.
+     *
+     * The row leaves the list on the *push*, not in this call — `machines:close`
+     * answers "the request left this machine" and the far end's `closed` frame
+     * is what empties the row. A stub that spliced the array and returned would
+     * make the ✕ look instant here and lag in the real app, which is the one
+     * thing a harness must never do: it exists to catch that difference, not to
+     * hide it.
+     */
+    closeMachineSession: async (id: string, sessionId: string) => {
+      const link = machinesView.links.find((one) => one.id === id)
+      if (!link || !link.sessions.some((session) => session.id === sessionId)) return false
+      setTimeout(() => {
+        link.sessions = link.sessions.filter((session) => session.id !== sessionId)
+        for (const listener of [...machineListeners]) listener(machinesView)
+      }, 120)
+      return true
+    },
     refreshMachinePorts: async () => true,
+    /*
+     * A port over there, given an address over here.
+     *
+     * The real one opens a loopback listener on this machine and carries its
+     * bytes to that port — `src/main/localhost-reach.ts`. A browser tab cannot
+     * do any of that, so what is modelled here is the **answer**, in both of its
+     * shapes, because the answer is the whole of what the window has to get
+     * right: a URL to navigate to, or a sentence to print.
+     *
+     * The refusal is the far machine's own wording from `tunnel.ts`, and it is
+     * reachable — ask for a port that is not in the list above and the window
+     * must show it. A stub that always said yes would leave the one path in this
+     * feature that a person actually reads completely unexercised.
+     */
+    reachOnMachine: async (id: string, port: number) => {
+      const link = machinesView.links.find((one) => one.id === id)
+      if (!link || link.state !== 'online') {
+        return { ok: false, message: 'That machine is not connected right now, so its ports cannot be reached.' }
+      }
+      if (!link.ports.some((entry) => entry.port === port)) {
+        return { ok: false, message: `Nothing is listening on port ${port} on that computer any more.` }
+      }
+      /*
+       * `5173` lands on a different number, and that is a fixture rather than an
+       * invention.
+       *
+       * The ladder in `localhost-reach.ts` keeps the port number when this
+       * machine has it free and takes an arbitrary one when it does not — and
+       * the case it cannot keep is precisely the interesting one, somebody with
+       * the same project running on two computers. Pinning one port to the third
+       * rung here is the only way the sentence that explains it is ever on
+       * screen in the harness.
+       */
+      const sameNumber = port !== 5173
+      const localPort = sameNumber ? port : 53412
+      console.info(`[harness] ${id} port ${port} would be served here on ${localPort}`)
+      return { ok: true, url: `http://127.0.0.1:${localPort}/`, port, localPort, sameNumber }
+    },
     openOnMachine: async (id: string, url: string) => {
       // Logged rather than opened. The harness is a browser tab: it has no far
       // machine to put a window on, and a stub that returned true silently would

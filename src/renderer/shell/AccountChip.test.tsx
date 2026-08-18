@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccountChip, MENU_HEAD, RUN_AGENT_COMMAND } from './AccountChip'
+import { AccountChip, MENU_HEAD, runAgentCommand, runnableAgent } from './AccountChip'
+import { AGENT_CATALOG } from '../../shared/agent-catalog'
 import {
   chipMode,
   presenceFromSession,
@@ -43,10 +44,15 @@ describe('a session with no agent in it', () => {
     // static render the promise never resolves, so the *session* half is what
     // decides here — which is exactly the half that is exact. The shell case is
     // driven through `presenceFromSession` and `parseAgentReading` below.
+    //
+    // `provider` is what the Run button is *about* now — the agent a session
+    // started here would run — so every render that expects the button has to
+    // say which one, exactly as both real callers do.
     return renderToStaticMarkup(
       <AccountChip
         current={agentRunning ? { id: 'work', name: 'Work' } : null}
         projectPath="/w/app"
+        provider="claude"
         session={agentRunning === null ? shell : { ...shell, provider: agentRunning ? 'claude' : 'shell' }}
         onPick={noop}
         onManage={noop}
@@ -62,7 +68,7 @@ describe('a session with no agent in it', () => {
     expect(chip(null)).toBe('')
   })
 
-  it('offers Run Claude once the screen says there is no agent', () => {
+  it('offers the Run button once the screen says there is no agent', () => {
     // The state every new session starts in, and the one this item is about.
     expect(chipMode(shell, { running: false, source: 'screen', saw: null })).toBe('run')
   })
@@ -72,14 +78,14 @@ describe('a session with no agent in it', () => {
     expect(chipMode(shell, { running: true, source: 'screen', saw })).toBe('account')
   })
 
-  it('offers Run Claude again after the agent is quit and the shell comes back', () => {
+  it('offers the Run button again after the agent is quit and the shell comes back', () => {
     // The case a control keyed off "the user typed claude" gets wrong forever:
     // `/exit` returns the shell and the session is still alive.
     expect(chipMode(shell, { running: true, source: 'screen', saw: 'x' })).toBe('account')
     expect(chipMode(shell, { running: false, source: 'screen', saw: null })).toBe('run')
   })
 
-  it('never draws Run Claude for a caller asking about a folder', () => {
+  it('never draws the Run button for a caller asking about a folder', () => {
     expect(chipMode(null, UNKNOWN_PRESENCE)).toBe('account')
     expect(chipMode(null, { running: false, source: 'screen', saw: null })).toBe('account')
   })
@@ -87,7 +93,7 @@ describe('a session with no agent in it', () => {
   it('wears the account picker the moment an agent is what the session is', () => {
     const html = chip(true)
     expect(html).toContain('Work')
-    expect(html).not.toContain('Run Claude')
+    expect(html).not.toContain('run-agent-button')
   })
 
   it('never offers to start an agent in a session that has ended', () => {
@@ -97,12 +103,13 @@ describe('a session with no agent in it', () => {
       <AccountChip
         current={null}
         projectPath="/w/app"
+        provider="claude"
         session={{ id: 's1', provider: 'shell', exited: true }}
         onPick={noop}
         onManage={noop}
       />,
     )
-    expect(html).toContain('Run Claude')
+    expect(html).toContain('run-agent-button')
     expect(html).toContain('disabled')
   })
 
@@ -116,28 +123,112 @@ describe('a session with no agent in it', () => {
   })
 })
 
-describe('what Run Claude actually does', () => {
-  it('types the command into that session’s own terminal', () => {
+describe('what the Run button actually does', () => {
+  it('types that agent’s own command into that session’s own terminal', () => {
     /*
      * His words: "it automatically types /claude and sends", i.e. the app runs
      * the command rather than making you remember it. Written into the pty, so
      * the terminal view shows the same keystrokes — chat mode and the toolbar
      * are views of one session, not second channels into it.
+     *
+     * The command is read off the catalogue row rather than written here, which
+     * is what makes the *next* three assertions worth anything: a fifth agent
+     * added to the table gets a working button by existing.
      */
-    expect(RUN_AGENT_COMMAND).toBe('claude\r')
+    expect(runAgentCommand(AGENT_CATALOG.claude)).toBe('claude\r')
+    expect(runAgentCommand(AGENT_CATALOG.codex)).toBe('codex\r')
+    expect(runAgentCommand(AGENT_CATALOG.gemini)).toBe('gemini\r')
   })
 
   it('sends a carriage return, which is what Return is on a terminal', () => {
     // `\n` is a line feed. A pty carries what a keyboard sends.
-    expect(RUN_AGENT_COMMAND.endsWith('\r')).toBe(true)
-    expect(RUN_AGENT_COMMAND).not.toContain('\n')
+    for (const entry of [AGENT_CATALOG.claude, AGENT_CATALOG.codex, AGENT_CATALOG.gemini]) {
+      expect(runAgentCommand(entry).endsWith('\r')).toBe(true)
+      expect(runAgentCommand(entry)).not.toContain('\n')
+    }
   })
 
   it('does not resume a conversation nobody asked to resume', () => {
-    // `--continue` picks the last conversation written in the folder, which
-    // `session-transcript.ts` records at length is frequently not this
-    // session's. The button says Run Claude and that is all it does.
-    expect(RUN_AGENT_COMMAND).not.toContain('--continue')
+    // Every agent's `resumeArgs` picks the last conversation written in the
+    // folder, which `session-transcript.ts` records at length is frequently not
+    // this session's. The button says Run and that is all it does.
+    for (const entry of [AGENT_CATALOG.claude, AGENT_CATALOG.codex, AGENT_CATALOG.gemini]) {
+      for (const arg of entry.resumeArgs) expect(runAgentCommand(entry)).not.toContain(arg)
+    }
+  })
+
+  it('has nothing to start when the chosen default is a plain shell', () => {
+    /*
+     * The state that used to type `claude` at somebody who had asked for a
+     * terminal and nothing else. A shell's `bin` is null because it is resolved
+     * at spawn from `$SHELL`, so there is no command to send and no agent to
+     * name — and a button naming one would be inventing a choice.
+     */
+    expect(runnableAgent('shell')).toBeNull()
+    expect(runnableAgent(null)).toBeNull()
+    expect(runnableAgent(undefined)).toBeNull()
+  })
+})
+
+describe('the Run button names the agent the person actually chose', () => {
+  /**
+   * The naming rule, applied to the one control that is on screen for the whole
+   * life of every new session:
+   *
+   *   > *"You should not mention in any settings or any pop-up a specific tool
+   *   > or LLM, because they can use some other also."*
+   *
+   * This was `Run Claude`, spelled out in the JSX, on every shell session's
+   * toolbar regardless of which agent the person had chosen — so for a Codex
+   * user it named the wrong product *and* would have typed the wrong command.
+   * These assertions are what stops the literal coming back: they fail if the
+   * label stops following `provider`.
+   */
+  const runChip = (provider: 'claude' | 'codex' | 'gemini' | 'shell'): string =>
+    renderToStaticMarkup(
+      <AccountChip
+        current={null}
+        projectPath="/w/app"
+        provider={provider}
+        session={{ id: 's1', provider: 'shell', exited: false }}
+        onPick={noop}
+        onManage={noop}
+      />,
+    )
+
+  it('says Run and then whatever the catalogue calls that agent', () => {
+    // Rendered with no bridge, so presence never resolves… which is why these
+    // go through `runnableAgent` for the label and the render for the wiring.
+    expect(runnableAgent('claude')?.label).toBe('Claude Code')
+    expect(runnableAgent('codex')?.label).toBe('Codex CLI')
+    expect(runnableAgent('gemini')?.label).toBe('Gemini CLI')
+  })
+
+  it('never hardcodes one agent’s name in this component', () => {
+    // The file itself, read as text: the guard in `neutral-naming.test.ts`
+    // scans copy across the whole tree, and this is the same rule stated where
+    // somebody editing this one component will see it fail.
+    const source = readFileSync(join(__dirname, 'AccountChip.tsx'), 'utf8')
+    const jsx = source.split('\n').filter((line) => line.includes('startable.label'))
+    expect(jsx.length).toBeGreaterThan(1)
+  })
+
+  it('draws nothing at all when there is no agent to offer', () => {
+    /*
+     * Not an inert button, and — the half that was wrong for a few minutes and
+     * only showed up in a screenshot — not the account picker either.
+     *
+     * With the plain shell as the default there is nothing to start, so the Run
+     * branch does not apply; falling through to the code below it put the
+     * account dropdown back on a plain shell reading "No login ⌄", which is
+     * precisely the control this whole mode exists to remove. Both halves are
+     * asserted because only asserting the first passed while the second was
+     * broken.
+     */
+    const html = runChip('shell')
+    expect(html).not.toContain('run-agent-button')
+    expect(html).not.toContain('account-chip')
+    expect(html).toBe('')
   })
 })
 
@@ -166,7 +257,7 @@ describe('the presence signal itself', () => {
 
   it('treats a malformed or missing answer as “not known”, never as “no agent”', () => {
     // A build with no controls channel resolves these to null/undefined. Read
-    // as "no agent" it would put a Run Claude button in front of a running one.
+    // as "no agent" it would put a Run button in front of a running agent.
     expect(parseAgentReading(null)).toEqual(UNKNOWN_PRESENCE)
     expect(parseAgentReading({})).toEqual(UNKNOWN_PRESENCE)
     expect(parseAgentReading({ agent: { running: 'yes' } })).toEqual(UNKNOWN_PRESENCE)

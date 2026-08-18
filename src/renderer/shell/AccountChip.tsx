@@ -1,6 +1,9 @@
 import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { ProviderId } from '@shared/types'
+// Relative, not '@shared/agent-catalog': vitest runs without the electron-vite
+// aliases, and this component's render tests import it directly.
+import { AGENT_CATALOG, type AgentEntry } from '../../shared/agent-catalog'
 import { useChipMenu } from './chip-menu'
 import { isolationNotice } from '../components/ProfilePicker'
 import { ProviderBadge } from '../components/ProviderBadge'
@@ -162,13 +165,17 @@ import './AccountChip.css'
  *   > nothing until an agent is running in it. … Put a Run Claude button there
  *   > instead."
  *
- * An account is a `CLAUDE_CONFIG_DIR` handed to an agent, so with no agent in
- * the session there is nothing for this control to be about — the chip was
- * showing the account a *future* session would use, on a terminal that is not
- * going to use one. In that state the same slot is a Run Claude button, and it
- * does the thing the command does rather than telling you the command:
- * `claude`, typed into the session's own pty, exactly as if it had been typed
- * in the terminal view.
+ * An account is a config directory handed to an agent, so with no agent in the
+ * session there is nothing for this control to be about — the chip was showing
+ * the account a *future* session would use, on a terminal that is not going to
+ * use one. In that state the same slot is a Run button, and it does the thing
+ * the command does rather than telling you the command: the agent's own
+ * command, typed into the session's own pty, exactly as if it had been typed in
+ * the terminal view.
+ *
+ * **Which** agent is the person's default one, read out of the catalogue rather
+ * than written into this file — see {@link runnableAgent} for the whole of that
+ * argument, which is the naming rule and a correctness bug at the same time.
  *
  * ## The chip says who, not which record
  *
@@ -196,14 +203,14 @@ import './AccountChip.css'
  * one process for the only fact the control exists to state is the control.
  *
  * The moment an agent is running the button gives way to the account chip. That
- * swap is driven by {@link useAgentPresence}, never by what was typed: `claude`
+ * swap is driven by {@link useAgentPresence}, never by what was typed: an agent
  * exits and leaves the shell behind, and a control keyed off the keystroke
  * would stay switched for the rest of the tab's life.
  *
  * While presence is *unknown* — the first few hundred milliseconds, or a build
  * with no controls channel — neither is drawn. Guessing wrong in that direction
- * is not free: pressing Run Claude at a session that already has Claude in it
- * does not start anything, it submits the word "claude" as a prompt.
+ * is not free: pressing Run at a session that already has an agent in it does
+ * not start anything, it submits the command as a prompt.
  */
 
 interface Props {
@@ -243,7 +250,7 @@ interface Props {
    */
   session?: ChromeSession | null
   /**
-   * Start Claude in `session`. Optional: without it the button types the
+   * Start the agent in `session`. Optional: without it the button types the
    * command into the session's own pty itself, which is the same thing the
    * terminal view would do with the same keystrokes.
    */
@@ -300,18 +307,70 @@ const CHEVRON = 'M6.5 9.5 10 13l3.5-3.5'
 const TICK = 'M4.5 10.5 8 14l7.5-8'
 
 /**
- * What Run Claude types.
+ * Which agent this button would start, or null when there is none to start.
  *
- * The bare command, with no flags. Not `--continue`: that silently resumes
- * whichever conversation was last written in the folder, which is a different
- * thing from what the button says and — as `session-transcript.ts` records at
- * length — is frequently not this session's conversation at all.
+ * ## Why this is looked up rather than written down
+ *
+ * The button used to be spelled `Run Claude`, and the label was a literal
+ * string sitting in the JSX four hundred lines below. That was defensible on
+ * the day it was typed — the command it sent was the literal `claude`, so the
+ * label was the command, and renaming the label without changing the keystrokes
+ * would have made the button lie about what it does. The defence was even
+ * written into this file.
+ *
+ * It was still wrong, and the review says why in a sentence drawn wider than
+ * the setup flow it was said about:
+ *
+ *   > *"You should not mention in any settings or any pop-up a specific tool or
+ *   > LLM, because they can use some other also."*
+ *
+ * This button is on the toolbar of **every shell session**, which is the state
+ * every new session starts in. A person whose default agent is Codex was being
+ * offered, on their own session, a button naming somebody else's product — and
+ * pressing it would have typed `claude` at a machine that may not have it
+ * installed. The label was not merely branded, it was about to be *wrong*,
+ * which is the exact decay the naming guard exists to catch.
+ *
+ * So the fix is not a rename. Both halves — the word on the button and the
+ * keystrokes it sends — now come from {@link AGENT_CATALOG}, keyed by the agent
+ * the person actually chose, and they cannot disagree because they are read
+ * from the same row. Naming a thing somebody chose is what the rule permits;
+ * naming one vendor while describing a mechanism any agent could serve is what
+ * it forbids, and moving the name out of the copy and into the catalogue is how
+ * this file stops doing the second one.
+ *
+ * ## Null is a real answer
+ *
+ * `shell` has no binary — `bin` is null in its row, because a login shell is
+ * `$SHELL` or `%COMSPEC%` and is resolved at spawn rather than looked up — and
+ * an unknown id has no row at all. Both mean there is genuinely nothing to
+ * start, and the caller draws no button rather than one that would type an
+ * empty line into somebody's terminal. A person whose default *is* the plain
+ * shell has asked for a terminal and nothing else; offering to start an agent
+ * they did not pick would be guessing on their behalf.
+ */
+export function runnableAgent(provider: ProviderId | null | undefined): AgentEntry | null {
+  if (provider == null) return null
+  const entry = AGENT_CATALOG[provider] as AgentEntry | undefined
+  return entry?.bin == null ? null : entry
+}
+
+/**
+ * What the Run button types, for that agent.
+ *
+ * The bare command with the agent's own start arguments, and nothing else. Not
+ * `resumeArgs`: those silently resume whichever conversation was last written
+ * in the folder, which is a different thing from what the button says and — as
+ * `session-transcript.ts` records at length — is frequently not this session's
+ * conversation at all.
  *
  * `\r`, not `\n`: a pty carries what a keyboard sends, and Return is carriage
  * return. The rest of this app types into sessions the same way — see
  * `sendCommand` in `main/agent-controls.ts`.
  */
-export const RUN_AGENT_COMMAND = 'claude\r'
+export function runAgentCommand(entry: AgentEntry): string {
+  return `${[entry.bin, ...entry.args].join(' ')}\r`
+}
 
 /**
  * What the menu is called, and it is not the same question in both modes.
@@ -355,7 +414,7 @@ export function AccountChip({
   onManage,
 }: Props) {
   const agent = useAgentPresence(session)
-  /** Whether the previous render drew the Run Claude button. See `revealing`. */
+  /** Whether the previous render drew the Run button. See `revealing`. */
   const wasRun = useRef(false)
   const [editing, setEditing] = useState<Editing | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -522,22 +581,38 @@ export function AccountChip({
   const mark = names ? current?.provider ?? listed?.provider ?? provider : undefined
 
   /**
-   * Start Claude in this session.
+   * The agent the Run button would start, and the whole of what it names.
+   *
+   * `provider` is the setting `newSessionIn` sends — the agent a session
+   * started from this spot would run — so the button offers the *same* agent
+   * the `+` beside it would, rather than a second opinion about which one this
+   * person uses. See {@link runnableAgent} for why null is a real answer and
+   * what the caller does with it.
+   */
+  const startable = runnableAgent(provider)
+
+  /**
+   * Start that agent in this session.
    *
    * Re-checked at the moment of the press, not only at the moment the button
    * was drawn. The presence reading is a screen reading and a screen can change
    * between those two instants — an agent started from the terminal a second
-   * ago, say — and the cost of being late is not a no-op: `claude` typed at a
-   * running Claude is submitted as a prompt.
+   * ago, say — and the cost of being late is not a no-op: the command typed at
+   * an agent that is already running is submitted to it as a prompt.
+   *
+   * `startable` is re-checked here as well, and not out of caution: this
+   * closure is handed to an element that only exists when it is non-null, but a
+   * handler that would send `null ` into somebody's terminal if that ever
+   * stopped being true is a handler one refactor away from doing it.
    */
   const runAgent = (): void => {
-    if (!session || agent.running !== false) return
+    if (!session || agent.running !== false || startable === null) return
     if (onRunAgent) {
       onRunAgent(session.id)
       return
     }
     const deck = (globalThis as { deck?: { writeToSession?: (id: string, data: string) => void } }).deck
-    deck?.writeToSession?.(session.id, RUN_AGENT_COMMAND)
+    deck?.writeToSession?.(session.id, runAgentCommand(startable))
   }
 
   /*
@@ -548,10 +623,10 @@ export function AccountChip({
    *   false → the screen was read and there is no agent. Offer to start one.
    *   true  → there is one. The account picker, exactly as before.
    *   null  → nothing has been read yet. Neither, and this is the interesting
-   *           one: guessing "no agent" here would put a Run Claude button in
-   *           front of a running Claude, and pressing it submits the word
-   *           "claude" as a prompt. Guessing "agent" would put the account
-   *           picker back on a plain shell, which is the complaint itself.
+   *           one: guessing "no agent" here would put a Run button in front of
+   *           a running agent, and pressing it submits the command as a prompt.
+   *           Guessing "agent" would put the account picker back on a plain
+   *           shell, which is the complaint itself.
    *
    * `null` resolves within a few hundred milliseconds of the session printing
    * anything, and stays for good in a build with no controls channel — where
@@ -603,21 +678,54 @@ export function AccountChip({
   const revealing = wasRun.current && showAccount
   wasRun.current = !showAccount
 
+  /*
+   * Nothing to draw, in three different ways.
+   *
+   * `!showAccount && !showRun` is the presence reading not having arrived. The
+   * third is the one added when the button stopped naming one fixed agent: this
+   * slot is in Run mode — a live shell with nothing running in it — and the
+   * person's default is the plain shell, so there is no agent to offer.
+   *
+   * It has to fall out here rather than dropping through, and the drop-through
+   * is a bug this actually shipped for a few minutes: the code below would have
+   * put the **account picker** back on a plain shell, which is the whole of the
+   * complaint the Run button was built to answer —
+   *
+   *   > "Starting a session gives you a plain shell. Today that shell still
+   *   > shows the chat/terminal switch and the account dropdown — both of which
+   *   > mean nothing until an agent is running in it."
+   *
+   * — and it read, on screen, "No login ⌄". Drawing neither control is the only
+   * honest state: the brief's rule for a control that cannot act is that it is
+   * removed rather than shown inert, and an inert Run button would have nothing
+   * true to put in its tooltip either, because the reason is not "this failed"
+   * but "you did not ask for an agent".
+   */
   if (!showAccount && !showRun) return null
+  if (showRun && startable === null) return null
 
-  // `session &&` as well as `showRun`, so the branch narrows. `chipMode` only
-  // answers `run` for a session, but that is a fact about another module and
-  // the compiler is right not to take it on trust.
-  if (showRun && session) {
+  /*
+   * `session &&` as well as `showRun`, so the branch narrows. `chipMode` only
+   * answers `run` for a session, but that is a fact about another module and
+   * the compiler is right not to take it on trust.
+   */
+  if (showRun && session && startable !== null) {
     return (
       <div className="account-chip account-chip-run">
         <button
           type="button"
           className="folder-chip-button run-agent-button"
+          /*
+           * Both sentences name the agent from its own catalogue row, for the
+           * reason set out on {@link runnableAgent}: the label, the tooltip and
+           * the keystrokes are three statements about one thing, and reading
+           * all three off `startable` is what stops any of them drifting into
+           * describing an agent this session is not about to run.
+           */
           title={
             session.exited
               ? 'This session has ended — nothing can be started in it'
-              : 'Start Claude in this session. Types the command for you, in this terminal.'
+              : `Start ${startable.label} in this session. Types the command for you, in this terminal.`
           }
           disabled={session.exited}
           onClick={runAgent}
@@ -627,7 +735,7 @@ export function AccountChip({
           <span className="run-agent-glyph" aria-hidden="true">
             ❯
           </span>
-          <span>Run Claude</span>
+          <span>Run {startable.label}</span>
         </button>
       </div>
     )

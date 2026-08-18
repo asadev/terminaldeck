@@ -74,23 +74,113 @@ export type Appearance = 'light' | 'dark'
 export const THEME_CHOICES: readonly ThemeChoice[] = ['system', 'light', 'dark']
 
 /**
- * What each choice is called on screen.
+ * What the one button says it is on, in full.
  *
- * "Auto" rather than "System": the control is three pills across the top of a
- * phone, and every character costs a pixel that the session title needs more.
- * The longer sentence lives in the accessible name below, where it is free.
+ * There used to be three words here — *Auto*, *Light*, *Dark* — because there
+ * used to be three pills, and the three of them ate about a hundred and fifty
+ * of a 390px header. There is one control now and it is an icon, so nothing is
+ * read off it at a glance and every one of these strings is free to be a
+ * sentence instead of a syllable. It is the button's `title` and its
+ * `aria-label` both: a pointer gets the tooltip, a screen reader gets the same
+ * words, and neither is told a different thing to the other.
+ *
+ * Present tense and no verb, deliberately. This names **the state the control
+ * is in**, not the state pressing it would move to — the trap every cycling
+ * button falls into, where "Dark" means either "it is dark" or "make it dark"
+ * depending on who wrote it. What pressing it does is said once, in
+ * {@link THEME_HINT}, appended after the state.
  */
-export const THEME_LABEL: Record<ThemeChoice, string> = {
-  system: 'Auto',
-  light: 'Light',
-  dark: 'Dark',
+export const THEME_TITLE: Record<ThemeChoice, string> = {
+  system: 'Appearance: follows this device',
+  light: 'Appearance: light',
+  dark: 'Appearance: dark',
 }
 
-/** The accessible name for each pill — what a screen reader says, in full. */
-export const THEME_DESCRIPTION: Record<ThemeChoice, string> = {
-  system: 'Follow this device’s appearance',
-  light: 'Always light',
-  dark: 'Always dark',
+/** What the next press does, appended to {@link THEME_TITLE}. */
+export const THEME_HINT = 'Press to change'
+
+/** The whole accessible name: the state it is in, then what a press does. */
+export function themeTitle(choice: ThemeChoice): string {
+  return `${THEME_TITLE[choice]}. ${THEME_HINT}.`
+}
+
+/**
+ * The next state, wrapping round.
+ *
+ * One button and three states means the order is the only thing that says which
+ * state comes next, so it is {@link THEME_CHOICES} rather than a second list —
+ * two orderings of the same three values are two orderings that will one day
+ * disagree, and the way somebody would notice is a button that skips a state.
+ *
+ * The wrap is what makes three states reachable from one control at all. Without
+ * it, a person who reached `dark` could never get back to following the device
+ * without clearing storage.
+ */
+export function nextChoice(choice: ThemeChoice): ThemeChoice {
+  const at = THEME_CHOICES.indexOf(choice)
+  // A value that is not in the list — impossible through `readChoice`, which
+  // validates, but this is exported — restarts the cycle rather than throwing.
+  // `indexOf` gives -1, and -1 + 1 is 0, which is `system`: the default, and the
+  // right place for a control whose state nobody can account for.
+  return THEME_CHOICES[(at + 1) % THEME_CHOICES.length] ?? 'system'
+}
+
+/**
+ * One primitive of one icon, as data rather than as markup.
+ *
+ * There is no DOM in this file and this is what keeps it that way while still
+ * owning the picture. `main.ts` turns each of these into an element with
+ * `createElementNS` — an SVG child made with `createElement` is an unstyled
+ * unknown element in the HTML namespace, which is the failure mode this shape
+ * exists to make impossible to hit by accident, because the caller cannot get
+ * the namespace from anywhere but the one helper.
+ *
+ * Geometry only: no colour, no stroke width, no size. Those come off the
+ * stylesheet through `currentColor` and the `.appearance` rules, so the icon
+ * inherits the header's ink in both themes rather than carrying a hex value
+ * this file would have to keep in step with `tokens`.
+ */
+export interface ThemeIconPart {
+  el: 'circle' | 'path'
+  attrs: Readonly<Record<string, string>>
+}
+
+/**
+ * The three pictures, and why these three.
+ *
+ * They are the same idea as the ones on the marketing site's header, drawn to
+ * the same 24-unit grid, because the two controls do the same job in the same
+ * place and a person who has seen one should recognise the other. Not copied
+ * markup — the shapes are a circle, a sun and a crescent, which is the
+ * vocabulary every appearance control on every platform uses, and drawing them
+ * here is what keeps the site's stylesheet out of this repository.
+ *
+ *   - **system** — a circle half filled. It is the only one of the three that
+ *     shows *both* states at once, which is exactly what "whatever this device
+ *     says" means, and it is why a gear or an `A` would be worse: those name a
+ *     setting rather than the answer.
+ *   - **light** — a sun. A disc with eight rays.
+ *   - **dark** — a crescent, cut as one path rather than as a disc with a disc
+ *     over it, so it needs no second fill and cannot show a seam where two
+ *     shapes meet on a translucent background.
+ */
+export const THEME_ICON: Record<ThemeChoice, readonly ThemeIconPart[]> = {
+  system: [
+    { el: 'circle', attrs: { cx: '12', cy: '12', r: '8' } },
+    // Filled and un-stroked: this is the half, drawn over the outline above, and
+    // a stroke on it would put a line down the middle of the circle.
+    { el: 'path', attrs: { d: 'M12 4a8 8 0 0 0 0 16z', fill: 'currentColor', stroke: 'none' } },
+  ],
+  light: [
+    { el: 'circle', attrs: { cx: '12', cy: '12', r: '4' } },
+    {
+      el: 'path',
+      attrs: {
+        d: 'M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
+      },
+    },
+  ],
+  dark: [{ el: 'path', attrs: { d: 'M20 14.5A8.5 8.5 0 0 1 9.5 4a7 7 0 1 0 10.5 10.5z' } }],
 }
 
 /**

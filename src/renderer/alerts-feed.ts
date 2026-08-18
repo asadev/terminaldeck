@@ -52,6 +52,18 @@
  * one tick per threshold rather than one tick a minute forever, and behind a
  * hidden window `schedule.ts` disarms it entirely.
  *
+ * ## The one thing in here that is not about a project
+ *
+ * A device waiting to be approved is folded into the same report, and it is the
+ * exception to everything above: it is a fact about the machine, it costs one
+ * in-memory list to read rather than forty transcripts, and it is announced by
+ * its own push (`remote:connections`, widened in `server.ts` to cover pairing)
+ * rather than inferred from session activity. So it sits outside the scan floor
+ * and outside the project switch, and is merged on the way out. `alerts-devices.ts`
+ * carries the argument for why it belongs on this surface at all — briefly:
+ * approval is now the gate everything remote is behind, and until this landed
+ * the app announced it nowhere.
+ *
  * ## Cost ceiling
  *
  * {@link MIN_SCAN_GAP_MS} is the floor between two scans. Status changes arrive
@@ -62,7 +74,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { machineReport, mergeAlerts, pendingDeviceAlerts } from './alerts-devices'
 import type { AlertReport } from './components/AlertsPanel'
+import { toRemoteDevices, type RemoteDevice } from './remote/RemoteSection'
 import { at } from './schedule'
 
 /* ------------------------------------------------------------------ bounds -- */
@@ -212,11 +226,46 @@ export interface AlertsFeedBridge {
   onSessionStatus(cb: (id: string, status: string) => void): () => void
   onSessionCreated(cb: (meta: unknown) => void): () => void
   onSessionExit(cb: (id: string, exitCode: number) => void): () => void
+  /**
+   * The paired-device roster, for the one alert that is about the machine
+   * rather than about the project. See `alerts-devices.ts`.
+   *
+   * Optional, and both of these are, because they are not what this feed is
+   * for: a build whose preload predates the remote channels still produces
+   * every project alert, and simply never raises a device one. Required
+   * members would have made `resolveBridge` answer "no main process at all"
+   * on such a build and taken the whole panel down with them.
+   *
+   * Cheap in a way `projectAlerts` is not — `remote:devices` returns a list
+   * the main process is already holding in memory, with no filesystem behind
+   * it — which is why it is read outside the scan floor below.
+   */
+  listRemoteDevices?(): Promise<unknown>
+  /**
+   * The remote picture changed: a device paired, was approved, was refused, or
+   * a phone came and went.
+   *
+   * This is what makes the announcement arrive at the moment it becomes true
+   * rather than at the next session status change, which on an idle machine
+   * could be never. `server.ts` widened the channel to cover pairing precisely
+   * because pairing produces no connection of its own — the socket is refused,
+   * so nothing on this side had ever been told.
+   */
+  onRemoteConnections?(cb: (connections: unknown) => void): () => void
 }
 
 /** What the bell and the sheet both read. One scan, one answer, no disagreement. */
 export interface AlertsFeed {
-  /** The latest report for the active project, or null before the first scan. */
+  /**
+   * The latest report for the active project with the machine's own alerts
+   * folded in, or null before the first scan.
+   *
+   * Null while no project is open, which is also true of a machine with a device
+   * waiting: the workspace counts unread alerts against a project path, so there
+   * is nothing for a machine-wide alert to be counted against until a folder is
+   * open. Closing that would mean the workspace keeping a second, project-less
+   * seen-set — see the note on the device subscription below.
+   */
   report: AlertReport | null
   /** A scan is running. The sheet's button says so and is disabled. */
   busy: boolean
@@ -273,6 +322,17 @@ export function useProjectAlerts(
 ): AlertsFeed {
   const { bridge } = options
   const host = useMemo(() => bridge ?? resolveBridge(), [bridge])
+  /**
+   * Devices waiting to be let in, read from the remote roster.
+   *
+   * Held beside the project's report rather than inside it, and merged on the
+   * way out, because the two have nothing to do with each other: one is a scan
+   * of a folder and the other is a fact about this computer. Keeping them apart
+   * means a project switch throws away the scan and keeps the devices — the
+   * device waiting in the next room did not stop waiting because somebody
+   * clicked a different folder in the sidebar.
+   */
+  const [devices, setDevices] = useState<RemoteDevice[]>([])
   /*
    * Read through a ref, for the reason `useEvery` gives about its callback: the
    * caller builds this predicate from its session list, so it is a fresh
@@ -439,5 +499,116 @@ export function useProjectAlerts(
     })
   }, [deadline, scanNow])
 
-  return { report, busy, error, available: host !== null, rescan: scanNow }
+  /**
+   * Read the device roster now.
+   *
+   * Deliberately outside `scanNow`/`request` and outside the scan floor. The
+   * floor exists because a project scan reads up to forty transcripts, shells
+   * out to git and stats every dirty file; this reads a list the main process is
+   * already holding, and delaying it by up to a minute would delay the one alert
+   * in the app that somebody is *standing there waiting for*. A device that has
+   * paired is a person looking at a phone that says it is waiting.
+   *
+   * Failure is silence rather than an error on the panel. The project's alerts
+   * are what this surface is mostly for, and a build with no remote channels —
+   * or a main process that refused this one — must not turn a working alerts
+   * sheet into an error message about a feature the person may not use.
+   */
+  const readDevices = useCallback(async (): Promise<void> => {
+    if (!host?.listRemoteDevices) return
+    try {
+      const roster = toRemoteDevices(await host.listRemoteDevices())
+      setDevices((current) => (sameDevices(current, roster) ? current : roster))
+    } catch {
+      // Leaves whatever was last known on screen. A read that did not come back
+      // is not evidence that nobody is waiting.
+    }
+  }, [host])
+
+  /**
+   * Once on mount, and then only when the main process says something moved.
+   *
+   * No timer, and none is needed: `remote:connections` now fires on every
+   * pairing, approval and refusal as well as on every connection change, which
+   * is the complete set of moments this list can differ. An app sitting idle
+   * with nobody pairing anything does exactly one read, at launch.
+   *
+   * Not gated on `projectPath`, unlike everything above it — a device waiting is
+   * true whichever folder is open. What is still gated is what the workspace
+   * does with the answer: it counts unread alerts per project, so with no
+   * project open there is nothing to count them against. That gap is the
+   * workspace's to close, not this feed's.
+   */
+  useEffect(() => {
+    void readDevices()
+    if (!host?.onRemoteConnections) return
+    // The payload is ignored on purpose, exactly as `RemoteSection` ignores it:
+    // one read is one source of truth, and a push that carried connections could
+    // not have carried the device that just paired anyway — it has none.
+    return host.onRemoteConnections(() => void readDevices())
+  }, [host, readDevices])
+
+  /**
+   * The one report both surfaces read, with the machine's own alerts folded in.
+   *
+   * Merged here rather than at either end, so the bell's count, the sheet's
+   * summary line and the sheet's list are all computed from one list — the
+   * property `AlertsPanel`'s header calls out as the reason the scan moved into
+   * this file in the first place.
+   */
+  const merged = useMemo(() => {
+    const now = Date.now()
+    const machine = pendingDeviceAlerts(devices, now)
+    /*
+     * A report with no project behind it, when there is something to say anyway.
+     *
+     * Two states reach this and both matter. There is no folder open at all —
+     * a fresh install, which is where pairing a first device most often happens
+     * — and there is a folder open whose first scan has not landed yet. In both,
+     * refusing to produce a report would mean the app knows a device is waiting
+     * and says nothing, which is the whole defect.
+     */
+    if (report === null) {
+      return machine.length === 0 ? null : machineReport(machine, projectPath, now)
+    }
+    return mergeAlerts(report, machine)
+  }, [devices, projectPath, report])
+
+  return { report: merged, busy, error, available: host !== null, rescan: scanNow }
+}
+
+/**
+ * Are these two rosters the same, for the purpose of the one alert built from
+ * them?
+ *
+ * Identity matters: the merged report is memoised on `devices`, and a read that
+ * returned a fresh array of identical rows would rebuild every alert object and
+ * hand the workspace a new report — which re-runs the seen-marking effect and
+ * rewrites `localStorage` for nothing. Compared on the three fields the alert
+ * actually uses rather than deep-equalled, so a `lastSeenAt` ticking on an
+ * approved device — the field that changes most often and means least here —
+ * does not count as a change.
+ */
+function sameDevices(a: readonly RemoteDevice[], b: readonly RemoteDevice[]): boolean {
+  if (a.length !== b.length) return false
+  // A plain loop rather than `Array.every`, and that is not a style preference:
+  // `alerts-feed.test.ts` refuses any `every(` in this file, because the timer
+  // helper this feed exists to avoid is called exactly that. Weakening the guard
+  // to tell a method call from a poll would make it catch less than it does now,
+  // and what it is guarding — that the bell never costs a clock — is worth more
+  // than four lines of brevity here.
+  for (let index = 0; index < a.length; index += 1) {
+    const one = a[index]
+    const other = b[index]
+    if (one === undefined || other === undefined) return false
+    if (
+      one.id !== other.id ||
+      one.state !== other.state ||
+      one.name !== other.name ||
+      one.addedAt !== other.addedAt
+    ) {
+      return false
+    }
+  }
+  return true
 }

@@ -118,20 +118,41 @@ extension XCUIApplication {
      * that they end up looking at the conversation, which is exactly what this
      * file exists for.
      *
+     * **And the pill is now conditional**, which changes what a `false` from
+     * here means: *"if the copilot is not connecting, this icon should not be
+     * inside the pill — then it will be three icon pill. Otherwise if the
+     * copilot is connected, then four icon pill."* So a phone that has not
+     * connected a copilot to the machine on screen has no Copilot pill at all,
+     * and this returns false rather than failing — which is the correct answer,
+     * not a flake. A caller that needs the connection first calls
+     * `connectTheCopilot` in its own suite, or `openCopilotSettings()` below.
+     *
      * A pop first, for the reason `openSettingsTab` does one: this tab has a
-     * stack of its own now, and a case that left a terminal pushed on it would
-     * come back to the terminal rather than to the copilot.
+     * stack of its own, and a case that left a terminal pushed on it would come
+     * back to the terminal rather than to the copilot. **Back on this screen is
+     * `copilot.back`, not a chevron the navigation stack supplied** — the screen
+     * draws no tab bar any more, so that button is its only way out — and it is
+     * in the same leading slot, so `element(boundBy: 0)` still finds whichever
+     * one is there.
      *
      * The proof is deliberately loose — *something* the copilot screen draws.
-     * There is no one element common to all eight access states: a connected
-     * phone has a composer, an unconnected one has a code field, a machine with
-     * no copilot has a sentence. Asserting any single one of those here would
-     * make this helper mean "arrived at the copilot **and** it is in the state I
-     * expected", which is the caller's assertion, not this one's.
+     * There is no one element common to every access state: a connected phone
+     * has a composer, a disconnected one has a sentence and a button to
+     * Settings, a machine with no copilot has a different sentence. Asserting
+     * any single one of those here would make this helper mean "arrived at the
+     * copilot **and** it is in the state I expected", which is the caller's
+     * assertion, not this one's.
      */
     @discardableResult
     func openCopilotTab() -> Bool {
-        openTab("Copilot")
+        // No pill means no copilot connection on the machine on screen, which is
+        // an answer rather than a failure. Checked before tapping, because
+        // `openTab`'s fallback would otherwise find the word "Copilot" somewhere
+        // else on the screen — the Settings row is called that too.
+        guard tabBars.firstMatch.buttons["Copilot"].waitForExistence(timeout: 10) else {
+            return false
+        }
+        tabBars.firstMatch.buttons["Copilot"].tap()
         if copilotIsShowing { return true }
         // Something is pushed over it — one Back is enough; this stack is one
         // deep by construction.
@@ -143,7 +164,7 @@ extension XCUIApplication {
     private var copilotIsShowing: Bool {
         for _ in 0 ..< 10 {
             if textFields["copilot.composer"].exists
-                || textFields["copilot.connect.field"].exists
+                || buttons["copilot.back"].exists
                 || otherElements["copilot.notGranted"].exists
                 || otherElements["copilot.notOffered"].exists
                 || staticTexts["Copilot"].exists {
@@ -152,6 +173,52 @@ extension XCUIApplication {
             _ = staticTexts["Copilot"].waitForExistence(timeout: 1)
         }
         return false
+    }
+
+    /**
+     * The copilot's **connection** screen, which is in Settings now.
+     *
+     * *"Actually connecting copilot should be in the settings."* The six-digit
+     * code used to be a screen behind the Copilot pill, and it could not stay
+     * there once the pill began appearing only for a copilot that is already
+     * connected. Every suite that connects a copilot comes through here.
+     *
+     * The proof is the screen's own root identifier rather than the code field,
+     * because this screen has six states and only two of them have a field on
+     * them — a phone that is already connected arrives at a card and a button,
+     * and that is still arriving.
+     */
+    @discardableResult
+    func openCopilotSettings() -> Bool {
+        guard openSettingsTab() else { return false }
+        let row = buttons["settings.copilot"]
+        guard row.waitForExistence(timeout: 10) else { return false }
+        row.tap()
+        /*
+         * Any one of the screen's six states, matched by identifier across
+         * every element type.
+         *
+         * A predicate over the set rather than a single identifier on the
+         * screen's own container, and that is not a stylistic choice: an
+         * identifier on the `ScrollView` **hid the code field from the
+         * accessibility tree entirely** — measured here, on iOS 26.4, where
+         * `textFields["copilot.connect.field"]` then went missing over a screen
+         * that was plainly showing it. A `ScrollView` is already an
+         * accessibility container, and naming it collapses what is inside.
+         *
+         * Matched with `descendants(matching: .any)` for the reason
+         * `waitForConnected` matches the connection pill that way: what a
+         * SwiftUI container is reported as changes with the release, and a query
+         * that names the wrong element type fails as "not there" over a screen
+         * that is on the phone.
+         */
+        let arrived = NSPredicate(format:
+            "identifier BEGINSWITH 'copilot.settings.' OR identifier == 'copilot.notConnected' "
+            + "OR identifier == 'copilot.credentialLost'")
+        return descendants(matching: .any)
+            .matching(arrived)
+            .firstMatch
+            .waitForExistence(timeout: 15)
     }
 
     /// Back to the sessions, which is where every other suite expects to be.

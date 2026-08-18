@@ -182,11 +182,36 @@ export function chooseLayout(room: ClusterRoom, needs: LayoutNeeds, was: Cluster
 /**
  * The narrowest the cluster is ever squeezed to before it stops being squeezed.
  *
- * Enough for the caret and a couple of characters. Past this the control stops
- * reading as a control at all, and a bar that has less than this to offer has
- * bigger problems than a truncated model name.
+ * Enough for the caret and a couple of characters — which is what it was always
+ * supposed to be, and 56 was not it. Measured in the running app on 2026-08-18
+ * at a 720px window, which is this app's own `minWidth` and therefore a size a
+ * person can really be at: the cluster was floored here at 56, the reading took
+ * 29 of it and the gap took 2, and the controls chip was left with 25 — its own
+ * padding and its caret exactly, and not one pixel for a character. It drew a
+ * bare chevron with 106 pixels of model and effort behind it, painted fully
+ * transparent. Zero of the couple of characters this constant exists to
+ * guarantee.
+ *
+ * 106 is the arithmetic done properly, in the same tier: the reading at its
+ * tight width is 35, the gap is 2, and the chip carrying `Opus 5` and its caret
+ * is 69 — 31 of chrome around a value measured at 38.2. So the narrowest window
+ * this app permits now shows the model, whole, which is what `summaryDetail`
+ * calls `model` and what Asad asked for in as many words: *"just Opus 5 with
+ * drop down is good enough."*
+ *
+ * The 50 pixels come from the caption beside it, and that is the right pocket to
+ * take them from. A session name is a caption with a tooltip and an ellipsis
+ * already in it; the chip is a control, and this constant's own note two
+ * functions down says what it is for — *"so that a session named at essay length
+ * cannot squeeze the controls out of existence"*. A session named at essay
+ * length is exactly what had happened.
+ *
+ * It cannot cost a control anywhere, because {@link clampWidth} takes the
+ * minimum of this and `hardRoom` — the room left before something that never
+ * gives way is covered. A 124px guest pane offers about fifty and still gets
+ * fifty; raising this changes nothing there.
  */
-export const MIN_CLUSTER_PX = 56
+export const MIN_CLUSTER_PX = 106
 
 /**
  * The width the cluster is allowed to draw at — published as `--sc-room`.

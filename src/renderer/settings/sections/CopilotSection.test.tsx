@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SettingsPanel } from '../SettingsWindow'
 import { sectionsFor } from '../settings-schema'
-import { CopilotSection, hasNeverStarted, logTrustLine } from './CopilotSection'
+import { CopilotSection, FileRow, hasNeverStarted, logTrustLine } from './CopilotSection'
 import {
   INTERACTIVE_SETTING,
   resolveCopilotBridge,
@@ -51,6 +51,8 @@ function fakeDeck(): Record<string, unknown> {
     copilotReadInstructions: answer,
     copilotWriteInstructions: answer,
     copilotResetInstructions: answer,
+    copilotReadFolderInstructions: answer,
+    copilotWriteFolderInstructions: answer,
     copilotScaffold: answer,
     copilotMemory: answer,
     copilotMemoryRead: answer,
@@ -209,9 +211,25 @@ describe('the claims the pane makes', () => {
      */
     const markup = html()
     expect(markup).toContain('Five paths, and only five')
-    expect(markup).toContain('an automation loop with no human in it')
-    expect(markup).toContain('a record its subject can compose is worth nothing')
-    expect(markup).toContain('a permission an agent can grant itself is not a permission')
+    /*
+     * The three reasons are behind this row's ⓘ now, with the five absolute
+     * paths that used to be printed under them — see the memory case above for
+     * why a moved claim is asserted against the source.
+     *
+     * The trim, and what survived it: the count is the claim, so the count stays
+     * on the page. Why each of the three is refused is an argument, and an
+     * argument on a settings pane for people who are, in his words, "mostly
+     * non-technical vibe coders" belongs one hover away. The paths themselves
+     * are not printed anywhere on this pane any more; they are still in the
+     * generated tool contract two rows up, which is the file the copilot is
+     * handed and the place a machine-readable list belongs.
+     */
+    expect(SOURCE).toContain('an automation loop with no human in it')
+    expect(SOURCE).toContain('a record its subject can compose is worth nothing')
+    expect(SOURCE).toContain('a permission an agent can grant itself is not a permission')
+    // And no row on this pane prints the list. `records.paths` reaches the
+    // popup's text and nothing else.
+    expect(markup).not.toContain('copilot-plain')
   })
 
   it('separates the CLI’s own prompts from this app’s confirmation', () => {
@@ -230,10 +248,19 @@ describe('the claims the pane makes', () => {
      * where the file is. `src/neutral-naming.test.ts` holds both halves.
      */
     const markup = html()
-    expect(markup).toContain('~/.claude/settings.json')
-    expect(markup).toContain('This app does not change that setting in either direction')
-    expect(markup).toContain('The CLI the copilot runs on has prompts of its own')
+    /*
+     * One line each on the page, and the mechanism behind two dots. This row was
+     * two full paragraphs — six rendered lines of permission-system explanation,
+     * permanently on screen — which is the density the 2026-08-17 pass is
+     * removing. What must never move is the *warning*, so both halves of the
+     * distinction are still sentences a reader meets without hovering anything;
+     * how each one works, and where the file is, are behind the dots.
+     */
+    expect(markup).toContain('those prompts follow')
+    expect(markup).toContain('The confirmation')
     expect(markup).toContain('Nothing in that settings file turns it off')
+    expect(SOURCE).toContain('~/.claude/settings.json')
+    expect(SOURCE).toContain('This app does not change that setting in either direction')
     // And the old half-truth is gone: under a bypassing default the CLI does
     // not ask before it edits a file, so the screen must not say it does.
     expect(markup).not.toContain('Anything it cannot undo, it asks about first')
@@ -246,10 +273,19 @@ describe('the claims the pane makes', () => {
   })
 
   it('says the account is one of yours rather than a login the copilot keeps', () => {
+    /*
+     * The answer stays on the page; how the account is resolved went behind the
+     * row's ⓘ in the 2026-08-18 trim. Which half is which matters here more than
+     * usual: "does my assistant have a login of its own" is a question about
+     * billing and about who is signed in as whom, and it has to be answerable
+     * without hovering anything. The resolution order is the follow-up.
+     */
     const markup = html()
-    expect(markup).toContain('One of the accounts in Accounts')
-    expect(markup).toContain('rather than having a login of its own')
+    expect(markup).toContain('as one of your accounts')
+    expect(markup).toContain('it has no login of its own')
     expect(markup).not.toContain('Pinned to a login of its own')
+    expect(SOURCE).toContain('the same way any session you start in')
+    expect(SOURCE).toContain('There is no separate login anywhere for the copilot')
   })
 })
 
@@ -541,13 +577,20 @@ describe('the files, and the one button on each row that acts', () => {
     expect(SOURCE).toContain('memory?.facts.length')
   })
 
-  it('has two editors and no more: its instructions, and one routine', () => {
+  it('has three editors and no more: two instruction files, and one routine', () => {
     /*
      * Counted in the source rather than in the markup, because
-     * `renderToStaticMarkup` runs no effects and both boxes are closed anyway.
+     * `renderToStaticMarkup` runs no effects and every box is closed anyway.
      * `CopilotEditor.test.tsx` exercises the box itself against props.
+     *
+     * It was two until the completeness audit, and the third is the one he
+     * actually meant: *"Nothing is editable. Every file needs an Edit button
+     * beside it, opening the same editor style already used, and saving."* The
+     * folder's own instruction file — the file carrying the copilot's name and
+     * how it addresses somebody, whenever they have pointed it at a workspace of
+     * their own — had a Finder button and no editor.
      */
-    expect(SOURCE.match(/<FileEditor/g) ?? []).toHaveLength(2)
+    expect(SOURCE.match(/<FileEditor/g) ?? []).toHaveLength(3)
     /*
      * No box on this pane spells a filename out; each derives its label from the
      * path it is actually pointed at. The instructions editor used to be
@@ -557,7 +600,94 @@ describe('the files, and the one button on each row that acts', () => {
      * filename that is not on disk anywhere.
      */
     expect(SOURCE).not.toContain('label="CLAUDE.md"')
-    expect(SOURCE.match(/label=\{baseName\(/g) ?? []).toHaveLength(4)
+    expect(SOURCE.match(/label=\{baseName\(/g) ?? []).toHaveLength(5)
+  })
+
+  it('gives the folder’s own instructions an editor rather than a file manager', () => {
+    /*
+     * The audit's second finding, pinned as a whole.
+     *
+     * Four things have to hold together, and any one of them alone would let the
+     * row go back to being a Finder button with a different label:
+     *
+     *  - the verb is Edit, and it is the row's only button;
+     *  - the write goes through the folder channel, not the layer's, because
+     *    those are two different files and saving one over the other would put
+     *    somebody's persona into the app's own folder or the reverse;
+     *  - the promise the folder feature turns on is restated *at the box*, where
+     *    it could be doubted, rather than in a document;
+     *  - and Show the file is still there, because somebody who would rather use
+     *    their own editor has not been asked to stop.
+     */
+    const page = markup()
+    expect(page).toContain('The folder’s own instructions')
+    expect(page).not.toContain('>Show</button>')
+    expect(SOURCE).toContain('copilotWriteFolderInstructions')
+    expect(SOURCE).toContain('copilotReadFolderInstructions')
+    expect(SOURCE).toContain('Saving writes it there and nothing else does')
+    expect(SOURCE).toContain('Show the file')
+  })
+
+  it('never draws the same badge word twice on one row', () => {
+    /*
+     * The audit's first finding, and it is pinned at the component rather than
+     * at the call sites it came from.
+     *
+     * The row for the instruction file passed an ownership badge reading `yours`
+     * and a state badge that reads `yours` the moment somebody edits the file —
+     * so the first save anybody made drew *Its instructions · yours · yours*.
+     * Every person who used the Edit button this review created hit it.
+     *
+     * Both halves are fixed and both are worth holding. The call sites say
+     * different words now, which is checked below; and `FileRow` folds a repeat
+     * whatever it is handed, which is the half that survives somebody adding a
+     * sixth instruction state without reading this file.
+     */
+    const repeated = renderToStaticMarkup(
+      <FileRow
+        label="Its instructions"
+        badges={[
+          { text: 'yours', quiet: false },
+          { text: 'Yours' },
+          { text: 'out of date' },
+        ]}
+        says="Whatever."
+        action="Edit"
+        onAction={() => {}}
+      />,
+    )
+    expect(repeated.match(/settings-badge/g) ?? []).toHaveLength(2)
+    expect(repeated).toContain('>yours<')
+    expect(repeated).toContain('>out of date<')
+
+    /*
+     * The call site, too, because a static render cannot reach the state the
+     * defect appeared in: `renderToStaticMarkup` runs no effects, so the pane
+     * under test is always the never-started one and its instruction file is
+     * always `missing`. The row that broke is the one that passed *two* badges,
+     * so what is pinned is that it passes one — the state — and that the second,
+     * which was the constant word `yours` in all four states, has not come back.
+     */
+    expect(SOURCE).toContain('badges={[{ text: note.badge, quiet: note.quiet }]}')
+
+    /*
+     * And on the real pane, no badge is ever followed by a badge saying the same
+     * thing — which is the defect exactly as a reader met it, two words side by
+     * side on one row.
+     *
+     * Adjacency rather than uniqueness across the whole pane, because two rows
+     * saying `generated` is correct: the tool list and the composed file are
+     * both generated, and each says so on its own line. What is never right is
+     * the same word twice in one breath.
+     */
+    const pairs = [
+      ...markup().matchAll(
+        /class="settings-badge[^"]*"[^>]*>([^<]+)<\/span><span class="settings-badge[^"]*"[^>]*>([^<]+)</g,
+      ),
+    ]
+    for (const [, first, second] of pairs) {
+      expect(first.toLowerCase(), `${first} · ${second}`).not.toBe(second.toLowerCase())
+    }
   })
 
   it('says a changed instruction file applies at the next start, not mid-conversation', () => {

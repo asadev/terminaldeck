@@ -80,7 +80,23 @@ import {
 } from './drive-bridge'
 import { resolveOmnibox, securityOf } from './omnibox'
 import { browserOverlayDom, isCovered, watchOverlays, type Rect as OverlayRect } from './overlay-watch'
-import { StartPage } from './StartPage'
+import { MachinePicker } from './MachinePicker'
+import {
+  destinationFor,
+  differentPortNote,
+  lostMachine,
+  machineChoices,
+  readMachines,
+  reachedAddress,
+  readReach,
+  resolveMachinesApi,
+  servedBy,
+  THIS_MACHINE,
+  type MachineChoice,
+  type ReachedPort,
+  type ReachOpened,
+} from './machines-bridge'
+import { StartPage, type PortSource } from './StartPage'
 import {
   closeTab as closeInList,
   moveTab,
@@ -472,6 +488,53 @@ export function BrowserWorkspace({
   const [offerNote, setOfferNote] = useState('')
   const accounts = useMemo(() => resolveAccountsApi(), [])
   const [focusToken, setFocusToken] = useState(0)
+
+  /*
+   * ---------------------------------------------------------------------------
+   * The machine this address bar is talking to.
+   *
+   * *"I should be able to type and reach the devices which are not here on this
+   * device but they are from the other remote device… maybe give a drop down
+   * next to somewhere here with the bar, to choose which device we are talking
+   * to right now."*
+   *
+   * Per **panel**, not per tab. It is a mode for what you are about to type, and
+   * a tab already carries where it went — the badge in the address bar reads the
+   * machine back off the URL, so a tab opened on another machine keeps saying so
+   * however the picker is set afterwards. Per-tab would mean the answer to "which
+   * machine am I typing at" changed when you clicked a different tab, which is
+   * the shape-changing this whole item is against.
+   *
+   * `machineView` is subscribed rather than polled. `machines:state` is pushed on
+   * every connect, disconnect, session change and port list, which is everything
+   * this reads — and a panel that polled a socket layer for it would be the
+   * "they make the system heavier" he has objected to by name.
+   * ---------------------------------------------------------------------------
+   */
+  const machinesApi = useMemo(() => resolveMachinesApi(), [])
+  const [machineView, setMachineView] = useState<MachineChoice[]>([])
+  const [machineId, setMachineId] = useState(THIS_MACHINE)
+  /**
+   * Every tunnel this window has opened, so a loopback page can name its source.
+   *
+   * Kept for the life of the panel because the tunnel is: `machines/ipc.ts` holds
+   * a listener open until the link drops, so a page opened ten minutes ago still
+   * loads. Entries for a machine that has gone are dropped below, in the same
+   * effect that gives the picker back — a badge naming a machine whose pages have
+   * stopped answering is the one thing worse than no badge.
+   */
+  const [opened, setOpened] = useState<ReachedPort[]>([])
+  /**
+   * The caveat about a port number that could not be kept, when there is one.
+   *
+   * Its own state, and drawn in `.bw-said` rather than `.bw-error`, because it
+   * is not a failure: the page opened, and this is the one thing about it that
+   * will surprise somebody later. The critical colour is for things that did not
+   * work, and a sentence in red about a page that loaded perfectly reads as one
+   * that did not — the same argument the "saved, cleared, copied" line already
+   * makes two bands down.
+   */
+  const [portNote, setPortNote] = useState('')
 
   /**
    * Where the first tab goes: what a link named, or the start page.
@@ -884,14 +947,156 @@ export function BrowserWorkspace({
     [api, active?.id],
   )
 
+  /* -- the other machines, and the addresses that resolve on them. */
+
+  useEffect(() => {
+    if (!machinesApi) return
+    let alive = true
+    const take = (raw: unknown): void => {
+      if (alive) setMachineView(machineChoices(readMachines(raw)))
+    }
+    // One read for the state that already exists, then the push for everything
+    // after it. Without the read a panel opened while a machine was already
+    // connected would show nothing until that machine next changed.
+    void machinesApi.listMachines().then(take).catch(() => undefined)
+    const off = machinesApi.onMachinesState(take)
+    return () => {
+      alive = false
+      off()
+    }
+  }, [machinesApi])
+
+  /**
+   * Give the picker back when the machine it is pointing at goes away.
+   *
+   * A selection that survived its machine would be an address bar that refused
+   * every localhost address with the same sentence until somebody worked out
+   * that a dropdown two centimetres away had gone stale. The reason is said out
+   * loud, once, in the band this panel already uses for sentences.
+   *
+   * The tunnels that machine served go with it, for the same reason: the
+   * listeners are already closed over in the main process — `machines/ipc.ts`
+   * drops them the moment a link leaves `online` — so a badge still naming it
+   * would be pointing at a page that has stopped answering.
+   */
+  useEffect(() => {
+    const lost = lostMachine(machineView, machineId)
+    if (lost === null) return
+    setMachineId(THIS_MACHINE)
+    setOpened((prev) => prev.filter((entry) => entry.machineId !== machineId))
+    // And the caveat about one of its ports, which is a true sentence about a
+    // page that has just stopped answering. Watched on a real pair of machines:
+    // revoking over there left "port 8090 is being served here on 64830" on
+    // screen above a dead tab, under a sentence saying the machine had gone.
+    setPortNote('')
+    setNotice(lost)
+  }, [machineId, machineView])
+
+  /*
+   * Ask the chosen machine what it is serving, once, on choosing it.
+   *
+   * The link asks on every welcome and pushes the answer, so there is normally a
+   * list already — but "normally" is doing a lot of work there: the machine may
+   * have been connected for an hour, and nothing on the far side watches its own
+   * process table. Somebody opening this picker has almost always just started
+   * something over there, which is the one case a push cannot cover.
+   */
+  useEffect(() => {
+    if (machineId === THIS_MACHINE || !machinesApi) return
+    void machinesApi.refreshMachinePorts(machineId).catch(() => undefined)
+  }, [machineId, machinesApi])
+
+  /**
+   * Ask the main process for an address on this machine that serves that port.
+   *
+   * Null on refusal, **after** putting the refusal on screen. Every one of the
+   * four ways this can fail is a different sentence written by whichever end
+   * knows the answer — the link is down, that machine is no longer serving the
+   * port, it never answered, or this machine could not open a local address —
+   * and swallowing one would turn a click into nothing at all.
+   */
+  const reachPort = useCallback(
+    async (machine: MachineChoice, port: number): Promise<ReachOpened | null> => {
+      if (!machinesApi) {
+        setNotice('This build cannot reach another machine’s ports.')
+        return null
+      }
+      const answer = readReach(
+        await machinesApi.reachOnMachine(machine.id, port).catch((cause: unknown) => ({
+          ok: false,
+          message: humanError(cause),
+        })),
+      )
+      if (!answer.ok) {
+        setNotice(answer.message)
+        return null
+      }
+      setOpened((prev) => [
+        ...prev.filter((entry) => entry.localPort !== answer.localPort),
+        {
+          machineId: machine.id,
+          machineName: machine.name,
+          port: answer.port,
+          localPort: answer.localPort,
+          sameNumber: answer.sameNumber,
+        },
+      ])
+      // Said once, when it happens, rather than left to be discovered by a link
+      // inside the site going somewhere strange. Set to '' on the ordinary case
+      // as well, so a caveat about the last port does not sit above a page it is
+      // not true of.
+      setPortNote(differentPortNote(answer, machine.name))
+      return answer
+    },
+    [machinesApi],
+  )
+
+  /**
+   * Open a port on another machine, in this tab, as an ordinary page.
+   *
+   * The address that comes back is a plain `http://` URL on this machine's
+   * loopback, so it goes through `browserNavigate` exactly as anything else
+   * does — same tab, same history, same Back button. That sameness is the
+   * requirement rather than an implementation detail: *"shape of the application
+   * should not be changing for local and remote devices."*
+   */
+  const openThere = useCallback(
+    async (machine: MachineChoice, port: number, typed: string): Promise<void> => {
+      const answer = await reachPort(machine, port)
+      if (!answer) return
+      act((a, id) => a.browserNavigate(id, reachedAddress(typed, answer.url)))
+    },
+    [reachPort, act],
+  )
+
   const navigate = useCallback(
     (input: string): void => {
       const resolution = resolveOmnibox(input)
       if (resolution.kind === 'empty') return
       setTabs((prev) => withTab(prev, activeRef.current, { editing: false }))
-      act((a, id) => a.browserNavigate(id, resolution.url))
+      /*
+       * Which machine this address is for, decided by one pure function.
+       *
+       * `destinationFor` is the whole behaviour of the picker and it lives in
+       * `machines-bridge.ts` so it can be tested: an effect inside a panel is
+       * the one place this project's test run cannot look, and a change that
+       * quietly stopped rerouting `localhost` would leave every render test
+       * passing with the feature gone.
+       */
+      const target = destinationFor(machineId, resolution.url)
+      if (target.kind === 'there') {
+        const machine = machineView.find((one) => one.id === target.machineId)
+        // Refused here rather than sent, because a machine that is not in the
+        // list is not one this window can say anything about. The effect above
+        // has already put the picker back and said why.
+        if (machine) {
+          void openThere(machine, target.port, target.url)
+          return
+        }
+      }
+      act((a, id) => a.browserNavigate(id, target.url))
     },
-    [act],
+    [act, machineId, machineView, openThere],
   )
 
   const closeTab = useCallback(
@@ -1375,6 +1580,49 @@ export function BrowserWorkspace({
   const security = securityOf(active?.url ?? '')
 
   /*
+   * The chosen machine, the page's own machine, and the list the start page draws.
+   *
+   * Three separate questions and they are answered separately on purpose. The
+   * *picker* says where the next address goes; the *badge* says where the page
+   * already on screen came from, read back off its URL so it survives a link, a
+   * reload and the Back button; the *source* is what a new tab lists. A single
+   * "current machine" would have made all three the same answer, and the second
+   * one is a fact about a tab while the first is a mode of the window.
+   */
+  const machine = machineView.find((one) => one.id === machineId) ?? null
+  const served = servedBy(active?.url ?? '', opened)
+  const portSource: PortSource | null =
+    machine === null
+      ? null
+      : {
+          name: machine.name,
+          ports: machine.ports,
+          open: (port) => {
+            // The address a person would have typed, so that what lands in the
+            // bar and in history is the page — not the row that was clicked.
+            void openThere(machine, port, `http://localhost:${port}/`)
+          },
+          refresh: () => {
+            void machinesApi?.refreshMachinePorts(machine.id).catch(() => undefined)
+          },
+        }
+
+  /*
+   * Absent until there is somewhere else to go.
+   *
+   * A dropdown whose only entry is "This machine" is chrome answering a question
+   * nobody with one computer has asked, and the standing rule in this panel is
+   * that a control which cannot do anything is not drawn. With a machine paired
+   * it appears, and the browser is still the same browser — one window, one tab
+   * strip, one address bar, with a word beside it saying which computer that
+   * address is on.
+   */
+  const picker =
+    machineView.length > 0 ? (
+      <MachinePicker machines={machineView} selected={machineId} onSelect={setMachineId} />
+    ) : undefined
+
+  /*
    * Which still image stands in for the page while a popup is over it.
    *
    * The capture's own photograph first, because a capture popup is anchored to
@@ -1440,6 +1688,15 @@ export function BrowserWorkspace({
         menuOpen={menuOpen}
         onMenu={() => openAt(() => setMenuOpen((open) => !open))}
         steps={recording.steps.length}
+        machinePicker={picker}
+        servedBy={
+          served && {
+            name: served.machineName,
+            port: served.port,
+            localPort: served.localPort,
+            sameNumber: served.sameNumber,
+          }
+        }
       />
 
       {/*
@@ -1560,6 +1817,17 @@ export function BrowserWorkspace({
         </p>
       )}
 
+      {/* Not in the band above it, and the colour is the whole reason: that one
+          is the critical colour and this page loaded. See `portNote`. */}
+      {portNote !== '' && (
+        <p className="bw-said" role="status">
+          {portNote}
+          <button type="button" className="bw-text-button" onClick={() => setPortNote('')}>
+            Dismiss
+          </button>
+        </p>
+      )}
+
       {/*
         One instruction strip, and only while it is the instruction.
 
@@ -1599,6 +1867,7 @@ export function BrowserWorkspace({
         {active && onStartPage(active) && (
           <StartPage
             onOpen={(url) => navigate(url)}
+            source={portSource}
             failure={
               active.failed && active.error
                 ? { message: active.error, url: active.url || active.draft }

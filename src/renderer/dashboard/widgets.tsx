@@ -509,6 +509,20 @@ export interface UsageView {
   /** Models these transcripts name, heaviest first. */
   models: string[]
   scanning: boolean
+  /**
+   * Whether some of this folder's transcripts were never read.
+   *
+   * The figures are capped — the newest forty conversations, inside ninety days
+   * — and the sentence under them used to describe them as *"every request your
+   * agents made in this folder"* regardless. That is the one thing this tile may
+   * not do: Asad's question about the headline was *"3.2 billion tokens. I don't
+   * know if it is true or not"*, and a total that quietly leaves work out while
+   * claiming to include all of it is how a figure becomes unbelievable.
+   *
+   * The main process answers it, because only it knows what it skipped. See
+   * `ProjectSummary.truncated`.
+   */
+  truncated: boolean
 }
 
 /** Prompt tokens: everything that was not output. */
@@ -669,6 +683,7 @@ function UsageWidget({ context }: { context: WidgetContext }): ReactElement {
         context,
         models,
         scanning: isRecord(raw) && raw.scanning === true,
+        truncated: isRecord(raw) && raw.truncated === true,
       }
     }, [projectPath]),
     { what: 'Reading this project’s transcripts' },
@@ -710,8 +725,25 @@ export function UsageReadout({
       <WidgetMessage
         tone="muted"
         title={data.scanning ? 'Still scanning…' : 'Nothing recorded yet'}
-        /* No tool named — same rule as the note below the totals. */
-        detail="Usage appears once an agent session in this folder has recorded its first request."
+        /*
+         * No tool named — same rule as the note below the totals.
+         *
+         * The second sentence exists because the first one was, for a while,
+         * simply untrue. This tile read "Nothing recorded yet" over the folder
+         * this app is built in, which holds three months of work, because the
+         * scan's forty slots had all gone to sessions that were opened and
+         * closed without being given anything to do. That is fixed where it
+         * belongs — the cap now counts conversations that recorded something,
+         * see `SCAN_FACTOR` in `src/main/transcript.ts` — but a cap that can
+         * still bite must not be allowed to masquerade as an empty folder ever
+         * again. Where work was left unread, the tile says so instead of telling
+         * somebody with a full history that they have not started yet.
+         */
+        detail={
+          data.truncated
+            ? 'Nothing was recorded in this folder’s most recent sessions. Older work was not read.'
+            : 'Usage appears once an agent session in this folder has recorded its first request.'
+        }
       />
     )
   }
@@ -805,11 +837,23 @@ export function UsageReadout({
         request into a second transcript. Saying so is what makes the figure
         checkable rather than something to be taken on trust. The arithmetic
         behind it is in `src/main/transcript.ts`.
+
+        The third thing is the clause that changes with `truncated`, and it is
+        the one the 2026-08-18 audit was about. "Every request your agents made
+        in this folder" was printed over a figure that is capped — the newest
+        forty conversations, inside ninety days — whether or not the cap had
+        taken anything out. Where nothing was left out the sentence is
+        unchanged, because there is nothing to qualify; where something was, the
+        promise is withdrawn and the reader is told what the number covers
+        instead. `ArtifactsPanel` says the same fact in the same words — *"older
+        work not read"* — so this app states one idea one way.
       */}
       <p className="widget-note">
         {formatTokens(tokenTotal)} tokens across {data.requests}{' '}
-        {plural(data.requests, 'request')} — every request your agents made in this folder,
-        counted once, from their own session records.
+        {plural(data.requests, 'request')} —{' '}
+        {data.truncated
+          ? 'counted once from this folder’s most recent sessions, from their own session records. Older work not read.'
+          : 'every request your agents made in this folder, counted once, from their own session records.'}
       </p>
 
       {expanded && (

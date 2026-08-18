@@ -26,10 +26,11 @@ import XCTest
 
 final class DeckChromeTests: XCTestCase {
 
-    /// The four tabs and the one screen pushed from one of them. All five are
-    /// places you are passing through, and he named three of them out loud.
+    /// The three tabs that draw a bar, and the one screen pushed from one of
+    /// them. All four are places you are passing through, and he named three of
+    /// them out loud.
     func testTheBarIsOnEveryTopLevelScreenAndOnMachines() {
-        for surface in [DeckSurface.copilot, .sessions, .localhost, .settings, .machines] {
+        for surface in [DeckSurface.sessions, .localhost, .settings, .machines] {
             XCTAssertTrue(DeckChrome.showsTabBar(on: surface),
                           "\(surface) is one of the screens the bar belongs on")
             XCTAssertEqual(DeckChrome.tabBar(on: surface), .visible)
@@ -37,48 +38,52 @@ final class DeckChromeTests: XCTestCase {
     }
 
     /**
-     * The two screens the complaint is about.
+     * The three screens the complaint is about.
      *
-     * Both are the whole reason you are there rather than somewhere you are
-     * passing through, both take the full height of the phone, and on both the
+     * Each is the whole reason you are there rather than somewhere you are
+     * passing through, each takes the full height of the phone, and on each the
      * bar was sitting over the bottom of the content while offering to take you
      * somewhere else.
      */
-    func testTheBarIsHiddenInsideASessionAndInsideAPage() {
+    func testTheBarIsHiddenInsideASessionAPageAndTheCopilot() {
         XCTAssertFalse(DeckChrome.showsTabBar(on: .session),
                        "the pill was covering the bottom rows of the terminal")
         XCTAssertFalse(DeckChrome.showsTabBar(on: .localhostPage),
                        "the pill was covering the bottom of the page from the machine")
+        XCTAssertFalse(DeckChrome.showsTabBar(on: .copilot),
+                       "the pill was sitting over the chat box")
         XCTAssertEqual(DeckChrome.tabBar(on: .session), .hidden)
         XCTAssertEqual(DeckChrome.tabBar(on: .localhostPage), .hidden)
+        XCTAssertEqual(DeckChrome.tabBar(on: .copilot), .hidden)
     }
 
     /**
-     * And the copilot **keeps** the bar, which is the opposite of what this file
-     * asserted a day ago.
+     * **The copilot, whose answer has now been given three times.** It is worth
+     * its own case, with the whole history in it, because the middle answer was
+     * good and somebody will rediscover it and undo this.
      *
-     * Worth a case of its own rather than being folded into the set above,
-     * because the reasoning for the old answer was good and somebody will
-     * rediscover it: the copilot screen ends in a composer, and a bar floating
-     * over a text field is the pill complaint exactly — *"when this keyboard is
-     * down, see the pill is still there."* That was right while the copilot was
-     * a screen **pushed from the session list**, where a chevron was how you
-     * left.
+     * *Hidden*, while the copilot was a screen pushed from the session list: it
+     * is full height and ends in a composer, and a bar floating over a text
+     * field is the pill complaint exactly. The chevron was how you left.
      *
-     * *"A fourth pill, and the copilot goes leftmost"* made it a tab, and a tab
-     * that hides its own tab bar has no way out at all: there is no chevron over
-     * a tab's root and no gesture that pops one. So the bar stays and the
-     * composer sits above it — `CopilotView` puts its footer in a bottom
-     * `safeAreaInset`, which is measured against the bar's own safe area.
+     * *Shown*, when *"a fourth pill, and the copilot goes leftmost"* made it a
+     * tab — because a tab that hides its own tab bar has no way out at all.
+     * There is no chevron over a tab's root and no gesture that pops one.
      *
-     * A terminal pushed **on top of** the copilot is a different surface and is
-     * still `.session`, so it still loses the bar. That is where the original
-     * complaint lives now, and `DeckTabsTests` walks it against the model.
+     * *Hidden again*, because he supplied the missing way out: *"pill should not
+     * be inside the chat box — there should be a back button to go back on
+     * home."* The entire case for the bar was that nothing else could leave the
+     * screen, and now something can. So the premise fell rather than the
+     * judgement being reversed.
+     *
+     * **Which makes `copilot.back` load-bearing**, and that is what the second
+     * assertion here is really about: this rule is only safe while that button
+     * exists. `CopilotScreensUITests` is where a finger proves it does.
      */
-    func testTheCopilotTabKeepsTheBarBecauseItIsATab() {
-        XCTAssertTrue(DeckChrome.showsTabBar(on: .copilot),
-                      "a tab that hid its own bar could not be left")
-        XCTAssertEqual(DeckChrome.tabBar(on: .copilot), .visible)
+    func testTheCopilotHidesTheBarBecauseItHasItsOwnWayHome() {
+        XCTAssertFalse(DeckChrome.showsTabBar(on: .copilot),
+                       "either we will type or we will use the pill")
+        XCTAssertEqual(DeckChrome.tabBar(on: .copilot), .hidden)
     }
 
     /**
@@ -93,8 +98,8 @@ final class DeckChromeTests: XCTestCase {
         let shown = Set(DeckSurface.allCases.filter { DeckChrome.showsTabBar(on: $0) })
         let hidden = Set(DeckSurface.allCases.filter { !DeckChrome.showsTabBar(on: $0) })
 
-        XCTAssertEqual(shown, [.copilot, .sessions, .localhost, .settings, .machines])
-        XCTAssertEqual(hidden, [.session, .localhostPage])
+        XCTAssertEqual(shown, [.sessions, .localhost, .settings, .machines])
+        XCTAssertEqual(hidden, [.session, .localhostPage, .copilot])
         XCTAssertEqual(shown.count + hidden.count, DeckSurface.allCases.count)
     }
 

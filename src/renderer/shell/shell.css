@@ -2266,9 +2266,16 @@
   the point of the section rather than an economy. A remote session is the same
   kind of thing as a local one, and drawing it in a different shape would be the
   app disagreeing with its own claim that using another machine feels like using
-  this one. What is different is the mark: a display and a stand rather than a
-  prompt, on the heading and on every row, so remote and local are tellable
-  apart at a glance without reading a word.
+  this one.
+
+  The mark used to sit on the heading **and on every row**, on the argument that
+  remote and local have to be tellable apart at a glance. Asad, 2026-08-18:
+  *"You don't need to give icon of the remote next to all of them — only above
+  there, next to the PC, the remote device."* He is right, and the reason is
+  worth keeping: being under the machine's heading is already what says a row is
+  remote, so repeating it per line said nothing while making the whole group
+  read as a foreign kind of thing sitting in a list of ordinary ones — which was
+  the complaint underneath the complaint. One mark, on the heading.
 */
 .sb-machine-mark {
   color: var(--text-muted);
@@ -2286,18 +2293,26 @@
   gap: var(--sp-1);
 }
 
-/* The last row of a machine's group, and quieter than a session: it is an
-   action rather than something you have open, so it wears the muted ink the
-   project headings use and only comes up on hover. */
-.sb-machine-new {
-  padding-left: var(--sp-3);
-  color: var(--text-muted);
-  font-size: var(--t-callout);
-  transition: color var(--dur-fast) var(--ease);
+/* `.sb-machine-new` used to be here: a "New session on DESKTOP-…" row bolted
+   under the last session in a machine's group. It is gone with the row, and by
+   the same instruction that took the per-row mark away — the machine's heading
+   is a `GroupHead` now, so starting a session there is the ＋ on the heading,
+   exactly where it is for a project. Two controls doing one thing, ten pixels
+   apart, is the thing he keeps asking to have removed. */
+
+/* A control on a group heading that cannot act right now, and says why in its
+   own tooltip rather than vanishing. Today there is one: Close, on a machine
+   whose app is too old to end sessions from here. Held at the ordinary muted
+   ink rather than dimmed further — the row it sits on is already muted, and a
+   second reduction on top of it reads as a rendering fault rather than as a
+   state. What says it cannot act is the cursor and the sentence. */
+.sb-row-action[data-blocked] {
+  cursor: default;
 }
 
-.sb-machine-new:hover {
-  color: var(--text-primary);
+.sb-row-action[data-blocked]:hover {
+  background: none;
+  color: var(--text-muted);
 }
 
 /* A session on another machine, filling the pane the way a local one does.

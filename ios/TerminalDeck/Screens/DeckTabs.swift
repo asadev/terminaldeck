@@ -13,19 +13,28 @@
  * which is where features go to be undiscovered. Nine items in one menu is not a
  * menu, it is a drawer.
  *
- * ## Which four
+ * ## Which four — and when there are only three
  *
  * | Tab | What is on it |
  * |---|---|
  * | **Copilot** | the conversation with the machine, and what it has been doing |
  * | **Sessions** | the machine's sessions, and nothing else |
  * | **Localhost** | its dev servers, and every port it is already serving |
- * | **Settings** | machines, GitHub, alerts, terminal text size, what the app is |
+ * | **Settings** | the copilot's connection, machines, GitHub, alerts, text size |
  *
  * *"A fourth pill, and the copilot goes leftmost: Copilot · Sessions · Localhost
  * · Settings."* Said with the copilot built and in front of him, so it settles a
  * question that had been answered twice before in both directions; the ordering
  * and the reasoning are on `DeckModel.Tab`.
+ *
+ * The first of those four is **conditional**: *"if the copilot is not
+ * connecting, this icon should not be inside the pill — then it will be three
+ * icon pill. Otherwise if the copilot is connected, then four icon pill,
+ * automatically."* So the bar has two shapes, the machine on screen decides
+ * which, and `DeckModel.showsCopilotTab` is the one place that decides. Which is
+ * also why connecting the copilot is a row in **Settings** and not a screen
+ * behind that pill — a setup form reachable only through the pill that appears
+ * once the setup is done is a door locked from the inside.
  *
  * The other two moved in an earlier recording. In short: the localhost list was
  * a second list underneath the sessions — *"no separate two lists already here"*
@@ -66,9 +75,30 @@ struct DeckTabs: View {
     @Bindable var model: DeckModel
 
     var body: some View {
-        TabView(selection: $model.tab) {
+        TabView(selection: selection) {
             /*
-             * The copilot, first, because that is where he put it.
+             * The copilot, first, because that is where he put it — **and only
+             * when this phone is connected to one.**
+             *
+             * *"If the copilot is not connecting, this icon should not be inside
+             * the pill — then it will be three icon pill. Otherwise if the
+             * copilot is connected, then four icon pill, automatically, like
+             * that way."* `DeckModel.showsCopilotTab` is the whole rule and
+             * argues every case, including the one that is not in that sentence:
+             * a disconnect while somebody is standing on this tab leaves the
+             * pill where it is, because a tab that disappears underneath a thumb
+             * is worse than one that stays and explains.
+             *
+             * This is the opposite of what was written here yesterday — *"a
+             * machine that has no copilot at all still gets the tab… hiding a
+             * pill for some machines and not others would make the bar move
+             * under a thumb that had learned where things are."* That reasoning
+             * was about the bar moving, and it is answered rather than
+             * contradicted: the pill is added and removed on the **left**, where
+             * the copilot lives, so the three that survive keep their order; the
+             * one case where it would move under a live thumb is held open by
+             * the clause above; and connecting has somewhere honest to live now,
+             * which it did not then. See `CopilotConnectionView`.
              *
              * It reads the *current* machine rather than a machine named in a
              * route, which is the one thing that changed about the screen when
@@ -76,38 +106,38 @@ struct DeckTabs: View {
              * its own title is how the machine is chosen, exactly as on the
              * Sessions and Localhost tabs, and `DeckModel.select` clears
              * anything pushed here that belonged to the machine being left.
-             *
-             * A machine that has no copilot at all still gets the tab, and the
-             * screen says so — see `CopilotView`'s `.notOffered`. Hiding a pill
-             * for some machines and not others would make the bar move under a
-             * thumb that had learned where things are, which is a worse failure
-             * than a screen that has to explain itself.
              */
-            NavigationStack(path: $model.copilotRoute) {
-                CopilotTabScreen(model: model)
-                    .navigationDestination(for: DeckModel.Route.self) { route in
-                        switch route {
-                        case let .session(host, id):
-                            TerminalScreen(model: model, hostID: host, sessionID: id)
+            if model.showsCopilotTab {
+                NavigationStack(path: $model.copilotRoute) {
+                    CopilotTabScreen(model: model)
+                        .navigationDestination(for: DeckModel.Route.self) { route in
+                            switch route {
+                            case let .session(host, id):
+                                TerminalScreen(model: model, hostID: host, sessionID: id)
+                            }
                         }
-                    }
+                }
+                .toolbar(DeckChrome.tabBar(on: model.copilotSurface), for: .tabBar)
+                .tabItem { Label("Copilot", systemImage: "sparkles") }
+                /*
+                 * The count of questions waiting on an answer, on the pill.
+                 *
+                 * This is where the badge from the old pinned row went. It is
+                 * strictly better placed: a question raised while somebody is
+                 * reading a terminal has a two-minute deadline and expires into
+                 * a **refusal**, and the row could only be seen by going back to
+                 * the list it was pinned to. A tab badge is on screen from every
+                 * tab.
+                 *
+                 * `.badge(0)` draws nothing at all, so there is no empty dot on
+                 * a machine with nothing pending and no condition to get wrong
+                 * here. A machine this phone is not connected to raises no
+                 * questions on it either, so there is no badge stranded on a
+                 * pill that is no longer drawn.
+                 */
+                .badge(model.copilot?.waitingCount ?? 0)
+                .tag(DeckModel.Tab.copilot)
             }
-            .toolbar(DeckChrome.tabBar(on: model.copilotSurface), for: .tabBar)
-            .tabItem { Label("Copilot", systemImage: "sparkles") }
-            /*
-             * The count of questions waiting on an answer, on the pill.
-             *
-             * This is where the badge from the old pinned row went. It is
-             * strictly better placed: a question raised while somebody is
-             * reading a terminal has a two-minute deadline and expires into a
-             * **refusal**, and the row could only be seen by going back to the
-             * list it was pinned to. A tab badge is on screen from every tab.
-             *
-             * `.badge(0)` draws nothing at all, so there is no empty dot on a
-             * machine with nothing pending and no condition to get wrong here.
-             */
-            .badge(model.copilot?.waitingCount ?? 0)
-            .tag(DeckModel.Tab.copilot)
 
             NavigationStack(path: $model.route) {
                 SessionListView(model: model)
@@ -162,6 +192,8 @@ struct DeckTabs: View {
                         switch route {
                         case .machines:
                             MachinesView(model: model)
+                        case .copilot:
+                            CopilotConnectionView(model: model)
                         }
                     }
             }
@@ -173,6 +205,20 @@ struct DeckTabs: View {
             .tabItem { Label("Settings", systemImage: "gearshape") }
             .tag(DeckModel.Tab.settings)
         }
+    }
+
+    /**
+     * The selection, routed through `DeckModel.show(_:)` rather than bound
+     * straight at `model.tab`.
+     *
+     * The copilot draws no tab bar of its own now, so its Back button is the
+     * only way off that screen and it has to know where the person came from.
+     * A plain `$model.tab` binding writes the new tab and forgets the old one;
+     * this hands the pair to the model, which keeps the one fact the button
+     * needs. Everything else about it is a plain binding.
+     */
+    private var selection: Binding<DeckModel.Tab> {
+        Binding(get: { model.tab }, set: { model.show($0) })
     }
 }
 
@@ -460,7 +506,7 @@ private struct MachineRow: View {
  * exists and a type called `SettingsView` in this module reads as if it might be
  * one; the brand's own prefix is what every other type here would have used.
  *
- * Four rows and a paragraph. Asad on the desktop's settings page, in the same
+ * Five rows and a paragraph. Asad on the desktop's settings page, in the same
  * recording: *"we don't need this much of big descriptions under each. The whole
  * page is going to be used just because of the big descriptions."* So each row is
  * a line, and the only paragraph on the screen is the one that says what alerts
@@ -468,7 +514,13 @@ private struct MachineRow: View {
  * repeatedly earned its place, because the alternative is somebody waiting two
  * hours for a buzz that was never coming.
  *
- * ## Machines is the first row, and it is the fourth
+ * ## Connecting the copilot is here, and it is the second row
+ *
+ * *"Actually connecting copilot should be in the settings."* The whole reason is
+ * on the row itself; the short version is that the Copilot pill now appears only
+ * once the copilot is connected, so the connect form could not stay behind it.
+ *
+ * ## Machines is the first row, and it is the fifth
  *
  * *"maybe this machines thing can go inside the settings this page overall. How
  * many machines we pair can go inside the settings actually, yes."* So the row's
@@ -533,6 +585,38 @@ struct DeckSettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("settings.machines")
+
+                        SettingsDivider()
+
+                        /*
+                         * **Where connecting the copilot lives.**
+                         *
+                         * *"Actually connecting copilot should be in the
+                         * settings."* It was a six-digit field on the Copilot
+                         * screen itself, which was tolerable while that screen
+                         * had a pill of its own in every state and is not now:
+                         * the pill only appears once the copilot **is**
+                         * connected, so the form for connecting it would be
+                         * behind a door that opens after you are through it.
+                         *
+                         * Second row rather than first because Machines is the
+                         * one that has to come first — a phone with no machine
+                         * paired has no copilot to connect either, and this row
+                         * would be the second thing somebody could not do.
+                         *
+                         * A `NavigationLink` for the same reason Machines is
+                         * one: this is somebody standing on Settings tapping a
+                         * row, so it pushes onto the stack it is already inside.
+                         * `DeckModel.showCopilotSettings()` is for the other
+                         * caller, which is not on this tab at all.
+                         */
+                        NavigationLink(value: DeckModel.SettingsRoute.copilot) {
+                            SettingsRowBody(title: "Copilot",
+                                            value: copilotValue,
+                                            icon: "sparkles")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("settings.copilot")
 
                         SettingsDivider()
 
@@ -706,6 +790,40 @@ struct DeckSettingsView: View {
     /// screen is being asked.
     private var machinesValue: String {
         model.hosts.count == 1 ? "1 paired" : "\(model.hosts.count) paired"
+    }
+
+    /**
+     * What the Copilot row says without being opened.
+     *
+     * With one machine it is that machine's answer in one word, because that is
+     * the question — *is my copilot connected* — and a row reading "Copilot"
+     * with a chevron would have to be tapped to find out. With several it is a
+     * count, for the same reason the Machines row is a count: the individual
+     * answers are on the screen behind it and the thing worth carrying out here
+     * is whether they all agree.
+     *
+     * A machine that has no copilot at all is not counted as unconnected. It is
+     * not a thing anybody can act on, and a row reading "0 of 1 connected" over
+     * a desktop that simply has no copilot in it would send somebody looking for
+     * a code that cannot be minted.
+     */
+    private var copilotValue: String {
+        let hosts = model.hosts
+        guard !hosts.isEmpty else { return "" }
+        if hosts.count == 1 {
+            switch hosts[0].copilotAccess {
+            case .notOffered: return "Not on this machine"
+            case .notConnected, .credentialLost: return "Not connected"
+            case .connecting: return "Connecting…"
+            case .notGranted: return "Nothing granted"
+            case .watch: return "Watching"
+            case .direct: return "Connected"
+            }
+        }
+        let offered = hosts.filter { $0.copilotAccess != .notOffered }
+        guard !offered.isEmpty else { return "Not on these machines" }
+        let connected = offered.filter { $0.copilotAccess.isConnected }.count
+        return "\(connected) of \(offered.count) connected"
     }
 
     /// What the Alerts row says without being opened. A row that always read

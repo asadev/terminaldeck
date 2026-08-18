@@ -3217,3 +3217,86 @@ describe('opening a page on the machine', () => {
     expect(opened).toEqual([])
   })
 })
+
+/**
+ * The fifth door.
+ *
+ * Folder enforcement landed on `list`, `attach`, `create` and `close` — the four
+ * verbs that reach files. A port is the fifth thing a paired device can ask this
+ * machine for, and it was never behind any of it: until now six typed digits and
+ * an approval bought a byte pipe to everything listening on the loopback,
+ * whatever folders the person approving had chosen.
+ *
+ * `localhostAllowed` in `server.ts` carries the argument for the rule at length.
+ * What is pinned here is the behaviour, in both halves: a guest is not *told*
+ * the capability exists, and a guest that sends the frames anyway is refused
+ * without losing the connection it is holding.
+ */
+describe('a guest gets no port list and no tunnel', () => {
+  /** Every connection is a guest: `device-1` is the only device this file knows. */
+  const everyoneIsAGuest = (): boolean => false
+
+  it('does not tell a guest that this machine serves localhost at all', async () => {
+    const harness = await serve({ copilotEligible: everyoneIsAGuest })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.localhost)
+  })
+
+  it('refuses a guest the port list, and keeps the connection it is holding', async () => {
+    const harness = await serve({
+      copilotEligible: everyoneIsAGuest,
+      scanPorts: async () => [{ port: 4321, process: 'node', guessed: false }],
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'ports' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unauthorized')
+    expect(client.received.some((m) => m.t === 'ports')).toBe(false)
+
+    // The connection survives. A device being told "not you" about one feature
+    // must not also lose the terminal session it is attached to — that is the
+    // difference between a refused request and a refused connection, and this
+    // file's `error` frame is deliberately used for both.
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+  })
+
+  it('refuses a guest a tunnel to a port that really is listening', async () => {
+    const harness = await serve({
+      copilotEligible: everyoneIsAGuest,
+      scanPorts: async () => [{ port: 4321, process: 'node', guessed: false }],
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    // Not a port that is missing from the scan — the refusal for that one
+    // already existed and would pass whatever this rule said. This is the one a
+    // guest would otherwise have got.
+    client.send({ t: 'tunnel.open', id: 'tun-1', port: 4321 })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unauthorized')
+    expect(client.received.some((m) => m.t === 'tunnel.opened')).toBe(false)
+  })
+
+  it('still serves one of the owner’s own machines', async () => {
+    const harness = await serve({
+      copilotEligible: (deviceId) => deviceId === 'device-1',
+      scanPorts: async () => [{ port: 4321, process: 'node', guessed: false }],
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.localhost)
+    client.send({ t: 'ports' })
+    const ports = await client.until((m) => m.t === 'ports', 'the port list')
+    expect(ports.t === 'ports' && ports.ports).toEqual([{ port: 4321, process: 'node', guessed: false }])
+  })
+})

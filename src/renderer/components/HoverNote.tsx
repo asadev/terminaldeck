@@ -36,9 +36,12 @@ import './HoverNote.css'
  *    real `<button>`, so Tab reaches it.
  *  - **Click / tap** — pins it open until the next click, which is the only
  *    thing that works on a screen with no pointer at all.
- *  - **Screen reader** — the popup carries an id and the button points at it
- *    with `aria-describedby`, so the paragraph is announced as the button's
- *    description whether or not it is on screen.
+ *  - **Screen reader** — the paragraph is always in the document, in a span the
+ *    eye cannot see, and the button points at it with `aria-describedby`. That
+ *    is a correction rather than a flourish: the first version put the id on the
+ *    *popup*, which does not exist until somebody hovers, so `aria-describedby`
+ *    pointed at nothing for every reader who could not hover — the exact readers
+ *    it was there for. See {@link HoverNoteProps.children} and the span below.
  *
  * ## Deliberately not a `title`
  *
@@ -151,7 +154,21 @@ export function HoverNote({ label, children }: HoverNoteProps) {
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') shut()
+      if (event.key !== 'Escape') return
+      /*
+       * One Escape closes one thing, and the thing it closes is the innermost.
+       *
+       * These dots live inside the Settings sheet and inside the setup dialog,
+       * and both of those close on Escape from a listener on `window`. This
+       * listener is on `document` in the **capture** phase, so it runs first —
+       * and without stopping the event there, a person who pinned a note open
+       * and pressed Escape to put it away lost the whole sheet as well. That is
+       * the classic nested-dismissal bug, and it is only avoidable from this
+       * side: the sheet cannot know a popup is open, and the popup is only
+       * listening while it is.
+       */
+      event.stopPropagation()
+      shut()
     }
     const onScroll = (): void => shut()
     document.addEventListener('keydown', onKey, true)
@@ -195,13 +212,44 @@ export function HoverNote({ label, children }: HoverNoteProps) {
       >
         <span aria-hidden="true">ⓘ</span>
       </button>
+      {/*
+        The paragraph itself, always present and never visible.
+
+        Three things fall out of it, and the first is a defect this fixes rather
+        than a design:
+
+         - **`aria-describedby` resolves.** It used to name the popup, which is
+           only in the document while it is open — so a screen reader landing on
+           a closed dot was told to read an element that was not there, and read
+           nothing. The dot then announced as "More about X" and no more, which
+           is a control that says it will explain something and does not.
+         - **The words are in the page**, so anything that reads the rendered
+           output rather than a screen — a test, a find-in-page, a scrape of the
+           window — finds them. That matters more than it sounds: a popup that
+           renders nothing until a pointer moves is unassertable, and a claim
+           this app makes about what it does with somebody's machine has to stay
+           assertable after it moves behind a dot.
+         - **It costs no layout.** `hovernote-text` is clipped to a pixel, which
+           is the one way to take an element out of sight without taking it out
+           of the accessibility tree. `display: none` and `visibility: hidden`
+           both remove it from that tree, and `hidden` is inconsistently followed
+           for a described-by target — which is how this kind of fix silently
+           becomes the bug it replaced.
+      */}
+      <span id={id} className="hovernote-text">
+        {children}
+      </span>
       {open &&
         createPortal(
           <div
             ref={box}
-            id={id}
             className="hovernote"
             role="tooltip"
+            // Hidden from the accessibility tree because the same words are
+            // already the button's description, two lines up. Without this a
+            // screen reader meets the paragraph twice the moment focus opens the
+            // popup — once as the description and once as a live tooltip.
+            aria-hidden="true"
             data-side={at?.side ?? 'below'}
             // Rendered before it is placed, because it has to be laid out to be
             // measured. `data-placed` is what makes it visible, one layout

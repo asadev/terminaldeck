@@ -177,3 +177,52 @@ describe('readSeen and writeSeen', () => {
     expect(() => writeSeen(storage, { [PROJECT]: ['warning:a'] })).not.toThrow()
   })
 })
+
+/**
+ * The one kind that never goes quiet on its own.
+ *
+ * Every other alert here describes a condition — a context window filling up, a
+ * dirty tree — and the seen-set exists so the dot does not light again for
+ * something you have already read. A device waiting to be approved is a question
+ * addressed to you, and it disappears the instant you answer it, so "you have
+ * read this" is the wrong idea entirely: the dot must stay up for as long as
+ * somebody is waiting, and it cannot outstay its welcome because approving or
+ * denying removes the device from the pending list.
+ */
+describe('a device waiting to be approved is never marked read', () => {
+  const waiting = alert({
+    id: 'device-pending:phone-1',
+    kind: 'device-pending',
+    severity: 'critical',
+    title: 'iPhone is waiting for you to let it in',
+  })
+  const blocked = alert({ id: 'session-blocked:abc' })
+
+  it('stays unread after the sheet has been opened on it', () => {
+    const seen = markSeen({}, PROJECT, [waiting, blocked])
+    expect(unreadCount([waiting, blocked], seen, PROJECT)).toBe(1)
+    expect(unreadAlerts([waiting, blocked], seen, PROJECT)[0]?.id).toBe('device-pending:phone-1')
+  })
+
+  it('is not written into the record at all', () => {
+    // A key stored for something nothing reads back is a line in a file that
+    // means nothing to whoever opens it next.
+    expect(markSeen({}, PROJECT, [waiting, blocked])[PROJECT]).toEqual(['warning:session-blocked:abc'])
+    // And a project whose only alert is a waiting device leaves no entry behind.
+    expect(markSeen({}, PROJECT, [waiting])).toEqual({})
+  })
+
+  it('counts with no project open, where every other alert cannot', () => {
+    // The state a fresh install is in, and where somebody pairs their first
+    // device. A project-scoped alert has no record to check against and is not
+    // counted; a machine-scoped one does not need one.
+    expect(unreadCount([waiting, blocked], {}, null)).toBe(1)
+    expect(unreadAlerts([waiting, blocked], {}, null)[0]?.kind).toBe('device-pending')
+  })
+
+  it('goes quiet the moment it is no longer in the report', () => {
+    // Which is the whole reason it is allowed to ignore the seen-set: approve or
+    // deny, the device leaves the pending list, and there is nothing left to count.
+    expect(unreadCount([blocked], markSeen({}, PROJECT, [blocked]), PROJECT)).toBe(0)
+  })
+})

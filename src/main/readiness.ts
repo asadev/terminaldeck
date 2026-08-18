@@ -671,6 +671,15 @@ const FIX_CREATE_CLAUDE_MD: ReadinessFix = {
    * created at your project root" is a fact about their filesystem that they
    * are entitled to before they press the button.
    *
+   * It is now the *only* place this check says a filename out loud. The fail
+   * branch below used to list the three the scan accepts, and that clause has
+   * gone — see the long note there for why a definition of the category is not
+   * the same act as a disclosure of what a button is about to write. Which
+   * means this sentence has to carry the whole of the disclosure, and it is
+   * shown twice before anything happens: as the button's tooltip, and in full
+   * beside the confirm step `ReadinessPanel` puts between the press and the
+   * write.
+   *
    * It stays CLAUDE.md rather than becoming AGENTS.md, and that is a decision
    * rather than an oversight. Both are read: `claude` 2.1.234 on this machine
    * carries the string "Claude Code hardcodes CLAUDE.md / AGENTS.md discovery",
@@ -710,19 +719,45 @@ async function checkClaudeMd(root: string): Promise<ReadinessCheck> {
 
   if (text === null || found === null) {
     /*
-     * The only branch that cannot name a real file, because there is not one —
-     * every other branch interpolates `found` or `candidate`, which is the
-     * filename actually on the person's disk. So this one leads with the
-     * category and then lists the three paths that would satisfy it, in that
-     * order. Listing them is the actionable half: "no instructions file" with no
-     * accepted names is a finding somebody cannot act on, and a person whose
-     * project carries an `AGENTS.md` deserves to see that it counts.
+     * The only branch that cannot name a real file, because there is not one.
+     *
+     * Every other branch interpolates `found` or `candidate` — the filename
+     * actually sitting on the person's disk, which is a fact about their
+     * project and belongs on screen. This one has no such file, so what it used
+     * to do instead was recite the three names the scan accepts:
+     *
+     *     No instructions file — none of CLAUDE.md, .claude/CLAUDE.md or
+     *     AGENTS.md is here.
+     *
+     * That was defended as the actionable half, and it is the sentence the
+     * completeness audit found still live on a surface the review named. The
+     * defence does not survive being read next to the rule:
+     *
+     *   > *"You should not mention in any settings or any pop-up a specific
+     *   > tool or LLM, because they can use some other also."*
+     *
+     * This clause is not disclosing what is about to happen to somebody's
+     * repository — it is *defining the category* by two spellings of one
+     * vendor's filename, on a panel that a person who has never installed that
+     * vendor's CLI will read. The disclosure the review does entitle him to is
+     * the other one, and it is still there and unchanged: the fix below names
+     * the file it writes, in `FIX_CREATE_CLAUDE_MD.description`, which the panel
+     * shows as the button's tooltip and again in full when the button is
+     * pressed and asks to be confirmed. Which filename lands in the repository
+     * is answered before anybody presses anything.
+     *
+     * What is lost is a person whose project keeps its instructions under a
+     * fourth name learning which three this scan looks at. That is a smaller
+     * loss than it sounds — the row above them says what the check is called,
+     * the fix says what it makes, and `CLAUDE_MD_CANDIDATES` is where the list
+     * lives for anybody who needs it — and it is bought with the whole of the
+     * vendor's name coming off the panel.
      */
     return check(
       'claude-md',
       AGENT_INSTRUCTIONS_TITLE,
       'fail',
-      'No instructions file — none of CLAUDE.md, .claude/CLAUDE.md or AGENTS.md is here. Every session starts by re-deriving your build commands, your layout and your conventions from scratch — slower, more expensive, and wrong more often.',
+      'No instructions file at the project root. Every session starts by re-deriving your build commands, your layout and your conventions from scratch — slower, more expensive, and wrong more often.',
       FIX_CREATE_CLAUDE_MD,
     )
   }

@@ -80,6 +80,31 @@ final class DeckTabsTests: XCTestCase {
                           lookup: { _ in nil }) { _, _, _ in SilentTransport() }
     }
 
+    /**
+     * Put one machine's copilot into the state a connected phone is in.
+     *
+     * The two frames the desktop actually sends, in order — the `welcome` that
+     * says this machine has a copilot and holds a record for this device, and
+     * the answer to `copilot.hello` that opens the connection — rather than a
+     * back door on `CopilotLink`. A test helper that reached past the wire could
+     * put the link in a combination the desktop cannot produce, and the property
+     * under test here is *what the tab bar does about a real connection*.
+     *
+     * `linked(credential:connection:)` is the frame that answers a redeemed
+     * six-digit code, and it is what stores the credential — through the
+     * `MemoryStore` above, which stands in for the Keychain, so nothing here
+     * touches the real one.
+     */
+    private func connectCopilot(on host: HostLink) {
+        let grant = CopilotGrant(read: true, act: true, alter: false)
+        host.copilot.welcomed(capabilities: [Copilot.capability],
+                              connection: CopilotConnection(stated: true, linked: false,
+                                                            open: false, grant: .none))
+        host.copilot.linked(credential: "c2VjcmV0",
+                            connection: CopilotConnection(stated: true, linked: true,
+                                                          open: true, grant: grant))
+    }
+
     private func credential(_ hostId: String, nickname: String) -> StoredCredential {
         StoredCredential(endpoint: .relay(url: URL(string: "wss://relay.example")!,
                                           hostId: hostId,
@@ -269,24 +294,156 @@ final class DeckTabsTests: XCTestCase {
     }
 
     /**
-     * The copilot tab keeps the tab bar, and this is the case worth stating
-     * out loud because the answer used to be the other one.
+     * The copilot draws no tab bar, and neither does a terminal pushed over it.
      *
-     * While it was a pushed screen it hid the bar with the terminal and the
-     * localhost page, and correctly: it is full height and ends in a composer,
-     * which is the pill complaint exactly. A tab cannot do that — there is no
-     * chevron over a tab's root and no gesture that pops one — so hiding the bar
-     * here would be a screen with no way out.
+     * *"Pill should not be inside the chat box."* Both surfaces the copilot's
+     * own stack can be showing are hidden ones, and the second is worth
+     * asserting beside the first because it is the case a `copilotSurface` bug
+     * would silently get right — a stack that failed to notice a push would
+     * answer `.copilot`, and `.copilot` is now also hidden. The equality on the
+     * surface itself is what makes this test able to fail for the real reason.
      */
-    func testTheCopilotTabKeepsTheBarAndATerminalOverItDoesNot() {
-        XCTAssertTrue(DeckChrome.showsTabBar(on: model.copilotSurface),
-                      "a tab that hid its own bar could not be left")
+    func testNeitherTheCopilotNorATerminalOverItDrawsTheBar() {
+        XCTAssertEqual(model.copilotSurface, .copilot)
+        XCTAssertFalse(DeckChrome.showsTabBar(on: model.copilotSurface),
+                       "either we will type or we will use the pill")
 
         model.tab = .copilot
         model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
         XCTAssertEqual(model.copilotSurface, .session)
         XCTAssertFalse(DeckChrome.showsTabBar(on: model.copilotSurface),
                        "the pill was covering the bottom rows of the terminal")
+    }
+
+    // MARK: - The fourth pill, and the way home
+
+    /**
+     * **Three pills until the copilot is connected, four after.**
+     *
+     * *"If the copilot is not connecting, this icon should not be inside the
+     * pill — then it will be three icon pill. Otherwise if the copilot is
+     * connected, then four icon pill, automatically, like that way."*
+     *
+     * Driven through the model rather than through `CopilotAccess` directly,
+     * because the failure this guards against is not the enum getting the answer
+     * wrong — `CopilotPillTests` walks every case of that — but the bar asking
+     * the wrong machine. `showsCopilotTab` reads `current`, and a phone paired
+     * with two machines has two answers.
+     */
+    func testThePillAppearsOnlyWhenTheCurrentMachinesCopilotIsConnected() throws {
+        model.select(Self.macId)
+        XCTAssertFalse(model.showsCopilotTab,
+                       "a phone that has never connected a copilot gets three pills")
+
+        let mac = try XCTUnwrap(model.host(Self.macId))
+        connectCopilot(on: mac)
+        XCTAssertTrue(model.showsCopilotTab, "and four once it has one")
+
+        // The other machine has its own answer, and switching to it must give
+        // that answer rather than the one that happened to be on screen.
+        model.select(Self.pcId)
+        XCTAssertFalse(model.showsCopilotTab,
+                       "the PC's copilot is not connected — the pill belongs to the machine")
+    }
+
+    /**
+     * **A copilot that disconnects underneath somebody keeps its pill.**
+     *
+     * The clause that is not in the sentence he said, and the reason it is here:
+     * SwiftUI would drop the whole tab, and with it the screen the person is
+     * reading, landing them on some other tab with no explanation of what just
+     * happened. A tab that vanishes underneath somebody is worse than one that
+     * stays and explains — `CopilotView` draws the disconnected state, which
+     * says what happened and where the remedy is.
+     *
+     * And it goes on the next tap somewhere else, which is the first moment
+     * removing it costs nobody anything.
+     */
+    func testAPillIsNotPulledOutFromUnderSomebodyStandingOnIt() throws {
+        let mac = try XCTUnwrap(model.host(Self.macId))
+        model.select(Self.macId)
+        connectCopilot(on: mac)
+        model.show(.copilot)
+        XCTAssertTrue(model.showsCopilotTab)
+
+        mac.copilot.forget()
+        XCTAssertFalse(mac.copilotAccess.isConnected, "the machine dropped it")
+        XCTAssertTrue(model.showsCopilotTab,
+                      "the tab somebody is standing on must not be deleted underneath them")
+
+        model.show(.sessions)
+        XCTAssertFalse(model.showsCopilotTab, "and it goes the moment they leave")
+    }
+
+    /**
+     * **Back goes where they came from**, and the session list is the fallback.
+     *
+     * *"There should be a back button to go back on home."* Home is the session
+     * list for somebody who tapped the pill from the session list, and it is
+     * Localhost for somebody who tapped it while reading their ports — a chevron
+     * that always landed on the sessions would teleport a third of the people
+     * who press it.
+     *
+     * The first case is the one that makes the fallback matter: `tab` set
+     * directly, by a deep link or a notification, records nothing, and Back has
+     * to land somewhere real anyway. It is asserted before the others because
+     * `homeTab` is sticky by design — it holds the last recorded answer rather
+     * than being cleared on the way out — so a fresh model is the only place the
+     * default itself is observable.
+     */
+    func testBackFromTheCopilotReturnsToWhereItWasEnteredFrom() {
+        // The fallback first, while nothing has been recorded: a `tab` set
+        // directly — a deep link, a notification — still has to leave somebody
+        // somewhere real.
+        model.tab = .copilot
+        model.leaveCopilot()
+        XCTAssertEqual(model.tab, .sessions, "the fallback is the screen the app opens on")
+
+        model.show(.localhost)
+        model.show(.copilot)
+        model.leaveCopilot()
+        XCTAssertEqual(model.tab, .localhost)
+
+        model.show(.settings)
+        model.show(.copilot)
+        model.leaveCopilot()
+        XCTAssertEqual(model.tab, .settings)
+    }
+
+    /// Re-entering the copilot must not record the copilot as its own way home.
+    /// A tap on a pill that is already selected would otherwise leave Back
+    /// pointing at the screen it is drawn on, which is a button that does
+    /// nothing on the one screen with no other way out.
+    func testEnteringTheCopilotTwiceDoesNotMakeBackPointAtItself() {
+        model.show(.localhost)
+        model.show(.copilot)
+        model.show(.copilot)
+        model.openCopilot(on: Self.macId)
+
+        model.leaveCopilot()
+        XCTAssertEqual(model.tab, .localhost)
+    }
+
+    /**
+     * Connecting the copilot is a screen inside Settings, and asking for it
+     * twice does not stack two copies.
+     *
+     * *"Actually connecting copilot should be in the settings."* The caller that
+     * needs this method rather than a `NavigationLink` is the Copilot screen
+     * itself: somebody standing on a disconnected copilot has to be moved to
+     * another tab as well as pushed.
+     */
+    func testTheCopilotConnectionScreenIsReachableFromAnywhereInSettings() {
+        model.tab = .sessions
+        model.showCopilotSettings()
+
+        XCTAssertEqual(model.tab, .settings)
+        XCTAssertEqual(model.settingsRoute, [.copilot])
+        XCTAssertEqual(model.settingsSurface, .machines,
+                       "anything pushed on Settings keeps the bar, like Machines does")
+
+        model.showCopilotSettings()
+        XCTAssertEqual(model.settingsRoute, [.copilot])
     }
 
     /**

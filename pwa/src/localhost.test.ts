@@ -3,10 +3,12 @@ import { parseClientMessage } from '../../src/main/remote/protocol'
 import {
   CHECK_PATIENCE_MS,
   NO_LOCALHOST,
+  PUBLIC_ADDRESS_ANSWER,
   cannotServeSentence,
   checkSentence,
   localhostOffered,
   localhostStep,
+  localhostUrl,
   noPortsSentence,
   openSentence,
   webOfferedHere,
@@ -253,15 +255,29 @@ describe('what this client will not claim to do', () => {
     expect(localhostOffered([])).toBe(false)
   })
 
-  it('says why there is no button that opens the page', () => {
-    // The sentence this module is accountable to. It names the real obstacle —
-    // a tab cannot listen on a port — rather than implying the feature is
-    // coming, and it names the two clients that genuinely can.
+  it('says why this browser cannot show the page inside itself', () => {
+    // It names the real obstacle — a tab cannot listen on a port — rather than
+    // implying the feature is coming, and it names the two clients that can.
     const said = cannotServeSentence('Mac')
-    expect(said).toContain('cannot open one of these pages')
+    expect(said).toContain('cannot open one of these pages inside itself')
     expect(said).toContain('127.0.0.1')
     expect(said).toContain('phone app')
     expect(said).not.toContain('soon')
+  })
+
+  it('answers the public-web-address question instead of ducking it', () => {
+    /*
+     * He asked for `app.terminaldeck.dev/something`, ngrok-style, and the answer
+     * is no. This pins the *reason* being on screen rather than the refusal: a
+     * limitation nobody can see the shape of is one that gets re-proposed every
+     * month, and the shape here is that a public URL means this service reading
+     * the traffic, which is the one thing the relay is built not to do.
+     */
+    expect(PUBLIC_ADDRESS_ANSWER).toContain('no public web link')
+    expect(PUBLIC_ADDRESS_ANSWER).toContain('decrypting')
+    expect(PUBLIC_ADDRESS_ANSWER).toContain('relay')
+    // Not a maybe. A "not yet" is a promise nobody made.
+    expect(PUBLIC_ADDRESS_ANSWER).not.toMatch(/soon|not yet|coming/i)
   })
 
   it('never opens a byte stream, because there is nothing on this end to serve it', () => {
@@ -345,29 +361,50 @@ describe('the wire, read by the desktop’s own parser', () => {
  *      `parseClientMessage` itself rather than against this file's idea of it.
  */
 describe('opening a port on the machine', () => {
-  it('sends a localhost URL for the port, and the desktop accepts it', () => {
-    const { state, send } = run(NO_LOCALHOST, { t: 'open', port: 5173 })
+  it('sends the address it was given, and the desktop accepts it', () => {
+    const { state, send } = run(NO_LOCALHOST, { t: 'open', url: localhostUrl(5173) })
     expect(send).toEqual([{ t: 'web.open', url: 'http://localhost:5173/' }])
-    expect(state.opening).toBe(5173)
+    expect(state.opening).toBe('http://localhost:5173/')
     // The desktop's own reader, not a shape this test made up.
     const parsed = parseClientMessage(JSON.stringify(send[0]))
     expect(parsed.ok).toBe(true)
   })
 
   it('drops a second press while one is in flight', () => {
-    const { state, send } = run(NO_LOCALHOST, { t: 'open', port: 5173 }, { t: 'open', port: 3000 })
+    const { state, send } = run(
+      NO_LOCALHOST,
+      { t: 'open', url: localhostUrl(5173) },
+      { t: 'open', url: localhostUrl(3000) },
+    )
     expect(send).toHaveLength(1)
-    expect(state.opening).toBe(5173)
+    expect(state.opening).toBe('http://localhost:5173/')
+  })
+
+  it('opens an address the browse bar composed, not only a row’s port', () => {
+    /*
+     * The whole of *"maybe we can have one browse bar here and something to
+     * browse it"*. A row knows its port; a person typing knows about a path, a
+     * query and a host that is not loopback at all. One action for both is what
+     * stops the bar and the rows being two features that agree until one of them
+     * is changed.
+     */
+    const { state, send } = run(NO_LOCALHOST, { t: 'open', url: 'http://localhost:3000/admin?tab=1' })
+    expect(send).toEqual([{ t: 'web.open', url: 'http://localhost:3000/admin?tab=1' }])
+    const parsed = parseClientMessage(JSON.stringify(send[0]))
+    expect(parsed.ok).toBe(true)
+    expect(openSentence({ url: state.opening!, kind: 'opened' }, 'Mac')).toBe(
+      'Opened localhost:3000/admin?tab=1 on the Mac.',
+    )
   })
 
   it('says what was opened, and where', () => {
     const { state } = run(
       NO_LOCALHOST,
-      { t: 'open', port: 5173 },
+      { t: 'open', url: localhostUrl(5173) },
       frame({ t: 'web.opened', url: 'http://localhost:5173/' }),
     )
     expect(state.opening).toBeNull()
-    expect(state.openOutcome).toEqual({ port: 5173, kind: 'opened' })
+    expect(state.openOutcome).toEqual({ url: 'http://localhost:5173/', kind: 'opened' })
     // The smaller, true claim: a page was opened somewhere else. Not "your dev
     // server is up", which this end has proved nothing about.
     expect(openSentence(state.openOutcome!, 'Mac')).toBe('Opened localhost:5173 on the Mac.')
@@ -376,7 +413,7 @@ describe('opening a port on the machine', () => {
   it('repeats the machine’s refusal rather than inventing one', () => {
     const { state } = run(
       NO_LOCALHOST,
-      { t: 'open', port: 5173 },
+      { t: 'open', url: localhostUrl(5173) },
       frame({ t: 'error', code: 'unauthorized', message: 'Only your own devices can open pages on this machine.' }),
     )
     expect(state.opening).toBeNull()
@@ -390,17 +427,17 @@ describe('opening a port on the machine', () => {
       NO_LOCALHOST,
       { t: 'check', port: 5173, id: 'tun-1' },
       frame({ t: 'tunnel.opened', id: 'tun-1', port: 5173 }),
-      { t: 'open', port: 5173 },
+      { t: 'open', url: localhostUrl(5173) },
       frame({ t: 'web.opened', url: 'http://localhost:5173/' }),
     )
     // Both survive. One field would have the second overwriting the first, and a
     // row somebody had checked *and* opened would show only the later one.
     expect(state.outcome).toEqual({ port: 5173, kind: 'answered' })
-    expect(state.openOutcome).toEqual({ port: 5173, kind: 'opened' })
+    expect(state.openOutcome).toEqual({ url: 'http://localhost:5173/', kind: 'opened' })
   })
 
   it('forgets an open in flight when the socket goes', () => {
-    const { state } = run(NO_LOCALHOST, { t: 'open', port: 5173 }, { t: 'offline' })
+    const { state } = run(NO_LOCALHOST, { t: 'open', url: localhostUrl(5173) }, { t: 'offline' })
     // A spinner against a socket that will never answer is the lie this whole
     // client is built to avoid.
     expect(state.opening).toBeNull()

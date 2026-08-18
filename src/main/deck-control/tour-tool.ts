@@ -111,8 +111,10 @@ export function tourTool(stage: TourStage): ToolSpec {
     title: 'Drive the screen through what matters',
     description:
       'Walk the person through what happened, on their own screen: for each stop the app navigates to the ' +
-      'session, draws a box around the exact text you quoted and dulls everything else, waits while they ' +
-      'read, and moves on. You write the whole tour in one call and the app plays it — there is no second ' +
+      'session, draws a box around the exact text you quoted and lays a field of dots over everything else, ' +
+      'then moves straight on at machine speed. It does NOT pause for them to read — they watch it work, ' +
+      'and the reading happens at the end, when you post the combined answer. You write the whole tour in ' +
+      'one call and the app plays it — there is no second ' +
       'turn per stop, so everything you want shown has to be in this one plan. ' +
       `At most ${MAX_TOUR_STOPS} stops; a longer plan is REFUSED rather than trimmed, and so is a quote over ` +
       `${MAX_QUOTE_CHARS} characters or a note over ${MAX_NOTE_CHARS}. ` +

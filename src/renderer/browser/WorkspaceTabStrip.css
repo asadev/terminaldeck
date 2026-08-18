@@ -778,6 +778,28 @@
   color: var(--text-primary);
 }
 
+/*
+  Except on a tab whose session is running on another machine, where this ✕
+  really does end it.
+
+  Asad, 2026-08-18, having asked for a remote session to carry the same pill a
+  local one does: the pill is the same and one control on it is not, because he
+  also asked for its ✕ to mean what Close on the machine's heading means — end
+  the session over there, keep the machine paired. So the mark that separates
+  "I tidied my tab bar" from "I killed a twenty-minute agent run" has to be
+  present on this bar too, and it is the same mark the rail already uses for the
+  same distinction: `--color-critical` under the pointer.
+
+  A data attribute rather than a second class, because the ✕ is the same control
+  in the same place doing a different thing to a different kind of tab — which
+  is exactly what an attribute selector is for, and it keeps `.strip-tab-close`
+  as the one rule that owns the geometry.
+*/
+.strip-tab-close[data-ends]:hover {
+  background: var(--fill-tertiary);
+  color: var(--color-critical);
+}
+
 /* -------------------------------------------------- after the last tab -- */
 
 /*

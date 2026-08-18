@@ -118,6 +118,10 @@ export function readProjectSummary(raw: unknown): ProjectSummary | null {
     requests: num(raw.requests),
     activeSessionId: typeof raw.activeSessionId === 'string' ? raw.activeSessionId : null,
     scanning: raw.scanning === true,
+    // Read the same defensive way every other flag here is: a payload from a
+    // build that predates the field is not "truncated", it simply does not know,
+    // and the honest default is the one that claims less rather than more.
+    truncated: raw.truncated === true,
     updatedAt: num(raw.updatedAt),
   }
 }
@@ -413,6 +417,17 @@ export function refreshFailureMessage(reason: RefreshReason): string {
       return 'No empty Claude Code prompt on screen — clear the prompt, or check this session is running Claude Code.'
     case 'no-panel':
       return 'Claude Code did not show its usage panel.'
+    case 'no-limits':
+      // Says what was seen, and stops. The cause is almost always an account
+      // billed through the API rather than a subscription — those have no
+      // rolling window for the CLI to draw — but this reports the screen rather
+      // than diagnosing the billing, because the screen is what it read.
+      return 'Claude Code’s usage panel shows no plan limits for this account, so there is nothing to read.'
+    case 'panel-open':
+      // The one failure that is visible to the person before it is described to
+      // them: something is on their screen that this app put there. Saying what
+      // it is, and what closes it, is the least it is owed.
+      return 'Claude Code’s usage panel was opened to read this and did not close — press Esc in the session.'
     case 'not-watching':
       return 'This session is not being watched.'
     case 'unwired':

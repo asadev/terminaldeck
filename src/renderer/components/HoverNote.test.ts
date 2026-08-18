@@ -93,8 +93,44 @@ describe('what the component deliberately does not do', () => {
     // paragraph is the button's accessible description either way.
     expect(SOURCE).toContain('onFocus')
     expect(SOURCE).toContain('aria-describedby')
-    expect(SOURCE).toContain("event.key === 'Escape'")
+    expect(SOURCE).toContain("event.key !== 'Escape'")
     expect(SOURCE).toContain('setPinned')
+  })
+
+  it('describes the dot with an element that is actually in the document', () => {
+    /*
+     * The defect this pins is the quiet kind, because it looks right in every
+     * screenshot and in every review that uses a pointer.
+     *
+     * `aria-describedby` named the popup, and the popup is only rendered while
+     * it is open. So for a screen reader — the one reader who cannot hover, and
+     * the reason the dot is a `<button>` at all — the description pointed at an
+     * element that did not exist, and the control announced as "More about X"
+     * and nothing else. The fix is a clipped span that is always there; what is
+     * asserted is that the id is on it and not on the box.
+     *
+     * The popup is then `aria-hidden`, because the same words are already the
+     * description and a screen reader that met both would read the paragraph
+     * twice the moment focus opened it.
+     */
+    expect(SOURCE).toMatch(/<span id=\{id\} className="hovernote-text">/)
+    expect(SOURCE).not.toMatch(/className="hovernote"[\s\S]{0,200}id=\{id\}/)
+    expect(SOURCE).toContain('aria-hidden="true"')
+  })
+
+  it('takes Escape for itself rather than letting it close the sheet behind it', () => {
+    /*
+     * Watched in the real app on 2026-08-18: pinning a note open in Settings and
+     * pressing Escape to dismiss it closed the entire Settings sheet, because
+     * `components/Modal.tsx` binds Escape on `window` and this had no opinion
+     * about the event once it had handled it.
+     *
+     * The capture-phase listener is what makes the fix possible — it sees the
+     * key before the sheet does — and `stopPropagation` is what makes one press
+     * do one thing. Both are asserted, because either one alone is the bug.
+     */
+    expect(SOURCE).toContain("document.addEventListener('keydown', onKey, true)")
+    expect(SOURCE).toMatch(/event\.key !== 'Escape'[\s\S]{0,900}event\.stopPropagation\(\)/)
   })
 
   it('closes on a scroll rather than floating over an unrelated row', () => {

@@ -5,7 +5,7 @@ import { ChatComposer } from './ChatComposer'
 import { useTranscriptChanges } from '../chat/usage'
 import { useEvery } from '../schedule'
 import { useSessionTranscript, type SessionScope } from '../session-transcript'
-import { useAgentPresence } from '../shell/agent-presence'
+import { runningProvider, useAgentPresence } from '../shell/agent-presence'
 import { CHAT_SESSION_ATTR } from '../driving/where'
 import type { ProviderId } from '@shared/types'
 import './ChatView.css'
@@ -585,32 +585,6 @@ function liveSessionIdOf(sessions: readonly LiveSession[], provided: string | un
  * anyway, so excluding by id and excluding by time come to the same answer,
  * and the caller does not always know its own id.
  */
-/**
- * What is running in a session, as opposed to what this app launched into it.
- *
- * Only one case differs, and it exists because Run Claude does (NEXT-UPDATE
- * item 1): a session spawned as `$SHELL -l` with an agent now in front of it.
- * `provider` still says `shell` — it is a record of the spawn and it is not
- * wrong — but every piece of copy keyed off it would be. The pane would go on
- * telling a reader with a live conversation in front of them that "a shell just
- * runs what you type, so there is nothing here to read".
- *
- * The answer is `undefined`, not `'claude'`. `undefined` already means "not
- * known" everywhere this is passed, and not known is the truth: somebody typed
- * a CLI into a terminal and this app never saw which one. Naming Claude here
- * would be a guess that reads as a fact, and `codex` is one keystroke away from
- * being the thing actually running.
- *
- * Anything other than a shell is returned untouched, including `undefined`.
- */
-export function runningProvider(
-  provider: ProviderId | undefined,
-  agentRunning: boolean | null,
-): ProviderId | undefined {
-  if (provider === 'shell' && agentRunning === true) return undefined
-  return provider
-}
-
 /**
  * Whether the named session's process is gone.
  *

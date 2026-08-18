@@ -2931,22 +2931,25 @@ export function parseServerFrame(parsed: unknown): ServerParse {
         : { ok: true, message: { t: 'closed', id } }
     }
     /*
-     * `ports` and `web.opened` are read here rather than only in the phone's own
-     * client, and that is a change of scope worth saying out loud.
+     * Every localhost frame is read here now, and the last two rungs of that
+     * arrived on 2026-08-18. It is worth recording why in order, because the
+     * absence of these branches used to be a deliberate statement and is not any
+     * more.
      *
-     * This parser exists for the **desktop acting as another desktop's guest**,
-     * and `pwa/src/protocol-client.ts` says at length that the localhost frames
-     * belong to it rather than here *"until the day the guest also tunnels"*.
-     * That day has arrived for half of the feature. A desktop reaching another
-     * desktop now lists what is listening over there and asks that machine to
-     * open a page on its own screen — which is machine-to-machine localhost, the
-     * thing his review found was one-way — so these two frames are frames this
-     * parser's caller has agreed to receive.
+     * This parser exists for the **desktop acting as another desktop's guest**.
+     * `pwa/src/protocol-client.ts` argued that the localhost frames belonged to
+     * the phone's client rather than here *"until the day the guest also
+     * tunnels"*, and named the exact condition: `net.*` carries a byte stream
+     * into a **listening socket**, and a desktop guest opened none.
      *
-     * The other five are still not here, and their absence is still a statement:
-     * `tunnel.*` and `net.*` carry a byte stream into a listening socket, and a
-     * desktop guest opens no listener. Reading frames nobody can send would be a
-     * parser for a conversation this end is not in.
+     * It does now. `src/main/localhost-reach.ts` binds a loopback listener on
+     * this machine for a port on another one, so that the in-app browser can
+     * open a remote dev server as an ordinary URL — his review of 2026-08-18,
+     * *"shape of the application should not be changing for local and remote
+     * devices"*. That listener is the missing half the older comment named, so
+     * the seven branches are one set again and the split that survives is the
+     * honest one: shape is checked here, and **who may ask** is checked by the
+     * server, which is the rule every verb in this file follows.
      */
     case 'ports': {
       const rows = parsed.ports
@@ -2964,6 +2967,59 @@ export function parseServerFrame(parsed: unknown): ServerParse {
         if (port !== null) ports.push(port)
       }
       return { ok: true, message: { t: 'ports', ports } }
+    }
+    case 'tunnel.opened': {
+      // Both fields, or nothing. The id names which pending open this answers
+      // and the port is what the far machine believes it opened; a frame missing
+      // either would leave a click waiting for an answer that has already come.
+      const tunnelId = id(parsed.id)
+      const port = portNumber(parsed.port)
+      return tunnelId === null || port === null
+        ? { ok: false, reason: 'incomplete tunnel.opened' }
+        : { ok: true, message: { t: 'tunnel.opened', id: tunnelId, port } }
+    }
+    case 'tunnel.closed': {
+      const tunnelId = id(parsed.id)
+      if (tunnelId === null) return { ok: false, reason: 'tunnel.closed without an id' }
+      // The sentence is the payload — it is the other machine explaining a
+      // refusal in words somebody reads — but an absent one is not a broken
+      // frame, so it becomes the empty string and this end supplies its own.
+      // Uncapped for the same reason `error` below is: the whole frame is
+      // already bounded by the message cap the socket enforces.
+      return { ok: true, message: { t: 'tunnel.closed', id: tunnelId, message: asString(parsed.message) ?? '' } }
+    }
+    case 'net.data': {
+      // The same three checks the client parser makes on the way in, in the same
+      // order, because this is the same frame travelling the other way: a
+      // channel it can be matched to, a chunk inside the cap, and base64 that is
+      // really base64. `Buffer.from(x, 'base64')` never throws — it silently
+      // skips what it does not recognise — so an unchecked frame becomes a
+      // *shorter* body written into a browser's socket, which reads as the dev
+      // server having truncated its own response.
+      const channel = id(parsed.ch)
+      if (channel === null) return { ok: false, reason: 'net.data without a channel id' }
+      const data = parsed.data
+      if (typeof data !== 'string') return { ok: false, reason: 'net.data without data' }
+      if (data.length > MAX_NET_DATA_CHARS) return { ok: false, reason: 'net.data over the chunk limit' }
+      if (!BASE64_RE.test(data) || data.length % 4 !== 0) return { ok: false, reason: 'net.data is not base64' }
+      return { ok: true, message: { t: 'net.data', ch: channel, data } }
+    }
+    case 'net.ack': {
+      const channel = id(parsed.ch)
+      if (channel === null) return { ok: false, reason: 'net.ack without a channel id' }
+      // Range-checked against the window it is an acknowledgement for. A number
+      // larger than the window could only ever un-pause a stream that should
+      // stay paused, which is the one thing flow control exists to prevent.
+      const bytes = whole(parsed.bytes, 1, NET_WINDOW_BYTES)
+      return bytes === null
+        ? { ok: false, reason: 'net.ack out of range' }
+        : { ok: true, message: { t: 'net.ack', ch: channel, bytes } }
+    }
+    case 'net.close': {
+      const channel = id(parsed.ch)
+      return channel === null
+        ? { ok: false, reason: 'net.close without a channel id' }
+        : { ok: true, message: { t: 'net.close', ch: channel } }
     }
     case 'web.opened': {
       // The URL is the whole payload: it is what the confirmation names, and the

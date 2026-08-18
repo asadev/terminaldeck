@@ -29,16 +29,35 @@
  * of them permanently taking the top of the list somebody opened to read their
  * sessions, is the duplication he objects to on every other page.
  *
- * ## Which means this screen keeps the tab bar, and used not to
+ * ## No tab bar over the composer, and a chevron instead
  *
- * As a pushed screen it hid the bar, with the terminal and the localhost page,
- * and it was right to: it is full height and ends in a text field, which is
- * exactly the frame the pill complaint was about — *"when this keyboard is down,
- * see the pill is still there."* A tab cannot do that. There is no chevron over
- * a tab's root and no gesture that pops one, so a copilot tab that hid the bar
- * would be a screen with no way out. The footer is in a bottom `safeAreaInset`,
- * which is measured against the bar's own safe area, so the composer sits above
- * the pill rather than under it. See `DeckChrome`.
+ * *"If we are on copilot on mobile version, now if we want to type here, the
+ * pill is still there. Why is the pill there if we can type here? Either we will
+ * type or we will use the pill. So pill should not be inside the chat box —
+ * there should be a back button to go back on home."*
+ *
+ * The bar was here for exactly one reason and he has removed it: a tab that
+ * hides its own tab bar has no way out, because there is no chevron over a tab's
+ * root and no gesture that pops one. A back button **is** a way out. So the bar
+ * goes, the composer gets the bottom of the phone to itself, and this screen
+ * draws its own chevron in `.topBarLeading` calling `DeckModel.leaveCopilot()`.
+ * The full argument, in the order it was argued, is on `DeckSurface.copilot`.
+ *
+ * That button is load-bearing in a way an ordinary back button is not: it is the
+ * only way off this screen. Anything that removes or conditions it strands
+ * somebody here.
+ *
+ * ## And the pill itself comes and goes with the connection
+ *
+ * *"If the copilot is not connecting, this icon should not be inside the pill —
+ * then it will be three icon pill. Otherwise if the copilot is connected, then
+ * four icon pill, automatically."* `DeckModel.showsCopilotTab` decides, and the
+ * consequence for this file is that **the connect form moved out of it**: a
+ * six-digit code field behind a pill that only exists once you are connected is
+ * a door locked from the inside. Connecting lives in Settings now — see
+ * `CopilotConnectionView` — and what is left here is the conversation, plus one
+ * short screen for the case where somebody is standing on this tab and the
+ * machine under it is not connected.
  *
  * ## One list: what it said and what it did, interleaved
  *
@@ -92,11 +111,6 @@ struct CopilotView: View {
     @State private var draft = ""
     @FocusState private var composing: Bool
 
-    /// The six digits somebody is typing into the Connect screen. Same reason
-    /// as the draft: it is a half-typed thing, not a fact about the machine.
-    @State private var code = ""
-    @FocusState private var typingCode: Bool
-
     /// The question on screen, if any — one to decide or one to go and look at.
     /// See `CopilotPrompt`, which is one type rather than two `@State`s because
     /// two sheets that can both be non-nil is two sheets that fight.
@@ -123,6 +137,36 @@ struct CopilotView: View {
         .navigationTitle("Copilot")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            /*
+             * **The way home, and the only one.**
+             *
+             * *"Pill should not be inside the chat box — there should be a back
+             * button to go back on home."* This screen has no tab bar under it,
+             * so this chevron is the entire exit: no pill to tap, no chevron
+             * supplied by a `NavigationStack` because this is a stack's root,
+             * and no pop gesture for the same reason.
+             *
+             * It is drawn unconditionally, in every access state, for that
+             * reason alone. A version of this that appeared only when connected
+             * — which is tempting, because the pill itself works that way —
+             * would strand somebody on the one screen where being stranded is
+             * possible.
+             *
+             * `leaveCopilot()` goes to whichever tab the copilot was entered
+             * from, defaulting to the session list. See `DeckModel.homeTab` for
+             * why that is not simply "the sessions": somebody who tapped the
+             * pill while reading their ports means Localhost by *home*.
+             */
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    model.leaveCopilot()
+                } label: {
+                    Image(systemName: "chevron.backward")
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                .accessibilityLabel("Back")
+                .accessibilityIdentifier("copilot.back")
+            }
             /*
              * Which machine's copilot, in the slot the other two tabs use for
              * the same question.
@@ -247,13 +291,10 @@ struct CopilotView: View {
             .accessibilityIdentifier("copilot.notOffered")
 
         case .notConnected:
-            connectScreen(lostCredential: false)
+            notConnectedHere(lostCredential: false)
 
         case .credentialLost:
-            connectScreen(lostCredential: true)
-
-        case .closed:
-            closedScreen
+            notConnectedHere(lostCredential: true)
 
         case .connecting:
             connectingScreen
@@ -267,172 +308,72 @@ struct CopilotView: View {
     }
 
     /**
-     * **The Connect screen.** Six digits, and the sentence that explains them.
+     * **Somebody is on the Copilot tab and this machine's copilot is not
+     * connected.** One short screen, and a button that goes where the fix is.
      *
-     * This is the screen the whole 2026-08-17 revision produced, so the wording
-     * is doing real work rather than filling a page. It has to say four things
-     * and each of them is a thing somebody would otherwise get wrong:
+     * The pill appears only for a connected copilot, so most of the time this is
+     * unreachable. Three ways in remain, and all three are ordinary:
      *
-     *  - **the copilot is a second connection**, not a permission on the one
-     *    this phone already has. Somebody who has paired their phone and can run
-     *    ten terminals on it will reasonably assume the copilot came with them;
-     *    it did not, deliberately, and *"connecting copilot will be a separate
-     *    connection than the sessions"* is why.
-     *  - **where the code comes from** — Settings → Remote, on that machine, on
-     *    this phone's own card. A screen that said "enter your code" with no
-     *    address is how somebody concludes the feature is broken.
-     *  - **what connecting hands over**, before it is handed over rather than
-     *    after. The tiers are chosen at the machine when the code is minted, so
-     *    this cannot promise a particular set — what it can say is that the
-     *    person minting it decides, and that confirmations may end up on this
-     *    phone.
-     *  - **the code is short-lived and single-use**, so a person who fumbles it
-     *    knows to ask for another rather than retyping the dead one.
+     *  - the copilot was connected, is standing on this tab, and the machine
+     *    disconnected it. The pill is held open on purpose while somebody is on
+     *    it — see `DeckModel.showsCopilotTab` — precisely so this sentence can
+     *    be shown instead of the screen being pulled away;
+     *  - the switcher in the title was used to move to a machine whose copilot
+     *    this phone has never connected;
+     *  - `openCopilot(on:)` was asked for a machine that is not connected.
      *
-     * `lostCredential` is the same screen with the first sentence replaced. The
-     * desktop holds a record for this device and this phone does not hold the
-     * key — restored from a backup, or a Keychain item that would not read — and
-     * the remedy is *a new code*, not a retry, because the credential is sent
-     * exactly once and nothing on that machine can show it again.
+     * The **code field is not here**, and that is the point of the whole change:
+     * *"actually connecting copilot should be in the settings."* Two code fields
+     * for one ceremony is two places to keep in step, and this one would live
+     * behind a pill that is drawn only once the ceremony is done. So this states
+     * the situation and hands over to the screen that owns it.
+     *
+     * `lostCredential` is the case where that machine still lists this phone but
+     * the key here is gone — restored from a backup, or a Keychain item that
+     * would not read. Different sentence, same button, because the remedy is the
+     * same one screen away: a new code, since the credential is sent exactly
+     * once and nothing on that machine can show it again.
      */
-    private func connectScreen(lostCredential: Bool) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 30))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.bottom, 14)
-
-                Text(lostCredential ? "Connect this phone again" : "Connect the copilot")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Theme.primary)
-                    .padding(.bottom, 8)
-
-                Text(lostCredential
-                     ? "\(host?.label ?? "That machine") still has this phone on its copilot list, "
-                        + "but this phone no longer holds the key it was given. It is sent once and "
-                        // No markdown emphasis: this string is built by
-                        // interpolation, so it is a `String` rather than a
-                        // `LocalizedStringKey`, and SwiftUI would draw the
-                        // asterisks. The word carries itself.
-                        + "cannot be sent again, so ask for a new code at the "
-                        + "\(hostNoun) — Settings, under Remote, on this phone's card."
-                     : "The copilot is a separate connection from your terminals. Pairing this "
-                        + "phone did not include it, on purpose. Open Settings → Remote on "
-                        + "\(host?.label ?? "that machine"), find this phone, and press "
-                        + "“Connect the copilot” — it shows six digits.")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 22)
-
-                Text("Connect code")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Theme.faint)
-                    .textCase(.uppercase)
-                    .padding(.bottom, 10)
-
-                // The same field as the pairing screen, deliberately: same
-                // format, same keypad, same self-submit on the sixth digit.
-                // Learning a second shape of code entry for the second thing you
-                // connect would be this app inventing work.
-                TextField("000000", text: $code)
-                    .textFieldStyle(.plain)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .font(.system(size: 34, weight: .semibold, design: .monospaced))
-                    .kerning(8)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(Theme.primary)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .focused($typingCode)
-                    .accessibilityIdentifier("copilot.connect.field")
-                    .padding(.vertical, 14)
-                    .frame(maxWidth: .infinity)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
-                    .onChange(of: code) { _, value in
-                        // Trimmed to six, then submitted on six. The trim is not
-                        // cosmetic: a number pad has no length limit of its own,
-                        // and a seventh digit landing after the sixth has already
-                        // gone would leave a field somebody has to clear before
-                        // they can try again.
-                        let digits = String(value.filter { $0.isASCII && $0.isNumber }
-                            .prefix(Copilot.codeLength))
-                        if digits != value { code = digits }
-                        guard digits.count == Copilot.codeLength,
-                              link?.isConnecting != true else { return }
-                        typingCode = false
-                        submitCode()
-                    }
-                    .padding(.bottom, 10)
-
-                Button {
-                    typingCode = false
-                    submitCode()
-                } label: {
-                    HStack(spacing: 7) {
-                        if link?.isConnecting == true {
-                            ProgressView().controlSize(.small).tint(Theme.onAccent)
-                        } else {
-                            Image(systemName: "arrow.right")
-                        }
-                        Text(link?.isConnecting == true ? "Checking that code…" : "Connect")
-                    }
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                }
-                .background(Theme.accent.opacity(code.isEmpty ? 0.28 : 1),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .foregroundStyle(code.isEmpty ? Theme.secondary : Theme.onAccent)
-                .disabled(code.isEmpty || link?.isConnecting == true)
-                .accessibilityIdentifier("copilot.connect.submit")
-                .padding(.bottom, 14)
-
-                Text("A connect code is good for one minute and one use. What it grants is chosen "
-                     + "at the \(hostNoun) when the code is made — watching, working, or also "
-                     + "answering the confirmations that would otherwise wait at that machine. "
-                     + "Whoever mints it can disconnect this phone again at any time, without "
-                     + "unpairing it.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 28)
-            .padding(.bottom, 32)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .scrollBounceBehavior(.basedOnSize)
-        .accessibilityIdentifier(lostCredential ? "copilot.credentialLost" : "copilot.notConnected")
-    }
-
-    private func submitCode() {
-        // The field keeps its digits when the frame did not go, and loses them
-        // when it did: a code is single-use, so leaving a spent one in the field
-        // invites a second tap that can only fail.
-        if link?.connect(code: code) == true { code = "" }
-    }
-
-    /// Somebody closed the copilot on this phone. Everything is still in place —
-    /// the record at the machine, the credential here — so this is one tap, and
-    /// it says so rather than looking like a failure.
-    private var closedScreen: some View {
+    private func notConnectedHere(lostCredential: Bool) -> some View {
         ContentUnavailableView {
-            Label("Closed on this phone", systemImage: "moon.zzz")
+            Label(lostCredential ? "This phone needs a new code" : "Copilot not connected",
+                  systemImage: "sparkles")
         } description: {
-            Text("The copilot connection is shut here. Nothing was disconnected at "
-                 + "\(host?.label ?? "the machine") — this phone can open it again without a "
-                 + "new code.")
+            Text(lostCredential
+                 ? "\(host?.label ?? "That machine") still has this phone on its copilot list, but "
+                    + "this phone no longer holds the key it was given. Connecting again takes a "
+                    + "fresh six-digit code."
+                 : "The copilot is a separate connection from your terminals, and this phone has "
+                    + "not made it to \(host?.label ?? "that machine") yet. It takes a six-digit "
+                    + "code from that \(hostNoun).")
         } actions: {
-            Button("Open the copilot") { link?.reopen() }
+            Button("Connect it in Settings") { model.showCopilotSettings() }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
-                .accessibilityIdentifier("copilot.reopen")
+                .accessibilityIdentifier("copilot.toSettings")
         }
-        .accessibilityIdentifier("copilot.closed")
+        /*
+         * **No identifier on the `ContentUnavailableView` itself**, and the
+         * button below is why.
+         *
+         * Naming a SwiftUI container makes the container an accessibility
+         * *element*, and everything inside it stops existing — for a UI test and
+         * for VoiceOver alike. Measured on iOS 26.4 while moving the connect
+         * form to Settings: a code field plainly on screen could not be found,
+         * because the stack around it carried the screen's name.
+         *
+         * The three sibling states in this file get away with it because they
+         * hold nothing but words. This one holds the only control on the screen,
+         * and a person using VoiceOver would have found a screen telling them to
+         * connect the copilot with no way to reach the place that does it. So
+         * the button *is* the identifier — which is the better handle anyway,
+         * since what a test wants to know here is whether the way out is
+         * offered.
+         *
+         * The one place this app already had the bug went out with the same
+         * change: `closedScreen` wrapped an "Open the copilot" button in
+         * `copilot.closed`, and the whole state is gone.
+         */
     }
 
     /// The credential is on its way, or the socket is down and it cannot be.
@@ -720,7 +661,7 @@ struct CopilotView: View {
     @ViewBuilder
     private var footer: some View {
         switch host?.copilotAccess ?? .notOffered {
-        case .notOffered, .notConnected, .credentialLost, .closed, .connecting, .notGranted:
+        case .notOffered, .notConnected, .credentialLost, .connecting, .notGranted:
             EmptyView()
         case .watch:
             watchingNote
@@ -909,13 +850,24 @@ struct CopilotView: View {
 
     /**
      * The overflow menu: the two lists that are references rather than places,
-     * the two verbs that act on this phone's own run, and the one that closes
-     * the copilot here.
+     * and the two verbs that act on this phone's own run.
      *
      * Activity and the session list are sheets rather than pushes for the reason
      * `SessionDetailView` is one — *"a reference somebody opens, reads and
      * closes, not a place they are going"* — and because pushing them would put
      * two more screens on a stack whose back button was fixed last week.
+     *
+     * **There was a fifth item and it is gone.** *"Why do we have Close the
+     * copilot here? It doesn't make any sense."* It sent `copilot.bye`, held the
+     * connection shut across reconnects, and had a whole access state of its own
+     * to draw; its justification was a shared device, and on a phone the thing
+     * that keeps somebody else out is the lock screen rather than a menu item
+     * three taps in. The two verbs below it are the ones that survive the
+     * question *what does a person actually need from a phone here* — Interrupt
+     * stops a turn, Stop ends the run that is spending money — and neither of
+     * them touches the connection. Ending the connection is done at the machine
+     * that granted it. The removal is argued at length on `CopilotLink`, where
+     * the flag behind it used to be.
      */
     private var menu: some View {
         Menu {
@@ -955,29 +907,6 @@ struct CopilotView: View {
                 .accessibilityIdentifier("copilot.stop")
             }
 
-            /*
-             * `copilot.bye`, and why it is here rather than on `onDisappear`.
-             *
-             * The design asks for a bye "when a person leaves the Copilot tab on
-             * a shared device", and the shared device is the whole of it: this
-             * is for putting the phone down somewhere somebody else may pick it
-             * up. Sending one every time the screen is popped would be a
-             * different feature and a worse one — the badge on the session list,
-             * which is how anybody learns a confirmation is waiting, is pushed
-             * down the watching subscription, so an automatic bye would switch
-             * off the half of this that works while nobody is looking at it.
-             *
-             * It survives a reconnect (`CopilotLink.isHeldClosed`), because
-             * otherwise the next `welcome` would helpfully re-open the thing
-             * somebody just closed.
-             */
-            Divider()
-            Button {
-                link?.close()
-            } label: {
-                Label("Close the copilot here", systemImage: "lock")
-            }
-            .accessibilityIdentifier("copilot.close")
         } label: {
             Image(systemName: "ellipsis.circle")
         }

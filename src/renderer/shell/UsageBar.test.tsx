@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { UsageBarView } from './UsageBar'
+import { retryOffered, UsageBarView } from './UsageBar'
 import type { UsageReport, UsageWindowReading } from './usage-bar-model'
 
 /**
@@ -340,22 +340,74 @@ describe('a window near its limit that has no line of its own', () => {
   })
 })
 
-describe('nobody presses anything', () => {
-  it('has no Check button on the bar or in the panel', () => {
+describe('nobody presses anything until the app gives up', () => {
+  it('has nothing to press while the app is still doing it for you', () => {
     /*
      * *"Claude Code has it, it should automatically do it and bring it here."*
      *
+     * Exhaustive over the states a reader can actually be in, because the rule
+     * is not "no button" any more — it is "no button while there is still a
+     * reason to wait". Reachable only as a function: the control lives in the
+     * sheet, the sheet is only rendered while the panel is open, and this
+     * project's render tests produce a static string.
+     */
+    expect(retryOffered(null, () => {})).toBe(false)
+  })
+
+  it('offers one press, and only once the app has stopped asking', () => {
+    /*
+     * The state the deletion did not consider, and the one his Windows recording
+     * is of: an attempt typed `/usage` into the session, found nothing, and by
+     * design will not try again. A sentence with no way to act on it is the dead
+     * end this whole review is about — worse than the button ever was.
+     */
+    expect(retryOffered('Claude Code’s usage panel shows no plan limits.', () => {})).toBe(true)
+    // And nothing is drawn when there is nothing behind it.
+    expect(retryOffered('Claude Code’s usage panel shows no plan limits.', undefined)).toBe(false)
+  })
+
+  it('keeps the bar itself down to one control, whatever the state', () => {
+    /*
      * Counted rather than searched for by name, because the name is the thing
-     * most likely to change and least likely to matter. There is exactly one
-     * `<button>` in this whole element — the one that opens the panel — so a
-     * second one cannot be added anywhere in it, under any label, without this
-     * failing. The class and the prop the old control used are named too, so a
-     * revert that restores it wholesale is caught by its own spelling.
+     * most likely to change and least likely to matter. Two `<button>`s in the
+     * whole file: the chip that opens the panel, and the retry inside it — and
+     * the second is spelled through `retryOffered`, so it cannot be loosened
+     * without the two tests above failing. A third cannot be added anywhere, in
+     * any state, under any label, without this failing.
+     *
+     * `ub-check` is the class the old always-present control wore, named here so
+     * that a wholesale revert is caught by its own spelling.
      */
     const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
-    expect(source.match(/<button/g) ?? []).toHaveLength(1)
+    expect(source.match(/<button/g) ?? []).toHaveLength(2)
     expect(source).not.toContain('ub-check')
-    expect(source).not.toContain('onCheck')
+    expect(source).toContain('retryOffered(blocked, onCheck)')
+  })
+
+  it('says the settled answer rather than “Reading…” for ever', () => {
+    /*
+     * The top bar in his recording read `Usage Reading…` and never resolved,
+     * because the fetch was being run again and again on a session where it
+     * could not succeed. A word that means "wait, this is coming" must not be on
+     * screen for a state that is not coming.
+     */
+    const stopped = render({
+      report: report([], 'Claude Code has not printed a plan-limit line in this session yet.'),
+      blocked: 'Claude Code’s usage panel shows no plan limits for this account, so there is nothing to read.',
+      fetching: true,
+    })
+    expect(text(stopped)).not.toContain('Reading…')
+    expect(text(stopped)).toContain('Not reported')
+    // And the sentence the bar hands to a hover and to a screen reader is the
+    // settled one, not the tracker's "it has not printed one yet" — which is
+    // true, and reads as "give it a moment" for a state that has no moment.
+    expect(stopped).toContain('no plan limits for this account')
+    expect(stopped).not.toContain('has not printed a plan-limit line')
+  })
+
+  it('still says “Reading…” while a fetch really is in flight', () => {
+    const trying = render({ report: report([]), fetching: true })
+    expect(text(trying)).toContain('Reading…')
   })
 
   it('fetches by itself instead, off the session’s own output', () => {
@@ -394,6 +446,50 @@ describe('nobody presses anything', () => {
     // stops the absence reading as a fault.
     const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
     expect(source).toContain('there is nothing to press')
+  })
+
+  it('stops for good once an attempt has typed into the session for nothing', () => {
+    /*
+     * The half of 2026-08-18 that is about *not* doing something.
+     *
+     * His message was one line — *"this is what keeps happening repeatedly"* —
+     * over fifteen seconds of a `/usage` panel sitting open on a live Windows
+     * session. The repetition is the defect, not a symptom of it: every attempt
+     * types a command into somebody's prompt and draws a panel over their work,
+     * and one that came back with nothing has no business being made again on a
+     * timer or on the next keystroke.
+     *
+     * Asserted at the seam rather than through a hook, because this project's
+     * tests have no DOM to render a hook into: the fetcher takes `blocked`, the
+     * bar hands it the one `useUsageBar` computes, and the fetcher's first gate
+     * is that value. Undo any one of the three and this fails.
+     */
+    const auto = readFileSync(join(__dirname, 'auto-usage.ts'), 'utf8')
+    expect(auto).toContain('blocked: string | null')
+    expect(auto).toContain('if (current.blocked !== null) return')
+    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
+    expect(source).toContain('blocked: usage.blocked')
+
+    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
+    // And what sets it: whether the attempt *typed*, not which sentence it
+    // carried. A refusal that typed nothing — the session was working, the
+    // prompt had half a line in it — costs the session nothing and is still
+    // allowed to come back.
+    expect(hook).toContain("if (result?.typed === true || reason === 'no-limits' || reason === 'panel-open')")
+  })
+
+  it('asks the main process to force, and only from the press', () => {
+    /*
+     * The stop is enforced twice over, and deliberately: this hook can be
+     * remounted, and a second window never saw the first refusal. `refresh()` in
+     * `src/main/plan-limit.ts` therefore keeps its own record and refuses to type
+     * again — so `force` is the one thing that can reach past it, and the one
+     * caller that passes it is the button.
+     */
+    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
+    expect(source).toContain('onCheck={() => usage.check(true)}')
+    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
+    expect(hook).toContain('.call(bridge, sessionId, force)')
   })
 })
 

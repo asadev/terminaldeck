@@ -165,20 +165,71 @@ describe('the layout decisions that cannot be seen from a test', () => {
     expect(flexBlocks.filter((selector) => !hidden.includes(selector)).sort()).toEqual(never)
   })
 
-  it('gives the session’s name the phone header it needs', () => {
+  it('keeps the appearance control small enough to survive a phone header', () => {
     /*
-     * The appearance control is drawn on every screen, which is right everywhere
-     * except one: three pills across a 390px header inside a terminal truncated
-     * the session's title to "Rework the localhost sc…".
+     * > *"On the top header bar I still see the same three separate — Auto,
+     * > Light, Dark. You can just give one small icon for switching."*
      *
-     * Two halves, and both have to be here or the rule silently stops working.
-     * `main.ts` marks the frame while a terminal is on screen; the stylesheet
-     * decides, from the width alone, whether that costs the strip.
+     * The three pills took about 150 of a 390px header, which inside a terminal
+     * truncated the session's title to "Rework the localhost sc…". The answer
+     * used to be a width rule that deleted the control on that screen; the
+     * answer now is that the control is one icon and fits, so both the rule and
+     * the `is-terminal` class it keyed off are gone.
+     *
+     * This pins the size, because the way the old problem comes back is somebody
+     * putting a word next to the glyph. A 28px control plus the 44px tap target
+     * around it leaves a phone header its title.
      */
-    expect(styles).toContain('#app.is-terminal .appearance {')
-    expect(block('#app.is-terminal .appearance')).toContain('display: none')
+    const control = block('.appearance')
+    expect(control).toContain('width: 28px')
+    expect(control).toContain('height: 28px')
+    // And no rule anywhere may delete it again: it is the one preference somebody
+    // changes because of what is on the screen right now, and the screen most
+    // likely to be too bright is the one with a terminal on it.
+    expect(styles).not.toContain('is-terminal')
     const source = readFileSync(fileURLToPath(new URL('../src/main.ts', import.meta.url)), 'utf8')
-    expect(source).toContain("classList.toggle('is-terminal'")
+    expect(source).not.toContain("classList.toggle('is-terminal'")
+    // One button, not a strip of them. The old markup was a `<div class="appearance">`
+    // holding three `.appearance__choice` pills.
+    expect(styles).not.toContain('.appearance__choice')
+    expect(source).toContain("element('button', 'appearance')")
+  })
+
+  it('gives both spellings of Open a disabled treatment', () => {
+    /*
+     * Open is a `<button>` when the page opens on the machine and an `<a>` when
+     * it opens in this browser — two elements, because one puts a frame on a
+     * socket and the other is a navigation, and only a real link can be
+     * cmd-clicked, copied or dragged to a bookmark bar.
+     *
+     * The trap is that an anchor has no `:disabled`. A field with nothing typed
+     * in it disables the button through the property and the anchor through
+     * `aria-disabled` plus a removed href, and a stylesheet that only knew about
+     * the first would leave a full-strength blue Open sitting over an empty
+     * address bar — a control that looks pressable and does nothing, which is the
+     * single most repeated complaint across three nights of review.
+     */
+    for (const selector of ['.port__open', '.browse__go']) {
+      expect(styles, `${selector} has no aria-disabled rule`).toContain(`${selector}[aria-disabled='true']`)
+    }
+    const off = block(".port__open[aria-disabled='true'],\n.browse__go[aria-disabled='true']")
+    expect(off).toContain('pointer-events: none')
+    expect(off).toContain('opacity')
+  })
+
+  it('draws no address field when there is nowhere to send an address', () => {
+    /*
+     * The standing rule, in the stylesheet: a control that cannot act is absent,
+     * not greyed. `.browse__none` is the sentence that replaces the whole bar
+     * when this browser reached the machine through the relay *and* the machine
+     * will not open pages, and it exists so that the empty case is a paragraph
+     * rather than a cursor blinking in a field that goes nowhere.
+     */
+    expect(styles).toContain('.browse__none {')
+    // And nothing anywhere disables the field itself, which would be the other
+    // way of drawing that state and the wrong one.
+    expect(styles).not.toContain('.browse__field:disabled')
+    expect(styles).not.toContain(".browse__field[aria-disabled")
   })
 
   it('really hides the toast when there is nothing being said', () => {

@@ -5,11 +5,15 @@ import {
   SYSTEM_DARK_QUERY,
   THEME_ATTRIBUTE,
   THEME_CHOICES,
+  THEME_HINT,
+  THEME_ICON,
   THEME_KEY,
-  THEME_LABEL,
+  THEME_TITLE,
+  nextChoice,
   readChoice,
   resolveAppearance,
   stampAppearance,
+  themeTitle,
   watchSystemAppearance,
   writeChoice,
   type Appearance,
@@ -56,8 +60,77 @@ describe('the three states', () => {
 
   it('names every choice on screen', () => {
     for (const choice of THEME_CHOICES) {
-      expect(THEME_LABEL[choice], `${choice} has no label`).toMatch(/\S/)
+      expect(THEME_TITLE[choice], `${choice} has no title`).toMatch(/\S/)
     }
+  })
+})
+
+describe('one button, three states', () => {
+  it('cycles through all three and comes back round', () => {
+    /*
+     * The whole of *"You can just give one small icon for switching"*, pinned.
+     *
+     * The wrap is the half that gets dropped: without it a person who reached
+     * `dark` could never get back to following the device, and the way anybody
+     * would find that out is by pressing a button that has stopped changing.
+     */
+    expect(nextChoice('system')).toBe('light')
+    expect(nextChoice('light')).toBe('dark')
+    expect(nextChoice('dark')).toBe('system')
+  })
+
+  it('reaches every state from every state', () => {
+    // Three presses from anywhere returns you to where you started, which is the
+    // property that says the cycle covers the set and skips nothing.
+    for (const start of THEME_CHOICES) {
+      expect(nextChoice(nextChoice(nextChoice(start)))).toBe(start)
+      const seen = new Set([start, nextChoice(start), nextChoice(nextChoice(start))])
+      expect([...seen].sort()).toEqual([...THEME_CHOICES].sort())
+    }
+  })
+
+  it('restarts the cycle rather than throwing on a value it does not know', () => {
+    // Unreachable through `readChoice`, which validates — but this is exported,
+    // and the safe answer for a state nobody can account for is the default.
+    expect(nextChoice('cyan' as ThemeChoice)).toBe('system')
+  })
+
+  it('says the state it is in and what a press does, never one without the other', () => {
+    /*
+     * A cycling icon has exactly one way of being unreadable: a label that could
+     * be read as either "it is dark" or "make it dark". So the accessible name
+     * carries both halves, and this is what stops somebody shortening it back to
+     * one.
+     */
+    for (const choice of THEME_CHOICES) {
+      const said = themeTitle(choice)
+      expect(said, `${choice} does not say what it is on`).toContain(THEME_TITLE[choice])
+      expect(said, `${choice} does not say what a press does`).toContain(THEME_HINT)
+    }
+    // And the three are different sentences. One label reused across states is a
+    // control that never announces having changed.
+    expect(new Set(THEME_CHOICES.map(themeTitle)).size).toBe(THEME_CHOICES.length)
+  })
+
+  it('has a picture for every state, and no two the same', () => {
+    /*
+     * The failure this catches is the one that type-checks: a state added to
+     * `THEME_CHOICES` with no icon draws an empty 16px box in the header, and a
+     * state that reuses another's icon is a button that looks stuck.
+     */
+    const drawn = new Set<string>()
+    for (const choice of THEME_CHOICES) {
+      const parts = THEME_ICON[choice]
+      expect(parts.length, `${choice} has no icon`).toBeGreaterThan(0)
+      for (const part of parts) {
+        expect(['circle', 'path'], `${choice} draws an element the helper cannot make`).toContain(part.el)
+        // Geometry only. A colour here would be a hex value living outside the
+        // token file and unable to follow the theme it is drawn in.
+        expect(Object.keys(part.attrs)).not.toContain('color')
+      }
+      drawn.add(JSON.stringify(parts))
+    }
+    expect(drawn.size).toBe(THEME_CHOICES.length)
   })
 })
 

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import {
   MAX_INPUT_BYTES,
@@ -504,28 +505,39 @@ describe('the localhost frames', () => {
     expect(result).toEqual({ ok: true, message: { t: 'ports', ports: [{ port: 5173, process: 'node', guessed: false }] } })
   })
 
-  it('still owns the two the shared parser will not read', () => {
+  it('no longer owns any localhost frame alone — the last two moved as well', () => {
     /*
-     * This assertion used to cover three frames and now covers two, and the one
-     * that left is the interesting half.
+     * This assertion has now emptied out, and the way it emptied is the record
+     * worth keeping.
      *
-     * The note above said the branch would stop being necessary "the day it
-     * moves there". `ports` moved: a **desktop** reaching another desktop now
-     * lists what is listening over there, so `parseServerFrame` reads that frame
-     * for its own caller and this client gets it either way. `web.opened` moved
-     * with it, for the same reason.
+     * It covered three frames, then two, and now none. The note above said the
+     * branch would stop being necessary "the day it moves there", and that day
+     * arrived in two steps. First `ports` and `web.opened`: a **desktop**
+     * reaching another desktop lists what is listening over there, so the shared
+     * parser reads those for its own caller.
      *
-     * `tunnel.opened` and `tunnel.closed` did not, and their absence is still a
-     * statement rather than an omission: they announce a byte stream into a
-     * listening socket, and a desktop guest opens no listener. A parser that
-     * read them would be a parser for a conversation that end is not in.
+     * Then `tunnel.opened` and `tunnel.closed`, and the reason they held out is
+     * exactly the reason they stopped: the old note said they *"announce a byte
+     * stream into a listening socket, and a desktop guest opens no listener."*
+     * That was true until `machines:reach` — the desktop now opens a listener of
+     * its own so its browser can load a port on the far machine, which is his
+     * *"shape of the application should not be changing for local and remote
+     * devices."* A desktop guest is in that conversation now, so the shared
+     * parser is in it too, and `guest.ts` handles both frames by name.
+     *
+     * What survives is the thing this describe block exists for: **two readers
+     * of one wire must not drift.** So the test stops asserting an exclusivity
+     * that is gone and asserts the agreement that has to hold instead — every
+     * localhost frame, read by both, decoding to the same value.
      */
     for (const frame of [
       { t: 'tunnel.opened', id: 'a', port: 5173 },
       { t: 'tunnel.closed', id: 'a', message: 'no' },
     ]) {
-      expect(parseServerMessage(JSON.stringify(frame)).ok).toBe(false)
-      expect(decodeServerMessage(JSON.stringify(frame)).ok).toBe(true)
+      const raw = JSON.stringify(frame)
+      expect(parseServerMessage(raw).ok, `${frame.t} is not read by the shared parser`).toBe(true)
+      expect(decodeServerMessage(raw).ok, `${frame.t} is not read by this client`).toBe(true)
+      expect(decodeServerMessage(raw)).toEqual(parseServerMessage(raw))
     }
   })
 
@@ -611,16 +623,29 @@ describe('the localhost frames', () => {
     expect(long.ok && long.message.t === 'tunnel.closed' && long.message.message.length).toBe(300)
   })
 
-  it('does not read the byte-stream frames, because this client never opens one', () => {
-    // `net.*` exists only inside a stream begun by a `net.open` this client
-    // cannot send — a browser tab has no socket to serve bytes into. A reader
-    // for them would be a parser for a conversation this client is not in.
-    for (const frame of [
-      { t: 'net.data', ch: 'a', data: 'AAAA' },
-      { t: 'net.ack', ch: 'a', bytes: 4 },
-      { t: 'net.close', ch: 'a' },
-    ]) {
-      expect(decodeServerMessage(JSON.stringify(frame)).ok).toBe(false)
-    }
+  it('never asks for a byte stream, which is the half that still holds', () => {
+    /*
+     * This used to assert that the client could not *read* `net.*`. It can now,
+     * and not because anybody taught it to: `decodeServerMessage` delegates to
+     * `parseServerFrame`, and that reader gained the byte-stream frames when the
+     * desktop learned to reach a port on another machine. One reader, shared on
+     * purpose — the alternative is two readers of one wire, which is the drift
+     * this whole describe block exists to catch.
+     *
+     * So the claim moves from what it can parse to what it can ask for, which is
+     * the part that was ever really true. `net.*` only exists inside a stream
+     * begun by a `net.open`, and a browser tab has no socket to serve bytes
+     * into. This client sends no such frame, so it is never in that conversation
+     * — and being able to read a sentence nobody will say to you costs nothing.
+     *
+     * Asserted against the source rather than by sending one, because the point
+     * is that no code path exists at all, and a runtime test can only show that
+     * the path was not taken today.
+     */
+    const source = readFileSync(new URL('./protocol-client.ts', import.meta.url), 'utf8')
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    expect(code, 'this client now sends net.open — it has no socket to serve').not.toContain(
+      'net.open',
+    )
   })
 })

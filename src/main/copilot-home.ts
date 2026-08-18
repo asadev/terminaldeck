@@ -1294,3 +1294,174 @@ export function writeCopilotInstructions(
   }
   return { saved: true, backup: previous === null ? null : backup, error: null }
 }
+
+/* ------------------------------------- the folder's own instructions, edited -- */
+
+/**
+ * Where a replaced copy of the folder's own instructions is kept.
+ *
+ * Under `<userData>`, deliberately, and **not** as a `.bak` beside the file the
+ * way {@link writeCopilotInstructions} does it. The folder can be somebody's own
+ * repository — that is the whole point of being able to choose one — and a
+ * second file appearing next to their `CLAUDE.md` is a file that turns up in
+ * `git status`, gets committed by a `git add -A`, and has to be explained. The
+ * safety net is worth having and it is not worth littering somebody's project
+ * for, so it lives on this side of the line with everything else this app keeps
+ * *about* the copilot rather than *for* it.
+ *
+ * One path rather than one per folder: it answers "what did I just replace",
+ * which is a question about the last save and nothing older. A numbered series
+ * would be a history nobody asked this app to keep of a file it does not own.
+ */
+export function folderInstructionsBackup(paths: CopilotPaths): string {
+  return join(paths.layer.dir, 'folder-instructions.bak')
+}
+
+/**
+ * The folder's own instruction file, for an editor to put in a box.
+ *
+ * ## Why this exists at all, when the row used to be a Finder button
+ *
+ * Asad, 2026-08-17, about this pane: *"Nothing is editable. **Every file needs
+ * an Edit button** beside it, opening the same editor style already used, and
+ * saving. So they can actually control and fix and design their copilot from
+ * here directly."*
+ *
+ * This is the file that instruction lands on hardest. When somebody points the
+ * copilot at a folder of their own — which is the case the folder feature was
+ * built for — the assistant that already lives in that folder *is* the copilot's
+ * character: its name, how it addresses them, what it is for. Sending them to
+ * Finder to change that, from the one screen in the app whose subject is "what
+ * my copilot is", was the gap the audit found.
+ *
+ * ## What is still true, and what changed
+ *
+ * The promise the folder feature turns on is that **this app writes nothing into
+ * a folder somebody chose** — no instructions, no `memory/`, no marker. That is
+ * a promise about the *app* acting on its own, and it is untouched: nothing in
+ * this module writes here except {@link writeFolderInstructions}, and nothing
+ * calls that except a person pressing Save on text they can see. An editor a
+ * person drives is not the app writing behind their back; it is the same act as
+ * opening the file in their own editor, with fewer steps.
+ *
+ * `ENOENT` is not an error here, and that is the difference between this reader
+ * and the layer's. A folder with no instruction file is the ordinary case — it
+ * is the *reassuring* case, the proof that nothing in that folder claims to be a
+ * copilot — so it comes back as an empty box a person may choose to write in,
+ * with `exists: false` saying which of the two situations they are looking at.
+ */
+export interface FolderInstructionsRead {
+  path: string
+  /** The file as it is, or '' when there is none yet. Never truncated. */
+  text: string
+  exists: boolean
+  /** Why it could not be read, or null. `ENOENT` never lands here. */
+  error: string | null
+}
+
+export function readFolderInstructions(paths: CopilotPaths): FolderInstructionsRead {
+  const path = folderInstructions(paths)
+  try {
+    return { path, text: readFileSync(path, 'utf8'), exists: true, error: null }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { path, text: '', exists: false, error: null }
+    }
+    return {
+      path,
+      text: '',
+      exists: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+export interface FolderInstructionsWrite {
+  saved: boolean
+  /** Where the replaced version was copied, or null when there was none. */
+  backup: string | null
+  /** Whether this save created the file rather than replacing one. */
+  created: boolean
+  error: string | null
+}
+
+/**
+ * Save the folder's own instructions, on a person's press and never otherwise.
+ *
+ * The three refusals are {@link writeCopilotInstructions}'s, for the same three
+ * reasons, and they are restated rather than shared because the sentences differ
+ * in the one way that matters: this file is *theirs*, so an empty save is not
+ * "your copilot has no instructions" but "you are about to blank a file in your
+ * own project", and the message has to say the second thing.
+ *
+ * **The directory is never created.** `writeFileSync` into a folder that is not
+ * there fails with `ENOENT`, and that is the correct outcome: a chosen folder
+ * that has since been deleted or unmounted is a situation to report, not one to
+ * paper over by recreating a directory this app has promised it does not make.
+ */
+export function writeFolderInstructions(
+  paths: CopilotPaths,
+  text: unknown,
+): FolderInstructionsWrite {
+  if (typeof text !== 'string') {
+    return { saved: false, backup: null, created: false, error: 'Nothing was supplied to save.' }
+  }
+  if (text.trim() === '') {
+    return {
+      saved: false,
+      backup: null,
+      created: false,
+      error:
+        'This is a file in your own folder, so this app will not blank it for you. Delete it yourself if that is what you want.',
+    }
+  }
+  if (Buffer.byteLength(text, 'utf8') > MAX_INSTRUCTIONS_BYTES) {
+    return {
+      saved: false,
+      backup: null,
+      created: false,
+      error: `Instructions cannot be larger than ${Math.round(MAX_INSTRUCTIONS_BYTES / 1024)} KB. This file is read at the start of every conversation.`,
+    }
+  }
+
+  const path = folderInstructions(paths)
+  let previous: string | null
+  try {
+    previous = readFileSync(path, 'utf8')
+  } catch {
+    previous = null
+  }
+  // An unchanged save must not replace a real backup with a copy of the thing
+  // being kept — see the same guard on the layer's writer.
+  if (previous === text) {
+    return { saved: true, backup: null, created: false, error: null }
+  }
+
+  try {
+    let backup: string | null = null
+    if (previous !== null) {
+      backup = folderInstructionsBackup(paths)
+      mkdirSync(paths.layer.dir, { recursive: true, mode: 0o700 })
+      writeFileSync(backup, previous, { mode: 0o600 })
+    }
+    /*
+     * No `mode` on this one, and no `mkdir` above it.
+     *
+     * The layer's files are this app's and are written 0o600 because nothing but
+     * this app has any business reading them. This file is the person's, in a
+     * folder they chose, very likely under version control and very likely read
+     * by other tools of theirs — so it keeps whatever permissions it already had
+     * and a new one takes the folder's default rather than a private mask that
+     * would surprise the next thing to open it.
+     */
+    writeFileSync(path, text)
+    return { saved: true, backup, created: previous === null, error: null }
+  } catch (error) {
+    return {
+      saved: false,
+      backup: null,
+      created: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}

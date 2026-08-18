@@ -134,6 +134,32 @@ export interface UsageBarViewProps {
   unwired?: boolean
   /** A fetch is in flight right now. Nobody asked for it — see `auto-usage.ts`. */
   fetching?: boolean
+  /**
+   * Why this session has stopped asking, when it has.
+   *
+   * The sentence from the last attempt that typed into the session and found
+   * nothing — see `blocked` in `useUsageBar`. Where it is drawn, so is the one
+   * control in this component: a bar that has stopped trying on its own must
+   * offer the reader a way to ask, or it is the dead end the whole review was
+   * about. Everywhere else there is deliberately nothing to press, because the
+   * app is already doing it.
+   */
+  blocked?: string | null
+  /**
+   * True when this app has left Claude Code's usage panel on the session.
+   *
+   * Said first and said plainly wherever it is true. It is not a fact about
+   * usage at all — it is a fact about the terminal underneath, and the person
+   * is owed it before any figure.
+   */
+  residue?: boolean
+  /**
+   * Ask the session again. Only called from the blocked state, only by a press.
+   *
+   * Absent in a build or a render that has nothing to call, in which case the
+   * control is not drawn — this app does not offer buttons that do nothing.
+   */
+  onCheck?: () => void
   /** Clock, for tests and for the harness. */
   now: number
   /**
@@ -188,6 +214,37 @@ function Meter({ percent, level, state }: { percent: number; level: string; stat
 }
 
 const CARET = 'M2.5 4.5 6 8l3.5-3.5'
+
+/**
+ * Whether this bar offers anything to press.
+ *
+ * ## Why this is a function and not an inline `&&`
+ *
+ * Because it is the rule that was reversed, and a reversed rule needs somewhere
+ * a test can reach. Asad deleted `Check now` in as many words — *"usage should
+ * appear on its own, not need a click"* — and the test that pinned the deletion
+ * counted the button elements in this file, which is a fine way to pin
+ * "there is no button" and no way at all to pin "there is a button in exactly
+ * one state". The sheet this control lives in is only rendered while the panel
+ * is open, and this project's render tests produce a static string with no
+ * chance to open anything, so the state that matters cannot be reached through
+ * a render at all. Same reason `chipMode` in `agent-presence.ts` is a function.
+ *
+ * ## The rule
+ *
+ * Nothing to press while the app is still doing it for you — which is every
+ * ordinary state, including a reading that is missing because Claude Code has
+ * not printed one yet. One thing to press once the app has stopped: an attempt
+ * typed `/usage` into the session, came back with nothing, and by design will
+ * not try again. That is the only state in which a reader is left with a fact
+ * they cannot act on, and it is the state the deletion did not consider.
+ *
+ * `onCheck` being absent is a build or a render with nothing to call, and a
+ * control with nothing behind it is not drawn — this app's rule everywhere.
+ */
+export function retryOffered(blocked: string | null, onCheck: (() => void) | undefined): boolean {
+  return blocked !== null && typeof onCheck === 'function'
+}
 
 /** The agent's own name — "Claude Code", "Codex CLI" — never the internal id. */
 function providerLabel(provider: ProviderId | undefined): string | null {
@@ -278,6 +335,9 @@ export function UsageBarView({
   accountLabel,
   unwired = false,
   fetching = false,
+  blocked = null,
+  residue = false,
+  onCheck,
   now,
   anchor,
 }: UsageBarViewProps) {
@@ -322,17 +382,57 @@ export function UsageBarView({
    * could be composed here — "Claude Code has not printed a plan-limit line in
    * this session yet", or "was released to make room"; and a report that has not
    * arrived at all is still being asked for.
+   *
+   * Which of the two settled sentences the panel is allowed to print, so that
+   * no two elements in it say the same thing.
+   *
+   * Caught by looking, which is the only way it could have been: rendered in the
+   * harness and screenshotted, the blocked panel printed *"Claude Code's usage
+   * panel shows no plan limits for this account"* twice, four lines apart —
+   * once as the reason there is nothing to show and once as the source note.
+   * The same "one fact printed twice" this app's account chip was corrected for.
+   *
+   * When a panel has been left behind, `ub-residue` below is the sentence that
+   * matters and it is the more actionable of the two, so `blocked` stands down
+   * here rather than repeating it.
    */
+  const stopped = residue ? null : blocked
   const nothing = unwired
     ? 'Usage is not wired into this build.'
-    : report === null
-      ? 'Asking this session what it has used…'
-      : (report.reason ?? 'Nothing has been reported for this session yet.')
+    : /*
+       * A settled answer outranks everything below it, and that ordering is the
+       * fix rather than a detail.
+       *
+       * `report.reason` is the tracker's sentence — *"Claude Code has not
+       * printed a plan-limit line in this session yet"* — which is true, is what
+       * used to be shown, and is the wrong thing to say once this app has
+       * actually asked and been answered. It reads as "give it a moment", and on
+       * an account with no subscription limits there is no moment that will ever
+       * arrive.
+       */
+      stopped !== null
+      ? stopped
+      : report === null
+        ? 'Asking this session what it has used…'
+        : (report.reason ?? 'Nothing has been reported for this session yet.')
 
   /* What the single line says when it has no reading. A fetch in flight is
      worth saying out loud precisely because nobody started it: without it the
-     bar would sit on "Not reported" through the two seconds it takes to run. */
-  const fallback = unwired ? 'Not wired' : fetching || report === null ? 'Reading…' : 'Not reported'
+     bar would sit on "Not reported" through the two seconds it takes to run.
+
+     `Reading…` is never drawn once this session has settled on an answer, and
+     that ordering matters more than it looks. On his Windows machine the top bar
+     read `Usage Reading…` and never resolved — because the fetch was being run
+     again and again on a session where it could not succeed. A word that means
+     "wait, this is coming" must not be on screen for a state that is not
+     coming. */
+  const fallback = unwired
+    ? 'Not wired'
+    : blocked !== null
+      ? 'Not reported'
+      : fetching || report === null
+        ? 'Reading…'
+        : 'Not reported'
 
   /*
    * Everything the lines cannot fit, for the hover label and for a screen reader.
@@ -492,11 +592,38 @@ export function UsageBarView({
             {accountLabel ? <span className="ub-whose-account">{accountLabel}</span> : null}
           </header>
 
+          {/*
+            Something this app put on the person's terminal and could not take
+            off again, said before anything else in here.
+
+            First, and above the numbers, because it is not a statement about
+            usage at all — it is a statement about the session underneath, and it
+            is the only thing in this panel that asks the reader to do something
+            in a window other than this one. It sits outside the empty/rows
+            branch below for the same reason: a fetch can read its figures
+            perfectly and still fail to dismiss the panel, and the sentence must
+            not be the price of having nothing to show.
+
+            The words are `blocked`'s own — `refreshFailureMessage` in
+            `usage-model.ts`, which is where every refusal in this feature is
+            worded. Composing a second sentence here is how the reason shown
+            before a press and the reason returned after one come to disagree.
+          */}
+          {residue && blocked !== null ? (
+            <p className="ub-residue" role="alert">
+              {blocked}
+            </p>
+          ) : null}
+
           {report && report.readings.length > 0 ? (
             report.readings.map((reading) => (
               <WindowRow key={reading.id} readout={usageReadout(reading, now)} />
             ))
-          ) : (
+          ) : residue ? null : (
+            /* Suppressed under a residue note, which has already accounted for
+               the absence and said something more useful about it. Two
+               paragraphs where one will do is what the first draft of this state
+               did, and it read as an app repeating itself. */
             <p className="ub-empty">{nothing}</p>
           )}
 
@@ -514,11 +641,46 @@ export function UsageBarView({
             limits into its rollout as it works, so there is nothing to ask it
             for.
           */}
+          {/*
+            Where the numbers come from — and, while the app is still fetching
+            them, that it is doing so.
+
+            The second clause goes the moment this session has stopped, because
+            it would then be two false claims in one sentence: it is not checking
+            by itself any more, and there *is* something to press, immediately
+            below. What is left is the provenance, which is still true.
+          */}
           <p className="ub-foot">
             {provider === 'claude'
-              ? 'Read from Claude Code’s own /usage panel. This checks by itself whenever the session goes quiet, so there is nothing to press.'
+              ? blocked !== null
+                ? sourceSentence('claude-usage-panel')
+                : 'Read from Claude Code’s own /usage panel. This checks by itself whenever the session goes quiet, so there is nothing to press.'
               : sourceSentence(provider === 'codex' ? 'codex-rollout' : 'claude-usage-panel')}
           </p>
+
+          {/*
+            The one control in this component, and the only state that has one.
+
+            He deleted `Check now` in as many words — *"usage should appear on
+            its own, not need a click"* — and that judgement is honoured
+            everywhere the automatic path is still trying: there is nothing to
+            press, and the sentence above says why there is nothing to press.
+
+            This is the state that judgement did not cover. The app has asked,
+            been answered, and stopped; leaving the reader with a sentence and no
+            way to act on it is the dead end the whole review was about, and it
+            is worse than the button ever was. So the button comes back here and
+            only here — after a stop, next to the reason for the stop.
+
+            It is the *only* thing that can type into the session again: both
+            this hook and `refresh()` in the main process refuse every automatic
+            attempt while a session is blocked, and only a press clears it.
+          */}
+          {retryOffered(blocked, onCheck) ? (
+            <button type="button" className="ub-retry" onClick={onCheck}>
+              Check again
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -578,6 +740,26 @@ export function UsageBar({ sessionId, provider, fit = 'full', bridge, now }: Usa
     fetching: usage.checking,
     fresh: leadIsLive(usageLines(usage.report, clock)),
     fetch: usage.check,
+    /*
+     * The refusal counter, threaded from the hook that owns it rather than
+     * counted again here.
+     *
+     * `useAutoUsage` gives up after a run of refusals, and it has to be told
+     * when one happens, because a refusal is not something it can observe: the
+     * gate that refuses lives in the main process and the answer comes back
+     * through `useUsageBar`. Passing the count rather than a boolean is what
+     * lets two refusals in a row be two events — the sentence they carry is
+     * usually identical, so a string would look unchanged and a flag would
+     * already be true.
+     */
+    refusals: usage.refusals,
+    /*
+     * And the stop. A session that has been typed into for nothing is not typed
+     * into again by anything but the press below — see `blocked` in
+     * `useUsageBar` for what counts, and the note at the top of `auto-usage.ts`
+     * for why a refusal and a failure are not the same event.
+     */
+    blocked: usage.blocked,
   })
 
   /*
@@ -632,6 +814,19 @@ export function UsageBar({ sessionId, provider, fit = 'full', bridge, now }: Usa
       accountLabel={identity?.label ?? null}
       unwired={usage.unwired}
       fetching={usage.checking}
+      blocked={usage.blocked}
+      residue={usage.residue}
+      /*
+       * The press, and the only caller that passes `force`.
+       *
+       * Spelled as a lambda rather than handed `usage.check` directly, because
+       * `check` takes an optional flag and React would call it with the click
+       * event — which is truthy, so every automatic-looking path that ever
+       * reached it would quietly become a forced one. The one place a press is
+       * meant to override a settled answer is here, deliberately, in view of the
+       * sentence explaining what it is overriding.
+       */
+      onCheck={() => usage.check(true)}
       now={clock}
       anchor={anchor}
     />

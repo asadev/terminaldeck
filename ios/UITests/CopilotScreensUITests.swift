@@ -99,14 +99,23 @@ final class CopilotScreensUITests: XCTestCase {
     func testAMachineThatOnlyAdvertisesACopilotShowsNone() throws {
         try XCTSkipUnless(grant == "absent", "this case is for --copilot absent")
 
-        // The pill is structure and is drawn for every machine; what must be
-        // absent is anything *about a copilot* behind it, and above all a
-        // Connect screen, because that build has nothing to mint a code with.
-        XCTAssertTrue(app.openCopilotTab())
-        XCTAssertFalse(app.textFields["copilot.connect.field"].waitForExistence(timeout: 8),
+        // **No fourth pill**, which is the whole answer here now. *"If the
+        // copilot is not connecting, this icon should not be inside the pill —
+        // then it will be three icon pill."* A machine whose build has no
+        // copilot in it can never connect one, so the pill is never drawn for
+        // it and there is nothing behind it to be wrong about.
+        XCTAssertFalse(app.openCopilotTab(),
+                       "a machine that only advertises a copilot gets no pill")
+        capture("absent-01-three-pills")
+
+        // And Settings says why, rather than offering a code that build has
+        // nothing to mint.
+        XCTAssertTrue(app.openCopilotSettings())
+        XCTAssertTrue(app.otherElements["copilot.settings.notOffered"].waitForExistence(timeout: 8),
+                      "it should name the version gap rather than draw a code field")
+        XCTAssertFalse(app.textFields["copilot.connect.field"].exists,
                        "the capability alone must not offer a code")
-        XCTAssertFalse(app.textFields["copilot.composer"].exists)
-        capture("absent-01-no-copilot")
+        capture("absent-02-settings-says-why")
     }
 
     /**
@@ -122,11 +131,20 @@ final class CopilotScreensUITests: XCTestCase {
         try XCTSkipUnless(grant == "alter" || grant == "none",
                           "this case needs a host that has a copilot")
 
-        XCTAssertTrue(app.openCopilotTab(), "the copilot has a pill of its own")
-        capture("connect-01-tab-not-connected")
+        // **Three pills.** This is the state every paired device starts in, and
+        // the pill is not drawn for it: the copilot is not connected, and a
+        // fourth pill leading to a screen whose only content is an explanation
+        // of why it is empty is the shape of complaint this round removed.
+        XCTAssertFalse(app.openCopilotTab(),
+                       "a phone that has never connected a copilot gets three pills")
+        capture("connect-01-three-pills")
 
+        // The code is in Settings — *"actually connecting copilot should be in
+        // the settings"* — which is also the only place it could be, since the
+        // pill it used to live behind appears once the connecting is done.
+        XCTAssertTrue(app.openCopilotSettings(), "connecting is a row in Settings")
         XCTAssertTrue(app.textFields["copilot.connect.field"].waitForExistence(timeout: 10),
-                      "an unconnected device is offered a code, not an empty conversation")
+                      "an unconnected device is offered a code")
         capture("connect-02-connect-screen")
 
         // Nothing that would be refused. All of them absent rather than
@@ -136,11 +154,6 @@ final class CopilotScreensUITests: XCTestCase {
         XCTAssertFalse(app.buttons["copilot.start"].exists, "no Start")
         XCTAssertFalse(app.buttons["copilot.more"].exists,
                        "every item behind it needs `read`, which needs a connection")
-        // And the pill is **there**, which is the opposite of what this line
-        // asserted while the copilot was a pushed screen. It is a tab now, and a
-        // tab that hid its own bar would be a screen with no way out — see
-        // `DeckChrome`.
-        XCTAssertTrue(app.tabBars.firstMatch.exists, "a tab keeps the bar it is a tab of")
     }
 
     /**
@@ -154,7 +167,6 @@ final class CopilotScreensUITests: XCTestCase {
     func testAConnectedDeviceWithNoTiersIsToldWhichBoxToTick() throws {
         try XCTSkipUnless(grant == "none", "this case is for --copilot none")
 
-        XCTAssertTrue(app.openCopilotTab())
         try connectTheCopilot()
 
         XCTAssertTrue(app.otherElements["copilot.notGranted"].waitForExistence(timeout: 15)
@@ -179,8 +191,36 @@ final class CopilotScreensUITests: XCTestCase {
     func testTheWholeCopilotWalk() throws {
         try XCTSkipUnless(grant == "alter", "this case is for --copilot alter")
 
-        XCTAssertTrue(app.openCopilotTab(), "the copilot is the leftmost pill")
         try connectTheCopilot()
+
+        /*
+         * **The pill arrived with the connection, and the chat box has the
+         * bottom of the phone to itself.**
+         *
+         * Two of the night's three changes, asserted together because they are
+         * one screen: *"if the copilot is connected, then four icon pill,
+         * automatically"*, and *"pill should not be inside the chat box — there
+         * should be a back button to go back on home."*
+         *
+         * The bar being **absent while standing on the copilot** is the part a
+         * screenshot alone would not settle, because on iOS 26 the bar is a
+         * floating pill and "over the composer" and "below it" look similar at a
+         * glance in a thumbnail. And `copilot.back` existing is what makes
+         * hiding it safe at all — this screen is a tab root, so without that
+         * button there is no chevron, no gesture and no way out.
+         */
+        XCTAssertTrue(app.buttons["copilot.back"].waitForExistence(timeout: 10),
+                      "the copilot's only way home")
+        XCTAssertFalse(app.tabBars.firstMatch.exists,
+                       "either we will type or we will use the pill")
+
+        // And it goes home. Then back in through the pill, which is the fourth
+        // one now that this phone is connected.
+        app.buttons["copilot.back"].tap()
+        XCTAssertTrue(app.tabBars.firstMatch.buttons["Copilot"].waitForExistence(timeout: 10),
+                      "four pills once the copilot is connected")
+        capture("alter-01b-four-pills")
+        XCTAssertTrue(app.openCopilotTab(), "and the fourth one goes back in")
 
         // The state card, from the desktop's own report. The assertion is on the
         // *desk* line: it is the field the client used to decode under the wrong
@@ -350,10 +390,20 @@ final class CopilotScreensUITests: XCTestCase {
 
     // MARK: - Getting there
 
-    /// Mint a code at the "machine" and type it into the phone, which is the
-    /// whole ceremony. A person does this by pressing a button in Settings →
-    /// Remote; a script cannot press it, which is what the control server is for.
+    /**
+     * Mint a code at the "machine" and type it into the phone, which is the whole
+     * ceremony. A person does this by pressing a button in Settings → Remote on
+     * the machine; a script cannot press it, which is what the control server is
+     * for.
+     *
+     * **Through Settings on this end**, because that is where the code field is
+     * now: *"actually connecting copilot should be in the settings."* The screen
+     * takes the person to the copilot itself once the code lands, so this ends
+     * on the conversation rather than on a settings row — which is what every
+     * caller below goes on to assert against.
+     */
     private func connectTheCopilot() throws {
+        XCTAssertTrue(app.openCopilotSettings(), "connecting is a row in Settings")
         let field = app.textFields["copilot.connect.field"]
         XCTAssertTrue(field.waitForExistence(timeout: 15), "the Connect screen should be up")
         let code = try mint("/copilot-code")

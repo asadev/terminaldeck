@@ -15,6 +15,7 @@ import {
   STEP_TITLE,
 } from './copilot-setup-model'
 import { DEFAULT_COPILOT_NAME, NO_IDENTITY } from '../../shared/copilot-identity'
+import { profileLoginLabel } from '../accounts'
 
 /**
  * The setup flow: its order, its skipping, and — the point of this file after
@@ -189,6 +190,47 @@ describe('how little each screen says', () => {
     )
     expect(blocks.length).toBeGreaterThan(0)
     for (const words of blocks) expect(words).toBeLessThanOrEqual(24)
+  })
+})
+
+describe('the account step names no vendor', () => {
+  /**
+   * The fourth of the strings the completeness audit found still live on the
+   * two surfaces the review names — a pop-up, in this case the last step of
+   * this flow, reading **"Your own Claude Code install"**.
+   *
+   * It was invisible to `neutral-naming.test.ts` and always will be, because
+   * there is no such string anywhere in the tree: it is composed at runtime
+   * from the agent's own catalogue row, which is the *right* architecture and
+   * the reason the guard cannot see it. A rule a scanner cannot enforce has to
+   * be pinned where the decision is made, so it is pinned here.
+   *
+   * The list on that step is `claudeAccounts` — the accounts the copilot's own
+   * session could actually run as — so it holds one agent's logins and the
+   * agent's name separates nothing on it. Settings → Accounts is the opposite
+   * case and keeps the name; the argument for both is written on
+   * `profileLoginLabel`.
+   */
+  const own = { id: 'system', name: 'Default', provider: 'claude' as const, system: true }
+
+  it('drops the agent from the machine’s own install, on this list only', () => {
+    expect(profileLoginLabel(own, undefined, { namesTheAgent: false })).toBe('Your own install')
+    // The default is unchanged, which is the half that keeps Settings → Accounts
+    // able to tell three system rows apart.
+    expect(profileLoginLabel(own, undefined)).toBe('Your own Claude Code install')
+  })
+
+  it('still prints the address when there is one, because that is the login', () => {
+    expect(
+      profileLoginLabel(own, { state: 'signed-in', account: 'a@b.co' }, { namesTheAgent: false }),
+    ).toBe('a@b.co')
+  })
+
+  it('asks for the neutral form from the setup flow itself', () => {
+    // The wiring, read from the source: a static render cannot reach this step,
+    // and a passing label function that nobody calls is not a fixed screen.
+    const source = readFileSync(join(__dirname, 'CopilotSetup.tsx'), 'utf8')
+    expect(source).toContain('namesTheAgent: false')
   })
 })
 

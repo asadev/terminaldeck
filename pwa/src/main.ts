@@ -42,6 +42,17 @@ import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 import { BRAND } from '../../src/shared/brand'
+import {
+  BROWSE_HERE,
+  BROWSE_MACHINE,
+  NOWHERE_TO_OPEN,
+  browseTargets,
+  destinationSentence,
+  parseAddress,
+  shortAddress,
+  type BrowseTarget,
+  type BrowseWhere,
+} from './browse'
 import { Connection, type ConnectionState, type SocketLike } from './connection'
 import {
   GO_AND_LOOK,
@@ -98,7 +109,6 @@ import {
 } from './endpoint'
 import {
   NO_DEV,
-  cannotOpenSentence,
   devRowView,
   devStep,
   devWaitingSentence,
@@ -112,7 +122,7 @@ import { createKeyBar, type KeyBarHandle } from './keybar'
 import {
   CHECK_PATIENCE_MS,
   NO_LOCALHOST,
-  cannotServeSentence,
+  PUBLIC_ADDRESS_ANSWER,
   checkSentence,
   localhostOffered,
   openSentence,
@@ -194,13 +204,13 @@ import {
 } from './sessions'
 import { createTerminal, type TerminalHandle } from './terminal'
 import {
-  THEME_CHOICES,
   THEME_COLOR,
-  THEME_DESCRIPTION,
-  THEME_LABEL,
+  THEME_ICON,
+  nextChoice,
   readChoice,
   resolveAppearance,
   stampAppearance,
+  themeTitle,
   watchSystemAppearance,
   writeChoice,
   type Appearance,
@@ -295,6 +305,45 @@ function element<K extends keyof HTMLElementTagNameMap>(
   return node
 }
 
+/** The one namespace an SVG child has to be made in. Spelled once, here. */
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+/**
+ * The appearance icon, as an element.
+ *
+ * `createElementNS`, not `createElement`, and that is the whole reason this
+ * helper exists rather than three lines at the call site: an `<svg>` built with
+ * `createElement` lands in the HTML namespace, where it is an unknown inline
+ * element that lays out as text and paints nothing. It type-checks, it appears
+ * in the DOM inspector spelled correctly, and the header simply has a gap in it
+ * — the exact class of failure this repo's rule about looking at a change is
+ * written for.
+ *
+ * The geometry comes from `theme.ts` as data. What is decided here is the frame
+ * around it: a 24-unit viewBox drawn at 16px, `currentColor` so the glyph is the
+ * header's ink in both themes without a hex value living outside the tokens, and
+ * `aria-hidden` because the button around it already carries the whole name and
+ * a second one would have a screen reader say it twice.
+ */
+function themeIcon(choice: ThemeChoice): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('width', '16')
+  svg.setAttribute('height', '16')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '1.8')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  for (const part of THEME_ICON[choice]) {
+    const node = document.createElementNS(SVG_NS, part.el)
+    for (const [name, value] of Object.entries(part.attrs)) node.setAttribute(name, value)
+    svg.append(node)
+  }
+  return svg
+}
+
 /**
  * One consent argument, as a line somebody reads before deciding.
  *
@@ -363,14 +412,33 @@ class Deck {
   private readonly bannerText = element('span', 'banner__text')
   private readonly bannerAction = element('button', 'banner__action', 'Retry now')
   /**
-   * Auto / Light / Dark, in the header rather than in a settings block.
+   * The appearance, as **one icon** in the header rather than three pills.
+   *
+   * > *"On the top header bar I still see the same three separate — Auto, Light,
+   * > Dark. You can just give one small icon for switching."*
+   *
+   * It is the same control the marketing site's header grew a few hours before
+   * he said that, and the same idea rather than the same code: one button
+   * cycling system → light → dark, showing the state it is in. The three pills
+   * were an honest reading of "three states need three affordances" and they
+   * were wrong about where the space goes — a header on a 390px phone has one
+   * job, which is the title of the thing you are looking at, and the appearance
+   * is a control somebody touches twice in the life of an install.
+   *
+   * A button rather than a `<div>` of buttons, so a keyboard reaches it in one
+   * tab stop and a screen reader is told one thing. What it is on and what a
+   * press does are both in `themeTitle`, because a cycling icon has exactly one
+   * way of being unreadable and that is a label that could mean either.
    *
    * Part of the chrome and not of a screen, for the same reason the tab strip
    * is: it has to survive every screen it is drawn over, and it has to be
    * reachable before pairing — the pair screen is the first thing a new reader
    * sees, and it is a whole screen of paper or charcoal with nothing else on it.
+   * Being one 28px button rather than three pills is also what lets it stay in
+   * the header **inside a terminal on a phone**, which the strip could not: the
+   * stylesheet used to delete it at that width to save the session's title.
    */
-  private readonly appearanceStrip = element('div', 'appearance')
+  private readonly appearanceButton = element('button', 'appearance')
   /**
    * Where a machine's request for a GitHub login is reported.
    *
@@ -534,6 +602,27 @@ class Deck {
   private picking = false
   /** What the machine is serving, and the check in flight. See `localhost.ts`. */
   private localhost: LocalhostState = NO_LOCALHOST
+  /**
+   * What is typed in the browse bar.
+   *
+   * Held here rather than read off the input at press time, for the reason every
+   * other in-progress value in this class is: the desktop pushes `ports` and
+   * `dev.state` unprompted, and each one rebuilds this screen. A half-typed
+   * address living only in the DOM would be erased by the machine answering a
+   * question somebody asked before they started typing.
+   */
+  private browseText = ''
+  /**
+   * Which device the bar opens on, once somebody has said.
+   *
+   * Null means "whatever the first available one is", which is not the same as a
+   * stored `machine`: the set of destinations changes underneath this — a socket
+   * drops, a machine that opens pages is swapped for one that does not — and a
+   * remembered choice that is no longer on offer has to fall back rather than
+   * leave the bar pointed at nothing. `browseTarget` is the only reader and it
+   * does that falling back in one place.
+   */
+  private browseWhere: BrowseWhere | null = null
   /** One row per project that can be served, and the start in flight. See `dev-server.ts`. */
   private dev: DevState = NO_DEV
   /**
@@ -703,9 +792,15 @@ class Deck {
     this.back.setAttribute('aria-label', 'Back')
     this.back.addEventListener('click', () => this.goBack())
 
+    // Wired once. `renderAppearance` replaces the icon inside it on every change
+    // and never the button itself, so this listener outlives every redraw — the
+    // reason the element is a field rather than something a render returns.
+    this.appearanceButton.type = 'button'
+    this.appearanceButton.addEventListener('click', () => this.cycleTheme())
+
     const titles = element('div', 'header__titles')
     titles.append(this.title, this.subtitle)
-    this.header.append(this.back, titles, this.appearanceStrip)
+    this.header.append(this.back, titles, this.appearanceButton)
 
     this.bannerAction.type = 'button'
     this.bannerAction.addEventListener('click', () => this.connection?.resume())
@@ -1046,39 +1141,27 @@ class Deck {
     this.renderAppearance()
   }
 
-  /** The person moved the switch. */
-  private chooseTheme(choice: ThemeChoice): void {
-    if (choice === this.themeChoice) return
-    this.themeChoice = choice
-    writeChoice(this.stores.browser, choice)
+  /** The person pressed the icon: on to the next of the three. */
+  private cycleTheme(): void {
+    this.themeChoice = nextChoice(this.themeChoice)
+    writeChoice(this.stores.browser, this.themeChoice)
     this.applyAppearance()
   }
 
   /**
-   * The three pills, redrawn from the one source of truth.
+   * The one icon, redrawn from the one source of truth.
    *
-   * `aria-pressed` rather than `aria-current`: these are not two places to be,
-   * they are one setting with three values, and the pressed state is what a
-   * screen reader needs to say which one is on.
+   * No `aria-pressed`. That attribute says a toggle is on or off, and this is
+   * one setting with three values — a screen reader told "pressed" here would be
+   * announcing a two-state control that does not exist. The whole state is in
+   * the name instead, which is what `themeTitle` is for, and the name changes on
+   * every press so the change is announced rather than merely painted.
    */
   private renderAppearance(): void {
-    this.appearanceStrip.replaceChildren(
-      ...THEME_CHOICES.map((choice) => {
-        const here = this.themeChoice === choice
-        const pill = element(
-          'button',
-          here ? 'appearance__choice appearance__choice--here' : 'appearance__choice',
-          THEME_LABEL[choice],
-        )
-        pill.type = 'button'
-        pill.setAttribute('aria-pressed', here ? 'true' : 'false')
-        // The label is two syllables because it lives in a phone's header; the
-        // sentence that says what it actually does is free here.
-        pill.setAttribute('aria-label', THEME_DESCRIPTION[choice])
-        pill.addEventListener('click', () => this.chooseTheme(choice))
-        return pill
-      }),
-    )
+    const said = themeTitle(this.themeChoice)
+    this.appearanceButton.setAttribute('aria-label', said)
+    this.appearanceButton.title = said
+    this.appearanceButton.replaceChildren(themeIcon(this.themeChoice))
   }
 
   /**
@@ -1732,11 +1815,16 @@ class Deck {
   /* -------------------------------------------------------------- render -- */
 
   private render(): void {
-    // The one thing the stylesheet cannot work out for itself: which screen this
-    // is. A phone-width header inside a terminal has room for the session's name
-    // or for the appearance control and not for both, and on that screen the name
-    // is what somebody needs — see the width rules at the foot of styles.css.
-    this.root.classList.toggle('is-terminal', this.screen === 'terminal')
+    /*
+     * There used to be an `is-terminal` class stamped here, and a width rule in
+     * the stylesheet that deleted the appearance control on a phone inside a
+     * terminal — because three pills and a session's title would not both fit in
+     * 390 points, and on that screen the title is what somebody needs.
+     *
+     * The appearance control is one 28px icon now, so both fit, and a class that
+     * styles nothing is a hook somebody will one day wire a second meaning to.
+     * It is gone with the rule it existed for.
+     */
     this.renderHeader()
     this.renderBanner()
     this.renderCredentialAsk()
@@ -2587,6 +2675,12 @@ class Deck {
     const online = this.state.phase === 'online'
     const tunnels = localhostOffered(this.capabilities)
 
+    // The bar is the first thing, above the list and above Refresh, because it is
+    // now what this screen is *for*. The list answers "what is running"; the bar
+    // is how you get to it, and a way in that sits under nine collapsed groups is
+    // a way in nobody finds.
+    screen.append(this.browseBar())
+
     // Refresh exists only while there is a socket to carry it — the standing rule
     // against a control whose only function is to explain that it does not
     // function — so offline there is no row here at all rather than an empty one,
@@ -2628,16 +2722,313 @@ class Deck {
       screen.append(element('p', 'note localhost__note', stalePortsSentence(this.noun)))
     }
 
-    // The screen's footnote, and it is the last thing on purpose: it answers a
-    // question somebody asks *after* they have looked at the list and wondered why
-    // nothing here opens a page. It covers the dev servers' addresses as well,
-    // which is why the shorter version below is written only when this one is
-    // absent.
-    if (tunnels) screen.append(element('p', 'note localhost__note', cannotServeSentence(this.noun)))
-    else if (this.dev.rows.some((row) => row.status === 'ready' && row.url !== undefined)) {
-      screen.append(element('p', 'note localhost__note', cannotOpenSentence(this.noun)))
-    }
+    /*
+     * The screen's one footnote, and it is the last thing on purpose.
+     *
+     * There used to be two paragraphs here, both about what a browser tab cannot
+     * do. They were true and they were the wrong quantity: an explanation of a
+     * limitation, restated under every visit, on a screen whose complaint was
+     * that it did nothing. Now that the bar opens pages, the only question left
+     * unanswered is the one he actually asked — *"maybe we can give our domain
+     * to them… just like ngrok"* — and `PUBLIC_ADDRESS_ANSWER` is the whole of
+     * the answer to it, including the reason, because a limitation nobody can
+     * see the shape of is one that gets re-proposed every month.
+     *
+     * Drawn whenever there is anything on this screen to have addresses at all,
+     * and not conditioned on which capability the machine advertised: the
+     * question is about the product, not about this machine's build.
+     */
+    if (groups.length > 0) screen.append(element('p', 'localhost__answer', PUBLIC_ADDRESS_ANSWER))
     return screen
+  }
+
+  /**
+   * The browse bar: an address, where to open it, and Open.
+   *
+   * ## Why this exists at all
+   *
+   * > *"I still cannot open the localhost of any of them, so there is no reason
+   * > to give the list here… Maybe we can have one browse bar here and something
+   * > to browse it, or maybe another kind of link to open in our normal
+   * > browser."*
+   *
+   * The list was never the problem — knowing what a machine in another country
+   * is serving is most of why anybody opens this screen — but a list nothing
+   * leads out of reads as decoration, and he is right that it had no reason. So
+   * the bar is the reason, and the rows are now ways into it: pressing Open on a
+   * row and typing that row's address into the bar are the same action carrying
+   * the same URL, through the same `openControl`, answered in the same place.
+   * They cannot drift, because there is only one of them.
+   *
+   * ## Two destinations, and both of them are real
+   *
+   * `browse.ts` owns which ones exist and why, and the short of it is that
+   * neither is a guess. **On the machine** is `web.open` over the sealed channel
+   * — the answer that works from a phone anywhere. **In this browser** is an
+   * ordinary link, offered only where the client can say *why* the address
+   * resolves from here: a direct pairing, or a page this browser was served over
+   * loopback. On a phone on the hosted client it is simply not there, because
+   * `localhost` on a phone is the phone.
+   *
+   * ## What it does when it can do nothing
+   *
+   * It says so, in a sentence, and draws no field. That is the rule this product
+   * is judged on and it is worth the extra branch: a bar with a cursor in it that
+   * cannot open anything is a worse answer than a line of text explaining that
+   * this machine will not open pages.
+   */
+  private browseBar(): HTMLElement {
+    const block = element('div', 'browse')
+    const targets = this.browseTargets()
+    const target = this.browseTarget()
+
+    if (target === null) {
+      // No field, no button, no chooser. There is nothing here that could act, so
+      // there is nothing here.
+      block.append(element('p', 'browse__none', NOWHERE_TO_OPEN))
+      return block
+    }
+
+    const line = element('div', 'browse__line')
+
+    const field = element('input')
+    field.type = 'text'
+    field.className = 'browse__field'
+    field.value = this.browseText
+    field.placeholder = 'localhost:3000'
+    field.setAttribute('aria-label', 'Address to open')
+    // A URL keyboard on a phone: no capitals, no autocorrect, and a visible `/`
+    // and `.`. A field somebody types `localhost:3000` into and gets `Localhost`
+    // back out of is a field they type into twice.
+    field.setAttribute('inputmode', 'url')
+    field.setAttribute('autocapitalize', 'off')
+    field.setAttribute('autocorrect', 'off')
+    field.spellcheck = false
+    field.enterKeyHint = 'go'
+
+    const go = this.openControl('Open', 'button browse__go', () => this.browseUrl())
+    line.append(field)
+    if (targets.length > 1) line.append(this.whereChooser(targets, target))
+    line.append(go.node)
+
+    field.addEventListener('input', () => {
+      this.browseText = field.value
+      // The control is refreshed in place rather than by redrawing the screen.
+      // A redraw on every keystroke takes the focus and the caret with it, which
+      // is the classic way an address bar becomes unusable on a phone.
+      go.refresh()
+    })
+    field.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      go.activate()
+    })
+
+    block.append(line)
+    block.append(element('p', 'browse__note', destinationSentence(target, this.machineName)))
+
+    /*
+     * The answer, under the bar — unless the address belongs to a row on the
+     * list, in which case `portRow` shows it under the row it is about, so that
+     * three ports in nobody has to guess which one "it opened" means.
+     *
+     * There is no offline branch here on purpose. A spinner that outlives its
+     * socket is cleared by `localhostStep`'s `offline` case, which is reached
+     * from `onState` the moment the connection drops — and a render is not where
+     * state gets fixed. A defensive mutation in here would re-enter this method
+     * through `renderContent`, which is a loop that happens to terminate.
+     */
+    const outcome = this.localhost.openOutcome
+    if (outcome !== null && this.rowUrls().indexOf(outcome.url) === -1) {
+      block.append(
+        element(
+          'p',
+          outcome.kind === 'opened' ? 'browse__result browse__result--ok' : 'browse__result',
+          // Through `plain` like every other string that came off this socket: a
+          // refusal is composed on the desktop, and this end is the one that pays
+          // if that ever stops being true.
+          plain(openSentence(outcome, this.noun)),
+        ),
+      )
+    }
+    return block
+  }
+
+  /**
+   * The device chooser beside the bar, drawn only when there is a choice.
+   *
+   * > *"Maybe give a drop down next to somewhere here with the bar, to choose
+   * > which device we are talking to right now."*
+   *
+   * A native `<select>` rather than a row of pills, and that is a phone
+   * decision: a select opens the platform's own wheel or sheet, which is
+   * reachable one-handed and is the control every reader already knows, where a
+   * segmented strip of device names would be two 44px targets fighting the
+   * address field for a 390px line.
+   *
+   * Never drawn for one option. That is the same rule the tab strip and the
+   * folder picker follow — a control with one choice is not a choice — and the
+   * sentence under the bar names the destination in that case instead.
+   */
+  private whereChooser(targets: readonly BrowseTarget[], current: BrowseTarget): HTMLElement {
+    const select = element('select', 'browse__where')
+    select.setAttribute('aria-label', 'Where to open it')
+    for (const target of targets) {
+      const option = element('option', undefined, target.label)
+      option.value = target.where
+      option.selected = target.where === current.where
+      select.append(option)
+    }
+    select.addEventListener('change', () => {
+      // Read back through the two constants rather than trusted as a string: a
+      // `<select>`'s value is whatever is in the DOM, and this is the one place a
+      // value from the document becomes a value the rest of the screen switches
+      // on.
+      this.browseWhere = select.value === BROWSE_HERE ? BROWSE_HERE : BROWSE_MACHINE
+      // A full redraw here is right where it was wrong for the field: changing
+      // the destination changes every row's Open as well as the bar's, since a
+      // link in this browser and a frame to the machine are different elements.
+      this.renderContent()
+    })
+    return select
+  }
+
+  /**
+   * One Open control, as whichever element the destination actually needs.
+   *
+   * This is the part that could most easily have been faked. Opening **on the
+   * machine** is a frame on a socket, so it is a `<button>`; opening **in this
+   * browser** is a navigation, so it is an `<a href target="_blank">` — a real
+   * link, which is exactly what he asked for (*"another kind of link to open in
+   * our normal browser"*) and which a `window.open` from a click handler is not:
+   * a link can be middle-clicked, copied, dragged to a bookmark bar and opened
+   * in a background tab, and it survives a popup blocker that would have
+   * swallowed the scripted call.
+   *
+   * `url()` is a thunk rather than a value because the bar's address changes as
+   * somebody types and the control must follow it without the screen being
+   * redrawn — see `refresh`, which is what the input listener calls.
+   *
+   * `className` is the whole class string rather than a modifier, because the two
+   * places this is used want different bases: the bar's Open is a `.button`,
+   * which is this client's full-width primary, and a row's Open is a `.port__open`
+   * chip that sits inline beside Check. One base for both would put a 44px
+   * full-width button inside every port row.
+   *
+   * A null URL is a control that cannot act, so it is disabled: `disabled` on
+   * the button, and on the anchor the href is *removed*, which takes it out of
+   * the tab order and stops the click, rather than left pointing at a string
+   * that will not parse.
+   */
+  private openControl(
+    label: string,
+    className: string,
+    url: () => string | null,
+  ): { node: HTMLElement; refresh: () => void; activate: () => void } {
+    const here = this.browseTarget()?.where === BROWSE_HERE
+    const busy = this.localhost.opening
+
+    if (here) {
+      const link = element('a', className, label)
+      link.target = '_blank'
+      // `noreferrer` as well as `noopener`: the page being opened is somebody's
+      // own dev server, and it has no business being told which client of this
+      // app sent the reader to it.
+      link.rel = 'noopener noreferrer'
+      const refresh = (): void => {
+        const address = url()
+        if (address === null) {
+          link.removeAttribute('href')
+          link.setAttribute('aria-disabled', 'true')
+          link.title = 'Type an address first'
+          return
+        }
+        link.href = address
+        link.removeAttribute('aria-disabled')
+        link.title = `Open ${shortAddress(address)} in a new tab`
+      }
+      refresh()
+      return { node: link, refresh, activate: () => link.click() }
+    }
+
+    const button = element('button', className, busy === null ? label : 'Opening…')
+    button.type = 'button'
+    const activate = (): void => {
+      const address = url()
+      if (address === null) return
+      this.localhostDo({ t: 'open', url: address })
+    }
+    const refresh = (): void => {
+      // Disabled while *any* open is in flight, not just this one's: the desktop
+      // takes one at a time, so a live-looking button elsewhere on the screen is
+      // a press that produces nothing.
+      button.disabled = busy !== null || url() === null
+    }
+    refresh()
+    button.addEventListener('click', activate)
+    return { node: button, refresh, activate }
+  }
+
+  /** The address in the bar, resolved against the destination's own host. */
+  private browseUrl(): string | null {
+    const target = this.browseTarget()
+    if (target === null) return null
+    // `localhost` for the machine, because that is what the address means on its
+    // side of the channel; the page's own host for a link in this browser, which
+    // is the only host this browser has been shown to reach. See `browse.ts`.
+    return parseAddress(this.browseText, target.host ?? 'localhost')
+  }
+
+  /** Every address the list can open, so the bar knows which answers are not its own. */
+  private rowUrls(): string[] {
+    const host = this.browseTarget()?.host ?? 'localhost'
+    const urls: string[] = []
+    for (const section of this.localhostSections()) {
+      for (const row of section.rows) {
+        if (row.port === null) continue
+        const url = parseAddress(String(row.port), host)
+        if (url !== null) urls.push(url)
+      }
+    }
+    return urls
+  }
+
+  /** The destinations this browser has right now. See `browse.ts` for the rules. */
+  private browseTargets(): BrowseTarget[] {
+    return browseTargets({
+      location: window.location,
+      endpoint: this.endpoint,
+      // Offline is not a destination. `web.open` needs the socket, and a bar that
+      // stayed live over a dead connection is the lie this client exists to avoid.
+      machineOpens: this.state.phase === 'online' && webOfferedHere(this.capabilities),
+      machineLabel: this.machineName,
+    })
+  }
+
+  /**
+   * The destination in force, falling back when the chosen one is gone.
+   *
+   * One reader for `browseWhere`, so the fallback happens in one place: the set
+   * of destinations changes underneath this screen — a socket drops and the
+   * machine stops being one of them — and a chooser left pointing at a
+   * destination that no longer exists is a bar that opens nothing and says
+   * nothing about why.
+   */
+  private browseTarget(): BrowseTarget | null {
+    const targets = this.browseTargets()
+    const chosen = targets.find((target) => target.where === this.browseWhere)
+    return chosen ?? targets[0] ?? null
+  }
+
+  /** What the machine is called on this screen: its nickname, or its kind. */
+  private get machineName(): string {
+    const machine = this.machine
+    if (machine === null) return `the ${this.noun}`
+    const label = machineLabel(machine, this.origin)
+    // A nickname reads as a name; a relay slot id and a bare host do not, so the
+    // fallback is the noun the rest of this screen already uses. "Opens on
+    // `ABCDEF`, in its own browser" is a sentence nobody can act on.
+    return machine.nickname !== null && machine.nickname !== '' ? label : `this ${this.noun}`
   }
 
   /**
@@ -2745,6 +3136,13 @@ class Deck {
   private portRow(row: LocalhostRow, online: boolean, tunnels: boolean): HTMLElement {
     const item = element('li', 'port')
     const port = row.port
+    // The address this row opens, against whichever host the current destination
+    // resolves — `localhost` on the machine's own side, the page's own host for a
+    // link in this browser. Null when there is no port to open or nowhere to open
+    // it, and both of those mean the same thing here: no control.
+    const target = this.browseTarget()
+    const rowUrl =
+      port === null || target === null ? null : parseAddress(String(port), target.host ?? 'localhost')
 
     /*
      * One line carries the row's identity **and** its controls, and that is the
@@ -2769,29 +3167,23 @@ class Deck {
     }
 
     /*
-     * Open it — **on the machine**, which is the thing this screen could never do.
+     * Open it — wherever the bar above says pages open.
      *
-     * His complaint, in full: *"Localhost lists ports with no way to open any of
-     * them. The whole reason localhost exists is to drive them."* A browser tab
-     * cannot serve a tunnel and the three reasons are at the top of
-     * `localhost.ts`; what it can do is ask the machine to open the page there,
-     * which is the answer he gave for the phone in the same review — *"a browser
-     * started from the phone must run on the machine you are inside."*
+     * His complaint, in full: *"I still cannot open the localhost of any of them,
+     * so there is no reason to give the list here."* A browser tab cannot serve a
+     * tunnel and the three reasons are at the top of `localhost.ts`; what it can
+     * do is send the address somewhere that can. This control is `openControl`,
+     * the same one the bar uses, so a row and the bar are one action with one
+     * answer rather than two features that agree until one of them is changed —
+     * and so a row is a link in this browser exactly when the bar is.
      *
-     * Before Check, because it is what most people came here to press. Drawn only
-     * when the machine advertised `web`, which it withholds from a host with no
-     * window and from a guest device — so this is never a button that discovers
-     * it does not work.
+     * Before Check, because it is what most people came here to press. Absent
+     * entirely when there is nowhere to send it, which is the same rule the bar
+     * follows: no destination, no control, and one sentence at the top saying so.
      */
-    if (online && port !== null && webOfferedHere(this.capabilities)) {
-      const busy = this.localhost.opening
-      const here = busy === port
-      const open = element('button', 'port__open', here ? 'Opening…' : 'Open')
-      open.type = 'button'
-      open.disabled = busy !== null
-      open.title = `Open localhost:${port} on the ${this.noun}`
-      open.addEventListener('click', () => this.localhostDo({ t: 'open', port }))
-      line.append(open)
+    if (rowUrl !== null) {
+      const open = this.openControl('Open', 'port__open', () => rowUrl)
+      line.append(open.node)
     }
 
     // One check at a time, and only with a socket. A second Check pressed while
@@ -2874,8 +3266,13 @@ class Deck {
     // rather than one shared one: a check proved a port answers and an open put a
     // page on somebody's screen, and a row that had done both would otherwise
     // show only whichever finished last.
+    //
+    // Matched on the **address** rather than on the port, because the bar and the
+    // rows now share one open and one answer: an address typed by hand that
+    // happens to be a row's own is that row's answer, and one that is not lands
+    // under the bar instead.
     const openOutcome = this.localhost.openOutcome
-    if (openOutcome !== null && openOutcome.port === port) {
+    if (openOutcome !== null && rowUrl !== null && openOutcome.url === rowUrl) {
       item.append(
         element(
           'p',

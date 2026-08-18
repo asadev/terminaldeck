@@ -485,7 +485,24 @@ describe('a shell session is not described as an agent', () => {
 
   it('has a state of its own rather than borrowing "no transcript yet"', () => {
     expect(view).toMatch(/\|\s*'shell'/)
-    expect(view).toMatch(/provider\s*===\s*'shell'/)
+    /*
+     * `effectiveProvider`, which is `runningProvider(provider, …)` — the record
+     * resolved against what is actually on the session's screen — and not the
+     * record itself. The distinction is load-bearing in both directions here: a
+     * shell with Claude Code running in it has a real conversation being
+     * written, and this pane telling its reader that "a shell just runs what
+     * you type, so there is nothing here to read" would be the app arguing with
+     * the transcript it is about to find.
+     *
+     * `runningProvider` moved to `shell/agent-presence.ts` on 2026-08-18, when
+     * the window's control cluster turned out to need the same distinction and
+     * to have been getting it wrong — see `SessionControls.presence.test.tsx`.
+     * It is asserted by name so that the move cannot quietly become a second
+     * copy of the same judgement living in two files.
+     */
+    expect(view).toContain("const shell = effectiveProvider === 'shell'")
+    expect(view).toContain('runningProvider(provider, presence.running)')
+    expect(view).toContain("from '../shell/agent-presence'")
   })
 
   it('is handed the provider by the app, or it cannot know', () => {
@@ -502,8 +519,17 @@ describe('a shell session is not described as an agent', () => {
     // control row it lived in, and the chrome answers the same question more
     // bluntly — it draws no cluster at all for a shell — so the assertion is
     // against the early return rather than against four separate guards.
+    //
+    // `running`, not `provider`, since 2026-08-18, and the rule this test
+    // defends is unchanged by that: a *shell* still gets no pickers. What
+    // changed is which question decides, because the record answers `shell` for
+    // the rest of a session's life after somebody types `claude` at its prompt
+    // — and reading it here withdrew the whole control surface from every
+    // session Asad starts that way. `SessionControls.presence.test.tsx` has the
+    // frames and the argument; this line only has to keep pointing at the guard
+    // rather than at the word it used to be written with.
     const controls = read('renderer/shell/SessionControls.tsx')
-    expect(controls).toMatch(/if \(provider === 'shell'\) return null/)
+    expect(controls).toMatch(/if \(running === 'shell'\) return null/)
   })
 
   it('does not invite the user to message an agent that is not there', () => {

@@ -107,6 +107,8 @@ export interface MachinesBridge {
   writeToMachineSession(id: string, sessionId: string, data: string): Promise<unknown>
   resizeMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
   createMachineSession(id: string, cwd?: string, provider?: string): Promise<unknown>
+  /** End one session over there. Refused unless that machine advertised `close`. */
+  closeMachineSession(id: string, sessionId: string): Promise<unknown>
   refreshMachinePorts(id: string): Promise<unknown>
   openOnMachine(id: string, url: string): Promise<unknown>
   onMachinesState(cb: (view: unknown) => void): () => void
@@ -127,6 +129,7 @@ const BRIDGE_METHODS = [
   'writeToMachineSession',
   'resizeMachineSession',
   'createMachineSession',
+  'closeMachineSession',
   'refreshMachinePorts',
   'openOnMachine',
   'onMachinesState',

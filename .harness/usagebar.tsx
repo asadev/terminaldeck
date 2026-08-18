@@ -104,6 +104,14 @@ const NOTHING =
   'Claude Code has not printed a plan-limit line in this session yet — it only does so near a limit, or when /usage is run.'
 const CODEX_SILENT =
   'Codex has not recorded a rate limit under this account yet — it writes one into its rollout when a turn completes.'
+/* The two sentences a settled answer carries, from `refreshFailureMessage` —
+   copied rather than imported so the board shows the words as a reader gets
+   them, and so a change to either is visible here rather than silently
+   absorbed. */
+const NO_LIMITS =
+  'Claude Code’s usage panel shows no plan limits for this account, so there is nothing to read.'
+const PANEL_STUCK =
+  'Claude Code’s usage panel was opened to read this and did not close — press Esc in the session.'
 
 interface Case {
   title: string
@@ -266,6 +274,37 @@ const CASES: Case[] = [
       report: report([], CODEX_SILENT, CODEX_ACCOUNT),
       provider: 'codex',
       accountLabel: 'Signed in · ChatGPT',
+      now: NOW,
+    },
+  },
+  {
+    title: 'Asked, answered, stopped — the account has no plan limits',
+    note:
+      'His Windows session. `/usage` was typed once, Claude Code drew its panel, and there was no ' +
+      '“Current session” and no “Current week” anywhere in it — an account billed through the API has no ' +
+      'rolling window to draw. So the app stops asking, says why, and this is the one state with something ' +
+      'to press. Never “Reading…”: that word means wait, and nothing is coming.',
+    props: {
+      report: report([], NOTHING),
+      provider: 'claude',
+      accountLabel: 'imzapremium@gmail.com',
+      blocked: NO_LIMITS,
+      onCheck: () => {},
+      now: NOW,
+    },
+  },
+  {
+    title: 'A panel this app opened and could not close',
+    note:
+      'The failure this feature is not allowed to have, said out loud. The close is verified by reading the ' +
+      'screen back, so this state is reachable at all — the old code wrote one Escape and assumed.',
+    props: {
+      report: report([], NOTHING),
+      provider: 'claude',
+      accountLabel: 'imzapremium@gmail.com',
+      blocked: PANEL_STUCK,
+      residue: true,
+      onCheck: () => {},
       now: NOW,
     },
   },

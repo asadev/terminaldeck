@@ -1,6 +1,7 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Modal } from './Modal'
 import { PageEmpty } from './PageEmpty'
+import { PendingApproval } from '../remote/PendingApproval'
 import './AlertsPanel.css'
 
 /**
@@ -33,9 +34,37 @@ export type AlertKind =
   | 'heavy-session'
   | 'loop'
   | 'dirty-tree'
+  /**
+   * A device has paired and is waiting for somebody here to let it in.
+   *
+   * The one kind in this list the project scan does not produce, because it is
+   * not a fact about a project. `alerts-devices.ts` derives it from the device
+   * roster and the feed folds it in; `src/main/alerts.ts` carries the kind
+   * anyway, so this list stays a mirror of one vocabulary rather than becoming a
+   * second one.
+   */
+  | 'device-pending'
 
 export interface AlertAction {
-  kind: 'open-inspector' | 'focus-session' | 'compact-session' | 'open-git' | 'install-provider'
+  kind:
+    | 'open-inspector'
+    | 'focus-session'
+    | 'compact-session'
+    | 'open-git'
+    | 'install-provider'
+    /**
+     * Open the approval flow for the device named in `target`.
+     *
+     * Answered by this panel rather than handed to `onAction`, and that is a
+     * deliberate exception to how every other action here works. The other five
+     * are navigations into the window behind the sheet, so the sheet closes and
+     * the window carries them out. This one has nowhere to navigate *to* that
+     * would not be "open Settings and find the Remote pane" — the sentence the
+     * whole announcement exists to avoid having to say — so the sheet runs the
+     * flow itself, mounting the same component the settings pane mounts and
+     * ending in the same `remote:device:approve` call.
+     */
+    | 'approve-device'
   label: string
   target?: string
 }
@@ -82,6 +111,17 @@ export interface AlertsPanelProps {
   onRescan?: () => void
   /** Invoked when the user takes an alert's action. */
   onAction?: (action: AlertAction, alert: Alert) => void
+  /**
+   * Open the approval flow for a device that is waiting.
+   *
+   * Supplied by {@link AlertsWindow}, which owns the flow, rather than by the
+   * workspace: approving is the one action on this surface that is carried out
+   * *here* instead of behind the sheet, so the handler is the sheet's own. A
+   * panel rendered without one draws the row and no button, which is the honest
+   * shape — the alert still says a device is waiting, it just cannot offer to do
+   * anything about it.
+   */
+  onApproveDevice?: (deviceId: string) => void
   /**
    * General → "Show insight alerts". Off keeps the alerts that describe the
    * project itself and drops the ones this panel infers from what sessions are
@@ -188,11 +228,38 @@ export function summarize(report: AlertReport | null): string {
 export function AlertRow({
   alert,
   onAction,
+  onApproveDevice,
 }: {
   alert: Alert
   onAction?: (action: AlertAction, alert: Alert) => void
+  /**
+   * Open the approval flow for a device that is waiting. See `approve-device`
+   * on {@link AlertAction} for why this row's button does not go through
+   * `onAction` like the other five.
+   */
+  onApproveDevice?: (deviceId: string) => void
 }) {
   const action = alert.action
+  /*
+   * Which handler this row's button has, if it has one at all.
+   *
+   * Resolved before the render rather than branched inside `onClick`, because
+   * the answer decides whether the button exists. Rule 1.1: a control that
+   * renders without a handler swallows the click and reports nothing, and this
+   * is the row where that would be worst — somebody presses "Review this
+   * device…", nothing happens, and the phone in their hand goes on saying it is
+   * waiting. A missing handler must remove the button, not disable the app.
+   */
+  const press =
+    action === null
+      ? null
+      : action.kind === 'approve-device'
+        ? action.target && onApproveDevice
+          ? () => onApproveDevice(action.target as string)
+          : null
+        : onAction
+          ? () => onAction(action, alert)
+          : null
   return (
     <li
       className="alerts-item"
@@ -228,8 +295,8 @@ export function AlertRow({
             handler is a control that swallows the click and reports nothing —
             which is exactly how "Open the git panel" spent its life re-running
             the scan and never navigating. */}
-        {action && onAction ? (
-          <button type="button" className="alerts-action" onClick={() => onAction(action, alert)}>
+        {action && press ? (
+          <button type="button" className="alerts-action" onClick={press}>
             {action.label}
           </button>
         ) : null}
@@ -247,6 +314,7 @@ export function AlertsPanel({
   available = true,
   onRescan,
   onAction,
+  onApproveDevice,
   showInsights = true,
 }: AlertsPanelProps) {
   /**
@@ -334,7 +402,12 @@ export function AlertsPanel({
             )}
             <ul className="alerts-list">
               {group.alerts.map((alert) => (
-                <AlertRow key={alert.id} alert={alert} onAction={onAction} />
+                <AlertRow
+                  key={alert.id}
+                  alert={alert}
+                  onAction={onAction}
+                  onApproveDevice={onApproveDevice}
+                />
               ))}
             </ul>
           </section>
@@ -386,10 +459,48 @@ export interface AlertsWindowProps extends AlertsPanelProps {
  * render tests run with no document at all.
  */
 export function AlertsWindow({ open, onClose, projectPath, ...panel }: AlertsWindowProps) {
+  /*
+   * The device this sheet is currently approving, or null for the alert list.
+   *
+   * State here rather than in the workspace, because approving is the one thing
+   * on this surface that happens *in* the sheet. Every other action closes the
+   * dialog and acts on the window behind it; this one has nowhere behind it to
+   * go — the flow's three questions are the point, and sending somebody to
+   * Settings to answer them is the failure the announcement exists to remove.
+   *
+   * Cleared on close as well as on finishing, so re-opening the bell never lands
+   * mid-flow on a decision somebody walked away from. Walking away from an
+   * approval leaves the device pending, which is the safe direction and the same
+   * one the settings pane's Cancel takes.
+   */
+  const [approving, setApproving] = useState<string | null>(null)
+  /*
+   * A native folder picker is up inside the flow. The dialog steps aside for it
+   * — see `Modal`'s `hidden`, and the note there about an `NSOpenPanel` being a
+   * separate window that no z-index can be stacked under.
+   */
+  const [picking, setPicking] = useState(false)
+
+  useEffect(() => {
+    if (!open) {
+      setApproving(null)
+      setPicking(false)
+    }
+  }, [open])
+
+  const approvingNow = open && approving !== null
+
   return (
     <Modal
       open={open}
-      title="Alerts"
+      hidden={picking}
+      /*
+       * The title follows what is in the body. A sheet headed "Alerts" while it
+       * asks whether to hand a stranger a shell is a dialog whose title is about
+       * the last screen — and this is the one screen in the app where being clear
+       * about what is being decided is the whole design.
+       */
+      title={approvingNow ? 'Let a device in' : 'Alerts'}
       /*
        * No description, for the reason Settings gives at length: the panel's own
        * summary line is the description — "2 needing you now", or "Nothing needs
@@ -399,13 +510,21 @@ export function AlertsWindow({ open, onClose, projectPath, ...panel }: AlertsWin
        */
       onClose={onClose}
       size="lg"
+      /*
+       * No footer during the flow. `DeviceApproval` draws its own Cancel, Back
+       * and "Let it in" along the bottom, and a second row underneath it with a
+       * Done button of its own would put two ways out side by side — one of which
+       * quietly abandons a decision half-made.
+       */
       footer={
-        <button type="button" className="modal-btn primary" onClick={onClose}>
-          Done
-        </button>
+        approvingNow ? undefined : (
+          <button type="button" className="modal-btn primary" onClick={onClose}>
+            Done
+          </button>
+        )
       }
     >
-      {projectPath === null ? (
+      {projectPath === null && (panel.report?.alerts.length ?? 0) === 0 ? (
         /*
          * No button on this one, deliberately.
          *
@@ -419,12 +538,34 @@ export function AlertsWindow({ open, onClose, projectPath, ...panel }: AlertsWin
          * what is missing, and the rail behind the scrim still has the ＋ that
          * opens one.
          */
+        /*
+         * Only when there is genuinely nothing to say.
+         *
+         * It used to be the answer to "no project open" full stop, and that was
+         * right while every alert was about a project. One is not: a device
+         * waiting to be approved is a fact about this computer, it is equally
+         * true with no folder open, and a fresh install with nothing open is
+         * precisely where somebody pairs their first phone. Drawing this in
+         * front of a report that has something in it would be the app knowing a
+         * person is waiting and printing a sentence about folders.
+         */
         <PageEmpty icon={ALERTS_GLYPH} title="No project open">
           Alerts are about the project you have open — what is blocked in it, what is filling up,
           what it is waiting on you for. Open one and this will have something to say.
         </PageEmpty>
+      ) : approving !== null ? (
+        /*
+         * The same flow the settings pane runs, on the same device, ending in
+         * the same call — see `PendingApproval`, which exists to be mounted from
+         * more than one place without becoming a second way in.
+         */
+        <PendingApproval
+          deviceId={approving}
+          onDone={() => setApproving(null)}
+          onPicking={setPicking}
+        />
       ) : (
-        <AlertsPanel {...panel} />
+        <AlertsPanel {...panel} onApproveDevice={setApproving} />
       )}
     </Modal>
   )

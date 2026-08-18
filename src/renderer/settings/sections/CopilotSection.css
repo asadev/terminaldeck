@@ -17,6 +17,13 @@
  * theme, without a second rule.
  */
 
+/* Nothing in this file styles a path, a chip, a numbered startup row or a memory
+   fact any more, because none of those is on the pane. They went in two passes —
+   the memory list and the startup list on 2026-08-17, the credential chips and
+   the refused-path list on 2026-08-18 — and the rules went with them rather than
+   being left behind as selectors that match nothing. A stylesheet full of dead
+   classes is a stylesheet nobody trusts to describe the screen. */
+
 /* ---------------------------------------------------------------- headings */
 
 /* The one line under a block's heading, holding the rhythm the flat sheet
@@ -27,66 +34,6 @@
    62-character measure; only the spacing is this pane's. */
 .copilot-says {
   margin: 0 0 var(--sp-2);
-}
-
-/* ------------------------------------------------------------------ asides */
-
-/* A sentence that qualifies the control above it rather than introducing the
-   one below. Held closer to what it belongs to than the twenty pixels that
-   separate two list entries, so it reads as part of that thing. */
-.copilot-aside {
-  display: block;
-  margin-top: var(--sp-2);
-}
-
-/* --------------------------------------------------------- startup files */
-
-/* The startup list is the one place in this pane where *order* is the content —
-   these files are read in this sequence, and a person asking "what did it read
-   before it said that" is asking about the sequence. So it is an <ol> with the
-   number drawn rather than a bulleted run of paths. */
-.copilot-ordered {
-  counter-reset: none;
-}
-
-.copilot-ordinal {
-  flex-shrink: 0;
-  width: 20px;
-  font-family: var(--font-mono);
-  font-size: var(--t-caption);
-  color: var(--text-muted);
-  text-align: right;
-  /* Aligned with the file name rather than centred on a three-line entry: the
-     number labels the name, not the block. */
-  align-self: flex-start;
-  padding-top: 1px;
-}
-
-/* A path and the button that opens it, on one line, with the path allowed to
-   run out of room rather than pushing the button off the edge. */
-.copilot-pathline {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-}
-
-.copilot-pathline .settings-path {
-  flex: 1;
-  min-width: 0;
-}
-
-/* -------------------------------------------------------- the instructions */
-
-/* CLAUDE.md gets its own stack under the file list because it is the one file
-   here that has a *state* — shipped, out of date, or somebody's own writing —
-   and an offer attached to that state. It is separated by space, per the house
-   rule, and not by a box. */
-.copilot-instructions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  margin-top: var(--sp-6);
 }
 
 /* ---------------------------------------------------------------- editors */
@@ -148,15 +95,6 @@
    above it as though it were that label's help text. */
 .copilot-editor-problem {
   margin-top: var(--sp-2);
-}
-
-/* ---------------------------------------------------------------- memory */
-
-.copilot-fact .settings-code {
-  /* Slightly tighter than the standing maximum: a memory file is a paragraph
-     with front matter, and giving it the full 280px well makes one expanded
-     fact taller than the three collapsed ones around it. */
-  max-height: 200px;
 }
 
 /* ------------------------------------------------------------ action log */
@@ -225,44 +163,6 @@
   font-family: var(--font-mono);
   font-size: var(--t-footnote);
   color: var(--text-primary);
-}
-
-/* ------------------------------------------------------------- boundaries */
-
-/* The carved-out credential kinds. Chips rather than a comma list because there
-   are eleven of them and a reader scanning for "ssh-private-key" finds it far
-   faster in a grid than in a sentence.
-
-   Deliberately *not* the mono face. These are the names of rules in the
-   generated sandbox profile — `dotenv`, `registry-auth` — and a code face would
-   present them as the filenames that get refused, which is a different and
-   untrue claim. Mono in this pane means "this is a literal string on your
-   disk", and it has to keep meaning only that. */
-.copilot-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-1);
-  margin-top: var(--sp-1);
-}
-
-.copilot-chip {
-  padding: 1px var(--sp-15);
-  border-radius: var(--radius-sm);
-  background: var(--fill-tertiary);
-  font-size: var(--t-caption);
-  color: var(--text-secondary);
-}
-
-/* A bare list of paths inside a row — the granted projects. No bullets, no
-   inset, so the paths line up with the sentence above them. */
-.copilot-plain {
-  list-style: none;
-  margin: var(--sp-1) 0 0;
-  padding: 0;
-}
-
-.copilot-plain > * + * {
-  margin-top: var(--sp-05);
 }
 
 /* ---------------------------------------------------------------- routines */

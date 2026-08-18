@@ -25,6 +25,7 @@ import {
   isTranscriptPath,
   listTranscripts,
   readTranscript,
+  SCAN_FACTOR,
   transcriptDir,
   transcriptDirs,
   TranscriptWatcher,
@@ -203,17 +204,39 @@ export function registerCostIpc(ipcMain: IpcMain): void {
     // gives at the same point: the cap is an answer about the project, so
     // applying it per directory would make the number depend on how many devices
     // had been paired.
-    const files = (await Promise.all(transcriptDirs(key).map((dir) => listTranscripts(dir))))
+    const all = (await Promise.all(transcriptDirs(key).map((dir) => listTranscripts(dir))))
       .flat()
       .sort((a, b) => b.modifiedAt - a.modifiedAt)
-      .filter((file) => file.modifiedAt >= cutoff)
-      .slice(0, DEFAULT_MAX_SESSIONS)
+    const recent = all.filter((file) => file.modifiedAt >= cutoff)
+    const candidates = recent.slice(0, DEFAULT_MAX_SESSIONS * SCAN_FACTOR)
 
+    /*
+     * Read until `DEFAULT_MAX_SESSIONS` transcripts have actually recorded
+     * something, not until that many files have been opened.
+     *
+     * This is the same correction `TranscriptWatcher.drain` makes, and it has to
+     * be made here as well because this is the path the Overview tile takes on a
+     * folder with nothing running in it — `cost:project`, not `cost:watch`. With
+     * the cap counted in files, the tile read "Nothing recorded yet" over the
+     * folder this app is built in, whose 40 newest transcripts are all sessions
+     * that were opened and closed without being given anything to do. The
+     * measurements, and why the ceiling is what it is, are on `SCAN_FACTOR`.
+     */
     const summaries: SessionSummary[] = []
-    for (const file of files) {
-      summaries.push(await readTranscript(file.path))
+    let carrying = 0
+    let read = 0
+    for (const file of candidates) {
+      if (carrying >= DEFAULT_MAX_SESSIONS) break
+      read += 1
+      const summary = await readTranscript(file.path)
+      summaries.push(summary)
+      if (summary.requests > 0) carrying += 1
     }
-    return summarizeStandalone(key, summaries)
+
+    // Whatever was never opened — too old, past the ceiling, or beyond the point
+    // the scan had found what it needed. `summarizeStandalone` turns the count
+    // into the sentence the tile prints; see `ProjectSummary.truncated`.
+    return summarizeStandalone(key, summaries, all.length - read)
   })
 
   ipcMain.handle('cost:session', (_e: IpcMainInvokeEvent, transcriptPath: string) =>
@@ -258,8 +281,21 @@ export function registerCostIpc(ipcMain: IpcMain): void {
   }))
 }
 
-/** Roll session summaries up into a project summary without a watcher. */
-function summarizeStandalone(cwd: string, sessions: SessionSummary[]): ProjectSummary {
+/**
+ * Roll session summaries up into a project summary without a watcher.
+ *
+ * `unread` is how many of the folder's transcripts were never opened — by the
+ * age cutoff, by the ceiling on how far back the scan looks, or because it had
+ * already found as much work as it was asked for. It is passed in rather than
+ * inferred because only the caller knows what it skipped, and the tile's
+ * sentence turns on it: a total drawn from part of a folder may not be described
+ * as *"every request your agents made"* in it.
+ */
+function summarizeStandalone(
+  cwd: string,
+  sessions: SessionSummary[],
+  unread: number,
+): ProjectSummary {
   const ordered = [...sessions]
     .filter((session) => session.requests > 0)
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
@@ -284,6 +320,7 @@ function summarizeStandalone(cwd: string, sessions: SessionSummary[]): ProjectSu
     requests,
     activeSessionId: ordered[0]?.sessionId ?? null,
     scanning: false,
+    truncated: unread > 0,
     updatedAt: Date.now(),
   }
 }

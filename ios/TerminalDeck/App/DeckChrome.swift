@@ -11,13 +11,21 @@
  * here only on the homepage or machines or settings, but not inside the session
  * and not also inside the localhost page."*
  *
+ * And a night later, on the copilot, which is the same complaint about the third
+ * screen that ends in a text field: *"if we are on copilot on mobile version,
+ * now if we want to type here, the pill is still there. Why is the pill there if
+ * we can type here? Either we will type or we will use the pill. So pill should
+ * not be inside the chat box — there should be a back button to go back on
+ * home."*
+ *
  * The rule is not "hide it on anything that was pushed". Machines is pushed —
  * it is a row inside Settings now — and it keeps the bar, because he named it as
  * one of the three places the bar belongs. What loses the bar is a screen that is
- * *the whole thing you came for*: a terminal, and a page from the machine. Both
- * are surfaces you look at rather than places you are passing through, both are
- * the full height of the phone, and on both the bar was covering the bottom of
- * the content while pointing at somewhere else.
+ * *the whole thing you came for*: a terminal, a page from the machine, and the
+ * conversation with the copilot. All three are surfaces you look at rather than
+ * places you are passing through, all three are the full height of the phone,
+ * and on all three the bar was covering the bottom of the content while pointing
+ * at somewhere else.
  *
  * ## Why this is a function rather than a modifier on each screen
  *
@@ -72,23 +80,36 @@ enum DeckSurface: Hashable, CaseIterable {
     /// A page from the machine, pushed from the Localhost tab.
     case localhostPage
     /**
-     * The copilot conversation — **a tab**, and therefore one that keeps the bar.
+     * The copilot conversation — a tab, and one that **hides** the bar anyway.
      *
-     * This answer is the opposite of what it was, and the fact underneath it
-     * changed rather than the judgement. While the copilot was a screen *pushed
-     * from the session list* it was the pill complaint exactly — full height,
-     * the whole thing you came for, and a text field at the bottom with the bar
-     * floating over it: *"when this keyboard is down, see the pill is still
-     * there."* Hiding the bar cost nothing there, because the chevron was how
-     * you left.
+     * This answer has now been given three times and the reasoning is worth
+     * keeping whole, because each answer was right about the app it was written
+     * against and somebody will otherwise re-derive the middle one.
      *
-     * *"A fourth pill, and the copilot goes leftmost"* moved it, and a tab that
-     * hides its own tab bar is a screen with **no way out**. There is no
-     * chevron over a tab's root and no gesture that pops one. So the bar stays,
-     * and the composer sits above it rather than under it — `CopilotView` puts
-     * the footer in a bottom `safeAreaInset`, which is measured against the bar's
-     * own safe area, so the two do not overlap. Verified by looking, in both
-     * appearances, which is the only way this class of thing is ever verified.
+     * **First: hidden.** The copilot was a screen *pushed from the session
+     * list*, and it was the pill complaint exactly — full height, the whole
+     * thing you came for, and a text field at the bottom with the bar floating
+     * over it: *"when this keyboard is down, see the pill is still there."*
+     * Hiding the bar cost nothing, because the chevron was how you left.
+     *
+     * **Then: shown.** *"A fourth pill, and the copilot goes leftmost"* made it
+     * a tab, and a tab that hides its own tab bar is a screen with **no way
+     * out** — there is no chevron over a tab's root and no gesture that pops
+     * one. So the bar came back and the composer was lifted above it with a
+     * bottom `safeAreaInset`.
+     *
+     * **Now: hidden again, because he supplied the missing way out himself.**
+     * *"Pill should not be inside the chat box — there should be a back button
+     * to go back on home."* The whole case for the bar was that nothing else
+     * could leave the screen; a back button leaves it. So the premise is gone
+     * rather than the judgement being reversed, and what is left is the original
+     * complaint, unchanged and now unanswered by anything else: a composer with
+     * a floating pill sitting over it is two things competing for one thumb.
+     *
+     * `CopilotView` draws that button in `.topBarLeading` and it calls
+     * `DeckModel.leaveCopilot()`, which is what makes this safe — the surface
+     * still has exactly one way home, it is simply not the tab bar any more. Do
+     * not hide the bar here without checking that button is still there.
      */
     case copilot
 }
@@ -98,9 +119,9 @@ enum DeckChrome {
     /// Whether the tab bar is drawn over this screen.
     static func showsTabBar(on surface: DeckSurface) -> Bool {
         switch surface {
-        case .copilot, .sessions, .localhost, .settings, .machines:
+        case .sessions, .localhost, .settings, .machines:
             return true
-        case .session, .localhostPage:
+        case .session, .localhostPage, .copilot:
             return false
         }
     }

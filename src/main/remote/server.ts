@@ -1420,7 +1420,18 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // on the owner's screen, which is driving the machine rather than reaching a
     // folder. One eligibility question behind both, so a device cannot be a
     // guest for one and an owner for the other.
-    return advertised.filter((name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web)
+    //
+    // And `localhost` goes with those two, which is the newer half of the rule
+    // and the one that needed deciding rather than copying. See
+    // {@link localhostAllowed} for the argument; the short form is that a port
+    // cannot be attributed to a folder, so there is nothing for a folder grant
+    // to be checked against and the only two honest rules are every port or
+    // none. A guest gets none, and is not told the capability exists — because a
+    // client that is told draws the tab, and a tab that refuses on every press
+    // is worse than one that was never there.
+    return advertised.filter(
+      (name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web && name !== CAPABILITY.localhost,
+    )
   }
 
   /**
@@ -1535,6 +1546,61 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    * hello, or whose device a human has not approved, never reaches the call.
    * See `tunnel.ts` for what the hub itself will and will not dial.
    */
+  /**
+   * May this device see what is listening here, and tunnel to it?
+   *
+   * ## The rule, stated
+   *
+   * **The port list and every tunnel are for a device of your own. A guest gets
+   * neither.**
+   *
+   * ## Why it is not scoped to the folders a guest was granted
+   *
+   * Folder enforcement landed on `list`, `attach`, `create` and `close`, and the
+   * obvious next move is to make a port the fifth door with the same key: show a
+   * guest the ports belonging to the projects it may reach. That cannot be
+   * built honestly. A port scan reads the process table — `lsof` here, `netstat`
+   * plus `tasklist` on Windows — and what it can say is *which command holds
+   * :5173*. It cannot say which project that command was started in: the process
+   * may have been launched from a parent directory, may be a proxy in front of
+   * three apps, may be a database or a container's published port with no
+   * project anywhere near it. A filter built on that is a guess wearing the
+   * clothes of a permission, and this app has a standing rule against exactly
+   * that — a control that looks precise and is not is worse than no control.
+   *
+   * So the two available rules are *every port* or *no port*, and the safe end
+   * of that is the one that does not hand somebody's guest a byte pipe to
+   * whatever else happens to be running on this machine: an admin console, a
+   * staging database's web UI, another service's dev build. None of those is in
+   * a folder, so none of them is covered by the thing a guest was actually
+   * granted.
+   *
+   * ## Why it is the same question as `web` and the copilot
+   *
+   * Because it is the same *kind* of question. A folder grant answers "which
+   * files may this device reach"; these three answer "may this device drive the
+   * machine itself". One eligibility rule behind all three, so a device cannot
+   * be a guest for one and an owner for another — which is also why this reads
+   * `copilotEligible` rather than growing a fourth callback that could one day
+   * disagree with it.
+   *
+   * ## What a guest loses, said plainly
+   *
+   * The localhost tab on a guest's phone. That is a real feature going away for
+   * a real person, and it is the right direction: a guest is somebody being lent
+   * a folder, and until today six typed digits also lent them every port on the
+   * machine.
+   */
+  function localhostAllowed(connection: LiveConnection, deviceId: string): boolean {
+    if (copilotEligible(deviceId)) return true
+    send(connection, {
+      t: 'error',
+      code: 'unauthorized',
+      message: 'Only your own devices can reach the ports on this machine.',
+    })
+    return false
+  }
+
   function hubFor(connection: LiveConnection): TunnelHub {
     if (connection.tunnels) return connection.tunnels
     const hub = createTunnelHub({
@@ -2913,6 +2979,15 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         // Listed one by one rather than caught by a default, so that adding a
         // verb to the protocol without deciding where it belongs stops the
         // build instead of quietly falling through to the tunnel hub.
+        //
+        // Checked here rather than only in the advertisement, and the difference
+        // is the whole of it: `capabilitiesFor` decides what a *client of ours*
+        // draws, and this decides what *any* client gets. A build that is older
+        // than the rule, or one somebody wrote themselves, sends these frames
+        // without having read the welcome. The refusal is a sentence on a
+        // channel that stays open, because a device being told "not you" must
+        // not also lose the terminal it is holding.
+        if (!localhostAllowed(connection, connection.deviceId)) return
         hubFor(connection).handle(message satisfies LocalhostMessage)
         return
       case 'web.open':
@@ -3928,7 +4003,40 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
 
 /* --------------------------------------------------------------------- ipc -- */
 
-/** Main → renderer. Fires when a phone authenticates, attaches, detaches or leaves. */
+/**
+ * Main → renderer. **The remote picture changed** — go and read it again.
+ *
+ * It began as a narrower promise: a phone authenticating, attaching, detaching
+ * or leaving. That was every change a *connection* could undergo, and it left
+ * out the one change that matters most to somebody sitting in front of the app,
+ * because it is not a connection change at all.
+ *
+ * **A device pairing produces no connection.** `authenticatorFor` redeems the
+ * code, creates the row, and then deliberately refuses the socket — a pairing
+ * token can be photographed off a screen, so a human at this machine has to
+ * approve the device before it is admitted. The refused socket never gets a
+ * `deviceId`, and `publicConnections` skips anything without one, so the
+ * connection list is byte-for-byte identical before and after the single most
+ * consequential thing that can happen on this surface. Nothing fired. The
+ * settings pane that was *already open on the pairing screen* — the pane you
+ * are necessarily looking at, because it is where the six digits came from —
+ * went on showing a list with no waiting device in it, and stayed that way
+ * until something else happened to make it re-read. That is the likeliest
+ * explanation for four browser pairings watched sitting pending through
+ * repeated approval attempts: they had paired, and no surface in the app had
+ * been told.
+ *
+ * So the channel now means what both of its listeners already treated it as
+ * meaning. Neither reads the payload to decide what changed — `RemoteSection`
+ * says so in as many words ("the payload is ignored on purpose: one read is one
+ * source of truth") and the alerts feed does the same — they re-read. Widening
+ * a signal that is already used as a bare nudge costs one extra read on a rare
+ * event and closes the hole; narrowing it to connections alone was never a
+ * property anything relied on.
+ *
+ * Fired for: a phone authenticating, attaching, detaching or leaving; **and** a
+ * device pairing, being approved, or being revoked.
+ */
 export const REMOTE_CONNECTIONS_CHANNEL = 'remote:connections'
 
 /**
@@ -4239,9 +4347,61 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     ? relayFor(deps.storageDir, relayUrl(env, deps.relayUrl), auth, desk, deps.onRelayState)
     : null
 
+  /**
+   * Tell every window that the remote picture moved.
+   *
+   * A function declaration rather than a `const`, because it is referenced from
+   * inside the `createRemoteServer` call below — hoisting is what lets the
+   * pairing hook be written where the pairing happens rather than being patched
+   * on afterwards. It reads `server` only when it runs, which is always long
+   * after the assignment completes.
+   *
+   * The payload is the live connection list, which is usually *unchanged* at
+   * the three moments this is called from. That is not a lie and not padding:
+   * both listeners re-read the whole state and ignore what arrives, so the
+   * payload's only job is to be true, and the true current list is what it is.
+   * See {@link REMOTE_CONNECTIONS_CHANNEL} for why the signal was widened.
+   */
+  function announceRemoteChange(): void {
+    deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, server.connections())
+  }
+
   const server = createRemoteServer({
     sessions: deps.sessions,
-    auth: authenticatorFor(auth, desk, deps.onDevicePaired),
+    /*
+     * The pairing hook, wired for every host rather than only the headless one.
+     *
+     * `deps.onDevicePaired` is the demo box's private arrangement — it approves
+     * from a broker allocation — and it is still called, unchanged and first,
+     * because it is the one caller whose behaviour depends on running before the
+     * refusal frame goes out (see {@link RemoteIpcDeps.onDevicePaired}). What is
+     * added around it is the thing every host needs and none had: the window is
+     * told, so the device that just paired is visible somewhere other than in a
+     * settings pane that happens to be re-read.
+     *
+     * Wrapped in nothing here — `authenticatorFor` already swallows a throw from
+     * this callback, and it must, because the pairing code has been burned by
+     * this point and a listener that failed would strand the device forever.
+     */
+    auth: authenticatorFor(auth, desk, (device) => {
+      /*
+       * The announcement goes first, and inside its own guard.
+       *
+       * `authenticatorFor` wraps this whole callback in a try/catch, so an
+       * exception anywhere in it is swallowed and the pairing still completes —
+       * which is correct and is why the two halves must not be able to take each
+       * other down. If the demo box's hook threw and the announcement came
+       * after, the window would never hear about a device that had genuinely
+       * paired; guarding the broadcast separately, and running it first, means
+       * neither half can silence the other whichever one fails.
+       */
+      try {
+        announceRemoteChange()
+      } catch (error) {
+        console.error('[remote] could not announce a new pairing to the window:', error)
+      }
+      deps.onDevicePaired?.(device)
+    }),
     webRoot: deps.webRoot,
     certDir: deps.storageDir,
     ...(deps.uploadsDir ? { uploadsDir: deps.uploadsDir } : {}),
@@ -4433,6 +4593,17 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
         deps.folders.forget(id)
       }
       auth.approveDevice(id)
+      /*
+       * And every other surface is told the wait is over.
+       *
+       * The window that pressed Approve gets the roster back as this call's
+       * answer and needs nothing else. The *other* surfaces do: the bell counts
+       * devices waiting for approval, and a badge that clears only when
+       * something else happens to make it re-read is a badge that says a person
+       * is still waiting after they have been let in. Approving in Settings must
+       * put the bell out, and this is the only moment that knows it happened.
+       */
+      announceRemoteChange()
       return auth.listDevices()
     },
   )
@@ -4482,6 +4653,15 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
        * supported path and the file has no other door.
        */
       deps.kinds.forget(id)
+      /*
+       * And the announcement, for the same reason approval makes one: Deny is
+       * how a waiting device is answered *no*, and a bell that went on counting
+       * a device somebody had already refused would be a count nothing could
+       * clear. Inside the `if`, unlike approval's, because `revokeDevice`
+       * answers false for a device that was already revoked and there is
+       * nothing to announce about a no-op.
+       */
+      announceRemoteChange()
     }
     return auth.listDevices()
   })

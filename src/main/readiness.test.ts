@@ -375,6 +375,32 @@ describe('scanReadiness — an empty folder', () => {
     expect(report.band).toBe('at-risk')
   }, 20_000)
 
+  /**
+   * The naming rule, at the one readiness row that had a vendor's filename in
+   * its prose.
+   *
+   *   > *"You should not mention in any settings or any pop-up a specific tool
+   *   > or LLM, because they can use some other also."*
+   *
+   * Two assertions in opposite directions, because this row has to do two
+   * things at once and the easy mistakes are the ones that do only one. The
+   * finding describes the category and names nothing; the fix beside it names
+   * exactly what it will write, because what lands in somebody's repository is
+   * a fact about their filesystem and they are entitled to it before they press
+   * a button. Deleting the second in the name of neutrality would be the worse
+   * failure of the two.
+   */
+  it('states the finding without naming any agent’s filename', async () => {
+    const report = await scanReadiness(await tempProject())
+    const row = byId(report, 'claude-md')
+    for (const name of ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md', 'Claude', 'Codex', 'Gemini']) {
+      expect(row.detail, `the finding says ${name}`).not.toContain(name)
+    }
+    // And the disclosure, still there, on the thing that acts.
+    expect(row.fix?.description).toContain('CLAUDE.md')
+    expect(row.fix?.label).toBe('Create instructions file')
+  }, 20_000)
+
   it('offers a fix for every missing foundation', async () => {
     const dir = await tempProject()
     const report = await scanReadiness(dir)

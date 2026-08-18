@@ -144,6 +144,28 @@ export interface WorkspaceTabStripProps {
    */
   onShowInstead(id: string | null): void
   /**
+   * The ✕ on a tab whose session is running on **another machine**.
+   *
+   * A separate handler from {@link onShowInstead} because it is a separate act,
+   * and the difference is the one thing about this bar that has to be understood
+   * before anything else on it makes sense. A local pill's ✕ takes the tab off
+   * the strip and leaves the session running — *"it should not delete the
+   * session… side panel will have everything inside"* — and that reading works
+   * because the rail still holds the row and the process is this app's.
+   *
+   * A remote session is different in the one way that matters here: he asked for
+   * the ✕ on its pill to mean what Close on its machine's heading means, which
+   * is *"It will just close all of the sessions from that PC… it should not
+   * disconnect the remote account."* So this ends the session where it is
+   * running. The caller routes it through the same confirmation every other
+   * close in the window gets; nothing about the decision is made in this file.
+   *
+   * Optional, and absent is a real state: a host with no way to end a remote
+   * session — a test, the harness mounting this bare — draws no ✕ on a remote
+   * tab at all rather than one that cannot act.
+   */
+  onEndRemote?(id: string): void
+  /**
    * The terminal icon after the last tab.
    *
    * It opens the **new-session dialog**, not a session: *"we just always wanted
@@ -199,6 +221,7 @@ export function WorkspaceTabStrip({
   covered = false,
   onSelect,
   onShowInstead,
+  onEndRemote,
   onNewSession,
   onNewBrowserTab,
   sidebarHidden = false,
@@ -648,7 +671,10 @@ export function WorkspaceTabStrip({
                 </button>
 
                 {/*
-                  Off the bar, not closed.
+                  Off the bar, not closed — unless the session is on another
+                  machine, in which case it is exactly closed.
+
+                  ## The local case, which is most of them
 
                   The label says the whole sentence rather than the verb, because
                   this is the one control in the window whose obvious reading is
@@ -657,20 +683,57 @@ export function WorkspaceTabStrip({
                   session, and asks first — says so in its own tooltip and turns
                   red under the pointer. Neither of them is subtle enough to be
                   mistaken for the other once you have read either one.
+
+                  ## The remote case, and why it is the other thing
+
+                  A local pill can afford to be harmless because the rail keeps
+                  the row and the process is this app's; "off the bar" is a
+                  complete and honest description of what happened. For a session
+                  on another machine, Asad asked for the ✕ to mean what Close on
+                  that machine's heading means — end it there, keep the machine —
+                  and that is what it does, through the caller's confirmation.
+
+                  The tooltip is therefore not the same sentence, and it should
+                  not be: two controls that do opposite things must not describe
+                  themselves identically. `--color-critical` on hover comes from
+                  `[data-ends]` in the stylesheet, which is the same mark the
+                  rail's ✕ wears for the same reason.
+
+                  ## And it is absent rather than inert when it cannot act
+
+                  A machine on an older build never advertised `close`, so the
+                  tab arrives with `closable: false` and gets no ✕. It can still
+                  be taken off the strip — dragged out of the bar, or folded back
+                  from its row in the rail — so nothing is trapped up here; what
+                  is missing is only the control that would have lied.
                 */}
-                <button
-                  type="button"
-                  className="strip-tab-close"
-                  // See the guard in `onDragStart` above: the tab is draggable,
-                  // and without this marker a press that slides a few pixels
-                  // reorders the strip instead of taking this tab off it.
-                  data-no-drag=""
-                  aria-label={`Remove ${full} from the top bar`}
-                  title="Remove from the top bar. It keeps running, in the sidebar."
-                  onClick={() => removeTab(tab.id)}
-                >
-                  <Glyph path={CLOSE} />
-                </button>
+                {(!tab.machine || (tab.closable && onEndRemote !== undefined)) && (
+                  <button
+                    type="button"
+                    className="strip-tab-close"
+                    data-ends={tab.machine ? '' : undefined}
+                    // See the guard in `onDragStart` above: the tab is draggable,
+                    // and without this marker a press that slides a few pixels
+                    // reorders the strip instead of taking this tab off it.
+                    data-no-drag=""
+                    aria-label={
+                      tab.machine
+                        ? `Close ${full} on ${tab.machine.name} — ends the session`
+                        : `Remove ${full} from the top bar`
+                    }
+                    title={
+                      tab.machine
+                        ? `Close ${full} — ends the session on ${tab.machine.name}. That machine stays connected.`
+                        : 'Remove from the top bar. It keeps running, in the sidebar.'
+                    }
+                    onClick={() => {
+                      if (tab.machine) onEndRemote?.(tab.id)
+                      else removeTab(tab.id)
+                    }}
+                  >
+                    <Glyph path={CLOSE} />
+                  </button>
+                )}
               </div>
             )
           })}

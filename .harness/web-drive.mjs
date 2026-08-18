@@ -395,7 +395,18 @@ if ((await row.count()) > 0) {
  * palette that agrees with itself can still leave a new surface unreadable, and
  * every surface on the Settings, Machines and grouped Localhost screens is new.
  */
-await page.locator('.appearance__choice', { hasText: 'Dark' }).click()
+/*
+ * One icon now, not three pills — *"you can just give one small icon for
+ * switching"* — so dark is reached by pressing it until the document says so
+ * rather than by clicking a pill labelled Dark. Bounded, because a control that
+ * had stopped cycling would otherwise spin here forever.
+ */
+for (let press = 0; press < 4; press += 1) {
+  const said = await page.evaluate(() => document.querySelector('.appearance')?.getAttribute('aria-label') ?? '')
+  if (said.includes('dark')) break
+  await page.locator('.appearance').click()
+  await page.waitForTimeout(250)
+}
 await page.waitForTimeout(400)
 await tab('Localhost')
 await page.waitForTimeout(2000)

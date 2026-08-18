@@ -387,6 +387,18 @@ const api = {
   createMachineSession: (id: string, cwd?: string, provider?: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:create', id, cwd ?? '', provider ?? ''),
   /*
+   * Ending a session on the other machine, which is not the same act as
+   * detaching from it two lines up.
+   *
+   * `detach` stops the bytes; this stops the process, for everyone attached, and
+   * there is nothing to recover from afterwards. It is here because the window
+   * now draws a ✕ on a remote session's pill and on its row in the rail, and
+   * both of those had to mean something real rather than removing a pill from a
+   * bar while the agent kept running on a computer nobody was looking at.
+   */
+  closeMachineSession: (id: string, sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:close', id, sessionId),
+  /*
    * Remote localhost, in the direction this desktop could not go.
    *
    * `web.open` has been on the wire since the web client needed it, and only the
@@ -397,6 +409,18 @@ const api = {
   refreshMachinePorts: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:ports', id),
   openOnMachine: (id: string, url: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:open', id, url),
+  /*
+   * And the third verb, which is the one the browser needed.
+   *
+   * `openOnMachine` puts a page on the *other* machine's screen. This brings the
+   * page *here*: the main process opens a loopback address on this machine that
+   * carries bytes to that port over there, and answers with a URL this window's
+   * browser opens like any other. His words for why it has to be a URL rather
+   * than a second kind of view — *"shape of the application should not be
+   * changing for local and remote devices"*.
+   */
+  reachOnMachine: (id: string, port: number): Promise<unknown> =>
+    ipcRenderer.invoke('machines:reach', id, port),
   onMachinesState: (cb: (view: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, view: unknown) => cb(view)
     ipcRenderer.on('machines:state', handler)
@@ -418,8 +442,12 @@ const api = {
   // nothing to return and nothing to await.
   watchPlanLimits: (sessionId: string): Promise<unknown> =>
     ipcRenderer.invoke('plan:watch', sessionId),
-  refreshPlanLimits: (sessionId: string): Promise<unknown> =>
-    ipcRenderer.invoke('plan:refresh', sessionId),
+  // `force` is a person pressing rather than the app deciding to ask. A session
+  // that has already established there is nothing to read — no plan limits on
+  // this account, or a panel that would not close — is left alone by everything
+  // except that press. See `refresh` in `src/main/plan-limit.ts`.
+  refreshPlanLimits: (sessionId: string, force = false): Promise<unknown> =>
+    ipcRenderer.invoke('plan:refresh', sessionId, force),
   unwatchPlanLimits: (sessionId: string): void => ipcRenderer.send('plan:unwatch', sessionId),
   onPlanLimits: (cb: (sessionId: string, payload: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, sessionId: string, payload: unknown) =>
@@ -722,6 +750,29 @@ const api = {
     ipcRenderer.invoke('copilot:read-instructions'),
   copilotWriteInstructions: (text: string): Promise<unknown> =>
     ipcRenderer.invoke('copilot:write-instructions', text),
+  /**
+   * The *folder's* own instruction file — the other half of the same act.
+   *
+   * The pair above edits the copilot layer, which lives under `<userData>` and is
+   * this app's to write. This pair edits the file in the working directory, which
+   * belongs to whoever chose that folder, and it exists because that is the file
+   * carrying the copilot's character whenever somebody has pointed it at a
+   * workspace of their own: its name, what it calls them, what it is for. The
+   * settings pane sent people to Finder for it until the 2026-08-17 review —
+   * *"every file needs an Edit button beside it"* — and Finder is not an editor
+   * in this app.
+   *
+   * The promise the folder feature turns on is untouched. This app still writes
+   * nothing into a chosen folder **of its own accord**; this channel carries one
+   * press of Save on text the person is looking at, which is the same act as
+   * opening the file in their own editor. And as with every other copilot
+   * channel, no path crosses this bridge: the folder was decided in the main
+   * process and a page has no way to name a different one.
+   */
+  copilotReadFolderInstructions: (): Promise<unknown> =>
+    ipcRenderer.invoke('copilot:read-folder-instructions'),
+  copilotWriteFolderInstructions: (text: string): Promise<unknown> =>
+    ipcRenderer.invoke('copilot:write-folder-instructions', text),
   /**
    * Put this build's `CLAUDE.md` back, keeping whatever was there as a `.bak`.
    *

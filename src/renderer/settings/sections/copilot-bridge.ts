@@ -36,6 +36,20 @@ export interface CopilotBridge {
   copilotReadInstructions(): Promise<unknown>
   copilotWriteInstructions(text: string): Promise<unknown>
   copilotResetInstructions(): Promise<unknown>
+  /**
+   * The folder's own instruction file, read and written.
+   *
+   * A separate pair from the two above because it is a separate file with a
+   * separate owner: those edit the copilot layer under `<userData>`, which is
+   * this app's, and these edit the file in the working directory, which belongs
+   * to whoever chose that folder. The row used to open Finder; the 2026-08-17
+   * review — *"every file needs an Edit button beside it"* — is why it does not.
+   *
+   * There is still no path on this bridge. The folder was decided in the main
+   * process, so a page can say *what* to save and never *where*.
+   */
+  copilotReadFolderInstructions(): Promise<unknown>
+  copilotWriteFolderInstructions(text: string): Promise<unknown>
   /* the app's half, read-only — there is no writer behind either of these */
   copilotReadContract(): Promise<unknown>
   copilotReadComposed(): Promise<unknown>
@@ -101,6 +115,8 @@ const BRIDGE_METHODS: ReadonlyArray<keyof CopilotBridge> = [
   'copilotReadInstructions',
   'copilotWriteInstructions',
   'copilotResetInstructions',
+  'copilotReadFolderInstructions',
+  'copilotWriteFolderInstructions',
   'copilotReadContract',
   'copilotReadComposed',
   'copilotFolder',
@@ -443,6 +459,62 @@ export function toInstructionsWrite(raw: unknown): InstructionsWriteResult {
   return {
     saved: bool(entry?.saved),
     backup: optStr(entry?.backup),
+    error: optStr(entry?.error),
+    state: toCopilotState(entry?.state),
+  }
+}
+
+/** Mirrors `FolderInstructionsRead` in `src/main/copilot-home.ts`. */
+export interface FolderInstructionsRead {
+  text: string
+  /**
+   * Whether there is a file at all, which the row draws differently from a file
+   * that happens to be empty.
+   *
+   * `false` is the reassuring state rather than a failure: nothing in that
+   * folder claims to be the copilot, so an ordinary terminal opened there reads
+   * nothing of ours. The editor opens on an empty box either way — a save is
+   * how a person creates one — and only the badge and the sentence differ.
+   */
+  exists: boolean
+  error: string | null
+}
+
+export function toFolderInstructionsRead(raw: unknown): FolderInstructionsRead {
+  const entry = record(raw)
+  /*
+   * A missing `text` is an unreadable file rather than an empty one, for the
+   * same reason `toInstructionsRead` refuses to trust a bare `ok`: the box that
+   * receives this has a Save under it, and an empty box over a file with
+   * contents is a delete waiting for somebody to press the button. The main
+   * process answers `''` with `exists: false` for the ordinary no-file case, so
+   * this branch only catches a frame that is actually wrong.
+   */
+  if (typeof entry?.text !== 'string') {
+    return {
+      text: '',
+      exists: false,
+      error: str(entry?.error, 'That folder’s own instructions could not be read.'),
+    }
+  }
+  return { text: entry.text, exists: bool(entry.exists), error: optStr(entry.error) }
+}
+
+/** Mirrors `FolderInstructionsWrite` in `src/main/copilot-home.ts`, plus the state. */
+export interface FolderInstructionsWrite {
+  saved: boolean
+  backup: string | null
+  created: boolean
+  error: string | null
+  state: CopilotState | null
+}
+
+export function toFolderInstructionsWrite(raw: unknown): FolderInstructionsWrite {
+  const entry = record(raw)
+  return {
+    saved: bool(entry?.saved),
+    backup: optStr(entry?.backup),
+    created: bool(entry?.created),
     error: optStr(entry?.error),
     state: toCopilotState(entry?.state),
   }

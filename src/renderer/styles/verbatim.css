@@ -148,6 +148,19 @@
 /* A port on a remote machine's localhost list — `127.0.0.1:5199`, and the path
    beside it. A redrawn character in an address is an address that does not
    resolve, and the reader cannot see why. */
+/* The chip beside the padlock naming which machine served this page and on
+   which port — `Asads-MacBook-Pro-21 :5266`. A hostname and a port number are
+   both machine text: a host can hold `->` and a redrawn digit in a port is an
+   address that goes somewhere else. It qualifies the address bar, so it has to
+   be as literal as the address bar. */
+.bw-served,
+
+/* The filenames a readiness fix will touch, listed under the finding before
+   anybody presses it. He asked that every not-ready row say what pressing it
+   does; a filename is the most load-bearing half of that answer, and a font
+   that welds `.` to `/` or redraws a `-->` inside a name would be answering a
+   different question. */
+.readiness-touches,
 .machines-port-label,
 
 /*

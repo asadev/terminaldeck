@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Modal } from '../components/Modal'
 import { HoverNote } from '../components/HoverNote'
-import { accountsBridge, profileLoginLabel, useAccounts, type AccountView } from '../accounts'
+import {
+  accountLabel,
+  accountsBridge,
+  profileLoginLabel,
+  useAccounts,
+  type AccountView,
+} from '../accounts'
 import { projectDefaultFor } from '../components/ProfilePicker'
 import { CHOOSING_A_FOLDER, FOLDER_NEEDS_A_RESTART } from '../../shared/copilot-text'
 import {
@@ -249,11 +255,28 @@ export function CopilotSetup({ open, onClose, onDone, bridge: injected }: Props)
     return pinned ?? accounts.snapshot.defaultId
   }, [accounts.snapshot, folder])
 
+  /**
+   * What one of those rows is called, without naming the agent.
+   *
+   * The list above is already one agent's — that is what `claudeAccounts` is —
+   * so the agent's name distinguishes nothing here, and printing it would put a
+   * vendor's product name on a pop-up, which is the sentence the review drew
+   * widest:
+   *
+   *   > *"You should not mention in any settings or any pop-up a specific tool
+   *   > or LLM, because they can use some other also."*
+   *
+   * Settings → Accounts keeps the name and should: that list holds every
+   * agent's logins side by side, and there the name is the only thing telling
+   * three otherwise identical rows apart. The argument for both halves is
+   * written on `profileLoginLabel` itself, next to the flag.
+   */
   const label = useCallback(
     (account: AccountView): string =>
       profileLoginLabel(
         { id: account.id, name: account.name, provider: account.provider, system: account.system },
         accounts.signIn[account.id],
+        { namesTheAgent: false },
       ),
     [accounts.signIn],
   )
@@ -632,7 +655,18 @@ export function CopilotSetup({ open, onClose, onDone, bridge: injected }: Props)
                       <span className="cs-choice-name">{label(account)}</span>
                       <span className="cs-choice-note">
                         {[
-                          account.system ? 'your own install' : null,
+                          /*
+                            Only when the name above has not already said it.
+                            With no address to print, the name *is* "Your own
+                            install", and this line eight pixels below it would
+                            be the same sentence twice — the duplication
+                            `AccountsSection` refuses for the same reason, and
+                            one the neutral label made possible here by removing
+                            the agent's name that used to tell them apart.
+                          */
+                          account.system && accountLabel(accounts.signIn[account.id]) !== null
+                            ? 'your own install'
+                            : null,
                           // Which one it is already using, so skipping this
                           // screen is a decision somebody can make rather than
                           // a blank they are guessing about.

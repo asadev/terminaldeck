@@ -386,7 +386,7 @@ button {
 
 /* -------------------------------------------------------------- appearance */
 
-/* Auto / Light / Dark, in the header, on every screen.
+/* One icon in the header, on every screen.
 
    In the header rather than in a settings block at the foot of the session list,
    and that is the whole of the placement argument: the appearance is the one
@@ -394,59 +394,83 @@ button {
    the sun came out, or the room went dark — and the pair screen, which is the
    first thing a new reader sees, has no settings block to put it in.
 
-   Three pills rather than a switch, because there are three answers. A two-state
-   toggle can express "light" and "dark" and cannot express "whatever this
-   computer says", which is the default and the one people notice missing.
+   It used to be three pills, one per state, on the reasoning that three answers
+   need three affordances. He looked at it and said no:
 
-   It shares the tab strip's shape on purpose: same pill, same radius, same
-   filled-when-current treatment. Two controls that behave alike should look
-   alike, and there is no line between this and anything else — the separation
-   is the space, then the tint, in that order. */
+     "On the top header bar I still see the same three separate — Auto, Light,
+      Dark. You can just give one small icon for switching."
+
+   He is right about the trade. The three pills took about 150 of a 390px header
+   — measured on a screenshot, where they had squeezed a session's title down to
+   "Rework the localhost sc…" — for a control most people touch twice in the life
+   of an install. One button that cycles costs 28 points, keeps all three states
+   reachable, and is what the marketing site's header does, so a reader who has
+   seen one recognises the other.
+
+   The cost of a cycling control is that the current state is no longer visible
+   as a *selection*; it is visible as the picture. That is what the three icons
+   in `theme.ts` are for, and why "system" is a half-filled circle rather than a
+   gear: it shows both states at once, which is what following the device means.
+
+   No fill, no border, no pill. This is a chrome control at the end of a bar and
+   it should be quiet until it is under a finger — the same treatment the back
+   chevron next to it gets, for the same reason. */
 .appearance {
   display: flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
-  gap: 2px;
-  padding: 2px;
+  /* For the invisible tap target below, which is absolutely positioned. */
+  position: relative;
+  /* 28 for the ink, and the invisible padding below takes the tap target to the
+     44 a thumb needs. A 28px hit area in the corner of a phone is a control
+     people miss, and missing it means pressing whatever is behind it. */
+  width: 28px;
+  height: 28px;
+  margin-right: -4px;
   border-radius: var(--radius-md);
-  background: var(--bg-hover);
-}
-
-.appearance__choice {
-  min-height: 26px;
-  padding: 4px 9px;
-  border-radius: var(--radius-sm);
   color: var(--text-muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.appearance__choice:active {
-  background: var(--bg-active);
 }
 
-/* The current one is a filled chip, the way a macOS segmented control marks its
-   selection — not merely brighter text, which at 12px is a difference nobody
-   reads at a glance. */
-.appearance__choice--here {
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-weight: 600;
+/* The tap target, without the paint. `::after` rather than a bigger button,
+   because the button is 28px of visible ink and growing it would put a hover
+   fill the size of a session row in the corner of the header.
+
+   Centred on the button rather than left where the static position puts it. Its
+   default origin is the content box's top-left, so an uncentred 44px square
+   grows sixteen points *right and down only* — half of it off the right edge of
+   a phone, and none of it on the side a right thumb approaches from. Two
+   properties and a transform buy a hit area that is actually around the thing it
+   is for. */
+.appearance::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
 }
 
-/* Inside a terminal, on a phone, the header is the session's name.
-
-   Three pills take about 150 of a 390px header, and with the back chevron and
-   the folder line under it that left "Rework the localhost sc…" — measured on a
-   screenshot. The session's name is what somebody in a terminal needs from that
-   bar; the appearance is one tap away on the screen they came from, and on any
-   window wide enough for both they are both there.
-
-   `display: none` in a query rather than the `hidden` attribute, because this is
-   a fact about the width and not about the state — nothing in `main.ts` decides
-   it, so nothing in `main.ts` can get it wrong. */
-@media (max-width: 559px) {
-  #app.is-terminal .appearance {
-    display: none;
+/* Hover only where there is a pointer. On a touch screen `:hover` is applied on
+   tap and stays applied, so a phone would keep a filled chip in the corner of
+   the header until something else was touched — a control that looks permanently
+   pressed. */
+@media (hover: hover) {
+  .appearance:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
   }
+}
+.appearance:active {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+/* The glyph inherits the button's ink through `currentColor`, which is what lets
+   one icon serve both themes with no second colour written down anywhere. */
+.appearance svg {
+  display: block;
 }
 
 /* ------------------------------------------------------------------ banner */
@@ -1107,15 +1131,168 @@ input[type='text']:focus-visible {
 
 /* --------------------------------------------------------------- localhost */
 
-/* What the machine is serving. `localhost.ts` explains at length what this
-   screen can honestly do from a browser tab — list the ports, and ask the
-   desktop to dial one — and why there is no button that opens the page. */
+/* What the machine is serving, and how to get to it. `localhost.ts` explains
+   what this screen can honestly do from a browser tab, and `browse.ts` owns the
+   rule for where a typed address can be sent. */
 
+/* ------------------------------------------------------------- browse bar */
+
+/* The address bar, above the list, and it is the reason the list has a reason:
+
+     "I still cannot open the localhost of any of them, so there is no reason to
+      give the list here… Maybe we can have one browse bar here and something to
+      browse it, or maybe another kind of link to open in our normal browser."
+
+   It sits at the top of the screen rather than at the foot of it because it is
+   what this screen is *for*: the list answers "what is running" and this is how
+   you reach it, and a way in underneath nine collapsed groups is a way in nobody
+   finds.
+
+   Its own gutter and its own bottom line, like `.start` on the session screen —
+   the list below is edge to edge, and the seam between a control and a list of
+   things it acts on is exactly where a phone screen has to be unambiguous. */
+.browse {
+  padding: 12px 16px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Field, chooser, button — one line, and the field is the part that gives.
+
+   `flex-wrap` is deliberate rather than a fallback: with a device chooser
+   holding a name like "On Studio Mac", 390 points cannot hold all three at a
+   readable size, and a field squeezed to sixty pixels is worse than a button on
+   the next line. The field's `min-width` is what forces the wrap rather than the
+   squeeze. */
+.browse__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+
+/* The address itself. Mono, because an address is exact and countable — the same
+   promise the port rows make — and the same tertiary fill every other field in
+   this client sits in, so it reads as a field without needing a border. */
+.browse__field {
+  flex: 1 1 12rem;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.browse__field::placeholder {
+  color: var(--text-muted);
+}
+
+/* Which device it opens on, drawn only when there is more than one.
+
+   A native `<select>`, so a phone gets its own wheel or sheet and a desktop gets
+   its own menu, which is one less control for anybody to learn. `appearance` is
+   left alone on purpose — the platform's own chevron and metrics are what make
+   it recognisable as a menu, and re-drawing them here would be inventing a
+   control that looks like a menu and is not one. */
+.browse__where {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 12rem;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+/* `.button` is display:block, width:100% and carries a top margin, because every
+   other button in this client is the primary action of its screen. This one sits
+   at the end of a line. */
+.browse__go {
+  flex: none;
+  width: auto;
+  margin: 0;
+  min-height: 40px;
+  padding: 8px 18px;
+  font-size: 14px;
+}
+/* Under about 30rem the three do not fit, and *how* they stop fitting matters.
+   Left to itself, flex wraps the last item, which put Open alone on a line under
+   a field and a chooser — an orphan, and the widest thing on the row was the one
+   with the least to say. Giving the field the whole first row instead puts the
+   two controls together on the second, which is the shape every browser's own
+   bar takes when it runs out of width.
+
+   After the three rules it narrows, and that ordering is load-bearing rather
+   than tidy: `.browse__field` sets the `flex` *shorthand*, which resets the
+   basis, so this block written above it is a query that silently does nothing.
+   It was written above it once, and the screenshot showed the orphan unchanged. */
+@media (max-width: 30rem) {
+  .browse__field {
+    flex-basis: 100%;
+  }
+  .browse__where {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+}
+
+/* Where the page will appear, in one line under the bar. It is the bar's second
+   line rather than a note about the screen, which is why it is close to it and
+   not in a `.note` box. */
+.browse__note {
+  margin: 8px 2px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: var(--prose);
+}
+
+/* The answer to an open that was not one of the rows' — a hand-typed address.
+   A row's own answer is drawn under that row, where it can be read against the
+   thing it is about. */
+.browse__result {
+  margin: 8px 2px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: var(--prose);
+}
+.browse__result--ok {
+  color: var(--status-completed);
+}
+
+/* Nowhere to send an address, so there is no field to type one into.
+
+   This is the whole standing rule of this product, drawn: a control that cannot
+   act is not disabled and greyed, it is absent, and the sentence that replaces
+   it says which of the two reasons it is. */
+.browse__none {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: var(--prose);
+}
+
+/* Refresh, on its own line above the groups.
+
+   The gutter is small on purpose. It used to be 12 above and 4 below, which was
+   right when this was the first thing on the screen; with the browse bar above
+   it and its own dividing line, that much air left the button floating in an
+   empty band with nothing to belong to. It belongs to the list, so it sits on
+   it. */
 .localhost__head {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 12px 16px 4px;
+  padding: 8px 16px 0;
 }
 
 /* `.button` is display:block, width:100% and carries a top margin, because
@@ -1136,6 +1313,23 @@ input[type='text']:focus-visible {
    here or it is not paid for at all. */
 .localhost__note {
   margin: 16px 16px calc(16px + var(--dock-safe));
+}
+
+/* The answer to the public-address question, and it is prose rather than a
+   `.note` card.
+
+   The two notes above it are *operational* — what the groups mean, how old the
+   list is — and they are boxed because they are things about the screen you are
+   looking at. This one is an answer to a design question somebody asks once, and
+   a third bordered card under two others is the explanation wall this product
+   keeps being told off for. Plain text, muted, at the very bottom, where it is
+   read by the person who has already scrolled the list and wondered. */
+.localhost__answer {
+  margin: 16px 16px calc(16px + var(--dock-safe));
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: var(--prose);
 }
 
 .ports {
@@ -1225,6 +1419,30 @@ input[type='text']:focus-visible {
 .port__check:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+/* A row's Open is a `<button>` when the page opens on the machine and an `<a>`
+   when it opens in this browser — two elements, because one sends a frame and
+   the other is a navigation, and a link is what makes cmd-click, middle-click
+   and "open in background tab" work. An anchor has no `:disabled`, so the same
+   state is `aria-disabled` and the href is removed with it. Both spellings are
+   written here or the disabled half is only true of one of them. */
+.port__open[aria-disabled='true'],
+.browse__go[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* An anchor is not a button and does not inherit its centring, its line box or
+   its lack of underline. Written out so the two spellings of Open are the same
+   control on screen. */
+a.port__open,
+a.browse__go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
 /* The answer sits under the port it is about, not at the foot of the list —

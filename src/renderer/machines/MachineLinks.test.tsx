@@ -91,6 +91,7 @@ const NOOP_BRIDGE: MachinesBridge = {
   writeToMachineSession: () => Promise.resolve(true),
   resizeMachineSession: () => Promise.resolve(true),
   createMachineSession: () => Promise.resolve(true),
+  closeMachineSession: () => Promise.resolve(true),
   refreshMachinePorts: () => Promise.resolve(true),
   openOnMachine: () => Promise.resolve(true),
   onMachinesState: () => () => {},

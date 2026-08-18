@@ -285,6 +285,61 @@ describe('components that are built are also wired', () => {
 })
 
 /**
+ * The control cluster is told whether its session is dead, and told the truth.
+ *
+ * ## Why this is a seam rather than a prop
+ *
+ * `SessionControls` reads the session's *screen* now, because the record it
+ * used to read cannot tell a `/bin/zsh -l` from a `/bin/zsh -l` with Claude
+ * Code running in it — that difference is the whole of the bug in
+ * `shell/SessionControls.presence.test.tsx`, and it took the model, the effort
+ * and the usage reading off the bar of every session Asad starts as a shell.
+ *
+ * A screen is exactly the source that can lie about a session that has stopped.
+ * A CLI killed rather than `/exit`-ed never clears its banner, so the last
+ * frame of a dead session still carries every marker the reader matches on;
+ * only `exitCode` settles it, and `presenceFromSession` reads that first for
+ * that reason. So the prop is required and has no default — a caller that
+ * forgot it would not compile — and this is the other half: that what arrives
+ * is the session's own exit code and not a literal.
+ *
+ * `exited={false}` is not hypothetical. It is the shortcut this change was
+ * warned about while it was being written, and it typechecks, and it puts live
+ * pressable model and effort chips on the bar of a session whose process no
+ * longer exists. The table above cannot catch it — a seam entry asks whether a
+ * prop is *passed* — and neither can the component's own tests, which are
+ * handed whatever they like. It is only visible here, in the source of the
+ * caller.
+ *
+ * Both mounts, not the first: the window's bar carries the host session's
+ * cluster and every guest pane carries its own, and a split can hold a live
+ * session beside a dead one.
+ */
+describe('the session control cluster is told what is dead', () => {
+  const app = read('renderer/App.tsx')
+
+  it('mounts two clusters and passes an exit code to each', () => {
+    const mounts = app.match(/<SessionControls\b[\s\S]*?\/>/g) ?? []
+    expect(mounts.length, 'a <SessionControls> mount has appeared or gone').toBe(2)
+    for (const [index, tag] of mounts.entries()) {
+      const passed = propExpression(tag, 'exited')
+      expect(passed, `mount ${index + 1} does not pass exited at all`).not.toBeNull()
+      /*
+       * `exitCode` is the only honest source for this in the renderer — it is
+       * the field `chromeSession` reads for the account chip beside this
+       * cluster, so the two components on one bar cannot come to disagree about
+       * whether the session is alive.
+       */
+      expect(
+        passed,
+        `mount ${index + 1} fabricates exited instead of reading the session — live controls over a dead session`,
+      ).toContain('exitCode')
+      expect(passed, `mount ${index + 1} passes a literal`).not.toMatch(/^\s*(true|false)\s*$/)
+    }
+  })
+})
+
+/**
  * A session started from a paired phone has to arrive, and has to arrive
  * quietly.
  *

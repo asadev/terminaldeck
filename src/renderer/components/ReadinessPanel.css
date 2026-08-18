@@ -318,6 +318,28 @@
   color: var(--text-secondary);
 }
 
+/* Which files the fix on this row will touch, always, before it is pressed.
+
+   Quiet and one line: it sits under the finding it belongs to and must not
+   compete with it, so the label is a small caps-ish lead-in and the names are
+   mono, because they are filenames and everything else on the row is prose. */
+.readiness-touches {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption-2);
+  line-height: var(--lh-body);
+  color: var(--text-tertiary);
+}
+
+.readiness-touches-label {
+  font-family: var(--font-ui);
+  color: var(--text-quaternary, var(--text-tertiary));
+}
+
 /* What a fix will do, shown while it waits for a second confirmation. */
 .readiness-fix-description {
   max-width: 74ch;

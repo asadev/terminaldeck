@@ -154,7 +154,9 @@ function rig(
         input: () => true,
         resize: () => true,
         create: () => true,
+        close: () => true,
         ports: () => true,
+        localhost: () => true,
         openThere: () => true,
       }
     },
@@ -216,6 +218,11 @@ describe('launching', () => {
     expect(rig().channels.sort()).toEqual(
       [
         'machines:attach',
+        // Ending a session over there — `create`'s opposite number, and its own
+        // channel rather than a flag on `detach` because the two are opposites
+        // rather than variants: `detach` stops the bytes and leaves the process
+        // running, this kills it for everyone attached. See `MachineLink.close`.
+        'machines:close',
         'machines:code',
         'machines:code:cancel',
         'machines:connect',
@@ -234,6 +241,14 @@ describe('launching', () => {
         'machines:open',
         'machines:pair',
         'machines:ports',
+        // Opening a tunnel to one port on that machine, so this desktop's own
+        // browser can load it. The counterpart to `ports`, which only lists
+        // them: a row you can see and cannot reach is the failure the whole of
+        // *"the shape of the application should not be changing for local and
+        // remote devices"* is about. It answers `{ ok: false, message }` rather
+        // than throwing, because every refusal here is a sentence somebody has
+        // to read — not connected, not a port, not granted.
+        'machines:reach',
         'machines:rename',
         'machines:resize',
       ].sort(),
@@ -454,7 +469,9 @@ describe('waking', () => {
             input: () => true,
             resize: () => true,
             create: () => true,
+            close: () => true,
             ports: () => true,
+            localhost: () => true,
             openThere: () => true,
           }
         },

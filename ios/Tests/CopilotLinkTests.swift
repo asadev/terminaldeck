@@ -389,29 +389,39 @@ final class CopilotLinkTests: XCTestCase {
     }
 
     /**
-     * **`copilot.bye` is deliberate, and it survives a reconnect.**
+     * **Nothing on this phone closes the copilot connection any more.**
      *
-     * Not sent when somebody leaves the Copilot screen: the badge that says a
-     * confirmation is waiting is pushed down the watching subscription, so an
-     * automatic bye would switch off the half of this feature that works while
-     * nobody is looking at it. What it is for is a shared phone — and if a
-     * reconnect re-opened it, the close would last until the next blip of
-     * somebody's wifi.
+     * This case used to be `testClosingItHereSurvivesAReconnect`: it pressed
+     * *"Close the copilot here"*, watched a `copilot.bye` go, and proved that a
+     * later `welcome` could not helpfully re-open what somebody had just shut.
+     * Asad, looking at the item: *"Why do we have Close the copilot here? It
+     * doesn't make any sense."* It went, and with it the flag, the wire send and
+     * the whole `closed` access state.
+     *
+     * What replaces it is this, which is the property that actually has to hold
+     * afterwards: a connected phone that goes away and comes back is **still
+     * connected**, and it re-opens by itself with the credential it holds. There
+     * is no state in which somebody has to press something to get their copilot
+     * back — which was the other half of what the close button existed to undo.
+     *
+     * The assertion on `wire.sent` is the important one: exactly one
+     * `copilot.hello`, carrying the stored credential, and no `copilot.connect`,
+     * because a phone that already holds a key must never ask a person for a
+     * code it does not need.
      */
-    func testClosingItHereSurvivesAReconnect() {
+    func testAReconnectReopensTheCopilotWithNoCodeAndNothingToPress() {
         connected()
 
-        link.close()
-        XCTAssertEqual(wire.sent, [.copilotBye])
-        XCTAssertEqual(link.access, .closed)
-
         link.connectionLost()
+        XCTAssertFalse(link.isOpen, "the socket took the copilot connection with it")
+        XCTAssertEqual(link.access, .connecting,
+                       "authorised, and waiting for the machine — not asking for a code")
+
         wire.clear()
         welcome(linked: true, read: true, act: true, alter: true)
-        XCTAssertTrue(wire.sent.isEmpty, "a welcome must not re-open what somebody just closed")
 
-        link.reopen()
-        XCTAssertEqual(wire.sent, [.copilotHello(credential: "c2VjcmV0")])
+        XCTAssertEqual(wire.sent, [.copilotHello(credential: "c2VjcmV0")],
+                       "it lets itself back in with the key it already has")
     }
 
     // MARK: - The act tier

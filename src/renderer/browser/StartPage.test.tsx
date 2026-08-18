@@ -1,6 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { portSummary, readPorts, splitOwnPorts, StartPage, type StartPageBridge } from './StartPage'
+import {
+  offersDevServers,
+  portSummary,
+  readPorts,
+  splitOwnPorts,
+  StartPage,
+  type PortSource,
+  type StartPageBridge,
+} from './StartPage'
 
 /**
  * The recording of 2026-08-16: a new tab on Windows opened onto Chromium's red
@@ -164,5 +172,86 @@ describe('splitOwnPorts', () => {
     const old = readPorts([{ port: 3000, process: 'node', guessed: false }])
     expect(splitOwnPorts(old).ours).toEqual([])
     expect(splitOwnPorts(old).open).toHaveLength(1)
+  })
+})
+
+/**
+ * The list, when it is about another machine.
+ *
+ * *"When I click on browser there is no way for me to find all the localhost
+ * pages of the remote device. I should be able to see the available whole
+ * ports."*
+ *
+ * The page is the same page — same heading, same address field, same rows, same
+ * card — with the machine's name where "this machine" used to be. That sameness
+ * is the requirement rather than a nicety: *"shape of the application should not
+ * be changing for local and remote devices."*
+ */
+describe('the start page, listing another machine', () => {
+  const source: PortSource = {
+    name: 'office-pc',
+    ports: [
+      { port: 5173, process: 'node', guessed: false, ours: false },
+      { port: 8080, process: '', guessed: true, ours: false },
+    ],
+    open: () => undefined,
+    refresh: () => undefined,
+  }
+
+  const html = renderToStaticMarkup(
+    <StartPage onOpen={() => undefined} bridge={noPorts} source={source} />,
+  )
+
+  it('names the machine the list is about, instead of claiming it is this one', () => {
+    expect(html).toContain('Listening on office-pc right now')
+    expect(html).not.toContain('Listening on this machine')
+  })
+
+  it('draws that machine’s ports as the same rows a local port gets', () => {
+    expect(html).toContain(':5173')
+    expect(html).toContain(':8080')
+    expect(html).toContain('port only')
+    expect(html).toContain('aria-label="Open port 5173 node on office-pc"')
+  })
+
+  it('keeps the address field, which is the other half of what he asked for', () => {
+    // *"…and I should be able to type and reach the devices which are not here
+    // on this device."* The field is the same one; where it resolves is the
+    // picker's business, in the toolbar above.
+    expect(html).toContain('aria-label="Address"')
+  })
+
+  it('offers a rescan, because nothing over there watches its own port table', () => {
+    expect(html).toContain('Scan again')
+  })
+
+  it('says nothing is listening on that machine, naming it', () => {
+    const empty = renderToStaticMarkup(
+      <StartPage onOpen={() => undefined} bridge={noPorts} source={{ ...source, ports: [] }} />,
+    )
+    expect(empty).toContain('Nothing is listening on office-pc')
+  })
+
+  it('waits rather than claiming nothing is listening before it has answered', () => {
+    // Null and `[]` are two different facts. A machine that has not been asked
+    // yet must not be reported as a machine with no dev server.
+    const asking = renderToStaticMarkup(
+      <StartPage onOpen={() => undefined} bridge={noPorts} source={{ ...source, ports: null }} />,
+    )
+    expect(asking).toContain('Asking office-pc what it is serving')
+    expect(asking).not.toContain('Nothing is listening')
+  })
+
+  it('does not offer to start a dev server here for a list that is over there', () => {
+    // Every row in that panel is a folder on *this* disk with a script this
+    // process would run. Pressing Start would spawn a server on the wrong
+    // computer, and there is no verb on the wire for starting one on the right
+    // one — so the honest amount to show is none.
+    //
+    // Asserted through the rule rather than through the markup: that panel
+    // fills itself from an effect, and effects do not run here, so a static
+    // render is empty either way and would pass whatever this file said.
+    expect(offersDevServers(source)).toBe(false)
+    expect(offersDevServers(null)).toBe(true)
   })
 })

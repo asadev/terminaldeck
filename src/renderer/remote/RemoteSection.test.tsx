@@ -262,11 +262,21 @@ describe('off', () => {
   })
 
   it('is one paragraph shorter than the screen it replaced', () => {
-    // The six-line "What you are turning on" block is behind the row's ⓘ. The
-    // heading it used to carry must not be back on the page — that is the
-    // regression, and it is the shape of the whole complaint about this screen.
+    /*
+     * The six-line "What you are turning on" block is behind the row's ⓘ. The
+     * heading it used to carry must not be back on the page — that is the
+     * regression, and it is the shape of the whole complaint about this screen.
+     *
+     * The dot is `hovernote-dot` now rather than `settings-info`. Both are the
+     * ⓘ; the difference is that this one opens a popup over the page instead of
+     * inserting the paragraph into the flow, which is what the whole Settings
+     * window agreed on after the 2026-08-17 review. Asserting the class is how
+     * this test proves the paragraph is *reachable* rather than deleted — a
+     * `HoverNote` renders nothing until somebody hovers it, so its absence and
+     * its presence look identical in static markup without the dot to point at.
+     */
     expect(html).not.toContain('What you are turning on')
-    expect(html).toContain('class="settings-info"')
+    expect(html).toContain('class="hovernote-dot"')
   })
 
   it('leaves the switch off', () => {

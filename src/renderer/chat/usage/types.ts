@@ -60,6 +60,13 @@ export interface ProjectSummary {
   activeSessionId: string | null
   /** True while the first pass over historical transcripts is still running. */
   scanning: boolean
+  /**
+   * True when some of the folder's transcripts were never read, so these totals
+   * describe part of its work rather than all of it. The same field in
+   * `src/main/transcript.ts` says what the caps are and why a tile's sentence
+   * has to change with it.
+   */
+  truncated: boolean
   updatedAt: number
 }
 
@@ -83,10 +90,31 @@ export interface PlanLimitSnapshot {
   reason: string | null
 }
 
-export type RefreshReason = 'unwired' | 'not-watching' | 'busy' | 'prompt-busy' | 'no-panel' | null
+/**
+ * Why running `/usage` in a session did not produce a reading.
+ *
+ * The renderer's copy of the main process's own list — see `RefreshReason` in
+ * `src/main/plan-limit.ts`, which is where each of these is argued. `no-limits`
+ * and `panel-open` joined it on 2026-08-18 and they are the two that carry
+ * weight here: both mean the app typed into somebody's session, so both stop
+ * the automatic fetcher for good rather than merely delaying it.
+ */
+export type RefreshReason =
+  | 'unwired'
+  | 'not-watching'
+  | 'busy'
+  | 'prompt-busy'
+  | 'no-panel'
+  | 'no-limits'
+  | 'panel-open'
+  | null
 
 export interface RefreshResult {
   ok: boolean
   reason: RefreshReason
+  /** True when the attempt got as far as typing into the session. */
+  typed: boolean
+  /** True when this app opened a panel it could not close again. */
+  residue: boolean
   snapshot: PlanLimitSnapshot
 }

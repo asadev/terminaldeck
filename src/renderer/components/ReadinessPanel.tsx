@@ -274,6 +274,39 @@ export function CheckRow({ check, busy, result, onApply, onOpen, onDismiss }: Ro
         </div>
         <p className="readiness-detail">{check.detail}</p>
 
+        {/*
+          What this button is about to touch, before it is pressed.
+
+          The full description is a paragraph and it appears at the confirm
+          step — which only exists for a `destructive` fix, so for every other
+          one it was reachable by hovering the button and in no other way. That
+          is not a disclosure for the audience this ships to:
+
+            > *"my audience will be mostly non-technical vibe coders"*
+
+          and a hover is not a thing that happens on a trackpad you are not
+          resting on, on a touch screen, or to anybody reading with a keyboard.
+
+          The gap became load-bearing on 2026-08-18, when the instructions row
+          stopped reciting `CLAUDE.md` in its finding — the review's rule is
+          that copy describing a *mechanism* must not name one vendor's file —
+          leaving the fix's own description as the only place this app says
+          which file it is about to create. So the file list comes out of the
+          tooltip and onto the row.
+
+          `touches` rather than a sentence, because it is the fix's own
+          declaration of what it writes and it cannot drift from the code the
+          way a re-worded description can. Rendered as the bare list under a
+          label so the same shape works for the one that writes a file and the
+          one that also rewrites git's index.
+        */}
+        {fix && fix.touches.length > 0 ? (
+          <p className="readiness-touches">
+            <span className="readiness-touches-label">Changes</span>
+            {fix.touches.join(', ')}
+          </p>
+        ) : null}
+
         {fix && confirming ? (
           <p className="readiness-fix-description">{fix.description}</p>
         ) : null}

@@ -95,41 +95,76 @@ final class LiveCopilotUITests: XCTestCase {
     // MARK: - The walk
 
     func testTheCopilotAgainstARealDesktop() throws {
-        try theTabsAreFourWithTheCopilotFirst()
+        // Three pills first, always: a phone that has just paired holds no
+        // copilot credential for anything, whatever that desktop can offer.
+        try theBarIsThreePillsBeforeAnythingIsConnected()
         if expectsCopilot {
             try theCeremonyIsWalkedAgainstARealDesktop()
+            try theBarIsFourPillsAfterwards()
         } else {
             try theCopilotIsDrawnOnlyWhenTheMachineHasOne()
         }
     }
 
     /**
-     * Four tabs, with the copilot the first of them.
+     * **Three pills, on a phone that has paired and connected no copilot.**
      *
-     * This asserted the opposite a day ago — *"three tabs, the copilot did not
-     * add a fourth"* — and the sentence it was written from has been superseded
-     * by one he said with the copilot built and in front of him: *"a fourth
-     * pill, and the copilot goes leftmost: Copilot · Sessions · Localhost ·
-     * Settings."* The later statement wins; `DeckModel.Tab` carries the whole
-     * argument.
+     * This has now been three tabs, four tabs, and three-or-four. The first two
+     * were both stated flatly and each was superseded; the third is the one he
+     * described in mechanism rather than in count: *"if the copilot is not
+     * connecting, this icon should not be inside the pill — then it will be
+     * three icon pill. Otherwise if the copilot is connected, then four icon
+     * pill, automatically, like that way."*
+     *
+     * Pairing a phone grants it no copilot reach at all — that is the whole
+     * point of the copilot being a second connection — so this is the state
+     * every phone is in the moment it arrives, whatever that desktop offers.
+     */
+    private func theBarIsThreePillsBeforeAnythingIsConnected() throws {
+        let bar = app.tabBars.firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 20), "the tab bar should be on the session list")
+        for name in ["Sessions", "Localhost", "Settings"] {
+            XCTAssertTrue(bar.buttons[name].exists, "\(name) should be a tab")
+        }
+        XCTAssertFalse(bar.buttons["Copilot"].exists,
+                       "no copilot connection, no fourth pill")
+        XCTAssertEqual(bar.buttons.count, 3, "three pills — no more, and no fewer")
+        capture("01-three-pills-before-connecting")
+    }
+
+    /**
+     * **Four pills, and the copilot the first of them**, once the ceremony has
+     * actually been walked against that Mac.
      *
      * The **order** is asserted as well as the membership, by frame rather than
      * by label, because that is the half a screenshot answers worst and the half
-     * a thumb notices first.
+     * a thumb notices first: *"a fourth pill, and the copilot goes leftmost —
+     * Copilot · Sessions · Localhost · Settings."*
+     *
+     * Reached by going **home from the copilot**, which is the other half of the
+     * night's change: that screen draws no bar of its own any more, so the only
+     * way to be looking at the bar from here is the back button.
      */
-    private func theTabsAreFourWithTheCopilotFirst() throws {
+    private func theBarIsFourPillsAfterwards() throws {
+        XCTAssertTrue(app.buttons["copilot.back"].waitForExistence(timeout: 15),
+                      "the copilot's only way home")
+        XCTAssertFalse(app.tabBars.firstMatch.exists,
+                       "the pill must not sit over the chat box")
+        app.buttons["copilot.back"].tap()
+
         let bar = app.tabBars.firstMatch
-        XCTAssertTrue(bar.waitForExistence(timeout: 20), "the tab bar should be on the session list")
+        XCTAssertTrue(bar.waitForExistence(timeout: 15))
         for name in ["Copilot", "Sessions", "Localhost", "Settings"] {
-            XCTAssertTrue(bar.buttons[name].exists, "\(name) should be a tab")
+            XCTAssertTrue(bar.buttons[name].waitForExistence(timeout: 10),
+                          "\(name) should be a tab")
         }
-        XCTAssertEqual(bar.buttons.count, 4, "four tabs — no more, and no fewer")
+        XCTAssertEqual(bar.buttons.count, 4, "four pills once the copilot is connected")
         let copilot = bar.buttons["Copilot"].frame
         for name in ["Sessions", "Localhost", "Settings"] {
             XCTAssertLessThan(copilot.minX, bar.buttons[name].frame.minX,
                               "the copilot should be to the left of \(name)")
         }
-        capture("01-four-tabs-copilot-leftmost")
+        capture("06-four-pills-copilot-leftmost")
     }
 
     /**
@@ -143,16 +178,17 @@ final class LiveCopilotUITests: XCTestCase {
      * one that does not.
      */
     private func theCopilotIsDrawnOnlyWhenTheMachineHasOne() throws {
-        // The pill is always drawn now — it is structure — so what must be
-        // absent is the *screen* offering a code. A short wait rather than none:
-        // `welcome` arrives on connection, and asserting absence the instant the
-        // list draws would pass for the wrong reason on any machine, including
-        // one that does have a copilot.
-        XCTAssertTrue(app.openCopilotTab(), "the pill is drawn for every machine")
+        // No pill, and — behind the Settings row that always exists — no code
+        // field either, because there is no panel on that machine to mint one
+        // from. A short wait rather than none: `welcome` arrives on connection,
+        // and asserting absence the instant the list draws would pass for the
+        // wrong reason on any machine, including one that does have a copilot.
+        XCTAssertFalse(app.openCopilotTab(), "a machine with no copilot gets no pill")
+        XCTAssertTrue(app.openCopilotSettings())
         let row = app.textFields["copilot.connect.field"]
         XCTAssertFalse(row.waitForExistence(timeout: 8),
                        "this desktop has no copilot layer, so nothing about one belongs on screen")
-        capture("02-session-list-no-copilot")
+        capture("02-settings-no-copilot")
     }
 
     /**
@@ -166,7 +202,11 @@ final class LiveCopilotUITests: XCTestCase {
      * can be wrong in a way a permissive harness would forgive.
      */
     private func theCeremonyIsWalkedAgainstARealDesktop() throws {
-        XCTAssertTrue(app.openCopilotTab(), "the copilot has a pill of its own")
+        // Through Settings, which is where connecting lives now — *"actually
+        // connecting copilot should be in the settings"* — and where it had to
+        // move to, since the pill it used to sit behind appears only once the
+        // connecting is done.
+        XCTAssertTrue(app.openCopilotSettings(), "connecting is a row in Settings")
         XCTAssertTrue(app.textFields["copilot.connect.field"].waitForExistence(timeout: 25),
                       "a desktop with a copilot offers an unconnected device a code")
         capture("02-connect-unconnected")

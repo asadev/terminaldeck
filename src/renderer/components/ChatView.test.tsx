@@ -10,9 +10,9 @@ import {
   markdown,
   mergeMessages,
   renderMarkdown,
-  runningProvider,
   type ChatMessage,
 } from './ChatView'
+import { runningProvider } from '../shell/agent-presence'
 import { CHAT_SESSION_ATTR } from '../driving/where'
 
 /**

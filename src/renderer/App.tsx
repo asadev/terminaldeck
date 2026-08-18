@@ -74,11 +74,19 @@ import { SessionControls } from './shell/SessionControls'
 import { PanelView } from './shell/PanelView'
 import { useSidebar } from './shell/useSidebar'
 import { PANELS, panelSpec, type PanelId } from './shell/panels'
+import { machineIsClosed, type ClosedMachine } from './shell/machine-groups'
 import { registerNavigator } from './copilot/driving/navigator'
 import { FeaturesProvider, useFeatures } from './features/FeaturesProvider'
 import { useControlOffer } from './features/offer'
 import { availableFeatures } from './features/state'
-import { nextActiveId, sessionLabel, type WorkspaceTab } from './shell/workspace-tabs'
+import {
+  asSessionStatus,
+  machineTabId,
+  nextActiveId,
+  readMachineTabId,
+  sessionLabel,
+  type WorkspaceTab,
+} from './shell/workspace-tabs'
 import {
   AUTO_SELECTION,
   resolveActiveTab,
@@ -104,10 +112,21 @@ import { readLastFolder, writeLastFolder } from './session-start'
 import { chordFor, resolveCommand, scopeForTarget } from './keymap'
 import './shell/shell.css'
 
-/** A close waiting on the user: one session, or every session in a project. */
+/**
+ * A close waiting on the user.
+ *
+ * Four subjects now: one session here, every session in a project, one session
+ * on another machine, and every session on another machine. The last two are not
+ * variants of the first two and are kept apart for the reason `CloseSubject`
+ * gives — the sentence a person reads has to name the right thing, and *"the
+ * machine itself stays connected"* is the one fact they actually want at that
+ * moment.
+ */
 type PendingClose =
   | { kind: 'session'; tab: WorkspaceTab }
   | { kind: 'project'; path: string; name: string; status: SessionStatus; count: number }
+  | { kind: 'machine-session'; machineId: string; sessionId: string; name: string; status: SessionStatus }
+  | { kind: 'machine'; machineId: string; name: string; status: SessionStatus; count: number }
 
 /**
  * The three facts the session chrome needs about a session, off the store.
@@ -511,6 +530,55 @@ function Workspace() {
   const [openMachineSession, setOpenMachineSession] = useState<
     { machineId: string; sessionId: string } | null
   >(null)
+  /**
+   * Machines whose group has been closed, and is therefore not drawn.
+   *
+   * ## What Close means, in his words
+   *
+   * He reasons it out in the recording and lands somewhere exact: *"Close you
+   * will not give — but you can actually give, because it should not disconnect
+   * the remote account. It will just close all of the sessions from that PC.
+   * Yeah, you can give this close too, so it will go from here, but whenever you
+   * want to start, you can start as a new session and you can start from that
+   * device."*
+   *
+   * Three separate things, and this state is only the second: the sessions end
+   * (the `close` frames), **the group goes from the rail** (this), and the
+   * pairing survives untouched (nothing here goes near `forgetMachine`).
+   *
+   * ## Why hiding is not the same as having no sessions
+   *
+   * A connected machine with nothing running on it is a real and ordinary state
+   * and the rail says so — "Nothing running there." — so if Close only ended the
+   * sessions, the group would stay on screen looking exactly as it did before,
+   * minus its rows. That is a press that appears not to have worked. It goes,
+   * and it comes back the moment there is something on it again, which is what
+   * *"whenever you want to start, you can start as a new session"* asks for:
+   * starting one from the New Session dialog puts a session on that machine, the
+   * effect below sees it, and the group is there with it.
+   *
+   * ## Why each entry remembers *which* sessions were closed
+   *
+   * The first spelling of this was a list of machine ids and it did not work,
+   * and the way it failed is worth keeping because it is not obvious from
+   * reading it. Hiding a group and then un-hiding it "once something is running
+   * there again" is a race with the round trip: at the instant Close is pressed
+   * the sessions are still listed — they end on the other computer, a frame or
+   * two later — so the rule un-hid the group in the same render that hid it and
+   * the press appeared to do nothing at all. Found by driving it, not by reading
+   * it; the code is correct on the page and wrong on the screen.
+   *
+   * So an entry carries the ids that were running when Close was pressed, and
+   * the group is hidden while **every** session on that machine is one of them.
+   * The sessions draining away keeps it hidden; a session appearing that nobody
+   * here closed brings it straight back, which is exactly *"whenever you want to
+   * start, you can start as a new session and you can start from that device."*
+   *
+   * Not persisted, deliberately. A closed group is a view state — the same
+   * category as a folded project — and a machine that stayed hidden across a
+   * relaunch would be a machine somebody had to remember they had hidden.
+   */
+  const [closedMachines, setClosedMachines] = useState<readonly ClosedMachine[]>([])
   /** Which machine the New Session dialog opens on. Null is this one. */
   const [newSessionMachine, setNewSessionMachine] = useState<string | null>(null)
   /**
@@ -696,6 +764,103 @@ function Workspace() {
       : []),
   ]
 
+  /**
+   * The sessions running on other machines, as tabs.
+   *
+   * ## Why they are tabs at all now
+   *
+   * They were not, for one night. A remote session covered the pane the way a
+   * sidebar view does and had no pill in the strip, on the argument that a ✕ on
+   * that pill would promise to end something this window does not own. Asad
+   * looked at that and asked for the opposite, directly: *"When I click on any
+   * session — the shape of the icon, top bar header is not same, and I cannot
+   * drag it up there… So it should be there on the top, just like the normal
+   * internal local session."* So the decision is reversed, and the ✕ is answered
+   * by the `close` verb on the wire rather than by leaving the pill out.
+   *
+   * ## Why they are a second list rather than part of `tabs`
+   *
+   * `tabs` is *this window's* windows, and half a dozen things downstream treat
+   * it as exactly that: `closeTabNow` reaches for `window.deck.killSession`,
+   * `resolveActiveTab` falls back to `tabs[0]` at launch, the swarm mounts a
+   * terminal per entry, and the panes model holds ids it expects to be able to
+   * draw. Folding a session that lives on another computer into that array would
+   * have meant qualifying every one of those with "unless it is remote" — a
+   * shape of bug per site rather than a decision in one place, which is the
+   * argument `WorkspaceTab.isCopilot` already makes about a third `TabKind`.
+   *
+   * So they are built here, joined to `tabs` for exactly the two surfaces that
+   * are meant to list *everything you have open* — the strip and the rail — and
+   * routed by id everywhere else. `machineTabId` is the one function that knows
+   * how the two handles join, and `readMachineTabId` is how a click comes back.
+   *
+   * ## `closable` is the far machine's answer, not a decoration
+   *
+   * It is the `close` capability off the link. A machine paired to an older
+   * build never advertises it, and a tab that carried `closable: true` there
+   * would draw a ✕ that sends a frame into silence. False means the pill has no
+   * ✕ at all — absent rather than drawn and inert, which is the rule this whole
+   * pass is being held to.
+   */
+  const machineTabs: WorkspaceTab[] = machines.machines
+    .filter((row) => !machineIsClosed(closedMachines, row.machine.id, row.link?.sessions ?? []))
+    .flatMap((row) =>
+      (row.link?.sessions ?? []).map((session): WorkspaceTab => ({
+        id: machineTabId(row.machine.id, session.id),
+        kind: 'session',
+        label: session.title,
+        status: asSessionStatus(session.status),
+        // The far machine's folder, carried so the tooltip and the qualifier can
+        // say which of two identically-named sessions this is. Nothing that
+        // *opens* a path reads it — see the `heading` further down, which hands
+        // `FolderChip` a null for exactly this reason: this path exists on a
+        // different computer, and a chip that opened nothing would be the dead
+        // control this pass is removing.
+        ...(session.cwd ? { projectPath: session.cwd } : {}),
+        machine: { id: row.machine.id, name: row.machine.name },
+        closable: row.link?.capabilities.includes('close') === true,
+      })),
+    )
+
+  /**
+   * Everything the strip and the rail list — this window's, and the machines'.
+   *
+   * One array for the two surfaces whose whole job is to answer *what do I have
+   * open*, and it is the same array for both so they cannot disagree about it.
+   * The promoted order the strip persists is keyed by tab id, so a remote
+   * session pinned to the top stays pinned across a renderer reload exactly as a
+   * local one does.
+   */
+  const openTabs: WorkspaceTab[] = [...tabs, ...machineTabs]
+
+  /**
+   * Forget a machine was ever closed, once work nobody here closed is on it.
+   *
+   * {@link machineIsClosed} already answers the question during a render, so
+   * this does not decide anything the screen depends on — it keeps the entry
+   * from outliving its meaning. Without it, a machine that had been closed, then
+   * started fresh on, would go back into hiding the moment that fresh session
+   * ended: the entry would still be there and the *new* ids would be gone with
+   * it, so `every` would be satisfied again by an empty list and the group would
+   * vanish for a reason nobody could see.
+   *
+   * A machine that is not in the list at all is **kept** rather than pruned. It
+   * is offline or forgotten, so it is not drawn either way, and dropping the
+   * entry would mean a machine that reconnects with the same sessions still
+   * running — a close that never landed — came back un-hidden with work on it
+   * that this window believes it ended. `closeMachineNow` handles the refusal it
+   * can see; this is the case it cannot.
+   */
+  useEffect(() => {
+    setClosedMachines((current) => {
+      const next = current.filter((entry) => {
+        const row = machines.machines.find((one) => one.machine.id === entry.id)
+        return row === undefined || machineIsClosed(current, entry.id, row.link?.sessions ?? [])
+      })
+      return next.length === current.length ? current : next
+    })
+  }, [machines.machines])
+
   const activeTab = resolveActiveTab(selection, tabs)
   const activeSession = activeTab?.kind === 'session' ? activeTab : null
 
@@ -776,6 +941,17 @@ function Workspace() {
    */
   const windowSessionsRef = useRef(windowSessions)
   windowSessionsRef.current = windowSessions
+  /*
+   * The sessions on other machines, for the three closes that act on them.
+   *
+   * A ref for the same reason the two above are refs: `machineTabs` is rebuilt
+   * on every push from `machines:state`, which on a live link is often, and a
+   * callback that listed it as a dependency would be a new function on every one
+   * of those pushes — re-registering whatever holds it, for a list it only reads
+   * at the moment somebody presses something.
+   */
+  const machineTabsRef = useRef(machineTabs)
+  machineTabsRef.current = machineTabs
   /*
    * Everything open, for the same reason and read the same way.
    *
@@ -1490,6 +1666,27 @@ function Workspace() {
 
   const selectTab = useCallback(
     (id: string) => {
+      /*
+       * A session on another machine, opened in the pane the way a local one is.
+       *
+       * First, and it is the whole of what makes a remote pill behave like a
+       * local one: every route into "show me this" — a click on the rail, a
+       * click on the pill, ⌘1–9, the command palette — arrives here, so putting
+       * the routing at the top means there is one road rather than a second one
+       * that will drift. `readMachineTabId` is the only code that knows how the
+       * machine and the session were joined into an id.
+       *
+       * `clearPanel` for the reason the rail's own handler used to give: a
+       * remote terminal drawn behind a covering view would be a session nobody
+       * could see, running keystrokes nobody sent.
+       */
+      const remote = readMachineTabId(id)
+      if (remote) {
+        clearPanel()
+        setCopilotPending(false)
+        setOpenMachineSession(remote)
+        return
+      }
       showTab(id)
       /*
        * A remote session filling the window is put away by any local navigation.
@@ -1532,7 +1729,7 @@ function Workspace() {
       if (!windowSessions.some((session) => session.id === id)) return
       setActiveSession(id)
     },
-    [windowSessions, setActiveSession, showTab],
+    [windowSessions, setActiveSession, showTab, clearPanel],
   )
 
   /**
@@ -1799,6 +1996,157 @@ function Workspace() {
   )
 
   /**
+   * End one session on another machine, having already asked.
+   *
+   * `machines.closeSession` answers *the request left this computer*, and that
+   * is deliberately all it answers: the session ends over there, and the row
+   * leaving `machines:state` is what says it happened. So nothing here waits and
+   * nothing here removes a row — the push does, which is the same arrangement
+   * `startSession` has in the other direction.
+   *
+   * A refusal is reported rather than swallowed. The window only draws the ✕
+   * when the far machine advertised `close`, so a `false` here means something
+   * changed between the draw and the press — the link dropped, the session had
+   * already exited — and a ✕ that quietly does nothing is the exact complaint
+   * this pass exists to remove. The rail is re-read so whatever is actually true
+   * over there is on screen a moment later.
+   */
+  const closeMachineSessionNow = useCallback(
+    (machineId: string, sessionId: string) => {
+      void machines.closeSession(machineId, sessionId).then((sent) => {
+        if (!sent) machines.reread()
+      })
+      /*
+       * And put the pane away if that was the session filling it.
+       *
+       * Immediately, rather than waiting for the row to disappear. A terminal
+       * bound to a session that is being killed is a terminal whose bytes have
+       * stopped, and leaving it on screen for the round trip would show a live-
+       * looking window over a dead process. `MachineSessionPane` detaches on
+       * unmount, so this is also what takes the subscription down.
+       */
+      setOpenMachineSession((current) =>
+        current && current.machineId === machineId && current.sessionId === sessionId
+          ? null
+          : current,
+      )
+    },
+    [machines],
+  )
+
+  /** The same, asking first — the rule every close in this window follows. */
+  const closeMachineSession = useCallback(
+    (machineId: string, sessionId: string) => {
+      const tab = machineTabsRef.current.find(
+        (entry) => entry.machine?.id === machineId && entry.id === machineTabId(machineId, sessionId),
+      )
+      if (!confirmClose) {
+        closeMachineSessionNow(machineId, sessionId)
+        return
+      }
+      setPendingClose({
+        kind: 'machine-session',
+        machineId,
+        sessionId,
+        name: tab?.label || 'Session',
+        status: tab?.status ?? 'idle',
+      })
+    },
+    [confirmClose, closeMachineSessionNow],
+  )
+
+  /**
+   * End every session on one machine, and leave the machine paired.
+   *
+   * His words, worked out on the recording: *"Close you will not give — but you
+   * can actually give, because it should not disconnect the remote account. It
+   * will just close all of the sessions from that PC. Yeah, you can give this
+   * close too, so it will go from here, but whenever you want to start, you can
+   * start as a new session and you can start from that device."*
+   *
+   * So: a `close` per session, the group hidden, and nothing whatsoever touching
+   * the pairing. `forgetMachine` exists and is on the Remote screen, where
+   * un-pairing belongs; this cannot reach it, which is the point.
+   *
+   * The frames go out together rather than in sequence. They are independent —
+   * each names one session — and awaiting them one at a time would leave a group
+   * emptying row by row over a slow link, which reads as something failing
+   * part-way rather than as one act.
+   */
+  const closeMachineNow = useCallback(
+    (machineId: string) => {
+      const handles = machineTabsRef.current
+        .filter((tab) => tab.machine?.id === machineId)
+        .map((tab) => readMachineTabId(tab.id))
+        .filter((handle): handle is { machineId: string; sessionId: string } => handle !== null)
+
+      /*
+       * Hidden against the ids that are running *now*, which is what makes the
+       * group go away on the press rather than a round trip later. See
+       * `machineIsClosed` for why the ids and not a bare flag.
+       */
+      setClosedMachines((current) => [
+        ...current.filter((entry) => entry.id !== machineId),
+        { id: machineId, sessions: handles.map((handle) => handle.sessionId) },
+      ])
+      // A remote session on screen belongs to one of those, so the pane goes
+      // with them rather than being left pointed at a process that is ending.
+      setOpenMachineSession((current) => (current?.machineId === machineId ? null : current))
+
+      void Promise.all(
+        handles.map((handle) => machines.closeSession(handle.machineId, handle.sessionId)),
+      ).then((results) => {
+        /*
+         * A refusal puts the group back, rather than leaving work hidden.
+         *
+         * The window only draws Close when the far machine advertised `close`,
+         * so a `false` here means something changed between the draw and the
+         * press — the link dropped, the machine went to sleep mid-frame. The
+         * sessions are then still running over there, and a hidden group would
+         * be this app quietly deciding that work it failed to end no longer
+         * exists. Re-reading is what puts the truth back on screen.
+         */
+        if (results.every((sent) => sent)) return
+        setClosedMachines((current) => current.filter((entry) => entry.id !== machineId))
+        machines.reread()
+      })
+    },
+    [machines],
+  )
+
+  /**
+   * The same, asking once — and once is the requirement rather than a nicety.
+   *
+   * *"Closing several sessions at once deserves one confirmation naming how
+   * many, not one dialog per session."* So the count is carried into the dialog
+   * and the sentence is built from it, exactly as closing a project already
+   * does. An empty machine still asks, for the reason `closeProject` gives about
+   * an empty folder: it costs one press, it is the one case where the answer
+   * cannot surprise anybody, and making it the exception puts back the rule this
+   * is removing.
+   */
+  const closeMachine = useCallback(
+    (machineId: string) => {
+      const on = machineTabsRef.current.filter((tab) => tab.machine?.id === machineId)
+      if (!confirmClose) {
+        closeMachineNow(machineId)
+        return
+      }
+      setPendingClose({
+        kind: 'machine',
+        machineId,
+        name: on[0]?.machine?.name ?? 'that machine',
+        // The most alarming state among them, so the wording is about the worst
+        // thing this press interrupts rather than about whichever session
+        // happens to be first — the same rule `closeProject` follows.
+        status: on.find((tab) => RISKY_STATUSES.has(tab.status ?? 'idle'))?.status ?? 'idle',
+        count: on.length,
+      })
+    },
+    [confirmClose, closeMachineNow],
+  )
+
+  /**
    * Close, asking first. Always.
    *
    * `CloseSessionConfirm` was written, tested and left on the unreachable list
@@ -1815,6 +2163,24 @@ function Workspace() {
    */
   const closeTab = useCallback(
     (id: string) => {
+      /*
+       * A session on another machine, ended where it is running.
+       *
+       * First, because the id is not in `tabs` and everything below this line
+       * assumes it is. `readMachineTabId` is the one place that knows how the
+       * two handles were joined, so this is the whole of the routing.
+       *
+       * It is genuinely a close, not a "take the pill off the bar". That is the
+       * decision Asad reversed on 2026-08-18 — the pill exists because he asked
+       * for it, and the ✕ on it means what Close on the machine's heading means:
+       * *"It will just close all of the sessions from that PC… it should not
+       * disconnect the remote account."* One session's worth of that.
+       */
+      const remote = readMachineTabId(id)
+      if (remote) {
+        closeMachineSession(remote.machineId, remote.sessionId)
+        return
+      }
       const tab = tabs.find((t) => t.id === id)
       /*
        * ⌘W on the copilot **puts it away**. It does not end it.
@@ -1857,7 +2223,7 @@ function Workspace() {
       }
       closeTabNow(id)
     },
-    [tabs, activeTab, showInstead, confirmClose, closeTabNow],
+    [tabs, activeTab, showInstead, confirmClose, closeTabNow, closeMachineSession],
   )
 
   /** Step through the open sessions and pages, wrapping at each end. */
@@ -2431,7 +2797,27 @@ function Workspace() {
       }
       switch (id) {
         case 'session.close':
-          if (activeTab) closeTab(activeTab.id)
+          /*
+           * ⌘W closes what is **on screen**, which since 2026-08-18 can be a
+           * session on another machine.
+           *
+           * `activeTab` is the local answer, and while a remote session fills
+           * the pane it names a tab you are not looking at — so the chord would
+           * have ended a session on this computer while a different one's
+           * terminal was in front of you. That was already true before a remote
+           * session had a pill, and it was already wrong; giving it a pill is
+           * what makes it fixable, because there is now a tab id to name.
+           *
+           * `openMachineSession` rather than `railActiveTabId`, which says the
+           * same thing and is computed several hundred lines below this
+           * callback — reading it here would be a temporal-dead-zone throw on
+           * the first ⌘W of every launch.
+           */
+          if (openMachineSession) {
+            closeTab(machineTabId(openMachineSession.machineId, openMachineSession.sessionId))
+          } else if (activeTab) {
+            closeTab(activeTab.id)
+          }
           return true
         // ⌘⇧T, and the application menu's "New Session…". One destination with
         // two chords is fine; two destinations would not be. See the palette
@@ -2491,6 +2877,9 @@ function Workspace() {
     [
       commands,
       activeTab,
+      // ⌘W closes what is on screen, and a session on another machine can be
+      // what is on screen. See the `session.close` case.
+      openMachineSession,
       closeTab,
       cycleTab,
       showPanel,
@@ -2870,6 +3259,14 @@ function Workspace() {
                           sessionId={session.id}
                           cwd={session.projectPath ?? null}
                           provider={session.provider}
+                          /* The session's real exit code, never a literal.
+                             The cluster reads this pane's screen to tell a
+                             shell with an agent in it from a plain one, and a
+                             killed CLI leaves its banner on the last frame —
+                             so a hardcoded `false` here would keep live model
+                             and effort chips on the bar of a session whose
+                             process is already gone. */
+                          exited={session.exitCode !== null}
                           onOpenConnectors={openConnectors}
                         />
                       ) : undefined
@@ -3269,7 +3666,24 @@ function Workspace() {
    * and draws the reveal button when it is false. Two components deciding it
    * separately is how you get two reveal buttons, or none.
    */
-  const hasStrip = stripIsPresent(tabs)
+  const hasStrip = stripIsPresent(openTabs)
+
+  /**
+   * The tab the rail and the strip should draw as selected.
+   *
+   * One value for the two of them, because they are answering the same question
+   * and a window where the highlighted row and the highlighted pill disagree is
+   * the defect `covered` was written for, in a third costume.
+   *
+   * A remote session is first, because when one is on screen it is what is on
+   * screen: it fills the pane above every local tab, exactly as it did before it
+   * had a pill. `focusedId` is the split's focused pane, which is the local
+   * answer and the one that has to win over `activeTab` — see the strip's own
+   * note about the bar below agreeing with it.
+   */
+  const railActiveTabId = openMachineSession
+    ? machineTabId(openMachineSession.machineId, openMachineSession.sessionId)
+    : focusedId ?? activeTab?.id ?? null
 
   /**
    * The session bar, absent inside a browser page.
@@ -3330,7 +3744,16 @@ function Workspace() {
           width={sidebar.width}
           projects={projects}
           tabs={tabs}
-          activeTabId={focusedId ?? activeTab?.id ?? null}
+          /*
+            Which row is highlighted — including a remote one.
+
+            `railActiveTabId` rather than `activeTab?.id`, because a session on
+            another machine is a tab now and has to be able to be the selected
+            one. That is what replaced the `activeMachineSession` pair this
+            component used to take: two ways of saying "this one is on screen"
+            is two answers to the question the rail asks most often.
+          */
+          activeTabId={railActiveTabId}
           activePanel={panel}
           // The rows this install has. A view whose feature is uninstalled has
           // no row at all rather than a disabled one — and the palette offers
@@ -3428,31 +3851,37 @@ function Workspace() {
           // nothing to restore.
           onOpenAlerts={() => setAlertsOpen(true)}
           /*
-            The machines, and the two things the rail does with them.
+            The machines, and the three things the rail does with them.
 
-            Flattened here rather than in the rail, for the reason every other
+            Assembled here rather than in the rail, for the reason every other
             list it takes is: the rail draws what it is handed, and deciding
             which machines are worth listing is `reachableMachines` — one rule,
             read by this section and by the New Session dialog's machine step, so
             a machine you can pick in the dialog is always one you can see here.
+
+            The sessions arrive as `WorkspaceTab`s off `machineTabs`, which is
+            what lets the rail draw them with `rowsFor` — the same function that
+            draws a project's sessions, so a remote row gets the identical status
+            dot, drag, promote toggle and ✕ a local one has. That is the fix he
+            asked for in as many words: *"You don't need to give icon of the
+            remote next to all of them — only above there, next to the PC."*
+
+            A group whose Close has been pressed is not in `machineTabs` at all,
+            so it is not here either; see `closedMachines`.
           */
-          machines={machines.machines.map((row) => ({
-            machineId: row.machine.id,
-            name: row.machine.name,
-            sessions: (row.link?.sessions ?? []).map((session) => ({
-              id: session.id,
-              title: session.title,
-              cwd: session.cwd,
-            })),
-          }))}
-          activeMachineSession={openMachineSession}
-          onOpenMachineSession={(machineId, sessionId) => {
-            // Whatever was filling the window goes, exactly as selecting a
-            // sidebar view does. A remote terminal drawn behind a panel would be
-            // a session nobody could see running keystrokes nobody sent.
-            clearPanel()
-            setOpenMachineSession({ machineId, sessionId })
-          }}
+          machines={machines.machines
+            .filter(
+              (row) => !machineIsClosed(closedMachines, row.machine.id, row.link?.sessions ?? []),
+            )
+            .map((row) => ({
+              machineId: row.machine.id,
+              name: row.machine.name,
+              sessions: machineTabs.filter((tab) => tab.machine?.id === row.machine.id),
+              // The far machine's own answer, not this build's hope. A PC on an
+              // older build advertises everything except this, and Close there
+              // says why it cannot act rather than sending a frame into silence.
+              canClose: row.link?.capabilities.includes('close') === true,
+            }))}
           /*
             The same dialog, with the machine already chosen.
 
@@ -3461,6 +3890,7 @@ function Workspace() {
             which is the difference between a shortcut and a second flow.
           */
           onNewMachineSession={(machineId) => openNewSessionDialog(null, machineId)}
+          onCloseMachine={closeMachine}
           onToggleCollapsed={sidebar.toggleCollapsed}
           onPeekStart={sidebar.beginPeek}
           onPeekEnd={sidebar.endPeek}
@@ -3500,19 +3930,38 @@ function Workspace() {
         */}
         {hasStrip && (
           <WorkspaceTabStrip
-            tabs={tabs}
-            activeTabId={focusedId ?? activeTab?.id ?? null}
+            /* Everything open, this window's and the machines'. A remote session
+               is a pill up here now, because he asked for one directly: *"it
+               should be there on the top, just like the normal internal local
+               session."* */
+            tabs={openTabs}
+            activeTabId={railActiveTabId}
             /* A sidebar view is filling the window, so none of these tabs is
                what is on screen — the bar below is headed with the view's name.
                The tab stays drawn, because it is what you will come back to;
                it just stops claiming to be the selected one.
 
-               A remote session covers it for exactly the same reason: it fills
-               the pane, so a local tab still drawn as selected would be the
-               strip claiming to be what is on screen when it is not. */
-            covered={showingPanel || openMachineSession !== null}
+               A remote session used to be listed here as a second reason to
+               cover the strip, on the grounds that it filled the pane and had no
+               pill of its own to be selected. It has one now, so covering the
+               strip for it would be the strip refusing to point at a tab it is
+               drawing — which is the very defect this prop exists to prevent, in
+               the opposite direction. */
+            covered={showingPanel}
             onSelect={selectTab}
             onShowInstead={showInstead}
+            /* The ✕ on a *remote* pill, and the one control in this bar that
+               ends something.
+
+               A local pill's ✕ takes the tab off the bar and leaves the session
+               running in the rail — *"it should not delete the session"* — and
+               that reading is only available because the rail still has the row.
+               For a remote session the strip and the rail both list it and
+               neither owns it, and he asked for the ✕ to mean what Close on the
+               machine's heading means: end the session over there, keep the
+               machine. `closeTab` routes it, so it gets the same confirmation
+               every other close in this window gets. */
+            onEndRemote={closeTab}
             /* The two icons after the last tab. The terminal opens the dialog,
                not a session — the same single route the rail's button takes —
                and the globe opens a page on the start page. */
@@ -3669,6 +4118,11 @@ function Workspace() {
                 sessionId={headingSession.id}
                 cwd={headingSession.projectPath ?? null}
                 provider={headingSession.provider}
+                /* The same fact the account chip beside it already gets through
+                   `chromeSession`, and for the same reason: presence is settled
+                   off the record first and off the screen only for a session
+                   that is still alive. See the note on the prop. */
+                exited={headingSession.exitCode !== null}
                 onOpenConnectors={openConnectors}
               />
             ) : null}
@@ -3795,7 +4249,27 @@ function Workspace() {
               ? (pendingClose.tab.status ?? 'idle')
               : pendingClose.status
         }
-        count={pendingClose?.kind === 'project' ? pendingClose.count : 1}
+        /*
+          How many sessions this press ends.
+        
+          A machine's count is the sessions running on it, which is what makes
+          *"Closing this machine closes 4 sessions on it"* a true sentence and
+          the reason there is one dialog rather than four. One session on another
+          machine is one, exactly as a local one is.
+        */
+        count={
+          pendingClose?.kind === 'project' || pendingClose?.kind === 'machine'
+            ? pendingClose.count
+            : 1
+        }
+        /* Which nouns the dialog uses. The act is the same in all three cases;
+           what differs is what a person is being told they are closing, and
+           calling a computer a project is how a confirmation stops being read. */
+        subject={
+          pendingClose?.kind === 'machine' || pendingClose?.kind === 'machine-session'
+            ? 'machine'
+            : 'project'
+        }
         provider={
           pendingClose?.kind === 'session'
             ? sessions.find((s) => s.id === pendingClose.tab.id)?.provider
@@ -3807,7 +4281,9 @@ function Workspace() {
           setPendingClose(null)
           if (!closing) return
           if (closing.kind === 'session') closeTabNow(closing.tab.id)
-          else closeProjectNow(closing.path)
+          else if (closing.kind === 'project') closeProjectNow(closing.path)
+          else if (closing.kind === 'machine') closeMachineNow(closing.machineId)
+          else closeMachineSessionNow(closing.machineId, closing.sessionId)
         }}
         // The dialog writes the setting itself; this keeps the copy above in
         // step so the very next close does not ask again.

@@ -237,20 +237,38 @@
   Two named values on one chip: the model and the effort.
 
   Why both are on it rather than one is argued in `SessionControls.tsx`. What is
-  here is how it gives way, and the order matters: the caret is outside the
-  clipped area, so the control never stops looking like a control, and the words
-  are clipped under a short fade from their trailing edge — which means the
-  model is the last thing to go, because it is first.
+  here is how it gives way — and it gives way by *saying less*, decided in the
+  component from the room the bar has, rather than by drawing the same thing at
+  every width and hiding the part that does not fit.
 
-  A fade rather than an ellipsis because there are five separate spans in there.
-  `text-overflow` acts on one box's own text; across a row of them it does
-  nothing at all, and the alternative — ellipsising each span on its own — reads
-  as `M… Opus 5 · E… High`, which is four truncations where one would do.
+  ## The fade that used to be here, and why it is gone
 
-  Nothing inside shrinks, which is what makes the truncation happen at one
-  place: the words keep their own widths and the row they sit in runs out. Let
-  them shrink and every span loses characters at once, which is the mush the
-  `.ac-name` rule above is about.
+  A mask ran across the trailing sixteen pixels of this box whenever its contents
+  overflowed. It looked reasonable and it was measured on 2026-08-18 in the
+  running app, at three window widths, on a session named "Update Claude Code
+  terminal to new version":
+
+      720px  chip  25px   label drawn    0px of 106
+      900px  chip  92px   label drawn   45px of 106
+      1100px chip 137px   label drawn  106px of 106
+
+  At 900 the reader saw `Opus 5 · Ul` dissolving into the toolbar, which is the
+  *"faded, clipped text — show it properly or make it a dropdown only"* item from
+  the review turning up in a second place. At 720 — which is this app's own
+  `minWidth`, so it is a size somebody can really be at — the mask began at
+  minus four pixels and every character of the label was painted fully
+  transparent: a control with a hundred and six pixels of invisible words behind
+  a bare chevron.
+
+  The three states in `summaryDetail` replace it. `both` and `model` are words a
+  person can read; `glyph` is an icon that was chosen rather than a word that was
+  erased. Nothing in this file fades anything now.
+
+  Nothing inside shrinks *except the last value*, and that exception is what
+  keeps a long model name honest. `text-overflow` acts on one box's own text, so
+  ellipsising every span reads as `M… Opus 5 · E… High` — four truncations where
+  one would do. Letting only the trailing value give way puts the single
+  truncation where a reader already expects one: at the end.
 */
 .sc-summary-text {
   display: flex;
@@ -265,18 +283,29 @@
 }
 
 /*
-  The fade, and only when there is something being faded out.
+  …and the trailing value is the one thing that does.
 
-  A mask written unconditionally shaves the last few pixels off the effort value
-  even in a bar with room to spare — seen on screen, `Effort Unknown` with the
-  `n` half gone and nothing wrong. So the component measures the span against
-  its own scroll width and stamps `data-clipped` when the two disagree; this is
-  the one thing in this file that could not be decided in CSS, because CSS has
-  no way to ask whether a box is overflowing.
+  `:last-child` rather than a class, because which value is last depends on the
+  state the component chose: `Ultracode` in `both`, `Opus 5` in `model`. Either
+  way it is the one furthest from the reader's entry point, so it is the one
+  that can afford to end in an ellipsis.
 */
-.sc-summary[data-clipped] .sc-summary-text {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
-  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+.sc-summary .sc-summary-text > .ac-value:last-child {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/*
+  The sliders mark, for the width at which there are no words.
+
+  Sized to match the caret it sits beside rather than to the 16px this app's
+  icon buttons use elsewhere: this is a glyph inside a chip, next to a 9px
+  chevron, and an icon drawn at button scale in there reads as a second control
+  rather than as the label of this one.
+*/
+.sc-summary-glyph {
+  flex-shrink: 0;
+  opacity: 0.85;
 }
 
 /* The dot between the two pairs. A mark rather than a character so it cannot be
@@ -308,32 +337,83 @@
   at all. A reading you cannot read is a nuisance; a control that is not on
   screen is the dead control this repository is audited for, and this one is the
   only way in to model, effort, fast mode and connectors once they have folded.
-  Thirty pixels is the chip's own padding plus its caret, so what survives is a
-  sliver of the word "Model" and the mark that says it opens something.
+
+  Three floors, one per state, because the states are three different controls
+  and a single number could only ever be right for one of them. Each is the
+  chip's own chrome — 16 of padding, a 6 gap, a 9 caret, so 31 — plus whatever
+  that state has to have room for.
+
+  `both` keeps the 30 it always had: past that it is giving up characters, and
+  the component has already decided to say less rather than draw less by then.
 */
 .session-controls .sc-summary {
   min-width: 30px;
 }
 
 /*
-  …and 25 when the reading beside it has been squeezed to its figures.
+  …72 when the chip is down to the model alone.
 
-  Thirty is the chip's padding plus its caret plus a sliver of a word. Twenty-
-  five is the padding plus the caret and nothing else — still a control, still
-  pressable, still the only way in to everything the fold hid. It is given up
-  for five pixels because of what those five pixels buy on the other side:
-  measured at a 720pt window with a 35-character session name, the whole cluster
-  is floored at 56 by `MIN_CLUSTER_PX`, and at a 30-pixel floor here the reading
-  drew `19%` as `19°`. Half a percent sign is not a smaller reading, it is a
-  wrong one — while a caret with no word beside it is exactly as pressable as a
-  caret with one.
+  31 of chrome — 16 of padding, a 6 gap, a 9 caret — around a value that measures
+  38.2 in the running app, plus a few pixels of margin. This is the floor that
+  makes the middle state worth having: without it, flex shares a shortfall out in
+  proportion to what each side asked for, and at a 900px window it handed the
+  chip 62 — six fewer than `Opus 5` needs, so the one value left ellipsised to
+  `Opus…`. Held here, the reading beside it gives up the pixels instead, which
+  costs it some meter and no figures.
+
+  The margin is not decoration and it was bought with a screenshot. At exactly 69
+  — the arithmetic to the pixel — the chip's content box came out at 38.0 against
+  a value wanting 38.24, and 900px still drew `Opus…`. A floor that is right to
+  the last quarter of a pixel is a floor that fails on the next font, the next
+  scale factor and the next model name.
+
+  Stated as a number rather than in `ch` because it is a measurement of this chip
+  in this face at this size, and `ch` would silently mean something else the
+  moment either changed. A model name longer than this holds still ellipsises,
+  which is the honest way to run out of room and the whole reason the mask went.
+*/
+.session-controls[data-detail='model'] .sc-summary {
+  min-width: 72px;
+}
+
+/*
+  …and 34 when there are no words at all.
+
+  31 of chrome around a 14-pixel glyph, less the padding the tight tier gives
+  back. What this replaces is the state the whole change is about: at the app's
+  own minimum window width the chip was floored at 25 — its padding and its
+  caret and nothing else — and the label it was still rendering was painted
+  entirely transparent by a mask. Twenty-five pixels of chevron is not a smaller
+  version of `Opus 5 · Ultracode`; it is a control that has stopped saying what
+  it is.
+
+  Nine more pixels buys the mark that says *which* control it is, and they come
+  from the reading beside it, which at this tier is two percentages and has
+  eighteen pixels of slack against its own `max-width`. `MIN_CLUSTER_PX` was
+  raised from 56 to 106 in the same change, so the window toolbar reaches
+  `model` rather than this; `glyph` is now what a genuinely tiny pane bar gets,
+  which is the only place it was ever an honest answer.
+*/
+.session-controls[data-detail='glyph'] .sc-summary {
+  min-width: 34px;
+}
+
+/*
+  …and the tight tier pulls the padding in, in every state.
+
+  Two pixels a side rather than eight, which is what the reading beside it
+  already does at this tier and for the same reason: at the bottom of the range
+  every pixel spent on padding is a pixel taken off a figure or a word.
 */
 .session-controls[data-fit='tight'] .sc-summary {
-  min-width: 25px;
+  padding-left: var(--sp-1);
+  padding-right: var(--sp-1);
 }
 
 /* The caret is the part that says "this opens something", so it is the one part
-   that never gives way and never fades. */
+   that never gives way. It is kept even in the glyph state, where the mark
+   beside it already reads as a button: a chip that opens a panel and a chip that
+   performs an action look identical without it, and this one opens a panel. */
 .sc-summary .ac-caret {
   flex-shrink: 0;
 }

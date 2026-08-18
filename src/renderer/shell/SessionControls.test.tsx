@@ -2,7 +2,15 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ConnectorsPicker, SessionControls, contentsSentence, summaryLabel } from './SessionControls'
+import {
+  ConnectorsPicker,
+  SessionControls,
+  contentsSentence,
+  summaryDetail,
+  summaryLabel,
+  SUMMARY_BOTH_PX,
+  SUMMARY_MODEL_PX,
+} from './SessionControls'
 import { DEFAULT_EFFORT, EFFORT_OPTIONS, controlName } from '../chat/controls/catalog'
 import { preferredEffort } from './useSessionControls'
 
@@ -42,12 +50,21 @@ afterEach(() => {
 
 const noop = (): void => {}
 
+/*
+ * `exited: false` because every case in this file is about a session that is
+ * running; the ones about a session that has stopped are in
+ * `SessionControls.presence.test.tsx`, where the stand-in for the screen makes
+ * the difference between the two visible. It is a default *here* and
+ * deliberately not one on the prop — see the note on `exited` in
+ * `SessionControls.tsx` for what a default would cost at a real call site.
+ */
 function render(props: Partial<Parameters<typeof SessionControls>[0]> = {}): string {
   return renderToStaticMarkup(
     <SessionControls
       sessionId="s1"
       cwd="/Users/apple/Projects/terminaldeck"
       provider="claude"
+      exited={false}
       onOpenConnectors={noop}
       {...props}
     />,
@@ -148,6 +165,90 @@ describe('the names on the chips', () => {
     expect(view).toContain(
       "{readings?.effort.label ? null : <span className=\"ac-name\">{controlName('effort')}</span>}",
     )
+  })
+})
+
+/* -------------------------------------------------------------------------- *
+ * The folded chip at widths a person can actually be at.
+ *
+ * Measured in the running app on 2026-08-18, on a session named "Update Claude
+ * Code terminal to new version", with the fade that used to live in
+ * `SessionControls.css`:
+ *
+ *     720px  chip  25px   label drawn    0px of 106
+ *     900px  chip  92px   label drawn   45px of 106
+ *     1100px chip 137px   label drawn  106px of 106
+ *
+ * 720 is this app's own `minWidth`, so the first row is not a corner case — it
+ * is the narrowest window somebody can make, and the control there was a bare
+ * chevron with a hundred and six pixels of invisible words behind it. The second
+ * row is the *"faded, clipped text — show it properly or make it a dropdown
+ * only"* item from the 2026-08-17 review, arrived in a new place.
+ * -------------------------------------------------------------------------- */
+
+describe('the folded chip says less rather than drawing less', () => {
+  const css = readFileSync(join(__dirname, 'SessionControls.css'), 'utf8')
+  const view = readFileSync(join(__dirname, 'SessionControls.tsx'), 'utf8')
+
+  it('has no mask anywhere in it, at any width or in any state', () => {
+    // The whole defect in one assertion. A fade is not a smaller label, it is a
+    // label the screen appears to have lost — and at 720 it was the entire
+    // label. Whatever this chip does when it runs out of room, it may not do
+    // this.
+    expect(css).not.toContain('mask-image')
+    expect(css).not.toContain('data-clipped')
+    expect(view).not.toContain('data-clipped')
+  })
+
+  it('carries both values only when the room for both has been measured', () => {
+    // 250 is 107 for the reading beside it, 2 for the gap and 137 for the chip
+    // carrying `Opus 5 · Ultracode`. Below that the chip stops promising two
+    // values it cannot draw.
+    expect(summaryDetail(SUMMARY_BOTH_PX)).toBe('both')
+    expect(summaryDetail(SUMMARY_BOTH_PX + 400)).toBe('both')
+    expect(summaryDetail(SUMMARY_BOTH_PX - 1)).toBe('model')
+  })
+
+  it('keeps the model whole rather than showing halves of two values', () => {
+    // *"Just Opus 5 with drop down is good enough."* One value read is worth
+    // more than two values guessed, and nothing is lost — `summaryLabel` names
+    // and quotes both, on hover and to a screen reader.
+    expect(summaryDetail(SUMMARY_MODEL_PX)).toBe('model')
+    expect(summaryDetail(161)).toBe('model')
+  })
+
+  it('becomes an icon rather than an empty chip when there is room for neither', () => {
+    expect(summaryDetail(SUMMARY_MODEL_PX - 1)).toBe('glyph')
+    expect(summaryDetail(25)).toBe('glyph')
+    // An icon that was chosen, not a word that was erased: the glyph is in the
+    // markup, and it comes with the caret and the same accessible name.
+    expect(view).toContain('sc-summary-glyph')
+  })
+
+  it('draws the unclamped row before anything has been measured', () => {
+    // The first paint, and this component's own static renders. Same answer
+    // `fit` gives to the same state, for the same reason.
+    expect(summaryDetail(null)).toBe('both')
+  })
+
+  it('gives each of the three states a floor wide enough for what it draws', () => {
+    // A single floor could only ever be right for one of them. 72 is 31 of chip
+    // chrome around `Opus 5`, measured at 38.2 in the app, plus a few pixels of
+    // margin; without it, flex shares a shortfall proportionally and a 900px
+    // window drew the one remaining value as `Opus…`. At exactly 69 — the
+    // arithmetic to the pixel — it drew `Opus…` as well, which is why the margin
+    // is part of the number rather than a rounding-up of it.
+    expect(css).toContain(".session-controls[data-detail='model'] .sc-summary {")
+    expect(css).toMatch(/\[data-detail='model'\] \.sc-summary \{\s*\n\s*min-width: 72px;/)
+    expect(css).toContain(".session-controls[data-detail='glyph'] .sc-summary {")
+  })
+
+  it('lets only the trailing value give way, so there is one truncation and not four', () => {
+    // Ellipsising every span reads as `M… Opus 5 · E… High`. The last value is
+    // the one furthest from the reader's entry point, so it is the one that can
+    // afford to end in an ellipsis.
+    expect(css).toContain('.sc-summary .sc-summary-text > .ac-value:last-child {')
+    expect(css).toContain('.sc-summary .sc-summary-text > * {\n  flex-shrink: 0;\n}')
   })
 })
 
@@ -298,6 +399,13 @@ describe('a shell session is not an agent', () => {
      * It is also the bug that produced the rule. The reader behind these values
      * falls back to Claude Code's own settings file when it cannot parse a
      * screen, so a plain shell once reported `Model  Opus 5`.
+     *
+     * Nothing has read this session's screen — a static render gives the
+     * presence hook no chance to resolve a promise — so this is the *unknown*
+     * shell as well as the plain one, and both draw nothing for the reason set
+     * out in `SessionControls.presence.test.tsx`. What is emphatically no
+     * longer covered by this case is a shell with Claude Code running in it;
+     * that one is over there and it draws the full cluster.
      */
     withBridge()
     expect(render({ provider: 'shell' })).toBe('')

@@ -22,6 +22,7 @@ import {
   tabQualifiers,
   type WorkspaceTab,
 } from './workspace-tabs'
+import { GroupHead } from './GroupHead'
 
 /**
  * One reachable machine, as the rail lists it.
@@ -36,7 +37,31 @@ import {
 export interface SidebarMachine {
   machineId: string
   name: string
-  sessions: ReadonlyArray<{ id: string; title: string; cwd: string }>
+  /**
+   * What is running there, as tabs.
+   *
+   * `WorkspaceTab`s rather than the three fields this used to carry, and the
+   * change is the whole of *"the rows underneath take the identical icons a
+   * local session row takes"*. They go through `rowsFor` now — the same function
+   * that draws a project's sessions — so they get the status dot, the drag to
+   * the top strip, the promote toggle and the ✕ without any of it being written
+   * twice. A row built from a private shape could only ever have been a copy of
+   * that function that drifts from it.
+   *
+   * Each tab's `machine` field says which machine it is on, and its id is minted
+   * by `machineTabId` so that one function owns the joining of the two handles.
+   */
+  sessions: readonly WorkspaceTab[]
+  /**
+   * Whether that machine will accept a request to end a session.
+   *
+   * It is the `close` capability off the link, asked one level up like every
+   * other decision this component is handed. False is not hypothetical: the verb
+   * is newer than the protocol, a machine paired to an older build advertises
+   * everything except this, and the honest answer there is a Close that says why
+   * it cannot act rather than one that sends a frame into silence.
+   */
+  canClose: boolean
 }
 
 interface Props {
@@ -87,16 +112,19 @@ interface Props {
    * app rather than requiring a machines bridge to exist.
    */
   machines?: readonly SidebarMachine[]
-  /**
-   * The remote session on screen right now, or null.
+  /*
+   * There was an `activeMachineSession` here — a `{ machineId, sessionId }` pair
+   * naming the remote session on screen, so this rail could highlight its row.
    *
-   * A pair rather than a composite id, and a prop of its own rather than a value
-   * folded into `activeTabId`. A remote session has two handles — the machine
-   * and the session — and joining them into one string here would mean every
-   * caller had to know the joining rule, which is how two files come to disagree
-   * about a separator.
+   * It is gone, and what replaced it is `activeTabId` carrying that session's
+   * tab id like any other. The pair existed because a remote session had no tab,
+   * and the argument for keeping it a pair was that joining two handles into one
+   * string would make every caller learn the joining rule. That is still true and
+   * is still the reason `machineTabId` exists — it is the one function that
+   * knows the rule, and both ends of this now call it. What changed is that a
+   * remote session *has* a tab, so a second way of saying "this one is selected"
+   * would be two answers to the question the rail asks most often.
    */
-  activeMachineSession?: { machineId: string; sessionId: string } | null
   /**
    * Whether to draw the bell beside Settings — i.e. whether the Alerts feature
    * is installed and on.
@@ -270,10 +298,18 @@ interface Props {
    * the window; these two open something over it and leave the window alone.
    */
   onOpenAlerts(): void
-  /** Open a session that is running on another machine. */
-  onOpenMachineSession?(machineId: string, sessionId: string): void
-  /** Start one there — the same dialog, with the machine already chosen. */
+  /** Start a session on another machine — the same dialog, machine already chosen. */
   onNewMachineSession?(machineId: string): void
+  /**
+   * End every session on one machine, and leave the machine paired.
+   *
+   * The rail reports the press and owns none of it. What it costs — one
+   * confirmation naming how many sessions rather than one dialog per session,
+   * the `close` frames themselves, and the group folding away afterwards — lives
+   * in `App.tsx` beside the rest of the machine state, for the same reason
+   * `machines` is a prop: every decision about what exists is made one level up.
+   */
+  onCloseMachine?(machineId: string): void
   /** Keep it open (peeking) or put it away (pinned). */
   onToggleCollapsed(): void
   onPeekStart(): void
@@ -309,7 +345,22 @@ function Glyph({
 }
 
 const PLUS = 'M12 5.5v13M5.5 12h13'
-const DISCLOSURE = 'M9.5 6.5l5.5 5.5-5.5 5.5'
+/* `DISCLOSURE` used to be here. The only thing that drew one was the project
+   heading, and that heading is `GroupHead` now — which owns the triangle along
+   with the three actions beside it, so a machine's heading folds with the same
+   glyph rather than a second copy of the same path. */
+
+/**
+ * The fold key for a machine's group.
+ *
+ * Projects and machines share one folded set — see the state's own comment — and
+ * this is what keeps the two key spaces apart. A project's key is an absolute
+ * path, which on every platform this app runs on begins with a separator or a
+ * drive letter, so nothing prefixed like this can ever be mistaken for one.
+ */
+function machineFoldKey(machineId: string): string {
+  return `machine:${machineId}`
+}
 /**
  * The arrow in the gutter, and the only control that opens or closes the rail.
  *
@@ -392,9 +443,8 @@ export function Sidebar({
   browser = true,
   browserOffer = null,
   machines = [],
-  activeMachineSession = null,
-  onOpenMachineSession = () => {},
   onNewMachineSession = () => {},
+  onCloseMachine = () => {},
   alerts = true,
   alertCount = 0,
   unread = [],
@@ -578,7 +628,15 @@ export function Sidebar({
     }
   }, [renaming])
 
-  /** Folded projects, by path. Local: it is a view state, not a preference. */
+  /**
+   * Folded groups, by key. Local: it is a view state, not a preference.
+   *
+   * One set for projects and machines together, because folding is one gesture
+   * and a second set would be a second place for it to get out of step. A
+   * project's key is its path and a machine's is {@link machineFoldKey}, which
+   * prefixes the id — an absolute path and a prefixed UUID cannot collide, and
+   * the prefix is what makes that a stated rule instead of a coincidence.
+   */
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set())
   const toggleFold = (path: string) =>
     setFolded((current) => {
@@ -745,7 +803,7 @@ export function Sidebar({
    * screen, which is the only way this class of thing ever gets found here.
    */
   const rowsFor = (
-    run: WorkspaceTab[],
+    run: readonly WorkspaceTab[],
     projectName?: string | ((tab: WorkspaceTab) => string | undefined),
   ) => {
     const nameOf = typeof projectName === 'function' ? projectName : () => projectName
@@ -805,7 +863,19 @@ export function Sidebar({
    * drawn and inert, which is the rule this window holds itself to.
    */
   const canRename = (tab: WorkspaceTab): boolean =>
-    tab.kind === 'session' && sessionRename.available
+    /*
+     * And not a session on another machine.
+     *
+     * `sessionRename` writes into *this* app's session store, keyed by session
+     * id, and a remote session's id belongs to a store on a different computer.
+     * Renaming one would have written a row nothing reads, so the field would
+     * have accepted a name and the row would have gone back to what it said
+     * before — a control that appears to work and does not, which is worse than
+     * one that is absent. The far machine names its own sessions and pushes the
+     * name; there is no verb on the wire for renaming one, so there is no
+     * gesture here either.
+     */
+    tab.kind === 'session' && !tab.machine && sessionRename.available
 
   const tabRow = (tab: WorkspaceTab, label: string, qualifier: string | null = null) => {
     /*
@@ -938,9 +1008,29 @@ export function Sidebar({
      * here. Which is the same trade the narrow rail already makes.
      */
     const rail = tab.account ? accountRail(tab.account, knownSignIns[tab.account.id]) : null
+    /*
+     * And where it is running, on the rows where that is not this computer.
+     *
+     * The row itself deliberately says nothing about it — that is the whole of
+     * *"you don't need to give icon of the remote next to all of them"* — so the
+     * hover is where the machine and its folder are stated. It is the same trade
+     * the account caption already makes on a narrow rail: the identifying fact
+     * moves off the line rather than being dropped, and the line keeps the name,
+     * which is what the row exists to carry.
+     *
+     * The folder is the far machine's and is deliberately not offered anywhere
+     * that would try to open it; see the `heading` in `App.tsx`, which hands
+     * `FolderChip` a null for exactly this reason.
+     */
+    const where = tab.machine
+      ? tab.projectPath
+        ? `${tab.projectPath} on ${tab.machine.name}`
+        : `on ${tab.machine.name}`
+      : null
     const rowTitle = [
       label,
       qualifier,
+      where,
       namesAccounts && rail ? rail.note : null,
       renameable ? 'double-click or F2 to rename' : null,
     ]
@@ -1134,11 +1224,26 @@ export function Sidebar({
               // marker, a press that slides four pixels starts a drag of the row
               // and the close never happens.
               data-no-drag=""
-              aria-label={`Close ${label}`}
+              /*
+                What this ✕ costs, said in the words of where the session is.
+
+                A remote row's ✕ ends the session **on that machine** and leaves
+                the machine paired — the same thing Close on its heading means,
+                one session's worth: *"It will just close all of the sessions
+                from that PC… it should not disconnect the remote account."* A
+                person hovering the ✕ on a row that belongs to a computer they
+                are not sitting at is owed both halves of that, because the
+                second half is the one they are actually worried about.
+              */
+              aria-label={
+                tab.machine ? `Close ${label} on ${tab.machine.name}` : `Close ${label}`
+              }
               title={
-                tab.kind === 'session'
-                  ? `Close ${label} — ends the session`
-                  : `Close ${label}`
+                tab.machine
+                  ? `Close ${label} — ends the session on ${tab.machine.name}. That machine stays connected.`
+                  : tab.kind === 'session'
+                    ? `Close ${label} — ends the session`
+                    : `Close ${label}`
               }
               onClick={() => onCloseTab(tab.id)}
             >
@@ -1342,25 +1447,29 @@ export function Sidebar({
 
           {projects.map((project) => (
             <div key={project.path} className="sb-project">
-              <div className="sb-row sb-project-head">
-                {/* A disclosure, the way a macOS sidebar folds a group. It used
-                    to start a session, which is what the ＋ beside it does — one
-                    affordance, one meaning. */}
-                <button
-                  type="button"
-                  className="sb-row-main"
-                  title={project.path}
-                  aria-expanded={!folded.has(project.path)}
-                  onClick={() => toggleFold(project.path)}
-                >
-                  <Glyph
-                    path={DISCLOSURE}
-                    size={12}
-                    className={`sb-disclosure${folded.has(project.path) ? '' : ' open'}`}
-                  />
-                  <span className="sb-project-name">{project.name}</span>
-                </button>
-                {/*
+              {/*
+                The heading, and it is the same component a machine's heading is.
+
+                It used to be written out here — a fold arrow, a name, and three
+                hover actions — and a machine's heading was written out
+                separately, which is what produced the complaint this change
+                answers: *"You will give this exactly same, like this kind of
+                pill to drop, with same drop-down, same button — continue last
+                session, new session, or close."* Two pieces of markup that must
+                look identical forever is how they stop looking identical, so the
+                markup moved into `GroupHead.tsx` whole and both callers use it.
+
+                Every label and tooltip is still decided here, because they are
+                the one thing that genuinely differs and the difference is about
+                truth rather than wording — see the note in that file about the
+                ⌘T on this ＋ and why a machine's ＋ must not carry it.
+              */}
+              <GroupHead
+                name={project.name}
+                title={project.path}
+                open={!folded.has(project.path)}
+                onToggle={() => toggleFold(project.path)}
+                /*
                   Continue-last-session, and only where there is one to continue.
 
                   *"'Continue last conversation' is agent-specific."* It is, and
@@ -1370,37 +1479,27 @@ export function Sidebar({
                   A control that cannot act is absent rather than live — see
                   `canResumeDefault` in `App.tsx`, which is where the question is
                   asked and why it is asked of the default agent.
-                */}
-                {canResume && (
-                  <button
-                    type="button"
-                    className="sb-row-action"
-                    onClick={() => onNewSession(project.path, true)}
-                    aria-label={`Continue the last session in ${project.name}`}
-                    title={tip('Continue last session', 'session.resume')}
-                  >
-                    <Glyph path={RESUME} size={13} />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="sb-row-action"
-                  onClick={() => onNewSession(project.path)}
-                  aria-label={`New session in ${project.name}`}
-                  title={tip('New session', 'session.new')}
-                >
-                  <Glyph path={PLUS} size={13} />
-                </button>
-                <button
-                  type="button"
-                  className="sb-row-action"
-                  onClick={() => onCloseProject(project.path)}
-                  aria-label={`Close ${project.name}`}
-                  title="Close project"
-                >
-                  <Glyph path={CLOSE} size={13} />
-                </button>
-              </div>
+                */
+                {...(canResume
+                  ? {
+                      resume: {
+                        label: `Continue the last session in ${project.name}`,
+                        title: tip('Continue last session', 'session.resume'),
+                        onPress: () => onNewSession(project.path, true),
+                      },
+                    }
+                  : {})}
+                add={{
+                  label: `New session in ${project.name}`,
+                  title: tip('New session', 'session.new'),
+                  onPress: () => onNewSession(project.path),
+                }}
+                close={{
+                  label: `Close ${project.name}`,
+                  title: 'Close project',
+                  onPress: () => onCloseProject(project.path),
+                }}
+              />
               {!folded.has(project.path) && (
                 <ul className="sb-list sb-sessions">
                   {rowsFor(sessionsIn(project.path), project.name)}
@@ -1459,69 +1558,110 @@ export function Sidebar({
           Asad, 2026-08-17, having looked at the Remote page: *"The Remote page
           is for connecting only, not controlling. This is shit."* and then the
           instruction — *"Remote sessions belong in the sidebar, alongside local
-          ones."* Until now they existed only inside Settings → Remote, in a pane
-          that stopped existing when that panel closed, which is the whole of
-          what he was objecting to.
+          ones."* Until then they existed only inside Settings → Remote, in a
+          pane that stopped existing when that panel closed, which is the whole
+          of what he was objecting to.
 
           One heading per machine rather than one heading called "Remote",
           because two machines' sessions in one list is a list where the row you
-          want is identified by nothing. The machine's own mark sits on every
-          row for the same reason it sits beside a remote port: remote and local
-          have to be tellable apart at a glance, and the thing that differs is
-          *where it is running*, not what kind of window it is.
+          want is identified by nothing.
+
+          ## The mark is on the heading and on nothing else
+
+          It used to be on every row as well, and that is the thing he asked to
+          have taken away, 2026-08-18: *"You don't need to give icon of the
+          remote next to all of them — only above there, next to the PC, the
+          remote device."* The rows below now go through `rowsFor` — the same
+          function the project groups use — so a remote session is drawn by the
+          same code, with the same status dot, the same drag, the same promote
+          toggle and the same ✕ as a session running here. Being under this
+          heading is what says where it is running, and repeating that on every
+          line said nothing while making the whole group look foreign, which was
+          the complaint underneath the complaint.
 
           Drawn only when a machine is reachable. A heading over nothing reads as
           a list that failed to load — the same argument every other section on
           this rail makes.
         */}
-        {machines.map((group) => (
-          <section className="sb-group" key={group.machineId}>
-            <h2 className="sb-group-label">
-              <Glyph path={MACHINE_ICON} size={12} className="sb-machine-mark" />
-              {group.name}
-            </h2>
-            {group.sessions.length === 0 ? (
-              // Said rather than left blank. A machine that is connected and has
-              // nothing running is a real and ordinary state, and an empty
-              // heading is indistinguishable from one that failed to fill.
-              <p className="sb-empty">Nothing running there.</p>
-            ) : (
-              <ul className="sb-list">
-                {group.sessions.map((session) => (
-                  <li key={`${group.machineId}\u0000${session.id}`}>
-                    <div
-                      className={`sb-row sb-open${
-                        !activePanel &&
-                        activeMachineSession?.machineId === group.machineId &&
-                        activeMachineSession.sessionId === session.id
-                          ? ' active'
-                          : ''
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        className="sb-row-main"
-                        title={`${session.title} — ${session.cwd} on ${group.name}`}
-                        onClick={() => onOpenMachineSession(group.machineId, session.id)}
-                      >
-                        <Glyph path={MACHINE_ICON} size={15} />
-                        <span className="sb-label">{session.title}</span>
-                      </button>
-                    </div>
-                  </li>
+        {machines.map((group) => {
+          const open = !folded.has(machineFoldKey(group.machineId))
+          return (
+            <section className="sb-group sb-project" key={group.machineId}>
+              <GroupHead
+                name={group.name}
+                title={`${group.name} — ${group.sessions.length === 1 ? '1 session' : `${group.sessions.length} sessions`}`}
+                open={open}
+                onToggle={() => toggleFold(machineFoldKey(group.machineId))}
+                icon={MACHINE_ICON}
+                /*
+                  There is no `resume` here, and the absence is the honest
+                  answer rather than an omission.
+
+                  He asked for the same three controls a project has, and two of
+                  them are here. Continue-last-session is not, because it cannot
+                  act: `create` on the wire carries a cwd and a provider and
+                  **not** a resume flag — `protocol.ts` says so in as many words
+                  and calls it a live gap, named rather than closed — so a glyph
+                  here would send a request the far machine answers by starting a
+                  *fresh* session, silently. That is the exact defect the project
+                  heading's own Continue was fixed for a night earlier, and
+                  drawing it again on a different heading would be reintroducing
+                  it. A machine group also has no folder of its own to continue
+                  in, which is the second half of the same problem: a project
+                  heading *is* a folder, and a machine is a computer with many.
+
+                  `GroupHead` makes the control optional for precisely this
+                  reason, and it is the same rule the project heading follows
+                  when the default agent has no resume command.
+                */
+                add={{
+                  label: `New session on ${group.name}`,
+                  // Deliberately not `tip(…, 'session.new')`. ⌘T starts a session
+                  // on *this* computer, and printing it beside a button that
+                  // starts one somewhere else would be the app claiming a key
+                  // that goes to a different machine.
+                  title: `New session on ${group.name}`,
+                  onPress: () => onNewMachineSession(group.machineId),
+                }}
+                /*
+                  Close, and what he decided it means.
+
+                  He talks himself through it in the recording and lands
+                  somewhere exact: *"Close you will not give — but you can
+                  actually give, because it should not disconnect the remote
+                  account. It will just close all of the sessions from that PC.
+                  Yeah, you can give this close too, so it will go from here, but
+                  whenever you want to start, you can start as a new session and
+                  you can start from that device."*
+
+                  So it ends the sessions, the group folds away, and the machine
+                  stays paired — New session brings it straight back. The rail
+                  does none of that: it reports the press, and `App.tsx` owns the
+                  confirmation, the `close` frames and the hiding, next to the
+                  rest of the machine state.
+                */
+                close={{
+                  label: `Close the sessions on ${group.name}`,
+                  title: `Close the sessions on ${group.name}. It stays connected.`,
+                  onPress: () => onCloseMachine(group.machineId),
+                  disabledReason: group.canClose
+                    ? null
+                    : `${group.name} is running a version of this app that cannot end sessions from here.`,
+                }}
+              />
+              {open &&
+                (group.sessions.length === 0 ? (
+                  // Said rather than left blank. A machine that is connected and
+                  // has nothing running is a real and ordinary state, and an
+                  // empty heading is indistinguishable from one that failed to
+                  // fill.
+                  <p className="sb-empty">Nothing running there.</p>
+                ) : (
+                  <ul className="sb-list sb-sessions">{rowsFor(group.sessions)}</ul>
                 ))}
-              </ul>
-            )}
-            <button
-              type="button"
-              className="sb-row sb-machine-new"
-              onClick={() => onNewMachineSession(group.machineId)}
-            >
-              <Glyph path={PLUS} size={13} />
-              <span className="sb-label">New session on {group.name}</span>
-            </button>
-          </section>
-        ))}
+            </section>
+          )
+        })}
 
       </div>
 

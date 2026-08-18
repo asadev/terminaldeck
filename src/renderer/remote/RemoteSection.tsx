@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Button, Group, Info, MoreBody, Notice, Row, Switch } from '../settings/controls'
+import { Button, Group, Notice, Row, Switch } from '../settings/controls'
+import { HoverNote } from '../components/HoverNote'
 import { useAt, useEvery, useWhenActive } from '../schedule'
 import { withDeadline } from '../deadline'
 import { errorText } from '../settings/settings-bridge'
@@ -979,25 +980,21 @@ function CopyCode({ code, disabled }: { code: string; disabled: boolean }) {
 /* -------------------------------------------------------------------------- */
 
 /**
- * An ⓘ that keeps its own open state, and the paragraph it opens.
+ * An ⓘ and the paragraph it opens — a popup, like every other one in this window.
  *
- * `Info` is deliberately controlled — a settings *row* owns whether its
- * disclosure is open, because only the row knows where the opened text belongs
- * relative to its own help line. Nothing on this panel is a settings row: the
- * four disclosures here hang off a path card, a prose line and two headings,
- * and each one wants the paragraph immediately after itself. So the state lives
- * with the button, in the one place where that is the right answer.
+ * This was a controlled disclosure, and the wrapper existed because the four
+ * dots on this panel hang off a path card, a prose line and two headings rather
+ * than off settings rows, so each one had to place its own opened paragraph.
+ * None of that survives the change: a popup is placed against the dot by
+ * measurement and has no relationship to the flow it was declared in, which is
+ * exactly why it works the same on a card as on a row.
+ *
+ * The wrapper is kept anyway, as a one-line alias, because four call sites read
+ * `<Note label=…>` and renaming them would put a diff across this file for no
+ * reader's benefit.
  */
 function Note({ label, children }: { label: string; children: string }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <Info label={label} open={open} onToggle={() => setOpen((was) => !was)}>
-        {children}
-      </Info>
-      {open && <MoreBody>{children}</MoreBody>}
-    </>
-  )
+  return <HoverNote label={label}>{children}</HoverNote>
 }
 
 /** Which control is mid-call, so only that one goes busy. */
@@ -1167,27 +1164,18 @@ function PathRow({
   more?: string
   children?: ReactNode
 }) {
-  const [openMore, setOpenMore] = useState(false)
   return (
     <li className="remote-path" data-state={tone}>
       <div className="remote-path-head">
         <span className="settings-label-line">
           <span className="remote-path-name">{name}</span>
-          {more && (
-            <Info label={name} open={openMore} onToggle={() => setOpenMore((was) => !was)}>
-              {more}
-            </Info>
-          )}
+          {more && <HoverNote label={name}>{more}</HoverNote>}
         </span>
         <span className="remote-pill" data-state={tone}>
           {pill}
         </span>
       </div>
       <p className="remote-path-blurb">{blurb}</p>
-      {/* Under the blurb rather than beside the ⓘ: a disclosure has to appear
-          below everything it is adding to, and here that is the one-line blurb
-          the paragraph is expanding. */}
-      {more && openMore && <MoreBody>{more}</MoreBody>}
       {children}
     </li>
   )

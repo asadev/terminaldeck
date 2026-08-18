@@ -144,12 +144,24 @@ final class AppearanceShotsUITests: XCTestCase {
 
         for scheme in [Scheme.dark, Scheme.light] {
             try choose(scheme)
-            // The pill, not a row. The copilot was pinned above the sessions
-            // until *"a fourth pill, and the copilot goes leftmost"*; the
-            // photograph of the row it used to draw has nothing left to be of.
+            /*
+             * The pill, when there is one — and Settings when there is not.
+             *
+             * The copilot was pinned above the sessions until *"a fourth pill,
+             * and the copilot goes leftmost"*, and the pill itself is now
+             * conditional: *"if the copilot is not connecting, this icon should
+             * not be inside the pill."* A stand-in started without `--copilot`,
+             * or one this phone has not redeemed a code against, draws three
+             * pills — so the screen worth photographing in that case is the
+             * connect screen inside Settings, which is where the whole ceremony
+             * moved to.
+             */
             guard app.openCopilotTab() else {
-                XCTFail("the stand-in was not started with --copilot, so there is nothing to photograph")
-                return
+                XCTAssertTrue(app.openCopilotSettings(),
+                              "no pill and no Settings row is a copilot with no door at all")
+                sleep(2)
+                capture("\(scheme.rawValue)-21-copilot-connect-in-settings")
+                continue
             }
             /*
              * Photographed in whatever state it is in, rather than waited on for

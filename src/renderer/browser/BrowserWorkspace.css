@@ -120,8 +120,17 @@
   the window's width says nothing about how much room this bar has. The
   addresses bar is the flexible element beside these, and it must not be
   squeezed to nothing to keep six captions.
+
+  The number was 720 and is 940, and the rule above is exactly why. Measured on
+  this bar as it stands: at a panel width of 792 — a 1000px window with the
+  sidebar open — the captioned actions take 554 pixels, and what was left for
+  the address bar after the navigation and the machine picker was **38**. That is
+  the sentence above being broken by its own threshold; there are eight actions
+  on this bar now rather than six, and a machine picker beside the field. 940 is
+  where the address bar stops being squeezed to nothing, and the captions go
+  first because the tooltip and the `aria-label` still carry every one of them.
 */
-@container (max-width: 720px) {
+@container (max-width: 940px) {
   .bw-icon[data-labelled] {
     display: grid;
     width: var(--icon-btn);
@@ -201,6 +210,85 @@
   cursor: default;
 }
 
+/* ============================================================================
+   Which machine the address bar is talking to.
+
+   *"Maybe give a drop down next to somewhere here with the bar, to choose which
+   device we are talking to right now."*
+
+   Built out of the Shared/Isolated switch's shape rather than a new one, and
+   that is the point: both are a word beside the address saying what typing in it
+   will mean. One idiom for one kind of statement. It carries the accent only
+   while it is pointing somewhere other than this machine — the accent is
+   otherwise reserved for selection and focus, and this is the one moment the
+   browser is doing something a person needs reminding of.
+   ============================================================================ */
+
+.bw-machine {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  /* Capped, because a machine's name is whatever somebody called their
+     computer and the address bar to its right is the thing this bar is for. A
+     20-character hostname was measured taking 171px of a 1176px toolbar, which
+     left the URL field 30 pixels wide — see `.bw-served` for the other half of
+     that arithmetic. */
+  max-width: 9rem;
+  height: var(--icon-btn);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.bw-machine:hover {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+}
+
+.bw-machine[data-on] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* A machine's name is whatever somebody called their computer, so its length is
+   nobody's decision. Truncated rather than wrapped: a two-line control in a bar
+   of one-line controls reshapes the whole toolbar. */
+.bw-machine-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bw-machine-caret {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+/*
+  On a narrow panel the name goes and the glyph and caret stay.
+
+  The number is 940 and not the 720 the action captions use, and it was measured
+  rather than chosen: at a panel width of 792 — a 1000px window with the sidebar
+  open — this control's 144px pushed the whole action group 76 pixels off the
+  right-hand edge of the toolbar. The captions are still on at that size, so the
+  bar has nothing else left to give, and the picker is the newcomer. It goes
+  first.
+
+  The control is still there and still opens. What is lost is the name, and the
+  `aria-label` and the tooltip both still carry it.
+*/
+@container (max-width: 940px) {
+  .bw-machine-name {
+    display: none;
+  }
+}
+
 /* One field, one radius, no border. */
 .bw-address {
   display: flex;
@@ -208,6 +296,10 @@
   gap: var(--sp-2);
   flex: 1;
   min-width: 0;
+  /* The URL input inside this claims a floor of its own, so on a very narrow
+     panel the row would otherwise spill out of the field and across the buttons
+     beside it. */
+  overflow: hidden;
   height: var(--control-h);
   padding: 0 var(--sp-3);
   border-radius: var(--radius-md);
@@ -250,9 +342,49 @@
   display: none;
 }
 
+/*
+  Where a loopback page actually came from.
+
+  Beside the padlock and before the address, because it qualifies the address in
+  exactly the way the padlock does: `127.0.0.1:53412` is the truth and it is not
+  the whole truth. Quiet — a tint and a radius, no icon — since it is a label
+  rather than a control, and it is only ever on screen for a page this window
+  opened a tunnel for.
+*/
+.bw-served {
+  /*
+    Shrinks, unlike everything else in this field.
+
+    Measured on a real pair of machines: a 20-character hostname printed here
+    *and* in the picker left the URL input 30 pixels wide, which is an address
+    bar that cannot show an address. The chip is the least important thing in
+    the row — its `title` carries the whole sentence, and the picker beside it
+    is already naming a machine — so it is the one that gives way.
+  */
+  flex-shrink: 1;
+  /* Not 0: a chip ellipsised down to twelve pixels is a grey sliver that says
+     nothing, and the honest floor is a few characters plus the ellipsis. Below
+     that the field clips it, which is what `.bw-address`'s `overflow` is for. */
+  min-width: 4rem;
+  max-width: 9rem;
+  overflow: hidden;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .bw-url {
   flex: 1;
-  min-width: 0;
+  /* Not 0. An address bar that has been squeezed to nothing by the labels
+     around it is worse than a label that has been cut short, so this claims a
+     floor and `.bw-served` gives way to it. */
+  min-width: 8rem;
   border: none;
   background: transparent;
   color: var(--text-primary);
@@ -751,9 +883,33 @@
   background: var(--bg-hover);
 }
 
-.bw-menu-item:disabled {
+.bw-menu-item:disabled,
+.bw-menu-choice:disabled {
   color: var(--text-muted);
   cursor: default;
+}
+
+/*
+  A row that is a choice plus the sentence about why it cannot be chosen.
+
+  Stacked rather than side by side: the sentence is a sentence — "that machine
+  has not approved this desktop yet" — and squeezing one into the right-hand
+  half of a 19rem menu row would set it four words to a line.
+*/
+.bw-menu-row-stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* How many ports that machine is offering, at the end of its own row. The same
+   quiet grammar as the "port only" tag on the start page: a small word at the
+   end of a row, saying a different thing. */
+.bw-menu-count {
+  margin-left: auto;
+  padding-left: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
 }
 
 /* A fixed column so the names line up whether or not a row is the active one. A

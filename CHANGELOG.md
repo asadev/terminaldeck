@@ -10,6 +10,89 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The app was typing `/usage` into your session and leaving the panel open on
+  top of your work.** On an account billed through the API there is no rolling
+  subscription window, so the CLI draws no session or weekly line at all — which
+  meant the reading could never be found, every attempt timed out, and every
+  attempt left the panel sitting over the conversation. Then it tried again on
+  the next quiet moment, and again, for as long as the session was open.
+
+  Three things changed. The panel is now **closed and the close is verified** by
+  reading the screen back, rather than sending an Escape and assuming; if it
+  genuinely cannot be closed, the app says so instead of leaving it there.
+  "There are no limits to read" is now an **answer** rather than a failure, so
+  it stops. And an attempt that typed into your session and found nothing
+  **blocks that session for good** — enforced where the typing happens, so a
+  reload or a second window cannot reach past it.
+
+  Automatic checking stays on, because on an account that has limits the whole
+  exchange measures 506ms end to end. What made it unshippable was the residue
+  and the repetition. Where a session has stopped, the bar now says why and
+  offers **Check again**, which is the only thing that can clear the block.
+
+- **A session running an agent you started yourself had no model, effort or
+  usage controls at all.** Two components in the same bar were answering the
+  same question from two places: the account chip read the screen and correctly
+  showed the agent, while the controls beside it read the session record, saw
+  "shell", and drew nothing. So on any session where you opened a plain shell
+  and ran an agent in it — which the app itself offers a button for — the entire
+  control surface was missing. They read one source now, and they withdraw again
+  when the agent exits, including when its process was killed with its banner
+  still on screen.
+
+- **A project could be drawn before its own scan had finished.** The routine
+  that reads session records returned immediately if another read was already
+  running, so a file-watcher event arriving during startup made the initial
+  scan's own wait a no-op — and the window opened with a partial figure and
+  nothing saying it was partial. It now waits for the work already in flight.
+
+- **Forgetting or renaming a machine did not reach every screen.** Only the
+  panel you did it in was told, so a machine removed in Settings was still
+  offered in the browser.
+
+### Added
+
+- **The browser reaches whichever machine you pick.** A machine chooser sits
+  beside the address bar, the start page lists what is listening on *that*
+  machine, and typing `3000` opens that machine's port 3000 — the same window,
+  the same tabs, the same everything. Choosing a machine changes what `localhost`
+  means and nothing else: a public address is the same site from either
+  computer, so it is left alone.
+
+  Port lists and tunnels are for **your own devices**. A guest gets neither and
+  is never told the capability exists — a port scan can say which program holds
+  a port but never which project, so it cannot be limited to the folders a guest
+  was granted. Every port or none, and none is the honest answer.
+
+- **A remote machine looks and behaves like a project.** One machine mark on the
+  heading rather than one on every row, the same pill and the same menu a local
+  project has, and remote sessions get a tab in the strip like any other. Close
+  on a machine ends its sessions and folds it away **without disconnecting it** —
+  New session brings it straight back.
+
+- **A device waiting for your approval says so**, instead of appearing only in a
+  settings pane you had to already be looking at.
+
+- **The web app takes an address.** A browse bar with a machine chooser: open it
+  on the machine you are connected to, or in the browser you are already in. The
+  three theme buttons became one icon, which also gave the header back enough
+  room to exist on a phone.
+
+### Changed
+
+- **Settings → Copilot is half the height it was**, every file it lists can be
+  edited in place, and the memory folder is one button rather than a list of
+  dated filenames.
+
+- **The model and effort chips keep their labels at every window width.** They
+  had been fading to nothing below 1000 pixels — at the app's own minimum width
+  they were 106 pixels of blank.
+
+- **On the phone: the copilot's tab bar is out of the way of the composer**, and
+  it appears only when the copilot is connected. Connecting moved to Settings.
+
 ## [0.4.0] — 2026-08-18
 
 ### Security

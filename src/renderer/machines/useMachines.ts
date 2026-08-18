@@ -81,6 +81,27 @@ export interface MachinesRead {
    * newest row may be somebody else's.
    */
   startSession(machineId: string, cwd: string, provider: string): Promise<string | null>
+  /**
+   * End one session on one machine, and answer whether the request left here.
+   *
+   * ## Why this waits for nothing, where {@link startSession} waits
+   *
+   * They are asymmetric on purpose. Starting a session has to wait, because the
+   * caller wants to *open* the thing it just made and the id is minted on the
+   * other computer — so believing the boolean would mean opening nothing.
+   * Ending one has nothing to open afterwards. The row leaves the list the
+   * moment the far machine's `closed` frame lands, `machines:state` pushes it,
+   * and every screen drawing that list redraws itself. A promise that resolved
+   * when the row went would be a second path to the same fact, and the screen
+   * would already have updated before anybody awaited it.
+   *
+   * False means the request never left: this build has no machine channels, the
+   * machine is not linked, or it never advertised `close`. Callers draw the
+   * control off `capabilities` rather than off this, so a false here is a
+   * genuine surprise and is worth reporting rather than swallowing — see
+   * `closeMachine` in `App.tsx`, which counts them.
+   */
+  closeSession(machineId: string, sessionId: string): Promise<boolean>
 }
 
 /**
@@ -224,11 +245,23 @@ export function useMachines(provided?: MachinesBridge): MachinesRead {
     [bridge],
   )
 
+  const closeSession = useCallback(
+    async (machineId: string, sessionId: string): Promise<boolean> => {
+      if (!bridge) return false
+      // `=== true` rather than a truthiness test, for the reason every other
+      // read of this bridge narrows: the channel is typed `unknown` on purpose,
+      // and an older preload answering `undefined` must not read as success.
+      return (await bridge.closeMachineSession(machineId, sessionId).catch(() => false)) === true
+    },
+    [bridge],
+  )
+
   return {
     wired: bridge !== null,
     machines: reachableMachines(view),
     bridge,
     reread,
     startSession,
+    closeSession,
   }
 }

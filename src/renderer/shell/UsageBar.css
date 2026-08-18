@@ -459,6 +459,55 @@
   color: var(--text-secondary);
 }
 
+/*
+  Something this app left on the person's terminal.
+
+  It carries `--status-input` — the colour this app already uses for "a session
+  is waiting on you" — because that is exactly what this is: there is a panel
+  open in a terminal and a key that closes it, and the only one who can press it
+  is the reader. It is not an error colour and it is deliberately not red; the
+  app did something visible and is saying so, which is a request rather than a
+  fault.
+
+  A tint and a radius, no border. Separate with space, then with a tint, and
+  only then with a line — and a two-line note inside a 300px panel has never
+  needed the line.
+*/
+.ub-residue {
+  margin: 0;
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--status-input) 12%, transparent);
+  color: var(--text-primary);
+}
+
+/*
+  The one action in this panel, and only in the one state that has stopped.
+
+  A quiet text target rather than a filled button, for the reason `.sc-open`
+  states beside the connector list: nothing else in this popover is pressable, so
+  a bordered button would be the loudest thing in a panel whose job is to state
+  facts. Pulled back by its own padding so its first letter sits on the same
+  vertical line as the sentence above it.
+*/
+.ub-retry {
+  align-self: flex-start;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  margin-left: calc(var(--sp-2) * -1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.ub-retry:hover {
+  background: var(--bg-hover);
+}
+
 /* A window that has rolled over keeps its sentence and loses its number, so the
    sentence is the whole row and is worth the ordinary text colour. */
 .ub-row[data-state='expired'] .ub-row-detail,

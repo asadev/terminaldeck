@@ -146,13 +146,53 @@ export interface CloseWarning {
 }
 
 /**
+ * What is being closed, which decides the nouns rather than the behaviour.
+ *
+ * Three subjects because there are three things in this window whose close ends
+ * more than itself, and the sentence has to name the right one. A machine group
+ * arrived on 2026-08-18 and is genuinely a third case rather than a project by
+ * another name: closing a project takes its folder off the rail *and* kills its
+ * sessions, and closing a machine ends its sessions and leaves the machine
+ * paired — *"it should not disconnect the remote account. It will just close all
+ * of the sessions from that PC."* Telling somebody they are about to close a
+ * project when they pressed ✕ on a computer is the kind of wrong that makes a
+ * confirmation stop being read.
+ */
+export type CloseSubject = 'session' | 'project' | 'machine'
+
+/**
  * What is actually at stake, in the words of the state it is in.
  *
  * `count` is how many sessions are going at once. Closing a project takes every
  * session in it with it — silently, until now — and "this session is still
- * working" is the wrong sentence for four of them.
+ * working" is the wrong sentence for four of them. `subject` says which kind of
+ * thing those sessions belong to; it is only ever read when there is more than
+ * one, because a single session's warning is about the session.
+ *
+ * The machine sentence names the machine's own limit as well as the loss, and
+ * that is deliberate. The one question a person actually has at this dialog is
+ * *"does this unpair my PC"*, and answering it in the confirmation is cheaper
+ * than answering it afterwards by watching whether the machine came back.
  */
-export function closeWarning(status: SessionStatus, count = 1): CloseWarning {
+export function closeWarning(
+  status: SessionStatus,
+  count = 1,
+  subject: CloseSubject = 'project',
+): CloseWarning {
+  if (subject === 'machine' && count > 1) {
+    return {
+      headline: `Closing this machine closes ${count} sessions on it.`,
+      detail:
+        'Every one of them stops where it is, on that machine, and anything they have not written to disk goes with them. The machine itself stays connected — New session brings it straight back.',
+    }
+  }
+  if (subject === 'machine') {
+    return {
+      headline: 'This ends the session on that machine.',
+      detail:
+        'The agent stops there and its terminal goes, with its scrollback. The machine itself stays connected.',
+    }
+  }
   if (count > 1) {
     return {
       headline: `Closing this project closes ${count} sessions.`,
@@ -217,6 +257,14 @@ interface Props {
    * running agents with no confirmation at all, with the confirm switch on.
    */
   count?: number
+  /**
+   * What kind of thing is being closed — which decides the nouns, not the act.
+   *
+   * Defaults to `'project'`, which is what every caller meant before there was a
+   * third subject: with `count` at 1 nothing reads it at all, and with `count`
+   * above 1 the only thing that could produce that was a project.
+   */
+  subject?: CloseSubject
   /** Used only to say honestly whether the conversation can be resumed. */
   provider?: ProviderId
   onCancel(): void
@@ -230,6 +278,7 @@ export function CloseSessionConfirm({
   title,
   status,
   count = 1,
+  subject = 'project',
   provider,
   onCancel,
   onConfirm,
@@ -284,13 +333,22 @@ export function CloseSessionConfirm({
    * where it belongs: `closeWarning` says something true for every state instead
    * of one alarming sentence for all of them.
    */
-  const warning = closeWarning(status, count)
-  const project = count > 1
+  const warning = closeWarning(status, count, subject)
+  /*
+   * Whether this dialog is about one thing or a group of them.
+   *
+   * `count > 1` and not `subject !== 'session'`, because the two questions are
+   * different and this one is about the wording of the buttons. A machine with
+   * exactly one session running on it is closing one session and says so; the
+   * plural sentence would be counting to one.
+   */
+  const group = count > 1
+  const noun = subject === 'machine' ? 'machine' : 'project'
 
   return (
     <Modal
       open={open}
-      title={project ? 'Close this project?' : 'Close this session?'}
+      title={group ? `Close this ${noun}?` : 'Close this session?'}
       description={title}
       onClose={onCancel}
       footer={
@@ -304,7 +362,7 @@ export function CloseSessionConfirm({
             disabled={busy}
             onClick={() => void confirm()}
           >
-            {busy ? 'Closing…' : project ? 'Close project' : 'Close session'}
+            {busy ? 'Closing…' : group ? `Close ${noun}` : 'Close session'}
           </button>
         </>
       }

@@ -15,6 +15,8 @@ import {
   toInteractiveDriving,
   toCopilotState,
   toFolderChange,
+  toFolderInstructionsRead,
+  toFolderInstructionsWrite,
   toInstructionsRead,
   toLayerRead,
   toInstructionsWrite,
@@ -80,23 +82,48 @@ import './CopilotSection.css'
  * then listed the same files again with an editor and a Forget on each; the
  * action log printed twelve three-line rows on open; and "Reading pace" set the
  * speed of a driving mode that has since been rebuilt around a machine-speed
- * scan, so it controlled nothing. The pane measured 4,946 pixels tall. It is now
- * 2,656, every row has exactly one button, and no path is on screen except the
- * one row whose subject *is* a path — the folder the copilot works in.
+ * scan, so it controlled nothing. The pane measured 4,946 pixels tall, and that
+ * pass took it to about half.
  *
  * The ⓘ went with it, from a disclosure that grew the page to a popup that does
  * not: {@link HoverNote}, and `Block` below carries the argument.
  *
+ * ## The 2026-08-18 pass, which is the same instruction finished
+ *
+ * A completeness audit against the shipped build found the trim had stopped
+ * halfway down the pane and the Edit buttons had stopped one file short. Four
+ * things, all of them the same two sentences of his applied further:
+ *
+ *  - **It rendered `yours yours`.** The instruction file's row carried an
+ *    ownership badge reading `yours` and a state badge that also reads `yours`
+ *    the moment somebody edits the file — so the first save anybody made drew
+ *    the word twice. The ownership badge is gone (it said the same thing in all
+ *    four states and the row's own name says it better), each remaining badge
+ *    says something no other badge says, and `FileRow` folds a repeat whatever
+ *    a caller hands it.
+ *  - **The folder's own instructions got an editor**, in place of a Finder
+ *    button. See the row itself for why that is not a broken promise.
+ *  - **Everything below "Its files" was trimmed to match it.** Two paragraphs
+ *    about the two permission systems became two lines and two dots; the
+ *    refused-records row stopped printing five absolute paths into the middle of
+ *    the pane; the routine editor stopped printing its file's path under the
+ *    box. No path is on screen anywhere now except the one row whose subject
+ *    *is* a path — the folder the copilot works in, which is a folder somebody
+ *    opens and which grows.
+ *  - **The ⓘ behaves one way in the whole window.** It was a popup here and a
+ *    disclosure on the other eight panes; `settings/controls.tsx` and
+ *    `one-info-dot.test.tsx` are where that got settled.
+ *
  * ## What is editable here, and what never will be
  *
  * Asad, 2026-08-17: *"none of them is clickable or editable … I should be able
- * to click and make changes and click save."* Two files get a box and a Save,
+ * to click and make changes and click save."* Three files get a box and a Save,
  * through the one {@link FileEditor} in `CopilotEditor.tsx`: the copilot's own
- * instructions, and any routine. Two more get a read-only box, in full, because
- * they are generated from what is wired and a hand-edited copy would stop
- * matching it. Nothing is hidden — the founding argument for this feature was
- * *"so we can see and learn how our copilot is working"* — and nothing pretends
- * to be editable that is not.
+ * instructions, the folder's own instructions, and any routine. Two get a
+ * read-only box, in full, because they are generated from what is wired and a
+ * hand-edited copy would stop matching it. Nothing is hidden — the founding
+ * argument for this feature was *"so we can see and learn how our copilot is
+ * working"* — and nothing pretends to be editable that is not.
  *
  * **The action log stays read-only, and that is not an omission.** It is the
  * record of what the copilot did, and the pane's own paragraph about it says the
@@ -117,11 +144,11 @@ import './CopilotSection.css'
  * The two differ and the difference matters, so no editor here is allowed to be
  * quiet about it:
  *
- *  - **Its instructions** — at the copilot's *next start*. The CLI is handed the
- *    file as the session spawns and never again, so a save while it is running
- *    changes nothing about the conversation on screen. The editor says so and
- *    offers Restart when it is running, which is a stop and a start and is the
- *    only honest version of "apply".
+ *  - **Its instructions, and the folder's** — at the copilot's *next start*. The
+ *    CLI is handed both as the session spawns and never again, so a save while
+ *    it is running changes nothing about the conversation on screen. Each editor
+ *    says so and offers Restart when it is running, which is a stop and a start
+ *    and is the only honest version of "apply".
  *  - **A routine** — immediately. The engine reloads the folder on the save, so
  *    the next trigger uses the new text.
  *
@@ -647,10 +674,22 @@ function SessionGroup({
           <span className="settings-path-main">
             <span className="settings-label">
               Its name
+              {/*
+                `you named it`, not `yours`.
+
+                Four badges on this pane all read `yours` at once — this one, the
+                folder's, and both of the two on the instruction file's row, which
+                after the first save drew the literal words *yours yours* side by
+                side. Every one of them was true and none of them said which
+                *thing* was the person's, which is the only reason a badge is
+                there. So each says what it actually means now, in words that
+                cannot collide, and `FileRow` refuses to draw the same word twice
+                whatever a caller passes it.
+              */}
               <span
                 className={setup.identity.name === null ? 'settings-badge quiet' : 'settings-badge'}
               >
-                {setup.identity.name === null ? 'not named' : 'yours'}
+                {setup.identity.name === null ? 'not named' : 'you named it'}
               </span>
             </span>
             {/*
@@ -766,10 +805,26 @@ function SessionGroup({
                 </span>
               )}
             </span>
+            {/*
+              One line, and the mechanism behind the dot.
+
+              The sentence this replaces was three rendered lines of *how* the
+              account is resolved, permanently on screen, on a row most people
+              read once. What a person is actually asking here is whether their
+              assistant has a login of its own — a question with a billing and a
+              privacy flavour — and that answer is short. How the resolution
+              works is the follow-up, and follow-ups are what the ⓘ is for.
+            */}
             <span className="settings-help">
               {signIn?.account
                 ? `${signIn.account}${signIn.plan ? ` — ${signIn.plan}` : ''}`
-                : 'One of the accounts in Accounts, resolved the same way any session in this folder resolves one. It signs in there, with you, rather than having a login of its own.'}
+                : 'It signs in with you, as one of your accounts — it has no login of its own.'}
+              <HoverNote label="its account">
+                {'It resolves an account out of Accounts the same way any session you start in ' +
+                  'this folder resolves one: the folder’s account if it has been given one, and ' +
+                  'your default otherwise. There is no separate login anywhere for the copilot ' +
+                  'and nothing signs in on its behalf.'}
+              </HoverNote>
             </span>
             <span className="settings-help">
               {signIn === null
@@ -982,7 +1037,12 @@ const INSTRUCTIONS: Record<
     says: 'A default an older build wrote, untouched since — nothing in it is yours. It describes powers this build has changed, so the copilot is being told something untrue about itself.',
   },
   edited: {
-    badge: 'yours',
+    // `your words`, not `yours`. The row's other badge said `yours` too, so an
+    // edited file drew *yours yours* — see the note on `Its name` above. This
+    // one is about the prose in the file; that one was about who owns the file,
+    // which is the same answer in all four states and therefore not worth a
+    // badge at all.
+    badge: 'your words',
     quiet: true,
     says: 'These are your words, and they are the truth for the copilot rather than this build’s wording. Nothing in the app will replace them.',
   },
@@ -1014,7 +1074,7 @@ const INSTRUCTIONS: Record<
  * whose verb outran what the app can do would be the fake control this whole
  * review was about.
  */
-function FileRow({
+export function FileRow({
   label,
   badges,
   says,
@@ -1036,12 +1096,42 @@ function FileRow({
   /** The editor or viewer this row opens, when it is open. */
   children?: ReactNode
 }) {
+  /*
+   * The same word never twice on one row.
+   *
+   * This is a guard rather than a tidy-up, and it is here because the pane
+   * shipped the failure: the instruction file's row passed an ownership badge
+   * reading `yours` and a state badge that also reads `yours` the moment
+   * somebody edits the file, so the first save anybody made turned the row into
+   * *Its instructions · yours · yours*. Every person who used the Edit button
+   * this review asked for hit it.
+   *
+   * The callers were fixed too — each badge now says a different thing — but a
+   * row that can draw a word twice will eventually draw it twice again, because
+   * the two strings come from different places and neither knows about the
+   * other. Folding by the drawn text is the only check that survives somebody
+   * adding a sixth state to {@link INSTRUCTIONS} without reading this file.
+   * Case-insensitive, because `Yours` and `yours` are the same word to a reader.
+   *
+   * The first one wins, which keeps the ownership badge to the left of the state
+   * badge in the rows that carry both — the order the eye reads them in.
+   *
+   * It also removes a real React key collision: two badges keyed on the same
+   * text is a duplicate-key warning and a list React may reorder wrongly.
+   */
+  const shown: typeof badges = []
+  for (const badge of badges) {
+    if (!shown.some((seen) => seen.text.toLowerCase() === badge.text.toLowerCase())) {
+      shown.push(badge)
+    }
+  }
+
   return (
     <li className="settings-path-row">
       <span className="settings-path-main">
         <span className="settings-label">
           {label}
-          {badges.map((badge) => (
+          {shown.map((badge) => (
             <span key={badge.text} className={badge.quiet === false ? 'settings-badge' : 'settings-badge quiet'}>
               {badge.text}
             </span>
@@ -1125,6 +1215,22 @@ function readInstructions(raw: unknown): { text: string | null; error: string | 
   return result.ok ? { text: result.text, error: null } : { text: null, error: result.error }
 }
 
+/**
+ * The folder's own file, in the same shape.
+ *
+ * A file that is not there comes back as an **empty box rather than an error**,
+ * which is the one thing this adapter decides. `''` with `exists: false` is the
+ * ordinary case — most folders have no instruction file, and in the app's own
+ * folder that absence is the reassuring row — so a person who presses Edit gets
+ * something they can type into and a Save that creates the file. An error here
+ * is a real failure to read: a folder that has been deleted, unmounted, or is
+ * refusing to be read, and those get a sentence and no Save.
+ */
+function readFolderText(raw: unknown): { text: string | null; error: string | null } {
+  const result = toFolderInstructionsRead(raw)
+  return result.error !== null ? { text: null, error: result.error } : { text: result.text, error: null }
+}
+
 function readLayer(raw: unknown): { text: string | null; error: string | null } {
   const result = toLayerRead(raw)
   return { text: result.text, error: result.error }
@@ -1159,13 +1265,14 @@ function readLayer(raw: unknown): { text: string | null; error: string | null } 
  * the same instruction — *"a control that cannot act is removed or disabled with
  * a reason"*:
  *
- *  - **Edit** — its instructions, the one file here that is a person's own and
- *    that this app writes. The box saves, and says when the save takes effect.
+ *  - **Edit** — its instructions, and the folder's own instructions. Both are a
+ *    person's writing; each box saves, and says where the bytes go and when the
+ *    save takes effect. The second of them was a Finder button until the
+ *    2026-08-18 audit, which is the one row on this pane that answered *"how do
+ *    I change what my copilot is"* with a file manager.
  *  - **View** — the tool list and the composed text. Shown in full, and
  *    read-only on purpose: both are generated from what is wired, so a
  *    hand-edited copy would stop matching the thing it describes.
- *  - **Show** — the folder's own instructions, which live on somebody else's
- *    disk in a directory this app has promised never to write into.
  *  - **Open the folder** — memory, which grows on its own.
  */
 function FilesGroup({
@@ -1177,8 +1284,8 @@ function FilesGroup({
   onReveal,
 }: Omit<Acts, 'loading'> & { state: CopilotState | null; memory: MemoryReport | null }) {
   const [confirm, setConfirm] = useState(false)
-  /** Which of the three boxes is open. One at a time — see the note on Edit. */
-  const [open, setOpen] = useState<'yours' | 'contract' | 'composed' | null>(null)
+  /** Which of the four boxes is open. One at a time — see the note on Edit. */
+  const [open, setOpen] = useState<'yours' | 'contract' | 'composed' | 'folder' | null>(null)
   const [saveNote, setSaveNote] = useState<{ text: string; ok: boolean } | null>(null)
 
   const instructions = state?.instructions ?? 'missing'
@@ -1225,6 +1332,22 @@ function FilesGroup({
     open === 'composed',
     'This build cannot read it — the channel is not wired.',
   )
+  /*
+   * The folder's own file, read on the press like the other three.
+   *
+   * `exists` rides along in the key as well as the mtime, because a file that
+   * has just been created goes from `null` mtime to a real one — but a folder
+   * *cleared* back to this app's own goes the other way, and a box still holding
+   * the chosen folder's text would put those bytes into the app's folder on the
+   * next Save.
+   */
+  const folderText = useFileText(
+    bridge.copilotReadFolderInstructions,
+    readFolderText,
+    `${state?.folder?.home ?? ''}:${folderFile?.exists === true ? 'has' : 'none'}:${folderFile?.modifiedAt ?? 0}`,
+    open === 'folder',
+    'This build cannot read it — the channel is not wired.',
+  )
 
   const saveBecause = !bridge.copilotWriteInstructions
     ? 'This build cannot save it — the channel is not wired.'
@@ -1238,7 +1361,7 @@ function FilesGroup({
         ? 'There is no file yet. Create its files instead.'
         : null
 
-  const toggle = (which: 'yours' | 'contract' | 'composed') => () => {
+  const toggle = (which: 'yours' | 'contract' | 'composed' | 'folder') => () => {
     // One box at a time. Three textareas open at once is the wall of text this
     // pass exists to remove, and the note under a box belongs to that box.
     setSaveNote(null)
@@ -1275,10 +1398,18 @@ function FilesGroup({
           */}
           <FileRow
             label="Its instructions"
-            badges={[
-              { text: 'yours', quiet: false },
-              { text: note.badge, quiet: note.quiet },
-            ]}
+            /*
+              One badge, and it is the state.
+
+              There used to be an ownership badge in front of it reading
+              `yours` — permanently, in all four states — and its only job was
+              to tell this row apart from the two generated ones below. It never
+              did that job: `Its instructions` is already the row about the
+              person's own file, the sentence under it says so in every branch,
+              and the button says Edit. What it did instead was collide, because
+              the state badge for an edited file also read `yours`.
+            */
+            badges={[{ text: note.badge, quiet: note.quiet }]}
             says={note.says}
             action={open === 'yours' ? 'Close' : 'Edit'}
             onAction={toggle('yours')}
@@ -1440,7 +1571,11 @@ function FilesGroup({
           */}
           <FileRow
             label="Its tool list"
-            badges={[{ text: 'the app’s' }, { text: 'generated' }]}
+            /* `generated` on its own. `the app’s` beside it was the same fact
+               said twice — nothing but this app generates anything here — and
+               two badges on a row whose sentence is already one line is the
+               kind of density this pass is removing. */
+            badges={[{ text: 'generated' }]}
             says="What it may do, written fresh from the tools that are actually wired every time it starts."
             action={open === 'contract' ? 'Close' : 'View'}
             onAction={toggle('contract')}
@@ -1468,7 +1603,7 @@ function FilesGroup({
 
           <FileRow
             label="What it was handed"
-            badges={[{ text: 'the app’s' }, { text: 'generated' }]}
+            badges={[{ text: 'generated' }]}
             says="The two halves above, composed — byte for byte what the running copilot was given, and never written into its folder."
             action={open === 'composed' ? 'Close' : 'View'}
             onAction={toggle('composed')}
@@ -1497,43 +1632,132 @@ function FilesGroup({
           </FileRow>
 
           {/*
-            The folder's own file, listed even when it is not there.
+            The folder's own file, listed even when it is not there — and, since
+            the 2026-08-17 review, editable here like everything else.
 
-            Its absence is the most reassuring row on this pane: it is the
+            Its absence is still the most reassuring row on this pane: it is the
             visible proof that nothing in that folder claims to be a copilot, so
             an ordinary terminal opened there reads nothing of ours. A row saying
             "not there" states it; leaving the row out would leave somebody to
             infer it.
 
-            **Open, not Edit, and that is a promise rather than missing work.**
-            This app writes nothing into a folder somebody chose — not
-            instructions, not `memory/`, not a marker — and a Save button here
-            would be this pane quietly breaking the one guarantee the folder
-            feature turns on. It opens where it lives instead, in their own
-            editor, which is whose file it is.
+            **This row used to open Finder, and that was the gap the audit
+            found.** *"Nothing is editable. Every file needs an Edit button
+            beside it, opening the same editor style already used, and saving. So
+            they can actually control and fix and design their copilot from here
+            directly."* Of the five files on this pane, this is the one that
+            instruction lands on hardest: when somebody points the copilot at a
+            folder of their own — the case the folder feature exists for — the
+            assistant already living in that folder *is* the copilot's character,
+            its name and how it addresses them. Sending them to Finder to change
+            that, from the screen whose subject is what their copilot is, was the
+            one row that answered the question with a file manager.
+
+            **The promise the folder feature turns on is untouched.** This app
+            writes nothing into a chosen folder *of its own accord* — no
+            instructions, no `memory/`, no marker — and nothing about that has
+            changed: the only write is one press of Save on text a person is
+            looking at, which is the same act as opening the file in their own
+            editor with fewer steps. The sentence under the box says so, the
+            replaced copy is kept under `<userData>` rather than as a `.bak` in
+            somebody's repository, and Show the file is still there for anyone
+            who would rather use their own editor after all.
           */}
           <FileRow
             label="The folder’s own instructions"
-            badges={
-              folderFile?.exists === true
-                ? [{ text: 'the folder’s' }]
-                : [{ text: 'the folder’s' }, { text: 'not there' }]
-            }
+            badges={folderFile?.exists === true ? [] : [{ text: 'not there' }]}
             says={
               folderFile?.exists === true
-                ? 'Whatever assistant already lives in that folder’s own instructions, read the ordinary way. This app never writes it.'
-                : 'Nothing in that folder claims to be the copilot, which is why an ordinary terminal opened there is not it.'
+                ? 'Whatever assistant already lives in that folder, read the ordinary way. This app writes it only when you press Save here.'
+                : 'Nothing in that folder claims to be the copilot. Write one here and it does — for this copilot and for any session you start there.'
             }
-            action="Show"
-            onAction={() => onReveal('root')}
+            action={open === 'folder' ? 'Close' : 'Edit'}
+            onAction={toggle('folder')}
             disabledBecause={
-              !bridge.copilotReveal
-                ? 'This build cannot open a folder — the channel is not wired.'
-                : folderFile?.exists === true
-                  ? null
-                  : 'There is no such file yet. Put one in that folder and it is read from the next start.'
+              bridge.copilotReadFolderInstructions
+                ? null
+                : 'This build cannot open it — the channel is not wired.'
             }
-          />
+          >
+            {open === 'folder' && (
+              <FileEditor
+                label={baseName(folderFile?.path ?? 'CLAUDE.md')}
+                text={folderText.text}
+                problem={folderText.problem}
+                rows={18}
+                saving={busy === 'folder-instructions-save'}
+                saveBecause={
+                  !bridge.copilotWriteFolderInstructions
+                    ? 'This build cannot save it — the channel is not wired.'
+                    : null
+                }
+                note={saveNote}
+                /*
+                 * Two sentences, and the second one is the promise being kept
+                 * out loud at the moment it could be doubted. Somebody looking
+                 * at a Save button over a file in their own project deserves to
+                 * be told, right there, that this is the only thing that ever
+                 * writes there.
+                 */
+                effect={
+                  running
+                    ? 'This is a file in your folder. Saving writes it there and nothing else does — it applies the next time the copilot starts, so restart it to hand it the new one.'
+                    : 'This is a file in your folder. Saving writes it there and nothing else does. It applies the next time the copilot starts.'
+                }
+                onSave={(next) => {
+                  setSaveNote(null)
+                  act('folder-instructions-save', async () => {
+                    const result = toFolderInstructionsWrite(
+                      await bridge.copilotWriteFolderInstructions?.(next),
+                    )
+                    if (result.error !== null) {
+                      setSaveNote({ text: result.error, ok: false })
+                    } else {
+                      // The saved bytes are what is on disk — see the note on
+                      // the instructions editor above for why the box goes clean
+                      // here rather than waiting for the re-read.
+                      folderText.accept(next)
+                      const where =
+                        result.backup === null ? '' : ` What was there is at ${result.backup}.`
+                      setSaveNote({
+                        text: result.created
+                          ? `Written. That folder now has its own instructions, and every session you start there reads them.${where}`
+                          : running
+                            ? `Saved.${where} The running copilot still has the old text — restart it to apply this.`
+                            : `Saved.${where} It applies the next time the copilot starts.`,
+                        ok: true,
+                      })
+                    }
+                    return null
+                  })
+                }}
+              >
+                {running && (
+                  <Button
+                    disabled={!bridge.stopCopilot || !bridge.ensureCopilot || busy !== null}
+                    onClick={() => {
+                      setSaveNote(null)
+                      act('folder-restart', async () => {
+                        await bridge.stopCopilot?.()
+                        const nextState = toCopilotState(await bridge.ensureCopilot?.())
+                        setSaveNote(
+                          nextState?.status === 'running'
+                            ? { text: 'Restarted. It has read the folder’s current instructions.', ok: true }
+                            : { text: nextState?.problem ?? 'It stopped, and did not come back up.', ok: false },
+                        )
+                        return null
+                      })
+                    }}
+                  >
+                    {busy === 'folder-restart' ? 'Restarting…' : 'Restart it'}
+                  </Button>
+                )}
+                <Button onClick={() => onReveal('root')} disabled={!bridge.copilotReveal}>
+                  Show the file
+                </Button>
+              </FileEditor>
+            )}
+          </FileRow>
 
           {/*
             Memory, as a count and a folder — never as a list of dated files.
@@ -1935,21 +2159,39 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
               only that some settings file governs this, nobody can go and change
               it. So the sentence describes and the <code>path</code> discloses.
             */}
+            {/*
+              One line, and the mechanism behind the dot.
+
+              This was two paragraphs and they were both permanently on screen —
+              six rendered lines of two-permission-systems explanation on a
+              settings pane for, in his words, *"mostly non-technical vibe
+              coders"*. The distinction still has to be made, because the failure
+              it prevents is the quiet one, so the sentence that *is* the warning
+              stays on the page and the two mechanisms move one hover away. Same
+              strings, and the path with them: `~/.claude/settings.json` is a
+              file rather than a folder that grows, and the pass this pane is
+              under says a path like that belongs behind the explanation rather
+              than printed in the middle of it.
+            */}
             <span className="settings-help">
-              The CLI the copilot runs on has prompts of its own — before it runs a command or
-              edits a file — and they follow <em>your</em> settings for it, in{' '}
-              <code>~/.claude/settings.json</code>, exactly as they do in every other session you
-              open. If you have set that to bypass them, the copilot will not stop to ask either.
-              This app does not change that setting in either direction.
+              The CLI it runs on asks you things too, and those prompts follow <em>your</em>{' '}
+              settings for that CLI — not this app’s.
+              <HoverNote label="the CLI’s own prompts">
+                {'They come before it runs a command or edits a file, exactly as in every ' +
+                  'other session you open, and they are governed by your own settings file for ' +
+                  'that CLI — on this machine, ~/.claude/settings.json. ' +
+                  'If you have set that to bypass them, the copilot will not stop to ask either. ' +
+                  'This app does not change that setting in either direction.'}
+              </HoverNote>
             </span>
             <span className="settings-help">
-              The confirmation <em>this app</em> shows you is a separate thing, asked by the desktop
-              rather than by the CLI. Nothing in that settings file turns it off.
+              The confirmation <em>this app</em> shows you is a separate thing. Nothing in that
+              settings file turns it off.
               <HoverNote label="this app’s confirmation">
-                {'It is asked before this app writes a setting, starts a session or changes a ' +
-                  'routine, over a request the agent cannot answer for itself — so nothing the ' +
-                  'copilot says can wave itself through. With no window open to ask, it is refused ' +
-                  'rather than allowed.'}
+                {'It is asked by the desktop rather than by the CLI, before this app writes a ' +
+                  'setting, starts a session or changes a routine, over a request the agent cannot ' +
+                  'answer for itself — so nothing the copilot says can wave itself through. With ' +
+                  'no window open to ask, it is refused rather than allowed.'}
               </HoverNote>
             </span>
           </span>
@@ -1963,22 +2205,38 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
                 {held ? 'held' : fenceable ? 'not proven' : 'not enforced here'}
               </span>
             </span>
+            {/*
+              The three kinds, and the five paths behind the dot rather than
+              printed under them.
+
+              This row drew five absolute paths into the middle of the pane —
+              `<userData>/routines`, `routine-state.json`, `copilot-log`, and the
+              two remote trust files — which is the longest run of machine text
+              anywhere in Settings and answers nothing a reader of this pane is
+              asking. The rule this pass is held to: a path stays only where the
+              thing genuinely is a folder somebody opens and that grows. These
+              are internal files of this app's, they never change, and naming
+              them by *what they are* is the whole sentence. The count stays on
+              the page, because the count is the claim — and `copilot-inspect.ts`
+              is what makes it true rather than a number typed here.
+
+              The paths themselves are not gone from the product: the same list
+              is written into the generated tool contract, which is two rows up
+              behind View, in the file the copilot itself is handed.
+            */}
             <span className="settings-help">
-              Five paths, and only five. It cannot write a routine — an agent that can write its
-              own next trigger is an automation loop with no human in it — it cannot read or
-              write the log of what it did, because a record its subject can compose is worth
-              nothing, and it cannot touch the two files that decide which of your paired devices
-              may reach it, because a permission an agent can grant itself is not a permission.
+              Five paths, and only five: its routines, the record of what it did, and the two
+              files that decide which of your paired devices may reach it.
+              <HoverNote label="the five refused paths">
+                {'An agent that can write its own next trigger is ' +
+                  'an automation loop with no human in it; ' +
+                  'a record its subject can compose is worth nothing; and ' +
+                  'a permission an agent can grant itself is not a permission.' +
+                  (records && records.paths.length > 0
+                    ? ` On this machine: ${records.paths.join(', ')}.`
+                    : '')}
+              </HoverNote>
             </span>
-            {records && records.paths.length > 0 && (
-              <ul className="copilot-plain">
-                {records.paths.map((path) => (
-                  <li key={path}>
-                    <code className="settings-path">{path}</code>
-                  </li>
-                ))}
-              </ul>
-            )}
             {state && (
               <span className="settings-help">
                 {held
@@ -2008,7 +2266,14 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
 
         <li className="settings-path-row">
           <span className="settings-path-main">
-            <span className="settings-label">A rule, not a wall: its memory</span>
+            {/*
+              Named for the thing rather than for the argument about it. "A
+              rule, not a wall" is a good line and it was doing the label's job
+              badly: somebody scanning this block for what happens to their other
+              sessions was reading an epigram. The distinction it was making is
+              the sentence underneath, which is where a distinction belongs.
+            */}
+            <span className="settings-label">What it keeps from your other sessions</span>
             {/*
               "Its instructions", not a filename. The rule this paragraph is
               about lives in the layer file this pane edits four blocks above —
@@ -2024,8 +2289,8 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
               *kind* of promise: nothing on this machine enforces it.
             */}
             <span className="settings-help">
-              It can read your other sessions’ transcripts, and its instructions tell it never to
-              copy any of that into its own memory. Nothing on this machine enforces that.
+              It can read them, and is told never to keep anything out of them. Nothing on this
+              machine enforces that.
               <HoverNote label="its memory rule">
                 {'Memory is the folder it loads at the start of every conversation, so a fact ' +
                   'copied out of somebody else’s agent would be in its head in every future one. ' +
@@ -2283,9 +2548,17 @@ function RoutineEntry({
                 })
               }}
             />
-            <code className="settings-path" title={routine.file}>
-              {routine.file}
-            </code>
+            {/*
+              The path used to be printed under this box and it is gone with the
+              rest of them.
+
+              The editor already names the file — `baseName(routine.file)` is its
+              accessible label and the folder is one button away at the foot of
+              this block — and the absolute path of a routine answers nothing a
+              person editing its trigger is asking. Same rule as everywhere else
+              on this pane after the 2026-08-17 pass: a path stays only where the
+              thing genuinely is a folder somebody opens.
+            */}
           </>
         )}
 

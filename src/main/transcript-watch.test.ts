@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, appendFileSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, appendFileSync, realpathSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -64,6 +64,30 @@ function line(
       },
     },
   })}\n`
+}
+
+/**
+ * A transcript that exists and records no request, byte-for-byte what the CLI
+ * writes.
+ *
+ * Copied from `~/.claude/projects/-Users-apple-Projects-terminaldeck` on
+ * 2026-08-18, where 94 of 104 files looked exactly like this: 256 bytes, four
+ * metadata lines, no `usage` anywhere. One is written every time a session is
+ * opened and closed without being given anything to do, which on a machine that
+ * restores its sessions at launch is most of them.
+ *
+ * It matters that this is the real shape rather than an invented "empty file".
+ * These lines carry no `timestamp`, so the aggregator that reads one has an
+ * activity time of zero — which is the reason the defect below could hide in a
+ * cap that sorts by activity.
+ */
+function shellTranscript(id: string): string {
+  return (
+    `${JSON.stringify({ type: 'ai-title', aiTitle: 'Update the terminal', sessionId: id })}\n` +
+    `${JSON.stringify({ type: 'agent-name', agentName: 'Update the terminal', sessionId: id })}\n` +
+    `${JSON.stringify({ type: 'mode', mode: 'normal', sessionId: id })}\n` +
+    `${JSON.stringify({ type: 'permission-mode', permissionMode: 'bypassPermissions', sessionId: id })}\n`
+  )
 }
 
 /**
@@ -437,6 +461,136 @@ describe('TranscriptWatcher against a live file', () => {
     const perSession = summary.sessions.map((s) => s.requests).sort()
     expect(perSession).toEqual([2, 3])
   }, 15_000)
+
+  /* ------------------------------------------------------------------------ *
+   * The cap counts conversations, not files.
+   *
+   * Measured on 2026-08-18 against `~/Projects/terminaldeck`, the folder this
+   * app is built in: 104 transcripts, of which **94 record no request at all**,
+   * and the newest one that does is number **79** by modification time. With the
+   * cap applied to the file list, all forty slots went to files describing
+   * nothing and the Overview tile read "Nothing recorded yet" over three months
+   * of work — no number at all, on the busiest folder on the machine.
+   * ------------------------------------------------------------------------ */
+
+  it('finds the work when every recent transcript recorded nothing', async () => {
+    const config = scratch('terminaldeck-cost-shells-')
+    const cwd = '/fake/project'
+    const dir = join(config, 'projects', encodeProjectPath(cwd))
+    mkdirSync(dir, { recursive: true })
+
+    // Oldest first, so the two that carry work are the two the old cap could
+    // never have reached. `utimesSync` rather than write order because the
+    // ordering *is* the test and a filesystem's mtime granularity is not
+    // something to leave to chance.
+    appendFileSync(join(dir, 'sess-work-a.jsonl'), line('wa', 10, { timestamp: '2026-08-11T10:00:00.000Z' }))
+    appendFileSync(join(dir, 'sess-work-b.jsonl'), line('wb', 20, { timestamp: '2026-08-11T10:05:00.000Z' }))
+    const base = Date.now() / 1000
+    utimesSync(join(dir, 'sess-work-a.jsonl'), base - 100, base - 100)
+    utimesSync(join(dir, 'sess-work-b.jsonl'), base - 99, base - 99)
+    for (let i = 0; i < 12; i += 1) {
+      const path = join(dir, `sess-shell-${i}.jsonl`)
+      appendFileSync(path, shellTranscript(`shell-${i}`))
+      utimesSync(path, base - 10 + i, base - 10 + i)
+    }
+
+    const watcher = new TranscriptWatcher({
+      cwd,
+      configDir: config,
+      debounceMs: 30,
+      maxSessions: 2,
+      onUpdate: () => {},
+    })
+    await watcher.start()
+    const summary = watcher.summary()
+    watcher.stop()
+
+    // Two files carry a request each. Before this, the scan opened the two
+    // newest files — both shells — and reported nothing.
+    expect(summary.requests).toBe(2)
+    expect(summary.sessions.map((s) => s.sessionId).sort()).toEqual(['sess-work-a', 'sess-work-b'])
+    // Everything eligible was read, so the tile may still say "every request".
+    expect(summary.truncated).toBe(false)
+  }, 20_000)
+
+  it('says so when it stopped looking before the folder ran out', async () => {
+    const config = scratch('terminaldeck-cost-partial-')
+    const cwd = '/fake/project'
+    const dir = join(config, 'projects', encodeProjectPath(cwd))
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(join(dir, 'sess-old.jsonl'), line('o1', 10, { timestamp: '2026-08-11T09:00:00.000Z' }))
+    appendFileSync(join(dir, 'sess-new.jsonl'), line('n1', 10, { timestamp: '2026-08-11T10:00:00.000Z' }))
+    const base = Date.now() / 1000
+    utimesSync(join(dir, 'sess-old.jsonl'), base - 100, base - 100)
+    utimesSync(join(dir, 'sess-new.jsonl'), base - 10, base - 10)
+
+    const watcher = new TranscriptWatcher({
+      cwd,
+      configDir: config,
+      debounceMs: 30,
+      maxSessions: 1,
+      onUpdate: () => {},
+    })
+    await watcher.start()
+    const summary = watcher.summary()
+    watcher.stop()
+
+    expect(summary.requests).toBe(1)
+    // The whole point of the flag: one request is not "every request your agents
+    // made in this folder", and the tile has to be able to tell the difference.
+    expect(summary.truncated).toBe(true)
+  }, 20_000)
+
+  it('does not let a transcript with no requests evict one that has some', async () => {
+    // The empty-but-active case: a session given a prompt and killed before it
+    // was answered writes a timestamped line and no usage. It sorts newest and
+    // carries nothing, and it used to take a resident slot from the conversation
+    // whose numbers are on screen.
+    const config = scratch('terminaldeck-cost-evict-')
+    const cwd = '/fake/project'
+    const dir = join(config, 'projects', encodeProjectPath(cwd))
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(join(dir, 'sess-real.jsonl'), line('r1', 10, { timestamp: '2026-08-11T10:00:00.000Z' }))
+
+    const updates: ProjectSummary[] = []
+    const watcher = new TranscriptWatcher({
+      cwd,
+      configDir: config,
+      debounceMs: 30,
+      maxSessions: 1,
+      onUpdate: (s) => updates.push(s),
+    })
+    await watcher.start()
+    expect(watcher.summary().requests).toBe(1)
+    const before = updates.length
+
+    appendFileSync(
+      join(dir, 'sess-abandoned.jsonl'),
+      `${JSON.stringify({
+        type: 'user',
+        uuid: 'abandoned-u',
+        timestamp: '2026-08-11T23:00:00.000Z',
+        sessionId: 'sess-abandoned',
+        cwd,
+        message: { role: 'user', content: 'do the thing' },
+      })}\n`,
+    )
+
+    /*
+     * Waited on rather than slept through, and waited on the watcher's own
+     * report rather than on a file existing.
+     *
+     * The watcher emits at the end of the drain that reads the new file, and
+     * `prune` runs inside that same drain — so an update arriving after the
+     * append is proof that the cap has already been applied, and there is no
+     * window in which both transcripts are resident for this to race against.
+     */
+    await until('the abandoned transcript to be read', watcher, () => updates.length > before)
+    const summary = watcher.summary()
+    watcher.stop()
+    expect(summary.requests).toBe(1)
+    expect(summary.sessions.map((s) => s.sessionId)).toEqual(['sess-real'])
+  }, 20_000)
 
   it('survives a project that has never been opened in Claude Code', async () => {
     const config = scratch('terminaldeck-cost-empty-')

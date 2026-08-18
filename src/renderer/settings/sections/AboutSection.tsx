@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Button, Info, LinkOut, MoreBody, Notice, useMore } from '../controls'
+import { Button, LinkOut, Notice } from '../controls'
+import { HoverNote } from '../../components/HoverNote'
 import { asRecord, toAbout, type AboutInfo, type SectionProps } from '../settings-bridge'
 
 /**
@@ -103,24 +104,25 @@ export function updateNote(about: AboutInfo | null, checkable: boolean): string 
   return checkable ? 'Press the button to check.' : 'This build cannot tell whether an update exists.'
 }
 
+/*
+ * A fact and its ⓘ, which is now the same ⓘ as everywhere else in this window.
+ *
+ * `data-open` is gone with the disclosure it described. A fact row is a two
+ * column grid — label, value — and the opened paragraph used to be a third line
+ * inside the value column that pushed every fact under it down the page. The
+ * popup draws over the page instead, so the row has exactly one height and there
+ * is no open state for a stylesheet to react to.
+ */
 function Fact({ label, more, children }: { label: string; more?: string; children: ReactNode }) {
-  const rest = useMore()
   return (
-    <div className="settings-fact" data-open={rest.open || undefined}>
+    <div className="settings-fact">
       <span className="settings-fact-label">
         <span className="settings-label-line">
           {label}
-          {more && (
-            <Info label={label} open={rest.open} onToggle={rest.toggle}>
-              {more}
-            </Info>
-          )}
+          {more && <HoverNote label={label}>{more}</HoverNote>}
         </span>
       </span>
-      <span className="settings-fact-value">
-        {children}
-        {more && rest.open && <MoreBody>{more}</MoreBody>}
-      </span>
+      <span className="settings-fact-value">{children}</span>
     </div>
   )
 }

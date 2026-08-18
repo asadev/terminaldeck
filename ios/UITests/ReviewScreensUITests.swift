@@ -592,7 +592,7 @@ final class ReviewScreensUITests: XCTestCase {
      * over a tab's root and no gesture that pops one, so a copilot tab that hid
      * the bar would be a screen with no way out of it.
      */
-    func testTheCopilotIsATabAndKeepsTheBar() throws {
+    func testTheCopilotIsATabAndHasItsOwnWayHome() throws {
         try XCTSkipIf(control.isEmpty && readyFile.isEmpty, Self.noStandIn)
         continueAfterFailure = false
         app = XCUIApplication()
@@ -611,11 +611,35 @@ final class ReviewScreensUITests: XCTestCase {
 
         for scheme in [Scheme.dark, Scheme.light] {
             try choose(scheme)
-            XCTAssertTrue(app.openCopilotTab(), "the copilot should have a pill of its own")
-            sleep(2)
-            XCTAssertTrue(app.tabBars.firstMatch.exists,
-                          "a tab that hid its own bar could not be left")
-            capture("\(scheme.rawValue)-11-copilot-tab")
+            /*
+             * **Whichever of the two shapes this phone is in, photograph the
+             * copilot.**
+             *
+             * The pill exists only for a machine whose copilot this phone has
+             * connected — *"if the copilot is not connecting, this icon should
+             * not be inside the pill"* — and which of those two this run is in
+             * depends on the host it was pointed at. So it takes the pill when
+             * there is one and the Settings row when there is not, and both are
+             * a real screen worth a frame.
+             */
+            if app.openCopilotTab() {
+                sleep(2)
+                // The bar is **not** over the composer, and the way home is the
+                // chevron this screen draws for itself: *"pill should not be
+                // inside the chat box — there should be a back button to go back
+                // on home."*
+                XCTAssertFalse(app.tabBars.firstMatch.exists,
+                               "either we will type or we will use the pill")
+                XCTAssertTrue(app.buttons["copilot.back"].exists,
+                              "hiding the bar is only safe while this button is here")
+                capture("\(scheme.rawValue)-11-copilot-tab")
+                app.buttons["copilot.back"].tap()
+            } else {
+                XCTAssertTrue(app.openCopilotSettings(),
+                              "with no pill, connecting is still one row inside Settings")
+                sleep(1)
+                capture("\(scheme.rawValue)-11-copilot-connect-in-settings")
+            }
 
             // And nothing about the copilot is left on the session list, which
             // is the duplication the pill replaced.

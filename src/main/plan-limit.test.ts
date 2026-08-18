@@ -9,9 +9,12 @@ import {
   planSnapshot,
   PlanLimitTracker,
   registerPlanLimitIpc,
+  usagePanelOnScreen,
+  usagePanelScanning,
   watchPlanSnapshots,
   type PlanLimitSnapshot,
   type RefreshResult,
+  type RefreshTimings,
 } from './plan-limit'
 
 /* ------------------------------------------------------------------ the IPC */
@@ -33,8 +36,17 @@ function fakeContents(sink: Pushed[] = []): unknown {
   }
 }
 
-/** Register the handlers against a fake `ipcMain` and hand back an `invoke`. */
-function wire(write?: (sessionId: string, data: string) => void): {
+/**
+ * Register the handlers against a fake `ipcMain` and hand back an `invoke`.
+ *
+ * `timings` is the seam described on {@link RefreshTimings}: the rules being
+ * proved below are measured in seconds and a suite that spent them for real
+ * would be several minutes slower for nothing. Omitting it uses the app's own.
+ */
+function wire(
+  write?: (sessionId: string, data: string) => void,
+  timings?: RefreshTimings,
+): {
   invoke: (channel: string, sender: unknown, ...args: unknown[]) => unknown
 } {
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
@@ -45,7 +57,10 @@ function wire(write?: (sessionId: string, data: string) => void): {
       },
       on: () => {},
     } as unknown as IpcMain,
-    write ? { write } : {},
+    {
+      ...(write ? { write } : {}),
+      ...(timings ? { timings } : {}),
+    },
   )
   return {
     invoke: (channel: string, sender: unknown, ...args: unknown[]): unknown => {
@@ -444,5 +459,330 @@ describe('running /usage on request', () => {
     const result = (await invoke('plan:refresh', fakeContents(), 'never-watched')) as RefreshResult
     expect(result).toMatchObject({ ok: false, reason: 'not-watching' })
     expect(result.snapshot.available).toBe(false)
+  })
+})
+
+/**
+ * The `/usage` panel of an account that has no subscription limits.
+ *
+ * Transcribed from a fifteen-second screen recording Asad sent from his Windows
+ * machine on 2026-08-18, running Terminal Deck 0.4.0 against Claude Code
+ * 2.1.224 under an account the CLI itself labels `Claude API`. Every line is
+ * his, including the two dollar figures: the panel is complete, and there is no
+ * `Current session` and no `Current week` anywhere between the cost block and
+ * the contributors. An account billed through the API has no rolling
+ * subscription window, so the CLI has nothing to draw there and draws nothing.
+ *
+ * There is no prompt glyph in it, deliberately. The panel takes the region the
+ * prompt box occupies, which is what makes "the prompt is back" a sound test
+ * for "the panel has gone".
+ */
+const PANEL_WITHOUT_LIMITS = `
+   Settings  Status   Config   Usage   Stats
+
+   Session
+
+   Total cost:            $146.95
+   Total duration (API):  5h 50m 42s
+   Total duration (wall): 17h 23m 44s
+   Total code changes:    2673 lines added, 15 lines removed
+   Usage by model:
+       claude-haiku-4-5:  134.2k input, 1.9k output, 0 cache read, 0 cache write, 6 web search ($0.2037)
+        claude-opus-5:  9.5k input, 1.6m output, 129.0m cache read, 6.0m cache write ($146.75)
+
+   What's contributing to your limits usage?
+   Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+   Last 24h · these are independent characteristics of your usage, not a breakdown
+
+   48% of your usage came from subagent-heavy sessions
+    Each subagent runs its own requests. Be deliberate about spawning them — and
+    consider configuring a cheaper model for simpler subagents.
+`
+
+/**
+ * The same panel while it is still walking the transcript store.
+ *
+ * The two lines at the end are the CLI's own, and the second is what the first
+ * theory about this bug turned on: while the scan runs, the panel offers Escape
+ * as the way to cancel *the scan*, which made it look as though the app's one
+ * Escape was being spent on the wrong thing. Driving the real CLI here refuted
+ * that — see `closePanel` — but the state is real and has to be waited out
+ * rather than read as an empty answer.
+ */
+const PANEL_SCANNING = `${PANEL_WITHOUT_LIMITS}
+   Scanning local sessions…
+
+   Esc to cancel
+`
+
+/** The panel with limits in it, drawn where the prompt box was. */
+const PANEL_WITH_LIMITS = `
+   Settings  Status   Config   Usage   Stats
+
+   Session
+
+   Total cost:            $0.0000
+
+   Current session
+   ██▌                                                5% used
+   Resets 4am (Asia/Dubai)
+
+   Current week (all models)
+   ████████████████████████████████████████           80% used
+   Resets Aug 14 at 2pm (Asia/Dubai)
+
+   What's contributing to your limits usage?
+`
+
+describe('recognising the panel itself', () => {
+  it('sees a panel that has no plan limits in it at all', () => {
+    // The distinction the old code could not make: there is nothing to parse
+    // here, and there is very much something on the screen.
+    expect(parsePlanLimits(PANEL_WITHOUT_LIMITS)).toBeNull()
+    expect(usagePanelOnScreen(PANEL_WITHOUT_LIMITS)).toBe(true)
+  })
+
+  it('does not mistake ordinary output for an open panel', () => {
+    expect(usagePanelOnScreen(IDLE_SCREEN)).toBe(false)
+    expect(usagePanelOnScreen('the settings status config usage stats are fine')).toBe(false)
+  })
+
+  it('tells a scan in progress from a panel that has finished', () => {
+    expect(usagePanelScanning(PANEL_SCANNING)).toBe(true)
+    expect(usagePanelScanning(PANEL_WITHOUT_LIMITS)).toBe(false)
+    expect(usagePanelScanning(IDLE_SCREEN)).toBe(false)
+  })
+})
+
+/**
+ * Everything below drives the real `refresh` against a fake CLI, with the
+ * timings shortened so that a five-second rule does not cost five seconds to
+ * prove. The rules themselves are the app's.
+ */
+describe('never leaving a panel on somebody screen', () => {
+  const ESC = String.fromCharCode(27)
+  const FAST: RefreshTimings = {
+    idleBeforeTyping: 120,
+    panelAppears: 900,
+    settledGrace: 500,
+    scanCeiling: 2_500,
+    closeSettle: 700,
+  }
+
+  /**
+   * Repaint the session's whole screen, the way a TUI does.
+   *
+   * Clear-and-home before the text, because the thing being tested is whether
+   * the panel is *on* the screen: appending it under the last one would leave
+   * the prompt glyph from the idle screen visible above it, and the panel would
+   * read as closed before anything had closed it. That is not a detail — the
+   * one existing test in this file that types `/usage` passed for exactly that
+   * reason and would have gone on passing with the close verification removed.
+   */
+  function paint(sessionId: string, text: string): void {
+    feed(sessionId, `\u001b[2J\u001b[H${text}`)
+  }
+
+  it('reads the panel, then proves the panel went away', async () => {
+    const wrote: string[] = []
+    const { invoke } = wire((id, data) => {
+      wrote.push(data)
+      if (data.includes('/usage')) paint(id, PANEL_WITH_LIMITS)
+      // A CLI that honours Escape, which is what a real one does: measured on a
+      // real PTY here, one press closed the panel inside 103ms.
+      if (data === ESC) paint(id, IDLE_SCREEN)
+    }, FAST)
+    invoke('plan:watch', fakeContents(), 'close-1')
+    paint('close-1', IDLE_SCREEN)
+    await idleFor(160)
+
+    const result = (await invoke('plan:refresh', fakeContents(), 'close-1')) as RefreshResult
+    expect(result).toMatchObject({ ok: true, reason: null, typed: true, residue: false })
+    expect(result.snapshot.source).toBe('usage-panel')
+    // One Escape, because one was enough. The second is an escalation, not a
+    // habit.
+    expect(wrote).toEqual(['/usage\r', ESC])
+    dropPlanSession('close-1')
+  })
+
+  it('says so when the panel will not close, instead of walking away from it', async () => {
+    const wrote: string[] = []
+    // A CLI that ignores Escape entirely. Whether that is Windows conpty, an
+    // older build, or a redraw racing the keystroke does not matter here: what
+    // matters is that this app cannot report success and cannot fall silent.
+    const { invoke } = wire((id, data) => {
+      wrote.push(data)
+      if (data.includes('/usage')) paint(id, PANEL_WITH_LIMITS)
+    }, FAST)
+    invoke('plan:watch', fakeContents(), 'stuck-1')
+    paint('stuck-1', IDLE_SCREEN)
+    await idleFor(160)
+
+    const result = (await invoke('plan:refresh', fakeContents(), 'stuck-1')) as RefreshResult
+    expect(result).toMatchObject({ ok: false, reason: 'panel-open', typed: true, residue: true })
+    // Two presses and then the truth — never a third.
+    expect(wrote).toEqual(['/usage\r', ESC, ESC])
+    dropPlanSession('stuck-1')
+  })
+
+  it('waits out a scan rather than calling it an empty panel', async () => {
+    const wrote: string[] = []
+    let opened = 0
+    const { invoke } = wire((id, data) => {
+      wrote.push(data)
+      if (data.includes('/usage')) {
+        opened += 1
+        paint(id, PANEL_SCANNING)
+        // The limits arrive later than the first poll, and while the panel is
+        // still saying `Esc to cancel`. A reader that treated "no limits yet"
+        // as the answer would have given up before this landed.
+        setTimeout(() => paint(id, PANEL_WITH_LIMITS), 700)
+      }
+      if (data === ESC) paint(id, IDLE_SCREEN)
+    }, FAST)
+    invoke('plan:watch', fakeContents(), 'scan-1')
+    paint('scan-1', IDLE_SCREEN)
+    await idleFor(160)
+
+    const result = (await invoke('plan:refresh', fakeContents(), 'scan-1')) as RefreshResult
+    expect(opened).toBe(1)
+    expect(result).toMatchObject({ ok: true, reason: null, residue: false })
+    expect(result.snapshot.limits.map((limit) => limit.id)).toEqual(['session', 'week'])
+    dropPlanSession('scan-1')
+  })
+
+  it('brings a panel down whose scan never ends', async () => {
+    const wrote: string[] = []
+    const { invoke } = wire((id, data) => {
+      wrote.push(data)
+      if (data.includes('/usage')) paint(id, PANEL_SCANNING)
+      if (data === ESC) paint(id, IDLE_SCREEN)
+    }, FAST)
+    invoke('plan:watch', fakeContents(), 'forever-1')
+    paint('forever-1', IDLE_SCREEN)
+    await idleFor(160)
+
+    const result = (await invoke('plan:refresh', fakeContents(), 'forever-1')) as RefreshResult
+    // Bounded, and closed. The scan is the CLI's business; the panel is this
+    // app's, because this app opened it.
+    expect(result).toMatchObject({ ok: false, reason: 'no-limits', residue: false })
+    expect(wrote).toEqual(['/usage\r', ESC])
+    dropPlanSession('forever-1')
+  })
+})
+
+describe('an account with no plan limits is an answer, not a timeout', () => {
+  const ESC = String.fromCharCode(27)
+  const FAST: RefreshTimings = {
+    idleBeforeTyping: 120,
+    panelAppears: 900,
+    settledGrace: 500,
+    scanCeiling: 2_500,
+    closeSettle: 700,
+  }
+
+  function paint(sessionId: string, text: string): void {
+    feed(sessionId, `\u001b[2J\u001b[H${text}`)
+  }
+
+  /** A CLI whose `/usage` panel is his: complete, and with no limits in it. */
+  function apiAccount(sessionId: string, wrote: string[]): { invoke: ReturnType<typeof wire>['invoke'] } {
+    const { invoke } = wire((id, data) => {
+      wrote.push(data)
+      if (data.includes('/usage')) paint(id, PANEL_WITHOUT_LIMITS)
+      if (data === ESC) paint(id, IDLE_SCREEN)
+    }, FAST)
+    invoke('plan:watch', fakeContents(), sessionId)
+    paint(sessionId, IDLE_SCREEN)
+    return { invoke }
+  }
+
+  it('reports that there are no limits, rather than that there was no panel', async () => {
+    const wrote: string[] = []
+    const { invoke } = apiAccount('api-1', wrote)
+    await idleFor(160)
+
+    const result = (await invoke('plan:refresh', fakeContents(), 'api-1')) as RefreshResult
+    expect(result).toMatchObject({ ok: false, reason: 'no-limits', typed: true, residue: false })
+    expect(wrote).toEqual(['/usage\r', ESC])
+    dropPlanSession('api-1')
+  })
+
+  it('does not ask the same session again on its own', async () => {
+    const wrote: string[] = []
+    const { invoke } = apiAccount('api-2', wrote)
+    await idleFor(160)
+
+    await invoke('plan:refresh', fakeContents(), 'api-2')
+    const typedOnce = wrote.length
+    await idleFor(160)
+    const again = (await invoke('plan:refresh', fakeContents(), 'api-2')) as RefreshResult
+
+    // The whole of the "repeatedly" in his message. A question whose answer
+    // cannot change is asked once.
+    expect(again).toMatchObject({ ok: false, reason: 'no-limits', typed: false, residue: false })
+    expect(wrote.length).toBe(typedOnce)
+    dropPlanSession('api-2')
+  })
+
+  it('lets a person ask anyway', async () => {
+    const wrote: string[] = []
+    const { invoke } = apiAccount('api-3', wrote)
+    await idleFor(160)
+
+    await invoke('plan:refresh', fakeContents(), 'api-3')
+    const typedOnce = wrote.length
+    await idleFor(160)
+    const pressed = (await invoke('plan:refresh', fakeContents(), 'api-3', true)) as RefreshResult
+
+    // A press is a person, and a person may ask a second time. This is what
+    // keeps the control in the panel from being a control that does nothing.
+    expect(pressed.typed).toBe(true)
+    expect(wrote.length).toBeGreaterThan(typedOnce)
+    dropPlanSession('api-3')
+  })
+
+  it('does not hang when the session is closed mid-check', async () => {
+    const wrote: string[] = []
+    const { invoke } = wire((id, data) => {
+      wrote.push(data)
+      if (data.includes('/usage')) paint(id, PANEL_SCANNING)
+    }, FAST)
+    invoke('plan:watch', fakeContents(), 'gone-1')
+    paint('gone-1', IDLE_SCREEN)
+    await idleFor(160)
+
+    const running = invoke('plan:refresh', fakeContents(), 'gone-1') as Promise<RefreshResult>
+    // The tab is closed while the panel is up, which disposes the tracker under
+    // the loop that is reading it. The awaited flush inside that loop is the
+    // thing that would never resolve if a disposed terminal were asked for one.
+    setTimeout(() => dropPlanSession('gone-1'), 400)
+    const result = await running
+
+    expect(result).toMatchObject({ ok: false, reason: 'not-watching', typed: true })
+    // And no Escape was sent into a pty that is not there any more.
+    expect(wrote).toEqual(['/usage\r'])
+  })
+
+  it('leaves a session alone once its panel has proved unclosable', async () => {
+    const wrote: string[] = []
+    const { invoke } = wire((id, data) => {
+      wrote.push(data)
+      if (data.includes('/usage')) paint(id, PANEL_WITH_LIMITS)
+    }, FAST)
+    invoke('plan:watch', fakeContents(), 'stuck-2')
+    paint('stuck-2', IDLE_SCREEN)
+    await idleFor(160)
+
+    await invoke('plan:refresh', fakeContents(), 'stuck-2')
+    const typedOnce = wrote.length
+    const again = (await invoke('plan:refresh', fakeContents(), 'stuck-2')) as RefreshResult
+
+    // An app that has just failed to clean up after itself does not get to make
+    // a second mess on the same screen without being asked.
+    expect(again).toMatchObject({ reason: 'panel-open', typed: false })
+    expect(wrote.length).toBe(typedOnce)
+    dropPlanSession('stuck-2')
   })
 })

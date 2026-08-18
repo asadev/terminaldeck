@@ -175,15 +175,57 @@ export type AlertKind =
    */
   | 'loop'
   | 'dirty-tree'
+  /**
+   * A device has paired and is waiting for somebody here to approve it.
+   *
+   * **Nothing in this file produces one, and that is deliberate rather than an
+   * omission.** Every rule below is a fact about *a project*, reached by reading
+   * that project's transcripts and its git state; this is a fact about *the
+   * machine*, equally true in every folder open on it, and it is not visible
+   * from anything `collectAlertInput` reads. The window derives it from the
+   * device roster the remote bridge already answers with, and folds it into the
+   * report — see `src/renderer/alerts-devices.ts`, which carries the argument at
+   * length.
+   *
+   * The kind lives here anyway, because this file is the *vocabulary* the panel
+   * mirrors, and a kind declared only on the renderer's copy would be the exact
+   * drift that copy's comment warns about. What a producer must not do is claim
+   * a kind it cannot evaluate; declaring one it does not raise costs nothing and
+   * keeps both sides reading from one list.
+   */
+  | 'device-pending'
 
 /**
  * What the UI offers to do about an alert. Optional — several alerts are worth
  * knowing about and have no single right response.
  */
 export interface AlertAction {
-  kind: 'open-inspector' | 'focus-session' | 'compact-session' | 'open-git' | 'install-provider'
+  kind:
+    | 'open-inspector'
+    | 'focus-session'
+    | 'compact-session'
+    | 'open-git'
+    | 'install-provider'
+    /**
+     * Open the step-by-step approval flow for the device in `target`.
+     *
+     * The odd one out among these, and the difference is worth stating because
+     * it is a security property rather than a routing detail. The other five are
+     * *navigations* — show a panel, focus a tab — and the sheet hands them to the
+     * window to carry out. This one is answered by the alerts sheet itself, which
+     * mounts the very same `DeviceApproval` flow the settings pane mounts and
+     * ends in the very same `remote:device:approve` call, the one that writes the
+     * device's kind and its folders **before** it admits anything.
+     *
+     * It is written that way so there is exactly one road into approval. An
+     * action that merely opened Settings would be an alert telling somebody to go
+     * and look — the failure this whole surface exists to remove — and one that
+     * approved the device outright would be a second road into the gate, with the
+     * two questions the flow asks skipped.
+     */
+    | 'approve-device'
   label: string
-  /** Session id, provider id or path, depending on `kind`. */
+  /** Session id, provider id, device id or path, depending on `kind`. */
   target?: string
 }
 

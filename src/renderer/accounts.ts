@@ -598,6 +598,34 @@ function isGeneratedAccount(account: NamedAccount): boolean {
  * install it is holds in all of those cases, is known without asking anybody,
  * and does not change under the pointer when a probe lands.
  *
+ * ## Why the third rung may be asked to drop the agent's name
+ *
+ * `namesTheAgent: false` turns "Your own Claude Code install" into "Your own
+ * install", and it exists for exactly one shape of list: one whose rows have
+ * already been filtered to a single agent.
+ *
+ * The default names the agent because the name is the only thing separating
+ * those rows. On a fresh machine `main/profiles.ts` generates one system
+ * account per agent, so this list holds three of them, none has an address, and
+ * without the agent's name all three read "Your own install" — the same
+ * caption on three rows that are not the same account, which is the failure
+ * {@link accountRail} spends a paragraph refusing to ship. The mark beside the
+ * row carries the agent too, but a glyph is not a caption and one of those rows
+ * is about to be made the default.
+ *
+ * Where the list has been filtered, none of that holds and the opposite rule
+ * applies. The copilot's setup flow offers only the accounts its own session
+ * could run as, so every row on it belongs to one agent, the name distinguishes
+ * nothing, and what is left is a vendor's product name printed in a pop-up —
+ * which is the thing the review asked for by name:
+ *
+ *   > *"You should not mention in any settings or any pop-up a specific tool or
+ *   > LLM, because they can use some other also."*
+ *
+ * So the flag is not a style switch. It says "this list has already answered
+ * the question the name was there to answer", and it is only true where the
+ * caller has done the filtering.
+ *
  * `system` off the list when it has been read, because that is the main
  * process's own answer, and the id only has to carry it before the list
  * arrives.
@@ -611,13 +639,17 @@ function isGeneratedAccount(account: NamedAccount): boolean {
 export function profileLoginLabel(
   account: NamedAccount,
   signIn: SignInFacts | undefined,
+  options?: { namesTheAgent?: boolean },
 ): string {
   const address = accountLabel(signIn)
   if (address !== null) return address
   if (!isGeneratedAccount(account)) return account.name
   // An agent this build does not know still gets a true sentence rather than
   // the slug — the same direction `parseAccount` errs in when it meets one.
-  const agent = account.provider == null ? undefined : AGENT_CATALOG[account.provider]?.label
+  const agent =
+    options?.namesTheAgent === false || account.provider == null
+      ? undefined
+      : AGENT_CATALOG[account.provider]?.label
   return agent ? `Your own ${agent} install` : 'Your own install'
 }
 

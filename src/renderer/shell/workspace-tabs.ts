@@ -97,6 +97,111 @@ export interface WorkspaceTab {
   url?: string
   /** True for tabs the user can close. */
   closable: boolean
+  /**
+   * The machine this session is running on, when it is not this one.
+   *
+   * Absent on everything local, and absent is the answer rather than a gap: a
+   * tab with no machine is a tab whose process belongs to this app, which is
+   * every tab this window has ever had until now.
+   *
+   * ## Why a remote session is a tab at all now
+   *
+   * It deliberately was not, for one night. A remote session covered the pane
+   * the way a sidebar view does and had no pill, on the argument that a ✕ on the
+   * pill would promise to end something this window does not own. Asad looked at
+   * that and asked for the opposite, in as many words: *"When I click on any
+   * session — the shape of the icon, top bar header is not same, and I cannot
+   * drag it up there… So it should be there on the top, just like the normal
+   * internal local session."* The argument was not wrong about the ✕; it was
+   * wrong about which half to give up. The ✕ is answered by the `close` verb on
+   * the wire, which lands the request on the far machine and ends the process
+   * there, and the pill is what he actually asked for.
+   *
+   * ## What it carries, and what it does not
+   *
+   * The machine's id, because that is the handle every verb needs, and its name,
+   * because four surfaces print it and none of them can read the machines view.
+   * Not its state, not its capabilities: whether a machine is worth drawing is
+   * `reachableMachines`, one level up, and a tab that carried the answer would
+   * be a second place for it to be decided.
+   *
+   * `closable` says whether the ✕ can act — see {@link machineTabId} for how a
+   * far machine that never advertised `close` arrives here as a tab with no ✕
+   * rather than a ✕ that does nothing.
+   */
+  machine?: { id: string; name: string }
+}
+
+/**
+ * The prefix on a remote session's tab id, and the one place the joining rule
+ * lives.
+ *
+ * A remote session has two handles — the machine and the session — and a tab has
+ * one id. Something has to join them, and the thing that must not happen is that
+ * two files each decide how: a separator agreed in two places is a separator
+ * that will disagree in one of them. So the rule is here, in the module that
+ * defines what a tab is, and {@link machineTabId} and {@link readMachineTabId}
+ * are the only code that knows it.
+ *
+ * The separator is a space and not the NUL `PAIR_SEP` uses a few hundred lines
+ * down, and the difference is not taste. That one joins two strings for a
+ * *comparison*; this one produces a value that goes into the DOM — `data-tab-id`
+ * on every strip tab — and is then read back through
+ * `querySelector('[data-tab-id="…"]')` to scroll the selected tab into view. A
+ * control character in an attribute selector is a road with no traffic on it,
+ * and the failure would be the strip quietly refusing to scroll rather than
+ * anything a test would trip over. A space is ordinary, escapes cleanly, and is
+ * safe here for a stated reason: a machine id is minted by `machines/store.ts`
+ * as a UUID, so the **first** space in the joined string is always the one this
+ * function put there. Only the machine id has to be space-free; the session id
+ * is whatever the far machine calls it and is taken as the whole remainder.
+ */
+const MACHINE_TAB_PREFIX = 'machine '
+
+/** The tab id for one session on another machine. */
+export function machineTabId(machineId: string, sessionId: string): string {
+  return `${MACHINE_TAB_PREFIX}${machineId} ${sessionId}`
+}
+
+/**
+ * The two handles back out of a tab id, or null when the id is a local tab's.
+ *
+ * Null rather than a throw, because every caller is asking the *question* — is
+ * this thing on another machine — rather than asserting the answer. `selectTab`
+ * and `closeTab` both take an id from a click and have to route it, and a
+ * routing decision that throws on the ordinary case is not a routing decision.
+ */
+export function readMachineTabId(id: string): { machineId: string; sessionId: string } | null {
+  if (!id.startsWith(MACHINE_TAB_PREFIX)) return null
+  const rest = id.slice(MACHINE_TAB_PREFIX.length)
+  const cut = rest.indexOf(' ')
+  if (cut <= 0 || cut === rest.length - 1) return null
+  return { machineId: rest.slice(0, cut), sessionId: rest.slice(cut + 1) }
+}
+
+/**
+ * A status string from another machine, narrowed to one this window can draw.
+ *
+ * The wire carries `status` as a plain string — `RemoteSession` restates the
+ * far end's type rather than importing it — so it can be a state a newer build
+ * over there knows about and this one does not. `idle` is the answer for those,
+ * and it is the honest one: the dot means "nothing recognisable on screen",
+ * which is exactly what this end knows. The alternative is a `StatusDot` handed
+ * a string it has no colour for, which draws nothing at all and takes the row's
+ * 15px lead-in with it — the rows either side would then be indented differently
+ * from a session that is merely newer than this app.
+ */
+const STATUSES: readonly SessionStatus[] = [
+  'idle',
+  'working',
+  'waiting',
+  'input',
+  'completed',
+  'exited',
+]
+
+export function asSessionStatus(raw: string): SessionStatus {
+  return STATUSES.find((known) => known === raw) ?? 'idle'
 }
 
 /**
@@ -268,8 +373,21 @@ export function tabLabel(tab: WorkspaceTab, tabs: readonly WorkspaceTab[]): stri
    */
   if (tab.isCopilot) return tab.label || COPILOT_NAME
   if (tab.kind !== 'session') return tab.label
+  /*
+   * Siblings are in the same folder **on the same machine**.
+   *
+   * Without the second half, two machines that both have a `~/projects/site`
+   * open would have their untitled sessions numbered as one run — "Session 1"
+   * over here and "Session 2" over there, for two sessions that have nothing to
+   * do with each other and no folder heading in common to explain the numbering.
+   * `machine?.id` rather than the object, because these tabs are rebuilt on
+   * every push and two identical machine objects are never the same reference.
+   */
   const siblings = tabs.filter(
-    (other) => other.kind === 'session' && other.projectPath === tab.projectPath,
+    (other) =>
+      other.kind === 'session' &&
+      other.projectPath === tab.projectPath &&
+      other.machine?.id === tab.machine?.id,
   )
   const index = siblings.findIndex((other) => other.id === tab.id)
   return sessionLabel(
@@ -550,6 +668,27 @@ export const STRIP_LABEL_BUDGET = 22
  * an empty second line would read as a missing value.
  */
 export function tabTooltip(tab: WorkspaceTab, label: string): string {
+  /*
+   * A remote session says which machine on its own line.
+   *
+   * It is the one fact that separates this pill from the identical-looking one
+   * beside it, and the pill itself deliberately does not draw it — the whole
+   * complaint being answered is that remote work looked like a foreign kind of
+   * thing, so the tab wears exactly what a local tab wears. The tooltip is where
+   * the difference is stated, which is the same trade the rail already makes
+   * with the account caption: the identifying fact moves off the line and into
+   * the hover rather than being dropped.
+   *
+   * The folder is the far machine's and is printed with it, because that pair —
+   * folder on machine — is what a person means when they ask which session this
+   * is. It is not passed to anything that opens a path; see the `heading` in
+   * `App.tsx`, which for the same reason hands `FolderChip` a null.
+   */
+  if (tab.machine) {
+    return tab.projectPath
+      ? `${label}\n${tab.projectPath} on ${tab.machine.name}`
+      : `${label}\non ${tab.machine.name}`
+  }
   return tab.projectPath ? `${label}\n${tab.projectPath}` : label
 }
 

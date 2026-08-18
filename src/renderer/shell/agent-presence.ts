@@ -171,6 +171,49 @@ export function settle(previous: AgentPresence, reading: AgentPresence, seenAgen
   return previous.running === true ? { ...previous, running: null } : reading
 }
 
+/**
+ * What is running in a session, as opposed to what this app launched into it.
+ *
+ * Only one case differs, and it exists because Run Claude does (NEXT-UPDATE
+ * item 1): a session spawned as `$SHELL -l` with an agent now in front of it.
+ * `provider` still says `shell` — it is a record of the spawn and it is not
+ * wrong — but every piece of copy keyed off it would be. The pane would go on
+ * telling a reader with a live conversation in front of them that "a shell just
+ * runs what you type, so there is nothing here to read".
+ *
+ * The answer is `undefined`, not `'claude'`. `undefined` already means "not
+ * known" everywhere this is passed, and not known is the truth: somebody typed
+ * a CLI into a terminal and this app never saw which one. Naming Claude here
+ * would be a guess that reads as a fact, and `codex` is one keystroke away from
+ * being the thing actually running. `refuseByProvider` in
+ * `src/main/agent-controls.ts` is the far end of that agreement: handed
+ * `undefined` it consults the *screen* and writes only when the screen carries
+ * Claude Code's own markers, so "not known" costs nothing and claims nothing.
+ *
+ * Anything other than a shell is returned untouched, including `undefined`.
+ *
+ * ## Why it lives here rather than in the one component that used to own it
+ *
+ * It was written in `components/ChatView.tsx`, because the chat pane was the
+ * first surface that had to tell a spawn apart from what is in front of it. It
+ * moved the day a second surface needed the same distinction — the window's
+ * control cluster, which had been asking the *record* while the account chip
+ * eighteen pixels to its left asked the *screen*, and so withdrew the model,
+ * the effort and the usage reading from every session Asad starts as a shell
+ * and types `claude` into. Two components on one bar disagreeing about whether
+ * an agent is running is the fault; one function, in the module that owns the
+ * question, is the fix. Importing it out of `ChatView` was not an option worth
+ * having — `ChatView` already imports {@link useAgentPresence} from here, so
+ * that direction is a cycle.
+ */
+export function runningProvider(
+  provider: ProviderId | undefined,
+  agentRunning: boolean | null,
+): ProviderId | undefined {
+  if (provider === 'shell' && agentRunning === true) return undefined
+  return provider
+}
+
 export function useAgentPresence(session: ChromeSession | null): AgentPresence {
   const settled = presenceFromSession(session)
   const [screen, setScreen] = useState<AgentPresence>(UNKNOWN_PRESENCE)

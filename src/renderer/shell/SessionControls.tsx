@@ -21,6 +21,7 @@ import {
   type ControlId,
   type ControlOption,
 } from '../chat/controls/catalog'
+import { runningProvider, useAgentPresence } from './agent-presence'
 import {
   chooseLayout,
   clampWidth,
@@ -115,13 +116,17 @@ export interface SessionControlsProps {
   /** The session's working directory, which is where its transcript is read from. */
   cwd?: string | null
   /**
-   * What is running in the session.
+   * What this app **launched** into the session — a record of the spawn, and
+   * deliberately not the same question as what is in front of it now.
    *
-   * `shell` withdraws the whole cluster: a `/bin/zsh -l` has no model, no
-   * effort and no fast mode, and the reader behind these values falls back to
-   * Claude Code's own settings file when it cannot parse a screen — which is
-   * how a plain shell once came to report `Model  Opus 5`. `finish.test.ts`
-   * pins that behaviour for the composer's copy and it is the same fact here.
+   * `shell` withdraws the whole cluster, but only once the screen agrees: a
+   * `/bin/zsh -l` has no model, no effort and no fast mode, and the reader
+   * behind these values falls back to Claude Code's own settings file when it
+   * cannot parse a screen — which is how a plain shell once came to report
+   * `Model  Opus 5`. `finish.test.ts` pins that behaviour for the composer's
+   * copy and it is the same fact here. What the record cannot settle on its own
+   * is the case in {@link exited}'s note below, and the component resolves it
+   * through `runningProvider`.
    *
    * `codex` and `gemini` do **not** withdraw it. They get the chips, drawn back
    * and carrying the sentence explaining that this build has not been shown how
@@ -129,6 +134,29 @@ export interface SessionControlsProps {
    * a model, and a gap where a control should be says nothing about why.
    */
   provider?: ProviderId
+  /**
+   * Whether the pty is gone — `exitCode !== null` on the session record.
+   *
+   * ## Why a fourth prop, and why it is required
+   *
+   * Everything else here is about a *live* session, and this cluster used to be
+   * able to ignore the question because it never asked the screen anything. It
+   * asks now, through {@link useAgentPresence}, and the screen is exactly the
+   * source that can go on saying "Claude Code" about a session whose process is
+   * already dead: a CLI killed rather than `/exit`-ed does not clear its own
+   * banner, so the last frame of a corpse still carries every marker the reader
+   * matches on. Presence answers that from the record first — `exited` is the
+   * first thing `presenceFromSession` looks at — which is why the honest value
+   * has to arrive rather than being assumed.
+   *
+   * Required, with no default, and that is the whole point of it. A `= false`
+   * here would be a fabrication with a visible consequence — live, pressable
+   * model and effort chips drawn over a session that cannot be typed into at
+   * all — and it would be invisible at every call site, because the caller that
+   * forgot it would compile. `renderer/wiring.test.ts` pins that both mounts in
+   * `App.tsx` pass the session's real exit code and not a literal.
+   */
+  exited: boolean
   /**
    * Opens the app's MCP servers view — the one connector surface it has.
    *
@@ -254,13 +282,10 @@ function useClusterFit(
   layout: ClusterLayout
   /** How wide the cluster may be drawn before it covers a control. */
   clamp: number | null
-  /** Whether the folded chip's words are actually running past its own edge. */
-  clipped: boolean
   attach: (node: HTMLDivElement | null) => void
 } {
   const [layout, setLayout] = useState<ClusterLayout>('full')
   const [clamp, setClamp] = useState<number | null>(null)
-  const [clipped, setClipped] = useState(false)
   const [bar, setBar] = useState<HTMLElement | null>(null)
   // Read and written inside the observer, which must not re-subscribe when the
   // layout changes — and `layout` in a closure would be the value from the
@@ -300,11 +325,6 @@ function useClusterFit(
     drawn.current = next
     setLayout(next)
     setClamp(Math.round(clampWidth(room)))
-    // Whether the fade is earned. CSS cannot ask a box if it is overflowing, so
-    // this is asked here and answered with an attribute — see
-    // `.sc-summary[data-clipped]`.
-    const words = cluster.querySelector('.sc-summary-text')
-    setClipped(words !== null && words.scrollWidth > words.clientWidth + 1)
   }, [bar, host])
 
   /*
@@ -333,7 +353,85 @@ function useClusterFit(
   // observer only hears about the second case.
   useEffect(measure, [measure, signature])
 
-  return { layout, clamp, clipped, attach }
+  return { layout, clamp, attach }
+}
+
+/**
+ * How much of itself the folded chip is allowed to say.
+ *
+ * ## What this is answering
+ *
+ * The chip used to have one shape and a fade: both values, laid out at their
+ * natural widths, with a mask over the trailing sixteen pixels for whatever ran
+ * past the edge. Measured in the running app on 2026-08-18, on a session named
+ * *"Update Claude Code terminal to new version"*:
+ *
+ * | window | chip | label drawn | of |
+ * |---|---|---|---|
+ * | 720 (the app's own `minWidth`) | 25px | **0px** | 106px |
+ * | 900 | 92px | 45px | 106px |
+ * | 1100 | 137px | 106px | 106px |
+ *
+ * So at the narrowest window a person can actually make, the control was a bare
+ * chevron with a hundred and six pixels of invisible text behind it, and at 900
+ * it read `Opus 5 · Ul` dissolving into the toolbar. That second one is the
+ * *"faded, clipped text — show it properly or make it a dropdown only"* item
+ * from the 2026-08-17 review, arrived in a new place; the first is neither of
+ * the two things he offered.
+ *
+ * ## Three states, and none of them is a fade
+ *
+ * - **`both`** — `Opus 5 · Ultracode`. What the chip has always meant to be.
+ * - **`model`** — `Opus 5` alone. The value he singled out — *"just Opus 5 with
+ *   drop down is good enough"* — drawn whole, rather than both values drawn
+ *   half. Dropping the effort here is not the mistake `catalog.ts` warns about:
+ *   nothing is being hidden that the reader cannot get back, because the chip's
+ *   own hover label names every control behind it and quotes both readings, and
+ *   the panel is one press away.
+ * - **`glyph`** — the sliders mark and the caret, and no words at all. This is
+ *   the honest version of the 25-pixel chip above: a toolbar button that has
+ *   decided to be an icon, rather than a label that has been faded to nothing.
+ *
+ * ## Why this is decided from the room and not from the overflow
+ *
+ * Because the overflow is a fact about what is drawn, and what is drawn is what
+ * this decides. Measuring "do both values fit" and then removing one to make
+ * them fit changes the answer to the question that was just asked, and a
+ * component that re-measures on its own output oscillates. {@link clampWidth}
+ * cannot: it is computed from the cluster's *siblings* on the bar, so it is the
+ * same number whichever of the three states is on screen. `fit` next door is
+ * decided the same way for the same reason.
+ *
+ * ## Where the two numbers come from
+ *
+ * Both measured in the app, with the reading beside the chip at its own natural
+ * width for the tier it is in.
+ *
+ *  - **250** is what `both` costs: the reading is 107 at `dense`, the gap is 2,
+ *    and the chip carrying `Opus 5 · Ultracode` is 137 — 31 of chrome (16 of
+ *    padding, a 6 gap, a 9 caret) around 106 of words. 246, rounded up to a
+ *    number that is not sitting on its own boundary.
+ *  - **100** is what `model` costs at the bottom of the range, where the reading
+ *    has already collapsed to its two percentages and measures 35: 35 + 2 + 69,
+ *    the 69 being the same 31 of chrome around `Opus 5`. 106, and the threshold
+ *    is set below it so that {@link MIN_CLUSTER_PX} — which is exactly 106, and
+ *    was raised to it for this — lands inside `model` rather than on its edge.
+ *
+ * A longer model name than `Opus 5` does not break either number, it truncates:
+ * the last value on the chip ellipsises, which is a mark a reader recognises as
+ * "there is more", where a fade is a mark that the screen has gone wrong.
+ */
+export type SummaryDetail = 'both' | 'model' | 'glyph'
+
+export const SUMMARY_BOTH_PX = 250
+export const SUMMARY_MODEL_PX = 100
+
+export function summaryDetail(clamp: number | null): SummaryDetail {
+  // Nothing measured yet is the unclamped row, which is what the first paint
+  // should draw and what this component's own tests render — the same answer
+  // `fit` gives to the same state.
+  if (clamp === null || clamp >= SUMMARY_BOTH_PX) return 'both'
+  return clamp >= SUMMARY_MODEL_PX ? 'model' : 'glyph'
 }
 
 /**
@@ -501,13 +599,81 @@ export function ConnectorsPicker({
   )
 }
 
-export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: SessionControlsProps) {
+export function SessionControls({
+  sessionId,
+  cwd,
+  provider,
+  exited,
+  onOpenConnectors,
+}: SessionControlsProps) {
   const host = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+  /**
+   * Is there an agent in front of this session, whatever it was launched as.
+   *
+   * ## The bug this is the whole of the answer to
+   *
+   * Asad's Windows recording, 0.4.0. Two sessions, one window, the same width:
+   * `ClaudeImza` carried the usage reading, the model chip and the effort chip,
+   * and `ClaudeImzacrm` carried none of the three — while the terminal directly
+   * underneath the empty bar printed `Claude Code v2.1.224 · Opus 5 with xhigh
+   * effort · Claude API`. Not a fold, not a width: a per-session fact, and it
+   * held across five frames.
+   *
+   * The cluster was asking `provider`, which is a record of what this app
+   * *spawned*. It says `shell` for a session started as `$SHELL -l` and it goes
+   * on saying `shell` for the rest of that session's life — including after
+   * somebody types `claude` at the prompt, which is an ordinary thing to do and
+   * is a thing this app itself offers to do for you: `AccountChip`'s Run Claude
+   * Code button types exactly that command into exactly this kind of session.
+   * So the app was arranging the state it then punished.
+   *
+   * And it already knew better forty pixels away. The account chip on the same
+   * bar in the same frame was drawn in its *picker* mode, which `chipMode` only
+   * reaches once presence has read the screen and reported `running === true`.
+   * One component in that bar had established there was an agent running; its
+   * neighbour withdrew anyway. Two components, one question, two sources — that
+   * is the fault, and consulting the same source is the fix.
+   *
+   * Null rather than a session when either half is missing, exactly as
+   * `ChatView` does it: presence reads `UNKNOWN_PRESENCE` from a null, and an
+   * unknown provider is left alone below rather than being resolved into one.
+   */
+  const agent = useAgentPresence(sessionId && provider ? { id: sessionId, provider, exited } : null)
+  /**
+   * What to *treat* the session as, which is the only thing below this line
+   * that should be consulted.
+   *
+   * `runningProvider` turns `shell` into `undefined` — "not known" — once the
+   * screen has actually said an agent is there, and leaves every other answer
+   * untouched. `undefined` is the right word rather than a convenient one: this
+   * app never saw which CLI was typed, and `refuseByProvider` in
+   * `src/main/agent-controls.ts` is built around that exact absence — it
+   * consults the screen, and writes only where the screen carries Claude Code's
+   * own markers. So a control drawn from here can act, and one drawn over a
+   * session that turns out to hold something else is refused by the far end
+   * rather than typing Claude's commands at a stranger.
+   *
+   * `useSessionControls` is handed this and not the record, or the reading it
+   * takes would be refused with *"This session is a shell, not an agent CLI"* —
+   * the model chip would draw itself disabled over a running agent, which is
+   * the same wrong answer as drawing nothing, only louder.
+   *
+   * `UsageBar` is handed it too, and there the cost of "not known" is worth
+   * stating rather than leaving to be discovered. `auto-usage.ts` types
+   * `/usage` into a session by itself and refuses to do that for anything but
+   * `claude`, so a session whose CLI this app never saw does not get that
+   * unasked fetch. The reading still arrives — `notePlanOutput` reads the plan
+   * lines off the session's own output for every session regardless of provider
+   * — it simply is not forced. That is the right way round: typing a slash
+   * command into a terminal on the strength of a guess about which CLI is in it
+   * is precisely the thing `undefined` exists to stop.
+   */
+  const running = runningProvider(provider, agent.running)
   const { readings, busy, notice, dismissNotice, wired, pick, models, discoverModels } = useSessionControls(
     sessionId,
     cwd,
-    provider,
+    running,
   )
   /*
    * The model rows come from the session; every other control's come from the
@@ -545,15 +711,22 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
    * row did not have a moment ago.
    */
   const signature = [
-    provider ?? '',
+    running ?? '',
     busy ?? '',
     readings?.model.label ?? '',
     readings?.effort.label ?? '',
     readings?.fast.label ?? '',
     hasConnectors ? 'mcp' : '',
   ].join('|')
-  const { layout, clamp, clipped, attach } = useClusterFit(host, signature)
+  const { layout, clamp, attach } = useClusterFit(host, signature)
   const folded = layout === 'folded'
+  /**
+   * How much of itself the folded chip may say, from the same measured room.
+   *
+   * See {@link summaryDetail}, where the three states and the two thresholds are
+   * argued and the measurements are written down.
+   */
+  const detail = summaryDetail(clamp)
   /**
    * How much of itself the usage reading can afford to draw here.
    *
@@ -639,10 +812,43 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
    * chips over a shell would be teaching the reader that this app *could* set a
    * model on their shell if only something were different. The same judgement
    * `AgentControls` makes, and `finish.test.ts` pins there.
+   *
+   * ## `running`, not `provider`, and that one word is the reported bug
+   *
+   * The record says `shell` for the whole life of a session started as one,
+   * including every minute an agent is running inside it. Read straight, this
+   * line took the entire control surface off the bar of exactly the sessions
+   * Asad works in — see the note beside `useAgentPresence` above for the frames
+   * it came from. `runningProvider` withdraws that answer the moment the screen
+   * contradicts it, so what withdraws the cluster now is a shell that is *still
+   * a shell*, which is what this paragraph always claimed to be about.
+   *
+   * ## Three answers, and why two of them draw nothing
+   *
+   * `running` is `'shell'` in two situations and both are right to be empty:
+   * the screen was read and there is no agent, and nothing has been read yet.
+   * The second is the interesting one. Guessing "agent" while unknown would put
+   * live model and effort chips on a plain `/bin/zsh -l` for the few hundred
+   * milliseconds before the first reading lands — the `Model  Opus 5` over a
+   * shell that this paragraph opens with, back again as a flicker. Drawing
+   * nothing and then appearing is the honest order, and it is the same order
+   * the account chip beside it already follows for the same reason.
+   *
+   * ## And when the agent exits
+   *
+   * It goes back to nothing. Two different exits reach that answer by two
+   * routes and neither is a special case here: `/exit` leaves the shell alive
+   * and clears Claude Code's screen, so the next reading finds no marker and
+   * `settle` — which spends one extra reading before believing a disappearance
+   * — flips `running` back to `'shell'`; and a dead pty is settled by the
+   * record, because `presenceFromSession` looks at `exited` before it looks at
+   * anything else. That second route is the whole reason `exited` is a required
+   * prop: a killed CLI leaves its banner on the last frame of the screen, so
+   * without the record this line would go on drawing live chips over a corpse.
    */
-  if (provider === 'shell') return null
+  if (running === 'shell') return null
 
-  const foreignNote = unsupportedProviderNote(provider)
+  const foreignNote = unsupportedProviderNote(running)
   /*
    * Why nothing can be changed at this instant, for one control.
    *
@@ -712,6 +918,10 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
          what stops the reading beside it losing a percent sign. See the note
          beside that rule. */
       data-fit={fit}
+      /* And how much of itself the folded chip is saying, published for the same
+         reason: `.sc-summary` needs a different floor in each of the three
+         states, and CSS has no way to ask this question for itself. */
+      data-detail={detail}
       /*
        * The last line of defence, and the only one that is unconditional.
        *
@@ -742,7 +952,7 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
         costs it the window name, both meters and the caret, leaving the two
         percentages, which are the reading. See `UsageBar.css`.
       */}
-      <UsageBar sessionId={sessionId} provider={provider} fit={fit} />
+      <UsageBar sessionId={sessionId} provider={running} fit={fit} />
 
       {folded ? (
         <>
@@ -787,7 +997,6 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
           <button
             type="button"
             className="cc-chip sc-summary"
-            data-clipped={clipped || undefined}
             aria-haspopup="dialog"
             aria-expanded={open}
             aria-label={`Session controls: ${summaryLabel(modelValue, effortValue, hasConnectors)}`}
@@ -802,22 +1011,65 @@ export function SessionControls({ sessionId, cwd, provider, onOpenConnectors }: 
               })
             }
           >
-            {/* The same rule the open row's chips follow, and for the same
-                reason: a value that says what it is does not need its label,
-                and `Unknown` does not say what it is. `Opus 5 · Ultracode`
-                needs no words; `Unknown · Unknown` would be a chip that has
-                stopped saying anything at all. See the long note beside
-                `.ac-picker:not(.sc-connectors) .ac-name` in the stylesheet —
-                it is expressed there in CSS because those chips come from a
-                shared component, and here in markup because this one does not,
-                and the two must not drift. */}
-            <span className="sc-summary-text">
-              {readings?.model.label ? null : <span className="ac-name">{controlName('model')}</span>}
-              <span className={readings?.model.label ? 'ac-value' : 'ac-value ac-value-unknown'}>{modelValue}</span>
-              <span className="sc-summary-sep" aria-hidden="true" />
-              {readings?.effort.label ? null : <span className="ac-name">{controlName('effort')}</span>}
-              <span className={readings?.effort.label ? 'ac-value' : 'ac-value ac-value-unknown'}>{effortValue}</span>
-            </span>
+            {/*
+              What the chip says, in the three sizes it comes in.
+
+              `glyph` is the state that used to be a fade over nothing. At the
+              app's own minimum window width this control has twenty-five pixels
+              — measured, and floored there by `MIN_CLUSTER_PX` — and it spent
+              them on a mask that painted a hundred and six pixels of label
+              completely transparent. So at that width it stops being a label:
+              it is a toolbar button with the sliders mark on it, which is what
+              every Mac app does with a control it cannot spell out, and it says
+              the whole of its business in the hover label and to a screen
+              reader exactly as before. An icon that was chosen is honest; a word
+              that was erased is not.
+
+              `model` is the middle, and it is his own sentence about which half
+              to keep: *"no need to show the other things like only show Opus 5.
+              If they drop down, they know that this is a model."* One value
+              whole beats two values half — and the effort is not lost, it is one
+              press and one hover away, both of which name it.
+
+              The names still appear when a value is `Unknown`, which is the same
+              rule the open row's chips follow and for the same reason: `Opus 5`
+              says what it is and `Unknown` says nothing, so the label it made
+              redundant stops being redundant the moment the value goes. See the
+              long note beside `.ac-picker:not(.sc-connectors) .ac-name` in the
+              stylesheet — expressed there in CSS because those chips come from a
+              shared component, and here in markup because this one does not.
+            */}
+            {detail === 'glyph' ? (
+              <svg
+                className="sc-summary-glyph"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <path d="M4 8h4M12 8h8M4 16h10M18 16h2" />
+                <circle cx="10" cy="8" r="2" />
+                <circle cx="16" cy="16" r="2" />
+              </svg>
+            ) : (
+              <span className="sc-summary-text">
+                {readings?.model.label ? null : <span className="ac-name">{controlName('model')}</span>}
+                <span className={readings?.model.label ? 'ac-value' : 'ac-value ac-value-unknown'}>{modelValue}</span>
+                {detail === 'both' ? (
+                  <>
+                    <span className="sc-summary-sep" aria-hidden="true" />
+                    {readings?.effort.label ? null : <span className="ac-name">{controlName('effort')}</span>}
+                    <span className={readings?.effort.label ? 'ac-value' : 'ac-value ac-value-unknown'}>
+                      {effortValue}
+                    </span>
+                  </>
+                ) : null}
+              </span>
+            )}
             <svg className="ac-caret" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
               <path d={CARET} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
             </svg>

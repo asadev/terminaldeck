@@ -204,6 +204,23 @@ export interface ContractInput {
  * already shipped twice — once claiming a jail that had been removed, once
  * claiming the copilot could not read the person's code.
  */
+/*
+ * A note on one word in the paragraph below, because it looks like a small one.
+ *
+ * The clause listing what might already be in somebody's folder used to open
+ * with a backticked `CLAUDE.md`. It read as harmless — an example of a file, in
+ * a list of examples — and it survived the naming sweep of 2026-08-17 because
+ * the guard stripped backticked spans before it looked, so the name was never
+ * on screen as far as any test could tell.
+ *
+ * It is not harmless. This paragraph is handed to whichever agent the copilot
+ * runs on, and it is also read by the person, in the pane that shows them what
+ * their copilot was told. Its subject is *their* folder and what an agent will
+ * find in it — a mechanism every agent has, described by naming one vendor's
+ * spelling of it, which is precisely the sentence the review drew the line
+ * around. The paragraph two blocks below already calls the same thing "the
+ * folder's own instructions"; this one now agrees with it.
+ */
 export function copilotContract(input: ContractInput): string {
   const { platform } = input
   const fenced = recordsFencePaths(input.userData)
@@ -230,10 +247,10 @@ Your working directory is:
 ${
   input.chosenFolder
     ? `**That folder is the person’s, not this app’s.** They pointed you at a
-workspace they already had. Whatever is in it — a \`CLAUDE.md\`, a \`memory/\`
-directory, notes, handoffs, project context — is theirs and predates you, and
-you have read it the ordinary way, because you are an ordinary session with that
-folder as its working directory.
+workspace they already had. Whatever is in it — its own instructions file, a
+\`memory/\` directory, notes, handoffs, project context — is theirs and predates
+you, and you have read it the ordinary way, because you are an ordinary session
+with that folder as its working directory.
 
 **The folder’s own instructions are in charge of how you work there.** Where they
 and this section disagree about tone, format, what to read at startup or where to

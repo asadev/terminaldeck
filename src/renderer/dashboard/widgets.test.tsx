@@ -341,6 +341,7 @@ describe('the usage tile, rendered on a real project', () => {
     },
     models: ['claude-opus-5', 'claude-sonnet-5'],
     scanning: false,
+    truncated: false,
   }
 
   function render(overrides: Partial<UsageView> = {}, expanded = false): string {
@@ -455,6 +456,38 @@ describe('the usage tile, rendered on a real project', () => {
   it('says nothing recorded rather than a row of zeroes', () => {
     const markup = render({ requests: 0 })
     expect(markup).toContain('Nothing recorded yet')
+  })
+
+  /*
+   * The claim in the headline has to match what was actually counted.
+   *
+   * On 2026-08-18 this tile read "Nothing recorded yet" over
+   * `~/Projects/terminaldeck`, a folder holding three months of work, because
+   * the scan's forty slots had all been taken by sessions that were opened and
+   * closed without recording anything — the newest transcript carrying a single
+   * request was number 79 of 104 by modification time. That is fixed in the main
+   * process, where the cap now counts conversations that recorded something; the
+   * two tests below hold the *sentence* to the same standard, so a cap that
+   * still bites can never again be printed under the word "every".
+   */
+  it('promises "every request" only when nothing was left unread', () => {
+    const markup = render({ truncated: false })
+    expect(markup).toContain('every request your agents made in this folder')
+    expect(markup).not.toContain('Older work not read')
+  })
+
+  it('withdraws the promise, in Artifacts’ own words, when work was left unread', () => {
+    const markup = render({ truncated: true })
+    expect(markup).not.toContain('every request your agents made in this folder')
+    expect(markup).toContain('Older work not read')
+  })
+
+  it('does not tell somebody with a full history that they have not started yet', () => {
+    // Nothing counted *and* work left unread is not an empty folder, and the
+    // difference is the whole of the defect above.
+    const markup = render({ requests: 0, truncated: true })
+    expect(markup).toContain('Older work was not read')
+    expect(markup).not.toContain('recorded its first request')
   })
 })
 

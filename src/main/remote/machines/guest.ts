@@ -49,7 +49,9 @@ import {
   type LocalPort,
   type ProtocolErrorCode,
   type RemoteSession,
+  type ServerMessage,
 } from '../protocol'
+import type { LocalhostMessage } from '../tunnel'
 import { dialMachine, type GuestChannel, type DialRequest } from './dial'
 import type { MachineSecrets } from './store'
 
@@ -142,8 +144,42 @@ export interface MachineLink {
   resize(sessionId: string, cols: number, rows: number): boolean
   /** Start a session over there. Refused unless that machine advertised `create`. */
   create(request: { cwd?: string; provider?: string; resume?: boolean }): boolean
+  /**
+   * End a session over there. Refused unless that machine advertised `close`.
+   *
+   * The one verb on this wire whose effect cannot be taken back — the far end
+   * kills the process, the agent stops wherever it had got to, and nothing is
+   * left to recover from. `guest-close.test.ts` pins the host's side of it,
+   * including the part that matters most: a guest granted one folder cannot end
+   * a session running in another, and the session layer is never even asked.
+   *
+   * It exists on this side because the desktop asked for it in as many words:
+   * *"It will just close all of the sessions from that PC… so it will go from
+   * here, but whenever you want to start, you can start as a new session and you
+   * can start from that device."* Ending sessions and un-pairing a machine are
+   * two different acts, and this is the first one; nothing here touches the
+   * store, so the pairing survives untouched.
+   */
+  close(sessionId: string): boolean
   /** Ask again what is listening over there. Refused unless it advertised `localhost`. */
   ports(): boolean
+  /**
+   * Send one tunnel frame to that machine, on behalf of `localhost-reach.ts`.
+   *
+   * The comment above `openThere` used to say *"a tunnel would bring the page
+   * here and this end opens no listener"*. That is no longer true: this desktop
+   * now binds a loopback listener for a port on another machine, so the browser
+   * can open a remote dev server as an ordinary URL. See `localhost-reach.ts`
+   * for the pipe and for why it is bytes rather than HTTP.
+   *
+   * A raw frame rather than a verb per message, because the seven `tunnel.*` and
+   * `net.*` frames are one conversation with its own state machine, and that
+   * state machine belongs in one file. This link's job is the channel: it knows
+   * whether there is one, and whether the far machine agreed to speak these
+   * frames at all — which is the gate below, and the same one `ports` applies
+   * for the same reason.
+   */
+  localhost(message: LocalhostMessage): boolean
   /**
    * Open a page **on that machine**, in its own browser.
    *
@@ -170,6 +206,17 @@ export interface MachineLinkOptions {
   onOutput(sessionId: string, data: string, replay: boolean): void
   /** A `welcome` landed. The store records the connection and the platform. */
   onWelcome(hostPlatform: string): void
+  /**
+   * A tunnel frame arrived from that machine.
+   *
+   * Handed straight out rather than interpreted here. The bytes inside belong to
+   * a socket this file knows nothing about, and a link that started tracking
+   * streams would be a second place holding the same state as the reach.
+   * Optional, so every existing construction of a link still compiles and
+   * behaves exactly as it did — a machine nobody has asked to tunnel simply
+   * never receives one of these.
+   */
+  onLocalhost?(message: ServerMessage): void
   now?: () => number
   /** Seams for the tests, so nothing here dials the public internet. */
   dial?: (request: DialRequest) => Promise<GuestChannel>
@@ -374,11 +421,57 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           ],
         })
         return
+      case 'closed':
+        /*
+         * The session this end asked to end is gone.
+         *
+         * Taken out of the list here rather than waited for, and that is not an
+         * optimisation. `server.ts` answers the device that sent `close` with
+         * this frame and sends every *other* connected device a fresh `sessions`
+         * list — deliberately, because `closed` names one device's action and
+         * `sessions` is v1 — so this connection is the one that never receives
+         * the refreshed list. Without this case the row stayed on screen until
+         * something unrelated caused a push, which on a quiet machine is until
+         * the next reconnect: the ✕ would have looked broken for as long as it
+         * took to notice, which is the exact class of defect this pass exists
+         * to remove.
+         *
+         * `reason` goes with it for the same reason `created` clears it: a
+         * refusal printed under the group is about the request that was refused,
+         * and leaving it beside a session that has just ended describes the
+         * wrong thing.
+         */
+        refusal = null
+        publish({
+          reason: null,
+          sessions: current.sessions.filter((session) => session.id !== message.id),
+        })
+        return
       case 'folders':
         publish({ folders: message.folders })
         return
       case 'ports':
         publish({ ports: message.ports })
+        return
+      case 'tunnel.opened':
+      case 'tunnel.closed':
+      case 'net.data':
+      case 'net.ack':
+      case 'net.close':
+        /*
+         * The tunnel's own conversation, passed through untouched.
+         *
+         * Listed one by one rather than caught by a default, so that a frame
+         * added to the protocol without a decision about where it belongs stops
+         * the build rather than quietly becoming somebody else's problem — the
+         * same rule `server.ts` follows on the way in.
+         *
+         * Nothing is published. A tunnel is not link state: it is a listener on
+         * this machine with a page open on it, and the panel that draws machines
+         * has nothing to say about one. Redrawing the sidebar for every chunk of
+         * a page body would also be a re-render per frame.
+         */
+        options.onLocalhost?.(message)
         return
       case 'web.opened':
         /*
@@ -563,12 +656,32 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         ...(request.resume === undefined ? {} : { resume: request.resume }),
       })
     },
+    close(sessionId): boolean {
+      // Refused here rather than sent and refused there, for the reason `create`
+      // gives above: a host that never advertised this answers it by closing the
+      // channel, and a button that disconnects you is worse than one that is not
+      // offered. The window asks the same question before it draws the control —
+      // see `SidebarMachine.canClose` — so this is the backstop rather than the
+      // gate, and it is here because a gate that lives only in a renderer is a
+      // gate an IPC call can walk around.
+      if (!current.capabilities.includes(CAPABILITY.close)) return false
+      return send({ t: 'close', id: sessionId })
+    },
     ports(): boolean {
       // Refused here rather than sent and refused there, for the reason
       // `create` gives: the far end answers an unadvertised verb by closing the
       // channel.
       if (!current.capabilities.includes(CAPABILITY.localhost)) return false
       return send({ t: 'ports' })
+    },
+    localhost(message): boolean {
+      // The same gate `ports` uses, and it is the whole of this method: a
+      // machine that never advertised `localhost` answers any of these frames by
+      // closing the channel, which would take every terminal session on it down
+      // with the tunnel. The reach reads the `false` as "not connected" and says
+      // so in a sentence rather than leaving a click unanswered.
+      if (!current.capabilities.includes(CAPABILITY.localhost)) return false
+      return send(message)
     },
     openThere(url): boolean {
       if (!current.capabilities.includes(CAPABILITY.web)) return false

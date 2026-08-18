@@ -92,6 +92,31 @@ final class DeckModel {
     var tab: Tab = .sessions
 
     /**
+     * The tab the copilot was entered from, which is where its Back button goes.
+     *
+     * The copilot screen has no tab bar under it any more — *"pill should not be
+     * inside the chat box — there should be a back button to go back on home"* —
+     * so it needs somewhere to go home *to*, and "home" is not one fixed screen:
+     * somebody who tapped the Copilot pill while reading their ports means
+     * Localhost by it, and somebody who connected the copilot in Settings means
+     * Settings. A chevron that always landed on the session list would be
+     * teleporting a third of the people who press it.
+     *
+     * It defaults to `.sessions` and falls back to it, which is the answer for
+     * every path that sets `tab` without going through `show(_:)` — a deep link,
+     * a test, a notification. That is deliberately the *safe* default rather than
+     * the *last* one: the session list is the screen this app opens on and the
+     * one he calls the homepage, so a Back that lands there is never wrong, only
+     * sometimes less specific than it could have been.
+     *
+     * Never `.copilot`. `show(_:)` refuses to record it, because a Back button
+     * that returned to the screen it is drawn on is a button that does nothing —
+     * and the way that would happen is not exotic: anything that asks for the
+     * copilot twice would do it.
+     */
+    private(set) var homeTab: Tab = .sessions
+
+    /**
      * The four surfaces this phone genuinely has, in the order they are drawn.
      *
      * ## Four pills, and the copilot is the first of them
@@ -151,10 +176,21 @@ final class DeckModel {
         case settings
     }
 
-    /// What can be pushed onto Settings. One thing, and it is the screen that
-    /// used to be a tab.
+    /**
+     * What can be pushed onto Settings. Two things, and both of them are
+     * *connecting something*, which is what this screen turned out to be for.
+     *
+     * `machines` is the screen that used to be a tab. `copilot` is where the
+     * six-digit copilot code moved to: *"actually connecting copilot should be
+     * in the settings."* It was on the Copilot screen itself, which put a setup
+     * form behind a pill that only exists once the setup is done — and once the
+     * pill follows the connection, that arrangement cannot work at all, because
+     * the screen holding the only way to connect would be the screen you cannot
+     * reach until you have.
+     */
     enum SettingsRoute: Hashable {
         case machines
+        case copilot
     }
 
     /**
@@ -201,6 +237,51 @@ final class DeckModel {
     }
     var localhostSurface: DeckSurface { localhostPageIsOpen ? .localhostPage : .localhost }
     var settingsSurface: DeckSurface { settingsRoute.isEmpty ? .settings : .machines }
+
+    /**
+     * **Whether there is a fourth pill.**
+     *
+     * *"If the copilot is not connecting, this icon should not be inside the
+     * pill — then it will be three icon pill. Otherwise if the copilot is
+     * connected, then four icon pill, automatically, like that way."*
+     *
+     * So: three pills — Sessions · Localhost · Settings — until this phone has a
+     * copilot connection to the machine it is looking at, and four the moment it
+     * does. `CopilotAccess.isConnected` is the rule and carries the argument for
+     * where each of the seven states falls.
+     *
+     * ## The clause that is not in the sentence he said
+     *
+     * `tab == .copilot` holds the pill open. Without it, a copilot that
+     * disconnects while somebody is sitting on that tab would delete the tab
+     * they are standing on — SwiftUI would drop the whole `NavigationStack` and
+     * land them on whichever tag the `TabView` fell back to, with no explanation
+     * and nothing on screen relating to what they had been doing. **A tab that
+     * vanishes underneath somebody is worse than one that stays and explains.**
+     *
+     * What actually happens instead: the pill stays, and `CopilotView` draws the
+     * disconnected state — what happened, and a button to Settings if there is
+     * something to do about it. The pill then goes on the next tap on another
+     * pill, which is the first moment removing it costs nobody anything. From
+     * every other tab the switch is immediate, so *"automatically"* holds
+     * everywhere except on the one screen where doing it automatically would be
+     * rude.
+     *
+     * ## And it is derived, never remembered
+     *
+     * The obvious optimisation is to persist "this phone had a copilot on that
+     * machine" so the pill is right on the first frame after launch instead of
+     * arriving with the `welcome` a moment later. It is refused: a remembered
+     * yes is a pill drawn for a connection somebody may have revoked at the
+     * machine while this phone was asleep, and tapping it would open a screen
+     * that has to take it back. A pill that appears a beat after launch is a
+     * cosmetic cost; a pill that lies is the complaint this whole review is
+     * about.
+     */
+    var showsCopilotTab: Bool {
+        if tab == .copilot { return true }
+        return current?.copilotAccess.isConnected ?? false
+    }
 
     /**
      * The terminal actually **on screen**, or nil.
@@ -972,8 +1053,54 @@ final class DeckModel {
         let host = hostId ?? currentHostId
         guard let host, hosts.contains(where: { $0.id == host }) else { return }
         if host != currentHostId { select(host) }
-        tab = .copilot
+        show(.copilot)
         copilotRoute.removeAll()
+    }
+
+    /**
+     * Move to a tab, remembering where the copilot was entered from.
+     *
+     * The one funnel the tab bar's own selection goes through, so that the
+     * copilot's Back button has somewhere to go. `tab` stays settable directly —
+     * deep links, notifications and the tests all do it, and none of them is
+     * choosing a tab *on the way into the copilot*, which is the only case this
+     * records.
+     *
+     * The guard on `tab != .copilot` is what stops re-entering the copilot from
+     * overwriting the answer with itself. Tapping a pill that is already
+     * selected, or a second deep link, would otherwise leave Back pointing at
+     * the screen it is drawn on.
+     */
+    func show(_ next: Tab) {
+        if next == .copilot, tab != .copilot { homeTab = tab }
+        tab = next
+    }
+
+    /**
+     * Leave the copilot by its Back button.
+     *
+     * *"There should be a back button to go back on home."* This is the whole of
+     * that button: the copilot draws no tab bar, so this is its only way out and
+     * it must never fail to move — hence a plain assignment with no guard on
+     * where it is going. `homeTab` is never `.copilot` by construction.
+     */
+    func leaveCopilot() {
+        tab = homeTab
+    }
+
+    /**
+     * Show the copilot's own connection screen, inside Settings.
+     *
+     * The counterpart of `showMachines()`, and a method for the same reason:
+     * the two callers are not on the Settings tab. One is the Copilot screen
+     * itself when this phone is not connected to the machine it is showing —
+     * where the whole point is to take somebody to the code field — and the
+     * other is a settings row that is already there and uses a `NavigationLink`.
+     * Idempotent, so arriving twice does not need two taps of Back.
+     */
+    func showCopilotSettings() {
+        tab = .settings
+        if settingsRoute.last != .copilot { settingsRoute.append(.copilot) }
     }
 
     /**

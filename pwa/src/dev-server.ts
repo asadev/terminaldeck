@@ -350,21 +350,19 @@ export function devRowView(row: DevServerReport, context: DevRowContext): DevRow
 /** What the section is called. Two words, above the rows, and nothing else. */
 export const DEV_CAPTION = 'Dev servers'
 
-/**
- * Why a running dev server's address is text rather than a link.
+/*
+ * There used to be a `cannotOpenSentence` here — *"that address is the Mac's own
+ * loopback, so this page cannot open it"* — printed under a running dev server's
+ * address to explain why it was text and not a link.
  *
- * `localhost.ts` makes this argument at length for the port list, and the
- * screen's footnote is that paragraph — so this exists only for a desktop that
- * offers `devserver` without `localhost`, where that footnote is absent and the
- * question is still asked. Short on purpose: the long version is one screen away
- * for anybody whose desktop offers both.
+ * It is gone because the claim stopped being true. Every row on that screen now
+ * carries an Open, and the browse bar above it takes an address by hand; where
+ * those land is decided in `browse.ts` and is a real destination in both cases —
+ * the machine's own browser over the sealed channel, or a link in this browser
+ * where the address genuinely resolves from here. A sentence explaining why a
+ * feature is impossible, left standing beside the feature, is worse than no
+ * sentence: it is the screen arguing with itself.
  */
-export function cannotOpenSentence(noun: string): string {
-  return (
-    `That address is the ${noun}'s own loopback, so this page cannot open it — a browser following it would ` +
-    `go to this computer instead. The phone app and the ${noun} itself can serve it.`
-  )
-}
 
 /**
  * What the section says while it is waiting for the first answer.

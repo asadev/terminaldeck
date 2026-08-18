@@ -93,15 +93,56 @@ export function alertKey(alert: Alert): string {
   return `${alert.severity}:${alert.id}`
 }
 
-/** The alerts in `alerts` that this project has not been shown. */
+/**
+ * The kinds that stay unread until they stop being true.
+ *
+ * Rule 1 above — an alert is unread until the sheet has been open while it was
+ * in the report — is right for every alert that *describes* something. A context
+ * window at 78%, a tree with four uncommitted files, a CLI that is not installed:
+ * you read it, you know it, and the app has no business lighting a dot about it
+ * again.
+ *
+ * A device waiting to be approved is not a description, it is a **question
+ * addressed to you**, and it has two properties none of the others have. It ends
+ * the moment you answer it — approve or deny and the device leaves the pending
+ * list, so the alert is gone and the dot goes out on its own. And until then,
+ * somebody is standing in front of a device that says it is waiting. Marking it
+ * read because the sheet was open once would put the dot out while the question
+ * was still open, which is the exact failure this whole surface was built to fix,
+ * reintroduced one layer down.
+ *
+ * So it cannot spam, because it cannot outlive the thing it is about, and there
+ * is no state in which it is lit and there is nothing to do.
+ */
+export const ALWAYS_UNREAD_KINDS: ReadonlySet<string> = new Set(['device-pending'])
+
+/** Does this alert ignore the seen-set entirely? See {@link ALWAYS_UNREAD_KINDS}. */
+export function staysUnread(alert: Alert): boolean {
+  return ALWAYS_UNREAD_KINDS.has(alert.kind)
+}
+
+/**
+ * The alerts in `alerts` that have not been shown.
+ *
+ * A null project is not the same as "nothing to count" any more. It means there
+ * is no folder open, and therefore no per-project record to check — but the
+ * alerts that are about the *machine* are just as true with no folder open as
+ * with one, and they are exactly the ones that do not consult the record. So a
+ * null path answers with those and nothing else, which is what lets a device
+ * waiting for approval reach the bell on a fresh install, where nobody has
+ * opened anything yet and remote access is the first thing they try.
+ */
 export function unreadAlerts(
   alerts: readonly Alert[],
   seen: SeenAlerts,
   projectPath: string | null,
 ): Alert[] {
-  if (projectPath === null) return []
-  const known = new Set(seen[projectPath] ?? [])
-  return alerts.filter((alert) => !known.has(alertKey(alert)))
+  const known = projectPath === null ? null : new Set(seen[projectPath] ?? [])
+  return alerts.filter((alert) => {
+    if (staysUnread(alert)) return true
+    if (known === null) return false
+    return !known.has(alertKey(alert))
+  })
 }
 
 /** The number on the bell. */
@@ -125,7 +166,11 @@ export function markSeen(
   projectPath: string,
   alerts: readonly Alert[],
 ): SeenAlerts {
-  const keys = alerts.map(alertKey)
+  // The always-unread kinds are left out of the record rather than written and
+  // then ignored on the way back. A key stored for something no reader will ever
+  // consult is a line in a file that means nothing, and the first person to read
+  // it will reasonably assume it does.
+  const keys = alerts.filter((alert) => !staysUnread(alert)).map(alertKey)
   const previous = seen[projectPath]
 
   if (keys.length === 0) {

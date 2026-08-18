@@ -175,9 +175,11 @@ import {
   copilotHomeReport,
   copilotPaths,
   readCopilotInstructions,
+  readFolderInstructions,
   resetCopilotInstructions,
   scaffoldCopilotHome,
   writeCopilotInstructions,
+  writeFolderInstructions,
   type CopilotPaths,
   type InstructionsReadResult,
   type InstructionsState,
@@ -1218,6 +1220,46 @@ export function registerCopilotIpc(ipcMain: IpcMain, deps: CopilotRuntimeDeps): 
     // The state travels with the result for the reason the reset gives below:
     // the pane needs the new `instructions` value and the new file size in the
     // same round trip, or it draws the old ones until something else refreshes.
+    return { ...result, state: copilotState(deps) }
+  })
+  /*
+   * The folder's own instruction file — read here, and written only when a
+   * person presses Save on text they are looking at.
+   *
+   * These two are the answer to the one row on the settings pane that still sent
+   * somebody to Finder, and `copilot-home.ts` carries the argument in full. What
+   * belongs *here* is the same sentence every other handler in this function is
+   * an instance of: **the renderer names no path.** A window says "save this
+   * text as the folder's instructions"; which folder that is was decided in this
+   * process, from the chosen-folder setting, and a page that wanted to write
+   * somewhere else has no way to say so. That is why the argument is content and
+   * the checks it needs are a type, a floor and a ceiling rather than a
+   * containment proof.
+   *
+   * Logged as the person's doing, like the layer's editor, and for a stronger
+   * reason: this file is in a folder of theirs that other tools read, so "when
+   * did this change and who changed it" is a question with consequences outside
+   * this app. The row names where the replaced copy went.
+   */
+  ipcMain.handle('copilot:read-folder-instructions', () =>
+    readFolderInstructions(resolve(deps).paths),
+  )
+  ipcMain.handle('copilot:write-folder-instructions', (_event, text: unknown) => {
+    const { paths } = resolve(deps)
+    const result = writeFolderInstructions(paths, text)
+    if (result.saved) {
+      appendCopilotAction(paths, {
+        action: 'folder-instructions.edited',
+        detail: result.created
+          ? `you created the folder’s own instructions from Settings at ${paths.root}`
+          : result.backup === null
+            ? 'you saved the folder’s own instructions from Settings; nothing changed'
+            : `you edited the folder’s own instructions from Settings; the previous file is at ${result.backup}`,
+      })
+    }
+    // The state travels back for the reason the two writers above give: the row
+    // draws its own "not there" badge off `startupFiles`, and a save that
+    // created the file has just made that badge wrong.
     return { ...result, state: copilotState(deps) }
   })
   ipcMain.handle('copilot:reset-instructions', () => {

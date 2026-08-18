@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { HoverNote } from '../components/HoverNote'
 import { useFeatures } from '../features/FeaturesProvider'
 import {
   settingsIn,
@@ -42,10 +43,13 @@ export function Group({ title, children }: { title?: string; children: ReactNode
   )
 }
 
-/**
- * The rest of an explanation, behind an ⓘ.
+/*
+ * The ⓘ dot used to be three things declared here — `Info`, `MoreBody` and
+ * `useMore` — and all three are gone, replaced by {@link HoverNote}.
  *
- * This is the second half of the instruction the whole copy pass came from:
+ * ## One window, one behaviour
+ *
+ * The instruction the whole copy pass came from:
  *
  *   > "we don't have to give this big descriptions. Let's give only one liner or
  *   > two liner descriptions and one eye buttons next to them so they can click
@@ -53,71 +57,30 @@ export function Group({ title, children }: { title?: string; children: ReactNode
  *   > whatever you want to give us more information about that, but not more
  *   > than one or two lines because it's being too big for them."
  *
- * ## Hover *and* click, from one string
+ * and then, about the same dot on the Copilot pane:
  *
- * Hover and keyboard focus go through the app's own tooltip layer, which is
- * delegated off the `title` attribute — see `shell/Tooltips.tsx`. That layer
- * exists precisely so a control does not have to import anything to get the
- * app's bubble instead of the OS's yellow box, and `saysSomethingNew` will
- * always draw this one because the glyph is `aria-hidden`, so the button has no
- * visible text for the title to be repeating.
+ *   > "the ⓘ dot shows its detail **on hover, as a popup** — not by expanding
+ *   > the pane downward."
  *
- * A click cannot use the same path: the tooltip layer treats `pointerdown` as
- * "you are doing something else now" and dismisses the bubble. So a click opens
- * the same sentence *inline*, under the row, where it stays until it is closed.
- * That also answers the reader who does not hover — a touch, a trackpad tap, or
- * a screen reader following the button — and it is why this is a button rather
- * than a decorative glyph with a `title` on it, which would be a dead control
- * for all three of them.
+ * The second was applied to Copilot and nowhere else, which left one Settings
+ * window with two dots that look identical and behave differently: a popup that
+ * costs nothing below it in Copilot, and a disclosure that pushes every row down
+ * the page in General, Appearance, Notifications, Tools, Browser, Advanced,
+ * About and Remote. A reader who learns what the dot does on one pane learns the
+ * wrong thing about the other eight, and the one they learn on is whichever they
+ * happened to open first.
  *
- * One string feeds both, so the bubble and the panel can never disagree.
+ * The popup is the better of the two and it is now the only one. `HoverNote`
+ * carries the reasoning; the short version is that a disclosure is right for a
+ * row and wrong for a pane with six of them, because reading the second
+ * explanation moves the third somewhere else. It is reachable by hover, focus,
+ * click and screen reader, so nothing that could be read before cannot be read
+ * now, and `settings-one-info.test.tsx` fails the moment a pane grows downward
+ * again.
+ *
+ * Nothing about the *copy* changed: a row still declares `more`, and the string
+ * is still the rest of the same explanation.
  */
-export function Info({
-  label,
-  open,
-  onToggle,
-  children,
-}: {
-  label: string
-  open: boolean
-  onToggle(): void
-  children: string
-}) {
-  return (
-    <button
-      type="button"
-      className="settings-info"
-      /* The name a screen reader reads, which also stops the tooltip layer
-         borrowing `title` as the accessible name — see `tooltip.ts`. Without
-         it this button would announce as the whole paragraph. */
-      aria-label={open ? `Hide more about ${label}` : `More about ${label}`}
-      aria-expanded={open}
-      title={children}
-      onClick={onToggle}
-    >
-      <span aria-hidden="true">ⓘ</span>
-    </button>
-  )
-}
-
-/**
- * The opened text, which every host places *after* its own body copy.
- *
- * The state and the placement are the host's rather than `Info`'s, and that is
- * not indirection for its own sake — the first version kept both inside the
- * button's component, so the opened paragraph rendered on the label's own line,
- * above the help text it was expanding. A disclosure has to appear below
- * everything it is adding to, and only the row knows where that is.
- */
-export function MoreBody({ children }: { children: string }) {
-  return <span className="settings-info-body">{children}</span>
-}
-
-/** Open state for one ⓘ. A hook so a row and an explanation share the behaviour. */
-export function useMore(): { open: boolean; toggle(): void } {
-  const [open, setOpen] = useState(false)
-  return { open, toggle: () => setOpen((was) => !was) }
-}
 
 export function Row({
   label,
@@ -138,7 +101,6 @@ export function Row({
   /** Set when the control is a single labellable element. */
   htmlFor?: string
 }) {
-  const rest = useMore()
   return (
     <div className="settings-row">
       <div className="settings-row-text">
@@ -152,20 +114,13 @@ export function Row({
               {label}
             </span>
           )}
-          {more && (
-            <Info label={label} open={rest.open} onToggle={rest.toggle}>
-              {more}
-            </Info>
-          )}
+          {more && <HoverNote label={label}>{more}</HoverNote>}
         </span>
         {help && (
           <span className="settings-help" id={helpId}>
             {help}
           </span>
         )}
-        {/* Below the help line, not beside the label: this is the rest of the
-            same explanation, so it reads as the paragraph continuing. */}
-        {more && rest.open && <MoreBody>{more}</MoreBody>}
       </div>
       <div className="settings-row-control">{control}</div>
     </div>
@@ -212,23 +167,17 @@ export function Explain({
   more?: string
   children: ReactNode
 }) {
-  const rest = useMore()
   return (
     <div className="settings-explain">
       {title && (
         <h5 className="settings-explain-title">
           <span className="settings-label-line">
             {title}
-            {more && (
-              <Info label={title} open={rest.open} onToggle={rest.toggle}>
-                {more}
-              </Info>
-            )}
+            {more && <HoverNote label={title}>{more}</HoverNote>}
           </span>
         </h5>
       )}
       <p className="settings-explain-body">{children}</p>
-      {more && rest.open && <MoreBody>{more}</MoreBody>}
     </div>
   )
 }

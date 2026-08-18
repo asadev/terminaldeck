@@ -714,21 +714,33 @@ describe('the bridge', () => {
       'copilot:files',
       'copilot:read-composed',
       'copilot:read-contract',
+      'copilot:read-folder-instructions',
       'copilot:read-instructions',
-      // The only ones that write, and only one takes an argument: *which* file
+      // The only ones that write, and only two take an argument: *which* file
       // is decided in this process either way.
       'copilot:reset-instructions',
       'copilot:signin',
       'copilot:state',
       'copilot:stop',
+      'copilot:write-folder-instructions',
       'copilot:write-instructions',
     ])
-    // The validation *is* the arity for all but one: nothing about where the
-    // copilot runs comes from the renderer, so there is no path to sanitise and
-    // no id to check. (`length` counts declared parameters; the IPC event is
-    // one of them.)
+    /*
+     * The validation *is* the arity for all but two: nothing about where the
+     * copilot runs comes from the renderer, so there is no path to sanitise and
+     * no id to check. (`length` counts declared parameters; the IPC event is
+     * one of them.)
+     *
+     * The two writers take content and nothing else. That distinction is the
+     * whole reason this assertion is written as an arity rather than a list of
+     * approved arguments: a handler that grew a second parameter would be a
+     * handler that had started taking a target from the page, and this fails the
+     * moment one does — including the folder writer, which puts bytes into a
+     * directory of somebody's own and would be the worst one to get wrong.
+     */
+    const takeText = new Set(['copilot:write-instructions', 'copilot:write-folder-instructions'])
     for (const [channel, handler] of handlers) {
-      expect(handler.length, channel).toBeLessThanOrEqual(channel === 'copilot:write-instructions' ? 2 : 1)
+      expect(handler.length, channel).toBeLessThanOrEqual(takeText.has(channel) ? 2 : 1)
     }
   })
 
