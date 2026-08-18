@@ -399,6 +399,32 @@ describe('transcripts', () => {
 /* ----------------------------------------------------------------- alerts -- */
 
 describe('alerts', () => {
+  /*
+   * The most expensive test in this file by a wide margin, and worth saying why
+   * before somebody wonders what a shape assertion is doing near a timeout.
+   *
+   * One `alerts()` launches six child processes. Counted, not guessed — every
+   * `child_process` entry point was wrapped and the run logged: `git init`, then
+   * inside `collectAlertInput` a lookup for each of the three agent CLIs, a
+   * `--version` probe on whichever answered, and `git rev-parse
+   * --show-toplevel` for the git status. On this Mac the whole test is 233 ms.
+   *
+   * On Windows the same six launches are the entire cost, and two of them are
+   * dearer than they look. The lookup is `where.exe <name>`, and the three names
+   * it is asked about are *not installed on a CI runner* — so each call walks
+   * every directory on PATH against every extension in PATHEXT before it can say
+   * no, which on a runner is a few hundred filesystem probes per call, each of
+   * them seen by Defender. That is the honest cost, and it is why this test sits
+   * near the default five-second ceiling on a loaded runner while taking under a
+   * second on a quiet one: the file measured 798, 875, 900, 909 and 996 ms
+   * across five Windows runs and then 5356 ms on the sixth, which is the run
+   * where it failed.
+   *
+   * No number is written here on purpose. The ceiling comes from
+   * `vitest.config.ts`, which raises it on Windows only and carries the evidence
+   * that the swing belongs to the runner — so this Mac still holds this test to
+   * five seconds, where 233 ms has plenty of room.
+   */
   it('produces a real report for a real folder', async () => {
     execFileSync('git', ['init', '-q'], { cwd: work })
     const report = (await surface().alerts(work)) as { alerts: unknown[]; generatedAt?: number }

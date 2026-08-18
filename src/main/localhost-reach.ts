@@ -258,6 +258,45 @@ function answers(host: string, port: number): Promise<boolean> {
   })
 }
 
+/**
+ * How a stream's socket is taken down. See {@link dropStream}.
+ *
+ * A named pair rather than a boolean because the two are not degrees of the
+ * same thing: one delivers bytes somebody is waiting for and the other refuses
+ * to hold a descriptor open. A `flush: true` at a call site would read as an
+ * option and this is a decision.
+ */
+type StreamEnding = 'flush' | 'discard'
+
+/**
+ * How long a flushing close may take before the socket is taken down anyway.
+ *
+ * `end()` writes what is queued and then sends FIN, and how long that takes is
+ * the peer's business: a browser that has stopped reading leaves the queue
+ * where it is, and without a ceiling that socket is a descriptor this process
+ * holds until it quits. Five seconds is far longer than a loopback flush can
+ * honestly need — the whole 288 KB case this was written for moves in single
+ * milliseconds once the reader turns up — and short enough that a reader which
+ * has genuinely gone away costs one timer rather than one file descriptor.
+ *
+ * The timer is unref'd, so it never keeps the process alive on its own.
+ */
+const FLUSH_LINGER_MS = 5_000
+
+/**
+ * Send what is queued, then close — with a ceiling on how long that may take.
+ *
+ * `end()` rather than `destroy()` is the whole of the fix `dropStream` is
+ * written around; the timer is what keeps that from being a leak.
+ */
+function flushAndClose(socket: Socket): void {
+  if (socket.destroyed) return
+  const linger = setTimeout(() => socket.destroy(), FLUSH_LINGER_MS)
+  linger.unref?.()
+  socket.once('close', () => clearTimeout(linger))
+  socket.end()
+}
+
 /** Bind a loopback listener, or null when the address will not take it. */
 function bind(host: string, port: number): Promise<Server | null> {
   return new Promise((resolve) => {
@@ -284,12 +323,59 @@ export function createRemoteReach(deps: ReachDeps): RemoteReach {
   /** Tunnel id → what to do when the far machine answers `tunnel.open`. */
   const waiting = new Map<string, (answer: { ok: true } | { ok: false; message: string }) => void>()
 
-  function dropStream(tunnel: Tunnel, ch: string, tell: boolean): void {
+  /**
+   * Close one browser connection, and say whether what is still queued for it
+   * has to reach the browser first.
+   *
+   * ## The measurement this parameter exists for
+   *
+   * `destroy()` does not flush. Anything Node has accepted from `write()` but
+   * has not yet handed to the kernel is thrown away, and on this Mac that is
+   * everything past the socket's in-flight capacity — measured here rather than
+   * assumed, by writing 64 MB into a loopback socket and closing it two ways:
+   *
+   *     destroy() → the peer received     327,212 of 67,108,864 bytes
+   *     end()     → the peer received  67,108,864 of 67,108,864 bytes
+   *
+   * The 327,212 is the whole of the story. It is macOS's auto-tuned loopback
+   * capacity — `net.inet.tcp.sendspace` 131,072 plus `recvspace` 131,072, grown
+   * a little under load — and it is the reason this was invisible here for as
+   * long as it was. **Windows's default is 64 KB**, it does not auto-tune
+   * loopback, and every write past that sits in libuv's own queue waiting on an
+   * IOCP completion, where a `closesocket()` cancels it.
+   *
+   * So a response smaller than the send buffer survived a `destroy()` and one
+   * larger than it did not, on a platform nobody here can run. `localhost-reach.test.ts`
+   * carries a 288 KB body specifically because it straddles that line: it fits
+   * inside macOS's 320 KB and does not fit inside Windows's 64 KB, and it is
+   * the test the Windows runner failed while every smaller one passed.
+   *
+   * What made it a *timeout* rather than a wrong answer is worth writing down
+   * too, because it is how this hid. A truncated `Content-Length` body gives the
+   * reader no `end` and no error on the request — the error lands on the
+   * response object — so a browser, or a test, that is waiting for the body
+   * simply waits forever.
+   *
+   * ## Which closes flush and which do not
+   *
+   * `'flush'` is for an **orderly** end: the far machine said this channel is
+   * finished, or the browser half-closed. In both cases the bytes already in
+   * hand are real bytes that the far server produced, and delivering them is
+   * the only truthful thing to do with them.
+   *
+   * `'discard'` is for an end that is not orderly, or not this stream's own: a
+   * socket error, a socket already closed, and the whole-tunnel teardown below.
+   * Teardown is the interesting one — a listener is being closed and a link has
+   * gone, and a socket that lingers there is a descriptor held open past the
+   * thing that owned it, which is a leak rather than a courtesy.
+   */
+  function dropStream(tunnel: Tunnel, ch: string, tell: boolean, ending: StreamEnding): void {
     const stream = tunnel.streams.get(ch)
     if (!stream) return
     tunnel.streams.delete(ch)
     stream.closed = true
-    stream.socket.destroy()
+    if (ending === 'flush') flushAndClose(stream.socket)
+    else stream.socket.destroy()
     if (tell) deps.send({ t: 'net.close', ch })
   }
 
@@ -298,7 +384,10 @@ export function createRemoteReach(deps: ReachDeps): RemoteReach {
     if (!tunnel) return
     tunnels.delete(id)
     byPort.delete(tunnel.port)
-    for (const ch of [...tunnel.streams.keys()]) dropStream(tunnel, ch, false)
+    // `'discard'`: the listener below is being closed and the link this tunnel
+    // belonged to has gone, so there is nothing left to be orderly *for* —
+    // holding sockets open past their own tunnel is a leak, not a courtesy.
+    for (const ch of [...tunnel.streams.keys()]) dropStream(tunnel, ch, false, 'discard')
     tunnel.server.close()
     releaseOwnPort(tunnel.localPort)
     if (tellFarEnd) deps.send({ t: 'tunnel.close', id })
@@ -340,12 +429,16 @@ export function createRemoteReach(deps: ReachDeps): RemoteReach {
     // A hot-reload notice is forty bytes and Nagle would hold each one.
     socket.setNoDelay(true)
     socket.on('data', (chunk: Buffer) => forward(stream, chunk))
-    socket.on('error', () => dropStream(tunnel, ch, true))
+    socket.on('error', () => dropStream(tunnel, ch, true, 'discard'))
     // 'end' as well as 'close', for the reason `tunnel.ts` gives: a browser that
     // sends a FIN after its request is waiting for the answer, and holding the
     // far socket open past it is a request that never finishes.
-    socket.on('end', () => dropStream(tunnel, ch, true))
-    socket.on('close', () => dropStream(tunnel, ch, true))
+    //
+    // It flushes, because that is exactly what a browser in this state is doing:
+    // it has said it will send no more and is still reading the answer. What is
+    // queued here is that answer.
+    socket.on('end', () => dropStream(tunnel, ch, true, 'flush'))
+    socket.on('close', () => dropStream(tunnel, ch, true, 'discard'))
   }
 
   /** Walk the ladder in the header. Null when every rung is taken. */
@@ -507,7 +600,13 @@ export function createRemoteReach(deps: ReachDeps): RemoteReach {
         case 'net.close': {
           const found = streamFor(message.ch)
           // No echo: the far end closed it, so it already knows.
-          if (found) dropStream(found.tunnel, message.ch, false)
+          //
+          // `'flush'`, and this is the line the Windows failure was about. The
+          // far machine's server finished its response and hung up, which is
+          // what an ordinary `Connection: close` reply looks like from here — so
+          // this frame arrives with the tail of that response still queued for
+          // the browser. Discarding it truncates a body the far end sent in full.
+          if (found) dropStream(found.tunnel, message.ch, false, 'flush')
           return
         }
         default:

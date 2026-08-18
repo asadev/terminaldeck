@@ -42,6 +42,40 @@ import { parseIgnoreFile } from './fs-tree'
 
 const run = promisify(execFile)
 
+/**
+ * The ceiling for a test that drives real `git`, and why it is not one number.
+ *
+ * Almost everything in this file makes a temporary repository and then shells
+ * out to `git` several times over it. On this Mac that is single-digit
+ * milliseconds a spawn; on the Windows runner it is the dominant cost of the
+ * whole file and it swings by roughly 5x between runs of *identical code*.
+ *
+ * Measured, from the runner's own logs, on
+ * `untracks a committed secret, keeps the file, and says history is not clean`
+ * — about ten `git` processes and a dozen small writes into a fresh repo:
+ *
+ *     1149 ms   baf9b1d
+ *     1349 ms   3024a58, run 32086548577
+ *     5355 ms   3024a58, run 32086051108   ← the same commit as the line above
+ *   >20000 ms   bfdc4c6, run 32116910629   ← the 20 s ceiling, hit
+ *
+ * The whole file over the same runs: 9.5 s, 10.6 s, 10.8 s, 12.1 s, 24.4 s,
+ * 42.4 s. So one `git` costs about 110 ms on a quiet runner and about 500 ms on
+ * a loaded one, and 20 s was less than four times the worst figure ever actually
+ * observed — which is not headroom, it is a coin toss.
+ *
+ * The Windows numbers are that worst observation with room over it. **The POSIX
+ * numbers are unchanged**, deliberately: this is where the work is done and the
+ * tight ceiling here is what would notice a real slowdown. Nothing about the
+ * Windows figure is a claim that the operation should take that long — it is the
+ * runner's scheduling variance, and `vitest.config.ts` carries the evidence that
+ * the variance is the runner's rather than this code's.
+ */
+const GIT_HEAVY_MS = process.platform === 'win32' ? 60_000 : 20_000
+
+/** The same allowance, for the handful of cases that were already given half again. */
+const GIT_HEAVIEST_MS = process.platform === 'win32' ? 90_000 : 30_000
+
 /* ------------------------------------------------------------------ setup -- */
 
 const created: string[] = []
@@ -159,7 +193,7 @@ beforeAll(async () => {
   // Warms the login-PATH cache in providers.ts once, so the first git call in
   // a test is not also paying for a login shell.
   await run('git', ['--version'])
-}, 20_000)
+}, GIT_HEAVY_MS)
 
 afterAll(async () => {
   for (const dir of created) await rm(dir, { recursive: true, force: true })
@@ -373,7 +407,7 @@ describe('scanReadiness — an empty folder', () => {
     expect(byId(report, 'secrets').status).toBe('pass')
     expect(report.score).toBeLessThan(40)
     expect(report.band).toBe('at-risk')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   /**
    * The naming rule, at the one readiness row that had a vendor's filename in
@@ -399,7 +433,7 @@ describe('scanReadiness — an empty folder', () => {
     // And the disclosure, still there, on the thing that acts.
     expect(row.fix?.description).toContain('CLAUDE.md')
     expect(row.fix?.label).toBe('Create instructions file')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('offers a fix for every missing foundation', async () => {
     const dir = await tempProject()
@@ -408,7 +442,7 @@ describe('scanReadiness — an empty folder', () => {
     expect(byId(report, 'readme').fix?.id).toBe('create-readme')
     expect(byId(report, 'gitignore').fix?.id).toBe('create-gitignore')
     expect(byId(report, 'git-repo').fix?.id).toBe('git-init')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 })
 
 describe('scanReadiness — a well-set-up project', () => {
@@ -420,12 +454,12 @@ describe('scanReadiness — a well-set-up project', () => {
     expect(report.score).toBe(100)
     expect(report.band).toBe('strong')
     expect(report.cappedBy).toBeNull()
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('does not flag .env.example as a secret', async () => {
     const report = await scanReadiness(await goodProject())
     expect(byId(report, 'secrets').status).toBe('pass')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 })
 
 describe('scanReadiness — the secrets check against a real repo', () => {
@@ -447,7 +481,7 @@ describe('scanReadiness — the secrets check against a real repo', () => {
     expect(report.score).toBeLessThanOrEqual(SECRET_FAIL_CAP)
     expect(report.band).toBe('at-risk')
     expect(report.cappedBy).not.toBeNull()
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('warns when a .env sits unignored, before anything is committed', async () => {
     const dir = await tempProject()
@@ -457,7 +491,7 @@ describe('scanReadiness — the secrets check against a real repo', () => {
     expect(secrets.status).toBe('warn')
     expect(secrets.fix?.id).toBe('ignore-secrets')
     expect(secrets.fix?.destructive).toBe(false)
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('passes when the .env is present but ignored', async () => {
     const dir = await tempProject()
@@ -465,7 +499,7 @@ describe('scanReadiness — the secrets check against a real repo', () => {
     await write(dir, '.gitignore', '.env\n')
     const report = await scanReadiness(dir)
     expect(byId(report, 'secrets').status).toBe('pass')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('flags an .npmrc only when it carries a token', async () => {
     const plain = await tempProject()
@@ -481,7 +515,7 @@ describe('scanReadiness — the secrets check against a real repo', () => {
     await git(leaky, 'add', '.')
     await git(leaky, 'commit', '--quiet', '-m', 'config')
     expect(byId(await scanReadiness(leaky), 'secrets').status).toBe('fail')
-  }, 30_000)
+  }, GIT_HEAVIEST_MS)
 })
 
 describe('scanReadiness — individual checks', () => {
@@ -496,7 +530,7 @@ describe('scanReadiness — individual checks', () => {
     const lines = Array.from({ length: CLAUDE_MD_BLOAT_LINES + 10 }, (_, i) => `- point ${i}`)
     await write(bloated, 'CLAUDE.md', `${lines.join('\n')}\nnpm test\n`)
     expect(byId(await scanReadiness(bloated), 'claude-md').status).toBe('warn')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('warns when CLAUDE.md documents no runnable command', async () => {
     const dir = await tempProject()
@@ -505,7 +539,7 @@ describe('scanReadiness — individual checks', () => {
     const check = byId(await scanReadiness(dir), 'claude-md')
     expect(check.status).toBe('warn')
     expect(check.detail).toContain('no runnable commands')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('accepts .claude/CLAUDE.md and AGENTS.md as the instructions file', async () => {
     const nested = await tempProject()
@@ -515,7 +549,7 @@ describe('scanReadiness — individual checks', () => {
     const agents = await tempProject()
     await write(agents, 'AGENTS.md', GOOD_CLAUDE_MD)
     expect(byId(await scanReadiness(agents), 'claude-md').status).toBe('pass')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('rejects npm\'s placeholder test script, and offers no fix for it', async () => {
     const dir = await tempProject()
@@ -528,7 +562,7 @@ describe('scanReadiness — individual checks', () => {
     expect(check.status).toBe('fail')
     // Nothing to point the script at, so inventing one would just move the lie.
     expect(check.fix).toBeNull()
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('offers a test script only when a runner is actually installed', async () => {
     const bare = await tempProject()
@@ -538,7 +572,7 @@ describe('scanReadiness — individual checks', () => {
     const withRunner = await tempProject()
     await write(withRunner, 'package.json', JSON.stringify({ devDependencies: { vitest: '^4' } }))
     expect(byId(await scanReadiness(withRunner), 'test-script').fix?.id).toBe('add-test-script')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('recognises tests outside npm', async () => {
     const cargo = await tempProject()
@@ -547,20 +581,20 @@ describe('scanReadiness — individual checks', () => {
     expect(byId(report, 'test-script').status).toBe('pass')
     // …and asks for the lockfile that pins them.
     expect(byId(report, 'lockfile').status).toBe('warn')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('skips the typecheck check on a project with no TypeScript', async () => {
     const dir = await tempProject()
     await write(dir, 'package.json', JSON.stringify({ name: 'js-only' }))
     expect(byId(await scanReadiness(dir), 'typecheck-script').status).toBe('skip')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('accepts a typecheck under any of its usual names', async () => {
     const dir = await tempProject()
     await write(dir, 'tsconfig.json', '{}')
     await write(dir, 'package.json', JSON.stringify({ scripts: { 'check-types': 'tsc --noEmit' } }))
     expect(byId(await scanReadiness(dir), 'typecheck-script').status).toBe('pass')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('warns rather than fails when a .gitignore is merely incomplete', async () => {
     const dir = await tempProject()
@@ -570,7 +604,7 @@ describe('scanReadiness — individual checks', () => {
     expect(check.status).toBe('warn')
     expect(check.detail).toContain('node_modules')
     expect(check.fix?.id).toBe('patch-gitignore')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('reports an uncommitted tree, and a conflicted one more harshly', async () => {
     const dir = await goodProject()
@@ -578,13 +612,13 @@ describe('scanReadiness — individual checks', () => {
     const dirty = byId(await scanReadiness(dir), 'git-clean')
     expect(dirty.status).toBe('warn')
     expect(dirty.detail).toContain('1 uncommitted change')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('warns when a node project has no lockfile', async () => {
     const dir = await tempProject()
     await write(dir, 'package.json', JSON.stringify({ name: 'x' }))
     expect(byId(await scanReadiness(dir), 'lockfile').status).toBe('warn')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 })
 
 /* ------------------------------------------------------------------ fixes -- */
@@ -623,7 +657,7 @@ describe('applyReadinessFix', () => {
     const after = await scanReadiness(dir)
     expect(byId(after, 'secrets').status).toBe('pass')
     expect(byId(after, 'gitignore').status).toBe('pass')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('appends only the missing patterns, and is idempotent', async () => {
     const dir = await tempProject()
@@ -663,7 +697,7 @@ describe('applyReadinessFix', () => {
 
     const again = await applyReadinessFix(dir, 'git-init')
     expect(again.ok).toBe(false)
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('untracks a committed secret, keeps the file, and says history is not clean', async () => {
     const dir = await goodProject()
@@ -682,7 +716,7 @@ describe('applyReadinessFix', () => {
     const after = await scanReadiness(dir)
     expect(byId(after, 'secrets').status).toBe('pass')
     expect(after.cappedBy).toBeNull()
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('re-derives the facts, so a fix applied twice does nothing the second time', async () => {
     const dir = await tempProject()
@@ -690,7 +724,7 @@ describe('applyReadinessFix', () => {
     const second = await applyReadinessFix(dir, 'untrack-secrets')
     expect(second.ok).toBe(false)
     expect(second.changed).toEqual([])
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('adds a test script using the runner already installed, preserving formatting', async () => {
     const dir = await tempProject()
@@ -758,7 +792,7 @@ describe('the check and the fix must agree about what a secret is', () => {
     expect(await tracked(dir)).not.toContain('.npmrc')
     // Still on disk, like every other secret this fix touches.
     expect(await readFile(join(dir, '.npmrc'), 'utf8')).toContain('_authToken')
-  }, 30_000)
+  }, GIT_HEAVIEST_MS)
 
   it('leaves a token-free .npmrc alone', async () => {
     const dir = await tempProject()
@@ -770,7 +804,7 @@ describe('the check and the fix must agree about what a secret is', () => {
     const result = await applyReadinessFix(dir, 'untrack-secrets')
     expect(result.ok).toBe(false)
     expect(await tracked(dir)).toContain('.npmrc')
-  }, 30_000)
+  }, GIT_HEAVIEST_MS)
 
   it('ignores what it untracks, so the next `git add .` cannot put it back', async () => {
     // credentials.json is detected as a secret but matches none of the standard
@@ -785,7 +819,7 @@ describe('the check and the fix must agree about what a secret is', () => {
     await git(dir, 'add', '.')
     expect(await tracked(dir)).not.toContain('credentials.json')
     expect(byId(await scanReadiness(dir), 'secrets').status).toBe('pass')
-  }, 30_000)
+  }, GIT_HEAVIEST_MS)
 })
 
 describe('ignoreBlockFor', () => {
@@ -822,7 +856,7 @@ describe('the ignore-secrets fix keeps .env.example committable', () => {
     const files = await tracked(dir)
     expect(files).toContain('.env.example')
     expect(files).not.toContain('.env')
-  }, 30_000)
+  }, GIT_HEAVIEST_MS)
 })
 
 describe('anchoredIgnoreLine', () => {
@@ -852,7 +886,7 @@ describe('a file too large to read is never reported as missing', () => {
     expect(check.status).toBe('warn')
     // Offering "Create CLAUDE.md" here would be a button that can only refuse.
     expect(check.fix).toBeNull()
-  }, 30_000)
+  }, GIT_HEAVIEST_MS)
 
   it('does not call a 1 MB README a title', async () => {
     const dir = await tempProject()
@@ -860,7 +894,7 @@ describe('a file too large to read is never reported as missing', () => {
     const check = byId(await scanReadiness(dir), 'readme')
     expect(check.detail).not.toContain('0 meaningful line')
     expect(check.status).toBe('pass')
-  }, 30_000)
+  }, GIT_HEAVIEST_MS)
 
   it('still reads a package.json larger than the prose limit', async () => {
     // Treating it as absent skipped three checks, and a skipped check leaves
@@ -875,7 +909,7 @@ describe('a file too large to read is never reported as missing', () => {
     expect(byId(report, 'test-script').status).toBe('pass')
     expect(byId(report, 'lockfile').status).toBe('warn')
     expect(byId(report, 'lint-script').status).toBe('warn')
-  }, 30_000)
+  }, GIT_HEAVIEST_MS)
 })
 
 describe('detail strings stay bounded', () => {
@@ -891,7 +925,7 @@ describe('detail strings stay bounded', () => {
     const check = byId(await scanReadiness(dir), 'secrets')
     expect(check.status).toBe('warn')
     expect(check.detail.length).toBeLessThan(400)
-  }, 30_000)
+  }, GIT_HEAVIEST_MS)
 })
 
 describe('a check that could not run', () => {
@@ -966,7 +1000,7 @@ describe('a skeleton this app wrote is not a pass', () => {
     // No machine can write this file for you, so the action is the file itself.
     expect(readme.fix).toBeNull()
     expect(readme.opens).toBe('README.md')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('says the same of the instructions file it writes', async () => {
     const dir = await tempProject()
@@ -977,7 +1011,7 @@ describe('a skeleton this app wrote is not a pass', () => {
     expect(instructions.status).toBe('warn')
     expect(instructions.detail).toContain('skeleton')
     expect(instructions.opens).not.toBeNull()
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('stops saying it the moment a real line is added', async () => {
     const dir = await tempProject()
@@ -987,7 +1021,7 @@ describe('a skeleton this app wrote is not a pass', () => {
 
     const report = await scanReadiness(dir)
     expect(byId(report, 'readme').status).toBe('pass')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('recognises a skeleton exactly, not by resemblance', () => {
     const template = '# Name\n\n## Install\n\n<!-- fill me -->\n'
@@ -1032,7 +1066,7 @@ describe('a row that cannot be fixed still names the file it is about', () => {
     // one. A button that opened the wrong thing would be worse than none.
     expect(byId(report, 'git-clean').opens).toBeNull()
     expect(byId(report, 'lockfile').opens).toBeNull()
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 })
 
 /* ------------------------------------------------------- the new two fixes -- */
@@ -1060,7 +1094,7 @@ describe("replacing npm's placeholder test script", () => {
     expect(result.ok).toBe(true)
     expect(JSON.parse(await readFile(join(dir, 'package.json'), 'utf8')).scripts.test).toBe('vitest run')
     expect(byId(await scanReadiness(dir), 'test-script').status).toBe('pass')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('refuses to overwrite a script somebody wrote', async () => {
     const dir = await tempProject()
@@ -1072,7 +1106,7 @@ describe("replacing npm's placeholder test script", () => {
     const result = await applyReadinessFix(dir, 'replace-test-script')
     expect(result.ok).toBe(false)
     expect(JSON.parse(await readFile(join(dir, 'package.json'), 'utf8')).scripts.test).toBe('make check')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 })
 
 describe('generating a lockfile', () => {
@@ -1088,7 +1122,7 @@ describe('generating a lockfile', () => {
     // `package-lock.json` in a pnpm project is a worse state than none.
     expect(row.fix).toBeNull()
     expect(row.detail).toContain('pnpm@9.0.0')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('refuses rather than writing the wrong kind of lockfile', async () => {
     const dir = await tempProject()
@@ -1096,7 +1130,7 @@ describe('generating a lockfile', () => {
     const result = await applyReadinessFix(dir, 'create-lockfile')
     expect(result.ok).toBe(false)
     expect(result.message).toContain('yarn@4.0.0')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 
   it('refuses when a lockfile is already there', async () => {
     const dir = await tempProject()
@@ -1105,7 +1139,7 @@ describe('generating a lockfile', () => {
     const result = await applyReadinessFix(dir, 'create-lockfile')
     expect(result.ok).toBe(false)
     expect(result.message).toContain('pnpm-lock.yaml')
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 })
 
 /* ------------------------------------------------------ the machine-level fix -- */
@@ -1266,5 +1300,5 @@ describe('registerReadinessIpc', () => {
     const report = (await handlers.get('readiness:scan')?.(null, dir)) as ReadinessReport
     expect(report.projectPath).toBe(dir)
     expect(report.checks).toHaveLength(Object.keys(CHECK_WEIGHTS).length)
-  }, 20_000)
+  }, GIT_HEAVY_MS)
 })

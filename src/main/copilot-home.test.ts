@@ -49,6 +49,18 @@ beforeEach(() => {
   paths = copilotPaths(userData)
 })
 
+/*
+ * If this file is ever red on Windows with a timeout, read `vitest.config.ts`
+ * before touching anything here.
+ *
+ * Two of these tests failed on the Windows runner on 2026-08-18 and neither was
+ * slow. They are synchronous — `() => {}`, not `async` — and make about ten
+ * filesystem calls each, so there is nothing for them to be waiting on; they
+ * were simply not being scheduled. The file has run at 298 ms and at 25263 ms
+ * on that runner with identical bytes, and 7644 ms of that spread came from a
+ * run that was green. The config file carries the whole table and the reasoning.
+ */
+
 describe('the layout', () => {
   it('keeps the working directory and the identity in different places', () => {
     /*

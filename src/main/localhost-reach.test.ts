@@ -1,5 +1,9 @@
 import { get as httpGet, createServer as createHttpServer, type Server } from 'node:http'
-import { createServer as createTcpServer, type Server as TcpServer } from 'node:net'
+import {
+  createConnection,
+  createServer as createTcpServer,
+  type Server as TcpServer,
+} from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createRemoteReach, type RemoteReach } from './localhost-reach'
 import { ownPorts } from './own-ports'
@@ -100,6 +104,17 @@ function openedId(frames: readonly LocalhostMessage[]): string {
  * down fails as `ECONNRESET` — which is true of the socket and says nothing
  * about whether the address is still being served. A fresh dial asks the
  * question the test is actually asking.
+ *
+ * **Both objects get an error handler, and the response one is not decoration.**
+ * A body cut short of its `Content-Length` is reported on the *response*, never
+ * on the request: there is no `end`, no rejection, and no unhandled error —
+ * measured, with this exact function, by serving 300 KB of a declared 300,000
+ * byte body and hanging up. The promise simply stayed pending, forever.
+ *
+ * That is how a truncation arrived on the Windows runner as `Test timed out in
+ * 5000ms` with no assertion and nothing naming a socket. Listening here costs
+ * one line and turns the same failure into `ECONNRESET`, which says what
+ * happened.
  */
 function fetchText(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -110,9 +125,25 @@ function fetchText(url: string): Promise<string> {
         text += chunk
       })
       response.on('end', () => resolve(text))
+      response.on('error', reject)
     })
     request.on('error', reject)
   })
+}
+
+/**
+ * Turn the event loop until `look` finds something, or give up after a while.
+ *
+ * The alternative is a fixed sleep, and a fixed sleep is a wrong answer twice
+ * over: too short on a loaded machine, and wasted time on every other run.
+ */
+async function waitFor<T>(look: () => T | undefined): Promise<T> {
+  for (let turn = 0; turn < 500; turn += 1) {
+    const found = look()
+    if (found !== undefined) return found
+    await new Promise<void>((settle) => setTimeout(settle, 10))
+  }
+  throw new Error('waited and it never happened')
 }
 
 describe('reaching another machine’s port from this one', () => {
@@ -243,5 +274,67 @@ describe('reaching another machine’s port from this one', () => {
     if (!answer.ok) throw new Error(answer.message)
     expect(await fetchText(answer.url)).toBe(body)
   })
-})
 
+  it('delivers what is already queued when the far machine closes the channel', async () => {
+    /*
+     * The Windows failure above, reduced to the property it was actually about
+     * and pinned so that it fails on this Mac too.
+     *
+     * The test above can only catch this on a platform whose socket buffers are
+     * small enough for a 288 KB body to leave something queued — 64 KB on
+     * Windows, about 320 KB here — which is why it passed on every Mac run and
+     * hung on the runner. This one takes the buffer out of the question by
+     * making the reader stop reading and then pushing far more at it than any
+     * loopback socket holds: whatever the kernel takes, the rest is sitting in
+     * this process when `net.close` arrives, on any machine.
+     *
+     * `net.close` is what an ordinary `Connection: close` response looks like
+     * from this side — the far server answered and hung up — so this is the
+     * common case rather than an edge one. Closing that channel with `destroy()`
+     * dropped the tail of every response larger than a socket buffer.
+     */
+    const port = await devServer('unused')
+    const { reach, frames } = pair([port])
+    const answer = await reach.open(port)
+    if (!answer.ok) throw new Error(answer.message)
+
+    // A browser that has connected and is not reading yet. Everything written to
+    // it past the kernel's appetite queues inside this process.
+    //
+    // The address comes off the answer rather than being written out: which rung
+    // of the ladder was free is the previous tests' subject, and hard-coding one
+    // here would make this test fail for a reason that has nothing to do with it.
+    const seen: Buffer[] = []
+    const target = new URL(answer.url)
+    const reading = new Promise<void>((settle, fail) => {
+      const socket = createConnection(
+        { host: target.hostname.replace(/^\[|\]$/g, ''), port: Number(target.port) },
+        () => {
+          socket.pause()
+          setTimeout(() => socket.resume(), 200)
+        },
+      )
+      socket.on('data', (chunk: Buffer) => seen.push(chunk))
+      socket.on('end', () => settle())
+      socket.on('error', fail)
+      accepted.push(socket)
+    })
+
+    // Wait for the listener to accept rather than sleeping a guessed number of
+    // milliseconds at it — a fixed wait is the thing that turns a loaded runner
+    // into a red test for no reason, which is most of what this session was about.
+    const opened = await waitFor(() => frames.find((frame) => frame.t === 'net.open'))
+    if (opened.t !== 'net.open') throw new Error('no channel was opened')
+
+    // Forty frames at the chunk cap — 960 KB, several times what any loopback
+    // socket will hold — and then the hang-up, in the same turn of the loop.
+    const piece = Buffer.alloc(24 * 1024, 0x79)
+    for (let sent = 0; sent < 40; sent += 1) {
+      reach.handle({ t: 'net.data', ch: opened.ch, data: piece.toString('base64') })
+    }
+    reach.handle({ t: 'net.close', ch: opened.ch })
+
+    await reading
+    expect(Buffer.concat(seen)).toHaveLength(piece.length * 40)
+  })
+})

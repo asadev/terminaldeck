@@ -28,6 +28,7 @@
     "relay/**/*",
     "ios/Harness/**/*",
     "electron.vite.config.ts",
-    "vite.headless.config.ts"
+    "vite.headless.config.ts",
+    "vitest.config.ts"
   ]
 }

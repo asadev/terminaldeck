@@ -213,6 +213,38 @@ export const MAX_STREAMS_TOTAL = 256
  */
 const DIAL_TIMEOUT_MS = 5000
 
+/**
+ * How a stream's socket is taken down. See {@link createTunnelHub}'s `dropStream`.
+ *
+ * The same pair, with the same meanings, as the guest half in
+ * `localhost-reach.ts`. Two spellings of this would be two chances to get the
+ * argument wrong on one side only, which is exactly how the guest half came to
+ * be wrong for as long as it was.
+ */
+type StreamEnding = 'flush' | 'discard'
+
+/**
+ * How long a flushing close may take before the socket is taken down anyway.
+ *
+ * `end()` writes what is queued and then sends FIN, and how long that takes
+ * belongs to the peer — a dev server that has stopped reading leaves the queue
+ * where it is. Without a ceiling that socket is a descriptor this process holds
+ * until it quits, which is the leak the flush would have traded for the
+ * truncation. Five seconds is far longer than a loopback flush can honestly
+ * need and short enough that a peer which has gone away costs a timer rather
+ * than a file descriptor. The timer is unref'd, so it never holds the app open.
+ */
+const FLUSH_LINGER_MS = 5_000
+
+/** Send what is queued, then close — with a ceiling on how long that may take. */
+function flushAndClose(socket: Socket): void {
+  if (socket.destroyed) return
+  const linger = setTimeout(() => socket.destroy(), FLUSH_LINGER_MS)
+  linger.unref?.()
+  socket.once('close', () => clearTimeout(linger))
+  socket.end()
+}
+
 interface Stream {
   id: string
   tunnel: string
@@ -288,13 +320,36 @@ export function createTunnelHub(deps: TunnelDeps): TunnelHub {
     if (!tunnel) return false
     tunnels.delete(id)
     // Copied first: `dropStream` mutates the set this is walking.
-    for (const streamId of [...tunnel.streams]) dropStream(streamId, false)
+    //
+    // `'discard'`: the tunnel itself is being taken down and the guest has
+    // already been told, so nothing on either side is still waiting for these
+    // bytes. A lingering socket here would be a descriptor held open past the
+    // tunnel that owned it.
+    for (const streamId of [...tunnel.streams]) dropStream(streamId, false, 'discard')
     deps.send({ t: 'tunnel.closed', id, message })
     changed()
     return true
   }
 
-  function dropStream(id: string, tell: boolean): void {
+  /**
+   * Close one connection to the dev server, and say whether what is still
+   * queued for it has to arrive first.
+   *
+   * The guest half of this argument is written out at length in
+   * `localhost-reach.ts`, on its own `dropStream`, and it is the same argument
+   * with the direction reversed: `destroy()` throws away everything Node has
+   * accepted from `write()` but not yet handed to the kernel — measured on this
+   * Mac at 66.8 MB of a 64 MB write lost, against nothing lost through `end()` —
+   * and the queue is only ever non-empty once a body is larger than the socket's
+   * in-flight capacity, which is about 320 KB here and **64 KB on Windows**.
+   *
+   * What is queued on *this* side is the browser's own bytes on their way to the
+   * dev server: a form post, a file upload, a long PUT. So the failure this
+   * prevents here is an upload silently arriving short — the server sees fewer
+   * bytes than `Content-Length` promised and hangs waiting for the rest, which
+   * is the same never-settles shape the guest side produced, one machine over.
+   */
+  function dropStream(id: string, tell: boolean, ending: StreamEnding): void {
     const stream = streams.get(id)
     if (!stream) return
     streams.delete(id)
@@ -303,7 +358,8 @@ export function createTunnelHub(deps: TunnelDeps): TunnelHub {
       stream.closed = true
       budget.give()
     }
-    stream.socket.destroy()
+    if (ending === 'flush') flushAndClose(stream.socket)
+    else stream.socket.destroy()
     if (tell) deps.send({ t: 'net.close', ch: id })
   }
 
@@ -489,16 +545,20 @@ export function createTunnelHub(deps: TunnelDeps): TunnelHub {
     socket.setTimeout(DIAL_TIMEOUT_MS, () => {
       // Only ever armed for the dial: cleared on connect, because a live page
       // holding an idle keep-alive socket is normal and must not be torn down.
-      if (!stream.closed) dropStream(ch, true)
+      if (!stream.closed) dropStream(ch, true, 'discard')
     })
     socket.once('connect', () => socket.setTimeout(0))
     socket.on('data', (chunk: Buffer) => forward(stream, chunk))
-    socket.on('error', () => dropStream(ch, true))
+    socket.on('error', () => dropStream(ch, true, 'discard'))
     // 'end' as well as 'close': a dev server that answers and hangs up sends a
     // FIN, and waiting for 'close' would hold the browser's socket open past the
     // end of the response.
-    socket.on('end', () => dropStream(ch, true))
-    socket.on('close', () => dropStream(ch, true))
+    //
+    // It flushes: a server that half-closes after answering is still reading —
+    // that is what a half-close means — and the tail of an upload still queued
+    // here is owed to it.
+    socket.on('end', () => dropStream(ch, true, 'flush'))
+    socket.on('close', () => dropStream(ch, true, 'discard'))
   }
 
   function write(ch: string, data: string): void {
@@ -554,7 +614,11 @@ export function createTunnelHub(deps: TunnelDeps): TunnelHub {
           return
         case 'net.close':
           // No echo: the phone closed it, so it already knows.
-          dropStream(message.ch, false)
+          //
+          // `'flush'`, for the reason on `dropStream`: the browser over there
+          // finished its request and hung up, and the tail of that request can
+          // still be queued for the dev server here.
+          dropStream(message.ch, false, 'flush')
           return
       }
     },
@@ -575,7 +639,8 @@ export function createTunnelHub(deps: TunnelDeps): TunnelHub {
     },
 
     closeAll(): void {
-      for (const id of [...streams.keys()]) dropStream(id, false)
+      // `'discard'`: the link has gone, so nothing is left to deliver these to.
+      for (const id of [...streams.keys()]) dropStream(id, false, 'discard')
       // Opens still waiting on a scan are cancelled rather than left to install
       // a tunnel against a phone that has gone.
       for (const pending of opening.values()) pending.cancelled = true
