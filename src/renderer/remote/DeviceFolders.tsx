@@ -78,12 +78,26 @@ export interface DeviceFoldersBridge {
   listDeviceFolders(): Promise<unknown>
   setDeviceFolders(deviceId: string, folders: string[]): Promise<unknown>
   pickProjectFolder(): Promise<string | null>
+  /**
+   * Whether sessions from a device are held inside their folder, and — on
+   * Windows — whether the one-time permission that does the holding has been
+   * granted. `main/confine/ipc.ts`.
+   *
+   * Optional on the bridge, and absent is a real state rather than a bug: a
+   * build whose preload predates these channels answers nothing, and the panel
+   * then falls back to what it can say from the platform alone. That is the
+   * same rule the rest of this file follows for `wired`.
+   */
+  confineState(): Promise<unknown>
+  grantConfinement(): Promise<unknown>
 }
 
 const BRIDGE_METHODS: ReadonlyArray<keyof DeviceFoldersBridge> = [
   'listDeviceFolders',
   'setDeviceFolders',
   'pickProjectFolder',
+  'confineState',
+  'grantConfinement',
 ]
 
 export function resolveDeviceFoldersBridge(host?: unknown): Partial<DeviceFoldersBridge> {
@@ -177,6 +191,45 @@ export function confinesSessions(platform: UiPlatform): boolean {
   return platform === 'mac'
 }
 
+/** What the main process says about holding sessions. `confine/ipc.ts`. */
+export interface ConfineView {
+  confining: boolean
+  canGrant: boolean
+  folders: string[]
+  note: string
+}
+
+/**
+ * Read the answer, and treat anything unrecognisable as *not confined*.
+ *
+ * The direction matters and it is the one the paragraph above `confinesSessions`
+ * argues: claiming a boundary that is not there is the dangerous mistake, and
+ * underselling one that is only annoying. So a malformed answer, a missing
+ * field, an older main process — all land on false.
+ */
+export function toConfineView(value: unknown): ConfineView | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  return {
+    confining: row.confining === true,
+    canGrant: row.canGrant === true,
+    folders: Array.isArray(row.folders) ? row.folders.filter((f): f is string => typeof f === 'string') : [],
+    note: typeof row.note === 'string' ? row.note : '',
+  }
+}
+
+/**
+ * Does this panel get to say a session is held?
+ *
+ * The main process's answer wins where there is one, because it read the disk;
+ * the platform guess is the fallback for a preload too old to be asked. On
+ * macOS the two always agree — seatbelt confines with nothing granted — and on
+ * Windows they agree only once somebody has pressed the button.
+ */
+export function holdsSessions(platform: UiPlatform, confine: ConfineView | null): boolean {
+  return confine === null ? confinesSessions(platform) : confine.confining
+}
+
 export interface DeviceFoldersViewProps {
   devices: FolderDevice[]
   /**
@@ -193,6 +246,14 @@ export interface DeviceFoldersViewProps {
   onAdd(deviceId: string): void
   onRemove(deviceId: string, folder: string): void
   platform?: UiPlatform
+  /** What the main process says about holding sessions. Null before it answers. */
+  confine?: ConfineView | null
+  /** Press the one-time Windows permission. Absent where there is nothing to press. */
+  onGrantConfinement?: () => void
+  /** True while the administrator prompt is up. */
+  granting?: boolean
+  /** What the last grant attempt said, when it did not work. */
+  grantProblem?: string | null
 }
 
 export function DeviceFoldersView({
@@ -204,8 +265,13 @@ export function DeviceFoldersView({
   onAdd,
   onRemove,
   platform = detectPlatform(),
+  confine = null,
+  onGrantConfinement,
+  granting = false,
+  grantProblem = null,
 }: DeviceFoldersViewProps) {
   const machine = thisMachine(platform)
+  const held = holdsSessions(platform, confine)
 
   if (!wired) {
     return (
@@ -223,7 +289,7 @@ export function DeviceFoldersView({
       {/* The honest sentence, first and not last, and a different one per
           platform. Someone will decide who holds a device on the strength of
           whichever of these two they read. */}
-      {confinesSessions(platform) ? (
+      {held ? (
         <>
           <p className="settings-prose">
             Pick which folders each guest can use. On {machine} a session started from a device is{' '}
@@ -242,13 +308,46 @@ export function DeviceFoldersView({
             reachable the moment you take a folder away.
           </p>
         </>
+      ) : confine?.canGrant ? (
+        /*
+         * Windows, built and switched off.
+         *
+         * The sentence that stood here until 2026-08-19 said holding a session
+         * inside its folder "has only been built for macOS". That was not true:
+         * it is built on AppContainer, measured against real Windows 11
+         * hardware, and what was missing was this button. A panel telling
+         * somebody a boundary does not exist, while the thing that raises it
+         * sits one press away, is the worst of the three states — it does not
+         * merely undersell the protection, it stops anyone turning it on.
+         */
+        <>
+          <p className="settings-prose">
+            Pick which folders each guest can use. On {machine} a session started from a device can
+            be <strong>held inside them</strong> — but that needs a one-time permission on the
+            folders holding node, git and the agent tools, and only an administrator can grant it.
+            <strong> Until you do, a session from a device runs unconfined</strong> and can reach
+            anything your account can.
+          </p>
+          {confine.folders.length > 0 && (
+            <p className="settings-prose">
+              It would cover {confine.folders.length === 1 ? 'this folder' : 'these folders'}:{' '}
+              {confine.folders.join(', ')}. Nothing else on the disk is touched.
+            </p>
+          )}
+          {confine.note !== '' && <p className="settings-prose">{confine.note}</p>}
+          {grantProblem !== null && <Notice tone="error">{grantProblem}</Notice>}
+          <div className="df-actions">
+            <Button tone="primary" onClick={onGrantConfinement} disabled={granting || !onGrantConfinement}>
+              {granting ? 'Waiting for the administrator prompt…' : 'Hold sessions inside their folders'}
+            </Button>
+          </div>
+        </>
       ) : (
         <p className="settings-prose">
           Pick where each guest can start a session. On {machine}, <strong>that is all this
           does</strong> — a session is a shell, and once it is running it can move to any other
-          folder, the same as one you start here. Holding a session inside its folder has only been
-          built for macOS, so this is for keeping your own devices tidy, not for keeping anyone
-          out.
+          folder, the same as one you start here. This build cannot hold a session inside its
+          folder here, so this is for keeping your own devices tidy, not for keeping anyone out.
         </p>
       )}
 
@@ -368,6 +467,9 @@ export function DeviceFolders({ devices, bridge: provided, platform }: DeviceFol
   const [grants, setGrants] = useState<Map<string, string[]> | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [confine, setConfine] = useState<ConfineView | null>(null)
+  const [granting, setGranting] = useState(false)
+  const [grantProblem, setGrantProblem] = useState<string | null>(null)
 
   const wired =
     typeof bridge.listDeviceFolders === 'function' &&
@@ -388,6 +490,67 @@ export function DeviceFolders({ devices, bridge: provided, platform }: DeviceFol
   useEffect(() => {
     void read()
   }, [read])
+
+  /**
+   * Ask once, when the panel opens, whether sessions are held here.
+   *
+   * An event rather than a poll — his standing rule — and there is genuinely no
+   * event to subscribe to: the answer changes only when somebody presses the
+   * button on this very screen, and that path sets the state from what the main
+   * process answered rather than from the press.
+   */
+  useEffect(() => {
+    const ask = bridge.confineState
+    if (!ask) return
+    let live = true
+    ask().then(
+      (value) => {
+        if (live) setConfine(toConfineView(value))
+      },
+      () => {
+        // Left null, which falls back to what the platform alone can say. A
+        // panel that could not ask must not claim a boundary either way.
+        if (live) setConfine(null)
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [bridge])
+
+  /**
+   * Raise the administrator prompt, and believe the answer rather than the press.
+   *
+   * The main process returns the state it read *after* elevating, so a person
+   * who dismisses the UAC dialog sees the screen stay exactly as it was — which
+   * is the truth. Drawing "held" off a successful button press is how a
+   * settings screen ends up promising a boundary nobody granted.
+   */
+  const grantConfinement = useCallback(() => {
+    const run = bridge.grantConfinement
+    if (!run) return
+    setGranting(true)
+    setGrantProblem(null)
+    run().then(
+      (value) => {
+        setGranting(false)
+        const answer = value as { result?: { ok?: boolean; detail?: string }; state?: unknown }
+        setConfine(toConfineView(answer?.state))
+        if (answer?.result?.ok === false) {
+          const detail = answer.result.detail ?? ''
+          setGrantProblem(
+            detail === ''
+              ? 'That did not go through, and this machine did not say why.'
+              : `That did not go through: ${detail}`,
+          )
+        }
+      },
+      (error) => {
+        setGranting(false)
+        setGrantProblem(errorText(error, 'That did not go through.'))
+      },
+    )
+  }, [bridge])
 
   /**
    * Write the whole list rather than an add or a remove.
@@ -464,6 +627,10 @@ export function DeviceFolders({ devices, bridge: provided, platform }: DeviceFol
       busy={busy}
       onAdd={onAdd}
       onRemove={onRemove}
+      confine={confine}
+      granting={granting}
+      grantProblem={grantProblem}
+      {...(bridge.grantConfinement ? { onGrantConfinement: grantConfinement } : {})}
       {...(platform ? { platform } : {})}
     />
   )

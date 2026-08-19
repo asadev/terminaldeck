@@ -812,8 +812,9 @@ export const WINDOWS_UNCONFINED_REASON =
  */
 export const WINDOWS_SETUP_NEEDED =
   'Windows confinement is built on AppContainer and needs a one-time permission on the folders ' +
-  'holding node, git and the agent CLIs, which only an administrator can grant. This build does ' +
-  'not offer that step yet, so a session from a device runs unconfined, the way it always has. ' +
+  'holding node, git and the agent CLIs, which only an administrator can grant. Settings → Remote ' +
+  'has the button; pressing it raises the administrator prompt once, and until somebody does, a ' +
+  'session from a device runs unconfined. ' +
   'A session in a WSL folder is a Linux process and is held by the Linux mechanism instead, not by this one.'
 
 /**

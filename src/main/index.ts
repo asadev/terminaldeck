@@ -56,6 +56,7 @@ import { registerUpdateIpc } from './updates/updater'
 import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
 import { registerRemoteIpc } from './remote/server'
+import { registerConfineIpc } from './confine/ipc'
 import { CopilotAccess } from './remote/copilot-access'
 import { CopilotRuns } from './remote/copilot-runs'
 import {
@@ -1259,6 +1260,19 @@ function registerIpc(): void {
     broadcast: (channel, state) => send(channel, state),
   })
   registerTailnetIpc(ipcMain, { certDir: join(app.getPath('userData'), 'tailnet-certs') })
+  /*
+   * The one-time permission that lets Windows hold a device's session inside
+   * its folder — the button `CONFINEMENT.md` said was the only thing missing.
+   *
+   * Registered on every platform and honest on each: macOS confines with no
+   * grant at all, because seatbelt needs no prior permission from anybody, and
+   * that asymmetry is exactly why only one of the two ever needed a button.
+   * `confine/ipc.ts` carries the argument.
+   */
+  registerConfineIpc(ipcMain, {
+    path: () => process.env.PATH ?? '',
+    accountHome: () => app.getPath('home'),
+  })
   /*
    * Remote copilot access, assembled — the store, and the runs it authorises.
    *

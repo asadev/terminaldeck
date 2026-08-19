@@ -10,6 +10,27 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Added
+
+- **Windows can hold a session inside its folder now, and there is a button that
+  turns it on.** Everything under it was already built and measured against real
+  Windows 11 hardware — the launcher, the ACL grant, the record, the per-session
+  probe — and `CONFINEMENT.md` said what was left in four words: *"What is
+  missing is the button."*
+
+  Nothing shipped ever called it, so a session started from a paired phone ran
+  as your full account: able to read `~/.ssh`, your `.gitconfig` and every
+  project on the disk, while the identical session on a Mac was held to the one
+  folder you granted. Settings → Remote → Folders now describes the permission,
+  names the folders it would cover, and raises the administrator prompt once.
+
+  The screen believes the machine rather than the press: dismiss the prompt and
+  nothing changes, because the state is read back after elevating rather than
+  assumed from a successful click. And the panel no longer tells Windows users
+  that holding a session "has only been built for macOS", which was never true.
+
 ## [0.6.0] — 2026-08-19
 
 ### Added

@@ -93,35 +93,47 @@ function callers(): string[] {
 }
 
 describe('the Windows one-time grant says what is actually true of this build', () => {
-  it('is not reachable from anywhere in the app', () => {
-    /*
-     * Stated as its own assertion rather than folded into the wording check
-     * below, because the two failures need different messages. This one is the
-     * good news — somebody has wired it — and the fix is to update the sentence,
-     * not to unwire anything.
-     */
+  /*
+   * **The feature arrived on 2026-08-19, and this file turned over with it.**
+   *
+   * It used to assert `callers()` was empty, with a message saying that a
+   * caller appearing would be *"the feature arriving, not a regression"* and
+   * naming the two things to change. Both are done: `confine/ipc.ts` reaches
+   * `establishToolGrant` from a channel, `index.ts` registers it, and
+   * `WINDOWS_SETUP_NEEDED` names the prompt again.
+   *
+   * The direction of the assertion is inverted rather than deleted, because the
+   * property worth holding is unchanged and only its sign moved: **the sentence
+   * and the code have to agree about whether a Windows session is held.** For a
+   * year the risk was a sentence promising a prompt nothing could raise; from
+   * today it is a sentence saying the step is not offered while the button sits
+   * in Settings. Both are the same defect, and this is still the thing that
+   * catches it.
+   */
+  it('is reachable from the app, which is what makes the sentence below true', () => {
     expect(
       callers(),
-      'Something now reaches establishToolGrant. That is the feature arriving, not a ' +
-        'regression — go and rewrite WINDOWS_SETUP_NEEDED in appcontainer.ts so it names the ' +
-        'prompt again, then update this test to expect a caller.',
-    ).toEqual([])
+      'Nothing reaches establishToolGrant any more. If the button was removed on purpose, ' +
+        'rewrite WINDOWS_SETUP_NEEDED to stop promising a prompt and invert this assertion — ' +
+        'a Windows user reading that Settings has a button that is not there is worse than ' +
+        'being told the step does not exist.',
+    ).not.toEqual([])
   })
 
-  it('does not promise an administrator prompt while nothing can raise one', () => {
-    // The words that make a person wait for a dialog. Checked as a phrase rather
-    // than as the whole sentence so that ordinary rewording does not fail here
-    // and only the promise does.
-    expect(WINDOWS_SETUP_NEEDED).not.toMatch(/administrator prompt/i)
-    expect(WINDOWS_SETUP_NEEDED).not.toMatch(/granted once with/i)
+  it('promises the administrator prompt, now that something can raise one', () => {
+    // The words that make a person wait for a dialog. They were forbidden here
+    // while nothing could produce one; they are required now, because a person
+    // who presses the button and is not told to expect UAC reads the dialog as
+    // something going wrong.
+    expect(WINDOWS_SETUP_NEEDED).toMatch(/administrator prompt/i)
   })
 
-  it('says instead that this build does not offer the step', () => {
-    // The replacement has to carry three things: that the mechanism is real,
-    // that the app does not offer it yet, and what that means for a session
-    // right now. A blank or truncated constant would pass a `not.toMatch`.
+  it('says where the button is, and what is true until it is pressed', () => {
+    // Three things: the mechanism is real, where to find the step, and what a
+    // session does in the meantime. A blank or truncated constant would pass a
+    // `not.toMatch` and says nothing to anybody.
     expect(WINDOWS_SETUP_NEEDED).toMatch(/AppContainer/)
-    expect(WINDOWS_SETUP_NEEDED).toMatch(/does not offer that step yet/i)
+    expect(WINDOWS_SETUP_NEEDED).toMatch(/Settings . Remote/i)
     expect(WINDOWS_SETUP_NEEDED).toMatch(/runs unconfined/i)
   })
 

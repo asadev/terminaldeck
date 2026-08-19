@@ -433,6 +433,12 @@ const api = {
   addServer: (draft: unknown): Promise<unknown> => ipcRenderer.invoke('servers:add', draft),
   /* The keys already on this computer, so adding a server with one is picking a
      name rather than opening a file in a text editor. `keyfiles.ts`. */
+  /* The one-time Windows permission that lets a device's session be held inside
+     its folder. Three channels rather than one because a permission change is
+     described before it is performed — `confine/ipc.ts` carries the argument. */
+  confineState: (): Promise<unknown> => ipcRenderer.invoke('confine:state'),
+  grantConfinement: (): Promise<unknown> => ipcRenderer.invoke('confine:grant'),
+  withdrawConfinement: (): Promise<unknown> => ipcRenderer.invoke('confine:withdraw'),
   serverKeys: (): Promise<unknown> => ipcRenderer.invoke('servers:keys'),
   pickServerKey: (): Promise<unknown> => ipcRenderer.invoke('servers:key-pick'),
   readServerKey: (path: string): Promise<unknown> => ipcRenderer.invoke('servers:key-read', path),

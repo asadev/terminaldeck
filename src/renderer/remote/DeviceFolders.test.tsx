@@ -88,9 +88,52 @@ describe('the sentence at the top', () => {
     // The mechanism, in words a non-engineer can act on: it moves.
     expect(said).toContain('it can move to any other folder')
     expect(said).toContain('not for keeping anyone out')
-    // And it says why, rather than leaving the reader to wonder whether the app
-    // simply has not got round to it.
-    expect(said).toContain('only been built for macOS')
+    /*
+     * And it says why — but no longer by claiming the mechanism does not exist.
+     *
+     * Until 2026-08-19 this asserted the words "only been built for macOS", and
+     * that sentence was false: Windows confinement is built on AppContainer and
+     * measured against real hardware. What was missing was the button, which
+     * now exists — so this branch is the one a machine reaches when it genuinely
+     * cannot hold a session: a build with no launcher, or a preload too old to
+     * be asked. The words have to be about *this build*, not about the port.
+     */
+    expect(said).toContain('This build cannot hold a session inside its folder')
+    expect(said).not.toContain('only been built for macOS')
+  })
+
+  it('on a PC that could be granted, offers the permission instead of denying the boundary', () => {
+    /*
+     * The state that used to be unreachable, and the reason this whole panel
+     * was misleading: everything needed to hold a Windows session was built and
+     * switched off, and this screen told people the feature did not exist —
+     * which does not merely undersell it, it stops anybody turning it on.
+     */
+    const said = text(
+      view({
+        platform: 'windows',
+        confine: { confining: false, canGrant: true, folders: ['C:\\Program Files\\nodejs'], note: 'A note.' },
+        onGrantConfinement: () => {},
+      }),
+    )
+    expect(said).toContain('Hold sessions inside their folders')
+    expect(said).toContain('a session from a device runs unconfined')
+    expect(said).toContain('C:\\Program Files\\nodejs')
+    expect(said).toContain('A note.')
+    // And it must not still be denying the boundary in the same breath.
+    expect(said).not.toContain('not for keeping anyone out')
+  })
+
+  it('says a Windows session is held once the permission has been granted', () => {
+    const said = text(
+      view({
+        platform: 'windows',
+        confine: { confining: true, canGrant: true, folders: [], note: '' },
+      }),
+    )
+    expect(said).toContain('held inside them')
+    expect(said).not.toContain('runs unconfined')
+    expect(said).not.toContain('Hold sessions inside their folders')
   })
 
   it('on a PC, never claims the device is held where it was put', () => {
