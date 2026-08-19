@@ -10,8 +10,6 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
-## [Unreleased]
-
 ### Added
 
 - **Windows can hold a session inside its folder now, and there is a button that
