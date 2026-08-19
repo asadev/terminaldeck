@@ -1,4 +1,4 @@
-What to test — 0.6.0
+What to test — 0.6.1
 
 Your last build is 0.5.0 from yesterday. The headline is that the copilot no
 longer has a connection of its own, and most of what to test is that absence.
@@ -45,8 +45,14 @@ to a chat message — which did not work on Windows at all — and letting a
 scheduled routine run, which always failed there. Windows now runs the same test
 suite as the Mac on every change, which it never did before.
 
+SESSIONS FROM A PHONE ARE HELD ON WINDOWS NOW, ONCE YOU SWITCH IT ON
+On a Mac a session you start from this phone is held inside the folder you
+granted, and can reach nothing else. On Windows that needed a one-time
+administrator permission and there was no button to ask for it, so it never
+happened. Settings -> Remote -> Folders has the button now: it names the folders
+it would cover and raises the prompt once. Until somebody presses it, a session
+from a phone on that PC still runs unconfined, and the panel says so.
+
 WHAT IS STILL NOT DONE, SO YOU ARE NOT LOOKING FOR IT
-Sessions started from a phone are still not confined on Windows the way they are
-on a Mac — the machinery is built and tested, and the button that switches it on
-is the missing piece. And the Windows download is still unsigned, so SmartScreen
-will still stop you on first run until there is a certificate.
+The Windows download is still unsigned, so SmartScreen will stop you on first
+run until there is a certificate.
