@@ -17,7 +17,7 @@
     "dist:headless": "node scripts/build-headless.mjs",
     "preview": "electron-vite preview",
     "test": "vitest run && npm run test:electron",
-    "test:electron": "node scripts/check-electron-crypto.mjs",
+    "test:electron": "node scripts/check-electron-crypto.mjs && node scripts/check-servers-transport.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "postinstall": "electron-builder install-app-deps",
@@ -56,7 +56,8 @@
     "gridstack": "^12.6.0",
     "marked": "^17.0.5",
     "node-pty": "^1.1.0",
-    "picomatch": "^4.0.3"
+    "picomatch": "^4.0.3",
+    "ssh2": "^1.17.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

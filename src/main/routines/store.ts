@@ -56,8 +56,9 @@
  */
 
 import { watch, type FSWatcher } from 'chokidar'
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { writeFileAtomic } from '../atomic-write'
 import { copilotPaths } from '../copilot-home'
 import { userDataDir } from '../platform/paths'
 import { isValidId, MAX_FILE_BYTES, parseRoutine, serializeRoutine, type Routine } from './format'
@@ -228,13 +229,30 @@ export class RoutineStore {
    * reason, with one extra consequence here: this directory is watched, and a
    * partial file would be picked up by the watch and parsed into a routine
    * nobody wrote. A rename is a single filesystem event over a complete file.
+   *
+   * Through `writeFileAtomic` rather than written out here, and that is a
+   * Windows fix rather than a tidy-up. The two lines this replaced were a bare
+   * `writeFileSync` into a fixed `<file>.tmp` followed by a `renameSync` — which
+   * is exactly right on POSIX, where `rename(2)` is guaranteed to replace the
+   * destination, and is two separate defects on Windows. `MoveFileEx` fails with
+   * EPERM/EACCES/EBUSY while *any* process holds the destination open without
+   * FILE_SHARE_DELETE, and Defender's real-time scan, the search indexer and a
+   * backup agent all do that for a few milliseconds immediately after a file is
+   * written — so a save into this folder failed intermittently and for no reason
+   * the person could see. And a fixed `.tmp` name is a shared name: two windows
+   * of this app saving two routines at once wrote the same temp file. The helper
+   * carries the pid and a counter, and retries a refused rename five times about
+   * 20 ms apart on Windows only. Nothing changes on macOS: one attempt, same
+   * rename, same guarantee.
+   *
+   * The throw is left to reach the caller unchanged — `RoutineApi.save` turns it
+   * into a refusal a person reads — because the one thing this must not do is
+   * report a save it did not make.
    */
   save(routine: Routine): string {
     this.ensureDir()
     const file = routineFilePath(this.dir, routine.id)
-    const temp = `${file}.tmp`
-    writeFileSync(temp, serializeRoutine(routine), 'utf8')
-    renameSync(temp, file)
+    writeFileAtomic(file, serializeRoutine(routine))
     return file
   }
 
@@ -287,14 +305,15 @@ export class RoutineStore {
    * loads a broken file and reports its problems — does not share.
    *
    * Atomic, for the reason {@link save} is: this directory is watched, and a
-   * half-written file is a real routine that really runs.
+   * half-written file is a real routine that really runs. Through the same
+   * helper, for the Windows reasons {@link save} spells out — this is the path a
+   * person's own edit in the Settings box takes, so it is the one where a
+   * silently-lost write costs them their typing rather than a regenerated file.
    */
   saveText(id: string, text: string): string {
     this.ensureDir()
     const file = routineFilePath(this.dir, id)
-    const temp = `${file}.tmp`
-    writeFileSync(temp, text, 'utf8')
-    renameSync(temp, file)
+    writeFileAtomic(file, text)
     return file
   }
 

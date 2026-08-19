@@ -232,6 +232,50 @@ describe('what New session may do', () => {
     expect(row(link())).toContain('New session')
   })
 
+  it('is not drawn at all on a copy of the page with no window behind it', () => {
+    /*
+     * Two gates on this button and they answer different questions. `offer.can`
+     * is about the far machine — connected, capable, has shared a folder. The
+     * action's presence is about *this* end: a window to open the dialog in.
+     *
+     * A machine that would happily serve one, on a page that cannot ask, is the
+     * combination worth pinning, because it is the one every static render in
+     * this repository is in — including the harness screenshots. Drawing the
+     * button there would put a control on screen that swallows the press, and
+     * hiding it silently would read as a machine that had refused. So the row
+     * says which of the two it is.
+     */
+    const markup = renderToStaticMarkup(
+      <MachineRow
+        machine={machine()}
+        link={link()}
+        openSessionId={null}
+        actions={{ ...NOTHING, newSession: undefined }}
+        platform="mac"
+      />,
+    )
+    expect(markup).not.toContain('>New session<')
+    expect(markup).toContain('not inside a window that can open one')
+    // The far machine's own reasons are untouched: it never refused anything.
+    expect(markup).not.toContain('cannot start a session')
+  })
+
+  it('says nothing about windows when the machine is the one refusing', () => {
+    // One explanation per absent button. A row that printed both would be
+    // telling somebody to go and fix a machine that is not the problem.
+    const markup = renderToStaticMarkup(
+      <MachineRow
+        machine={machine()}
+        link={link({ capabilities: [] })}
+        openSessionId={null}
+        actions={{ ...NOTHING, newSession: undefined }}
+        platform="mac"
+      />,
+    )
+    expect(markup).toContain('cannot start a session')
+    expect(markup).not.toContain('not inside a window that can open one')
+  })
+
   it('is not a button against a machine that cannot start one, and says why', () => {
     const offer = newSessionOffer(link({ capabilities: [] }))
     expect(offer.can).toBe(false)
@@ -406,7 +450,14 @@ function recorder(answers: Partial<Record<keyof MachinesBridge, unknown>> = {}):
 
 function pressing(bridge: MachinesBridge | null, digits = ''): {
   actions: MachineActions
-  state: { digits: string; view: MachinesView; busy: boolean; error: string | null }
+  state: {
+    digits: string
+    view: MachinesView
+    busy: boolean
+    error: string | null
+    /** Machine ids the window was asked to open the new-session dialog on. */
+    asked: string[]
+  }
   settled(): Promise<void>
 } {
   const state = {
@@ -414,6 +465,7 @@ function pressing(bridge: MachinesBridge | null, digits = ''): {
     view: { machines: [], links: [], blocked: null } as MachinesView,
     busy: false,
     error: null as string | null,
+    asked: [] as string[],
   }
   const actions = machineActions({
     bridge,
@@ -432,6 +484,9 @@ function pressing(bridge: MachinesBridge | null, digits = ''): {
     },
     setOpen: () => {},
     isAlive: () => true,
+    // A window, stood in for. The one without is its own case below, because
+    // what it proves is the opposite thing: that there is no press at all.
+    openNewSession: (machineId) => state.asked.push(machineId),
   })
   // Nothing here returns its promise, which is the point — these are presses.
   // One turn of the microtask queue is enough for a resolved bridge.
@@ -504,7 +559,7 @@ describe('typing a code and sending it', () => {
     h.actions.pair()
     h.actions.connect(machine())
     h.actions.forget(machine())
-    h.actions.newSession(machine(), link())
+    h.actions.newSession?.(machine())
     await h.settled()
     expect(h.state.error).toBeNull()
   })
@@ -531,22 +586,57 @@ describe('the machine buttons', () => {
     expect(h.state.view.machines).toHaveLength(0)
   })
 
-  it('starts a session in the first folder that machine shared, and nowhere else', async () => {
+  it('asks the window for a new session instead of starting one on the far machine', async () => {
+    /*
+     * These two cases used to be *"starts a session in the first folder that
+     * machine shared"* and *"lets a machine that never mentioned folders choose
+     * for itself"*, and both pinned `createMachineSession` going straight out of
+     * this button. They are one case now, and it pins the opposite: nothing
+     * crosses the bridge on a press, and the window is asked instead.
+     *
+     * The old pair were not wrong about what they described — the first shared
+     * folder really is the only one this end knows is allowed. They were pinning
+     * a press that answered *which folder*, *which agent* and *which login* on
+     * somebody else's computer without asking anybody, which is exactly what the
+     * 2026-08-17 review took away everywhere else: *"we just always wanted this
+     * pop-up to come up so we choose which type of terminal we want to open."*
+     *
+     * `calls` being empty is half the assertion and the important half. A route
+     * that opened the dialog *and* spawned would look right on screen and start
+     * two sessions.
+     */
     const { bridge, calls } = recorder()
     const h = pressing(bridge)
-    h.actions.newSession(machine(), link({ folders: ['/Users/a/projects/deck', '/tmp'] }))
+    h.actions.newSession?.(machine())
     await h.settled()
-    expect(calls).toEqual(['createMachineSession(MACHINE1, /Users/a/projects/deck)'])
+    expect(h.state.asked).toEqual(['MACHINE1'])
+    expect(calls).toEqual([])
   })
 
-  it('lets a machine that never mentioned folders choose for itself', async () => {
-    // An empty string is that machine's own default. A path invented here would
-    // be a folder this end guessed at for a filesystem it cannot see.
-    const { bridge, calls } = recorder()
-    const h = pressing(bridge)
-    h.actions.newSession(machine(), link({ folders: null }))
-    await h.settled()
-    expect(calls).toEqual(['createMachineSession(MACHINE1, )'])
+  it('has no New session to press at all when there is no window behind the page', () => {
+    /*
+     * Absent, not dead. The dialog is the window's, so a copy of this page with
+     * no window around it — the harness, a test, `renderToStaticMarkup` — has
+     * nowhere for the press to land, and this app's standing rule is that such a
+     * control is not drawn. `undefined` rather than a function that refuses is
+     * what makes that checkable from the row.
+     */
+    const { bridge } = recorder()
+    const actions = machineActions({
+      bridge,
+      digits: '',
+      setDigits: () => {},
+      setView: () => {},
+      setPairing: () => {},
+      setError: () => {},
+      setOpen: () => {},
+      isAlive: () => true,
+      openNewSession: null,
+    })
+    expect(actions.newSession).toBeUndefined()
+    // And every other press still works, because they go to the bridge rather
+    // than to the window: a page outside a window is not a page in trouble.
+    expect(typeof actions.connect).toBe('function')
   })
 })
 

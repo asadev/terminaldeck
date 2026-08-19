@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   NO_COPILOT,
   NO_GRANT,
-  copilotOffered,
   copilotStep,
   grantSentence,
   mergeChat,
@@ -19,10 +18,11 @@ import type { CopilotGrantWire, CopilotLinkWire, ServerMessage } from './protoco
  * all: there is no DOM under vitest, so a decision written inside a `render` is
  * a decision verified only by somebody remembering to take a screenshot.
  *
- * Four of these guard failures the design documents name by name — a client that
- * believes a `welcome` means it is already connected, a watching device drawing
- * an Allow button, a control offered for a frame that would be refused, and an
- * answer that is not the same with the driving turned off.
+ * Five of these guard failures the design documents name by name — a client that
+ * believes a `welcome` means it is already connected, one that asks a guest's
+ * machine for a copilot, a watching device drawing an Allow button, a control
+ * offered for a frame that would be refused, and an answer that is not the same
+ * with the driving turned off.
  */
 
 const GRANT = (over: Partial<CopilotGrantWire> = {}): CopilotGrantWire => ({ ...NO_GRANT, ...over })
@@ -39,19 +39,36 @@ function connected(over: Partial<CopilotState> = {}): CopilotState {
 }
 
 describe('whether there is a copilot here at all', () => {
-  it('is the capability and nothing else', () => {
-    expect(copilotOffered(['create', 'copilot'])).toBe(true)
-    expect(copilotOffered(['create', 'localhost'])).toBe(false)
+  it('is the welcome carrying one, and nothing else', () => {
+    /*
+     * > *"if we are connecting as my device copilot automatically comes, if we
+     * > connect as guest then copilot don't come"*
+     *
+     * The machine filters `welcome.copilot` by the device's kind, so its
+     * presence is the per-device answer and the client asks nothing else. A
+     * second signal — the `copilot` capability, which is still advertised — would
+     * be a second answer that can differ from this one, and the difference would
+     * land as a tab drawn for a guest or withheld from one of his own devices.
+     */
+    expect(copilotStep(NO_COPILOT, { t: 'welcome', link: LINK({ open: false }) }).state.offered).toBe(true)
+    expect(copilotStep(NO_COPILOT, { t: 'welcome', link: null }).state.offered).toBe(false)
   })
 
-  it('takes everything away when a machine stops offering one', () => {
+  it('asks a machine that offered nothing for nothing', () => {
+    // The guest case, and the only thing that makes it safe: no frame goes out
+    // at all. A client that said hello anyway would be counting refusals against
+    // a machine that had already declined to mention the feature.
+    expect(copilotStep(NO_COPILOT, { t: 'welcome', link: null }).send).toEqual([])
+  })
+
+  it('takes everything away when a welcome stops carrying one', () => {
     /*
-     * A guest is never told the machine has a copilot, and neither is a browser
-     * switched to a second machine that has none. Anything held from the last
-     * one is a statement about a different computer.
+     * A device re-paired as a guest, or a browser switched to a second machine
+     * that has no copilot. Anything held from the last one is a statement about
+     * a different computer.
      */
     const held = connected({ chat: [{ id: 'm1', role: 'agent', text: 'hello', at: 1 }] })
-    const step = copilotStep(held, { t: 'welcome', capabilities: ['create'], link: null, credential: 'c' })
+    const step = copilotStep(held, { t: 'welcome', link: null })
     expect(step.state.offered).toBe(false)
     expect(step.state.link.linked).toBe(false)
     expect(step.state.chat).toEqual([])
@@ -59,15 +76,18 @@ describe('whether there is a copilot here at all', () => {
   })
 })
 
-describe('the separate connection', () => {
-  it('sends a hello on every welcome, carrying the stored credential', () => {
-    const step = copilotStep(NO_COPILOT, {
-      t: 'welcome',
-      capabilities: ['copilot'],
-      link: LINK({ open: false }),
-      credential: 'stored-credential',
-    })
-    expect(step.send).toEqual([{ t: 'copilot.hello', credential: 'stored-credential' }])
+describe('opening it on a socket', () => {
+  it('sends a hello that carries nothing at all', () => {
+    /*
+     * The frame that used to prove a second secret. There is no copilot code and
+     * no copilot credential any more: the socket is already authenticated as
+     * this device, and the machine reads the kind a person chose when they
+     * approved it. A `credential` key here would be a secret this browser does
+     * not have and must not invent.
+     */
+    const step = copilotStep(NO_COPILOT, { t: 'welcome', link: LINK({ open: false }) })
+    expect(step.send).toEqual([{ t: 'copilot.hello' }])
+    expect(step.state.opening).toBe(true)
   })
 
   it('never believes a welcome that claims the connection is already open', () => {
@@ -77,34 +97,15 @@ describe('the separate connection', () => {
      * Forced rather than trusted, because a client whose correctness depends on
      * the far end never having a bug is not correct.
      */
-    const step = copilotStep(NO_COPILOT, {
-      t: 'welcome',
-      capabilities: ['copilot'],
-      link: LINK({ open: true }),
-      credential: null,
-    })
+    const step = copilotStep(NO_COPILOT, { t: 'welcome', link: LINK({ open: true }) })
     expect(step.state.link.open).toBe(false)
   })
 
-  it('asks for a code rather than a hello when nothing is stored', () => {
-    const step = copilotStep(NO_COPILOT, {
-      t: 'welcome',
-      capabilities: ['copilot'],
-      link: LINK({ linked: false, open: false, grant: NO_GRANT }),
-      credential: null,
-    })
-    expect(step.send).toEqual([])
-    expect(step.state.link.linked).toBe(false)
-  })
-
-  it('hands a new credential out to be stored, and starts watching', () => {
-    const linked: ServerMessage = { t: 'copilot.linked', credential: 'fresh', link: LINK() }
-    const step = copilotStep(
-      { ...NO_COPILOT, offered: true, connecting: true },
-      { t: 'frame', message: linked },
-    )
-    expect(step.credential).toBe('fresh')
-    expect(step.state.connecting).toBe(false)
+  it('starts watching when the grant that answers the hello arrives', () => {
+    const opening: CopilotState = { ...NO_COPILOT, offered: true, opening: true, link: LINK({ open: false }) }
+    const step = copilotStep(opening, { t: 'frame', message: { t: 'copilot.grant', link: LINK() } })
+    expect(step.state.opening).toBe(false)
+    expect(step.state.link.open).toBe(true)
     expect(step.send.map((frame) => frame.t)).toEqual([
       'copilot.attach',
       'copilot.state',
@@ -113,9 +114,22 @@ describe('the separate connection', () => {
     ])
   })
 
+  it('puts a machine that refuses the hello on screen in its own words', () => {
+    /*
+     * `app.terminaldeck.dev` deploys on its own, so a new client will meet a
+     * desktop old enough to still want a credential. Swallowed, the tab would
+     * sit at "Asking the machine…" forever with nothing to read.
+     */
+    const opening: CopilotState = { ...NO_COPILOT, offered: true, opening: true, link: LINK({ open: false }) }
+    const refused: ServerMessage = { t: 'error', code: 'bad-message', message: 'copilot.hello without a credential' }
+    const step = copilotStep(opening, { t: 'frame', message: refused })
+    expect(step.state.opening).toBe(false)
+    expect(step.state.notice).toBe('copilot.hello without a credential')
+  })
+
   it('drops the conversation when the machine closes the connection', () => {
-    // A disconnect at the machine. Leaving the bubbles up would be a screen
-    // showing a copilot this browser can no longer reach.
+    // This device revoked at the machine. Leaving the bubbles up would be a
+    // screen showing a copilot this browser can no longer reach.
     const held = connected({ chat: [{ id: 'm1', role: 'agent', text: 'hi', at: 1 }], run: 'r1' })
     const closed: ServerMessage = { t: 'copilot.grant', link: LINK({ open: false, grant: NO_GRANT }) }
     const step = copilotStep(held, { t: 'frame', message: closed })
@@ -123,9 +137,12 @@ describe('the separate connection', () => {
     expect(step.state.run).toBeNull()
   })
 
-  it('keeps `linked` when the socket drops, and closes the connection', () => {
+  it('closes the connection when the socket drops and keeps the entitlement', () => {
+    // Nothing has to be re-established by a person: the next welcome carries the
+    // copilot again, because being paired to that machine as his own is what
+    // entitles this browser to it.
     const step = copilotStep(connected(), { t: 'offline' })
-    expect(step.state.link.linked).toBe(true)
+    expect(step.state.offered).toBe(true)
     expect(step.state.link.open).toBe(false)
   })
 })

@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { recordsFenceAgrees, recordsFenceList, recordsFencePaths } from '../confine/records'
 import { DeviceKinds, REMOTE_KINDS_FILE, asDeviceKind } from './device-kind'
 
 /**
@@ -152,5 +153,54 @@ describe('what is on disk', () => {
     kinds.claim('__proto__', 'guest')
     expect(new DeviceKinds(dir).kindOf('__proto__')).toBe('guest')
     expect(new DeviceKinds(dir).kindOf('constructor')).toBe('guest')
+  })
+})
+
+describe('the copilot may not edit the file that says who may drive it', () => {
+  /**
+   * The pin that moved on 2026-08-19, and the reason it had to move with it.
+   *
+   * `confine/records.ts` fences five paths, and one of them used to be
+   * `copilot-link.json` — the store of separate copilot connections. That store
+   * was deleted when a device's *kind* became the whole authorisation, and the
+   * permission it held moved into **this** file, which was not fenced at all.
+   *
+   * A fence left pointing at the old path would have been worse than no fence:
+   * a Seatbelt rule over a file nothing writes refuses nothing, silently, while
+   * the file that now decides who reaches the copilot sits writable one
+   * directory along. That exact failure has already happened once in this
+   * codebase — the fence went on naming `remote-copilot.json` after the store
+   * became `copilot-link.json` — which is why `recordsFenceAgrees` exists and
+   * why it is called from the module that *owns* the path rather than from the
+   * fence.
+   *
+   * What it stops: the copilot writing `"kind": "mine"` beside a guest's device
+   * id, and handing a stranger's phone full remote control of this machine.
+   */
+  it('agrees with the path this store actually writes', () => {
+    // `<userData>/remote`, which is what `remoteStorageDir()` hands this class
+    // in `main/index.ts`. Constructing it against `<userData>` itself would pin
+    // the fence to a path the app never uses.
+    //
+    // Through `realpathSync`, because the fence resolves symlinks and macOS's
+    // temp directory is one: `/var/folders/...` is `/private/var/folders/...`,
+    // and comparing the two spellings would fail on a rule that is correct.
+    const dir = realpathSync(tempDir())
+    const kinds = new DeviceKinds(join(dir, 'remote'))
+    expect(
+      recordsFenceAgrees(recordsFencePaths(dir), {
+        // Owned by other modules; this caller checks only what it owns.
+        routines: join(dir, 'routines'),
+        routineState: join(dir, 'routine-state.json'),
+        log: join(dir, 'copilot-log'),
+        remoteCopilot: kinds.file,
+      }),
+    ).toBe(true)
+  })
+
+  it('puts it in the list the fence actually denies writes to', () => {
+    const dir = realpathSync(tempDir())
+    const kinds = new DeviceKinds(join(dir, 'remote'))
+    expect(recordsFenceList(recordsFencePaths(dir))).toContain(kinds.file)
   })
 })

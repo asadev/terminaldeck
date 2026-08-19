@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { decodeServerMessage } from './protocol-client'
-import { readCopilots, withCopilot, withoutCopilot, MAX_STORED_COPILOTS } from './copilot-store'
 
 /**
- * What this client will and will not read off a copilot frame, and where it
- * keeps the credential.
+ * What this client will and will not read off a copilot frame.
  *
  * The decoder's refusals are not symmetric and the asymmetry is the whole
  * design: a frame that *is* one fact is refused whole when that fact is
@@ -12,6 +10,11 @@ import { readCopilots, withCopilot, withoutCopilot, MAX_STORED_COPILOTS } from '
  * rest. Both directions are asserted here, because the wrong one in either place
  * is a screen that lies — a consent prompt with no arguments, or a session list
  * that vanished because one row had a null title.
+ *
+ * There used to be a third section, about where a copilot credential was kept in
+ * this browser. It is gone with the credential: pairing a device as one of his
+ * own is now the whole of the copilot's authorisation, so there is no second
+ * secret and no store to hold one.
  */
 
 const frame = (value: unknown) => decodeServerMessage(JSON.stringify(value))
@@ -70,14 +73,6 @@ describe('a frame that is one fact is refused whole', () => {
     // a watching surface for a device that may have been given everything.
     expect(frame({ t: 'copilot.grant', link: { linked: true, open: true, grant: { read: true } } }).ok).toBe(false)
     expect(frame({ t: 'copilot.grant', link: LINK }).ok).toBe(true)
-  })
-
-  it('refuses a `copilot.linked` with no credential in it', () => {
-    // It is sent exactly once and the machine keeps only a hash. A frame
-    // accepted without one would leave this browser believing it had connected
-    // while holding nothing.
-    expect(frame({ t: 'copilot.linked', link: LINK }).ok).toBe(false)
-    expect(frame({ t: 'copilot.linked', credential: 'abc', link: LINK }).ok).toBe(true)
   })
 
   it('refuses a state report whose desk word it does not know', () => {
@@ -146,10 +141,10 @@ describe('a frame carrying a list keeps the rows it can read', () => {
 describe('the copilot link riding on a welcome', () => {
   it('is read, even though the shared parser drops it', () => {
     /*
-     * The cost of not reading it is exact: `linked` would be false on every
-     * welcome, the Copilot screen would ask for a connect code on every reload,
-     * and the code would work — producing a second record for a browser that
-     * already had one.
+     * Its presence is now the whole of whether this client draws a Copilot tab,
+     * so the cost of not reading it is total rather than cosmetic: a machine
+     * with a copilot and a device entitled to it, drawn as though neither
+     * existed.
      */
     const result = frame({
       t: 'welcome',
@@ -168,7 +163,7 @@ describe('the copilot link riding on a welcome', () => {
     expect(result.message.copilot).toEqual({ linked: true, open: false, grant: GRANT })
   })
 
-  it('leaves it absent when the machine has no copilot layer', () => {
+  it('leaves it absent for a guest, or for a machine with no copilot layer', () => {
     const result = frame({
       t: 'welcome',
       protocol: 1,
@@ -193,36 +188,17 @@ describe('a copilot frame this client did not ask for', () => {
     if (result.ok) return
     expect(result.reason).toContain('did not ask for')
   })
-})
 
-describe('where the credential is kept', () => {
-  it('is keyed by machine, because a copilot connection is to one machine', () => {
-    // A single stored string would be presented to whichever machine happened to
-    // be current — refused, and counted against that machine's limiter.
-    const held = withCopilot(withCopilot({}, 'machine-a', 'cred-a'), 'machine-b', 'cred-b')
-    expect(held).toEqual({ 'machine-a': 'cred-a', 'machine-b': 'cred-b' })
-    expect(withoutCopilot(held, 'machine-a')).toEqual({ 'machine-b': 'cred-b' })
-  })
-
-  it('drops the longest-held entry rather than growing without bound', () => {
-    let held = {}
-    for (let index = 0; index < MAX_STORED_COPILOTS + 2; index += 1) {
-      held = withCopilot(held, `machine-${index}`, `cred-${index}`)
-    }
-    expect(Object.keys(held)).toHaveLength(MAX_STORED_COPILOTS)
-    expect(Object.keys(held)).not.toContain('machine-0')
-    expect(Object.keys(held)).toContain(`machine-${MAX_STORED_COPILOTS + 1}`)
-  })
-
-  it('reads a hand-edited store as empty rather than handing a machine rubbish', () => {
-    const store = (value: string | null) => ({
-      getItem: () => value,
-      setItem: () => undefined,
-      removeItem: () => undefined,
-    })
-    expect(readCopilots(store('not json'))).toBeNull()
-    expect(readCopilots(store('[]'))).toBeNull()
-    expect(readCopilots(store(JSON.stringify({ a: 'x'.repeat(5_000) })))).toBeNull()
-    expect(readCopilots(store(JSON.stringify({ a: 'fine' })))).toEqual({ a: 'fine' })
+  it('refuses a `copilot.linked`, because there is nowhere for a credential to go', () => {
+    /*
+     * It answered `copilot.connect` and carried the credential that frame
+     * minted, and both were deleted on 2026-08-19. Reading it now would be a
+     * decoder standing ready to accept a secret this client has nothing to do
+     * with — the one shape of dead code worth a test of its own.
+     */
+    const result = frame({ t: 'copilot.linked', credential: 'abc', link: LINK })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toContain('did not ask for')
   })
 })

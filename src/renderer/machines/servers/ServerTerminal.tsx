@@ -1,0 +1,375 @@
+import { useEffect, useRef, useState } from 'react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { terminalTheme } from '../../components/TerminalView'
+import { subscribeTheme } from '../../theme'
+import { asShellId, asShellOutput, type ServersBridge, type ShellOutput } from './types'
+
+/**
+ * A shell on a server, on this screen.
+ *
+ * ## Why it is here at all
+ *
+ * It is the honest floor under everything else in this area. The cards above it
+ * are built by classifying what a machine happens to be running, and that
+ * classification will be incomplete on somebody's server — a bare container, a
+ * machine using an init system this app has never met, a stack nobody here has
+ * seen. A page that can only offer named actions has nothing to say to those
+ * people. This has everything to say to them, and it is what makes an empty
+ * middle zone an honest answer rather than a dead end.
+ *
+ * ## Where it is drawn, and what changed
+ *
+ * It used to be drawn *inside* the server's page, behind the Advanced door, on
+ * the argument that everything else on that page is a named action with a stated
+ * consequence and a shell has none. The second half of that is still true and is
+ * still why the *door* to one is behind Advanced. What was wrong was where the
+ * terminal itself then lived: inside a panel, so it existed only while that
+ * panel was the thing on screen, with no row in the rail, no pill, no ⌘W and no
+ * way to look at anything else without losing it.
+ *
+ * Asad has now said the rule three times about machines that are not this one:
+ * *"the shape of the application should not be changing for local and remote
+ * devices. It should act like that same."* So this is mounted by the window, as
+ * one of the panes it keeps, and the press behind the Advanced door opens a tab
+ * rather than a rectangle on a page.
+ *
+ * ## Why this is not `RemoteTerminal`
+ *
+ * `RemoteTerminal` is bound to the *device* channels and carries two handles, a
+ * machine and a session, because a device runs this app on the far end and keeps
+ * its sessions whether or not anybody is attached — which is why detaching one
+ * is a detach and not a close. A server keeps nothing: the shell exists because
+ * this window is holding a connection to it, so this component's teardown ends
+ * it rather than letting go of it.
+ *
+ * So the xterm *setup* is written out again and the *behaviour* deliberately is
+ * not: no find bar, no clear, no copy chords. What is shared is what has to be —
+ * the colours come from the same tokens, so this terminal and a local one are
+ * the same terminal to look at.
+ *
+ * ## Columns first, then rows, in both directions
+ *
+ * The library underneath reverses that order between opening a shell and
+ * resizing one, in the same library on the same channel. Getting it wrong
+ * produces a terminal that is perfect until the window is resized and then wraps
+ * every line at the wrong column, which reads as a rendering bug rather than as
+ * two swapped arguments. The flip is absorbed in exactly one adapter on the
+ * other side of the bridge; everything on this side says columns, then rows.
+ */
+
+/**
+ * Output that arrives before this end learns which shell it belongs to.
+ *
+ * There is a real race here and it eats the most important bytes there are. The
+ * far side attaches its output listener the moment the shell exists and starts
+ * broadcasting immediately, while the id that names that shell is still
+ * travelling back across the bridge — so the first frames, which are the login
+ * banner and the prompt, arrive at a listener that does not yet know what to
+ * compare them against. Dropping them leaves a black rectangle that only comes
+ * to life once somebody types, which reads as a terminal that failed to open.
+ *
+ * So they are held, and once the id is known the ones that match are written in
+ * order and the rest are discarded. The cap is what stops this becoming a leak
+ * if the id never arrives at all: a shell that answers a quarter of a megabyte
+ * before it answers its own name is one we have already lost.
+ *
+ * It is a small object rather than three variables in a closure because the
+ * decision it makes is the whole of the fix, and a decision worth a paragraph is
+ * worth a test.
+ */
+export const MOST_HELD_BYTES = 256 * 1024
+
+export class ShellFrames {
+  private held: ShellOutput[] | null = []
+  private bytes = 0
+  private id: string | null = null
+
+  constructor(private readonly cap: number = MOST_HELD_BYTES) {}
+
+  /** A frame arrived. Answers what to write now — empty while we are holding. */
+  arrived(chunk: ShellOutput): string {
+    if (this.id !== null) return chunk.shellId === this.id ? chunk.data : ''
+    if (this.held !== null && this.bytes < this.cap) {
+      this.held.push(chunk)
+      this.bytes += chunk.data.length
+    }
+    return ''
+  }
+
+  /** The id came back. Answers everything held for it, in the order it arrived. */
+  settled(shellId: string | null): string {
+    const held = this.held ?? []
+    this.held = null
+    this.id = shellId
+    if (shellId === null) return ''
+    return held
+      .filter((chunk) => chunk.shellId === shellId)
+      .map((chunk) => chunk.data)
+      .join('')
+  }
+
+  /** Nothing is coming. Let go of whatever is held. */
+  give(): void {
+    this.held = null
+  }
+}
+
+interface Props {
+  serverId: string
+  bridge: ServersBridge
+  fontSize?: number
+  fontFamily?: string
+  /**
+   * Whether this pane is the one on screen.
+   *
+   * The element stays mounted either way — that is the whole reason a shell on a
+   * server can be left and come back to — and this is what tells xterm to
+   * measure itself again when it becomes visible. It cannot measure a hidden
+   * element: a terminal fitted while `display: none` reports a column count from
+   * a zero-width box, and the far end is then told to wrap at it.
+   *
+   * Defaults to true so the component can still be rendered on its own, which is
+   * what every test of it does.
+   */
+  visible?: boolean
+  /**
+   * The far end has gone.
+   *
+   * Called once, when the shell this pane opened closes over there — somebody
+   * typed `exit`, the connection dropped, the server rebooted. The window uses
+   * it for the row's dot, so a session that has ended says so in the rail
+   * instead of looking like one that is merely quiet.
+   */
+  onEnded?(): void
+}
+
+export const DEFAULT_SERVER_FONT_SIZE = 13
+
+/** Reads a CSS custom property, so the terminal follows the app theme. */
+function token(name: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
+}
+
+export function ServerTerminal({
+  serverId,
+  bridge,
+  fontSize = DEFAULT_SERVER_FONT_SIZE,
+  fontFamily = '',
+  visible = true,
+  onEnded,
+}: Props) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const termRef = useRef<Terminal | null>(null)
+  const fitRef = useRef<FitAddon | null>(null)
+  /**
+   * Read inside the effect's own listeners, which are registered once for the
+   * life of the shell. A captured callback would be whichever one was in hand
+   * on the first render, and the window rebuilds its handlers whenever the tab
+   * list changes — which is every time anything anywhere is opened or closed.
+   */
+  const endedRef = useRef(onEnded)
+  endedRef.current = onEnded
+  /**
+   * Why the terminal is not here, when it is not.
+   *
+   * A build without the connection layer, or a server that refused the shell,
+   * both end here — and both have to say so. An empty black rectangle is the
+   * shape of a terminal that is about to work, and leaving one on screen is how
+   * somebody waits for a prompt that is never coming.
+   */
+  const [refused, setRefused] = useState<string | null>(null)
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+
+    const term = new Terminal({
+      fontFamily: token('--font-mono', 'JetBrains Mono, Menlo, monospace'),
+      fontSize: DEFAULT_SERVER_FONT_SIZE,
+      lineHeight: 1.35,
+      cursorBlink: true,
+      allowProposedApi: true,
+      scrollback: 10_000,
+      theme: terminalTheme(),
+    })
+    const fit = new FitAddon()
+    term.loadAddon(fit)
+    term.open(host)
+    termRef.current = term
+    fitRef.current = fit
+
+    // Fitted before the shell is asked for, so the first screen the far end
+    // paints is already the shape of this pane. Opening first and resizing after
+    // makes every shell start with one reflow of scrambled output.
+    try {
+      fit.fit()
+    } catch {
+      // A pane can be zero-sized on its first frame; the observer below fits it
+      // the moment it is not.
+    }
+
+    /*
+     * The shell's own id, which is not the server's.
+     *
+     * One server can only have one of these open from this page, but the far
+     * side hands back an id per shell rather than keying on the server — so a
+     * frame that arrives from a shell that has already been closed is
+     * recognisable as such instead of being painted into its replacement.
+     */
+    let shellId: string | null = null
+    let gone = false
+    const frames = new ShellFrames()
+
+    // Switching the app's theme has to reach a terminal that already exists —
+    // resolved colours do not follow the sheet on their own. Without this, a
+    // shell opened in one appearance stays in it while the window changes
+    // around it.
+    const offTheme = subscribeTheme(() => {
+      term.options.theme = terminalTheme()
+    })
+
+    const offData = bridge.onServerShellOutput((raw) => {
+      const chunk = asShellOutput(raw)
+      if (chunk === null) return
+      const data = frames.arrived(chunk)
+      if (data !== '') term.write(data)
+    })
+
+    const offClosed = bridge.onServerShellClosed((raw) => {
+      const chunk = asShellOutput(raw)
+      if (chunk !== null && shellId !== null && chunk.shellId === shellId) {
+        // Said in the terminal itself rather than as a notice beside it,
+        // because that is where the person is looking and it is the last line
+        // of that session's own output.
+        term.write('\r\n\r\n[The connection to this server ended.]\r\n')
+        shellId = null
+        endedRef.current?.()
+      }
+    })
+
+    const input = term.onData((data) => {
+      if (shellId !== null) void bridge.writeToServerShell(shellId, data)
+    })
+
+    const observer = new ResizeObserver(() => {
+      /*
+       * A pane that has been hidden is a pane with no size, and it must not be
+       * measured.
+       *
+       * This fires when the tab goes to the background, because hiding the pane
+       * changes its box to nothing — and fitting against nothing produces a
+       * column count of nothing, which would then be sent to the far end as the
+       * width to wrap at. The shell would come back from the background having
+       * reflowed its whole screen to a width no window has. Returning here
+       * leaves the far end on the last size it was actually told, which is the
+       * size it will be again the moment the pane is on screen.
+       */
+      if (host.clientWidth === 0 || host.clientHeight === 0) return
+      try {
+        fit.fit()
+      } catch {
+        // Mid-teardown, or a pane with no size. Neither is worth an error.
+        return
+      }
+      if (shellId !== null) void bridge.resizeServerShell(shellId, term.cols, term.rows)
+    })
+    observer.observe(host)
+
+    void bridge.openServerShell(serverId, term.cols, term.rows).then(
+      (raw) => {
+        const opened = asShellId(raw)
+        if (gone) {
+          // The pane went away while the far end was still opening. Close what
+          // was opened rather than leaking a shell on somebody's machine.
+          if (opened !== null) void bridge.closeServerShell(opened)
+          return
+        }
+        if (opened === null) {
+          frames.give()
+          setRefused('This copy of the app could not open a terminal on that server.')
+          return
+        }
+        shellId = opened
+        // Everything that arrived while the id was in flight, in the order it
+        // arrived, and nothing that belonged to a different shell.
+        const missed = frames.settled(opened)
+        if (missed !== '') term.write(missed)
+      },
+      () => {
+        frames.give()
+        if (!gone) setRefused('That server would not open a terminal.')
+      },
+    )
+
+    return () => {
+      gone = true
+      observer.disconnect()
+      input.dispose()
+      offTheme()
+      offData()
+      offClosed()
+      // Closed explicitly, and this matters more here than it does for a device.
+      // Nothing on the far end is keeping this shell — there is no app there to
+      // keep it — so a shell nobody closes is a stranded process on somebody
+      // else's machine.
+      if (shellId !== null) void bridge.closeServerShell(shellId)
+      term.dispose()
+      termRef.current = null
+      fitRef.current = null
+    }
+  }, [serverId, bridge])
+
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    term.options.fontSize = fontSize
+    if (fontFamily !== '') term.options.fontFamily = fontFamily
+    try {
+      fitRef.current?.fit()
+    } catch {
+      // Same as above: a pane with no size yet.
+    }
+  }, [fontSize, fontFamily])
+
+  /*
+   * Measure again the moment this pane comes back, and take the keyboard.
+   *
+   * xterm cannot measure a hidden element, so a terminal that was fitted while
+   * its tab was in the background is holding a column count from a zero-width
+   * box — and the far end was told that count. Without this, switching away and
+   * back leaves a shell wrapping every line at the wrong column, which reads as
+   * a rendering fault rather than as a measurement taken with the lights off.
+   *
+   * On the next frame rather than in this one: the attribute that reveals the
+   * pane is set by this same render, and a measurement taken before the browser
+   * has laid it out reads the size it is leaving rather than the one it is
+   * arriving at. This is the same arrangement `TerminalView` uses for a local
+   * session, for the same reason.
+   *
+   * The resize is deliberately *not* sent from here. The observer below is
+   * already watching this element and fires on the layout change the reveal
+   * causes, so sending one here as well would put two window-change messages on
+   * the channel for one event.
+   */
+  useEffect(() => {
+    if (!visible) return
+    const frame = requestAnimationFrame(() => {
+      try {
+        fitRef.current?.fit()
+        termRef.current?.focus()
+      } catch {
+        // A pane with no size yet. The observer fits it when it has one.
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [visible])
+
+  return (
+    <>
+      {refused !== null && <p className="servers-card-why">{refused}</p>}
+      <div className="servers-terminal" ref={hostRef} />
+    </>
+  )
+}

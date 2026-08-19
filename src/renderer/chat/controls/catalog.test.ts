@@ -15,7 +15,6 @@ import {
   PRIMARY_CONTROLS,
   reachOf,
   sourceNote,
-  unsupportedProviderNote,
   type ControlId,
   type ControlReading,
 } from './catalog'
@@ -285,39 +284,12 @@ describe('which option gets the tick', () => {
 })
 
 
-describe('an agent CLI this build has not learned', () => {
-  it('says nothing about Claude, which is the one it does speak', () => {
-    expect(unsupportedProviderNote('claude')).toBeNull()
-  })
-
-  it('leaves a session whose CLI is unknown alone, because the screen answers that', () => {
-    // `undefined` is an agent started by hand inside a shell session. The main
-    // process decides that one from the screen — the markers it matches are
-    // Claude Code's own — so pre-empting it here would withdraw the controls
-    // from the very case they were extended to cover.
-    expect(unsupportedProviderNote(undefined)).toBeNull()
-  })
-
-  it('leaves the shell to its own sentence rather than borrowing this one', () => {
-    // "There is no model in a shell" and "this build has not learned this CLI's
-    // commands" are different facts, and merging them would make the shell case
-    // read as an unfinished feature.
-    expect(unsupportedProviderNote('shell')).toBeNull()
-  })
-
-  it('names Codex and Gemini, and says the mechanism is unestablished rather than absent', () => {
-    for (const [provider, name] of [
-      ['codex', 'Codex'],
-      ['gemini', 'Gemini'],
-    ]) {
-      const note = unsupportedProviderNote(provider)
-      expect(note, provider).toContain(name)
-      // Neither could be driven on the machine this was written on — the Codex
-      // binary is missing and Gemini stops on an auth picker — so this build
-      // has no evidence either way. Claiming they *cannot* do it would be
-      // inventing a fact to sound final.
-      expect(note, provider).not.toMatch(/cannot|impossible|does not support/i)
-      expect(note, provider).toMatch(/has not been shown/i)
-    }
-  })
-})
+/*
+ * `unsupportedProviderNote`'s tests moved with it.
+ *
+ * It was deleted from `catalog.ts` on 2026-08-19 because it named one vendor on
+ * a bar that was showing another. The behaviour it described is still tested —
+ * in `SessionControls.test.tsx`, beside the code that now composes the sentence.
+ * A test left here for an export that no longer exists is the shape this repo
+ * keeps finding: a guard that has stopped guarding, still looking like one.
+ */

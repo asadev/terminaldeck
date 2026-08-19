@@ -22,7 +22,9 @@ import {
   MACHINE_FIX_IDS,
   meaningfulLines,
   registerReadinessIpc,
+  noRouteAdvice,
   toolMessage,
+  toolSpawn,
   upgradeAgentCli,
   upgradeCommandFor,
   upgradeRouteFor,
@@ -1301,4 +1303,109 @@ describe('registerReadinessIpc', () => {
     expect(report.projectPath).toBe(dir)
     expect(report.checks).toHaveLength(Object.keys(CHECK_WEIGHTS).length)
   }, GIT_HEAVY_MS)
+})
+
+/* ------------------------------------------- the same fixes, on a Windows PC -- */
+
+/**
+ * Every fix in this module that does anything beyond writing a file shells out
+ * to a package manager, and on Windows `npm`, `npx` and `gemini` are all `.cmd`
+ * shims rather than executables. Node refuses to spawn one without
+ * `shell: true` — EINVAL, deliberately, since 18.20.2/20.12.2 as the fix for
+ * CVE-2024-27980 — and `runTool`'s catch is written for a tool that ran and
+ * failed, so the throw arrived as `{ ok: false, output: 'spawn npm EINVAL' }`.
+ * The user-visible result on Windows: "regenerate the lockfile" quietly did
+ * nothing, and "upgrade the agent CLI" always refused.
+ *
+ * These force the platform rather than reading it. On this Mac
+ * `process.platform` is 'darwin' and always will be, so a test that measured it
+ * would prove only that macOS still works — which is how this defect survived
+ * a suite of several thousand tests.
+ */
+describe('running a package manager on Windows', () => {
+  it('sends the command through the processor that can run a .cmd shim', () => {
+    const { file, spawn } = toolSpawn('npm', 'C:\\Program Files\\nodejs', { timeout: 1000 }, 'win32')
+    // Both halves of the fix, and each is useless without the other: `shell`
+    // so Node will spawn a batch file at all, quoting because Node builds
+    // `cmd /d /s /c "<file> <args>"` without quoting <file> itself.
+    expect(spawn.shell).toBe(true)
+    expect(file).toBe('"npm"')
+  })
+
+  it('leaves macOS spawning the binary directly, as it always has', () => {
+    const { file, spawn } = toolSpawn('npm', '/opt/homebrew/bin', { timeout: 1000 }, 'darwin')
+    expect(spawn.shell).toBe(false)
+    expect(file).toBe('npm')
+  })
+
+  it('never leaves a Windows child holding two spellings of PATH', () => {
+    // `{ ...process.env, PATH }` produces an object carrying both `Path` (the
+    // inherited value) and `PATH` (the intended one) because a spread copy is
+    // case-sensitive while Windows is not, and which the child reads is
+    // undefined. `withPath` removes the coin flip; this pins that it is used.
+    const { spawn } = toolSpawn('npm', 'C:\\tools', { timeout: 1000 }, 'win32')
+    const spellings = Object.keys(spawn.env).filter((key) => key.toUpperCase() === 'PATH')
+    expect(spellings).toHaveLength(1)
+    expect(spawn.env[spellings[0]!]).toBe('C:\\tools')
+    // Untouched on the platform where a separate `Path` is a legitimate,
+    // unrelated variable.
+    const mac = toolSpawn('npm', '/usr/bin', { timeout: 1000 }, 'darwin')
+    expect(mac.spawn.env.PATH).toBe('/usr/bin')
+  })
+
+  it('still hides the console window, on the one platform that has one', () => {
+    expect(toolSpawn('npm', 'C:\\tools', { timeout: 1000 }, 'win32').spawn.windowsHide).toBe(true)
+  })
+
+  it('does not spend twenty seconds asking Windows for Homebrew', async () => {
+    /*
+     * `brew` cannot exist on a stock Windows PC and there is no supported way
+     * to put it there, so the probe could only ever fail — but it is the first
+     * thing between the button and the answer and `ROUTE_TIMEOUT_MS` is twenty
+     * seconds, so on Windows the detection paid a spawn (and, on a machine with
+     * no `brew.cmd`, a cmd.exe start) for a program with no reachable case.
+     */
+    const asked: string[] = []
+    const probe = async (command: string, args: string[]) => {
+      asked.push(`${command} ${args[0]}`)
+      return { ok: command === 'npm', output: '' }
+    }
+    expect(await upgradeRouteFor(probe, 'win32')).toBe('npm')
+    expect(asked).toEqual(['npm ls'])
+  })
+
+  it('still asks brew first on a Mac, where most installs came from it', async () => {
+    const asked: string[] = []
+    const probe = async (command: string, args: string[]) => {
+      asked.push(`${command} ${args[0]}`)
+      return { ok: command === 'brew', output: '' }
+    }
+    expect(await upgradeRouteFor(probe, 'darwin')).toBe('brew')
+    expect(asked).toEqual(['brew list'])
+  })
+
+  it('does not tell a Windows user to run brew', () => {
+    // The refusal a person is most likely to read, because it fires on every
+    // machine that installed the CLI some third way. Naming a command that
+    // cannot exist on their PC — and naming it first — reads as the app having
+    // been written for somebody else's computer.
+    const windows = noRouteAdvice('win32')
+    expect(windows).not.toContain('brew')
+    expect(windows).toContain('npm install -g @google/gemini-cli@latest')
+
+    const mac = noRouteAdvice('darwin')
+    expect(mac).toContain('brew upgrade gemini-cli')
+    expect(mac).toContain('npm install -g @google/gemini-cli@latest')
+  })
+
+  it('carries the Windows sentence out through the fix itself', async () => {
+    // The advice is chosen inside `upgradeAgentCli`, so a platform-aware
+    // sentence only reaches the panel if the platform is threaded through.
+    const exec: ToolRunner = async (command) =>
+      command === 'gemini' ? { ok: true, output: '0.32.1' } : { ok: false, output: 'not found' }
+    const result = await upgradeAgentCli(exec, 'win32')
+    expect(result.ok).toBe(false)
+    expect(result.message).not.toContain('brew')
+    expect(result.message).toContain('npm install -g @google/gemini-cli@latest')
+  })
 })

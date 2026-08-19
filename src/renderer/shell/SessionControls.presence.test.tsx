@@ -214,7 +214,7 @@ describe('the cluster asks the same source its neighbours do', () => {
      */
     expect(controls).toMatch(/useSessionControls\(\s*sessionId,\s*cwd,\s*running,\s*\)/)
     expect(controls).toContain('<UsageBar sessionId={sessionId} provider={running}')
-    expect(controls).toContain('unsupportedProviderNote(running)')
+    expect(controls).toContain('foreignAgentNote(running)')
   })
 
   it('asks presence about the session the bar is actually over', () => {

@@ -6,7 +6,16 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { browserStores, clearAcross, memoryStorage, readAcross, storeFor, writeAcross } from './remember'
+import {
+  RETIRED_KEYS,
+  browserStores,
+  clearAcross,
+  memoryStorage,
+  purgeRetired,
+  readAcross,
+  storeFor,
+  writeAcross,
+} from './remember'
 
 /** Safari in private mode: hands back the object, then throws on the write. */
 function lyingStorage(): Storage {
@@ -115,5 +124,47 @@ describe('the rule that exactly one store holds a thing', () => {
     both.tab.setItem('x', 'b')
     clearAcross(both, clear)
     expect(readAcross(both, read)).toBeNull()
+  })
+})
+
+describe('keys this client used to write and no longer does', () => {
+  it('names the copilot credential store, because that is what it was', () => {
+    // The one entry, and it held a secret rather than a preference. If this list
+    // ever grows, the thing to check about the new entry is the same: whether
+    // what it held was worth taking off a computer somebody does not own.
+    expect(RETIRED_KEYS).toEqual(['terminaldeck.copilot.v1'])
+  })
+
+  it('sweeps both stores, not whichever one this browser chose', () => {
+    /*
+     * The value was written when the answer to *is this browser yours* may have
+     * been the other one, and the copy that would be missed is the durable copy
+     * on a machine somebody has since said is not theirs. `clearAcross` makes
+     * the same argument for the pairing itself.
+     */
+    const stores = { browser: memoryStorage(), tab: memoryStorage() }
+    stores.browser.setItem('terminaldeck.copilot.v1', '{"machine-a":"cred-a"}')
+    stores.tab.setItem('terminaldeck.copilot.v1', '{"machine-b":"cred-b"}')
+    purgeRetired(stores)
+    expect(stores.browser.getItem('terminaldeck.copilot.v1')).toBeNull()
+    expect(stores.tab.getItem('terminaldeck.copilot.v1')).toBeNull()
+  })
+
+  it('survives a store that throws, because a launch must not die tidying up', () => {
+    const throwing = {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {
+        throw new Error('SecurityError')
+      },
+    }
+    expect(() => purgeRetired({ browser: throwing, tab: throwing })).not.toThrow()
+  })
+
+  it('leaves everything else alone', () => {
+    const stores = { browser: memoryStorage(), tab: memoryStorage() }
+    stores.browser.setItem('terminaldeck.machines.v1', 'the book')
+    purgeRetired(stores)
+    expect(stores.browser.getItem('terminaldeck.machines.v1')).toBe('the book')
   })
 })

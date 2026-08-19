@@ -1,6 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { MAX_FILE_BYTES, parseRoutine, serializeRoutine } from './format'
 import { MAX_ROUTINES, RoutineStore, routineFilePath, routinesDirFor } from './store'
@@ -224,7 +232,18 @@ describe('reading and writing a routine file as text', () => {
   it('leaves no half-written file behind, because the write is a rename', () => {
     const store = new RoutineStore({ dir })
     store.saveText('sweep', HAND_WRITTEN)
-    expect(existsSync(join(dir, 'sweep.md.tmp'))).toBe(false)
+    /*
+     * The whole directory rather than one name, and the change is not cosmetic.
+     *
+     * This asserted `sweep.md.tmp` was absent, which was a live claim while this
+     * file wrote its own temp-and-rename with that fixed name — and became a
+     * claim about a filename that can no longer occur the moment the write moved
+     * to `writeFileAtomic`, whose temp names carry the pid and a counter. An
+     * assertion that cannot fail is worse than none: it reads like coverage.
+     * What is actually being promised is that a watcher sees one complete file
+     * and nothing else, so that is what is checked.
+     */
+    expect(readdirSync(dir)).toEqual(['sweep.md'])
   })
 
   it('refuses an id that is really a path, in both directions', () => {
@@ -243,5 +262,50 @@ describe('reading and writing a routine file as text', () => {
     const result = store.readText('huge')
     expect(result.ok).toBe(false)
     expect(result.ok === false && result.error).toContain('larger than')
+  })
+})
+
+/**
+ * Saving on Windows, which nobody here can run — so it is pinned by construction
+ * instead.
+ *
+ * Both writers in this file used to be `writeFileSync(`${file}.tmp`, …)` then
+ * `renameSync`, and on POSIX that is exactly right: `rename(2)` is *guaranteed*
+ * to replace the destination, which is why it has never once failed on a Mac.
+ * Windows gives no such guarantee. `MoveFileEx(MOVEFILE_REPLACE_EXISTING)` fails
+ * with EPERM/EACCES/EBUSY while any process holds the destination open without
+ * FILE_SHARE_DELETE, and Defender's real-time scan, the search indexer and any
+ * backup agent all do that for a few milliseconds immediately after a file is
+ * written. The result on Windows only: a routine somebody edited in the Settings
+ * box occasionally does not save, intermittently and with nothing on screen to
+ * say so. The fixed `.tmp` name was the second half — two windows of this app
+ * saving at once wrote the same temp file.
+ *
+ * `atomic-write.ts` is the one answer to that, and `atomic-write.test.ts` pins
+ * the retry against an injected filesystem with the platform forced to win32.
+ * What is left for *this* file to promise is that the routines store actually
+ * goes through it, which is a property of the source and is checked as one — the
+ * same shape of guard `release-signing.test.ts` and `platform/env-path.test.ts`
+ * use for decisions whose loss would be invisible on the machine that runs the
+ * suite.
+ */
+describe('how a routine reaches the disk', () => {
+  const source = readFileSync(fileURLToPath(new URL('./store.ts', import.meta.url)), 'utf8')
+
+  it('does not do its own temp-and-rename', () => {
+    // The *call*, not the word: the comment on `save` names both functions to
+    // explain what they used to do and why that was wrong, and a scan that
+    // could not tell an explanation from a call would make the explanation
+    // undeletable. A `renameSync(` here would be green on every machine this is
+    // developed on and would silently drop a Windows user's edits.
+    expect(source).not.toMatch(/renameSync\(/)
+    expect(source).not.toMatch(/writeFileSync\(/)
+  })
+
+  it('writes through the one helper that knows about Windows', () => {
+    expect(source).toMatch(/import \{ writeFileAtomic \} from '\.\.\/atomic-write'/)
+    // Both writers, not just the one somebody remembered: `save` is the tool and
+    // engine path, `saveText` is the person's own typing.
+    expect(source.match(/writeFileAtomic\(/g) ?? []).toHaveLength(2)
   })
 })

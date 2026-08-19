@@ -1,0 +1,191 @@
+/**
+ * The slice of `ssh2` this app uses, declared here rather than depended on.
+ *
+ * ## Why hand-written and not `@types/ssh2`
+ *
+ * Two reasons, and the second is the one that matters.
+ *
+ * The dependency decision for this feature was deliberately narrow: **one**
+ * package, `ssh2`, installed without its optional native pieces, because the
+ * measured cipher behaviour of that exact package under Electron is what the
+ * whole transport choice rests on. Adding a second package to describe the
+ * first is not free in a repository whose packaging quirks are documented at
+ * length in `BUILDING.md`, and it buys types for an API surface that is a dozen
+ * calls wide.
+ *
+ * The second reason is that a declaration written here can be *narrower than
+ * the library* on purpose. `ssh2` will happily connect with no
+ * {@link ConnectConfig.hostVerifier} at all — that is its default — and the one
+ * hole this feature must not have is a second connection path that quietly
+ * skips the host key check. Below, `hostVerifier` is **required**, so a call
+ * that forgets it does not compile. A structural test also scans for it
+ * (`host-key-checked.test.ts`), because a future author could widen this file;
+ * the type is the fence and the test is the alarm on the fence.
+ *
+ * ## The one trap that is worth a type
+ *
+ * `shell()` takes `{ rows, cols }` as an object and {@link Channel.setWindow}
+ * takes `(rows, cols, height, width)` **positionally**, in the same library, on
+ * the same channel. Getting the pair the wrong way round produces a terminal
+ * that is perfect until somebody resizes the window and then wraps every line
+ * at the wrong column — which reads as a rendering bug, not as two swapped
+ * arguments. `setWindow` is therefore never called directly anywhere in this
+ * app: `connection.ts` wraps it in a function that takes a named object.
+ *
+ * Verified against `node_modules/ssh2/lib/client.js` and
+ * `node_modules/ssh2/lib/Channel.js` at 1.17.0, and exercised end to end
+ * against a real server under Electron's own Node.
+ */
+
+declare module 'ssh2' {
+  import type { Duplex, Readable } from 'node:stream'
+
+  /**
+   * The interactive side of a session.
+   *
+   * A duplex stream carrying the far end's terminal output, with the process's
+   * standard error arriving separately — `exec` splits them, a `shell` with a
+   * pty does not, because a terminal has one stream by definition.
+   */
+  export interface Channel extends Duplex {
+    stderr: Readable
+    /**
+     * Tell the far end the terminal is a different size.
+     *
+     * **Positional, and the order is not the same as `shell()`'s object.** See
+     * the header. Do not call this outside `connection.ts`.
+     */
+    setWindow(rows: number, cols: number, height: number, width: number): void
+    signal(name: string): void
+    /** Ask the far end to close this channel. Distinct from ending the stream. */
+    close(): void
+    /** Send end-of-file without closing the channel. */
+    eof(): void
+    on(event: 'close', listener: (code?: number, signal?: string) => void): this
+    on(event: 'data', listener: (chunk: Buffer) => void): this
+    on(event: 'error', listener: (err: Error) => void): this
+    on(event: string, listener: (...args: never[]) => void): this
+  }
+
+  /** Size of the pseudo-terminal asked for when a shell is opened. */
+  export interface PseudoTtyOptions {
+    rows?: number
+    cols?: number
+    height?: number
+    width?: number
+    term?: string
+  }
+
+  /**
+   * How to reach a server and how to prove who we are.
+   *
+   * `hostVerifier` is required here although the library treats it as optional.
+   * That is the point — see the header.
+   */
+  export interface ConnectConfig {
+    host: string
+    port?: number
+    username: string
+    password?: string
+    privateKey?: string | Buffer
+    passphrase?: string
+    /** Milliseconds allowed for the handshake before it is abandoned. */
+    readyTimeout?: number
+    /**
+     * Seconds between keep-alive packets. **Left at 0 (off) deliberately.** A
+     * connection here only exists while somebody is looking at the page, and a
+     * timer per open server is the polling-shaped thing this feature is built
+     * to avoid.
+     */
+    keepaliveInterval?: number
+    /** Offer keyboard-interactive as well as password, for servers that only do that. */
+    tryKeyboard?: boolean
+    /**
+     * Called with the server's public key blob before anything is sent to it.
+     * Answer `true` to continue. Required; see the header.
+     */
+    hostVerifier: (key: Buffer, verify: (ok: boolean) => void) => void
+    /** Explicitly `false` to stop the library reading an agent from the environment. */
+    agent?: string | false
+    debug?: (message: string) => void
+  }
+
+  export class Client {
+    connect(config: ConnectConfig): this
+    exec(
+      command: string,
+      callback: (err: Error | undefined, channel: Channel) => void,
+    ): boolean
+    shell(
+      window: PseudoTtyOptions,
+      callback: (err: Error | undefined, channel: Channel) => void,
+    ): boolean
+    /**
+     * Open a channel carrying a TCP connection made **by the server**.
+     *
+     * This is what `ssh -L` is built out of, and it is the whole transport
+     * behind a server's own `localhost` appearing in this app's browser. The
+     * first two arguments are what the far end records the connection as having
+     * come from — they reach its log and nothing else; the second two are where
+     * it actually goes.
+     *
+     * Two things about the failure path are properties of the library rather
+     * than of SSH, both read out of `lib/client.js` and `lib/utils.js` at 1.17.0
+     * and both relied on by `forward.ts`:
+     *
+     *  - it **throws** rather than calling back when the socket has already
+     *    gone, so every call sits inside a `try`;
+     *  - a refusal from the far end arrives as an ordinary `Error` carrying a
+     *    numeric `reason` from RFC 4254 §5.1, and that number is the only thing
+     *    that separates *"this server refuses to forward"* from *"nothing is
+     *    listening there"*. It is optional in the type because the library
+     *    leaves it off the errors it raises itself.
+     */
+    forwardOut(
+      srcIP: string,
+      srcPort: number,
+      dstIP: string,
+      dstPort: number,
+      callback: (err: (Error & { reason?: number }) | undefined, channel: Channel) => void,
+    ): this
+    end(): this
+    destroy(): void
+    on(event: 'ready', listener: () => void): this
+    on(event: 'error', listener: (err: Error & { level?: string }) => void): this
+    on(event: 'close', listener: () => void): this
+    on(event: 'end', listener: () => void): this
+    on(event: 'banner', listener: (message: string) => void): this
+    on(
+      event: 'keyboard-interactive',
+      listener: (
+        name: string,
+        instructions: string,
+        lang: string,
+        prompts: readonly { prompt: string; echo: boolean }[],
+        finish: (responses: readonly string[]) => void,
+      ) => void,
+    ): this
+    once(event: 'ready', listener: () => void): this
+    once(event: 'error', listener: (err: Error & { level?: string }) => void): this
+    once(event: 'close', listener: () => void): this
+    removeAllListeners(event?: string): this
+  }
+
+  /** A parsed private key, or the reason it could not be parsed. */
+  export interface ParsedKey {
+    type: string
+    comment: string
+    getPublicSSH(): Buffer
+  }
+
+  export const utils: {
+    /**
+     * Parse a private key, returning an `Error` rather than throwing.
+     *
+     * The three failures it distinguishes are the three a person needs told
+     * apart: not a key at all, a locked key with no passphrase, and a locked
+     * key with the wrong one. `credentials.ts` maps them to sentences.
+     */
+    parseKey(data: string | Buffer, passphrase?: string): ParsedKey | ParsedKey[] | Error
+  }
+}

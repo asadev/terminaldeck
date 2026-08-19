@@ -51,12 +51,14 @@ const {
   SAFE_STORAGE_ITEMS,
   classifyKeychainFailure,
   cookieExpiryToUnixSeconds,
+  cookieImportSupported,
   cookiesFileFor,
   decryptCookieValue,
   deriveCookieKey,
   emptyLedger,
   importCookies,
   importMessage,
+  keychainMessage,
   listCookieSources,
   mergeLedger,
   normaliseDomains,
@@ -69,6 +71,7 @@ const {
   toCookieSetDetails,
   toSameSite,
   unpadPkcs7,
+  unsupportedMessage,
 } = await import('./cookie-import')
 
 /* ------------------------------------------------------------- fixtures -- */
@@ -741,6 +744,157 @@ describe('importCookies asks for the permission that decides the outcome first',
     expect(report.keychain).toBe('unsupported')
     expect(report.ok).toBe(false)
     expect(report.settings).toBeNull()
+  })
+})
+
+/* ------------------------------------------------ the platform it can run on -- */
+
+/**
+ * The Windows half of the browser sign-in handover, and why it is a refusal
+ * rather than a to-do.
+ *
+ * The band at the top of the in-app browser used to offer *"I have signed in —
+ * bring it back"* on every platform, because nothing in the path that raises it
+ * is platform-dependent: Google refuses embedded browsers by user agent, the
+ * handover is `shell.openExternal`, and the preload wires the import channel
+ * unconditionally. Only the work behind the button is macOS-only, and a button
+ * is not where you find that out.
+ *
+ * These cases pin the two halves of the decision that followed. They are all
+ * forced rather than measured — every one passes the platform in — because the
+ * machine this suite runs on is a Mac and would answer `darwin` to every
+ * question asked of it.
+ */
+describe('the platforms this can carry cookies on, and what it says on the others', () => {
+  it('answers darwin and nothing else, for every platform this ships on', () => {
+    expect(cookieImportSupported('darwin')).toBe(true)
+    // Not a to-do list. See the module header: Windows is a wall, Linux is
+    // unwritten, and both are "no" to the only question this function asks.
+    expect(cookieImportSupported('win32')).toBe(false)
+    expect(cookieImportSupported('linux')).toBe(false)
+  })
+
+  it('tells a Windows user it is a wall, not something nobody got round to', () => {
+    const windows = unsupportedMessage('Chrome', 'win32')
+    /*
+     * The wording is the point of this case rather than padding, and it is the
+     * whole of what changed here. One sentence served every platform before —
+     * *"only implemented for macOS"* — which on Windows is both wrong and
+     * wrong in the direction that costs somebody a day: it reads as an
+     * oversight, so the reasonable next move is to go and write the DPAPI key
+     * path. That path recovers the key perfectly and still decrypts nothing,
+     * for the reason the case below this one measures.
+     */
+    expect(windows).toMatch(/windows/i)
+    expect(windows).not.toMatch(/only implemented/i)
+    // And it still says where it does work, because that is the actionable half
+    // for anybody who has both machines.
+    expect(windows).toMatch(/macOS/)
+  })
+
+  it('keeps the original sentence for Linux, where it really is unwritten', () => {
+    // Preserved rather than replaced: on Linux the key is behind libsecret or
+    // KWallet and the blobs are `v11`, so "only implemented for macOS" is an
+    // accurate description of a gap somebody could close.
+    expect(unsupportedMessage('Chromium', 'linux')).toMatch(/only implemented for macOS/i)
+  })
+
+  it('carries the per-platform sentence out through the keychain result', () => {
+    /*
+     * The seam exists so both wordings can be pinned side by side on one
+     * machine. Without it the branch is only ever reachable from the platform
+     * that runs the suite, which is exactly how six Mac-only tests in this repo
+     * came to pass forever and fail on the first Windows runner.
+     *
+     * `readSafeStorageKey` is the real function here, not a stand-in, and the
+     * run that reaches it must not shell out to `/usr/bin/security` on the way:
+     * a Windows answer produced by asking macOS for a key would be answering as
+     * two machines at once.
+     */
+    const seen: string[] = []
+    const spy = async (file: string) => {
+      seen.push(file)
+      return { code: 0, stdout: 'never-reached', stderr: '', timedOut: false }
+    }
+
+    return Promise.all([
+      // The *same* browser on both, which is the only way this assertion means
+      // anything: with two different browser names the sentences would differ
+      // whether or not the platform reached them, and the case would pass
+      // against the single all-platforms sentence it exists to rule out.
+      readSafeStorageKey('chrome', 'Chrome', 'win32', spy),
+      readSafeStorageKey('chrome', 'Chrome', 'linux', spy),
+    ]).then(([windows, linux]) => {
+      expect(seen).toEqual([])
+      expect(windows.ok).toBe(false)
+      expect(linux.ok).toBe(false)
+      if (windows.ok || linux.ok) return
+      expect(windows.reason).toBe('unsupported')
+      expect(linux.reason).toBe('unsupported')
+      // Two platforms, two different sentences, both checked from a Mac.
+      expect(windows.detail).not.toBe(linux.detail)
+      expect(windows.detail).toBe(keychainMessage('unsupported', 'Chrome', 'win32'))
+      expect(linux.detail).toBe(keychainMessage('unsupported', 'Chrome', 'linux'))
+    })
+  })
+})
+
+/**
+ * The measurement behind the decision not to build the Windows key path.
+ *
+ * The proposal was: read `os_crypt.encrypted_key` from `Local State`, strip its
+ * `DPAPI` prefix, `CryptUnprotectData` it, and decrypt. It is a real, writable
+ * piece of code and it would have recovered a real key. What it would then meet
+ * is a cookie database in which every row is `v20` — app-bound encryption,
+ * shipped in Chrome 127, whose key is held by Chrome's own elevation service and
+ * handed back only to Chrome's own executable.
+ *
+ * That claim could not be measured on a Windows machine, because there is not
+ * one here. What can be measured, here, is the half that decides the outcome:
+ * what this module does when it is handed `v20` blobs. It refuses them on the
+ * version bytes, before any key is consulted — so the key the DPAPI path would
+ * have recovered changes nothing, and the button it would have re-enabled would
+ * report *"the keychain key did not fit"* to a user whose key fitted perfectly.
+ *
+ * A dead button with a false sentence under it is worse than no button, which is
+ * why the offer was withdrawn instead.
+ */
+describe('what a Windows key path would have run into, measured on this Mac', () => {
+  /** A correctly formed app-bound blob: `v20`, 12-byte nonce, ciphertext, tag. */
+  const appBound = (value: string): Buffer => {
+    const nonce = Buffer.alloc(12, 9)
+    const cipher = createCipheriv('aes-256-gcm', Buffer.alloc(32, 3), nonce)
+    const body = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])
+    return Buffer.concat([Buffer.from('v20', 'latin1'), nonce, body, cipher.getAuthTag()])
+  }
+
+  it('refuses every app-bound row, so the tally is failures and nothing else', () => {
+    const rows = [
+      { host_key: '.google.com', name: 'SID', encrypted_value: appBound('a-real-session') },
+      { host_key: '.google.com', name: 'HSID', encrypted_value: appBound('another') },
+      { host_key: '.youtube.com', name: 'LOGIN_INFO', encrypted_value: appBound('third') },
+    ]
+    // The key is the *right* one for this module's scheme, which is the point:
+    // nothing here is failing for want of a key.
+    const tally = planImport(rows, KEY, [], Date.now())
+
+    expect(tally.imported).toBe(0)
+    expect(tally.failed).toBe(3)
+    // `details` empty is what separates this from a run that decrypted and was
+    // then refused by Chromium — see `importMessage`, which reads exactly that.
+    expect(tally.details).toHaveLength(0)
+  })
+
+  it('and would have blamed the key, which was never the problem', () => {
+    const tally = planImport(
+      [{ host_key: '.google.com', name: 'SID', encrypted_value: appBound('a-real-session') }],
+      KEY,
+      [],
+      Date.now(),
+    )
+    // The sentence a Windows user would have read at the end of a working
+    // DPAPI implementation. It names the one thing that was fine.
+    expect(importMessage(tally, 'Chrome')).toMatch(/did not fit/i)
   })
 })
 

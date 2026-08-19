@@ -697,6 +697,48 @@ describe('paths and detection on this machine', () => {
     ).toBe('C:\\Users\\asad\\AppData\\Local\\Google\\Chrome\\User Data')
   })
 
+  it('finds Chrome Canary on Windows, where the folder is called SxS', () => {
+    /*
+     * The row had a macOS path and no Windows one, so `userDataDirFor` returned
+     * null and the browser-data pane simply had no line for Canary on Windows:
+     * a Windows user saw a shorter list than the same person on a Mac, with no
+     * sentence anywhere explaining the absence.
+     *
+     * The reason it was missed is that the two platforms spell the channel
+     * differently. macOS puts the human name in the directory —
+     * `Google/Chrome Canary` — and Windows puts the install mode there,
+     * `Google\Chrome SxS`, because Canary is built to sit beside stable
+     * Chrome. Pinned as a literal so a future edit that "corrects" it to
+     * `Chrome Canary` fails here instead of on somebody's PC.
+     */
+    const canary = BROWSERS.find((b) => b.id === 'chrome-canary')
+    expect(canary).toBeDefined()
+    expect(
+      userDataDirFor(canary!, 'win32', 'C:\\Users\\asad', {
+        LOCALAPPDATA: 'C:\\Users\\asad\\AppData\\Local',
+      }),
+    ).toBe('C:\\Users\\asad\\AppData\\Local\\Google\\Chrome SxS\\User Data')
+    // And the macOS answer is untouched, because this is a port, not a rewrite.
+    expect(userDataDirFor(canary!, 'darwin', '/Users/asad', {})).toBe(
+      '/Users/asad/Library/Application Support/Google/Chrome Canary',
+    )
+  })
+
+  it('still refuses to guess where Arc keeps its data on Windows', () => {
+    // Arc for Windows is an MSIX package under
+    // `%LOCALAPPDATA%\Packages\TheBrowserCompany.Arc…`, where the suffix is a
+    // package-family hash nobody here can read without a Windows machine that
+    // has Arc on it. A guessed path would put a row in the pane that
+    // permanently fails to read, which is worse than the row being absent —
+    // this table's habit is to leave unverified paths out, not invent them.
+    const arc = BROWSERS.find((b) => b.id === 'arc')
+    expect(
+      userDataDirFor(arc!, 'win32', 'C:\\Users\\asad', {
+        LOCALAPPDATA: 'C:\\Users\\asad\\AppData\\Local',
+      }),
+    ).toBeNull()
+  })
+
   it('never throws, whatever this machine happens to have installed', () => {
     const found = detectBrowsers()
     expect(Array.isArray(found)).toBe(true)
@@ -854,8 +896,17 @@ describe('the permission this needs, and where it lives', () => {
     expect(opened).toHaveLength(1)
   })
 
-  const onDisk = process.platform === 'win32' ? it.skip : it
-  onDisk('checks a real open, not a stat', () => {
+  /*
+   * `it.skipIf`, not a hand-rolled `process.platform === 'win32' ? it.skip : it`.
+   *
+   * The skip itself is right and its reason is below. What was wrong was the
+   * spelling: everything else in this repository skips with `skipIf`, and a
+   * grep for `skipIf` is how anybody — including an audit of what Windows is
+   * not checking — enumerates the gaps. One case wearing a different idiom is
+   * one case that does not appear in that list, which is the same failure as
+   * not writing the skip down at all.
+   */
+  it.skipIf(process.platform === 'win32')('checks a real open, not a stat', () => {
     /*
      * The trap this whole gate is built around, exercised against the
      * filesystem rather than described. On a TCC-protected path — measured on

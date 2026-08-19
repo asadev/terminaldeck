@@ -448,43 +448,119 @@ describe('nobody presses anything until the app gives up', () => {
     expect(source).toContain('there is nothing to press')
   })
 
-  it('stops for good once an attempt has typed into the session for nothing', () => {
+  it('never types into a session, which is the requirement everything else serves', () => {
     /*
-     * The half of 2026-08-18 that is about *not* doing something.
+     * The half of 2026-08-18 that is about *not* doing something, and the whole
+     * of what he asked for on the second pass.
      *
-     * His message was one line — *"this is what keeps happening repeatedly"* —
-     * over fifteen seconds of a `/usage` panel sitting open on a live Windows
-     * session. The repetition is the defect, not a symptom of it: every attempt
-     * types a command into somebody's prompt and draws a panel over their work,
-     * and one that came back with nothing has no business being made again on a
-     * timer or on the next keystroke.
+     * His first message was one line — *"this is what keeps happening
+     * repeatedly"* — over fifteen seconds of a `/usage` panel sitting open on a
+     * live Windows session. The fix that followed rationed the typing. He came
+     * back a third time and closed the question instead: *"find out some other
+     * way to keep the bar refresh otherwise we will remove it completely if it
+     * will be heavy"*.
      *
-     * Asserted at the seam rather than through a hook, because this project's
-     * tests have no DOM to render a hook into: the fetcher takes `blocked`, the
-     * bar hands it the one `useUsageBar` computes, and the fetcher's first gate
-     * is that value. Undo any one of the three and this fails.
+     * So there is no rationing left to assert, because there is no typing left
+     * to ration. The fetcher calls one channel and that channel reads a file and,
+     * at worst, starts a `claude` of this app's own — see `usage-probe.ts` for
+     * what that costs, measured. Asserted at the seam, because this project's
+     * tests have no DOM to render a hook into.
      */
+    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
+    expect(hook).toContain('refreshUsage')
+    expect(hook).not.toContain('refreshPlanLimits')
     const auto = readFileSync(join(__dirname, 'auto-usage.ts'), 'utf8')
+    expect(auto).not.toContain('refreshPlanLimits')
+
+    /*
+     * And the one thing that is still refused: a login that has answered is not
+     * asked again. It is no longer a *stop* — nothing here costs the reader
+     * anything, so nothing has to be prevented — it is that there is no reason
+     * to keep asking a question that has been answered, and the bar is already
+     * saying so on its face.
+     */
     expect(auto).toContain('blocked: string | null')
     expect(auto).toContain('if (current.blocked !== null) return')
     const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
     expect(source).toContain('blocked: usage.blocked')
+    expect(hook).toContain('SETTLED.has(result.outcome)')
+  })
 
-    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
-    // And what sets it: whether the attempt *typed*, not which sentence it
-    // carried. A refusal that typed nothing — the session was working, the
-    // prompt had half a line in it — costs the session nothing and is still
-    // allowed to come back.
-    expect(hook).toContain("if (result?.typed === true || reason === 'no-limits' || reason === 'panel-open')")
+  it('says a login has no limits, rather than that a figure has not arrived', () => {
+    /*
+     * `Not reported` is right for every other absent reading here — Claude Code
+     * prints its limits only near one or when asked, so the number really is
+     * late. On a login billed through the API there is no rolling window at
+     * all: nothing is late, nothing is coming, and the same two words would be
+     * reporting a failure that did not happen.
+     */
+    const html = renderToStaticMarkup(
+      <UsageBarView
+        report={null}
+        provider="claude"
+        accountLabel="someone@example.com"
+        blocked="This account is billed through the Claude API, which has no subscription limits to read."
+        noLimits
+        onCheck={() => {}}
+        now={NOW}
+      />,
+    )
+    expect(html).toContain('No limits')
+    expect(html).not.toContain('Not reported')
+    expect(html).not.toContain('Reading…')
+  })
+
+  it('does not claim a reading was taken when there is no reading', () => {
+    /*
+     * Caught by looking, which is the only way it could have been. Rendered in a
+     * real instance against a session whose banner said `· Claude API ·`, the
+     * detail sheet printed *"This account is billed through the Claude API"* and
+     * then, four lines below it, a provenance line — for a reading that does not
+     * exist, under the one state whose whole point is that there is nothing to
+     * read.
+     *
+     * The sheet is only in the markup while it is open and this project's render
+     * tests cannot open it, so the branch is pinned at the source. Delete it and
+     * the false sentence comes straight back.
+     */
+    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
+    expect(source).toContain('? noLimits\n                ? ')
+    expect(source).toContain('Remembered for this account, so nothing is started to ask again.')
+    /*
+     * And the same mistake in its second form, caught the same day. The first
+     * fix branched on `noLimits`, which left the *signed-out* account printing
+     * a provenance line about a fetch that never happened. So the branch is on
+     * "is there a reading" rather than on which reason there is not, and every
+     * stopped state gets a sentence about what happens next instead.
+     */
+    expect(source).toContain('Nothing was read, so there is no figure here')
+    expect(source).not.toContain("? sourceSentence('claude-usage-api')")
+  })
+
+  it('does not tell the reader their session is typed into, anywhere on the bar', () => {
+    /*
+     * The sentence under the bars used to say where the figure came from, and
+     * the true answer was *"Read from Claude Code's own /usage panel"* — this
+     * app having typed `/usage` into the reader's session to produce it. It is
+     * not true any more, and a line that still said it would be advertising the
+     * exact thing he asked three times to have removed.
+     */
+    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
+    expect(source).toContain('no session is typed into')
+    expect(source).not.toContain("sourceSentence('claude-usage-panel')")
+
+    const model = readFileSync(join(__dirname, 'usage-bar-model.ts'), 'utf8')
+    expect(model).toContain("'claude-usage-api'")
   })
 
   it('asks the main process to force, and only from the press', () => {
     /*
-     * The stop is enforced twice over, and deliberately: this hook can be
-     * remounted, and a second window never saw the first refusal. `refresh()` in
-     * `src/main/plan-limit.ts` therefore keeps its own record and refuses to type
-     * again — so `force` is the one thing that can reach past it, and the one
-     * caller that passes it is the button.
+     * The settled answer is remembered twice over, and deliberately: this hook
+     * can be remounted, and a second window never saw the first answer.
+     * `refreshUsage` in `src/main/usage-ipc.ts` therefore keeps its own record
+     * against the *account* and declines automatic attempts on it — so `force`
+     * is the one thing that reaches past it, and the one caller that passes it
+     * is the button.
      */
     const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
     expect(source).toContain('onCheck={() => usage.check(true)}')

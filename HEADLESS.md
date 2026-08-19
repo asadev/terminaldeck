@@ -145,11 +145,128 @@ and say so rather than implying the app can reach a powered-down computer.
 
 ## Packaging
 
-- Node, not Electron. `node-pty` and `better-sqlite3` build for Linux normally.
+- Node, not Electron.
 - Ship as an npm package (`terminaldeck` is already claimed) plus a plain
   `curl | sh` script, since a server user will not want a GUI toolchain.
 - No Electron, no Chromium: it should be small enough that installing it on a
   server is an easy decision.
+
+An earlier version of this section said *"`node-pty` and `better-sqlite3` build
+for Linux normally"*. Half of that is wrong and the wrong half is what broke the
+install, so it is corrected here rather than quietly edited: `better-sqlite3` is
+not in this package at all (`scripts/build-headless.mjs` derives the dependency
+list from the bundle, and the bundle imports `@noble/ciphers`, `@xterm/headless`
+and `node-pty` — nothing else), and node-pty does not *have* a Linux build to
+place. Measured against the published tarball on 2026-08-18: node-pty 1.1.0 ships
+prebuilds for `darwin-arm64`, `darwin-x64`, `win32-arm64` and `win32-x64`, and
+its install step is `node scripts/prebuild.js || node-gyp rebuild`. On every
+Linux box, the second half runs. It compiles.
+
+## Installing it
+
+```
+curl -fsSL https://terminaldeck.dev/install.sh | sh
+```
+
+That is `scripts/install-headless.sh`. It is still a wrapper around
+`npm install -g terminaldeck` — npm is what places node-pty correctly for a
+platform, arch and libc nobody here can see — and the reasoning at the top of the
+file is worth reading before changing any of it.
+
+### What the machine needs
+
+| | |
+|---|---|
+| **OS** | Linux or macOS. Windows people install the desktop app. |
+| **Architecture** | anything Node publishes a build for: `x64`, `arm64`, `armv7l`, `ppc64le`, `s390x`. `uname -m` says `aarch64`; Node spells that `arm64`, and the installer does the translation. |
+| **C library** | glibc. See below. |
+| **Node** | 22 or newer, with npm — **or nothing at all**, in which case the installer supplies its own. |
+| **Build tools** | on Linux only: `python3`, `make`, a C++ compiler. For node-pty, per above. |
+| **Network** | nodejs.org (only when it fetches a runtime) and registry.npmjs.org. |
+
+### When there is no Node
+
+This is the ordinary state of a rented Linux server and it is no longer treated
+as the user's problem. Measured on the owner's own box on 2026-08-18 — aarch64,
+Ubuntu 24.04.4, glibc 2.39 — `node` and `npm` were both absent, so the one
+machine this feature was built against was the one machine it could not be
+installed on.
+
+So when Node is missing or older than 22, the installer:
+
+1. works out `linux`/`darwin`, the architecture in Node's spelling, and glibc vs
+   musl;
+2. reads `https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt` — one 4 KB file
+   that names both the current 22.x version and every checksum, so there is no
+   version literal in the script to rot and no JSON to parse in `sh`;
+3. downloads the `.tar.gz` (not the `.tar.xz`: GNU tar shells out to an `xz`
+   binary a minimal image need not have) and **refuses to unpack it unless the
+   sha256 matches**;
+4. unpacks it into `~/.terminaldeck/runtime`, checks the binary actually runs,
+   and uses that node and npm for the install.
+
+Nothing is written outside `$HOME`. Nothing runs as root. Nothing is put on a
+PATH behind anyone's back: the package goes into the runtime's own prefix, and a
+four-line launcher at `~/.local/bin/terminaldeck` puts the private runtime first
+*for that one process*, so a Node the machine gets later is never shadowed.
+`rm -rf ~/.terminaldeck` and `rm ~/.local/bin/terminaldeck` undo all of it.
+
+A machine that already has Node 22+ and npm downloads none of this and behaves
+exactly as it did before.
+
+What the checksum buys and does not buy: the bytes are the bytes nodejs.org
+published, so a truncated transfer or a stale mirror is caught. It is not a
+signature check — `SHASUMS256.txt` comes from the same origin as the tarball, so
+a compromised origin signs its own homework. Node publishes a detached GPG
+signature; checking it would mean shipping a keyring into a `curl | sh`.
+
+### Not supported, and why
+
+- **musl (Alpine, and anything else without glibc).** The Node project publishes
+  no musl build — every tarball under `nodejs.org/dist` is linked against glibc.
+  One unpacks perfectly on Alpine and then exits with `not found`, which is the
+  loader missing and reads like nothing at all. The installer detects musl
+  (`ldd --version` prints `musl libc`; the `/lib/ld-musl-*` loader is the
+  fallback probe) and says so, naming `apk add --no-cache nodejs npm`. Everything
+  else works on Alpine once node and npm are on PATH — node-pty compiles against
+  musl fine, given `build-base python3`. What is unsupported is *fetching* a Node,
+  not running on one.
+- **A Linux box with no compiler.** node-pty has no Linux prebuild, so
+  `npm install` runs node-gyp. Without `python3`, `make` and `g++` that fails a
+  minute in with `gyp ERR! find Python`, which reads like a bug in this project.
+  The installer checks first, before anything is downloaded, and names the
+  packages for apt/apk/dnf/yum/pacman/zypper. `TERMINALDECK_SKIP_TOOLCHAIN_CHECK=1`
+  goes past it if node-pty ever ships Linux prebuilds.
+- **Windows.** The desktop app is the answer there; this installs a POSIX host.
+- **Architectures Node does not build for.** Named as Node's answer rather than
+  this project's opinion, with the exact filename that was not in the checksum
+  file.
+- **The npm package itself, today.** As of 2026-08-19 the registry still holds
+  `terminaldeck@0.0.1`, a placeholder with no `bin` — `npm install -g` exits 0
+  and installs no command. The installer now checks for the command after
+  installing and refuses to report success without it, but until the real package
+  is published, `curl | sh` cannot produce a working host on any machine.
+
+### Environment
+
+All optional. `TERMINALDECK_DRYRUN=1` prints the whole plan — detected machine,
+resolved Node version, exact tarball URL, expected sha256, install prefix — and
+writes nothing, which is what makes the rest of it testable from a machine that
+is not the machine it is for (`src/headless/install-script.test.ts`).
+
+| | |
+|---|---|
+| `TERMINALDECK_VERSION` | npm version or tag (default `latest`) |
+| `TERMINALDECK_PACKAGE` | install this instead — a path to a tarball, for a server with no route to npmjs.org |
+| `TERMINALDECK_DRYRUN=1` | print the plan, write nothing |
+| `TERMINALDECK_NO_RUNTIME=1` | never fetch Node; refuse instead, leaving the machine untouched |
+| `TERMINALDECK_FORCE_RUNTIME=1` | use the private runtime even where there is a good Node |
+| `TERMINALDECK_RUNTIME` | where the private runtime goes |
+| `TERMINALDECK_NODE_VERSION` | pin it |
+| `TERMINALDECK_NODE_LINE` | release directory to track (default `latest-v22.x`) |
+| `TERMINALDECK_NODE_MIRROR` | base URL for Node downloads |
+| `TERMINALDECK_OS` / `_ARCH` / `_LIBC` | override detection |
+| `TERMINALDECK_SKIP_TOOLCHAIN_CHECK=1` | skip the node-pty build-tools check |
 
 ## Definition of done
 

@@ -224,7 +224,7 @@ export async function lookupCommand(
  * The agents this machine has added.
  *
  * Kept in memory and written through, the same shape `FolderGrants` and
- * `CopilotLinks` use: every read is a map lookup on a path a session start is
+ * `CopilotAccess` use: every read is a map lookup on a path a session start is
  * waiting on, and the file is only ever written by a person pressing a button.
  */
 export class CustomAgentStore {

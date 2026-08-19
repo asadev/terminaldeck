@@ -198,7 +198,29 @@ export const runCommand: CommandRunner = (file, args, options = {}) =>
     execFile(
       file,
       [...args],
-      { timeout: options.timeoutMs, maxBuffer: 1024 * 1024 },
+      {
+        timeout: options.timeoutMs,
+        maxBuffer: 1024 * 1024,
+        /*
+         * The one spawn helper in `src/main` that was missing this, and the one
+         * that runs a Windows console binary.
+         *
+         * `powercfg.exe` is a console program, so without `windowsHide` every
+         * call flashes a black window over whatever the user is doing. This
+         * file calls it on launch, on every AC/battery transition, and four
+         * times in a row when the switch is flipped — `/query`,
+         * `/setdcvalueindex`, `/setacvalueindex`, `/setactive` — so the flicker
+         * is not a single blink, it is a burst of them, on a feature whose
+         * entire purpose is to be left running unattended overnight.
+         *
+         * Roughly twenty other files here pass this flag with a comment about
+         * exactly that (`prerequisites.ts`, `tool-probe.ts`, `dev-ports.ts`,
+         * `wsl.ts`, `remote/secret-file.ts`, `confine/tools.ts`). The flag is
+         * ignored on POSIX, so `pmset` and `ioreg` are unaffected — this is
+         * additive, not a branch.
+         */
+        windowsHide: true,
+      },
       (error, stdout, stderr) => {
         if (!error) {
           resolve({ code: 0, stdout, stderr })

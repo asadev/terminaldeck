@@ -132,10 +132,12 @@ export const PROTOCOL_VERSION = 1
  *
  * Every other name on this list is a promise about a *host*: this desktop
  * speaks these frames, so send them. This one is a promise about the host and
- * nothing at all about the device — copilot access is a **separate connection**
- * with its own code, its own credential and its own record, off by default, and
- * it travels beside the capability rather than inside it (see
- * `welcome.copilot` and {@link CopilotLinkWire}).
+ * nothing at all about the device — whether a device reaches the copilot is
+ * decided by its **kind**, chosen by a person at the machine when the device was
+ * approved, and it travels beside the capability rather than inside it (see
+ * `welcome.copilot` and {@link CopilotLinkWire}). It was a separate connection
+ * with its own code and credential for two days in August 2026;
+ * `remote/copilot-access.ts` carries both arguments.
  *
  * The split is deliberate and it is the shape `folders` already has. A
  * capability answers *can this machine do it*; a grant answers *may you*. Fold
@@ -587,13 +589,13 @@ export interface DeviceDescriptor {
  * hand-edited file, and this type refused to carry it — three independent
  * refusals guarding the tier whose safety property is *a human at the machine
  * says yes*. That is superseded, and the reason is not that the property was
- * abandoned: it is that the second factor moved. Copilot access is no longer a
- * box ticked beside an already-paired phone; it is a **separate connection**
- * with its own code, its own credential and its own record
- * (`remote/copilot-link.ts`). The thing a device must have in order to answer
- * its own confirmation is no longer *be at the desk*, it is *have been
- * deliberately authorised for the copilot in a ceremony performed at the desk*.
- * `COPILOT-REMOTE.md` §4 carries the full argument and what it replaced.
+ * abandoned: it is that the second factor moved. The thing a device must have in
+ * order to answer its own confirmation is no longer *be at the desk*, it is
+ * *have been deliberately paired, at the desk, as one of his own devices* — a
+ * decision that cannot be changed without pairing again. It was a separate
+ * copilot connection with its own code for two days in between;
+ * `remote/copilot-access.ts` carries both arguments and why the middle one did
+ * not survive. `COPILOT-REMOTE.md` §4 has the long form.
  *
  * Not spelled `Tier` and not imported from `deck-control/surface.ts`, even
  * though the members now match. That module is main-process-only and this file
@@ -620,23 +622,27 @@ export interface CopilotGrantWire {
 }
 
 /**
- * Whether this device has a copilot connection at all, and whether this socket
- * has opened it.
+ * Whether this device reaches the copilot at all, and whether this socket has
+ * opened the stream.
  *
  * Three facts rather than one, because a client has three different screens to
  * draw and folding them together makes one of them wrong:
  *
- *  - `linked` — this desktop holds a copilot record for this device. False means
- *    *ask the person for a connect code*; there is no frame that will work
- *    before one is redeemed.
- *  - `open` — **this socket** has presented the copilot credential. Every
- *    `copilot.*` verb needs it, including the read-tier ones. A client that
- *    reconnects has a `linked` of true and an `open` of false until it sends
- *    `copilot.hello` again, which is the whole point of a separate connection:
- *    the copilot is not something a session channel carries by existing.
- *  - `grant` — what the connection may do once open. Sent even while closed, so
- *    a device can show what it would get rather than discovering it a frame
- *    later.
+ *  - `linked` — this device reaches the copilot. Since 2026-08-19 that is
+ *    exactly *"it was paired as one of his own"*, so a device that receives this
+ *    frame at all sees `true`: a guest is sent no `copilot` key whatsoever.
+ *    It is still carried, and still worth carrying, for the one case a client
+ *    cannot otherwise learn about — a `copilot.grant` push saying `false`, which
+ *    takes the copilot away without a reconnect. Capabilities travel only in the
+ *    `welcome`, so without this frame a demoted device would keep a tab that
+ *    refuses on every press.
+ *  - `open` — **this socket** has sent `copilot.hello`. Every `copilot.*` verb
+ *    needs it, including the read-tier ones. A client that reconnects has a
+ *    `linked` of true and an `open` of false until it says hello again: the
+ *    copilot is not something a session channel carries by existing, and that
+ *    outlived the separate connection it was first written for.
+ *  - `grant` — what the stream may do once open. Sent even while closed, so a
+ *    device can show what it would get rather than discovering it a frame later.
  */
 export interface CopilotLinkWire {
   linked: boolean
@@ -704,11 +710,7 @@ export const COPILOT_FRAME_TIER: Readonly<Record<string, CopilotTier>> = {
  * `copilot.*` client verb — so a verb added without deciding which list it
  * belongs in fails the suite rather than falling through to a handler.
  */
-export const COPILOT_UNTIERED_FRAMES: readonly string[] = [
-  'copilot.connect',
-  'copilot.hello',
-  'copilot.bye',
-]
+export const COPILOT_UNTIERED_FRAMES: readonly string[] = ['copilot.hello', 'copilot.bye']
 
 /**
  * Largest `copilot.say`, in UTF-8 bytes.
@@ -931,23 +933,6 @@ export interface CopilotSettledRow {
   reason: string | null
 }
 
-/**
- * Largest `copilot.connect` code, in characters.
- *
- * Six digits with room for whatever separators a client's keypad inserts. The
- * store normalises and the cap is here so a malformed frame is refused before it
- * reaches a hash.
- */
-export const MAX_COPILOT_CODE_CHARS = 32
-
-/**
- * Largest copilot credential, in characters.
- *
- * 32 bytes of base64url is 43. The ceiling is generous and finite for the reason
- * `device-auth.ts` gives about its own: a caller that forgets to check a frame
- * size must not be able to hand a megabyte to scrypt.
- */
-export const MAX_COPILOT_CREDENTIAL_CHARS = 512
 
 export type ClientMessage =
   /**
@@ -1280,35 +1265,21 @@ export type ClientMessage =
    * here, because that one frame gives back everything the design bought.
    */
   /**
-   * ## The copilot is a **separate connection**, and these three frames are it
-   *
-   * `copilot.connect`, `copilot.hello` and `copilot.bye` carry no tier because
-   * they *are* the authorisation. A device paired to run terminals has no
-   * copilot reach at all until a person at the desktop mints a connect code and
-   * this device redeems it; after that, every socket it opens has to present the
-   * resulting credential before a single `copilot.*` verb is served, read tier
-   * included.
-   *
-   * The second factor is therefore *having been deliberately authorised for the
-   * copilot*, not *being in the room* — which is what makes it honest for a
-   * device to hold `alter` and answer its own confirmations. See
-   * `remote/copilot-link.ts` for the argument this replaced, in full.
-   *
-   * Redeem a connect code. Sent on an already-authenticated sealed channel, so
-   * the device id is a fact rather than a claim and the code is the second thing
-   * being proved rather than the first. Answered once with `copilot.linked`
-   * carrying the credential, or with `error`.
-   */
-  | { t: 'copilot.connect'; code: string }
-  /**
-   * Open the copilot connection on this socket, with the stored credential.
+   * Open this socket's copilot stream.
    *
    * Answered with `copilot.grant` carrying `open: true`. Required after every
-   * reconnect: a session channel does not carry the copilot by existing, which
-   * is the entire difference between this design and the per-device grant it
-   * replaced.
+   * reconnect: a session channel does not carry the copilot by existing.
+   *
+   * **It carries nothing.** There was a `copilot.connect` above this until
+   * 2026-08-19 — redeem a six-digit copilot code, receive a credential — and
+   * this frame used to present that credential on every socket. Both are gone.
+   * The second factor is *having been paired as one of his own devices*, which
+   * is decided at the machine, cannot be changed without pairing again, and is
+   * what makes it honest for a device to hold `alter` and answer its own
+   * confirmations. See `remote/copilot-access.ts` for that argument and for the
+   * one it superseded.
    */
-  | { t: 'copilot.hello'; credential: string }
+  | { t: 'copilot.hello' }
   /**
    * Close the copilot connection on this socket, and keep the terminals.
    *
@@ -1706,20 +1677,6 @@ export type ServerMessage =
    * `folders`.
    */
   | { t: 'copilot.grant'; link: CopilotLinkWire }
-  /**
-   * The copilot connection was established, and here is the credential.
-   *
-   * Sent exactly once, in answer to `copilot.connect`, and never again by any
-   * frame: the desktop stores a scrypt hash and cannot show it a second time. A
-   * client that loses it asks the person for a new code — which is the right
-   * failure, because minting a code is a deliberate act at the machine and
-   * re-issuing a credential on request would not be.
-   *
-   * The client must store it where it stores its session credential and with the
-   * same care. On iOS that is the keychain; anywhere else it is whatever holds
-   * the pairing credential today, because the two are worth exactly the same.
-   */
-  | { t: 'copilot.linked'; credential: string; link: CopilotLinkWire }
   /**
    * A confirmation this connection may answer. Pushed the moment it is raised.
    *
@@ -2481,34 +2438,19 @@ export function parseClientMessage(raw: unknown): ParseResult {
       // verb to this capability without deciding what it carries stops the build
       // instead of silently arriving as a bare frame.
       return { ok: true, message: { t: parsed.t } }
-    case 'copilot.connect': {
-      /*
-       * A connect code, shape-checked and nothing more.
-       *
-       * Not normalised here and not compared here. `copilot-link.ts` owns the
-       * alphabet, the expiry, the single use and the five-wrong-guesses rule,
-       * and a second opinion about what a code looks like living in the parser
-       * is how the two come apart — the same reason this file shape-checks a
-       * pairing token and lets `device-auth.ts` decide whether it is real.
-       */
-      const code = parsed.code
-      if (typeof code !== 'string' || code === '') return bad('copilot.connect without a code')
-      if (code.length > MAX_COPILOT_CODE_CHARS) return bad('copilot.connect with an unusable code')
-      return { ok: true, message: { t: 'copilot.connect', code } }
-    }
-    case 'copilot.hello': {
-      const credential = parsed.credential
-      if (typeof credential !== 'string' || credential === '') {
-        return bad('copilot.hello without a credential')
-      }
-      // Bounded before it reaches scrypt. The store checks the alphabet too;
-      // this is the transport refusing to hand a megabyte to a KDF, which is a
-      // check that belongs at the edge whether or not the store repeats it.
-      if (credential.length > MAX_COPILOT_CREDENTIAL_CHARS) {
-        return bad('copilot.hello with an unusable credential')
-      }
-      return { ok: true, message: { t: 'copilot.hello', credential } }
-    }
+    /*
+     * A bare frame, and an older client's `credential` field is ignored rather
+     * than refused.
+     *
+     * There is nothing to carry: the socket is already authenticated as this
+     * device and a person at the machine already decided whether it is one of
+     * their own. Ignoring an extra field rather than rejecting it is deliberate
+     * — a phone built against the previous protocol still sends one, and its
+     * copilot should simply start working rather than fail with a sentence
+     * about a credential nobody can produce any more.
+     */
+    case 'copilot.hello':
+      return { ok: true, message: { t: 'copilot.hello' } }
     case 'copilot.answer': {
       const answerId = id(parsed.id)
       // A consent id is a `randomUUID` from `consent.ts`. Checked here so the

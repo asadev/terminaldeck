@@ -63,7 +63,11 @@ import { describeAge, formatPercent, levelOfPercent } from '../chat/usage/usage-
 export type UsageWindowKind = 'five-hour' | 'weekly' | 'monthly' | 'other'
 
 /** Mirrors `UsageSourceId`. Named per source, not per provider. */
-export type UsageSourceId = 'claude-usage-panel' | 'claude-warning' | 'codex-rollout'
+export type UsageSourceId =
+  | 'claude-usage-panel'
+  | 'claude-warning'
+  | 'claude-usage-api'
+  | 'codex-rollout'
 
 /** Mirrors `UsageAmount`: a union so "0%" and "nothing said" cannot be confused. */
 export type UsageAmount = { state: 'reported'; fraction: number } | { state: 'not-reported' }
@@ -144,7 +148,12 @@ function nullableStr(value: unknown): string | null {
 }
 
 const WINDOWS: UsageWindowKind[] = ['five-hour', 'weekly', 'monthly', 'other']
-const SOURCES: UsageSourceId[] = ['claude-usage-panel', 'claude-warning', 'codex-rollout']
+const SOURCES: UsageSourceId[] = [
+  'claude-usage-panel',
+  'claude-warning',
+  'claude-usage-api',
+  'codex-rollout',
+]
 
 /**
  * The amount, read without ever inventing one.
@@ -285,6 +294,19 @@ export function windowNoun(reading: UsageWindowReading): string {
 
 /** Where a reading came from, in words, for the sentence under the bars. */
 export function sourceSentence(source: UsageSourceId): string {
+  /*
+   * The one that answers the question a reader of this bar actually has.
+   *
+   * "Where did this number come from" used to have an uncomfortable answer —
+   * this app typed `/usage` into your session and read the panel — and the
+   * sentence had to say so because it was true. It is no longer true, and this
+   * says what happens instead in the same breath, because the change is the
+   * point: the figure is fetched by a Claude Code of this app's own, and no
+   * session is touched to get it.
+   */
+  if (source === 'claude-usage-api') {
+    return 'Fetched by Claude Code itself, in this app’s own process — no session is typed into.'
+  }
   if (source === 'claude-usage-panel') return 'Read from Claude Code’s own /usage panel.'
   if (source === 'claude-warning') return 'Read from a limit warning Claude Code printed in this session.'
   return 'Read from the rollout Codex writes as it works — no need to ask it.'

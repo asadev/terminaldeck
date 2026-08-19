@@ -6,6 +6,38 @@ import { formatTokens, totalTokens } from './cost'
 import { encodeProjectPath, TranscriptWatcher, type ProjectSummary } from './transcript'
 
 /**
+ * The ceilings these tests state for themselves, and why they are not one
+ * number.
+ *
+ * `vitest.config.ts` raises the *default* timeout to 30 s on Windows, with a
+ * measurement behind it: the runner shows roughly 25x scheduling variance on
+ * unchanged code. An explicit third argument to `it()` overrides that default
+ * outright — so every case in this file opted out of the allowance the config
+ * exists to provide, using a number chosen on a Mac.
+ *
+ * That matters more here than almost anywhere else in the suite, because this
+ * file is the file whose subject is *file watching*, and the two platforms do
+ * not watch the same way. macOS gets FSEvents; Windows gets
+ * ReadDirectoryChangesW, with different coalescing, different latency and a
+ * different relationship to the antivirus scanner that opens every file the
+ * moment it is written. The numbers below were tuned against FSEvents and were
+ * never evidence about the other one.
+ *
+ * So the shape `readiness.test.ts` established is used: a named constant per
+ * class of cost, POSIX side unchanged — that is where the work is done and a
+ * tight ceiling there is what would notice a real slowdown — and a Windows side
+ * with room over the observed variance. `vitest.config.ts` endorses exactly
+ * this: "a test whose cost is genuinely structural still states its own ceiling
+ * with its own reasoning."
+ *
+ * Nothing here claims an operation *should* take this long. A test that never
+ * settles is still red, just later.
+ */
+const WATCH_MS = process.platform === 'win32' ? 30_000 : 10_000
+const WATCH_SLOW_MS = process.platform === 'win32' ? 45_000 : 15_000
+const WATCH_SLOWEST_MS = process.platform === 'win32' ? 60_000 : 20_000
+
+/**
  * A scratch config directory, spelled the way the OS will spell it back.
  *
  * `os.tmpdir()` is `/var/folders/…` on macOS, which is a symlink to
@@ -191,7 +223,7 @@ describe('TranscriptWatcher against a live file', () => {
     expect(final.requests).toBe(3)
     expect(final.usage.output).toBe(3_000_000)
     expect(updates.length).toBeGreaterThan(1)
-  }, 10_000)
+  }, WATCH_MS)
 
   it('reports a project total that equals the sum of its sessions', async () => {
     /*
@@ -225,7 +257,7 @@ describe('TranscriptWatcher against a live file', () => {
     expect(totalTokens(summary.usage)).toBe(sessionTotal)
     expect(summary.usage.output).toBe(1_000_000)
     expect(summary.usageByModel['claude-sonnet-5'].output).toBe(1_000_000)
-  }, 10_000)
+  }, WATCH_MS)
 
   it('caps how many sessions it keeps resident as new ones appear', async () => {
     // Regression: `maxSessions` was only applied to the initial scan, so a
@@ -265,7 +297,7 @@ describe('TranscriptWatcher against a live file', () => {
     expect(ids).toContain('sess-c')
     expect(ids).toContain('sess-b')
     expect(ids).not.toContain('sess-a')
-  }, 10_000)
+  }, WATCH_MS)
 
   /**
    * The store a confined session writes to, which is not the owner's.
@@ -313,7 +345,7 @@ describe('TranscriptWatcher against a live file', () => {
     // project's spend and the conversation was simply not there.
     expect(afterScan.sessions.map((s) => s.sessionId).sort()).toEqual(['sess-owner', 'sess-phone'])
     expect(afterScan.requests).toBe(2)
-  }, 10_000)
+  }, WATCH_MS)
 
   it('notices a device that starts its first session while the pane is open', async () => {
     /*
@@ -363,7 +395,7 @@ describe('TranscriptWatcher against a live file', () => {
     const grown = await until('the append to that session', watcher, (s) => s.requests >= 2)
     watcher.stop()
     expect(grown.sessions.map((s) => s.sessionId)).toEqual(['sess-late'])
-  }, 15_000)
+  }, WATCH_SLOW_MS)
 
   it('counts only this project, not another folder the device worked in or its scratch', async () => {
     /*
@@ -413,7 +445,7 @@ describe('TranscriptWatcher against a live file', () => {
     console.log('pruned live:', grown.requests, grown.sessions.map((s) => s.sessionId))
     expect(grown.sessions.map((s) => s.sessionId)).toEqual(['sess-mine'])
     expect(grown.requests).toBe(2)
-  }, 15_000)
+  }, WATCH_SLOW_MS)
 
   /**
    * The project total counts one API request once, however many files hold it.
@@ -460,7 +492,7 @@ describe('TranscriptWatcher against a live file', () => {
     // It is only the project sum that must not add a request to itself twice.
     const perSession = summary.sessions.map((s) => s.requests).sort()
     expect(perSession).toEqual([2, 3])
-  }, 15_000)
+  }, WATCH_SLOW_MS)
 
   /* ------------------------------------------------------------------------ *
    * The cap counts conversations, not files.
@@ -511,7 +543,7 @@ describe('TranscriptWatcher against a live file', () => {
     expect(summary.sessions.map((s) => s.sessionId).sort()).toEqual(['sess-work-a', 'sess-work-b'])
     // Everything eligible was read, so the tile may still say "every request".
     expect(summary.truncated).toBe(false)
-  }, 20_000)
+  }, WATCH_SLOWEST_MS)
 
   it('says so when it stopped looking before the folder ran out', async () => {
     const config = scratch('terminaldeck-cost-partial-')
@@ -539,7 +571,7 @@ describe('TranscriptWatcher against a live file', () => {
     // The whole point of the flag: one request is not "every request your agents
     // made in this folder", and the tile has to be able to tell the difference.
     expect(summary.truncated).toBe(true)
-  }, 20_000)
+  }, WATCH_SLOWEST_MS)
 
   it('does not let a transcript with no requests evict one that has some', async () => {
     // The empty-but-active case: a session given a prompt and killed before it
@@ -590,7 +622,7 @@ describe('TranscriptWatcher against a live file', () => {
     watcher.stop()
     expect(summary.requests).toBe(1)
     expect(summary.sessions.map((s) => s.sessionId)).toEqual(['sess-real'])
-  }, 20_000)
+  }, WATCH_SLOWEST_MS)
 
   it('survives a project that has never been opened in Claude Code', async () => {
     const config = scratch('terminaldeck-cost-empty-')
@@ -610,7 +642,7 @@ describe('TranscriptWatcher against a live file', () => {
     expect(summary.activeSessionId).toBeNull()
     expect(summary.usageByModel).toEqual({})
     expect(totalTokens(summary.usage)).toBe(0)
-  }, 10_000)
+  }, WATCH_MS)
 })
 
 describe('what the cap counts as unread', () => {

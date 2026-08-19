@@ -232,3 +232,87 @@ describe('collectFolderDiff', () => {
     expect(diff.attributionNote).toMatch(/not a git repository/)
   })
 })
+
+/* -------------------------------------------- attribution on a Windows path -- */
+
+/**
+ * The one place in this module where the two sides of a comparison come from
+ * different programs, and therefore arrive spelled differently.
+ *
+ * `root` is whatever `git rev-parse --show-toplevel` printed, and git prints
+ * forward slashes on Windows: `C:/Users/asad/Projects/app`. `session.cwd` is
+ * the path this app holds, which came from `dialog.showOpenDialog` and is
+ * native: `C:\Users\asad\Projects\app`. The containment test used to be written
+ * inline here as `cwd === root || cwd.startsWith(`${root}/`)`, and on Windows
+ * neither half could be true for any real pair — so every session started in a
+ * sub-folder was dropped from the candidate set and the copilot reported the
+ * whole diff as unattributed. On a Mac, where both sides are POSIX, the same
+ * code is correct, which is why several thousand green tests said nothing.
+ *
+ * The platform is forced, not measured: on this machine `process.platform` is
+ * 'darwin' and no test that reads it can reach the branch that was broken.
+ */
+describe('which sessions are inside this repository, on Windows', () => {
+  const WIN_ROOT_GIT = 'C:/Users/asad/Projects/app'
+  const WIN_ROOT_NATIVE = 'C:\\Users\\asad\\Projects\\app'
+
+  function winRig(sessions: SessionView[]): Promise<FolderDiff> {
+    const surface: Pick<DeckSurface, 'gitChanges' | 'fileDiff' | 'fileModifiedAt'> = {
+      // Exactly what git prints on Windows — forward slashes, drive letter.
+      gitChanges: async (): Promise<RepoChanges> => ({
+        repo: true,
+        root: WIN_ROOT_GIT,
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        files: [changed('src/a.ts')],
+        reason: null,
+      }),
+      fileDiff: async () => '--- a\n+++ b\n+x\n',
+      fileModifiedAt: async () => 5_000,
+    }
+    return collectFolderDiff(surface, sessions, { cwd: WIN_ROOT_NATIVE }, 'win32')
+  }
+
+  it('credits a session running in a sub-folder of the repository', async () => {
+    const sub = session('web', 1_000, `${WIN_ROOT_NATIVE}\\packages\\web`)
+    const diff = await winRig([sub])
+    expect(diff.sessions.map((entry) => entry.id)).toEqual(['web'])
+    // And it reaches attribution, which is the part the user sees: with one
+    // candidate alive before the write, the file gets a name on it.
+    expect(diff.files[0]?.attribution.sessionId).toBe('web')
+  })
+
+  it('credits a session at the root even though git spelled the root differently', async () => {
+    const at = session('root', 1_000, WIN_ROOT_NATIVE)
+    expect((await winRig([at])).sessions.map((entry) => entry.id)).toEqual(['root'])
+  })
+
+  it('folds case, because NTFS does', async () => {
+    // The drive letter alone arrives capitalised from some Windows APIs and
+    // lower-cased from others, and a folder the user typed once is stored
+    // however they typed it. `c:\users\…` and `C:\Users\…` are one directory.
+    const odd = session('cased', 1_000, 'c:\\users\\ASAD\\Projects\\app\\src')
+    expect((await winRig([odd])).sessions.map((entry) => entry.id)).toEqual(['cased'])
+  })
+
+  it('still refuses the folder next door that merely starts the same way', async () => {
+    // The separator boundary is what makes this containment rather than a
+    // prefix match. `…\app-two` is a different repository.
+    const next = session('neighbour', 1_000, `${WIN_ROOT_NATIVE}-two\\src`)
+    const diff = await winRig([next])
+    expect(diff.sessions).toEqual([])
+    expect(diff.files[0]?.attribution.sessionId).toBeNull()
+  })
+
+  it('keeps the POSIX answer identical, separator for separator', async () => {
+    // The same three cases on a Mac, so the fix is a port and not a rewrite.
+    const inside = session('web', 1_000, `${ROOT}/packages/web`)
+    const neighbour = session('other', 1_000, `${ROOT}-two/src`)
+    const diff = await run({ files: [changed('src/a.ts')], mtimes: { 'src/a.ts': 5_000 } }, [
+      inside,
+      neighbour,
+    ])
+    expect(diff.sessions.map((entry) => entry.id)).toEqual(['web'])
+  })
+})

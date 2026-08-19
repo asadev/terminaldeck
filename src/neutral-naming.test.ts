@@ -82,6 +82,12 @@ import { describe, expect, it } from 'vitest'
  *     words. That last one is the net: it catches copy nobody thought to route
  *     through a named prop, which is most of it.
  *
+ * The middle two are read *through whatever they are built out of* and at any
+ * length — a call, an array, a ternary, an object — because a copy key is a
+ * declaration that its value is words on a screen, and a label is a label at one
+ * word. See {@link copyLiteralsIn}, and hole 4 below for the two strings that
+ * cost us.
+ *
  * Before matching, four shapes are cut out of the text, because they are not
  * prose even when they sit in the middle of it: URLs, paths, `SCREAMING_SNAKE`
  * environment variables, and spans inside backticks — which is how every
@@ -117,7 +123,32 @@ import { describe, expect, it } from 'vitest'
  *     `claude` and `label` above — but never the root identifier, so ordinary
  *     variables cannot trip it.
  *
- * The fourth string the audit found is the one that proves where the line is,
+ * ## The fourth hole, closed on 2026-08-19
+ *
+ * A second audit — this one against the recorded reviews rather than against the
+ * code — found two more live strings with this file still green, and both were
+ * the same hole: **a copy key was only read when its value was a bare string
+ * literal.** Anything else in that position was not examined at all.
+ *
+ *  - `label={baseName(folderFile?.path ?? 'CLAUDE.md')}` in Settings → Copilot.
+ *    `label` is a copy key, and `FileEditor` puts it straight onto the
+ *    textarea's `aria-label`, so a screen-reader user editing a box captioned
+ *    "The folder's own instructions" heard a vendor's filename instead. It was
+ *    not even a fallback: the folder row is emitted whether or not the file
+ *    exists, so the path was always that path and the `??` never ran.
+ *  - `touches: ['CLAUDE.md']` on the readiness fix, printed under "Changes" on
+ *    the always-visible half of the card, on any repository with any agent in
+ *    it. A one-word string inside an array: too short for the catch-all and the
+ *    wrong shape for the property branch.
+ *
+ * The repair is positional rather than lexical, and {@link readsLikeASentence}
+ * argues why counting one word as a sentence would have been the wrong fix.
+ * `touches` joined {@link COPY_KEYS} at the same time, and — since a clean tree
+ * is also what a collector with a hole in it reports — the last `describe` in
+ * this file now hands the collector those two lines of source and asks what it
+ * saw, rather than inferring its reach from today's sources being tidy.
+ *
+ * A fifth string the first audit found is the one that proves where the line is,
  * and it is deliberately still invisible here: `Your own Claude Code install`
  * is composed from `AGENT_CATALOG[account.provider].label`, keyed by a value
  * only known at runtime. No scanner can see that, and none should — reading a
@@ -330,10 +361,38 @@ const ABOUT_A_NAMED_AGENT: ReadonlyArray<{
     file: 'src/main/usage-ipc.ts',
     because:
       'Answers "why is there no usage for this session" per agent, because the two agents record it at ' +
-      'different moments — one near a limit, one when a turn completes.',
+      'different moments — one near a limit, one when a turn completes — and, since 2026-08-18, reports ' +
+      'how a refresh went. The refresh drives one named CLI in a process of this app’s own, so the ' +
+      'sentences say which CLI was asked and what it said about its own billing.',
     allows: [
       'No usage has been reported for this session yet. Claude Code prints its limits only near one, or when /usage is run; Codex records them when a turn completes.',
       'Codex has not recorded a rate limit under this account yet — it writes one into its rollout when a turn completes.',
+      'This session runs a different agent, so it has no Claude limits to read.',
+      'Read from what Claude Code had already written down — nothing was started.',
+      // Names the billing arrangement rather than the CLI, and has to: it is
+      // reporting the words that CLI printed on its own banner — `· Claude API ·`
+      // where a subscription would have said `· Claude Max ·` — and a sentence
+      // that neutralised the name would be describing somebody's billing without
+      // saying which billing it means.
+      'This login is billed through the Claude API, which has no subscription limits to read.',
+    ],
+  },
+  {
+    file: 'src/main/usage-probe.ts',
+    because:
+      'Drives one named CLI over its own control protocol to ask it for its own plan limits. Every ' +
+      'sentence here is a report about that one process: whether it started, whether it answered, and ' +
+      'what it said. A neutral wording would be describing something that did not happen, since no other ' +
+      'agent is asked anything by this module.',
+    allows: [
+      'Claude Code could not be started here, so its usage could not be read.',
+      'Claude Code did not answer within  …  seconds, so its usage is unread.',
+      'Claude Code was asked for its usage and answered something this build could not read.',
+      'Claude Code could not report its usage:  …',
+      'That account is not signed in to Claude Code, so it has no plan limits to report.',
+      'This login has no subscription limits — Claude Code reports none for it.',
+      'Claude Code reports no plan limits for this login.',
+      'Read from Claude Code, in this app’s own process — no session was touched.',
     ],
   },
   {
@@ -344,37 +403,48 @@ const ABOUT_A_NAMED_AGENT: ReadonlyArray<{
     allows: [
       'Read from Claude Code’s own /usage panel.',
       'Read from a limit warning Claude Code printed in this session.',
+      // The provenance of the source that replaced the panel on 2026-08-18. The
+      // name is the whole content of it: what a reader of this line wants to
+      // know is that the figure was fetched by that CLI in this app's own
+      // process rather than by typing into the session in front of them.
+      'Fetched by Claude Code itself, in this app’s own process — no session is typed into.',
       'Read from the rollout Codex writes as it works — no need to ask it.',
     ],
   },
   {
     file: 'src/renderer/shell/UsageBar.tsx',
     because:
-      'Describes an automation that types /usage and reads the panel that one CLI draws. It is that CLI’s ' +
-      'command and that CLI’s panel.',
+      'Describes an automation that asks one named CLI for its own plan limits. It is that CLI’s ' +
+      'subscription and that CLI’s process, and the sentence exists to tell the reader which — and, ' +
+      'since 2026-08-18, that it is not their session.',
     allows: [
-      'Read from Claude Code’s own /usage panel. This checks by itself whenever the session goes quiet, so there is nothing to press.',
+      'Fetched by Claude Code itself, in this app’s own process — no session is typed into. This happens by itself whenever the session goes quiet, so there is nothing to press.',
     ],
   },
   {
     file: 'src/renderer/chat/usage/usage-model.ts',
-    because: 'The same automation’s refusals, naming the prompt it looked for and did not find.',
+    because:
+      'The renderer’s fallback wording for the same automation, used when the main process sends a ' +
+      'result with no sentence of its own. It names the one CLI that is asked, for the same reason ' +
+      '`usage-probe.ts` does: no other agent is asked anything.',
     allows: [
-      'No empty Claude Code prompt on screen — clear the prompt, or check this session is running Claude Code.',
-      'Claude Code did not show its usage panel.',
-      'Claude Code’s usage panel shows no plan limits for this account, so there is nothing to read.',
-      'Claude Code’s usage panel was opened to read this and did not close — press Esc in the session.',
+      'Read from Claude Code, in this app’s own process — no session was touched.',
+      'Read from what Claude Code had already written down — nothing was started.',
+      'That account is not signed in to Claude Code, so it has no plan limits to report.',
+      'Claude Code could not be started here, so its usage could not be read.',
+      'This session runs a different agent, so it has no Claude limits to read.',
+      'Claude Code’s usage could not be read just now.',
     ],
   },
   {
     file: 'src/renderer/chat/controls/catalog.ts',
     because:
-      'The model, effort, fast and permission controls type one CLI’s slash commands into the pty. ' +
-      '`unsupportedProviderNote` withdraws the whole panel for the other agents and says so in as many ' +
-      'words, so nothing here is ever drawn where a different agent could be meant.',
+      'The model, effort, fast and permission controls type one CLI’s slash commands into the pty, and ' +
+      'these strings describe that CLI’s own behaviour on a row that is only ever drawn for it. The ' +
+      'sentence that named a *different* agent — `unsupportedProviderNote` — was deleted on 2026-08-19 ' +
+      'and its replacement in `SessionControls.tsx` names the category instead.',
     allows: [
       'Claude judges each call and blocks risky ones',
-      'These work by typing Claude Code’s own commands into the session.  …  has its own, and this build has not been shown what they are — so nothing is offered here rather than a button that types the wrong thing.',
       'from Claude settings',
       'Claude prints the permission mode only when it changes, and no default is set in your Claude settings — so this session has not said which one it is in. Pick one and it will.',
     ],
@@ -490,7 +560,14 @@ const ABOUT_A_NAMED_AGENT: ReadonlyArray<{
 
 /* --------------------------------------------------------------- collecting -- */
 
-/** JSX props and object keys that carry words a person reads. */
+/**
+ * JSX props and object keys that carry words a person reads.
+ *
+ * A key on this list declares its value to be copy, so the value is read
+ * **whatever shape it has and however short it is** — see {@link copyLiteralsIn}
+ * for why that is now the collector's rule rather than "a string literal of
+ * three words or more".
+ */
 const COPY_KEYS = new Set([
   'title',
   'placeholder',
@@ -517,6 +594,16 @@ const COPY_KEYS = new Set([
   'purpose',
   'prompt',
   'why',
+  /*
+   * `touches` is the readiness fix's list of what it writes, printed under
+   * "Changes" on the always-visible part of the card. It is on this list since
+   * 2026-08-19 because it was the field that carried `CLAUDE.md` onto that card
+   * for every project and every user while this suite stayed green — the value
+   * is an array of one-word strings, so neither the object-property branch (a
+   * string literal only) nor the catch-all (three words or more) could see it.
+   * Its other values are project paths, which `prosePartOf` cuts out anyway.
+   */
+  'touches',
 ])
 
 /**
@@ -717,7 +804,26 @@ function prosePartOf(text: string, backticks: 'shelter' | 'unwrap' = 'shelter'):
   )
 }
 
-/** Three words or more, at least one of them lettered. A sentence, not an id. */
+/**
+ * Three words or more, at least one of them lettered. A sentence, not an id.
+ *
+ * This is the *catch-all's* test and it stays where it is, which is worth
+ * defending because the fourth hole (below) was a one-word string sailing past
+ * it. The obvious repair — count one word as copy — is the wrong one, and
+ * loudly so: `'CLAUDE.md'` appears in this tree as an argument to `createFile`,
+ * as a member of `CLAUDE_MD_CANDIDATES`, and inside `join(paths.root, …)`. Those
+ * are filesystem operations, not sentences; the header of this file says in as
+ * many words that code, identifiers and filenames are untouched. A guard that
+ * fired on them would be answered with exemptions, and a guard answered with
+ * exemptions has stopped guarding.
+ *
+ * So the widening is **positional, not lexical**: a string is copy because of
+ * where it sits, not because of how many words it has. Three words remains the
+ * heuristic for a bare literal *somewhere in code* — the net that catches copy
+ * nobody routed through a named prop. Everywhere a string has been *declared* to
+ * be copy, by sitting under a {@link COPY_KEYS} key or in a JSX attribute of
+ * that name, length stops mattering entirely: a label is a label at one word.
+ */
 function readsLikeASentence(text: string): boolean {
   return text.trim().split(/\s+/).filter((word) => /[A-Za-z]/.test(word)).length >= 3
 }
@@ -732,14 +838,107 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   return out
 }
 
+/**
+ * Everything a copy key's value can put on a screen, however it is assembled.
+ *
+ * ## The fourth hole, found on 2026-08-19
+ *
+ * The three holes closed on 2026-08-18 were all about *what the text says*.
+ * This one is about **where the collector was willing to look**, and it let two
+ * live strings through on the two surfaces the review named:
+ *
+ *  1. `label={baseName(folderFile?.path ?? 'CLAUDE.md')}` in the copilot's
+ *     settings pane. `label` is a copy key and `label` is exactly what the
+ *     editor puts on the textarea's `aria-label`, so this was a vendor's
+ *     filename read aloud to every screen-reader user on every machine. The
+ *     attribute branch accepted a `StringLiteral` and nothing else, so a call
+ *     was not looked inside at all — and because the collector never saw the
+ *     string, no exemption was ever argued for it and nobody was ever asked.
+ *  2. `touches: ['CLAUDE.md']` on the readiness fix. An array under a key,
+ *     holding a single one-word string: too short for the catch-all and the
+ *     wrong shape for the object-property branch, which also took a bare
+ *     literal only.
+ *
+ * Both are the same mistake, and it is the mistake this file's own header warns
+ * about in a different costume: **the guard was reading something other than
+ * what a person reads.** A copy key is a *declaration* that its value is words
+ * on a screen. Once that is declared, how the value is built — a literal, a
+ * ternary, a call, an array, a `??` chain, an object of them — is the author's
+ * business and none of the guard's, and so is how long it is.
+ *
+ * ## What it takes, and what it refuses to take
+ *
+ * Every string and template literal in the value's subtree, at any depth, with
+ * no length test. Templates are resolved the same way the catch-all resolves
+ * them, through {@link resolvedSpan}, so a name welded in from a constant still
+ * arrives.
+ *
+ * JSX elements inside the value are stepped over, and that is deliberate rather
+ * than lazy. `hint={<>…<code>claude mcp add</code>…</>}` is a subtree the main
+ * visitor already walks, with the quoting rules the `<code>` tag is entitled to;
+ * reading it a second time here would strip that context off it and report a
+ * quotation as prose. Two readings that disagree is worse than one.
+ *
+ * Duplicates are not deduplicated, because the collector has always produced
+ * them — `<Foo title="a long enough sentence" />` is taken by the attribute
+ * branch and again by the catch-all as it descends — and every assertion in this
+ * file is a question about *whether* a string is on the list, never how often.
+ *
+ * ## The false positives this buys, and why they are cheap
+ *
+ * A copy key whose value happens to contain a non-copy string now contributes
+ * it: `title={formatWhen(at, 'en-GB')}` puts `en-GB` on the list. That is fine.
+ * The list is only ever matched against a vendor name, and a locale, a format
+ * string or a CSS length matches nothing. The cost of being over-inclusive here
+ * is a longer list; the cost of being under-inclusive was `CLAUDE.md` in an
+ * `aria-label` for a whole release.
+ */
+function copyLiteralsIn(
+  value: ts.Expression,
+  constants: Map<string, string>,
+  take: (text: string, node: ts.Node) => void,
+): void {
+  const walk = (node: ts.Node): void => {
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node)) return
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      take(node.text, node)
+      return
+    }
+    if (ts.isTemplateExpression(node)) {
+      const parts = [node.head.text]
+      for (const span of node.templateSpans) {
+        parts.push(resolvedSpan(span.expression, constants), span.literal.text)
+      }
+      take(parts.join(''), node)
+      return
+    }
+    ts.forEachChild(node, walk)
+  }
+  walk(value)
+}
+
 function collectFromTypeScript(file: string, rel: string, found: Found[]): void {
-  const source = readFileSync(file, 'utf8')
+  collectFromSource(readFileSync(file, 'utf8'), rel, file.endsWith('.tsx'), found)
+}
+
+/**
+ * The collector proper, over text rather than over a path.
+ *
+ * Split out from {@link collectFromTypeScript} on 2026-08-19 so that the last
+ * test in this file can hand it a few lines of source and ask what it saw. That
+ * test is the only reason the seam exists, and it earns it: every other
+ * assertion here asks whether *today's tree* is clean, which a collector that
+ * has quietly stopped looking somewhere also answers yes to. The `> 1000`
+ * counts at the top catch a collector that has died altogether; nothing caught
+ * one that had a hole in a particular shape, which is what all four holes were.
+ */
+function collectFromSource(source: string, rel: string, tsx: boolean, found: Found[]): void {
   const sf = ts.createSourceFile(
-    file,
+    rel,
     source,
     ts.ScriptTarget.Latest,
     true,
-    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    tsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   )
   const constants = constantsOf(sf)
   const take = (text: string, node: ts.Node, quoted = false): void => {
@@ -760,27 +959,13 @@ function collectFromTypeScript(file: string, rel: string, found: Found[]): void 
     } else if (ts.isJsxAttribute(node) && node.initializer) {
       if (COPY_KEYS.has(node.name.getText(sf))) {
         const init = node.initializer
-        const literal = ts.isStringLiteral(init)
-          ? init
-          : ts.isJsxExpression(init) &&
-              init.expression &&
-              (ts.isStringLiteral(init.expression) ||
-                ts.isNoSubstitutionTemplateLiteral(init.expression))
-            ? init.expression
-            : null
-        if (literal) take(literal.text, node)
+        const value = ts.isJsxExpression(init) ? init.expression : init
+        if (value) copyLiteralsIn(value, constants, take)
       }
     } else if (ts.isPropertyAssignment(node)) {
       const key =
         ts.isIdentifier(node.name) || ts.isStringLiteral(node.name) ? node.name.text : null
-      const value = node.initializer
-      if (
-        key !== null &&
-        COPY_KEYS.has(key) &&
-        (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value))
-      ) {
-        take(value.text, node)
-      }
+      if (key !== null && COPY_KEYS.has(key)) copyLiteralsIn(node.initializer, constants, take)
     }
 
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
@@ -988,6 +1173,31 @@ describe('the neutral vocabulary is used consistently', () => {
     ).toBe(true)
   })
 
+  it('the box that edits that folder’s file is named by category, not by the file', () => {
+    /*
+     * The `aria-label` on the textarea, which is the only thing `FileEditor`
+     * does with `label` and the only way anybody hears which box they are in.
+     * It read `baseName(folderFile?.path ?? 'CLAUDE.md')` until 2026-08-19 —
+     * a vendor's filename, unconditionally, on the pane the review was looking
+     * at when it asked for none.
+     *
+     * Pinned by the row's exact visible words rather than by any neutral
+     * phrase, because the point is that the two agree: what a screen reader
+     * announces is what the person next to it is reading.
+     */
+    expect(
+      says('src/renderer/settings/sections/CopilotSection.tsx', 'The folder’s own instructions'),
+    ).toBe(true)
+  })
+
+  it('the readiness card says what a fix changes by category on its visible line', () => {
+    // `touches` is printed under "Changes" the moment the card is drawn, on any
+    // repository with any agent in it. The filename is still disclosed — in the
+    // fix's `description`, which is on the {@link DISCLOSED_FILENAMES} list and
+    // is asserted to still exist by the staleness test above.
+    expect(says('src/main/readiness.ts', 'your instructions file')).toBe(true)
+  })
+
   it('the readiness check is titled by category, and its fix by what it makes', () => {
     expect(says('src/main/readiness.ts', 'Agent instructions present and useful')).toBe(true)
     expect(says('src/main/readiness.ts', 'Create instructions file')).toBe(true)
@@ -1004,5 +1214,85 @@ describe('the neutral vocabulary is used consistently', () => {
     expect(
       says('ios/TerminalDeck/Screens/SessionListView.swift', 'in your own terminal or editor.'),
     ).toBe(true)
+  })
+})
+
+/**
+ * The guard's own reach, asked directly rather than inferred from a clean tree.
+ *
+ * Every other assertion in this file is a question about today's source, and a
+ * collector with a hole in it answers all of them "clean". All four holes found
+ * so far were exactly that: not a judgement anybody made, not a string anybody
+ * argued for, but a shape the scanner declined to look at. The two below are the
+ * ones that reached a screen in the 0.5.0 build and were never seen here.
+ *
+ * Written as source text on purpose. A test that called `copyLiteralsIn` with a
+ * hand-built node would pin the function; this pins the thing that matters,
+ * which is what happens when somebody types those lines into a `.tsx` file.
+ */
+describe('the collector reads copy in the shapes people actually write it', () => {
+  const seen = (source: string, tsx = true): string[] => {
+    const found: Found[] = []
+    collectFromSource(source, tsx ? 'fixture.tsx' : 'fixture.ts', tsx, found)
+    return found.map((item) => item.text)
+  }
+
+  it('reads a copy prop whose value is computed, not written out', () => {
+    // The settings-pane leak, in miniature: a copy key, a call, and the name
+    // inside it. `label` is what `FileEditor` puts on the textarea's
+    // `aria-label`, so this is a person hearing "CLAUDE dot M D".
+    const texts = seen(`
+      const x = <FileEditor label={baseName(file?.path ?? 'CLAUDE.md')} />
+    `)
+    expect(texts).toContain('CLAUDE.md')
+  })
+
+  it('reads a copy key holding a list, and each one-word entry in it', () => {
+    // The readiness leak. Neither the old object-property branch (a bare string
+    // literal only) nor the catch-all (three lettered words or more) could see
+    // a single short string inside an array.
+    const texts = seen(`const fix = { touches: ['CLAUDE.md'] }`, false)
+    expect(texts).toContain('CLAUDE.md')
+  })
+
+  it('reads through the other shapes a value gets built out of', () => {
+    // Not a wish-list: each of these is how some existing copy prop in this
+    // tree is written, and any of them could have been where the name landed.
+    const texts = seen(`
+      const a = <B title={busy ? 'Working…' : 'VS Code'} />
+      const c = <D hint={['first', 'GEMINI.md']} />
+      const e = <F note={{ text: 'Visual Studio Code', ok: true }} />
+    `)
+    expect(texts).toEqual(expect.arrayContaining(['VS Code', 'GEMINI.md', 'Visual Studio Code']))
+  })
+
+  it('and the whole thing is caught by the rule, not merely collected', () => {
+    // Collection is only half of it. This is the assertion that would have gone
+    // red on 0.5.0: the strict rule, run over what the collector now returns.
+    const offenders = seen(`
+      const x = <FileEditor label={baseName(file?.path ?? 'CLAUDE.md')} />
+      const fix = { touches: ['CLAUDE.md'] }
+    `).filter((text) => NAMED_IN_THE_REVIEW.test(prosePartOf(withoutDisclosures(text), 'unwrap')))
+    expect(offenders).toHaveLength(2)
+  })
+
+  it('steps over JSX inside a copy prop rather than reading it twice', () => {
+    /*
+     * `<code>` is the one place the rule would force a lie, and the main visitor
+     * is where that exemption lives — it tags the text `quoted` from the tag it
+     * sits under. Reading the same span again from in here would report a
+     * quotation as prose, so the walk stops at a JSX element and lets the
+     * ordinary pass handle it, with the context intact.
+     */
+    const found: Found[] = []
+    collectFromSource(
+      `const x = <Row hint={<span>run <code>claude mcp add</code> first</span>} />`,
+      'fixture.tsx',
+      true,
+      found,
+    )
+    const quoted = found.filter((item) => item.text.includes('claude mcp add'))
+    expect(quoted).toHaveLength(1)
+    expect(quoted[0].quoted).toBe(true)
   })
 })

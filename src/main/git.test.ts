@@ -21,6 +21,25 @@ import {
 
 const run = promisify(execFile)
 
+/**
+ * The ceiling for a case that drives real `git`, and why it is not one number.
+ *
+ * Every test below this line makes a temporary repository and then shells out
+ * to `git` several times over it. On this Mac that is single-digit milliseconds
+ * a spawn; on the Windows runner it is the dominant cost of the file and it
+ * swings by roughly 5x between runs of *identical code* — `readiness.test.ts`
+ * carries the measurements from the runner's own logs, including a 20 s ceiling
+ * actually being hit by a case that had taken 1149 ms two runs earlier.
+ *
+ * 20000 was written here as a bare literal, which overrides the 30 s Windows
+ * allowance `vitest.config.ts` exists to provide — so the file most likely to
+ * need that allowance was the file that had opted out of it. The POSIX number
+ * is unchanged: that is where the work is done and the tight ceiling is what
+ * would notice a real slowdown. The Windows number is the worst figure ever
+ * actually observed, with room over it.
+ */
+const GIT_HEAVY_MS = process.platform === 'win32' ? 60_000 : 20_000
+
 /** Join records the way `-z` does: every record NUL-terminated. */
 function z(...records: string[]): string {
   return records.map((r) => `${r}\0`).join('')
@@ -259,7 +278,7 @@ describe('readGitStatus', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
-  }, 20000)
+  }, GIT_HEAVY_MS)
 
   it('reports a folder that does not exist', async () => {
     const result = await readGitStatus(join(tmpdir(), 'terminaldeck-does-not-exist-9f3a'))
@@ -299,7 +318,7 @@ describe('readGitStatus', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
-  }, 20000)
+  }, GIT_HEAVY_MS)
 })
 
 /**
@@ -419,7 +438,7 @@ describe.skipIf(!HAS_GIT)('readFileDiff', () => {
       await rm(secret, { force: true })
       await rm(dir, { recursive: true, force: true })
     }
-  }, 20000)
+  }, GIT_HEAVY_MS)
 
   /** The guard must not cost the panel its actual job. */
   it('still diffs untracked, unstaged and staged files inside the repo', async () => {
@@ -439,7 +458,7 @@ describe.skipIf(!HAS_GIT)('readFileDiff', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
-  }, 20000)
+  }, GIT_HEAVY_MS)
 })
 
 /* ---------------------------------------------------------------- watching -- */
@@ -496,7 +515,7 @@ describe('git watches', () => {
       stopAllGitWatches()
       await rm(dir, { recursive: true, force: true })
     }
-  }, 20000)
+  }, GIT_HEAVY_MS)
 
   it('ignores watch and unwatch for a relative path', async () => {
     const { ipcMain, invoke, sent } = fakeIpc()
@@ -512,5 +531,5 @@ describe('git watches', () => {
     } finally {
       stopAllGitWatches()
     }
-  }, 20000)
+  }, GIT_HEAVY_MS)
 })

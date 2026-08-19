@@ -144,14 +144,66 @@ async function startCopilot(): Promise<string> {
   return state.sessionId as string
 }
 
-/** Give a pty a moment to echo, without pinning a duration to a fast machine. */
-async function settle(predicate: () => boolean, label: string): Promise<void> {
-  const deadline = Date.now() + 2000
+/**
+ * Give a pty a moment to echo, without pinning a duration to a fast machine.
+ *
+ * Returns how long the wait actually took, because the negative assertion below
+ * has to be measured against it rather than against a number chosen on this
+ * Mac. See {@link atLeastAsLong}.
+ */
+async function settle(predicate: () => boolean, label: string): Promise<number> {
+  const started = Date.now()
+  const deadline = started + SETTLE_BUDGET_MS
   while (Date.now() < deadline) {
-    if (predicate()) return
+    if (predicate()) return Date.now() - started
     await new Promise((done) => setTimeout(done, 20))
   }
   throw new Error(`timed out waiting for ${label}`)
+}
+
+/**
+ * How long a real pty is given to echo before the wait is called a failure.
+ *
+ * Two numbers because the two runners are not the same machine. On this Mac a
+ * pty echoes in single-digit milliseconds and two seconds is enormous headroom;
+ * on the Windows runner `vitest.config.ts` records scheduling variance of about
+ * 25x on unchanged code, and a ConPTY spawn is the single most expensive thing
+ * in this suite. A budget tuned here is a budget that fails there for a reason
+ * that has nothing to do with the copilot.
+ *
+ * `readiness.test.ts` establishes this shape — `const GIT_HEAVY_MS =
+ * process.platform === 'win32' ? 60_000 : 20_000` — and `vitest.config.ts`
+ * endorses it in as many words: a test whose cost is genuinely structural
+ * states its own ceiling with its own reasoning.
+ */
+const SETTLE_BUDGET_MS = process.platform === 'win32' ? 15_000 : 2000
+
+/**
+ * The floor under the silence, so it is never shorter than the proof.
+ *
+ * This is the *whole* mechanism of the one test standing between a paired phone
+ * and the copilot's keyboard, and it was wrong in the direction that passes.
+ * The control leg waits up to {@link SETTLE_BUDGET_MS} for the person's session
+ * to echo — that is what establishes the fanout can type at all — and the
+ * copilot's silence was then measured over a flat 200 ms, while the comment
+ * beside it claimed "the copilot gets at least as long to betray itself as the
+ * session above took to answer".
+ *
+ * On this Mac the two are close enough that nobody would notice: the echo lands
+ * in a few milliseconds and 200 ms is generous. On a loaded Windows runner
+ * where the control leg genuinely takes 1500 ms, the copilot got an eighth of
+ * the time it had just taken to prove that typing works — so a write that *did*
+ * land, slowly, would be asserted absent and the test would pass green over a
+ * copilot the phone had successfully typed into.
+ *
+ * So the number is measured, not chosen: whatever the control took, the silence
+ * gets at least that, with a floor so a suspiciously fast echo does not shrink
+ * the negative case to nothing.
+ */
+const MIN_SILENCE_MS = 200
+
+function atLeastAsLong(controlMs: number): number {
+  return Math.max(controlMs, MIN_SILENCE_MS)
 }
 
 describe('what a paired phone can see of this app', () => {
@@ -193,13 +245,19 @@ describe('what a paired phone can see of this app', () => {
      * indistinguishable from a test that types nowhere at all.
      */
     core.sessions.write(mine.id, 'echo-me')
-    await settle(() => (output.get(mine.id) ?? '').includes('echo-me'), 'the echo from the person’s session')
+    const controlMs = await settle(
+      () => (output.get(mine.id) ?? '').includes('echo-me'),
+      'the echo from the person’s session',
+    )
 
     core.sessions.write(copilot, 'rm -rf ~/Projects\r')
     core.sessions.resize(copilot, 200, 60)
-    // Same wait again, so the copilot gets at least as long to betray itself as
-    // the session above took to answer.
-    await new Promise((done) => setTimeout(done, 200))
+    // The same wait again, and this time it really is the same wait: whatever
+    // the control leg took to prove the fanout can type, the copilot gets at
+    // least that long to betray itself. It used to be a flat 200 ms against a
+    // control with a 2000 ms budget — indistinguishable on this Mac, and on a
+    // loaded Windows runner an eighth of the time the proof itself needed.
+    await new Promise((done) => setTimeout(done, atLeastAsLong(controlMs)))
     expect(output.get(copilot) ?? '').not.toContain('rm -rf')
   })
 

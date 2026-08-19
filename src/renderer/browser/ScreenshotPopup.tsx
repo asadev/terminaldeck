@@ -26,13 +26,35 @@ interface Props {
  *
  * Cut at a separator where there is one near the limit, so the visible part
  * starts at a folder name rather than mid-word.
+ *
+ * ## Both separators, because the input is a real OS path
+ *
+ * This is handed `screenshotDir()`, which is `join(app.getPath('pictures'),
+ * BRAND.name)` — so on Windows it is `C:\Users\asad\Pictures\Terminal Deck\
+ * localhost-8791-20260817-012405.png`, with not one forward slash in it.
+ * Splitting on `'/'` alone made the whole path a single segment: the
+ * folder-boundary loop had nothing to iterate, the function fell through to the
+ * raw character slice, and the popup showed an arbitrary mid-word cut like
+ * `…/sad\Pictures\Terminal Deck\localhost-…png` instead of the intended
+ * `…\Terminal Deck\localhost-….png`. Cosmetic, and visible on every single
+ * screenshot a Windows user takes.
+ *
+ * The separator the input used is the one it is rejoined with, rather than
+ * normalising to `/`. This string sits directly under a `title` carrying the
+ * full path, and a person who reads the short form and then copies the long one
+ * should not see the machine spell its own paths two ways in the same tooltip.
+ * `folderName` in `session-title.ts` splits on `/[\\/]/` for the same reason and
+ * records the Windows machine it was found on.
  */
 export function shortenPath(path: string, max = 52): string {
   if (path.length <= max) return path
-  const parts = path.split('/')
+  const parts = path.split(/[\\/]/)
+  // Whichever the input used. A path with neither is a bare filename, where the
+  // separator never appears in the output anyway.
+  const sep = path.includes('\\') && !path.includes('/') ? '\\' : '/'
   let kept = parts[parts.length - 1]
   for (let i = parts.length - 2; i >= 0; i--) {
-    const wider = `${parts[i]}/${kept}`
+    const wider = `${parts[i]}${sep}${kept}`
     // +2 for the leading ellipsis and separator this will end up wearing.
     if (wider.length + 2 > max) break
     kept = wider
@@ -40,7 +62,7 @@ export function shortenPath(path: string, max = 52): string {
   // A single filename longer than the budget still has to be cut somewhere, and
   // its end — the timestamp — is the part that distinguishes it from its
   // neighbours.
-  return `…/${kept.length + 2 > max ? kept.slice(kept.length - (max - 2)) : kept}`
+  return `…${sep}${kept.length + 2 > max ? kept.slice(kept.length - (max - 2)) : kept}`
 }
 
 /**

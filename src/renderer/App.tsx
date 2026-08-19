@@ -84,9 +84,27 @@ import {
   machineTabId,
   nextActiveId,
   readMachineTabId,
+  readServerTabId,
+  serverTabId,
   sessionLabel,
+  tabLabel,
   type WorkspaceTab,
 } from './shell/workspace-tabs'
+import { ServerSessionPane } from './machines/servers/ServerSessionPane'
+import { MachineSessions } from './machines/new-session-context'
+import { ServerSessions } from './machines/servers/session-context'
+import { resolveServersBridge } from './machines/servers/types'
+import {
+  newShellKey,
+  renameServersIn,
+  serverSessionEnded,
+  serverSessionGroups,
+  serverTabs,
+  withoutServer,
+  withoutServerSession,
+  withServerSession,
+  type ServerSession,
+} from './machines/servers/server-sessions'
 import {
   AUTO_SELECTION,
   resolveActiveTab,
@@ -127,6 +145,14 @@ type PendingClose =
   | { kind: 'project'; path: string; name: string; status: SessionStatus; count: number }
   | { kind: 'machine-session'; machineId: string; sessionId: string; name: string; status: SessionStatus }
   | { kind: 'machine'; machineId: string; name: string; status: SessionStatus; count: number }
+  /*
+   * And the two a server adds. `name` is the *server's* name on both, not the
+   * terminal's, because that is what the dialog has to identify — a row called
+   * "Session 2" names nothing on its own, and the one fact a person needs at
+   * this moment is which machine it is on.
+   */
+  | { kind: 'server-session'; tabId: string; name: string; status: SessionStatus }
+  | { kind: 'server'; serverId: string; name: string; status: SessionStatus; count: number }
 
 /**
  * The three facts the session chrome needs about a session, off the store.
@@ -531,6 +557,43 @@ function Workspace() {
     { machineId: string; sessionId: string } | null
   >(null)
   /**
+   * The way to a server, and nothing else read from one.
+   *
+   * `resolveServersBridge` is pure — it looks at what the preload actually
+   * carries and answers the object or null — so asking for it here costs no IPC
+   * and dials nothing. That matters: this window holds the shells people open on
+   * servers, and it must not become a second thing that reads the servers list
+   * on every launch. The list belongs to the Machines panel, which reads it once
+   * when somebody opens it.
+   */
+  const serversBridge = useMemo(() => resolveServersBridge(), [])
+  /**
+   * The shells this window has open on servers.
+   *
+   * Held here rather than inside the Machines panel, and that placement is the
+   * whole of what makes a server session a session. A panel's state stops
+   * existing when the panel closes; that is exactly what used to happen to a
+   * terminal on a server, and it is why one had no row in the rail, no pill, no
+   * ⌘W and nothing you could drag to the top while a session on a paired laptop
+   * had all four. Asad, for the third night running about machines that are not
+   * this one: *"the shape of the application should not be changing for local
+   * and remote devices. It should act like that same."*
+   *
+   * `machines/servers/server-sessions.ts` holds every rule about this list and
+   * has no React in it, so what a row is called and what closing one takes with
+   * it can be pinned without a window.
+   */
+  const [serverSessions, setServerSessions] = useState<readonly ServerSession[]>([])
+  /**
+   * Which of those is on screen, by tab id, or null when something else is.
+   *
+   * One id rather than the pair `openMachineSession` carries, because the pair
+   * has to be re-joined into a tab id at four call sites and this one is read as
+   * an id at all of them. `readServerTabId` takes it back apart where the two
+   * halves are actually needed.
+   */
+  const [openServerSession, setOpenServerSession] = useState<string | null>(null)
+  /**
    * Machines whose group has been closed, and is therefore not drawn.
    *
    * ## What Close means, in his words
@@ -823,7 +886,24 @@ function Workspace() {
     )
 
   /**
-   * Everything the strip and the rail list — this window's, and the machines'.
+   * The shells open on servers, as tabs.
+   *
+   * A third list for the same reason `machineTabs` is a second one: `tabs` is
+   * *this window's* windows and half a dozen things downstream treat it as
+   * exactly that — `closeTabNow` reaches for `window.deck.killSession`,
+   * `resolveActiveTab` falls back to `tabs[0]` at launch, the swarm mounts a
+   * terminal per entry. Folding a shell that runs on somebody's server into that
+   * array would mean qualifying every one of those with "unless it is a server",
+   * which is a shape of bug per site rather than a decision in one place.
+   *
+   * Built by `serverTabs` rather than here so that what a server tab *is* can be
+   * asserted without a window around it.
+   */
+  const serverSessionTabs: WorkspaceTab[] = serverTabs(serverSessions)
+
+  /**
+   * Everything the strip and the rail list — this window's, the machines' and
+   * the servers'.
    *
    * One array for the two surfaces whose whole job is to answer *what do I have
    * open*, and it is the same array for both so they cannot disagree about it.
@@ -831,7 +911,7 @@ function Workspace() {
    * session pinned to the top stays pinned across a renderer reload exactly as a
    * local one does.
    */
-  const openTabs: WorkspaceTab[] = [...tabs, ...machineTabs]
+  const openTabs: WorkspaceTab[] = [...tabs, ...machineTabs, ...serverSessionTabs]
 
   /**
    * Forget a machine was ever closed, once work nobody here closed is on it.
@@ -952,6 +1032,17 @@ function Workspace() {
    */
   const machineTabsRef = useRef(machineTabs)
   machineTabsRef.current = machineTabs
+  /*
+   * And the shells open on servers, for the three closes that act on those.
+   *
+   * A ref for the same reason: the list is rebuilt whenever anything anywhere in
+   * this window opens or closes, and a callback that depended on it would be a
+   * new function each time — handed to the rail, the strip and the keyboard
+   * dispatcher — for a list it only reads at the instant somebody presses
+   * something.
+   */
+  const serverSessionsRef = useRef(serverSessions)
+  serverSessionsRef.current = serverSessions
   /*
    * Everything open, for the same reason and read the same way.
    *
@@ -1487,7 +1578,8 @@ function Workspace() {
   )
 
   /**
-   * Every route to a new session, and there is now exactly one of them.
+   * Every route to a new session, and there is now exactly one of them — apart
+   * from one button this file cannot reach, named at the bottom of this note.
    *
    * Asad, 2026-08-17: *"if we click directly on the whole button it opens a
    * quick window. We don't want this quick window at all. We just always wanted
@@ -1504,7 +1596,46 @@ function Workspace() {
    *
    * The direct spawn is *not* deleted — `newSession` above is still what the
    * dialog's Start, Continue-last-session, the account chip and the sign-in
-   * flow all call. What is gone is any *button* that reaches it without asking.
+   * flow all call. What is gone is any *button in this window's chrome* that
+   * reaches it without asking.
+   *
+   * ## One button still goes round this, and it is not in this file
+   *
+   * That last sentence read "any *button*" until 2026-08-19, when an audit of
+   * the recorded reviews read it as a closed invariant and it is wrong by one.
+   * The paired-machine card on Settings → Remote draws its own **New session** —
+   * `machines/MachineLinks.tsx`, in the `machines-actions` row — and its handler
+   * calls `bridge.createMachineSession(machine.id, link.folders?.[0] ?? '')`.
+   * That is the quick window he asked to have taken away, wearing a different
+   * frame: nothing asks which agent, nothing asks which login, and the folder is
+   * whichever one happens to be first in the list that machine advertised rather
+   * than one anybody picked. Its own test pins the direct spawn, so it is
+   * current intent rather than something left behind.
+   *
+   * The sentence is corrected rather than deleted. The invariant it states is
+   * still the one this function is holding to and still what every control in
+   * the rail, the strip, the palette and the menu obeys; it was simply never
+   * true of the whole app, and a comment that overstates is exactly how the next
+   * reader is told a gap is closed.
+   *
+   * ## What closing it takes, so the next person does not have to find it twice
+   *
+   * One call site, and this function is already what it should call:
+   * `openNewSessionDialog(null, machine.id)` — the same press the rail's machine
+   * heading makes below, which lands on the dialog's machine step with the
+   * folder and the agent still to answer. What it needs is a way *up*: that page
+   * is four components above this one and on the far side of `PanelView`'s
+   * switch, so a callback cannot be threaded down without widening the file that
+   * draws all ten views. The route already exists for the identical problem one
+   * subject over — `machines/servers/session-context.ts` publishes the window's
+   * server-shell opener as a context, `null` meaning "no window around me, so
+   * draw no control", and `ServerAdvanced` reads it. A machine opener wants the
+   * same shape.
+   *
+   * Not built here, on purpose: the context and the button both live in files
+   * this pass does not own, and a provider with nothing reading it is dead code
+   * that reads like a finished feature. Naming it with its shape is worth more
+   * than half of it.
    */
   const openNewSessionDialog = useCallback(
     (
@@ -1685,6 +1816,24 @@ function Workspace() {
         clearPanel()
         setCopilotPending(false)
         setOpenMachineSession(remote)
+        setOpenServerSession(null)
+        return
+      }
+      /*
+       * A terminal on a server, shown the same way and by the same road.
+       *
+       * Second rather than first only because the machine test was already
+       * here; the two are independent and either order is correct. What matters
+       * is that both are *above* `showTab`, so every route into "show me this"
+       * — the rail, the pill, ⌘1–9, the palette — arrives at one place and
+       * routes once. `readServerTabId` is the only code that knows how the two
+       * handles were joined into this id.
+       */
+      if (readServerTabId(id)) {
+        clearPanel()
+        setCopilotPending(false)
+        setOpenMachineSession(null)
+        setOpenServerSession(id)
         return
       }
       showTab(id)
@@ -1699,6 +1848,10 @@ function Workspace() {
        * about what is selected.
        */
       setOpenMachineSession(null)
+      /* And the same for a terminal on a server, which covers the pane in
+         exactly the same way and has to be revealed from under by exactly the
+         same act. */
+      setOpenServerSession(null)
       /*
        * While the window is split, a sidebar row or a tab fills the pane you
        * are looking at rather than taking the whole window back.
@@ -2146,6 +2299,199 @@ function Workspace() {
     [confirmClose, closeMachineNow],
   )
 
+  /* ------------------------------------------------------ shells on servers -- */
+
+  /**
+   * Open a terminal on a server, and put the window on it.
+   *
+   * ## Why the tab exists before the shell does
+   *
+   * The far end's handle for a shell does not exist until a connection is up and
+   * the shell has been opened, which is a round trip across the internet to a
+   * machine that may be asleep. A press that waited for it would leave the
+   * window with nothing on screen for a second or more, and a failure would have
+   * nowhere to be reported. So the window mints its own key, opens the tab on it
+   * at once, and the pane below asks for the shell — which is also where a
+   * refusal is said, in the terminal itself, where the person is already looking.
+   *
+   * ## Why it does not go through the New session dialog
+   *
+   * That dialog exists to ask three questions — which folder, which agent, which
+   * login — and this app can answer none of them about a stranger's server. It
+   * has no list of folders over there, no account there, and no way to know what
+   * is installed without asking the machine. A dialog with every field blank is a
+   * step, not a question.
+   *
+   * `keepNewWindowInStrip`, because this window *created* this one: *"if I open
+   * any new session and any new browser from the header, it should automatically
+   * open in the top bar."* That is the difference from a session on a paired
+   * machine, which was already running over there and is merely being looked at.
+   */
+  const openServerShell = useCallback(
+    (serverId: string, serverName: string) => {
+      const key = newShellKey()
+      setServerSessions((current) => withServerSession(current, serverId, serverName, key))
+      const id = serverTabId(serverId, key)
+      /*
+       * The same three things selecting a remote session does, and for the same
+       * reason: a terminal drawn behind a covering view would be a session
+       * nobody can see, taking keystrokes nobody sent.
+       */
+      clearPanel()
+      setCopilotPending(false)
+      setOpenMachineSession(null)
+      setOpenServerSession(id)
+      keepNewWindowInStrip(id)
+    },
+    [clearPanel],
+  )
+
+  /**
+   * End one terminal on a server.
+   *
+   * Taking the row off the list **is** the close. The pane is mounted for as
+   * long as its tab exists and its teardown closes the shell on the far end —
+   * see `ServerSessionPane`, which carries the argument for why it is mounted
+   * that way. So there is no request to send from here and nothing to await: the
+   * unmount this state change causes is the act.
+   *
+   * That also settles what a failure would mean, which is nothing: the shell
+   * lives on a connection this window is holding, so letting go of it cannot be
+   * refused by anything at the far end. There is nothing over there to refuse.
+   */
+  const closeServerSessionNow = useCallback((tabId: string) => {
+    setServerSessions((current) => withoutServerSession(current, tabId))
+    // And put the pane away if that was the one filling the window. Immediately,
+    // rather than waiting for a list to settle: a terminal whose shell is being
+    // closed is a terminal whose bytes have stopped.
+    setOpenServerSession((current) => (current === tabId ? null : current))
+  }, [])
+
+  /** The same, asking first — the rule every close in this window follows. */
+  const closeServerSession = useCallback(
+    (tabId: string) => {
+      if (!confirmClose) {
+        closeServerSessionNow(tabId)
+        return
+      }
+      const entry = serverSessionsRef.current.find((one) => one.tabId === tabId)
+      setPendingClose({
+        kind: 'server-session',
+        tabId,
+        name: entry?.serverName ?? 'that server',
+        status: entry?.status ?? 'idle',
+      })
+    },
+    [confirmClose, closeServerSessionNow],
+  )
+
+  /**
+   * End every terminal open on one server, and keep the server.
+   *
+   * Exactly what Close means on a machine's heading, one kind down: *"it should
+   * not disconnect the remote account. It will just close all of the sessions
+   * from that PC."* Here the terminals end, the group goes because a server's
+   * heading is only drawn while something is open on it, and nothing about the
+   * stored server changes — it keeps its name and its sign-in and is one press
+   * from another terminal. Forgetting a server is a different act with its own
+   * button on its own page, and this cannot reach it.
+   *
+   * There is no `closedServers` set to mirror `closedMachines`. That set exists
+   * because a machine's sessions end on the *other* computer, so at the instant
+   * Close is pressed they are all still listed and the group would un-hide in
+   * the same render that hid it. Nothing here is asked of anybody else: the list
+   * is this window's, and removing from it is the close.
+   */
+  const closeServerNow = useCallback((serverId: string) => {
+    setServerSessions((current) => withoutServer(current, serverId))
+    setOpenServerSession((current) => {
+      if (current === null) return null
+      return readServerTabId(current)?.serverId === serverId ? null : current
+    })
+  }, [])
+
+  /**
+   * The same, asking once — and once rather than per terminal, for the reason
+   * closing a machine already gives: *"Closing several sessions at once deserves
+   * one confirmation naming how many, not one dialog per session."*
+   */
+  const closeServer = useCallback(
+    (serverId: string) => {
+      const on = serverSessionsRef.current.filter((entry) => entry.serverId === serverId)
+      if (!confirmClose) {
+        closeServerNow(serverId)
+        return
+      }
+      setPendingClose({
+        kind: 'server',
+        serverId,
+        name: on[0]?.serverName ?? 'that server',
+        // The most alarming state among them, so the wording is about the worst
+        // thing this press interrupts — the same rule the other two group closes
+        // follow.
+        status: on.find((entry) => RISKY_STATUSES.has(entry.status))?.status ?? 'idle',
+        count: on.length,
+      })
+    },
+    [confirmClose, closeServerNow],
+  )
+
+  /**
+   * The far end has gone: somebody typed `exit`, the link dropped, the machine
+   * went away.
+   *
+   * The row stays and its dot goes to `exited`, which is what a local session
+   * does when its process ends — the tab is still there, still readable, and
+   * still closed by hand. Removing it here instead would take the last thing the
+   * shell printed off the screen at the exact moment somebody wants to read it.
+   */
+  const serverShellEnded = useCallback((tabId: string) => {
+    setServerSessions((current) => serverSessionEnded(current, tabId))
+  }, [])
+
+  /**
+   * What the Machines panel is handed so its pages can open one of these.
+   *
+   * A context rather than a prop, because the only route from here to a server's
+   * page is `PanelView`, which draws all ten views off a `PanelId` and takes no
+   * per-view props. `machines/servers/session-context.ts` carries the argument.
+   */
+  const serverSessionOpener = useMemo(
+    () => ({
+      open: openServerShell,
+      openOn: (serverId: string) =>
+        serverSessionsRef.current.filter((entry) => entry.serverId === serverId).length,
+      renamed: (serverId: string, name: string) =>
+        setServerSessions((current) => renameServersIn(current, [{ id: serverId, name }])),
+    }),
+    [openServerShell],
+  )
+
+  /**
+   * What the Machines page is handed so a machine's card can start a session on
+   * it — the dialog, on its folder step, with the machine already answered.
+   *
+   * The last of the presses the 2026-08-17 review was about: *"the sidebar +
+   * opens [an agent] directly instead of asking session type. Everywhere should
+   * ask the same thing."* Everywhere meant the chrome, and one button was not in
+   * the chrome — **New session** on a paired machine's card, which called
+   * `createMachineSession` with the first folder that machine happened to
+   * advertise. The long note above `openNewSessionDialog` describes the gap and
+   * what closing it took; this is the line it said was missing.
+   *
+   * `openNewSessionDialog(null, machineId)` — character for character the call
+   * the rail's machine heading makes below, because they are the same press made
+   * in two places, and a second expression here is how the two would drift.
+   *
+   * A context rather than a prop, for the same reason the server opener above is
+   * one: `PanelView` draws all ten views off a `PanelId` and takes no per-view
+   * props, and the button is three components below it.
+   */
+  const machineSessionOpener = useMemo(
+    () => ({ open: (machineId: string) => openNewSessionDialog(null, machineId) }),
+    [openNewSessionDialog],
+  )
+
   /**
    * Close, asking first. Always.
    *
@@ -2179,6 +2525,19 @@ function Workspace() {
       const remote = readMachineTabId(id)
       if (remote) {
         closeMachineSession(remote.machineId, remote.sessionId)
+        return
+      }
+      /*
+       * A terminal on a server, ended where it is running.
+       *
+       * Beside the machine case and meaning the same thing, one kind down: this
+       * is a close and not a "take the pill off the bar". The shell exists
+       * because this window is holding a connection to it, so letting go of it
+       * ends it — and the server itself is untouched, which is what the
+       * confirmation says in its second clause.
+       */
+      if (readServerTabId(id)) {
+        closeServerSession(id)
         return
       }
       const tab = tabs.find((t) => t.id === id)
@@ -2223,7 +2582,7 @@ function Workspace() {
       }
       closeTabNow(id)
     },
-    [tabs, activeTab, showInstead, confirmClose, closeTabNow, closeMachineSession],
+    [tabs, activeTab, showInstead, confirmClose, closeTabNow, closeMachineSession, closeServerSession],
   )
 
   /** Step through the open sessions and pages, wrapping at each end. */
@@ -2257,6 +2616,12 @@ function Workspace() {
       // And a remote session on screen, for the reason `selectTab` gives: it
       // covers the pane, so anything that fills the pane has to take it back.
       setOpenMachineSession(null)
+      /* And a terminal on a server, which covers the pane in the same way. It
+         is only put *away*, never closed: the shell keeps running and its pane
+         stays mounted behind the view, so coming back to it finds the scrollback
+         where it was left. `ServerSessionPane` carries the argument for why that
+         pane is mounted for as long as its tab exists. */
+      setOpenServerSession(null)
       // Going to a view cancels a copilot open that has not landed yet — see
       // `selectTab`, which does the same for the same reason.
       setCopilotPending(false)
@@ -2815,6 +3180,11 @@ function Workspace() {
            */
           if (openMachineSession) {
             closeTab(machineTabId(openMachineSession.machineId, openMachineSession.sessionId))
+          } else if (openServerSession !== null) {
+            /* The same correction for the other kind of elsewhere. It is already
+               a tab id, so nothing has to be re-joined; `closeTab` routes it and
+               it gets the confirmation every other close in this window gets. */
+            closeTab(openServerSession)
           } else if (activeTab) {
             closeTab(activeTab.id)
           }
@@ -2880,6 +3250,7 @@ function Workspace() {
       // ⌘W closes what is on screen, and a session on another machine can be
       // what is on screen. See the `session.close` case.
       openMachineSession,
+      openServerSession,
       closeTab,
       cycleTab,
       showPanel,
@@ -2971,6 +3342,26 @@ function Workspace() {
   )
 
   const mainView = () => {
+    /*
+     * A terminal on a server is on screen, and this function draws nothing.
+     *
+     * First, and the *nothing* is the point. Every other pane in this window is
+     * mounted by this function and unmounted when something else takes the pane
+     * — which is safe for all of them, because a local terminal is redrawn from
+     * the main process's scrollback, a browser page lives in the main process,
+     * and a session on a paired machine is replayed by that machine when this
+     * end attaches again. A shell on a server has none of those: nothing at the
+     * far end is keeping it, and nothing on this side is recording what it
+     * printed. So its pane is mounted beside this one, for as long as its tab
+     * exists, and hidden rather than unmounted — see the block at the bottom of
+     * this component and the note on `ServerSessionPane`.
+     *
+     * Returning null rather than falling through matters. Without it the branch
+     * below would mount every local terminal and show whichever one `activeTab`
+     * fell back to, underneath an opaque pane — a terminal nobody can see, with
+     * the keyboard, taking keystrokes meant for the server.
+     */
+    if (openServerSession !== null) return null
     /*
      * A session on another machine, filling the pane exactly as a local one
      * does.
@@ -3579,7 +3970,41 @@ function Workspace() {
     (session) => session.id === openMachineSession?.sessionId,
   )
 
-  const heading = openMachineSession
+  /**
+   * The terminal on a server the bar is naming, when it is naming one.
+   *
+   * Found in the tab list rather than remembered beside the id, exactly as the
+   * remote one above is, so that the bar and the rail cannot come to disagree
+   * about what a row is called — `serverTabs` builds both from one list.
+   */
+  const openServerTab = openServerSession
+    ? serverSessionTabs.find((tab) => tab.id === openServerSession) ?? null
+    : null
+
+  const heading = openServerTab
+    ? {
+        /*
+         * Its own number, and the server underneath.
+         *
+         * `tabLabel` rather than `labelOf`, because `labelOf` numbers a session
+         * among the tabs *this window owns* and a shell on a server is not one
+         * of those — it would have been counted against local sessions in a
+         * folder it has nothing to do with. `tabLabel` counts siblings on the
+         * same machine, which for these is the other terminals on the same
+         * server, and is the same function the strip and the rail use. Three
+         * surfaces, one number.
+         *
+         * No `folder`: a shell on a server starts wherever that sign-in lands
+         * and this app has not asked where that is, so there is nothing true to
+         * put on a chip that opens a path on *this* computer. And no `account`,
+         * for the reason the whole control cluster is withdrawn below.
+         */
+        title: tabLabel(openServerTab, openTabs),
+        subtitle: openServerTab.server ? `on ${openServerTab.server.name}` : null,
+        folder: null,
+        account: null,
+      }
+    : openMachineSession
     ? {
         // Its own title, and the machine underneath — the one fact that makes
         // this window different from the identical-looking local one above it.
@@ -3683,7 +4108,12 @@ function Workspace() {
    */
   const railActiveTabId = openMachineSession
     ? machineTabId(openMachineSession.machineId, openMachineSession.sessionId)
-    : focusedId ?? activeTab?.id ?? null
+    : /* And a terminal on a server, for the identical reason: when one is on
+         screen it *is* what is on screen, filling the pane above every local
+         tab. It is already a tab id, so nothing has to be re-joined. */
+      openServerSession !== null
+      ? openServerSession
+      : focusedId ?? activeTab?.id ?? null
 
   /**
    * The session bar, absent inside a browser page.
@@ -3718,6 +4148,9 @@ function Workspace() {
     // A remote session gets the bar too — it is a session, and the bar is where
     // its name and its machine are said.
     openMachineSession !== null ||
+    // And a terminal on a server, which is a session in exactly the same sense
+    // and whose bar says which machine it is on.
+    openServerSession !== null ||
     showingPanel ||
     splitting ||
     !hasStrip ||
@@ -3725,6 +4158,30 @@ function Workspace() {
     copilotPending
 
   return (
+    /*
+      The window's list of terminals open on servers, offered to whatever inside
+      it needs to add one.
+
+      A provider rather than a prop because the only route from here to a
+      server's page is `PanelView`, which draws all ten views off a `PanelId` and
+      takes no per-view props — widening it for one panel would put a
+      server-shaped argument on the component that draws every view. The default
+      is `null` rather than a no-op, so a panel rendered outside a window says it
+      has nowhere to put a terminal instead of drawing a control that swallows
+      the press.
+    */
+    <ServerSessions.Provider value={serverSessionOpener}>
+    {/*
+      The window's route to the new-session dialog, offered to the Machines page.
+
+      Nested rather than merged into the opener above it, because the two are
+      different destinations that happen to be reached from the same page: that
+      one opens a shell on a server, this one opens the dialog pointed at a
+      paired machine. One object with both on it would be a bundle whose name
+      could only be "things the machines page can do", and every consumer would
+      take a dependency on the half it does not use.
+    */}
+    <MachineSessions.Provider value={machineSessionOpener}>
     <div className="app" data-sidebar-peek={sidebar.peeking || undefined}>
       {/*
         The reveal strip: eight pixels of window edge that peek the rail out.
@@ -3891,6 +4348,38 @@ function Workspace() {
           */
           onNewMachineSession={(machineId) => openNewSessionDialog(null, machineId)}
           onCloseMachine={closeMachine}
+          /*
+            And the terminals open on servers, grouped by the server they are on.
+
+            Built by `serverSessionGroups` from the same list the strip's pills
+            come from, so the rail and the strip cannot come to disagree about
+            what is open — which is the whole reason `openTabs` is one array.
+
+            A heading appears here only while something is open on that server,
+            unlike a machine's, which is drawn whenever the machine is reachable.
+            `server-sessions.ts` carries the argument: reachability is a live fact
+            about a paired desktop and worth a row, and a server has no
+            equivalent — it is a stored address this app never dials to find out
+            about, so a heading per stored server would be a permanent row saying
+            nothing in the list whose entire job is to answer what you have open.
+          */
+          servers={serverSessionGroups(serverSessions).map((group) => ({
+            serverId: group.serverId,
+            name: group.name,
+            sessions: serverSessionTabs.filter((tab) => tab.server?.id === group.serverId),
+          }))}
+          /*
+            No dialog behind this one, and that is the difference from the ＋
+            above rather than an omission. The New session dialog asks which
+            folder, which agent and which login, and this app can answer none of
+            those about somebody else's server. So the press opens a shell, which
+            is the honest floor.
+          */
+          onNewServerSession={(serverId) => {
+            const group = serverSessionsRef.current.find((entry) => entry.serverId === serverId)
+            if (group) openServerShell(serverId, group.serverName)
+          }}
+          onCloseServer={closeServer}
           onToggleCollapsed={sidebar.toggleCollapsed}
           onPeekStart={sidebar.beginPeek}
           onPeekEnd={sidebar.endPeek}
@@ -4113,7 +4602,33 @@ function Workspace() {
               carries any of them. A model chip over somebody else's session
               would be naming a setting it cannot see and cannot change.
             */}
-            {headingSession && !swarm && openMachineSession === null ? (
+            {/*
+              And absent over a terminal on a server, for a reason that is
+              mechanical rather than a matter of taste — which matters, because
+              the tempting shortcut is to say *servers do not have agents* and
+              that is an assumption about somebody else's machine, which is the
+              one thing this whole area is arranged against.
+
+              The real reason is that every control in this cluster is a
+              conversation with a **local pty, by session id**. `useSessionControls`
+              reads `agent:controls:read` and writes `agent:controls:set`, both
+              keyed on a session this app spawned; `agent-controls.ts` performs a
+              change by typing `/model` into that pty and waiting for the screen
+              to echo it back. A shell on a server has no such id — what it has
+              is a channel on a connection — so there is nothing for any of them
+              to act on and nothing for the usage strip to read.
+
+              And it stays absent even on a server that *does* have an agent CLI
+              installed on it. Installed is not running: `agent-presence.ts` is
+              explicit that for a shell session the question cannot be answered
+              from the record and has to be read off the screen, through the same
+              local channel — so for a server shell the answer is permanently
+              `null`, which is the state that file already says draws neither
+              control. Typing `/model` into a shell on a hunch does not change a
+              model; it submits the word to whatever happens to be in front of
+              it, which might be a database prompt on somebody's live machine.
+            */}
+            {headingSession && !swarm && openMachineSession === null && openServerSession === null ? (
               <SessionControls
                 sessionId={headingSession.id}
                 cwd={headingSession.projectPath ?? null}
@@ -4133,7 +4648,16 @@ function Workspace() {
               else. Absent rather than disabled, which is this product's rule for
               a control that cannot act.
             */}
-            {(activeSession || splitting) && !showingPanel && !swarm && openMachineSession === null ? (
+            {(activeSession || splitting) &&
+            !showingPanel &&
+            !swarm &&
+            openMachineSession === null &&
+            /* And the mode switch with them, for the same reason one line up:
+               Chat is a view of a transcript file on this machine's disk and
+               Split arranges this window's own panes, and a shell on a server
+               has neither. Absent rather than disabled, which is this product's
+               rule for a control that cannot act. */
+            openServerSession === null ? (
               <ModeSwitch mode={mode} onChange={setMode} splitOffer={!features.on('split')} />
             ) : null}
             {/*
@@ -4165,6 +4689,44 @@ function Workspace() {
               split whose host pane is still empty, where "Split view" describes
               the arrangement rather than pretending to name a session in it. */}
           <ErrorBoundary label={heading.title ?? 'Split view'}>{mainView()}</ErrorBoundary>
+          {/*
+            The terminals open on servers — every one of them, always, hidden
+            unless it is the one in front.
+
+            Outside the boundary above rather than inside `mainView`, and that
+            placement is the whole of what makes one of these a session you can
+            leave and come back to. `mainView` returns one thing: open Settings,
+            look at a session on a paired machine, split the window, and whatever
+            it was drawing before is unmounted. Every other pane survives that
+            because something else is holding its state — the main process's
+            scrollback, the page in the main process, the far machine's replay —
+            and a shell on a server has nothing holding it but the terminal it is
+            written into. Unmounting it would either lose every line it had
+            printed or, if the shell were left open to avoid that, strand a live
+            one on somebody's machine with no way back to it.
+
+            So they are mounted here, beside the pane, exactly as the local
+            terminals and browser pages are mounted beside each other one level
+            down: *"Every browser and terminal stays mounted and is shown or
+            hidden, so a page keeps its scroll position and a terminal keeps its
+            scrollback when you switch away and come back."*
+
+            Nothing at all is drawn when the list is empty, which is every window
+            that has never opened one, and the bridge being absent draws nothing
+            either — a build whose preload has no server channels cannot have a
+            row on this list in the first place.
+          */}
+          {serversBridge !== null &&
+            serverSessions.map((entry) => (
+              <ServerSessionPane
+                key={entry.tabId}
+                serverId={entry.serverId}
+                shellKey={entry.shellKey}
+                bridge={serversBridge}
+                visible={openServerSession === entry.tabId}
+                onEnded={() => serverShellEnded(entry.tabId)}
+              />
+            ))}
         </div>
       </main>
 
@@ -4258,7 +4820,9 @@ function Workspace() {
           machine is one, exactly as a local one is.
         */
         count={
-          pendingClose?.kind === 'project' || pendingClose?.kind === 'machine'
+          pendingClose?.kind === 'project' ||
+          pendingClose?.kind === 'machine' ||
+          pendingClose?.kind === 'server'
             ? pendingClose.count
             : 1
         }
@@ -4268,7 +4832,9 @@ function Workspace() {
         subject={
           pendingClose?.kind === 'machine' || pendingClose?.kind === 'machine-session'
             ? 'machine'
-            : 'project'
+            : pendingClose?.kind === 'server' || pendingClose?.kind === 'server-session'
+              ? 'server'
+              : 'project'
         }
         provider={
           pendingClose?.kind === 'session'
@@ -4283,6 +4849,8 @@ function Workspace() {
           if (closing.kind === 'session') closeTabNow(closing.tab.id)
           else if (closing.kind === 'project') closeProjectNow(closing.path)
           else if (closing.kind === 'machine') closeMachineNow(closing.machineId)
+          else if (closing.kind === 'server') closeServerNow(closing.serverId)
+          else if (closing.kind === 'server-session') closeServerSessionNow(closing.tabId)
           else closeMachineSessionNow(closing.machineId, closing.sessionId)
         }}
         // The dialog writes the setting itself; this keeps the copy above in
@@ -4561,6 +5129,8 @@ function Workspace() {
       */}
       <Tooltips />
     </div>
+    </MachineSessions.Provider>
+    </ServerSessions.Provider>
   )
 }
 

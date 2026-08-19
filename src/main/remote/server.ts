@@ -74,7 +74,7 @@ import { copilotFrameAllowed, type CopilotRemote, type CopilotSink } from './cop
 // Type-only, for the reason `FolderGrants` above is: `index.ts` owns the one
 // instance of this store, and a class import here would be a second constructor
 // for a file whose whole point is that there is one copy of it in memory.
-import type { CopilotLink, CopilotLinks } from './copilot-link'
+import type { CopilotAccess, CopilotReach } from './copilot-access'
 import {
   CAPABILITIES,
   CAPABILITY,
@@ -397,21 +397,6 @@ export interface RemoteEndpointOptions {
   maxMessageBytes?: number
   /** Fires whenever a phone authenticates, attaches, detaches or leaves. */
   onConnections?: (connections: RemoteConnection[]) => void
-  /**
-   * Fires when a device redeems a connect code, and its copilot record appears.
-   *
-   * An **event, not a poll**, and it exists because of a state a person watches
-   * happen: they mint a code here, read it out, and somebody types it into a
-   * phone in the next room. Without this the panel would keep showing the code
-   * until it expired and then fall back to a Connect button, having never
-   * noticed the connection it had just authorised — a screen contradicting the
-   * store, which is the one thing a permission screen must not do.
-   *
-   * Nothing else changes a link *from off this machine*; disconnecting and
-   * re-granting are IPC calls that answer with the whole list, so the panel
-   * already redraws from the answer.
-   */
-  onCopilotLinked?: (deviceId: string) => void
   /**
    * What is listening on this machine, for the `localhost` capability.
    *
@@ -2168,47 +2153,27 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       return
     }
     switch (message.t) {
-      case 'copilot.connect': {
-        const outcome = await copilot.connect(deviceId, message.code, connection.address)
-        if (!live.has(connection.id)) return
-        if (!outcome.ok) {
-          send(connection, { t: 'error', code: outcome.code, message: outcome.message })
-          return
-        }
-        /*
-         * Redeeming opens the connection on this socket as well.
-         *
-         * The alternative — hand back a credential and make the client turn
-         * round and send `copilot.hello` with it — proves nothing extra and adds
-         * a round trip in the one moment a person is standing there watching. It
-         * has just proved it holds a code minted at this machine seconds ago,
-         * which is a stronger claim than the credential it is about to be given.
-         */
-        connection.copilotOpen = true
-        // The desktop's own panel, told the moment it happens. See
-        // `onCopilotLinked` — the person who read the code out is looking at the
-        // screen this redraws.
-        try {
-          options.onCopilotLinked?.(deviceId)
-        } catch (error) {
-          console.error('[remote] could not announce a copilot connection:', error)
-        }
-        send(connection, {
-          t: 'copilot.linked',
-          credential: outcome.credential,
-          link: copilotLink(copilot, deviceId, true),
-        })
-        send(connection, { t: 'copilot.grant', link: copilotLink(copilot, deviceId, true) })
-        return
-      }
       case 'copilot.hello': {
-        const outcome = await copilot.open(deviceId, message.credential, connection.address)
+        /*
+         * No credential, and no `copilot.connect` above this any more.
+         *
+         * Both were deleted on 2026-08-19. The socket is already authenticated
+         * as this device by `RemoteAuth` and a person at this keyboard already
+         * decided, when they approved it, whether it is one of their own — and
+         * that decision cannot be changed without pairing again. A second
+         * six-digit code on top proved the same fact twice.
+         * `copilot-access.ts` carries the argument and preserves the one it
+         * superseded.
+         *
+         * The eligibility check a few lines above this switch is what gates it,
+         * and it is unchanged: a guest never reaches here at all.
+         */
+        const outcome = await copilot.open(deviceId)
         if (!live.has(connection.id)) return
         if (!outcome.ok) {
-          // The socket's copilot access is cleared on a failure as well as left
-          // unset, so a client that opened, was disconnected on the desktop, and
-          // then sent a stale credential does not keep the access its first
-          // hello bought.
+          // Cleared on failure as well as left unset, so a socket that opened,
+          // had its device revoked on the desktop, and then said hello again
+          // does not keep the access its first hello bought.
           closeCopilotConnection(connection)
           send(connection, { t: 'error', code: outcome.code, message: outcome.message })
           return
@@ -2339,8 +2304,25 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    * Tell one device its copilot grant changed, and take away what it no longer
    * has.
    *
-   * Called from the settings panel through `remote:copilot:set`, and from a
-   * revoke. Two halves, and only the second is about the wire:
+   * **Nothing in the product calls this today, and that is worth stating rather
+   * than hiding.** It was reached from the settings panel through
+   * `remote:copilot:set` and from a disconnect, and both went on 2026-08-19 with
+   * the separate connection. What can change a device's answer now is its
+   * *kind*, which `device-kind.ts` writes once and never overwrites, so the only
+   * route from "reaches the copilot" to "does not" is revoking the device — and
+   * `dropDevice` already does the whole job there: it calls
+   * `CopilotRemote.revoked`, drops the MCP token, stops the run and closes every
+   * socket, so the device learns by disconnection rather than by a frame.
+   *
+   * It is kept rather than deleted for one reason, and only one: the phone
+   * clients read a `copilot.grant` carrying `linked: false` as *the copilot has
+   * been taken away*, without needing a reconnect. That is the correct client
+   * behaviour and it should stay correct; this is the only thing on this side
+   * that could ever produce that frame. If a future change makes a kind
+   * revocable in place, this is what it calls — and if that never happens, this
+   * comment is the thing that stops somebody reading its silence as a bug.
+   *
+   * Two halves, and only the second is about the wire:
    *
    *  - `CopilotRemote.revoked` drops the device's MCP token — so a tool call in
    *    flight on it aborts with `caller-gone` — and stops its run. That is what
@@ -3054,15 +3036,14 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         proxy.handle(connection.deviceId, message satisfies CredentialMessage)
         return
       }
-      case 'copilot.connect':
       case 'copilot.hello':
       case 'copilot.bye': {
         /*
-         * The authorisation ceremony, which is deliberately **not** tier-gated.
+         * The two frames that open and close it, deliberately **not** tier-gated.
          *
-         * Gating these on a tier would be circular: a device with no copilot
-         * connection has no tiers, so requiring one to send the frame that
-         * establishes the connection would mean no device could ever connect.
+         * Gating these on a tier would be circular: the tiers are read off the
+         * connection these frames establish, so requiring one to send them would
+         * mean no device could ever open the stream.
          * `COPILOT_UNTIERED_FRAMES` names them so that "which verbs skip the
          * tier check" is answerable from the code rather than inferred from an
          * absence, and `copilot-frames.test.ts` asserts the two lists together
@@ -4123,19 +4104,20 @@ export interface RemoteIpcDeps {
    */
   copilot?: CopilotRemote
   /**
-   * The copilot connections, for the settings panel.
+   * Who reaches the copilot, for the settings panel to *show*.
    *
-   * Separate from {@link copilot} even though the run manager reads the same
-   * store, and deliberately so: this is the *editing* side and that is the
-   * *enforcing* side. `index.ts` owns the one instance and hands it to both —
-   * the same rule `folders` follows and for the same reason, which the folder
-   * grants' own comment states: a second instance would give the panel a store
-   * that writes the same file and holds a different copy of it in memory.
+   * Read-only now, and the change of tense is the whole of 2026-08-19: this used
+   * to be the *editing* side of a store of separate connections, with channels
+   * that minted a code, disconnected a device and set its tiers. There is
+   * nothing to edit any more — a device's kind is the answer and a kind is fixed
+   * when the device is approved — so the panel's only remaining question is
+   * *which of my devices have it*, which this derives. `copilot-access.ts`
+   * carries the argument.
    *
-   * Absent means the panel's channels answer with nothing, which is what a host
+   * Absent means the panel's channel answers with nothing, which is what a host
    * with no copilot should say to a UI that has no business asking.
    */
-  copilotLinks?: CopilotLinks
+  copilotLinks?: CopilotAccess
   /**
    * The ceiling on what this host advertises. See {@link RemoteEndpointOptions.offer}.
    *
@@ -4432,7 +4414,6 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     ...(deps.offer ? { offer: deps.offer } : {}),
     port: deps.port,
     onConnections: (connections) => deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, connections),
-    onCopilotLinked: () => deps.broadcast(REMOTE_COPILOT_CHANNEL, deps.copilotLinks?.list() ?? []),
     ...(relay ? { relay } : {}),
     ...(deps.readTailnet ? { readTailnet: deps.readTailnet } : {}),
     ...(deps.serve ? { serve: deps.serve } : {}),
@@ -4628,21 +4609,16 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
       // behind could never be reached by anything again.
       deps.folders.forget(id)
       /*
-       * And its copilot connection, for exactly the same reason and one degree
-       * more sharply: a stale folder row is a preference nobody can reach, and a
-       * stale copilot record is a *credential* sitting in a file with nobody's
-       * name against it. `dropDevice` above has already stopped the run and
-       * dropped its MCP token; this is the record.
+       * Nothing to forget for the copilot any more, and that is worth a line
+       * rather than a silence.
        *
-       * This is the one direction the two revocations are connected in, and it
-       * is garbage collection rather than a cascade. Revoking the *copilot*
-       * leaves the device paired and its terminals working — that is
-       * `remote:copilot:disconnect` below — because the two authorisations are
-       * separate acts and undoing one must not silently undo the other. Revoking
-       * the *device* is different only because a revoked device can never open a
-       * channel again, so the copilot record could not be reached by anything.
+       * There used to be a `copilotLinks.forget(id)` here, garbage-collecting a
+       * stored credential that could never be reached again. Since 2026-08-19
+       * there is no such record: copilot access is derived from the device's
+       * kind, and the kind is dropped two lines below. `dropDevice` above has
+       * already stopped the run and dropped its MCP token, so the revocation is
+       * complete before this comment ends.
        */
-      deps.copilotLinks?.forget(id)
       /*
        * And its kind, which is what makes re-pairing the way to change one.
        *
@@ -4695,98 +4671,29 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
   )
 
   /**
-   * The copilot connections: which devices hold one, what each may do, how a new
-   * one is authorised, and how one is ended.
+   * Which of your devices reach the copilot.
    *
-   * Four channels rather than the folder pair, because copilot access is no
-   * longer a property of a paired device that a checkbox toggles. It is a
-   * **separate connection** — its own code, its own credential, its own record —
-   * and the two extra channels are the two acts that create and destroy one.
-   * `copilot-link.ts` carries the argument, including the one it superseded.
+   * **One channel now, and it only reads.** There were four until 2026-08-19 —
+   * list, mint a code, disconnect, set tiers — because copilot access was a
+   * separate connection with its own credential and its own record. It is not
+   * any more: a device's kind decides it, a kind is chosen when the device is
+   * approved, and there is deliberately no way to change one without pairing
+   * again. `copilot-access.ts` carries that argument in full, including the one
+   * it superseded.
    *
-   * The shape is otherwise the folder channels' and for the same reason: read
-   * the whole list, write one device, answer with the whole list again, so the
-   * panel renders what the main process says rather than what it just asked for.
-   * A switch cannot show as on when the store says off.
+   * So there is nothing here to write. Minting a code would mint nothing;
+   * disconnecting would have to un-decide a kind, which `device-kind.ts` has no
+   * method for on purpose; and setting tiers would be a tick box pretending to
+   * be an authorisation, which is the exact shape the separate connection was
+   * built to replace. The remedy for a device you no longer trust is
+   * `remote:device:revoke`, which already exists and takes everything with it.
    *
-   * Devices with no connection simply do not appear. That is the default state
-   * and inventing a row for it would make "never connected" and "connected, then
-   * unticked to nothing" two spellings of one fact — and they are not: the
-   * second one still holds a credential.
+   * Derived from the roster rather than stored, so a device approved a second
+   * ago appears without anything having been written to disk.
    */
-  ipcMain.handle('remote:copilot', (): CopilotLink[] => deps.copilotLinks?.list() ?? [])
-  /**
-   * Mint a connect code, and decide there and then what it grants.
-   *
-   * The tiers travel with the *code* rather than being ticked afterwards, and
-   * that is the ceremony: the person minting it is standing at this machine
-   * looking at a screen that says what they are about to hand over. Returning
-   * the code to the renderer is safe and is the only way it can be read out —
-   * it lives sixty seconds, it is single-use, and five wrong guesses kill it.
-   */
-  ipcMain.handle('remote:copilot:code', (_event, tiers: unknown) => {
-    const links = deps.copilotLinks
-    if (!links) return null
-    const offer = links.offer(tiers)
-    return { code: offer.code, expiresAt: offer.expiresAt, tiers: offer.tiers }
-  })
-  /**
-   * End a device's copilot connection, and leave everything else alone.
-   *
-   * This is what "revoke copilot access" means. It is deliberately not "untick
-   * every box": a record with all-false tiers still holds a working credential,
-   * so the device could still open a connection and sit there being refused — a
-   * connection nobody authorised any more. Dropping the record makes the next
-   * `copilot.hello` answer exactly what a device that never connected gets.
-   *
-   * The phone keeps its terminals. Nothing here touches `remote-auth.json`.
-   */
-  ipcMain.handle('remote:copilot:disconnect', (_event, id: unknown): CopilotLink[] => {
-    const links = deps.copilotLinks
-    if (!links) return []
-    if (typeof id !== 'string' || id === '') return links.list()
-    links.disconnect(id)
-    // Then the wire, in that order — the disk is what everything else is
-    // downstream of. This stops the run, drops its MCP token, closes the copilot
-    // connection on every live socket of that device and tells it why.
-    server.copilotGrantChanged(id)
-    return links.list()
-  })
   ipcMain.handle(
-    'remote:copilot:set',
-    (_event, id: unknown, tiers: unknown): CopilotLink[] => {
-      const links = deps.copilotLinks
-      if (!links) return []
-      if (typeof id !== 'string' || id === '') return links.list()
-      /*
-       * `tiers` is handed over unchecked, on purpose.
-       *
-       * `copilotGrantFrom` is the rule — a non-object is nothing, only a literal
-       * `true` grants, and nothing outside the ceiling survives whatever it says
-       * — and it lives in the store because the store is what a hand-edited file
-       * is read through too. Narrowing here as well would be a second copy of a
-       * permission rule, and the second copy is the one that gets it wrong.
-       *
-       * `set` also refuses to *create* a record, which is the line that keeps
-       * this channel from being a second door onto copilot access. A device with
-       * no connection cannot be granted anything by ticking a box, because the
-       * box is not the authorisation — the connection is.
-       */
-      links.set(id, tiers)
-      /*
-       * Then the wire, in that order.
-       *
-       * The disk first, because everything else is downstream of it: a grant the
-       * panel believes and the disk does not is a permission that reverts at the
-       * next launch, and `commit()` throws rather than let that happen. Then the
-       * run's token is dropped and its process stopped if `act` has gone, every
-       * confirmation that device raised is withdrawn, and every live connection
-       * of that device is told — which is what stops a device watching a
-       * conversation it can no longer influence.
-       */
-      server.copilotGrantChanged(id)
-      return links.list()
-    },
+    'remote:copilot',
+    (): CopilotReach[] => deps.copilotLinks?.list(auth.listDevices().map((device) => device.id)) ?? [],
   )
 
   return { server, auth, desk }

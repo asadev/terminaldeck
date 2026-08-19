@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -352,5 +352,90 @@ describe('the last-good snapshot', () => {
     writeFileSync(USER_DATA, 'this is a file where the folder should be', 'utf8')
     expect(() => writeSettingsSnapshot({}, 'copilot settings.write')).toThrow()
     rmSync(USER_DATA, { force: true })
+  })
+})
+
+/* -------------------------------------- the portable Windows build, in About -- */
+
+/**
+ * Two screens of one app, disagreeing about the one artifact that cannot
+ * update — and only on Windows.
+ *
+ * `updateSupport` refuses a portable Windows build outright, because an update
+ * on Windows runs an installer and installing is the thing a portable app does
+ * not do (`PORTABLE_REASON`). It learns that from one field:
+ * `portableExecutable`, which electron-builder's own launcher supplies as
+ * `PORTABLE_EXECUTABLE_FILE` before it starts the app, and which is the only
+ * thing that tells the portable exe and the installed one apart at runtime —
+ * they are the same build carrying the same feed.
+ *
+ * `updateChannel()` — the About panel's source — built its own
+ * `UpdateEnvironment` and left that field out, so the portable branch was
+ * unreachable from About while the update controller in `index.ts`, which does
+ * pass it, refused. Somebody running `-portable.exe` therefore read "this build
+ * is code-signed and carries a release feed, so it could install an update" on
+ * one screen and "installing is the thing a portable app does not do" on the
+ * other.
+ *
+ * Asserted against the source of every caller rather than by running them. The
+ * value only exists inside a packaged portable exe on Windows, so the branch
+ * cannot be reached from this Mac at all — and the failure being guarded
+ * against is a caller that *omits a field*, which is invisible to any test that
+ * calls the function itself. `confine/windows-setup-reachable.test.ts` makes
+ * the same argument for the same shape of gap.
+ */
+describe('every UpdateEnvironment this app builds', () => {
+  const MAIN = join(__dirname, '..', '..', 'src', 'main')
+
+  /**
+   * `feedConfigPath` is the field that identifies an `UpdateEnvironment`
+   * literal: it is required, it is spelled nowhere else, and a caller building
+   * one cannot leave it out. Counting it against `portableExecutable` catches
+   * both shapes of the bug — a caller that omits the optional field entirely,
+   * and a file that builds two environments and only remembers it in one.
+   */
+  function counts(file: string): { environments: number; portable: number } {
+    const source = readFileSync(join(MAIN, file), 'utf8')
+    return {
+      environments: (source.match(/feedConfigPath:/g) ?? []).length,
+      portable: (source.match(/portableExecutable:/g) ?? []).length,
+    }
+  }
+
+  it('tells the verdict whether this is the portable exe', () => {
+    for (const file of ['settings-extra.ts', 'index.ts']) {
+      const seen = counts(file)
+      expect(seen.environments, `${file} no longer builds an UpdateEnvironment`).toBeGreaterThan(0)
+      expect(
+        seen.portable,
+        `${file} builds an UpdateEnvironment without portableExecutable, so the Windows ` +
+          'portable build is told it could install an update that it cannot install.',
+      ).toBe(seen.environments)
+    }
+  })
+
+  it('knows about every caller, so a third one cannot be added quietly', () => {
+    // The list above is only a guarantee while it is the whole list. A new file
+    // that builds one of these fails here and is sent to add itself.
+    const walk = (dir: string, out: string[] = []): string[] => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name)
+        if (statSync(full).isDirectory()) walk(full, out)
+        else if (/\.tsx?$/.test(full) && !/\.test\.tsx?$/.test(full)) out.push(full)
+      }
+      return out
+    }
+    const builders = walk(MAIN)
+      .filter((file) => /feedConfigPath:/.test(readFileSync(file, 'utf8')))
+      // Split on both separators and rejoin with one, because this assertion
+      // also runs on the Windows runner, where `join` produces backslashes and
+      // a POSIX literal below would fail for a reason that has nothing to do
+      // with updates. Six tests in this repo have already had to be fixed for
+      // exactly that.
+      .map((file) => file.slice(MAIN.length + 1).split(/[\\/]/).join('/'))
+      // The module that *declares* `UpdateEnvironment` is not a caller of it.
+      .filter((file) => file !== 'updates/updater.ts')
+      .sort()
+    expect(builders).toEqual(['index.ts', 'settings-extra.ts'])
   })
 })

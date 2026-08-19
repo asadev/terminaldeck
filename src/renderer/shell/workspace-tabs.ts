@@ -130,6 +130,47 @@ export interface WorkspaceTab {
    * rather than a ✕ that does nothing.
    */
   machine?: { id: string; name: string }
+  /**
+   * The server this shell is running on, when it is on one.
+   *
+   * Absent on everything else, and the absence is the answer rather than a gap,
+   * exactly as it is for {@link WorkspaceTab.machine} above: a tab with neither
+   * field is a tab whose process belongs to this app.
+   *
+   * ## Why a shell on a server is a tab at all
+   *
+   * It deliberately was not, for a day. `SERVERS-DESIGN.md` §5.5 argued the
+   * opposite in as many words — *"a server terminal is not a session — it has no
+   * transcript, no account, no model, no cost, and none of the control cluster
+   * that makes the strip's chrome meaningful; a pill carrying six controls that
+   * all do nothing is the exact defect `panels.ts` records the copilot page
+   * having had, in reverse."* — and the terminal therefore lived inside the
+   * Machines panel, on a page of its own, reachable only while that panel was
+   * the thing on screen.
+   *
+   * That argument is the same one that was made about a *remote* session the
+   * night before, and it lost for the same reason. Asad has now said it three
+   * times about machines that are not this one: *"Keep the same one browser
+   * window for every device… the shape of the application should not be changing
+   * for local and remote devices. It should act like that same."* A server was
+   * getting a lesser product than a paired laptop — no row in the rail, no pill,
+   * no ⌘W, nothing you could drag to the top — and that is the defect.
+   *
+   * The half of the old argument that was *right* is kept, and it is kept the
+   * way this window already keeps it: a control that cannot act is **absent**.
+   * `App.tsx` withdraws the model, effort and connector cluster over a server
+   * session exactly as it withdraws it over a remote one, and for a reason that
+   * is mechanical rather than a matter of taste — see the note beside
+   * `SessionControls` there. A pill is not a control cluster; it is the answer
+   * to *what do I have open*, and a shell on somebody's server is one of those.
+   *
+   * ## What it carries
+   *
+   * The server's id, because that is the handle every verb needs, and its name,
+   * because the rail heading, the pill's tooltip, the window bar and the close
+   * confirmation all print it and none of them can read the servers list.
+   */
+  server?: { id: string; name: string }
 }
 
 /**
@@ -177,6 +218,52 @@ export function readMachineTabId(id: string): { machineId: string; sessionId: st
   const cut = rest.indexOf(' ')
   if (cut <= 0 || cut === rest.length - 1) return null
   return { machineId: rest.slice(0, cut), sessionId: rest.slice(cut + 1) }
+}
+
+/**
+ * The prefix on a server shell's tab id.
+ *
+ * The same arrangement as {@link machineTabId} a few lines up, and written as a
+ * second pair rather than folded into that one on purpose. The two handles look
+ * alike — an id for the far thing, an id for the session on it — and they are
+ * not interchangeable: a machine id names a paired desktop that runs this app
+ * and answers `machines:*`; a server id names a stored address this app signs in
+ * to over its own connection and answers `servers:*`. Routing is done by asking
+ * both questions in turn, and a single shared prefix would make the answer to
+ * *which bridge does this belong to* a matter of looking the id up somewhere,
+ * which is the thing an id is for.
+ *
+ * The separator is a space, for the reason {@link MACHINE_TAB_PREFIX} gives: the
+ * joined value ends up in `data-tab-id` and is read back through an attribute
+ * selector, so a control character would be a road with no traffic on it. A
+ * server id is minted by `main/servers/store.ts` as a UUID, so the first space
+ * in the remainder is always the one this function put there.
+ */
+const SERVER_TAB_PREFIX = 'server '
+
+/**
+ * The tab id for one shell on one server.
+ *
+ * `shellKey` is minted **here**, in the renderer, and is not the far end's
+ * handle. That is deliberate and it is the whole reason this feature can draw a
+ * pill the instant somebody presses ＋: the id the far end hands back does not
+ * exist until the connection is up and the shell has been opened, which is a
+ * round trip across the internet. A tab that had to wait for it would be a press
+ * with nothing on screen for a second and a half, and a failure would have
+ * nowhere to be reported — see `ServerTerminal`, which says so in the terminal
+ * itself, in the pane the tab already opened.
+ */
+export function serverTabId(serverId: string, shellKey: string): string {
+  return `${SERVER_TAB_PREFIX}${serverId} ${shellKey}`
+}
+
+/** The two handles back out of a server tab's id, or null when it is not one. */
+export function readServerTabId(id: string): { serverId: string; shellKey: string } | null {
+  if (!id.startsWith(SERVER_TAB_PREFIX)) return null
+  const rest = id.slice(SERVER_TAB_PREFIX.length)
+  const cut = rest.indexOf(' ')
+  if (cut <= 0 || cut === rest.length - 1) return null
+  return { serverId: rest.slice(0, cut), shellKey: rest.slice(cut + 1) }
 }
 
 /**
@@ -382,12 +469,21 @@ export function tabLabel(tab: WorkspaceTab, tabs: readonly WorkspaceTab[]): stri
    * do with each other and no folder heading in common to explain the numbering.
    * `machine?.id` rather than the object, because these tabs are rebuilt on
    * every push and two identical machine objects are never the same reference.
+   *
+   * `server?.id` is the same rule for the other kind of elsewhere, and it is not
+   * covered by the machine test: a shell on a server has no machine and no
+   * folder, so without it every shell on every server — and every folderless
+   * local shell — fell into one run and was numbered as though they were
+   * siblings. Two servers each with one terminal open would have read "Session 1"
+   * and "Session 2", under two different headings, with nothing on screen
+   * explaining why the second one starts at two.
    */
   const siblings = tabs.filter(
     (other) =>
       other.kind === 'session' &&
       other.projectPath === tab.projectPath &&
-      other.machine?.id === tab.machine?.id,
+      other.machine?.id === tab.machine?.id &&
+      other.server?.id === tab.server?.id,
   )
   const index = siblings.findIndex((other) => other.id === tab.id)
   return sessionLabel(
@@ -568,6 +664,54 @@ export function tabQualifiers(
   )
 
   /*
+   * Then **where it is running**, when that is what differs.
+   *
+   * A rung that did not exist while everything in this window ran here. Two
+   * shells opened on two different servers are both called *Session 1* — the
+   * numbering counts siblings on the same machine, deliberately, so that a
+   * second server does not start at three — and in the strip there is no heading
+   * above either of them to say which is which. The folder cannot separate them
+   * either: a shell on a server has no folder this app knows, so both fall to
+   * the empty string and the rung above declines.
+   *
+   * What was left was the id rung, and on these ids it is close to useless. A
+   * server tab's id begins `server ` followed by a UUID, and `shortSessionId`
+   * cuts at the first hyphen — so the two heads are `server 3f2a1b0c` and
+   * `server 9d8e4a55`, identical for the first eight characters, and the
+   * qualifier a person would have read is `server 3`. That is an identifier for
+   * a machine, not for a person.
+   *
+   * The name is. It is the word already on the rail heading and on the ✕'s
+   * tooltip, so a pill qualified with it can be matched by eye to the row it
+   * belongs to — which is the whole job of a qualifier.
+   *
+   * A tab running **here** gets nothing, and that is the right asymmetry rather
+   * than an omission: this computer is the default place, it has no name in this
+   * window's vocabulary, and *Session 1 · your Mac* beside *Session 1 · web-01*
+   * would be labelling the ordinary case to explain the unusual one. It needs no
+   * further qualifier either — the pair is already separated, because only one
+   * of them carries a name.
+   *
+   * In the rail this rung never fires, and that is by construction rather than
+   * by luck: `rowsFor` is called once per heading, so the run it is asked about
+   * is one server's rows, whose `where` is one value. The same reason the folder
+   * rung goes quiet inside a project.
+   */
+  const wheres = new Map<string, Set<string>>()
+  tabs.forEach((tab, index) => {
+    const set = wheres.get(labels[index]) ?? new Set<string>()
+    set.add(tab.machine?.id ?? tab.server?.id ?? '')
+    wheres.set(labels[index], set)
+  })
+
+  const placed = tabs.map((tab, index) => {
+    if (qualified[index] !== null) return qualified[index]
+    if ((byLabel.get(labels[index]) ?? 0) <= 1) return null
+    if ((wheres.get(labels[index])?.size ?? 0) <= 1) return null
+    return tab.machine?.name ?? tab.server?.name ?? null
+  })
+
+  /*
    * The account, when the caller is already drawing it.
    *
    * Not a qualifier this function ever prints — the row prints the account
@@ -588,7 +732,7 @@ export function tabQualifiers(
   // The second pass. See {@link PAIR_SEP} for why the parts are joined with a
   // NUL, and why it is spelled as an escape.
   const key = (index: number): string =>
-    `${labels[index]}${PAIR_SEP}${qualified[index] ?? ''}${PAIR_SEP}${separator(index)}`
+    `${labels[index]}${PAIR_SEP}${placed[index] ?? ''}${PAIR_SEP}${separator(index)}`
   const byKey = count(labels.map((_, index) => key(index)))
 
   /*
@@ -611,9 +755,9 @@ export function tabQualifiers(
   )
 
   return tabs.map((tab, index) => {
-    if (!needsId[index]) return qualified[index]
+    if (!needsId[index]) return placed[index]
     const id = shortSessionId(tab.id).slice(0, idChars)
-    return qualified[index] ? `${qualified[index]} · ${id}` : id
+    return placed[index] ? `${placed[index]} · ${id}` : id
   })
 }
 
@@ -689,6 +833,22 @@ export function tabTooltip(tab: WorkspaceTab, label: string): string {
       ? `${label}\n${tab.projectPath} on ${tab.machine.name}`
       : `${label}\non ${tab.machine.name}`
   }
+  /*
+   * And a terminal on a server says which server, for the same reason and on the
+   * same line.
+   *
+   * It cannot be left to the qualifier. That only appears when two pills collide
+   * — one terminal on one server produces no collision at all — so the ordinary
+   * case is a pill that says *Session 1* and nothing else, over a shell on
+   * somebody's live machine, sitting between two sessions running here. The rail
+   * row already answers this in its own hover; the pill has to answer it too, or
+   * the two surfaces disagree about how much they are willing to say.
+   *
+   * No folder, and its absence is deliberate: a shell starts wherever that
+   * sign-in lands and this app has not asked where that is. Printing one would
+   * be the first invented fact on a screen built not to have any.
+   */
+  if (tab.server) return `${label}\non ${tab.server.name}`
   return tab.projectPath ? `${label}\n${tab.projectPath}` : label
 }
 

@@ -165,6 +165,30 @@ function pickOf(path: string): OutsidePick {
  * falls through to `public.file-url` and attaches one file instead of three.
  * A degraded answer, never a wrong one — and never a crash, which a real parser
  * fed a binary blob would be.
+ *
+ * ## And the third format, which is Windows — added 2026-08-19
+ *
+ * Both names above are macOS pasteboard types. A Windows clipboard holds
+ * neither, so until now copying a file in Explorer and pressing paste fell
+ * through this function with nothing, hit the image branch, and reported
+ * *"There is no file or image on the clipboard"* over a clipboard that had a
+ * file on it. The renderer's half of that bug was fixed in the same batch; this
+ * is the half that decides whether a pick reaches the renderer at all.
+ *
+ * `FileNameW` is the format Windows exposes through Electron, and it carries
+ * **one** path — the same shape, and the same honest degradation, as
+ * `public.file-url` on macOS. `CF_HDROP` is what would carry several, and
+ * Electron does not surface it: reading it would mean parsing a `DROPFILES`
+ * struct out of a raw buffer, which is the "real parser fed a binary blob"
+ * this function's own paragraph above declines to become. So a multi-file paste
+ * on Windows attaches the first file rather than all of them, which is a
+ * degraded answer and not a wrong one.
+ *
+ * The string arrives UTF-16 and is usually NUL-terminated, so the terminator is
+ * trimmed. It is asked for **last** on purpose: the two macOS names cost
+ * nothing on Windows (the reader answers `''` for a format the platform does
+ * not have) and asking in this order keeps the multi-file case first on the
+ * platform that can serve it.
  */
 export function clipboardFilePaths(read: (format: string) => string): string[] {
   const plist = read('NSFilenamesPboardType')
@@ -179,7 +203,12 @@ export function clipboardFilePaths(read: (format: string) => string): string[] {
 
   const url = read('public.file-url')
   const single = pathFromFileUrl(url)
-  return single === null ? [] : [single]
+  if (single !== null) return [single]
+
+  // Windows. Trimmed of NULs and surrounding space; an empty answer is a
+  // clipboard with no file on it, which is the ordinary case.
+  const windows = read('FileNameW').replace(/\u0000+$/, '').trim()
+  return windows === '' ? [] : [windows]
 }
 
 /** The five entities XML has to escape. A filename may legitimately contain `&`. */
@@ -199,6 +228,31 @@ function decodeXml(text: string): string {
  * a malformed URL on the pasteboard should mean "there is no file here", not an
  * exception on a paste. Anything that is not a `file:` URL answers null, which
  * is how a clipboard holding plain text falls through to the image check.
+ *
+ * ## The drive letter, which is the whole reason this has a Windows branch
+ *
+ * A Windows file URL is `file:///C:/Users/asad/a.png`, so the remainder after
+ * the scheme is `/C:/Users/asad/a.png` — a leading slash in front of a drive
+ * letter. Returning that as a path is not a near miss, it is the exact
+ * `new URL(…).pathname` → `/D:/…` shape the Windows CI has already caught once
+ * in this repository, hand-written here rather than inherited from the URL API.
+ * A `/C:/…` string is not a path any Windows API accepts: every consumer
+ * downstream — `existsSync`, the composer's absolute-path gate, the agent that
+ * is eventually asked to read the file — sees something that is neither
+ * absolute nor relative and fails in its own way.
+ *
+ * It has never fired, because `clipboardFilePaths` above only asks for the two
+ * macOS pasteboard types and a Windows clipboard therefore never reaches this
+ * function with a URL at all. That is not a defence: it is a trap set for
+ * whoever adds the `FileNameW`/`CF_HDROP` branch that Windows paste needs, at
+ * which point this would silently start producing broken paths from a gesture
+ * that looks like it worked. Fixing it now costs three lines and removes the
+ * trap; the alternative is that the person wiring the clipboard has to know
+ * this is here.
+ *
+ * `fileURLToPath` does exactly this — strip the slash when a drive letter
+ * follows — and is not used for the reason above: it throws on a malformed URL,
+ * and a paste must never raise. So the rule is copied, not the function.
  */
 export function pathFromFileUrl(url: string): string | null {
   const trimmed = url.trim()
@@ -210,7 +264,21 @@ export function pathFromFileUrl(url: string): string | null {
   if (path === null) return null
   try {
     const decoded = decodeURIComponent(path)
-    return decoded === '' ? null : decoded.replace(/\/$/, '')
+    if (decoded === '') return null
+    // `/C:/Users/…` → `C:\Users\…`. Both separators are accepted on the way in
+    // because a URL is written with slashes and a hand-typed one may not be,
+    // and the result is spelled with backslashes because that is what the rest
+    // of the machine — and every error message the user will read — uses.
+    const drive = /^\/([A-Za-z]:[\\/].*)$/.exec(decoded)
+    if (drive) {
+      const windows = drive[1].replace(/\//g, '\\')
+      // Trailing separator dropped as it is on POSIX below — but never down to
+      // `C:`, which means "the current directory on drive C" to Windows rather
+      // than the root of it, and is the one string here that would be silently
+      // wrong instead of visibly wrong.
+      return windows.length > 3 ? windows.replace(/\\$/, '') : windows
+    }
+    return decoded.replace(/\/$/, '')
   } catch {
     return null
   }

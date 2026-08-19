@@ -635,10 +635,21 @@ final class ReviewScreensUITests: XCTestCase {
                 capture("\(scheme.rawValue)-11-copilot-tab")
                 app.buttons["copilot.back"].tap()
             } else {
-                XCTAssertTrue(app.openCopilotSettings(),
-                              "with no pill, connecting is still one row inside Settings")
+                /*
+                 * **No pill, and nothing behind it — which is the whole answer
+                 * for a machine whose copilot is not this phone's.**
+                 *
+                 * This branch used to photograph the connect screen in Settings.
+                 * There is no such screen: *"if we are connecting as my device
+                 * copilot automatically comes, if we connect as guest then
+                 * copilot don't come."* So the frame worth taking is the bar
+                 * itself, with three pills on it, and the assertion is that
+                 * nothing anywhere offers to connect the thing.
+                 */
+                XCTAssertFalse(app.buttons["settings.copilot"].exists,
+                               "there is nothing in Settings left to connect")
                 sleep(1)
-                capture("\(scheme.rawValue)-11-copilot-connect-in-settings")
+                capture("\(scheme.rawValue)-11-three-pills-no-copilot")
             }
 
             // And nothing about the copilot is left on the session list, which

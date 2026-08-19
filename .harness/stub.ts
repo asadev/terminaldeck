@@ -287,15 +287,16 @@ const machinesView = {
 const machineListeners = new Set<(view: unknown) => void>()
 const machineOutputListeners = new Set<(chunk: unknown) => void>()
 
-/** Who is listening for a device connecting. See `onDeviceCopilotChanged`. */
-const copilotWatchers = new Set<(links: unknown) => void>()
-
-const copilotLinks: Array<{
-  deviceId: string
-  tiers: { read: boolean; act: boolean; alter: boolean }
-  connectedAt: number
-  lastSeenAt: number | null
-}> = []
+/*
+ * There was a copilot-connection store here — a list of devices, each with its
+ * tiers and the moment it connected — and it is gone with the panel it fed.
+ *
+ * 2026-08-19: *"if we are connecting as my device, copilot automatically comes;
+ * if we connect as guest then copilot don't come."* There is nothing for a
+ * harness to model any more. A device's kind is the whole answer, it is chosen
+ * on the approval screen this stub already drives, and no control anywhere
+ * changes it afterwards.
+ */
 
 /** `RemoteStatus`, rebuilt each read so the buttons above are visible in it. */
 const remoteState = () => ({
@@ -666,77 +667,16 @@ const api: Record<string, unknown> = new Proxy(
       return remote.connections
     },
     /*
-     * Copilot connections, mutable for the same reason the approve/revoke stubs
-     * are.
+     * The five copilot-connection stubs are gone with the panel they fed:
+     * `listDeviceCopilot`, `setDeviceCopilot`, `copilotConnectCode`,
+     * `disconnectDeviceCopilot` and `onDeviceCopilotChanged`.
      *
-     * A stub that answered with a fixed list would make every control on the
-     * panel look broken in the harness — pressed, and the row unchanged — which
-     * is precisely the symptom this panel exists to make impossible. It models
-     * the three rules that matter now that copilot access is a **separate
-     * connection** rather than a checkbox:
-     *
-     *  - `setDeviceCopilot` **cannot create** a record. A device with no
-     *    connection is granted nothing by ticking a box, because the box is not
-     *    the authorisation.
-     *  - a connection with every tier unticked is still a connection, and still
-     *    appears — it holds a credential, and only one of "no connection" and
-     *    "connected, allowed nothing" has something to revoke.
-     *  - `alter` is stored, because it is grantable.
+     * They modelled a separate connection with its own six-digit code, and the
+     * preload channels behind them were deleted on 2026-08-19 when a device's
+     * kind became the authorisation. A stub for a channel that no longer exists
+     * is worse than none: it lets a panel keep drawing a control the real app
+     * would refuse.
      */
-    listDeviceCopilot: async () => copilotLinks,
-    setDeviceCopilot: async (deviceId: string, tiers: Record<string, boolean>) => {
-      const row = copilotLinks.find((entry) => entry.deviceId === deviceId)
-      if (row) {
-        row.tiers = { read: tiers.read === true, act: tiers.act === true, alter: tiers.alter === true }
-      }
-      return copilotLinks
-    },
-    copilotConnectCode: async (tiers: Record<string, boolean>) => {
-      /*
-       * The harness has no device on the other end to type it into, so the code
-       * is minted *and redeemed* here — otherwise the panel would show a code
-       * that nothing could ever use and the connected state would be
-       * unreachable in the one place the UI is actually looked at.
-       *
-       * The code itself is real-shaped: six digits, and it is what the panel
-       * draws. `.harness/stub.ts` must mirror the preload's shapes, not its
-       * security model.
-       */
-      const code = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
-      const deviceId = remote.devices.find((device) => device.status === 'approved')?.id ?? 'dev-phone'
-      if (!copilotLinks.some((row) => row.deviceId === deviceId)) {
-        copilotLinks.push({
-          deviceId,
-          tiers: { read: tiers.read === true, act: tiers.act === true, alter: tiers.alter === true },
-          connectedAt: Date.now(),
-          lastSeenAt: null,
-        })
-      }
-      // A beat later, the way a person typing a code into a phone in the next
-      // room is a beat later. Firing synchronously would hide the state the
-      // harness exists to show: a code on screen, and then a connection.
-      setTimeout(() => {
-        for (const watcher of copilotWatchers) watcher(copilotLinks)
-      }, 2_000)
-      return { code, expiresAt: Date.now() + 60_000, tiers }
-    },
-    disconnectDeviceCopilot: async (deviceId: string) => {
-      const at = copilotLinks.findIndex((row) => row.deviceId === deviceId)
-      if (at >= 0) copilotLinks.splice(at, 1)
-      return copilotLinks
-    },
-    /*
-     * The push a real device's redemption causes, fired from the stub's own
-     * `copilotConnectCode` a beat later.
-     *
-     * `on*` returns an unsubscribe, like every other subscription on this
-     * bridge. A stub that returned a promise here would draw a panel that never
-     * updates and hide the one state transition worth looking at.
-     */
-    onDeviceCopilotChanged: (cb: (links: unknown) => void) => {
-      copilotWatchers.add(cb)
-      return () => copilotWatchers.delete(cb)
-    },
     onRemoteConnections: noop,
     tailnetStatus: async () => ({
       ready: true,
@@ -782,18 +722,6 @@ const api: Record<string, unknown> = new Proxy(
     // The harness has no live session, so the plan half reports "not available"
     // — which is the state worth being able to look at anyway.
     watchPlanLimits: async () => null,
-    // Every field the real result carries, `unwired` included: `typed` says
-    // whether anything went into the session, `residue` whether a panel was left
-    // behind. A stub that omits them reads as `undefined`, which the bar takes
-    // for "no", which is right here and would hide the two states the bar most
-    // needs to be looked at in.
-    refreshPlanLimits: async () => ({
-      ok: false,
-      reason: 'unwired',
-      typed: false,
-      residue: false,
-      snapshot: null,
-    }),
     unwatchPlanLimits: () => {},
     onUsage: noop,
     // Same reasoning for the usage windows: there is no terminal to read a
@@ -814,6 +742,19 @@ const api: Record<string, unknown> = new Proxy(
       assembledAt: Date.now(),
     }),
     unwatchUsage: () => {},
+    // Every field the real result carries, so the bar's states are all
+    // reachable here: `outcome` is what it branches on, `detail` is the sentence
+    // it prints, and `spawned` is the one that says whether a process was
+    // started. A stub that omits them reads as `undefined`, which the bar takes
+    // for "could not read" — a real state, but not one worth pinning the
+    // harness to.
+    refreshUsage: async () => ({
+      ok: false,
+      outcome: 'unwatched',
+      detail: 'The harness has no session to read usage from.',
+      elapsedMs: 0,
+      spawned: false,
+    }),
     // `provider` and `configDir` are what the main process actually sends, and
     // both are drawn: the account chip and the Accounts list put that agent's
     // mark beside the name, and the settings row shows the directory that makes
@@ -1595,8 +1536,11 @@ const api: Record<string, unknown> = new Proxy(
     browserSignInDiagnose: async () => null,
     browserSignInHandover: async () => null,
     browserSignInAgents: async () => [],
-
-    hooksStatus: async () => [],
+    // `hooksStatus` is answered once, further up beside `listDir`. A second key
+    // here was silently winning — a duplicate in an object literal is not an
+    // error, it is the later one — so the stub above it could have been changed
+    // to no effect for as long as this stood. vite warned about it on every
+    // page load and nothing was reading vite's warnings.
     loadBoard: async () => null,
     loadDashboard: async () => null,
     getLatestSessionInsights: async () => null,
@@ -1897,6 +1841,53 @@ const api: Record<string, unknown> = new Proxy(
       machineOutputListeners.add(cb)
       return () => machineOutputListeners.delete(cb)
     },
+
+    /*
+     * The servers half of the Machines panel — the empty state, honestly.
+     *
+     * Deliberately not a set of fixtures. What this area is about is a
+     * *sequence* — add a server, land on its page, press something, read what it
+     * says — and `.harness/servers.html` exists precisely because a fixture per
+     * state cannot show that. What the whole-app harness needs from it is only
+     * that opening Machines draws the real "no servers yet" screen rather than
+     * the object proxy's `null`, which resolves as a bridge that is present and
+     * answers nothing: the one shape `CLAUDE.md` records inventing three bugs
+     * that did not exist.
+     */
+    listServers: async () => [],
+    /*
+     * The two verbs the browser's machine picker calls for a server.
+     *
+     * Present and honest rather than absent: `resolveServersApi` treats a
+     * preload missing any one of the three as a build that predates the
+     * feature and draws no server rows at all, so leaving these out would make
+     * the harness silently disagree with the app about whether the feature
+     * exists. With `listServers` empty there is nothing to call them with, and
+     * both say what they are rather than pretending to answer.
+     */
+    serverPorts: async () => ({ ok: false, message: 'The harness has no server to ask.' }),
+    reachOnServer: async () => ({ ok: false, message: 'The harness cannot reach a server.' }),
+    lookAtServer: async () => ({ ok: false, sentence: 'There is no server here in the harness.' }),
+    closeServer: async () => ({ closed: true }),
+    previewServerAction: async () => null,
+    actOnServer: async () => ({ ok: false, sentence: 'The harness cannot act on a server.' }),
+    readServerLogs: async () => ({ ok: false, sentence: 'The harness has no logs to read.' }),
+    grantServerCopilot: async () => null,
+    revokeServerCopilot: async () => ({ revoked: false }),
+    serverGrantState: async () => null,
+    openServerShell: async () => ({ ok: false, sentence: 'The harness has no terminal to open.' }),
+    writeToServerShell: async () => ({ written: false }),
+    resizeServerShell: async () => ({ resized: false }),
+    closeServerShell: async () => ({ closed: true }),
+    onServerShellOutput: () => () => {},
+    onServerShellClosed: () => () => {},
+    addServer: async () => ({
+      ok: false,
+      kind: 'unknown',
+      sentence: 'Adding a server needs the real app — open .harness/servers.html for the flow.',
+    }),
+    forgetServer: async () => ({ forgotten: false }),
+    renameServer: async () => ({ renamed: false }),
   },
   {
     // Mirror the real preload's shape: on* methods are subscriptions that

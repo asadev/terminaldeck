@@ -214,6 +214,16 @@
    consent dialog above, so the two must draw the same characters. */
 .copilot-action-name,
 
+/* The last lines a server printed, fetched once and shown under a card. This is
+   the same case as the driving quote below, arriving from further away still:
+   text produced by a program on somebody else's computer, drawn under this
+   app's chrome with the claim that it is what the server said. Log lines are
+   made of exactly the pairs this font welds — `=>` in a stack trace, `!=` in a
+   failed check, `2>&1` and `->` in a command a service logged before running
+   it — and a person reads them here precisely because something is wrong and
+   they intend to act on what they see. */
+.servers-log-body,
+
 /* The quote on a driving-mode stop, in the panel while a tour plays and in the
    recap afterwards. The strictest case in this file after the consent dialog's
    arguments, and for the same reason turned up a notch: this is text lifted
@@ -271,6 +281,22 @@
 .machines-pane-path,
 .machine-entry-box,
 .machines-key,
+
+/* The box a private key is pasted into when signing in to a server. It is the
+   one field in this app whose contents are checked *by eye* before they are
+   used: the whole reason it wears the mono face is so somebody can see that the
+   `-----BEGIN` and `-----END` lines came along with the middle. A key's base64
+   body can hold `//` and `==`, and its header holds `-----`, which is five
+   hyphens JetBrains Mono is happy to draw as a rule. Redrawing any of that
+   turns "your paste is incomplete" into a puzzle with no visible cause. */
+.servers-key,
+/* The names of the key files found on this computer, in the list that replaced
+   "open the key file in any text editor". A filename is machine text somebody
+   matches against what they see in Finder or `ls`, and these are exactly the
+   names ligatures reach: `id_ed25519` is fine, `key--prod`, `www-data=>old` and
+   a downloaded `server..pem` are not. It is also the string a person compares
+   character by character when two keys differ by one. */
+.servers-keylist-name,
 .df-folder-path,
 /* The copilot setup flow: the folder it will work in. `.cs-preview` used to be
    listed here too — the block of instructions the summary screen showed byte for
@@ -334,12 +360,11 @@
 .bw-badge,
 .gh-scope,
 .gh-device-code,
-/* The copilot connect code: six digits somebody reads off this screen and types
-   into a device. It cannot contain a pair this font welds, and it is registered
-   for the reason the paragraph above gives — the rule is about the face rather
-   than about today's content, and a code that is misread is a person told their
-   connection failed with no way to tell that from having typed it wrong. */
-.dc-code,
+/* `.dc-code` — the copilot connect code — was registered here and is gone with
+   the panel that drew it. Reaching the copilot is no longer a second connection
+   with a code of its own: a device paired as "My device" carries the copilot,
+   a guest never does. Nothing on any screen types six digits at a copilot any
+   more, so there is no face rule left to state about it. */
 .join-input-code,
 .join-input-pin,
 .join-note-ok,

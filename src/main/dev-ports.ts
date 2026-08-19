@@ -3,6 +3,7 @@ import { createConnection } from 'node:net'
 import { promisify } from 'node:util'
 import type { IpcMain } from 'electron'
 import { BRAND } from '../shared/brand'
+import { isExcluded } from '../shared/not-a-page'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
 import {
   LSOF,
@@ -103,72 +104,6 @@ function toWire(detail: DevPortDetail): DevPort {
     guessed: detail.guessed,
     ours: detail.ours,
   }
-}
-
-/**
- * Processes that are almost never something you want to open in a browser.
- * Everything else is offered, because guessing which frameworks a person uses
- * is exactly the assumption this module exists to avoid.
- */
-const NOT_A_DEV_SERVER = new Set([
-  'rapportd',
-  'sshd',
-  'launchd',
-  'ControlCe',
-  'Spotify',
-  'Dropbox',
-  'iTunes',
-  'AirPlay',
-  'identityservicesd',
-  'remoted',
-  'Google',
-  'Slack',
-  'Postgres',
-  'postgres',
-  'mysqld',
-  'redis-server',
-  'mongod',
-  'Docker',
-  // Windows equivalents. Nothing above ever appears there and nothing here ever
-  // appears on macOS, so one list serves both without either platform paying for
-  // the other's noise. `System` is PID 4, which holds 135, 445 and 139 on a
-  // stock install — three ports offered as dev servers on the very first launch.
-  'System',
-  'System Idle Process',
-  'svchost',
-  'services',
-  'lsass',
-  'wininit',
-  'spoolsv',
-  'sqlservr',
-  'MsMpEng',
-  'vmware-hostd',
-  'com.docker.backend',
-])
-
-/**
- * Does the exclusion list above cover this process, under any of the spellings
- * the operating system might have printed?
- *
- * Three, and every one of them is a real spelling seen on this machine:
- *
- *  - the name as printed — `sshd`, `node`;
- *  - the first word of it — field-mode `lsof` prints `Google Chrome` where the
- *    column output printed `Google`, and the list was written against the
- *    column output;
- *  - the first nine characters — the column output's own clamp, which is how
- *    `ControlCenter` came to be listed as `ControlCe`.
- *
- * Checking all three means switching `lsof` to field mode cannot quietly
- * *un-exclude* half the list. It did on the first attempt: Chrome's port 9333
- * reappeared as a suggested dev server the moment the names stopped being
- * truncated.
- */
-function isExcluded(name: string): boolean {
-  if (NOT_A_DEV_SERVER.has(name)) return true
-  const firstWord = name.split(' ')[0]
-  if (firstWord !== name && NOT_A_DEV_SERVER.has(firstWord)) return true
-  return name.length > 9 && NOT_A_DEV_SERVER.has(name.slice(0, 9))
 }
 
 /** Runtimes that usually ARE serving a page, listed before anything else. */

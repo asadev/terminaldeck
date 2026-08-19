@@ -81,28 +81,26 @@ final class DeckTabsTests: XCTestCase {
     }
 
     /**
-     * Put one machine's copilot into the state a connected phone is in.
+     * Put one machine's copilot into the state a phone paired as **his** is in.
      *
      * The two frames the desktop actually sends, in order — the `welcome` that
-     * says this machine has a copilot and holds a record for this device, and
-     * the answer to `copilot.hello` that opens the connection — rather than a
-     * back door on `CopilotLink`. A test helper that reached past the wire could
-     * put the link in a combination the desktop cannot produce, and the property
-     * under test here is *what the tab bar does about a real connection*.
+     * carries a `copilot` object because this device is one of his, and the
+     * `copilot.grant` that answers the hello and opens the connection — rather
+     * than a back door on `CopilotLink`. A helper that reached past the wire
+     * could put the link in a combination the desktop cannot produce, and the
+     * property under test here is *what the tab bar does about a real machine*.
      *
-     * `linked(credential:connection:)` is the frame that answers a redeemed
-     * six-digit code, and it is what stores the credential — through the
-     * `MemoryStore` above, which stands in for the Keychain, so nothing here
-     * touches the real one.
+     * There is no third frame. It used to redeem a six-digit code and store a
+     * credential; both went on 2026-08-19, so the whole of "connecting the
+     * copilot" is now the welcome arriving with the field in it.
      */
-    private func connectCopilot(on host: HostLink) {
+    private func giveCopilot(to host: HostLink) {
         let grant = CopilotGrant(read: true, act: true, alter: false)
         host.copilot.welcomed(capabilities: [Copilot.capability],
-                              connection: CopilotConnection(stated: true, linked: false,
-                                                            open: false, grant: .none))
-        host.copilot.linked(credential: "c2VjcmV0",
-                            connection: CopilotConnection(stated: true, linked: true,
-                                                          open: true, grant: grant))
+                              connection: CopilotConnection(stated: true, linked: true,
+                                                            open: false, grant: grant))
+        host.copilot.apply(pushed: CopilotConnection(stated: true, linked: true,
+                                                     open: true, grant: grant))
     }
 
     private func credential(_ hostId: String, nickname: String) -> StoredCredential {
@@ -318,32 +316,37 @@ final class DeckTabsTests: XCTestCase {
     // MARK: - The fourth pill, and the way home
 
     /**
-     * **Three pills until the copilot is connected, four after.**
+     * **Three pills on a machine with no copilot for this phone, four on one
+     * that has it.**
      *
      * *"If the copilot is not connecting, this icon should not be inside the
      * pill — then it will be three icon pill. Otherwise if the copilot is
-     * connected, then four icon pill, automatically, like that way."*
+     * connected, then four icon pill, automatically, like that way."* And what
+     * decides it, since 2026-08-19: *"if we are connecting as my device copilot
+     * automatically comes, if we connect as guest then copilot don't come."*
      *
      * Driven through the model rather than through `CopilotAccess` directly,
      * because the failure this guards against is not the enum getting the answer
      * wrong — `CopilotPillTests` walks every case of that — but the bar asking
      * the wrong machine. `showsCopilotTab` reads `current`, and a phone paired
-     * with two machines has two answers.
+     * with two machines has two answers: it can be his own device on one and a
+     * guest on the other, which is exactly the arrangement the second half of
+     * this case stands for.
      */
-    func testThePillAppearsOnlyWhenTheCurrentMachinesCopilotIsConnected() throws {
+    func testThePillAppearsOnlyForAMachineWhoseCopilotIsThisPhones() throws {
         model.select(Self.macId)
         XCTAssertFalse(model.showsCopilotTab,
-                       "a phone that has never connected a copilot gets three pills")
+                       "before any welcome there is nothing to draw a fourth pill from")
 
         let mac = try XCTUnwrap(model.host(Self.macId))
-        connectCopilot(on: mac)
-        XCTAssertTrue(model.showsCopilotTab, "and four once it has one")
+        giveCopilot(to: mac)
+        XCTAssertTrue(model.showsCopilotTab, "and four once the welcome says so")
 
         // The other machine has its own answer, and switching to it must give
         // that answer rather than the one that happened to be on screen.
         model.select(Self.pcId)
         XCTAssertFalse(model.showsCopilotTab,
-                       "the PC's copilot is not connected — the pill belongs to the machine")
+                       "no copilot on the PC for this phone — the pill belongs to the machine")
     }
 
     /**
@@ -362,7 +365,7 @@ final class DeckTabsTests: XCTestCase {
     func testAPillIsNotPulledOutFromUnderSomebodyStandingOnIt() throws {
         let mac = try XCTUnwrap(model.host(Self.macId))
         model.select(Self.macId)
-        connectCopilot(on: mac)
+        giveCopilot(to: mac)
         model.show(.copilot)
         XCTAssertTrue(model.showsCopilotTab)
 
@@ -425,25 +428,32 @@ final class DeckTabsTests: XCTestCase {
     }
 
     /**
-     * Connecting the copilot is a screen inside Settings, and asking for it
-     * twice does not stack two copies.
+     * **There is nowhere in Settings to connect the copilot, and there is not
+     * meant to be.**
      *
-     * *"Actually connecting copilot should be in the settings."* The caller that
-     * needs this method rather than a `NavigationLink` is the Copilot screen
-     * itself: somebody standing on a disconnected copilot has to be moved to
-     * another tab as well as pushed.
+     * This case used to be `testTheCopilotConnectionScreenIsReachableFromAnywhereInSettings`,
+     * pushing `SettingsRoute.copilot` and landing on a six-digit field —
+     * *"actually connecting copilot should be in the settings."* Then the
+     * ceremony went: *"instead of giving mobile app separate connection for
+     * copilot just make it like if we are connecting as my device copilot
+     * automatically comes."*
+     *
+     * What is asserted instead is the shape that replaced it. Settings has one
+     * destination, Machines — which is also the honest place for anything to do
+     * with what kind of device this is — and it still keeps the tab bar when
+     * pushed, which is the property the old case was quietly covering.
      */
-    func testTheCopilotConnectionScreenIsReachableFromAnywhereInSettings() {
+    func testSettingsHasOneDestinationAndItKeepsTheBar() {
         model.tab = .sessions
-        model.showCopilotSettings()
+        model.showMachines()
 
         XCTAssertEqual(model.tab, .settings)
-        XCTAssertEqual(model.settingsRoute, [.copilot])
+        XCTAssertEqual(model.settingsRoute, [.machines])
         XCTAssertEqual(model.settingsSurface, .machines,
                        "anything pushed on Settings keeps the bar, like Machines does")
 
-        model.showCopilotSettings()
-        XCTAssertEqual(model.settingsRoute, [.copilot])
+        model.showMachines()
+        XCTAssertEqual(model.settingsRoute, [.machines], "asking twice does not stack two copies")
     }
 
     /**

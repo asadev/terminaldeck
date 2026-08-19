@@ -69,10 +69,10 @@ describe('reading a settled push', () => {
    * `by` is read, because this dialog is no longer the only surface that can
    * answer.
    *
-   * A device with its own copilot connection can answer its own run's question,
-   * and first answer wins — so this window can be closed by an answer nobody in
-   * front of it gave. Without this field the dialog would simply vanish, which
-   * teaches a person that the app does things behind their back.
+   * One of the owner's own devices can answer its own run's question, and first
+   * answer wins — so this window can be closed by an answer nobody in front of
+   * it gave. Without this field the dialog would simply vanish, which teaches a
+   * person that the app does things behind their back.
    */
   it('carries the surface that answered it', () => {
     expect(
@@ -84,12 +84,24 @@ describe('reading a settled push', () => {
   })
 
   it('says where a question was answered, allowed or refused', () => {
+    /*
+     * "one of your devices", not "a connected device", and the difference is a
+     * claim rather than a rewording.
+     *
+     * While reaching the copilot was a second connection a device acquired
+     * separately, all this sentence could honestly say was that *something
+     * connected* had answered. The kind decides it now — **My device** carries
+     * the copilot, a guest is sent none — so a `device:` answer can only be the
+     * owner at another of their own keyboards, and the reassurance somebody
+     * needs when a confirmation closes itself is exactly that nobody outside
+     * answered it.
+     */
     expect(
       settledSentence({ id: 'q1', granted: true, reason: null, by: 'device:phone-1' }),
-    ).toBe('Allowed on a connected device.')
+    ).toBe('Allowed on one of your devices.')
     expect(
       settledSentence({ id: 'q1', granted: false, reason: 'declined', by: 'device:phone-1' }),
-    ).toBe('Refused on a connected device.')
+    ).toBe('Refused on one of your devices.')
     // Answered here, by the person looking at it: repeating it back would be the
     // app narrating the button they just pressed.
     expect(settledSentence({ id: 'q1', granted: true, reason: null, by: 'window' })).toBeNull()

@@ -837,17 +837,75 @@ describe('the command we write actually works', () => {
 })
 
 describe('syncInstalledHooks', () => {
-  it('re-points a stale install and leaves an uninstalled provider alone', () => {
+  it('leaves an uninstalled provider alone', () => {
     writeClaude()
-    installHooks({ ...context, endpoint: OTHER_COPY }, 'claude')
 
     const statuses = syncInstalledHooks(context)
-    const claude = statuses.find((status) => status.id === 'claude')
     const codex = statuses.find((status) => status.id === 'codex')
 
-    expect(claude?.state).toBe('complete')
     expect(codex?.state).toBe('none')
     // Nothing was created for the provider that had no hooks.
     expect(() => statSync(join(root, '.codex', 'hooks.json'))).toThrow()
+  })
+
+  /**
+   * The behaviour this replaced, and why.
+   *
+   * This test used to assert the opposite — that a startup sync re-points
+   * another copy's install at itself and reports `complete`. That is what the
+   * code did, and it cost twenty-two hooks across three CLIs on a real machine,
+   * three times in one week: a second copy of the app launches, decides every
+   * hook in the user's home is stale because it did not write them, claims them
+   * all, and the copy the person is actually using stops receiving session
+   * events without ever saying so.
+   *
+   * Two installs of the same app is an ordinary thing to have — a beta beside a
+   * stable one, an old build somebody kept. So the startup pass now repairs only
+   * what it wrote. Taking over from another copy is still offered, in Settings,
+   * where a person chooses it.
+   */
+  it('does not claim an install belonging to another copy of the app', () => {
+    writeClaude()
+    installHooks({ ...context, endpoint: OTHER_COPY }, 'claude')
+    const before = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+
+    const statuses = syncInstalledHooks(context)
+    const claude = statuses.find((status) => status.id === 'claude')
+
+    expect(claude?.state).toBe('stale')
+    // Not "mostly unchanged" — the other copy's file is not written to at all.
+    expect(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')).toBe(before)
+  })
+
+  it('still migrates an install of ours from before the token left the command', () => {
+    // The form this migration exists for: our marker, no config path, because
+    // the port and token were baked into the command itself.
+    writeClaude()
+    const file = join(root, '.claude', 'settings.json')
+    const data = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    const hooks = (data.hooks ?? {}) as Record<string, unknown>
+    for (const event of HOOK_PROVIDERS.claude.events) {
+      const existing = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : []
+      hooks[event] = [
+        ...existing,
+        { matcher: '', hooks: [{ type: 'command', command: `curl -s http://127.0.0.1:51234/hook ${HOOK_MARKER}` }] },
+      ]
+    }
+    data.hooks = hooks
+    writeFileSync(file, JSON.stringify(data, null, 2))
+
+    const claude = syncInstalledHooks(context).find((status) => status.id === 'claude')
+
+    expect(claude?.state).toBe('complete')
+  })
+
+  it('takes over from another copy when a person asks for it', () => {
+    // The escape hatch the startup pass no longer takes by itself.
+    writeClaude()
+    installHooks({ ...context, endpoint: OTHER_COPY }, 'claude')
+
+    const result = installHooks(context, 'claude')
+
+    expect(result.status.state).toBe('complete')
   })
 })

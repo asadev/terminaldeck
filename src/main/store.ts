@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { writeFileAtomic } from './atomic-write'
 import { userDataDir } from './platform/paths'
 import type { ProviderId } from '../shared/types'
 import type { SavedSession } from './session-restore'
@@ -19,6 +20,48 @@ export interface Preferences {
   notifyOnComplete: boolean
 }
 
+/**
+ * What this app has established about one Claude login, keyed by its
+ * configuration directory.
+ *
+ * A *fact about the account*, which is the whole reason it is written down at
+ * all. Everything else this feature knows lives in a per-session tracker held
+ * in memory, and that is right for a screen reading — a session's screen is the
+ * session's — but wrong for the two things here. Whether a login is billed
+ * through a subscription, and whether its `/usage` panel has any plan limits in
+ * it, are true of the login and stay true of it across every session it ever
+ * runs and across every launch of this app.
+ *
+ * That distinction is not academic. Before this existed, "this account has no
+ * limits to read" was remembered against the *session*, so five open sessions
+ * each typed `/usage` into somebody's terminal to learn the same thing, and
+ * quitting the app threw all five answers away and made them learn it again.
+ * See `src/main/account-limits.ts`, which owns the reading and writing, and
+ * `refresh` in `src/main/plan-limit.ts`, which is the side that types.
+ */
+export interface AccountLimitFact {
+  /**
+   * What Claude Code's own welcome banner said this login is billed as.
+   *
+   * `api` is every billing arrangement that has no rolling subscription window
+   * — an API key, console billing, Bedrock, Vertex — and it is the one worth
+   * knowing in advance, because those accounts have no plan limits for the CLI
+   * to draw and never will. Absent until a banner has actually been read.
+   */
+  billing?: 'subscription' | 'api'
+  /**
+   * A terminal answer that a `/usage` run established, or absent.
+   *
+   * Only `no-limits` is kept: the panel opened, settled, and had no plan-limit
+   * section in it. That cannot change by being asked again, so it is the one
+   * answer worth spending a person's terminal on exactly once. A reading is
+   * never recorded here — a reading blocks nothing, by design.
+   */
+  answer?: 'no-limits'
+  /** When this was last written, so a stale record can be reasoned about. */
+  at: number
+}
+
 export interface PersistedState {
   version: number
   projects: PersistedProject[]
@@ -36,6 +79,20 @@ export interface PersistedState {
    * untouched. There is nothing here a previous build could misread.
    */
   openSessions?: SavedSession[]
+  /**
+   * What is known about each Claude login, keyed by its configuration directory.
+   *
+   * Additive in exactly the way `openSessions` above is, and `version` is
+   * untouched for the same reason: a `state.json` written by an older build
+   * simply has no such key and loads as an empty map, which is the honest
+   * starting state — nothing has been established about any account yet.
+   *
+   * Keyed by the configuration directory because that *is* the account
+   * everywhere else in this app — `UsageAccountRef.configDir` in
+   * `usage-window.ts`, `Profile.configDir` in `profiles.ts` — so a record
+   * written under one name cannot fail to be found under another.
+   */
+  accountLimits?: Record<string, AccountLimitFact>
   windowBounds?: { width: number; height: number; x?: number; y?: number }
 }
 
@@ -49,6 +106,19 @@ const DEFAULTS: PersistedState = {
     notifyOnComplete: true,
   },
   openSessions: [],
+}
+
+/**
+ * A parsed `accountLimits` map, or nothing.
+ *
+ * Deliberately shallow: it proves the container is an object of objects and
+ * leaves the individual fields to be read defensively where they are used. A
+ * deep validator here would be a second copy of the shape, which is how two
+ * copies come to disagree.
+ */
+function isFactMap(raw: unknown): raw is Record<string, AccountLimitFact> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return false
+  return Object.values(raw).every((value) => typeof value === 'object' && value !== null)
 }
 
 /**
@@ -74,6 +144,12 @@ class Store {
         preferences: { ...DEFAULTS.preferences, ...raw.preferences },
         projects: Array.isArray(raw.projects) ? raw.projects : [],
         openSessions: Array.isArray(raw.openSessions) ? raw.openSessions : [],
+        // A hand-edited or half-written map must not take the launch down with
+        // it, and must not be trusted into the gate that decides whether this
+        // app types into somebody's terminal. Anything that is not a plain
+        // object is read as "nothing established", which is the safe direction:
+        // it costs one `/usage`, where trusting rubbish could cost the feature.
+        accountLimits: isFactMap(raw.accountLimits) ? raw.accountLimits : {},
       }
     } catch {
       // Missing or corrupt — start clean rather than crash on launch.
@@ -84,9 +160,17 @@ class Store {
   private persist(): void {
     try {
       mkdirSync(dirname(this.file), { recursive: true })
-      const tmp = `${this.file}.tmp`
-      writeFileSync(tmp, JSON.stringify(this.state, null, 2), 'utf8')
-      renameSync(tmp, this.file)
+      // `writeFileAtomic` rather than the temp-and-rename written out here,
+      // for two reasons that only bite on Windows and that this file had both
+      // of. The temp name was the fixed `${file}.tmp`, so two windows of this
+      // app writing state at the same time wrote the *same* temp file and one
+      // truncated the other's bytes. And `rename` over a destination another
+      // process holds open fails on Windows with EPERM — Defender's real-time
+      // scan opening the file we just closed is enough — where POSIX `rename`
+      // always succeeds. The catch below turned that into a line in a log
+      // nobody reads, so on Windows a user's project list, theme and window
+      // bounds could simply stop being saved with nothing on screen.
+      writeFileAtomic(this.file, JSON.stringify(this.state, null, 2))
     } catch (err) {
       console.error('[store] failed to persist state:', err)
     }
@@ -205,6 +289,41 @@ class Store {
    */
   setOpenSessions(sessions: readonly SavedSession[]): void {
     this.state.openSessions = [...sessions]
+    this.persist()
+  }
+
+  /**
+   * What is known about one Claude login, or null.
+   *
+   * Null rather than an empty record, because "nothing has been established
+   * about this account" and "this account was established to have nothing" are
+   * opposite answers and only the second may stop this app asking.
+   */
+  getAccountLimit(configDir: string): AccountLimitFact | null {
+    return this.state.accountLimits?.[configDir] ?? null
+  }
+
+  /**
+   * Write what has been established, merging rather than replacing.
+   *
+   * Merging because the two fields are learned by different means at different
+   * moments — the billing off a banner that happened to be on screen, the
+   * answer off a `/usage` that ran — and a writer of one must not erase the
+   * other's work.
+   */
+  setAccountLimit(configDir: string, patch: Omit<AccountLimitFact, 'at'>): AccountLimitFact {
+    const map = this.state.accountLimits ?? {}
+    const next: AccountLimitFact = { ...map[configDir], ...patch, at: Date.now() }
+    map[configDir] = next
+    this.state.accountLimits = map
+    this.persist()
+    return next
+  }
+
+  /** Forget an account's record entirely — what a person pressing Check means. */
+  forgetAccountLimit(configDir: string): void {
+    if (!this.state.accountLimits || !(configDir in this.state.accountLimits)) return
+    delete this.state.accountLimits[configDir]
     this.persist()
   }
 

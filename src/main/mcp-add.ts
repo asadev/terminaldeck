@@ -313,7 +313,18 @@ export function buildAddArgs(request: McpAddRequest): string[] {
 
 /** Injectable so the test can run a stub instead of the real CLI. */
 export interface McpAddDeps {
-  exec?(file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }): Promise<{ stdout: string; stderr: string }>
+  exec?(
+    file: string,
+    args: string[],
+    // `windowsHide` is part of the contract rather than an implementation
+    // detail, because on Windows the launcher is `cmd.exe /c claude …` and
+    // cmd.exe is a console program: without the flag the Add button paints a
+    // black window over the settings panel every time it is pressed. Naming it
+    // here is what lets a test assert it from this Mac — there is no
+    // behavioural symptom to measure, the command works either way, which is
+    // how the omission survived review in the first place.
+    options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number; windowsHide: boolean },
+  ): Promise<{ stdout: string; stderr: string }>
   path?(): Promise<string>
 }
 
@@ -400,6 +411,13 @@ export async function addMcpServer(raw: unknown, deps: McpAddDeps = {}): Promise
       // and `platform/env-path.test.ts` now fails the build on it.
       env: withPath(process.env, path, currentPlatform()),
       timeout: ADD_TIMEOUT_MS,
+      // The launcher above is `cmd.exe /c claude …` on Windows, and cmd.exe is
+      // a console program: without this the Add button flashes a black console
+      // window over the settings panel every time it is pressed. Ignored on
+      // POSIX, where the spawn is `claude` directly and there is no window to
+      // hide — so this is additive rather than a branch, the same way the other
+      // twenty spawn sites in `src/main` carry it.
+      windowsHide: true,
     })
     const said = [stdout, stderr].map((part) => part.trim()).filter((part) => part !== '').join('\n')
     return {

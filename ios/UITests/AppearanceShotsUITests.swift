@@ -145,22 +145,20 @@ final class AppearanceShotsUITests: XCTestCase {
         for scheme in [Scheme.dark, Scheme.light] {
             try choose(scheme)
             /*
-             * The pill, when there is one — and Settings when there is not.
+             * The pill, when there is one — and the bar itself when there is not.
              *
              * The copilot was pinned above the sessions until *"a fourth pill,
              * and the copilot goes leftmost"*, and the pill itself is now
              * conditional: *"if the copilot is not connecting, this icon should
-             * not be inside the pill."* A stand-in started without `--copilot`,
-             * or one this phone has not redeemed a code against, draws three
-             * pills — so the screen worth photographing in that case is the
-             * connect screen inside Settings, which is where the whole ceremony
-             * moved to.
+             * not be inside the pill."* A stand-in started without `--copilot`
+             * draws three pills, and there is nothing behind that any more —
+             * *"if we connect as guest then copilot don't come"* deleted the
+             * connect screen along with the ceremony. So the frame worth taking
+             * in that case is the three-pill bar.
              */
             guard app.openCopilotTab() else {
-                XCTAssertTrue(app.openCopilotSettings(),
-                              "no pill and no Settings row is a copilot with no door at all")
                 sleep(2)
-                capture("\(scheme.rawValue)-21-copilot-connect-in-settings")
+                capture("\(scheme.rawValue)-21-three-pills-no-copilot")
                 continue
             }
             /*

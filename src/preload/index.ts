@@ -300,60 +300,33 @@ const api = {
   listDeviceFolders: (): Promise<unknown> => ipcRenderer.invoke('remote:folders'),
   setDeviceFolders: (deviceId: string, folders: string[]): Promise<unknown> =>
     ipcRenderer.invoke('remote:folders:set', deviceId, folders),
-  /**
-   * The copilot connections: who holds one, what it may do, how one is made and
-   * how one is ended.
+  /*
+   * There were five channels here — `listDeviceCopilot`, `setDeviceCopilot`,
+   * `copilotConnectCode`, `disconnectDeviceCopilot` and a pushed
+   * `remote:copilot:changed` — and they are gone rather than renamed.
    *
-   * Four channels rather than the folder pair, because copilot access is not a
-   * property of a paired device that a checkbox toggles. It is a **separate
-   * connection** — its own six-digit code, its own credential, its own record —
-   * and `copilotConnectCode` and `disconnectDeviceCopilot` are the two acts that
-   * create and destroy one. `remote/copilot-link.ts` carries the argument,
-   * including the one it superseded.
+   * They carried a **second connection**: a paired device reached the copilot
+   * only after somebody minted a six-digit copilot code here and typed it on
+   * the device, which stored a credential of its own and a per-device tier
+   * record beside it. Asad, 2026-08-19: *"instead of giving mobile app separate
+   * connection for copilot just make it like if we are connecting as my device
+   * copilot automatically comes, if we connect as guest then copilot don't come
+   * — that's all we need to do instead of two different connections."*
    *
-   * The shape is otherwise the folder channels' and for the same reason: read
-   * the whole list, write one device, answer with the whole list again. A panel
-   * that drew its own ask rather than the answer would show a permission that is
-   * not on disk, which is the one mistake a permission screen must not make —
-   * and `CopilotLinks.set` genuinely does not store everything it is handed. It
-   * **refuses to create a record at all** for a device that has not connected,
-   * which is what keeps this channel from being a second door onto copilot
-   * access.
+   * So the authorisation is the pairing. A device approved as **one of your
+   * own** carries the copilot in its `welcome`; a guest is sent no copilot key
+   * at all. That decision is made once, where the device's kind is decided — the
+   * approval flow behind `remote:kinds` above — and it is then read off the
+   * already-authenticated socket rather than off a credential. There is no code
+   * to mint, nothing to store, nothing to disconnect, and so no channel for a
+   * panel to call. `remote/copilot-link.ts` and the panel that drew it went with
+   * them.
    *
-   * `tiers` crosses as a plain object and is **not** narrowed here. The rule
-   * lives in the store, because that is what a hand-edited file is read through
-   * too, and a copy of a permission rule in the preload would be the copy that
-   * gets it wrong.
-   *
-   * `copilotConnectCode` returns six digits that live sixty seconds, are usable
-   * once, and die after five wrong guesses. It reaches page code because a
-   * person has to read it off this screen and type it into a device — that is
-   * the whole ceremony, and there is no version of it where the code stays in
-   * the main process.
+   * Nothing is left as a no-op stub on purpose. A preload method that resolves
+   * to an empty list is how a panel keeps drawing a control for a permission the
+   * main process stopped keeping, which is the one mistake a permission surface
+   * must not make.
    */
-  listDeviceCopilot: (): Promise<unknown> => ipcRenderer.invoke('remote:copilot'),
-  setDeviceCopilot: (deviceId: string, tiers: Record<string, boolean>): Promise<unknown> =>
-    ipcRenderer.invoke('remote:copilot:set', deviceId, tiers),
-  copilotConnectCode: (tiers: Record<string, boolean>): Promise<unknown> =>
-    ipcRenderer.invoke('remote:copilot:code', tiers),
-  disconnectDeviceCopilot: (deviceId: string): Promise<unknown> =>
-    ipcRenderer.invoke('remote:copilot:disconnect', deviceId),
-  /**
-   * A device redeemed a connect code, and the list changed off this machine.
-   *
-   * The one copilot state change that does not come back as the answer to
-   * something the panel asked for: somebody reads a code out and it is typed
-   * into a phone in the next room. An event rather than a poll — the standing
-   * preference in this workspace, and here it is also the only honest option,
-   * because the panel would otherwise keep showing a live code until it expired
-   * and then fall back to a Connect button, having never noticed the connection
-   * it had just authorised.
-   */
-  onDeviceCopilotChanged: (cb: (links: unknown) => void): (() => void) => {
-    const handler = (_e: IpcRendererEvent, links: unknown) => cb(links)
-    ipcRenderer.on('remote:copilot:changed', handler)
-    return () => ipcRenderer.off('remote:copilot:changed', handler)
-  },
   onRemoteConnections: (cb: (connections: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, connections: unknown) => cb(connections)
     ipcRenderer.on('remote:connections', handler)
@@ -432,6 +405,95 @@ const api = {
     return () => ipcRenderer.off('machines:output', handler)
   },
 
+  /* ---------------------------------------------------------- servers -- */
+  /**
+   * The other half of Machines: computers nobody sits at.
+   *
+   * A device is paired with a code minted by the app at the far end; a server
+   * has no app at the far end to mint anything, so it is reached by an address
+   * and a sign-in. Two ceremonies, one panel — which is why these sit beside
+   * the `machines:` methods above rather than in a section of their own.
+   *
+   * **Nothing here ever carries a credential in either direction except the one
+   * moment it is offered.** `addServer` takes the draft a person just typed and
+   * hands it straight to the secure store; every other method names a server by
+   * id, and `listServers` answers names and addresses. A screen that held a
+   * password would be a screenshot away from publishing it — the same argument
+   * `renderer/machines/types.ts` already makes for paired devices.
+   */
+  listServers: (): Promise<unknown> => ipcRenderer.invoke('servers:list'),
+  lookAtServer: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:look', id),
+  closeServer: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:close', id),
+  previewServerAction: (id: string, cardId: string, actionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:preview', id, cardId, actionId),
+  actOnServer: (id: string, cardId: string, actionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:act', id, cardId, actionId),
+  readServerLogs: (id: string, cardId: string, lines: number): Promise<unknown> =>
+    ipcRenderer.invoke('servers:logs', id, cardId, lines),
+  addServer: (draft: unknown): Promise<unknown> => ipcRenderer.invoke('servers:add', draft),
+  /* The keys already on this computer, so adding a server with one is picking a
+     name rather than opening a file in a text editor. `keyfiles.ts`. */
+  serverKeys: (): Promise<unknown> => ipcRenderer.invoke('servers:keys'),
+  pickServerKey: (): Promise<unknown> => ipcRenderer.invoke('servers:key-pick'),
+  readServerKey: (path: string): Promise<unknown> => ipcRenderer.invoke('servers:key-read', path),
+  forgetServer: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:forget', id),
+  renameServer: (id: string, name: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:rename', id, name),
+  grantServerCopilot: (id: string, forMs: number): Promise<unknown> =>
+    ipcRenderer.invoke('servers:grant', id, forMs),
+  revokeServerCopilot: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:revoke', id),
+  serverGrantState: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:grant-state', id),
+  /*
+   * A server's own `localhost`, in this window's browser.
+   *
+   * The same two verbs the paired-machine path already has —
+   * `refreshMachinePorts` and `reachOnMachine` above — with the same answers,
+   * on purpose. His rule for the whole browser is that *"shape of the
+   * application should not be changing for local and remote devices"*, and a
+   * server is one of those machines: it belongs in the same picker, beside the
+   * same laptops, and its ports open in the same tabs.
+   *
+   * They differ in one thing, and it is a fact about servers rather than a
+   * choice. A paired machine pushes its port list up a connection this desktop
+   * already holds, so its verb only has to say *ask again*; a server holds no
+   * connection until somebody wants something, so this one answers with the
+   * list itself — and with whether the server will allow any of it to be
+   * opened, which is a question only the server can settle.
+   */
+  serverPorts: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:ports', id),
+  reachOnServer: (id: string, port: number): Promise<unknown> =>
+    ipcRenderer.invoke('servers:reach', id, port),
+  /*
+   * The terminal in zone three. It is keyed on a *shell* id rather than on the
+   * server id, because the id the far end answers is the only thing that
+   * distinguishes two shells on the same server, and the page that opens one
+   * has no other handle on it.
+   *
+   * `resizeServerShell` takes columns first and then rows, matching every other
+   * resize in this file. `ssh2` reverses the pair between `shell({cols, rows})`
+   * and `setWindow(rows, cols, …)`; that reversal is handled once, in the main
+   * process, and must not be allowed to leak out here.
+   */
+  openServerShell: (id: string, cols: number, rows: number): Promise<unknown> =>
+    ipcRenderer.invoke('servers:shell:open', id, cols, rows),
+  writeToServerShell: (shellId: string, data: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:shell:write', shellId, data),
+  resizeServerShell: (shellId: string, cols: number, rows: number): Promise<unknown> =>
+    ipcRenderer.invoke('servers:shell:resize', shellId, cols, rows),
+  closeServerShell: (shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:shell:close', shellId),
+  onServerShellOutput: (cb: (chunk: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, chunk: unknown) => cb(chunk)
+    ipcRenderer.on('servers:shell:output', handler)
+    return () => ipcRenderer.off('servers:shell:output', handler)
+  },
+  onServerShellClosed: (cb: (chunk: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, chunk: unknown) => cb(chunk)
+    ipcRenderer.on('servers:shell:closed', handler)
+    return () => ipcRenderer.off('servers:shell:closed', handler)
+  },
+
   tailnetStatus: (force?: boolean): Promise<unknown> =>
     ipcRenderer.invoke('tailnet:status', force === true),
   tailnetCert: (dnsName: string): Promise<unknown> => ipcRenderer.invoke('tailnet:cert', dnsName),
@@ -442,12 +504,6 @@ const api = {
   // nothing to return and nothing to await.
   watchPlanLimits: (sessionId: string): Promise<unknown> =>
     ipcRenderer.invoke('plan:watch', sessionId),
-  // `force` is a person pressing rather than the app deciding to ask. A session
-  // that has already established there is nothing to read — no plan limits on
-  // this account, or a panel that would not close — is left alone by everything
-  // except that press. See `refresh` in `src/main/plan-limit.ts`.
-  refreshPlanLimits: (sessionId: string, force = false): Promise<unknown> =>
-    ipcRenderer.invoke('plan:refresh', sessionId, force),
   unwatchPlanLimits: (sessionId: string): void => ipcRenderer.send('plan:unwatch', sessionId),
   onPlanLimits: (cb: (sessionId: string, payload: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, sessionId: string, payload: unknown) =>
@@ -460,15 +516,24 @@ const api = {
   // The same readings as `plan:*`, normalised across agents and joined by
   // Codex's — each one tagged with the account it describes, the window it
   // covers, when the source produced it and when this app read it. Separate
-  // from the plan channels because those also carry an *action* (`plan:refresh`
-  // types `/usage` into the session), and a surface that only draws a bar
-  // should not have to know that one of its sources can be prodded.
+  // from the plan channels because those are one session's screen and these are
+  // an account's windows, and because the *action* lives here now: `plan:refresh`
+  // used to type `/usage` into a session, and `usage:refresh` below reads a file
+  // and, at worst, starts a `claude` of this app's own.
   //
   // `usage:read` takes null for the machine-wide read — what can be answered
   // without a session, which today is the user's own Codex install.
   watchUsage: (sessionId: string): Promise<unknown> => ipcRenderer.invoke('usage:watch', sessionId),
   readUsage: (sessionId: string | null): Promise<unknown> =>
     ipcRenderer.invoke('usage:read', sessionId),
+  // The refresh that touches nobody's terminal, and the reason the bar no longer
+  // types `/usage` into a session somebody is working in. It reads what Claude
+  // Code already wrote into `.claude.json` and, only when that has gone stale,
+  // asks a `claude` of this app's own — in the user's home directory, over
+  // stdio, with no user message and therefore no tokens. `force` is a person
+  // pressing; see `refreshUsage` in `src/main/usage-ipc.ts`.
+  refreshUsage: (sessionId: string, force = false): Promise<unknown> =>
+    ipcRenderer.invoke('usage:refresh', sessionId, force),
   unwatchUsage: (sessionId: string): void => ipcRenderer.send('usage:unwatch', sessionId),
   onUsage: (cb: (sessionId: string, payload: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, sessionId: string, payload: unknown) =>

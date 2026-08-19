@@ -140,9 +140,10 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
   // nothing a phone can do".
   //
   // What makes them reachable now is not a switch. `src/main/index.ts`
-  // constructs one `CopilotLinks` — `copilot-grants.ts` was replaced by
-  // `copilot-link.ts` when copilot access became a separate connection with its
-  // own code and credential — and one `CopilotRuns` over it, and hands the run
+  // constructs one `CopilotAccess` — `copilot-grants.ts` became `copilot-link.ts`
+  // when copilot access was a separate connection with its own code, and became
+  // this when a device's *kind* replaced that connection on 2026-08-19 — and one
+  // `CopilotRuns` over it, and hands the run
   // manager to `registerRemoteIpc`, which is what makes `server.ts` advertise
   // the `copilot` capability at all; the `copilot.*` frames reach real handlers;
   // `remoteCopilotCaller` is the caller function on every run's token, so
@@ -153,6 +154,35 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
   // Deleted rather than reworded, per the note about `confine/appcontainer.ts`
   // above: an entry that outlives its reason is documentation asserting the
   // opposite of the code.
+  'src/main/servers/servers.electron-probe.ts':
+    'the same category as `remote/sealed.electron-probe.ts` at the top of this list, and for the ' +
+    'identical reason: it is the body of the server transport check, bundled and run under ' +
+    'ELECTRON_RUN_AS_NODE by scripts/check-servers-transport.mjs, which `npm test` runs after ' +
+    'vitest. It has to live in src/ so that tsc typechecks it against `connection.ts` — the ' +
+    'module whose behaviour under BoringSSL is the entire reason the check exists.',
+  'src/main/servers/ssh2.d.ts':
+    'an ambient declaration, not a module: it describes the slice of `ssh2` this app calls and ' +
+    'emits nothing. It is hand-written rather than `@types/ssh2` so that `hostVerifier` can be ' +
+    'declared REQUIRED where the library leaves it optional, which makes a connection path that ' +
+    'skips the host key check fail to compile. Nothing imports it by path because nothing can; ' +
+    'tsc picks it up from the tsconfig include, and `host-key-checked.test.ts` is the alarm on ' +
+    'the fence in case somebody widens it.',
+  'src/main/servers/ssh2-server.d.ts':
+    'the same, for the half of `ssh2` the app never calls. `reach.ssh.test.ts` puts a real SSH ' +
+    'server at the far end of a real socket so that a server\u2019s own localhost is proved through ' +
+    'the real library rather than through a stand-in that agrees with the client; this declares ' +
+    'the four calls that test makes. It is separate from `ssh2.d.ts` because that file is ' +
+    'deliberately narrower than the library and mixing the two would leave the next reader unable ' +
+    'to tell which declarations are load bearing. Nothing in the app may import it, and ' +
+    '`host-key-checked.test.ts` enforces that structurally.',
+  'src/main/servers/test-fixtures.ts':
+    'test data, and deliberately shared rather than copied. Four test files in that folder ' +
+    'describe the same server through it — facts, cards and a room measured off ' +
+    '`terminaldeck-server` rather than invented — because four slightly different hand-written ' +
+    'shapes is how a suite ends up green against a server the feature never produces. The walk ' +
+    'excludes tests as importers on purpose, so a module only tests use looks like an orphan; ' +
+    'this one is not a feature claiming to work, it is the description the features are checked ' +
+    'against.',
   'src/renderer/driving/dim-budget.ts':
     'a checker rather than a feature, in the same category as ' +
     '`remote/sealed.electron-probe.ts` at the top of this list: it is the colour arithmetic — ' +

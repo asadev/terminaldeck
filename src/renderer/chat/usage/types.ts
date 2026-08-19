@@ -91,30 +91,46 @@ export interface PlanLimitSnapshot {
 }
 
 /**
- * Why running `/usage` in a session did not produce a reading.
+ * How a usage refresh went, mirroring `UsageRefreshResult['outcome']` in
+ * `src/main/usage-ipc.ts`.
  *
- * The renderer's copy of the main process's own list — see `RefreshReason` in
- * `src/main/plan-limit.ts`, which is where each of these is argued. `no-limits`
- * and `panel-open` joined it on 2026-08-18 and they are the two that carry
- * weight here: both mean the app typed into somebody's session, so both stop
- * the automatic fetcher for good rather than merely delaying it.
+ * The list that replaced `RefreshReason` on 2026-08-18, and the shape of it is
+ * the change. The old one was a catalogue of ways typing `/usage` into
+ * somebody's session could go wrong — `prompt-busy`, `no-panel`, `panel-open`,
+ * a panel left sitting on their conversation — and three of its members had to
+ * stop the app asking again for the life of the session, because every one of
+ * them had been paid for out of a terminal.
+ *
+ * Nothing here is paid for out of a terminal. A refresh reads a file and, at
+ * worst, starts a short-lived `claude` in the user's home directory, so a
+ * failure costs the reader nothing and none of these is terminal. What is left
+ * is a list of *answers*, each of which has to be sayable on the bar.
  */
-export type RefreshReason =
-  | 'unwired'
-  | 'not-watching'
-  | 'busy'
-  | 'prompt-busy'
-  | 'no-panel'
+export type UsageRefreshOutcome =
+  /** Numbers arrived, from a `claude` this app started and then stopped. */
+  | 'ok'
+  /** Numbers arrived from what the CLI had already written down. Free. */
+  | 'cached'
+  /** The login answered, and has no subscription windows to report. */
   | 'no-limits'
-  | 'panel-open'
-  | null
+  /** Remembered from an earlier `no-limits`, so nothing was started. */
+  | 'settled'
+  /** That configuration directory is not signed in to Claude Code. */
+  | 'signed-out'
+  /** There is no runnable `claude` on this machine. */
+  | 'no-binary'
+  /** It timed out, or answered something this build could not read. */
+  | 'unreadable'
+  /** This session runs another agent, or is not one this process knows. */
+  | 'unwatched'
 
-export interface RefreshResult {
+export interface UsageRefreshResult {
   ok: boolean
-  reason: RefreshReason
-  /** True when the attempt got as far as typing into the session. */
-  typed: boolean
-  /** True when this app opened a panel it could not close again. */
-  residue: boolean
-  snapshot: PlanLimitSnapshot
+  outcome: UsageRefreshOutcome
+  /** One sentence for the bar, present in every outcome including `ok`. */
+  detail: string
+  /** Wall clock, so what this feature costs is visible rather than asserted. */
+  elapsedMs: number
+  /** True when a `claude` process was started. False on both free paths. */
+  spawned: boolean
 }

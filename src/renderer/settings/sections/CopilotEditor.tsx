@@ -10,9 +10,9 @@ import { Button, Notice } from '../controls'
  * save, and those folders, instructions, everything should be directly changed
  * from here."*
  *
- * Three different files answer that — the copilot's `CLAUDE.md`, one memory
- * fact, one routine — and they are three different things on disk with three
- * different consequences for saving. What they have in common is the *shape* of
+ * Three different files answer that — the copilot's own instructions, one
+ * memory fact, one routine — and they are three different things on disk with
+ * three different consequences for saving. What they have in common is the *shape* of
  * the interaction, and there is exactly one of it here rather than three
  * hand-written copies, because three copies is three chances for one of them to
  * lose the part that matters: a draft that survives a reload, a Save that is
@@ -48,7 +48,26 @@ import { Button, Notice } from '../controls'
  */
 
 export interface FileEditorProps {
-  /** The file, as a person names it: `CLAUDE.md`, `nightly-sweep.md`. */
+  /**
+   * What this box is editing, as the person hears it — this is the textarea's
+   * `aria-label` and nothing else renders it.
+   *
+   * It used to be documented as "the file, as a person names it" and every
+   * caller obliged by passing `baseName()` of a path. That is right for the
+   * boxes over files this app made up and named — `instructions.md`,
+   * `tools.md`, `copilot.md` — where the filename is neutral and is the most
+   * useful four syllables a screen reader can spend.
+   *
+   * It is wrong for the one box over a file in somebody else's folder, whose
+   * name is one CLI's convention rather than ours. That box passed
+   * `baseName(folderFile?.path ?? 'CLAUDE.md')` and so announced a vendor's
+   * filename to every screen-reader user on every machine, on a pane where the
+   * visible copy had already been swept clean of it — the 2026-08-17 review's
+   * complaint, surviving in the one place nobody looks because it is never
+   * drawn. So the prop is a *name for the thing*, and a caller may answer with
+   * the category ("The folder’s own instructions") where the filename would be
+   * a vendor's. See the note at that call site in `CopilotSection.tsx`.
+   */
   label: string
   /** What is on disk, or null while it is being read. */
   text: string | null
@@ -71,10 +90,10 @@ export interface FileEditorProps {
    * What the last save did, under this box rather than at the foot of the pane.
    *
    * Measured on the real thing and then moved: the pane's own status notice
-   * renders after all six blocks, so pressing Save on `CLAUDE.md` — which sits
-   * near the top of a screen and a half of content — put "Saved, and here is
-   * where your old version went" somewhere the person could not see. A result
-   * belongs to the control that produced it.
+   * renders after all six blocks, so pressing Save on the instructions box —
+   * the top one, near the top of a screen and a half of content — put "Saved,
+   * and here is where your old version went" somewhere the person could not
+   * see. A result belongs to the control that produced it.
    *
    * `ok` decides the tone rather than a second prop, because the two cases are
    * genuinely different news: a routine that would not parse is a refusal a

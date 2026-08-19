@@ -6,7 +6,7 @@ import { ActionLog } from '../deck-control/action-log'
 import { ConsentBroker, WINDOW_SURFACE, type ConsentRequest } from '../deck-control/consent'
 import { DeckControl } from '../deck-control/control'
 import type { DeckSurface } from '../deck-control/surface'
-import { CopilotLinks, remoteCopilotCaller } from './copilot-link'
+import { CopilotAccess, remoteCopilotCaller } from './copilot-access'
 import { CopilotRuns } from './copilot-runs'
 import type { CopilotConsentQuestion, CopilotSettledRow } from './protocol'
 import { resetHiddenSessions } from './hidden-sessions'
@@ -85,19 +85,34 @@ function permissiveSurface(): DeckSurface {
 
 interface Rig {
   deck: DeckControl
-  links: CopilotLinks
+  links: CopilotAccess
   runs: CopilotRuns
   log: ActionLog
   consent: ConsentBroker
   /** Whether a window is attached as the desktop approver. */
   desk: { attached: boolean }
-  /** Everything the connected device was sent. */
+  /** Everything the device was sent. */
   asked: CopilotConsentQuestion[]
   settled: CopilotSettledRow[]
   /** Subscribe a device the way `copilot.attach` does. */
   watch(deviceId: string): () => void
-  /** Connect a device to the copilot, the way a person does. */
-  connect(deviceId: string, tiers: Record<string, boolean>): Promise<void>
+  /**
+   * Approve a device as **one of his own**, which is the entire ceremony.
+   *
+   * This used to be a `connect(deviceId, tiers)` that minted a six-digit copilot
+   * code, redeemed it against a store on disk and awaited the outcome — a second
+   * act of authorisation on top of pairing. It is gone, and so is the `await` at
+   * every call site: a device's kind is decided once, when it is approved, and
+   * `CopilotAccess` reads that and nothing else. `copilot-access.ts` carries the
+   * argument and preserves the one it superseded.
+   *
+   * Every device in this file is approved as his, because a guest raises no
+   * confirmations to answer: it has no copilot, so there is no run of its own to
+   * ask it anything. That property is asserted where it belongs, in
+   * `copilot-enforcement.test.ts` and `server.test.ts`, rather than restated
+   * here as an absence.
+   */
+  approve(deviceId: string): void
 }
 
 /**
@@ -109,7 +124,13 @@ interface Rig {
  * `deck-control/index.ts` and `main/index.ts` wire them.
  */
 function rig(): Rig {
-  const links = new CopilotLinks(dir)
+  // The roster of devices somebody at this keyboard approved as their own, which
+  // in the app is `remote-device-kinds.json` read through `DeviceKinds.kindOf`.
+  // A mutable set rather than a fixed list because `CopilotAccess` asks the
+  // question on every call rather than snapshotting an answer, and a fixture
+  // that could not change underneath it would quietly stop testing that.
+  const mine = new Set<string>()
+  const links = new CopilotAccess({ isMine: (deviceId) => mine.has(deviceId) })
   const log = new ActionLog({ dir: join(dir, 'log') })
   const desk = { attached: false }
   const asked: CopilotConsentQuestion[] = []
@@ -165,10 +186,12 @@ function rig(): Rig {
         ask: (question) => asked.push(question),
         settled: (row) => settledRows.push(row),
       }),
-    connect: async (deviceId, tiers) => {
-      const offer = links.offer(tiers)
-      const outcome = await links.redeem(offer.code, deviceId)
-      expect(outcome.ok, 'the fixture failed to connect a device').toBe(true)
+    approve: (deviceId) => {
+      mine.add(deviceId)
+      // A guard on the fixture rather than decoration: if `CopilotAccess` ever
+      // stopped answering off the kind, every ownership assertion below would
+      // pass against a rig in which nobody could raise a question at all.
+      expect(links.granted(deviceId).alter, 'the fixture failed to approve a device').toBe(true)
     },
   }
 }
@@ -185,7 +208,7 @@ function writeDensity(deck: DeckControl, caller: ReturnType<typeof remoteCopilot
 describe('a device answers its own run’s confirmation', () => {
   it('is asked with the arguments, allows it, and the tool actually runs', async () => {
     const r = rig()
-    await r.connect('phone-1', { read: true, act: true, alter: true })
+    r.approve('phone-1')
     r.watch('phone-1')
 
     const call = writeDensity(r.deck, remoteCopilotCaller(r.links, 'phone-1'))
@@ -224,7 +247,7 @@ describe('a device answers its own run’s confirmation', () => {
    */
   it('writes a row that says which device caused it and where it was allowed', async () => {
     const r = rig()
-    await r.connect('phone-1', { read: true, act: true, alter: true })
+    r.approve('phone-1')
     r.watch('phone-1')
 
     const call = writeDensity(r.deck, remoteCopilotCaller(r.links, 'phone-1'))
@@ -283,7 +306,7 @@ describe('a device answers its own run’s confirmation', () => {
    */
   it('refuses, and the call is declined rather than failed', async () => {
     const r = rig()
-    await r.connect('phone-1', { read: true, act: true, alter: true })
+    r.approve('phone-1')
     r.watch('phone-1')
 
     const call = writeDensity(r.deck, remoteCopilotCaller(r.links, 'phone-1'))
@@ -300,7 +323,7 @@ describe('a device answers its own run’s confirmation', () => {
 describe('first answer wins, and the loser is told where it went', () => {
   it('takes the desktop’s answer and withdraws the device’s dialog', async () => {
     const r = rig()
-    await r.connect('phone-1', { read: true, act: true, alter: true })
+    r.approve('phone-1')
     r.watch('phone-1')
 
     const call = writeDensity(r.deck, remoteCopilotCaller(r.links, 'phone-1'))
@@ -325,7 +348,7 @@ describe('first answer wins, and the loser is told where it went', () => {
   it('takes the device’s answer and reports it to the desktop the same way', async () => {
     const r = rig()
     r.desk.attached = true
-    await r.connect('phone-1', { read: true, act: true, alter: true })
+    r.approve('phone-1')
     r.watch('phone-1')
 
     const call = writeDensity(r.deck, remoteCopilotCaller(r.links, 'phone-1'))
@@ -346,17 +369,22 @@ describe('the ownership rule', () => {
    * **A device may not answer another device's question.**
    *
    * The rule §4.2 flags as non-obvious, at the layer that enforces it. Both
-   * devices are connected and both hold `alter`, so nothing about the tier or
-   * the transport stops this — what stops it is that the question belongs to
-   * `phone-1`'s run. Otherwise connecting two phones to one copilot would make
-   * either of them able to approve the other's actions, which is a permission
-   * model with a shared password.
+   * devices are his own and both therefore hold `alter`, so nothing about the
+   * tier or the transport stops this — what stops it is that the question
+   * belongs to `phone-1`'s run.
+   *
+   * This rule got *more* load-bearing when the separate copilot connection went
+   * away, not less. Two of his devices used to be two deliberate redemptions;
+   * they are now simply two devices he owns, which is the ordinary case rather
+   * than the unusual one. Without this check, approving a second phone would
+   * make either of them able to approve the other's actions — a permission model
+   * with a shared password.
    */
   it('refuses an answer from a device that did not raise the question', async () => {
     const r = rig()
     r.desk.attached = true
-    await r.connect('phone-1', { read: true, act: true, alter: true })
-    await r.connect('phone-2', { read: true, act: true, alter: true })
+    r.approve('phone-1')
+    r.approve('phone-2')
     r.watch('phone-1')
 
     const call = writeDensity(r.deck, remoteCopilotCaller(r.links, 'phone-1'))
@@ -383,8 +411,8 @@ describe('the ownership rule', () => {
   it('never sends another device the question, only the watch row', async () => {
     const r = rig()
     r.desk.attached = true
-    await r.connect('phone-1', { read: true, act: true, alter: true })
-    await r.connect('phone-2', { read: true, act: true, alter: true })
+    r.approve('phone-1')
+    r.approve('phone-2')
 
     const seen: CopilotConsentQuestion[] = []
     r.runs.watch('phone-2', {
@@ -440,7 +468,7 @@ describe('a device that goes away defaults to refusal', () => {
   it('refuses its questions when its copilot connection closes', async () => {
     const r = rig()
     r.desk.attached = true
-    await r.connect('phone-1', { read: true, act: true, alter: true })
+    r.approve('phone-1')
     r.watch('phone-1')
 
     const call = writeDensity(r.deck, remoteCopilotCaller(r.links, 'phone-1'))
@@ -464,7 +492,7 @@ describe('a device that goes away defaults to refusal', () => {
   it('leaves the desk’s own questions alone', async () => {
     const r = rig()
     r.desk.attached = true
-    await r.connect('phone-1', { read: true, act: true, alter: true })
+    r.approve('phone-1')
     r.watch('phone-1')
 
     const call = r.deck.call('settings.write', {
@@ -490,7 +518,7 @@ describe('a device that goes away defaults to refusal', () => {
    */
   it('refuses on the timeout with nobody answering', async () => {
     const r = rig()
-    await r.connect('phone-1', { read: true, act: true, alter: true })
+    r.approve('phone-1')
     r.watch('phone-1')
 
     const quick = new ConsentBroker({

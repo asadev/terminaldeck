@@ -1392,8 +1392,22 @@ describe('every route that opens a window keeps it', () => {
      * opening: `openTabWindow` is called from the rail's rows and from nothing
      * else, and `keepWindowBesideInStrip` on the next line is the new window
      * itself.
+     *
+     * The seventh arrived later the same day, in `openServerShell` — the press
+     * that opens a terminal on a server. It is an opening in the strictest sense
+     * of this rule: the window *creates* that shell, the way it creates a
+     * session or a page, which is exactly what *"if I open any new session and
+     * any new browser from the header, it should automatically open in the top
+     * bar"* is about. Note that opening a session on a paired **machine** is
+     * deliberately not in this list and must not join it: that session was
+     * already running over there and is merely being looked at.
      */
-    expect(app.match(/keepNewWindowInStrip\(/g)).toHaveLength(6)
+    expect(app.match(/keepNewWindowInStrip\(/g)).toHaveLength(7)
+    /* And the seventh is inside the press rather than loose beside a
+       navigation, which is the shape the count alone cannot tell apart. */
+    const server = /const openServerShell = useCallback\([\s\S]*?\n {4}\[clearPanel\],/.exec(app)?.[0] ?? ''
+    expect(server, 'openServerShell has changed shape').not.toBe('')
+    expect(server).toContain('keepNewWindowInStrip(id)')
     // And the new one is genuinely inside that handler rather than loose beside
     // a navigation — the shape the count alone could not tell apart.
     const opening = /const openTabWindow = useCallback\([\s\S]*?\n {4}\[activeTab, selectTab\],/.exec(app)?.[0] ?? ''

@@ -244,28 +244,30 @@ function foldersField(): { folders?: string[] } {
 }
 
 /**
- * What this stand-in does about the copilot, in five states.
+ * What this stand-in does about the copilot, in **two** states.
  *
- *     --copilot absent   no `welcome.copilot` key at all — a machine with no
- *                        copilot layer, which is what a 0.3.0 desktop is
- *     --copilot none     the key, all false — a machine that has one and would
- *                        connect this device to none of it
- *     --copilot read     watching: the state, the sessions, the log, the pending
- *     --copilot act      watching, and able to start a run and talk to it
- *     --copilot alter    all of that, and able to answer its own confirmations
+ *     --copilot mine     one of his own devices: `welcome.copilot` is present,
+ *                        `copilot.hello` opens the stream carrying nothing, and
+ *                        all three tiers are held — including `alter`, so the
+ *                        device draws and answers its own confirmations
+ *     --copilot absent   a guest, or a machine with no copilot layer at all:
+ *                        **no `welcome.copilot` key**, and every `copilot.*`
+ *                        verb refused
  *
- * The flag says **what a connect code grants**, not what this device already
- * holds. Every device starts unconnected — `linked: false` — exactly as a real
- * desktop starts it, because that is the state the whole 2026-08-17 revision is
- * about: *"connecting copilot will be a separate connection than the sessions."*
- * A code is minted through the control server (`/copilot-code`) and redeemed by
- * `copilot.connect`, and only then does this host serve a `copilot.*` verb.
+ * Five states until 2026-08-19, when the separate copilot connection was
+ * deleted. There is no `none` any more because there is no per-device
+ * narrowing left to express, and no `read`/`act` because "My device" means full
+ * access — his words on the approval screen, which is now the only place the
+ * decision is made. The old names are still accepted and all mean `mine`, so
+ * that a test script passing `--copilot alter` keeps working rather than
+ * reporting a harness problem as a client problem.
  *
- * `alter` is the one that exercises the path most likely to be got wrong: a
- * device that may answer a question draws a dialog with the arguments in it, and
- * `COPILOT-REMOTE.md` §4 requires refusing to be at least as easy as accepting.
+ * The absent case is the one worth the care. It is **no key**, not a key with
+ * everything false, because that is the rule a client must not paper over: a
+ * guest is told nothing about a copilot it may not have, so it can draw no tab,
+ * no switch and no greyed-out row.
  *
- * **This is a client harness, not a security model** — the code is not
+  * **This is a client harness, not a security model** — the code is not
  * rate-limited here, the credential is not scrypt-hashed, and the ownership rule
  * for confirmations is enforced with a field rather than by a broker. What it
  * *does* reproduce is every shape a client has to get right: `open` false on
@@ -294,44 +296,50 @@ function foldersField(): { folders?: string[] } {
 const COPILOT = flag('copilot', 'absent')
 
 /**
- * What a connect code hands over, or null for a host with no copilot at all.
+ * Whether this stand-in host offers the copilot to the device on the other end.
  *
- * Not what any device holds. See `copilotLinks`, which is the equivalent of
- * `remote/copilot-link.json` — the store that decides, per device, whether there
- * is a connection to grant anything through.
+ * **Rewritten on 2026-08-19, and the shape of the flag is the change.** There
+ * used to be a store here — `copilotLinks`, a device id to a credential, a
+ * one-line copy of `remote/copilot-link.json` — plus a six-digit code minted at
+ * the "machine" and burned on redemption. All of it is gone, because the
+ * desktop's is gone: a device's *kind* decides copilot access now, and a kind is
+ * chosen once when the device is approved. `src/main/remote/copilot-access.ts`
+ * carries the argument.
+ *
+ * So the harness has exactly two states to reproduce, and they are the two a
+ * client has to draw:
+ *
+ *   `--copilot mine`    one of his own devices. The welcome carries a `copilot`
+ *                       key, `copilot.hello` opens the stream with nothing in
+ *                       it, and all three tiers are held.
+ *   `--copilot absent`  a guest, or a host with no copilot. **No `copilot` key
+ *                       at all** — absent rather than false, which is the whole
+ *                       of the rule a client must not paper over.
+ *
+ * The old level names are still accepted and all mean `mine`. That is
+ * deliberate rather than lazy: several iOS test scripts pass `--copilot alter`,
+ * and failing them with an unknown-flag error would report a harness problem as
+ * a client problem. There is no narrowing left to express — "My device" means
+ * full access — so a level is not a thing a caller can ask for any more.
  */
-const copilotOffer: CopilotGrantWire | null =
-    COPILOT === 'absent'
-        ? null
-        : {
-              read: COPILOT === 'read' || COPILOT === 'act' || COPILOT === 'alter',
-              act: COPILOT === 'act' || COPILOT === 'alter',
-              // `alter` is grantable now, and it is what a client needs in order
-              // to draw an Allow button at all. `--copilot alter` is the flag
-              // that reproduces a device somebody has fully connected.
-              alter: COPILOT === 'alter',
-          }
-
+const COPILOT_TIERS: CopilotGrantWire = { read: true, act: true, alter: true }
 const NO_COPILOT: CopilotGrantWire = { read: false, act: false, alter: false }
 
+/** Does this run offer the copilot at all? See the note above about the levels. */
+const copilotOffer: CopilotGrantWire | null =
+    COPILOT === 'absent' || COPILOT === 'guest' ? null : COPILOT_TIERS
+
 /**
- * Devices with a copilot connection, and the credential each was given.
+ * What this device may do **right now**, read per frame as the desktop reads it.
  *
- * `remote/copilot-link.json` in one line. The credential is stored in the clear
- * here and is a scrypt hash on the desktop; what matters for a client is that it
- * is **issued once**, that a socket has to present it before any verb is served,
- * and that dropping the record takes the grant with it without touching the
- * pairing.
+ * One expression rather than a lookup, because there is no per-device state left
+ * to look anything up in. A run either represents one of his own devices or it
+ * does not, and that was decided by the flag before the socket existed — which
+ * is exactly how the desktop behaves, where it was decided by a person at the
+ * keyboard before the device ever connected.
  */
-const copilotLinks = new Map<string, string>()
-
-/** The one live connect code, minted at the "machine". Single use, sixty seconds. */
-let copilotCode: { code: string; expiresAt: number } | null = null
-
-/** What this device may do **right now**, read per frame as the desktop reads it. */
-function copilotGrantFor(deviceId: string): CopilotGrantWire {
-    if (copilotOffer === null) return NO_COPILOT
-    return copilotLinks.has(deviceId) ? copilotOffer : NO_COPILOT
+function copilotGrantFor(_deviceId: string): CopilotGrantWire {
+    return copilotOffer ?? NO_COPILOT
 }
 
 /**
@@ -340,7 +348,7 @@ function copilotGrantFor(deviceId: string): CopilotGrantWire {
  * `open` is a parameter and is false from every caller but one, because that is
  * the rule the client has to be built against: a copilot connection is opened by
  * `copilot.hello`, never by having said hello to the session channel. The
- * exception is the `copilot.grant` that answers a hello or a connect.
+ * exception is the `copilot.grant` that answers a hello.
  */
 function copilotField(deviceId: string, open = false): { copilot?: CopilotLinkWire } {
     if (copilotOffer === null) return {}
@@ -348,7 +356,10 @@ function copilotField(deviceId: string, open = false): { copilot?: CopilotLinkWi
 }
 
 function copilotLink(deviceId: string, open: boolean): CopilotLinkWire {
-    return { linked: copilotLinks.has(deviceId), open, grant: copilotGrantFor(deviceId) }
+    // `linked` is no longer a lookup: a device either is one of his — decided
+    // before it connected — or it is a guest and never sees this field at all,
+    // because `copilotField` returns {} for that case.
+    return { linked: copilotOffer !== null, open, grant: copilotGrantFor(deviceId) }
 }
 
 /**
@@ -1769,63 +1780,31 @@ class Channel {
 
             /* ---- capability `copilot`: the ceremony ---------------------- */
             /*
-             * Three frames that carry **no tier** and cannot: they *are* the
-             * authorisation. A device with no copilot connection has no tiers,
-             * so requiring one to send the frame that establishes the connection
-             * would mean no device could ever connect. They are handled here,
-             * before the tier switch below, so that the code which assumes an
-             * open connection does not also contain the code that opens one —
-             * which is the shape in which somebody eventually moves a check to
-             * the wrong side of it.
+             * Two frames that carry **no tier** and cannot: the tiers are read
+             * off the connection these very frames establish, so requiring one
+             * to send them would mean no device could ever open the stream.
+             *
+             * Handled here, before the tier switch below, so that the code which
+             * assumes an open connection does not also contain the code that
+             * opens one — the shape in which somebody eventually moves a check
+             * to the wrong side of it.
              */
-            case 'copilot.connect': {
-                if (copilotOffer === null) {
-                    return this.send({
-                        t: 'error', code: 'unavailable',
-                        message: 'There is no copilot to reach on this machine.',
-                    })
-                }
-                const device = this.deviceId ?? ''
-                const live = copilotCode
-                const ok = live !== null && live.code === message.code && Date.now() < live.expiresAt
-                if (!ok) {
-                    // One sentence, three causes — unknown, spent, expired —
-                    // exactly as `CopilotRuns.connect` answers, and for its
-                    // reason: telling a client which one it hit tells a guesser
-                    // whether they were close.
-                    log(`copilot connect refused for ${device.slice(0, 8)}`)
-                    return this.send({
-                        t: 'error', code: 'unauthorized',
-                        message: 'That connect code did not work. Ask for a new one on the machine itself.',
-                    })
-                }
-                // Burned before anything else. Single use is half of what makes
-                // six digits enough.
-                copilotCode = null
-                const credential = randomBytes(32).toString('base64url')
-                copilotLinks.set(device, credential)
-                // Redeeming opens this socket as well: it has just proved it
-                // holds a code minted seconds ago, which is a stronger claim
-                // than the credential it is about to be given.
-                this.copilotOpen = true
-                log(`copilot connected ${device.slice(0, 8)}`)
-                this.send({ t: 'copilot.linked', credential, link: copilotLink(device, true) })
-                return this.send({ t: 'copilot.grant', link: copilotLink(device, true) })
-            }
             case 'copilot.hello': {
                 const device = this.deviceId ?? ''
-                const held = copilotLinks.get(device)
-                // Checked rather than waved through, which this file used to do.
-                // A harness that accepts any credential is one a client can pass
-                // while sending the wrong bytes — or none — and the whole point
-                // of the hello is that it is presented on **every** socket.
-                if (held === undefined || held !== message.credential) {
+                /*
+                 * Nothing is presented and nothing is checked, because there is
+                 * nothing to present: the copilot code and the credential were
+                 * deleted with the separate connection. A guest never reaches
+                 * this switch at all — the eligibility refusal above it fires
+                 * first — so arriving here means this run represents one of his
+                 * own devices.
+                 */
+                if (copilotOffer === null) {
                     this.copilotOpen = false
                     log(`copilot hello refused for ${device.slice(0, 8)}`)
                     return this.send({
                         t: 'error', code: 'unauthorized',
-                        message: 'This device is not connected to the copilot. '
-                            + 'Connect it on the machine itself, in Settings → Remote.',
+                        message: 'This device does not have the copilot.',
                     })
                 }
                 this.copilotOpen = true
@@ -2372,8 +2351,10 @@ relay.server.listen(PORT, '0.0.0.0', async () => {
     log(`host id      ${HOST_ID}`)
     log(`key          ${fingerprint(macStatic.publicKey)}`)
     log(`devices      ${devices.size} known, ${[...devices.values()].filter((d) => d.approved).length} approved`)
+    // `/copilot-code` is not in this list because the route is gone: minting a
+    // six-digit copilot code went with the separate connection on 2026-08-19.
     log(`control      http://127.0.0.1:${CONTROL_PORT}/state | /approve | /pair | /folders`
-        + ' | /copilot-code | /copilot-ask | /quit')
+        + ' | /copilot-ask | /quit')
     log(`pairing code ${token}`)
 })
 
@@ -2493,32 +2474,6 @@ createHttpServer((req, res) => {
         }
 
         /**
-         * Mint a connect code, the way pressing **Connect the copilot…** does.
-         *
-         *     curl 127.0.0.1:8788/copilot-code
-         *
-         * The copilot is a separate connection and connecting is a deliberate
-         * act *at the machine* — which is exactly the kind of act a script
-         * cannot perform, and exactly why this control surface exists. What it
-         * grants is the `--copilot` flag; six digits, sixty seconds, single use,
-         * as `copilot-link.ts` mints them.
-         *
-         * A host started with `--copilot absent` refuses, because there is
-         * nothing on it to connect to and a harness that handed out a code
-         * anyway would be teaching a client that the ceremony works on a machine
-         * with no copilot.
-         */
-        case '/copilot-code': {
-            if (copilotOffer === null) {
-                return reply({ error: 'this host was started with --copilot absent' })
-            }
-            const digits = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
-            copilotCode = { code: digits, expiresAt: Date.now() + 60_000 }
-            log(`copilot connect code ${digits} (60s, one use) granting `
-                + `${Object.entries(copilotOffer).filter(([, on]) => on).map(([tier]) => tier).join('+') || 'nothing'}`)
-            return reply({ code: digits, grants: copilotOffer, expiresInMs: 60_000 })
-        }
-        /**
          * Raise a confirmation for whichever connected device holds `alter`.
          *
          *     curl 127.0.0.1:8788/copilot-ask
@@ -2529,8 +2484,20 @@ createHttpServer((req, res) => {
          * demand, with the arguments a real `settings.write` would carry.
          */
         case '/copilot-ask': {
+            /*
+             * Every device with a copilot connection open on a live channel.
+             *
+             * It used to walk the link store, which no longer exists. A device
+             * that has said hello on some socket is the same set in practice and
+             * is a more honest one in principle: a question is raised for
+             * somebody who is watching for it.
+             */
             const raised: string[] = []
-            for (const deviceId of copilotLinks.keys()) {
+            const asked = new Set<string>()
+            for (const channel of channels.values()) {
+                const deviceId = channel.deviceId
+                if (!channel.copilotOpen || !deviceId || asked.has(deviceId)) continue
+                asked.add(deviceId)
                 const question = raiseCopilotQuestion(deviceId)
                 if (question) raised.push(`${deviceId}:${question.id}`)
             }
@@ -2545,7 +2512,7 @@ createHttpServer((req, res) => {
                 hostId: HOST_ID,
                 copilot: {
                     offers: copilotOffer,
-                    connected: [...copilotLinks.keys()],
+                    connected: [...new Set([...channels.values()].filter((c) => c.copilotOpen).map((c) => c.deviceId).filter(Boolean))],
                     open: [...channels.values()].filter((c) => c.copilotOpen).length,
                     pending: copilotQuestions.length,
                 },

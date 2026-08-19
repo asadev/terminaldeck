@@ -2,23 +2,20 @@
  * What this phone holds about **every** machine it is paired with, and where it
  * holds it.
  *
- * Four kinds of secret, and they are not the same kind:
+ * Three kinds of secret, and they are not the same kind:
  *
  *  1. **The credentials.** Bearer tokens, each granting a shell on somebody's
  *     machine. Whoever has the bytes is the device, so they live in the Keychain
  *     and nowhere else — not `UserDefaults`, not a plist, not a file in
  *     Documents, all of which are in the unencrypted backup and readable by
  *     anything that gets a look at the container.
- *  1b. **The copilot credential**, per machine, in the same item as that
- *     machine's pairing credential and therefore with the same protection class.
- *     `COPILOT-REMOTE.md` §8 asks for it to sit *beside* the pairing one, and
- *     the same item is the strongest reading of beside: the two are minted for
- *     the same device by the same machine, they are revoked separately but they
- *     die together when the pairing is forgotten, and one item cannot go missing
- *     while the other survives. It is optional on the record, so a
- *     `StoredCredential` written before this field existed still decodes — and a
- *     record that fails to decode is a machine that has vanished from the phone,
- *     which is exactly what this design exists to avoid.
+ *
+ *     There used to be a **fourth**: a per-machine *copilot credential*, in this
+ *     same item, minted by redeeming a six-digit code and worth exactly what the
+ *     pairing one is worth. It is gone — pairing a device as **My device** is
+ *     the copilot's authorisation now, so nothing is minted and nothing is kept
+ *     — and `hydrate()` scrubs the field out of any record an older build wrote,
+ *     because a secret nobody can revoke is worse than one nobody is using.
  *  2. **The device's static X25519 private key.** The other half of the sealed
  *     channel's identity. Generated once, never leaves the device, never sent —
  *     only its public half goes to a host at pairing time. **One key for all
@@ -103,25 +100,27 @@ struct StoredCredential: Equatable, Codable {
      */
     var nickname: String?
 
-    /**
-     * The copilot credential for this machine, when this device has one.
+    /*
+     * **`copilotCredential` used to be here, and is deliberately not any more.**
      *
-     * A **second** secret with a separate life. It is minted by a separate
-     * ceremony — six digits read off that machine, redeemed over the already
-     * sealed channel — and it is revoked separately: disconnecting the copilot
-     * at the desk drops it and leaves every terminal this device was paired for.
-     * That separation is the whole of `COPILOT-REMOTE.md` §6, and it is why this
-     * is its own field rather than something derived from `token`.
+     * It was a second secret with a separate life: minted by redeeming six
+     * digits read off that machine, revoked separately from the pairing, and
+     * sent exactly once because the desktop kept only a scrypt hash of it.
+     * `COPILOT-REMOTE.md` §6 argued the separation at length.
      *
-     * **The desktop sends it exactly once** and keeps a scrypt hash, so there is
-     * no path that can show it again. A phone that loses it has to be given a
-     * new code; nothing here may quietly discard it.
+     * Asad deleted the ceremony on 2026-08-19 — *"if we are connecting as my
+     * device copilot automatically comes, if we connect as guest then copilot
+     * don't come"* — so there is nothing to mint, nothing to type and nothing to
+     * store. Dropping the field from this struct is safe in both directions:
+     * `JSONDecoder` ignores a key it has no property for, so a record written by
+     * the previous build still decodes and still names its machine, which is the
+     * one failure this whole file is designed against.
      *
-     * Optional with a default, so a record written before this field existed
-     * still decodes — see `nickname` for why that matters more here than it
-     * looks.
+     * The bytes do **not** stay in the Keychain, though — see the scrub in
+     * `KeychainCredentialStore.hydrate()`. A live-looking credential sitting in
+     * an item with no code left in the app that reads it is a secret nobody
+     * would think to revoke.
      */
-    var copilotCredential: String?
 
     /// Which machine this is. Stable across re-pairings with the same host.
     var hostId: String { endpoint.hostId }
@@ -132,18 +131,10 @@ struct StoredCredential: Equatable, Codable {
         return endpoint.shortName
     }
 
-    /**
-     * The durable credential, from a redeemed pairing.
-     *
-     * The copilot credential is deliberately **not** carried across. Redeeming
-     * produces a device id, and a re-pair produces a *new* one — at which point
-     * the desktop's copilot record, which is keyed by device id, belongs to a
-     * device that no longer exists and is garbage-collected. A secret kept
-     * through that would be one this phone believes in and nothing on the far
-     * machine has ever heard of, which is the worst of the two ways to be wrong:
-     * the Connect screen would not be drawn, and every copilot frame would come
-     * back refused with no explanation on either end.
-     */
+    /// The durable credential, from a redeemed pairing. A re-pair mints a new
+    /// device id, so nothing about the old device — including whether its owner
+    /// had approved it as his own — is carried across; that question is answered
+    /// again, at the machine, on the approval screen.
     func redeemed(token: String, deviceId: String, deviceName: String) -> StoredCredential {
         StoredCredential(endpoint: endpoint, token: token, kind: .device,
                          deviceId: deviceId, deviceName: deviceName, pairedAt: Date(),
@@ -153,15 +144,7 @@ struct StoredCredential: Equatable, Codable {
     func renamed(_ name: String?) -> StoredCredential {
         StoredCredential(endpoint: endpoint, token: token, kind: kind,
                          deviceId: deviceId, deviceName: deviceName, pairedAt: pairedAt,
-                         nickname: name, copilotCredential: copilotCredential)
-    }
-
-    /// The copilot credential, stored or dropped. Everything else survives —
-    /// this is the connection changing, not the pairing.
-    func withCopilotCredential(_ credential: String?) -> StoredCredential {
-        StoredCredential(endpoint: endpoint, token: token, kind: kind,
-                         deviceId: deviceId, deviceName: deviceName, pairedAt: pairedAt,
-                         nickname: nickname, copilotCredential: credential)
+                         nickname: name)
     }
 }
 
@@ -314,9 +297,43 @@ final class KeychainCredentialStore: CredentialStore {
                 continue
             }
             cached[record.hostId] = record
+            scrubCopilotCredential(account: account, raw: data, record: record)
         }
 
         migrate()
+    }
+
+    /**
+     * **Erase a copilot credential an older build left in this item.**
+     *
+     * Between 2026-08-17 and 2026-08-19 a `StoredCredential` carried a second
+     * secret beside the pairing one: the credential a six-digit connect code was
+     * redeemed for. That ceremony is deleted — pairing a device as **My device**
+     * is the copilot's authorisation now — and the property is gone from the
+     * struct, which is enough for the app to stop *using* it: `JSONDecoder`
+     * ignores a key it has no property for.
+     *
+     * It is **not** enough to stop it existing. Dropping the property leaves the
+     * bytes sitting in the Keychain item forever, because nothing rewrites a
+     * record that has not changed, and a live-looking credential nobody can
+     * revoke because nobody knows it is there is precisely the thing the old
+     * code was careful about in the other direction. So the raw JSON is checked
+     * for the key on the way in, and one re-encode — of the record this build
+     * has just decoded, which no longer has the field — replaces the item.
+     *
+     * Cheap by construction: `JSONSerialization` runs only when the substring is
+     * present at all, which is once per machine on one launch after an upgrade
+     * and never again. A failed write is not retried and not reported — the
+     * record in memory is already correct either way, and this is a tidy-up of
+     * something that has stopped being reachable, not a step somebody is waiting
+     * on.
+     */
+    private func scrubCopilotCredential(account: String, raw: Data, record: StoredCredential) {
+        guard let text = String(data: raw, encoding: .utf8), text.contains("copilotCredential"),
+              let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+              object["copilotCredential"] != nil,
+              let clean = try? JSONEncoder().encode(record) else { return }
+        write(account: account, data: clean)
     }
 
     /**
@@ -420,6 +437,25 @@ final class KeychainCredentialStore: CredentialStore {
         write(account: legacyAccount, data: data)
         loaded = false
         cached = [:]
+    }
+
+    /// Only the tests call this: writes one host's record as raw bytes, so a
+    /// record in the shape an *older* build wrote — one carrying the copilot
+    /// credential this struct no longer has a property for — can be put in the
+    /// drawer and read back through the real code path. Composing it as JSON
+    /// rather than as a string is what keeps it the format rather than a test's
+    /// idea of the format.
+    func writeRawRecordForTesting(hostId: String, data: Data) {
+        write(account: account(for: hostId), data: data)
+        loaded = false
+        cached = [:]
+    }
+
+    /// Only the tests call this: the bytes actually in the drawer for one host,
+    /// which is the only way to prove the scrub rewrote the item rather than
+    /// merely declining to read a field.
+    func rawRecordForTesting(hostId: String) -> Data? {
+        read(account: account(for: hostId))
     }
 
     /// Only the tests call this: replaces one host's record with bytes that are

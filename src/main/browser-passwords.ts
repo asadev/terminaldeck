@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { clipboard, safeStorage, type IpcMain } from 'electron'
+import { protectSecretFile, writeSecretFile } from './remote/secret-file'
 
 /**
  * Saved logins for the embedded browser — a real store, not a screen shaped
@@ -255,6 +256,35 @@ export function resetLoginsForTests(): void {
   cacheDir = null
 }
 
+/**
+ * The bytes on disk, in either of the two spellings this file has used.
+ *
+ * Older builds wrote the `safeStorage` buffer raw; this one writes it base64
+ * through `writeSecretFile`. Reading only the new spelling would turn every
+ * existing user's saved logins into "unreadable", which this module treats as
+ * "absent" — so the passwords would not be lost so much as silently forgotten,
+ * which is worse, because nothing on screen would say a store had ever existed.
+ *
+ * The new form is tried first and only when the bytes are *entirely* base64
+ * text, which a `safeStorage` blob is not: on Windows and Linux it opens with
+ * the literal marker `v10`/`v11` followed by binary, and on macOS it is
+ * keychain ciphertext — either way a byte outside the base64 alphabet appears
+ * within the first few. A raw blob that did happen to look like base64 falls
+ * through to the second attempt anyway, because decryption of the wrong bytes
+ * throws.
+ */
+function decryptBlob(raw: Buffer): string {
+  const text = raw.toString('utf8')
+  if (/^[A-Za-z0-9+/\r\n]+={0,2}\s*$/.test(text)) {
+    try {
+      return safeStorage.decryptString(Buffer.from(text, 'base64'))
+    } catch {
+      // Not the new spelling after all — fall through and read it as written.
+    }
+  }
+  return safeStorage.decryptString(raw)
+}
+
 export function allLogins(userData: string): SavedLogin[] {
   if (cache !== null && cacheDir === userData) return cache
   cacheDir = userData
@@ -263,8 +293,13 @@ export function allLogins(userData: string): SavedLogin[] {
     cache = []
     return cache
   }
+  // Lock down a file an older build left with inherited permissions. The write
+  // path above protects everything it writes from the moment this version
+  // first saves; a store that already exists is only reached here. No-op off
+  // Windows, and idempotent, so this costs one `icacls` per process at most.
+  protectSecretFile(dirname(path), path)
   try {
-    cache = readLogins(JSON.parse(safeStorage.decryptString(readFileSync(path))) as unknown)
+    cache = readLogins(JSON.parse(decryptBlob(readFileSync(path))) as unknown)
   } catch {
     // Encrypted by a different OS user, a different machine, or an older
     // format. Unreadable is the same as absent from here — the alternative is a
@@ -274,14 +309,36 @@ export function allLogins(userData: string): SavedLogin[] {
   return cache
 }
 
+/**
+ * Write the store, through the same door every other secret in this app uses.
+ *
+ * This file was the one exception, and `servers/credentials.ts` calls it out by
+ * name for it: it wrote the blob with a bare `writeFileSync` — no mode, no
+ * fsync, and, the part that matters here, no `icacls /inheritance:r`. On
+ * Windows NTFS ignores the POSIX mode entirely, so the file sat in `%APPDATA%`
+ * with whatever the parent folder's inherited ACL happened to be, while every
+ * other credential this app writes — pairing tokens, GitHub tokens, server
+ * credentials, `deck-control.json`, the hook endpoint config — carries an
+ * explicit owner-only entry. On macOS the 0600 the other path sets is the same
+ * boundary, so this was a Windows-only hole in an otherwise uniform rule.
+ *
+ * The contents are DPAPI-encrypted by `safeStorage`, so another standard user
+ * on the PC cannot decrypt them — which is why this is a small hole and not an
+ * exposure. It is still the app's own stated rule with one file exempted, and
+ * an exemption nobody can see is the kind that survives.
+ *
+ * Base64 rather than the raw buffer, for the reason `servers/credentials.ts`
+ * gives: `writeSecretFile` writes text, because the sequence it performs —
+ * open exclusive, write, fsync, ACL, rename, chmod — is written once for
+ * strings and a second binary variant of it would be a second thing to keep
+ * correct. {@link decryptBlob} reads both spellings so a store written by an
+ * older build is not lost.
+ */
 function persist(userData: string, list: SavedLogin[]): SaveOutcome {
   if (!safeStorage.isEncryptionAvailable()) return { ok: false, message: NO_SECURE_STORE }
   const path = loginsPath(userData)
-  mkdirSync(dirname(path), { recursive: true })
   const blob = safeStorage.encryptString(JSON.stringify({ version: 1, entries: list }))
-  const temporary = `${path}.tmp`
-  writeFileSync(temporary, blob)
-  renameSync(temporary, path)
+  writeSecretFile(dirname(path), path, blob.toString('base64'))
   cache = list
   cacheDir = userData
   return { ok: true, message: 'Saved.' }

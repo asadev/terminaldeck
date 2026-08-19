@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   binaryEvidence,
   binaryNote,
@@ -11,6 +12,7 @@ import {
   resetAgentBinaryCache,
   resolveAgentBinaries,
   resolveAgentBinary,
+  tryRun,
   type RunProbe,
 } from './agent-binaries'
 
@@ -250,6 +252,115 @@ describe('resolving every agent', () => {
     // key here, which is the check that stops one being silently skipped.
     expect(Object.keys(all).sort()).toEqual(['claude', 'codex', 'gemini', 'shell'])
     expect(canStart(all.shell)).toBe(true)
+  })
+})
+
+describe('the process a version probe leaves behind', () => {
+  it('puts a command processor in front of a Windows .cmd shim and nothing in front of a Mac binary', async () => {
+    /*
+     * The fact everything below rests on, asserted because it cannot be seen
+     * from this machine.
+     *
+     * An npm-installed agent CLI resolves on Windows to a `.cmd` shim, and Node
+     * has refused to spawn `.cmd`/`.bat` without `shell: true` since
+     * 18.20.2/20.12.2 (the CVE-2024-27980 fix). So `launchSpec` returns
+     * `shell: true` there, the direct child of this process is `cmd.exe`, and
+     * the `node …\claude --version` that may hang is a *grandchild*. On macOS
+     * the same lookup produces no shell at all and the child is the CLI.
+     *
+     * The quoting is the other half and is just as invisible from here: without
+     * it `cmd /d /s /c C:\Program Files\nodejs\claude.cmd` splits at the space
+     * and Windows tries to run `C:\Program`.
+     */
+    const seen: { command: string; shell: boolean }[] = []
+    const record = async (command: string, _args: readonly string[], shell: boolean): Promise<RunProbe> => {
+      seen.push({ command, shell })
+      return { ok: true, line: '2.1.234' }
+    }
+
+    const windows = await resolveAgentBinary('claude', {
+      platform: 'win32',
+      path: 'C:\\Program Files\\nodejs',
+      lookup: async () => 'C:\\Program Files\\nodejs\\claude.cmd',
+      probe: record,
+    })
+    expect(seen[0]).toEqual({ command: '"C:\\Program Files\\nodejs\\claude.cmd"', shell: true })
+    // And what a spawn should later use is the bare name, not that path —
+    // `CreateProcess` will not run a `.cmd`. This is what forces every usage
+    // probe through cmd.exe too; `usage-probe.ts` reads exactly this field.
+    expect(windows.runnable).toBe('claude')
+
+    seen.length = 0
+    await resolveAgentBinary('claude', {
+      platform: 'darwin',
+      path: '/usr/bin',
+      refresh: true,
+      lookup: async () => '/opt/homebrew/bin/claude',
+      probe: record,
+    })
+    expect(seen[0]).toEqual({ command: 'claude', shell: false })
+  })
+
+  it('owns its own deadline, and the deadline really ends the child', async () => {
+    /*
+     * Why this stopped being `execFile`'s `timeout:` option.
+     *
+     * That option kills the process Node spawned. On Windows, when a shell is
+     * in the way, that process is `cmd.exe` and the hung CLI underneath it
+     * survives — `TerminateProcess` does not descend and Windows has no process
+     * group to signal. The Setup panel probes every tool on every open, so a
+     * CLI that blocks on stdin for `--version` (several do, which is why this
+     * timeout exists at all) leaked one process per probe on Windows and none
+     * on macOS.
+     *
+     * Node's timeout cannot be made to kill a tree, and a second timer at the
+     * same deadline loses the race — Node created its timer first, and
+     * `taskkill /T` has to run *before* the shell dies or the grandchild is
+     * already orphaned out of the tree. So the deadline moved here. What this
+     * test guards is the thing that move could break: that there is still a
+     * deadline and it still ends the child.
+     *
+     * `process.execPath` rather than `sleep` or `timeout.exe`: this suite is
+     * run on Windows by `release.yml`, and a test that reaches for a POSIX
+     * binary is one of the six shapes of Mac-only test this repo has already
+     * had to fix. Node is running this test, so node is present on both.
+     */
+    const started = Date.now()
+    const result = await tryRun(
+      process.execPath,
+      // Two minutes — long enough that only a kill can end it inside any test
+      // timeout this suite uses, on either platform.
+      ['-e', 'setTimeout(() => {}, 120000)'],
+      process.env,
+      false,
+      process.platform,
+      150,
+    )
+    expect(result.ok).toBe(false)
+    // Resolving at all is the assertion: the child was going to sit there for
+    // two minutes. No wall-clock bound is asserted beyond that, because the
+    // Windows runner has demonstrated 25x scheduling variance on unchanged code
+    // (see `vitest.config.ts`) and a tight bound would be a flake generator.
+    expect(Date.now() - started).toBeLessThan(60_000)
+  })
+
+  it('never leaves a Windows shell to be killed by the handle alone', () => {
+    /*
+     * Asserted over the source because the failure is invisible here: on macOS
+     * `timeout:` and `child.kill()` both reach the CLI itself, so a build with
+     * the bug is indistinguishable from a build without it on this machine.
+     *
+     * Comments are stripped first — the reasoning that was superseded is kept
+     * beside the fix on purpose, and it quotes the option it replaced.
+     */
+    const source = readFileSync(join(__dirname, 'agent-binaries.ts'), 'utf8')
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+    // The one `run` call that can carry `shell` must not also carry Node's
+    // timeout; the lookup call may, and does, because nothing shells out there.
+    const shelled = code.slice(code.indexOf('const pending = run('), code.indexOf('const deadline'))
+    expect(shelled).toContain('shell,')
+    expect(shelled).not.toContain('timeout:')
+    expect(code).toContain('killTree(pending.child')
   })
 })
 

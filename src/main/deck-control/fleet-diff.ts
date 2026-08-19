@@ -55,6 +55,8 @@
  */
 
 import { join } from 'node:path'
+import { currentPlatform, type Platform } from '../platform/host'
+import { sameFolder, withinFolder } from '../remote/session-create'
 import type { ChangedFile, DeckSurface, RepoChanges, SessionView } from './surface'
 
 /* ------------------------------------------------------------------ bounds -- */
@@ -144,9 +146,13 @@ export async function collectFolderDiff(
   surface: Pick<DeckSurface, 'gitChanges' | 'fileDiff' | 'fileModifiedAt'>,
   sessions: readonly SessionView[],
   request: DiffRequest,
+  // Passed rather than read, so the Windows spelling of a path can be pinned
+  // from the Mac this is written on. `platform/host.ts` opens with the argument
+  // for this; the attribution below is where it matters.
+  platform: Platform = currentPlatform(),
 ): Promise<FolderDiff> {
   const changes = await surface.gitChanges(request.cwd)
-  const here = sessionsIn(sessions, request.cwd, changes)
+  const here = sessionsIn(sessions, request.cwd, changes, platform)
 
   if (!changes.repo) {
     return {
@@ -250,17 +256,45 @@ export async function collectFolderDiff(
  * folder, because a session started in `packages/web` and a diff asked for at
  * the repository root are the same working tree — and a session that edited
  * `packages/web/src/App.tsx` is the obvious candidate for that change however
- * the question was phrased. The prefix check is a plain path comparison with a
- * separator on the end, so `/repo-two` is not a match for `/repo`.
+ * the question was phrased. The check is containment, not a prefix match, so
+ * `/repo-two` is not inside `/repo`.
+ *
+ * ## Why this asks `withinFolder` instead of comparing strings
+ *
+ * It used to be written here, as `session.cwd === root || session.cwd
+ * .startsWith(`${root}/`)`, and on Windows neither half could ever be true.
+ *
+ * The two sides arrive spelled differently and both spellings are correct.
+ * `root` is `git rev-parse --show-toplevel` (`git.ts`), and git prints forward
+ * slashes on Windows — `C:/Users/asad/Projects/app`. `session.cwd` is the path
+ * the app itself holds, which came from `dialog.showOpenDialog` and is native —
+ * `C:\Users\asad\Projects\app`. So the equality failed on the separators and
+ * the prefix failed on both the separators and the hard-coded `/`. The visible
+ * result was that only a session whose cwd exactly equalled the *requested*
+ * folder was ever attributed (the third clause, which compares two paths from
+ * the same source), so on Windows the copilot's fleet diff reported every file
+ * under a sub-folder session as unattributed while the same repository on a Mac
+ * named the session that touched it.
+ *
+ * `withinFolder` is the one implementation of this question in the app: it
+ * normalises both sides through `path.win32` on Windows, folds case there and
+ * only there (NTFS is case-insensitive; a POSIX filesystem genuinely is not),
+ * and keeps the separator boundary that stops `/repo-two` matching `/repo`. Its
+ * own header argues for exactly one copy of this rule, and `remote-start.ts`
+ * already reaches across for its sibling `sameFolder` for the same reason.
  */
 function sessionsIn(
   sessions: readonly SessionView[],
   cwd: string,
   changes: RepoChanges,
+  platform: Platform = currentPlatform(),
 ): SessionView[] {
   const root = changes.repo && changes.root !== null ? changes.root : cwd
   return sessions
-    .filter((session) => session.cwd === root || session.cwd.startsWith(`${root}/`) || session.cwd === cwd)
+    .filter(
+      (session) =>
+        withinFolder(root, session.cwd, platform) || sameFolder(cwd, session.cwd, platform),
+    )
     .sort((a, b) => b.createdAt - a.createdAt)
 }
 

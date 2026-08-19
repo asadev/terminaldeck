@@ -327,7 +327,14 @@ describe('the bridge this panel needs', () => {
  * this project's test run has no DOM.
  */
 describe('when the chosen machine goes', () => {
-  const good: MachineChoice = { id: 'mach-1', name: 'office-pc', noun: 'PC', ports: [], refusal: null }
+  const good: MachineChoice = {
+    kind: 'device',
+    id: 'mach-1',
+    name: 'office-pc',
+    noun: 'PC',
+    ports: [],
+    refusal: null,
+  }
 
   it('leaves a good selection alone', () => {
     expect(lostMachine([good], 'mach-1')).toBeNull()

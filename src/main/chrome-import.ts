@@ -175,7 +175,37 @@ export const BROWSERS: readonly BrowserDef[] = [
     name: 'Chrome Canary',
     darwin: 'Library/Application Support/Google/Chrome Canary',
     darwinApp: 'Google Chrome Canary.app',
+    /*
+     * `Chrome SxS`, not `Chrome Canary`, and that is not a typo.
+     *
+     * Canary is built to install side-by-side with stable Chrome, and on
+     * Windows the channel is spelled by the directory rather than by the
+     * product name: stable is `%LOCALAPPDATA%\Google\Chrome\User Data` and
+     * Canary is `%LOCALAPPDATA%\Google\Chrome SxS\User Data`. Chromium's own
+     * `chrome/installer` calls the install mode SxS for exactly this reason.
+     * macOS spells it the other way round — the directory carries the human
+     * name — which is why this row read as "no Windows path exists" rather
+     * than "the Windows path is spelled differently".
+     *
+     * The consequence of the row having no `win32` was silence, not an error:
+     * `userDataDirFor` returned null, the browser-data pane simply had no row
+     * for Canary, and a Windows user running it saw a shorter list than the
+     * same person on a Mac with no sentence anywhere saying why.
+     */
+    win32: 'Google/Chrome SxS/User Data',
   },
+  /*
+   * Arc deliberately has no `win32` entry.
+   *
+   * Arc for Windows is packaged as an MSIX and keeps its data under
+   * `%LOCALAPPDATA%\Packages\TheBrowserCompany.Arc…`, where the suffix is a
+   * package-family hash that has to be read off a real installation. Guessing
+   * it would put a row in the pane that permanently fails to read, which is a
+   * worse answer than the row being absent — and this table's own habit is to
+   * mark unverified paths as unverified rather than to invent them (see the
+   * `linux`/`win32` field comments). Claim it when somebody has a Windows
+   * machine with Arc on it to read the folder from.
+   */
   { id: 'arc', name: 'Arc', darwin: 'Library/Application Support/Arc/User Data', darwinApp: 'Arc.app' },
   {
     id: 'edge',

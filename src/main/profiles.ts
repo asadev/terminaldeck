@@ -55,11 +55,12 @@
  * profile that this module will not rename, relocate or delete.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import type { ProviderId } from '../shared/types'
+import { writeFileAtomic } from './atomic-write'
 import { profileIsolation, type ProfileIsolation } from './platform/credential-store'
 import { currentPlatform, type Platform } from './platform/host'
 import { userDataDir } from './platform/paths'
@@ -651,9 +652,16 @@ function persist(state: ProfilesState): void {
 
   // Temp file plus rename, so a crash mid-write cannot truncate the list and
   // orphan every profile directory on disk.
-  const tmp = `${file}.tmp`
-  writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8')
-  renameSync(tmp, file)
+  //
+  // Through the shared helper, because the rename half of that dance is not
+  // safe on Windows the way it is on POSIX: `MoveFileEx` refuses with EPERM
+  // while any other process holds the destination open without
+  // FILE_SHARE_DELETE, which Defender and the search indexer both do for a few
+  // milliseconds after any write. The throw here reaches the caller, so on
+  // Windows a profile edit could fail to save intermittently and for no reason
+  // the user could see. The fixed `${file}.tmp` was the second half of it: two
+  // windows of this app writing profiles at once wrote the same temp file.
+  writeFileAtomic(file, JSON.stringify(payload, null, 2))
 }
 
 /* ------------------------------------------------------------ resolution -- */

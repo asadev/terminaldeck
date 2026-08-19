@@ -64,6 +64,7 @@ import { promisify } from 'node:util'
 import type { ProviderId } from '../shared/types'
 import { AGENT_CATALOG, LOOKUP_AGENTS, type AgentEntry } from '../shared/agent-catalog'
 import { currentPlatform, withPath, type Platform } from './platform/host'
+import { killTree, systemRootOf } from './kill-tree'
 import { firstLookupPath, lookupSpec } from './platform/lookup'
 import { launchSpec } from './tool-probe'
 
@@ -182,21 +183,63 @@ export function firstMeaningfulLine(output: string): string | null {
   return null
 }
 
-async function tryRun(
+/**
+ * The default `probe`: run a candidate and say whether it ran.
+ *
+ * Exported only so `agent-binaries.test.ts` can drive the deadline directly.
+ * Everything else in this module reaches it through the injected `probe` seam,
+ * and should keep doing so — the seam is what lets a test model a machine, and
+ * this function is what actually spawns.
+ */
+export async function tryRun(
   command: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   shell: boolean,
+  platform: Platform,
+  timeoutMs: number = BINARY_PROBE_TIMEOUT_MS,
 ): Promise<RunProbe> {
+  /*
+   * The deadline is ours, and `execFile`'s own `timeout:` is deliberately not
+   * passed. This looks like extra work for the same behaviour; on Windows it is
+   * the difference between a probe that cleans up and one that leaks.
+   *
+   * `timeout:` makes Node kill the process it spawned when the clock runs out.
+   * On Windows, when `shell` is true — which is every npm-installed agent CLI,
+   * because what is on PATH is a `.cmd` shim and Node has refused to spawn
+   * those without a shell since CVE-2024-27980 — the process Node spawned is
+   * `cmd.exe`. The `node …\claude --version` that is actually hung is its
+   * grandchild, and `TerminateProcess` does not descend. So a hung probe left a
+   * whole agent CLI behind on Windows and left nothing behind on macOS: the
+   * Setup panel leaks one process per hung probe, and it probes every tool on
+   * every open.
+   *
+   * There is no way to make Node's own timeout kill a tree, and there is no
+   * ordering trick either: arming a second timer at the same deadline loses,
+   * because Node created its timer first and same-expiry timers fire in
+   * creation order — and `taskkill /T` must run *before* the shell dies or the
+   * grandchild is already orphaned and no longer in anyone's tree
+   * (`kill-tree.ts` argues this at length). So there is exactly one deadline
+   * here and it is this one.
+   *
+   * What a caller observes is unchanged on every platform. When the tree is
+   * killed the child exits non-zero, `execFile` rejects exactly as it did when
+   * the timeout was Node's, and the `catch` below turns that into the same
+   * `{ ok: false }` it always produced. `timeoutMs` is a parameter only so a
+   * test can use a deadline shorter than the six seconds a cold CLI needs.
+   */
+  const pending = run(command, [...args], {
+    env,
+    encoding: 'utf8',
+    shell,
+    windowsHide: true,
+    maxBuffer: 256 * 1024,
+  })
+  const deadline = setTimeout(() => {
+    void killTree(pending.child, { platform, shell, systemRoot: systemRootOf(env) })
+  }, timeoutMs)
   try {
-    const { stdout, stderr } = await run(command, [...args], {
-      env,
-      timeout: BINARY_PROBE_TIMEOUT_MS,
-      encoding: 'utf8',
-      shell,
-      windowsHide: true,
-      maxBuffer: 256 * 1024,
-    })
+    const { stdout, stderr } = await pending
     const output = `${stdout}\n${stderr}`
     // A zero exit that still printed a spawn failure is the launcher pattern
     // wearing a different exit code. Refuse it rather than trust the status.
@@ -206,6 +249,8 @@ async function tryRun(
     const failure = error as ExecFailure
     const output = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`
     return { ok: false, line: firstMeaningfulLine(output) }
+  } finally {
+    clearTimeout(deadline)
   }
 }
 
@@ -267,6 +312,12 @@ async function defaultLookup(
 ): Promise<string | null> {
   const spec = lookupSpec(platform, bin)
   try {
+    // `timeout:` is Node's own here, unlike `tryRun` above, and that is correct
+    // rather than inconsistent: `lookupSpec` runs `where.exe` on Windows and
+    // `command -v` through no shell elsewhere, so there is never a command
+    // processor between this process and the one being timed. Node's kill
+    // reaches the only child there is. The moment this grows a `shell: true`
+    // it has to move to the owned-deadline shape `tryRun` uses.
     const { stdout } = await run(spec.command, spec.args, { env, windowsHide: true, timeout: 4000 })
     return firstLookupPath(stdout)
   } catch {
@@ -304,7 +355,8 @@ export async function resolveAgentBinary(
   const lookup = options.lookup ?? ((bin: string) => defaultLookup(bin, platform, env))
   const probe =
     options.probe ??
-    ((command: string, args: readonly string[], shell: boolean) => tryRun(command, args, env, shell))
+    ((command: string, args: readonly string[], shell: boolean) =>
+      tryRun(command, args, env, shell, platform))
 
   const bin = entry.bin
   const onPath = SAFE_BIN.test(bin) ? await lookup(bin) : null

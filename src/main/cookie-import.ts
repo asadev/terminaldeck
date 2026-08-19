@@ -57,6 +57,51 @@ import { currentPlatform, type Platform } from './platform/host'
  *    site accepts and no error reports. {@link stripDomainHash} strips it when
  *    it is there and leaves older blobs alone.
  *
+ * ## Why this is macOS-only, and why that is not simply a gap to be filled
+ *
+ * A read of the Windows build on 2026-08-19 found the browser sign-in handover
+ * offering its second half — *"I have signed in — bring it back"* — on every
+ * platform, while everything below {@link readSafeStorageKey} answers on macOS
+ * and nowhere else. The obvious repair is to write the Windows key path: read
+ * `os_crypt.encrypted_key` out of `Local State`, strip its `DPAPI` prefix,
+ * `CryptUnprotectData` it, and AES-256-GCM the values. That was considered and
+ * rejected, and the reasoning is written down here because the next person to
+ * open this file will have the same idea and deserves the counter-argument
+ * rather than an unexplained hole.
+ *
+ * **On Windows the key is not the blocker; the cookies are.** Since Chrome 127
+ * (July 2024) Windows Chromium encrypts cookies with *app-bound* encryption:
+ * the blobs are `v20`, and the key that opens them is held by Chrome's own
+ * elevation service — a SYSTEM service that hands it back only to a caller
+ * whose executable lives inside the Chrome installation it belongs to. That is
+ * not an accident of the format. It is a measure aimed precisely at other
+ * programs reading the cookie store, which is exactly what this module is.
+ * Edge shipped the same thing.
+ *
+ * This file had already written that fact down once, before any of this: see
+ * {@link decryptCookieValue}, which refuses `v20` by name rather than mangling
+ * it. So a Windows key path would unwrap a key perfectly and then meet a
+ * database in which every row is `v20` — {@link planImport} counts each one as
+ * `failed`, and {@link importMessage} tells the user *"the keychain key did not
+ * fit its cookie database"*, which is both wrong and unactionable. That outcome
+ * is pinned by a test against `v20` fixtures, run on this Mac, so the claim is
+ * measured rather than asserted: several hundred lines of DPAPI plumbing to
+ * arrive at the same dead button with a worse sentence under it.
+ *
+ * **What was *not* done, stated plainly.** None of the Windows behaviour above
+ * was measured on a Windows machine, because there is not one here. It is taken
+ * from Chrome's app-bound encryption design and from this module's own prior
+ * refusal of `v20`, and it should be re-checked rather than trusted if Chrome
+ * ever unwinds it. What did not need a Windows machine is the part that was
+ * done: {@link cookieImportSupported} is now the single answer to "can this
+ * platform do this at all", and the two places that would otherwise draw a
+ * control anyway both ask it before offering — the settings pane through
+ * `CookieImportStatus.supported`, and `SignInBanner`, which cannot import from
+ * `src/main` and so asks its own side's copy of the question for the reason
+ * `src/renderer/platform.ts` sets out at length. The rule being applied is the
+ * house one: a control that cannot act is absent with its reason stated, never
+ * drawn hopefully.
+ *
  * ## What never leaves this module
  *
  * Cookie values and the keychain key. Nothing here logs, and nothing here puts
@@ -162,6 +207,34 @@ export const SAFE_STORAGE_ITEMS: Readonly<Record<BrowserId, { service: string; a
     vivaldi: { service: 'Vivaldi Safe Storage', account: 'Vivaldi' },
   }
 
+/**
+ * Can this platform carry cookies over at all?
+ *
+ * One function rather than three inline `platform === 'darwin'` comparisons,
+ * because there were three of them and they are one decision. They had already
+ * begun to drift: {@link readSafeStorageKey} refused off macOS, `statusOf`
+ * reported `supported: false` off macOS, and the sign-in banner asked neither
+ * and offered the button everywhere — so on Windows the settings pane said
+ * "Importing cookies works on macOS only" while a band at the top of the same
+ * browser offered to do it. Two answers to one question is how that happens,
+ * and a named predicate is the cheapest way to have only one.
+ *
+ * It takes the platform rather than reading it, for the reason `platform/host.ts`
+ * argues at length and this file has already been bitten by once: a branch that
+ * reads `process.platform` inline can only ever be exercised by the machine it
+ * was written on, and the macOS answer was asserted unconditionally here until
+ * the first Windows CI run failed on it.
+ *
+ * The answer is `darwin` and nothing else, and that is not laziness about
+ * Linux either — the key there lives behind libsecret or KWallet, the blobs are
+ * `v11`, and neither is written. Linux has no build target today, so the honest
+ * answer for it is the same "no" with the same sentence attached rather than a
+ * half-path nobody can run.
+ */
+export function cookieImportSupported(platform: Platform): boolean {
+  return platform === 'darwin'
+}
+
 /** How long to leave the keychain dialog on screen before giving up. */
 const KEYCHAIN_TIMEOUT_MS = 120_000
 
@@ -189,8 +262,43 @@ export function classifyKeychainFailure(
   return 'failed'
 }
 
-/** The sentence for each failure. Written for someone who did not read this file. */
-export function keychainMessage(reason: KeychainFailure, browserName: string): string {
+/**
+ * Why an import cannot happen on this platform, said differently per platform
+ * because the reason genuinely is different.
+ *
+ * The old sentence was one line for every platform — *"only implemented for
+ * macOS, where the key lives in the login keychain"* — and it is kept below,
+ * unchanged, for Linux, where it is exactly true: the key is behind libsecret
+ * or KWallet, the blobs are `v11`, and nobody has written that path.
+ *
+ * It is wrong on Windows, and wrong in the direction that invites somebody to
+ * fix the wrong thing. *"Only implemented"* reads as "so implement it", and the
+ * module header explains at length why implementing the DPAPI key path would
+ * produce a working key and a still-dead feature: Chrome seals the cookies
+ * themselves, not the key, and it does it specifically against readers like
+ * this one. A person reading a refusal deserves to know it is a wall rather
+ * than a to-do — otherwise the next thing they do is file the same bug again.
+ */
+export function unsupportedMessage(browserName: string, platform: Platform): string {
+  if (platform === 'win32') {
+    return `Carrying ${browserName}’s cookies over works on macOS only. Chrome on Windows locks its cookie store to Chrome itself — no other program can read those sign-ins, and this app will not pretend to.`
+  }
+  return `Importing cookies from ${browserName} is only implemented for macOS, where the key lives in the login keychain.`
+}
+
+/**
+ * The sentence for each failure. Written for someone who did not read this file.
+ *
+ * `platform` is threaded in rather than read here so that both wordings can be
+ * pinned side by side on one machine. This file's tests already make that
+ * argument for the access-failure sentence, and it applies unchanged: a branch
+ * that reads the host is a branch only the host can ever check.
+ */
+export function keychainMessage(
+  reason: KeychainFailure,
+  browserName: string,
+  platform: Platform = currentPlatform(),
+): string {
   switch (reason) {
     case 'not-found':
       return `macOS has no “Safe Storage” keychain item for ${browserName}, so there is no key to decrypt its cookies with. Open ${browserName} once and try again.`
@@ -199,7 +307,7 @@ export function keychainMessage(reason: KeychainFailure, browserName: string): s
     case 'no-answer':
       return `The keychain asked for permission and nothing answered it, so the import stopped. Run it again and answer the dialog.`
     case 'unsupported':
-      return `Importing cookies from ${browserName} is only implemented for macOS, where the key lives in the login keychain.`
+      return unsupportedMessage(browserName, platform)
     case 'failed':
       return `macOS refused to hand over ${browserName}’s encryption key, so nothing could be decrypted.`
   }
@@ -238,8 +346,12 @@ export async function readSafeStorageKey(
   platform: NodeJS.Platform = process.platform,
   run: Runner = runSecurity,
 ): Promise<KeychainResult> {
-  if (platform !== 'darwin') {
-    return { ok: false, reason: 'unsupported', detail: keychainMessage('unsupported', browserName) }
+  if (!cookieImportSupported(platform)) {
+    return {
+      ok: false,
+      reason: 'unsupported',
+      detail: keychainMessage('unsupported', browserName, platform),
+    }
   }
   const item = SAFE_STORAGE_ITEMS[browserId]
   if (!item) {
@@ -1035,8 +1147,11 @@ async function statusOf(
     source: ledger.source,
     // Through the seam, not through `process.platform` inline. Same reason as
     // everywhere else in this file: a branch written inline is a branch only
-    // the machine it was written on can ever exercise.
-    supported: platform === 'darwin',
+    // the machine it was written on can ever exercise. And through the shared
+    // predicate rather than a fourth copy of the comparison — the settings pane
+    // and the keychain read have to agree with each other or a Windows user is
+    // told two different things two inches apart, which is what was happening.
+    supported: cookieImportSupported(platform),
   }
 }
 

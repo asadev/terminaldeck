@@ -49,8 +49,22 @@ import type { ProviderId } from '../shared/types'
  */
 export type UsageWindowKind = 'five-hour' | 'weekly' | 'monthly' | 'other'
 
-/** Where a reading was taken from. Named per source, not per provider. */
-export type UsageSourceId = 'claude-usage-panel' | 'claude-warning' | 'codex-rollout'
+/**
+ * Where a reading was taken from. Named per source, not per provider.
+ *
+ * `claude-usage-api` is the one that costs nobody a panel: Claude Code fetched
+ * the figure from `/api/oauth/usage` under its own login, either because this
+ * app asked it to in a process of its own or because it had already done so and
+ * left the answer in `.claude.json`. See `usage-probe.ts`. It is one id and not
+ * two on purpose — the number and its `reportedAt` are identical whichever way
+ * they reached this process, and splitting them would put a distinction on
+ * screen that says nothing about the figure.
+ */
+export type UsageSourceId =
+  | 'claude-usage-panel'
+  | 'claude-warning'
+  | 'claude-usage-api'
+  | 'codex-rollout'
 
 /**
  * How much of the window has been used.

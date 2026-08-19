@@ -64,8 +64,6 @@ import {
   CAPABILITY,
   CREDENTIAL_OPERATIONS,
   DEV_SERVER_STATUSES,
-  MAX_COPILOT_CODE_CHARS,
-  MAX_COPILOT_CREDENTIAL_CHARS,
   MAX_COPILOT_MESSAGE_CHARS,
   MAX_COPILOT_SAY_BYTES,
   MAX_CREDENTIAL_HOST_LENGTH,
@@ -120,8 +118,6 @@ export type {
 }
 export {
   CAPABILITY,
-  MAX_COPILOT_CODE_CHARS,
-  MAX_COPILOT_CREDENTIAL_CHARS,
   MAX_COPILOT_MESSAGE_CHARS,
   MAX_COPILOT_SAY_BYTES,
   PROTOCOL_VERSION,
@@ -462,7 +458,7 @@ function devStateFrame(parsed: unknown): DecodeResult | null {
 }
 
 /**
- * The nine `copilot.*` frames, which `parseServerFrame` does not read either.
+ * The eight `copilot.*` frames, which `parseServerFrame` does not read either.
  *
  * ## Why this is the fourth exception and still not a habit
  *
@@ -471,32 +467,40 @@ function devStateFrame(parsed: unknown): DecodeResult | null {
  * because it is the same seam. `parseServerFrame` was written for a desktop
  * acting as the **guest** of another desktop; that guest speaks protocol v1 and
  * negotiates nothing, so refusing a frame it has never heard of is right *for
- * it*. This client negotiates. It reads `welcome.capabilities`, sends
- * `copilot.hello` only after seeing `copilot` in there, and sends no other
- * `copilot.*` verb until a `copilot.grant` says the connection is open — which
- * makes every frame below one it has agreed to receive.
+ * it*. This client negotiates. It sends `copilot.hello` only after a `welcome`
+ * that carried a copilot for this device, and sends no other `copilot.*` verb
+ * until a `copilot.grant` says the connection is open — which makes every frame
+ * below one it has agreed to receive.
  *
- * The right home for all sixteen branches across these four readers is
- * `parseServerFrame` itself, the day the guest also connects a copilot. Moving
- * them there deletes these functions and changes nothing else.
+ * The right home for all fifteen branches across these four readers is
+ * `parseServerFrame` itself, the day the guest also has a copilot. Moving them
+ * there deletes these functions and changes nothing else.
  *
- * ## Why there are nine and not ten
+ * ## Why there are eight and not ten
  *
- * `copilot.log` is deliberately absent, and its absence is a statement about
- * what this client does rather than an oversight. That frame answers
- * `copilot.log` and nothing else — it is never pushed — and this client never
- * sends one: the action log it draws is the *live* one, assembled from the
- * `copilot.tool` frames that arrive as calls happen, which is what a page
- * somebody is watching wants. Reading a frame nobody here can provoke would be
- * a parser for a conversation this client is not in, exactly as `net.*` is for
- * `localhostFrame`.
+ * Two are deliberately absent, and each absence is a statement about what this
+ * client does rather than an oversight.
+ *
+ * `copilot.log` answers `copilot.log` and nothing else — it is never pushed —
+ * and this client never sends one: the action log it draws is the *live* one,
+ * assembled from the `copilot.tool` frames that arrive as calls happen, which is
+ * what a page somebody is watching wants. Reading a frame nobody here can
+ * provoke would be a parser for a conversation this client is not in, exactly as
+ * `net.*` is for `localhostFrame`.
+ *
+ * `copilot.linked` is gone rather than merely unread. It answered
+ * `copilot.connect` and carried the credential that frame minted, and both were
+ * deleted on 2026-08-19 when pairing a device as one of his own became the whole
+ * of the copilot's authorisation — see the header of `copilot.ts`. Nothing can
+ * provoke it, there is no longer anywhere to put a credential, and a reader kept
+ * for it would be a place for one to arrive.
  *
  * ## What is refused whole and what merely loses a row
  *
  * The split follows the rule the three readers above already settled on. A
- * frame that *is* one fact — `copilot.state`, `copilot.grant`, `copilot.linked`,
- * `copilot.ask`, `copilot.settled` — is refused whole when that fact is
- * incomplete, because a half-read one would put a wrong claim on screen: a
+ * frame that *is* one fact — `copilot.state`, `copilot.grant`, `copilot.ask`,
+ * `copilot.settled` — is refused whole when that fact is incomplete, because a
+ * half-read one would put a wrong claim on screen: a
  * consent prompt missing its arguments is the reflex-Yes that
  * `CopilotConsentQuestion` exists to prevent, and a grant missing a tier is a
  * control drawn for a permission nobody holds. A frame that carries a *list* —
@@ -578,20 +582,6 @@ function copilotFrame(parsed: unknown): DecodeResult | null {
       return link === null
         ? { ok: false, reason: 'copilot.grant without a link' }
         : { ok: true, message: { t: 'copilot.grant', link } }
-    }
-
-    case 'copilot.linked': {
-      const credential = typeof frame.credential === 'string' ? frame.credential : ''
-      const link = copilotLink(frame.link)
-      // The whole value of this frame is the credential, and it is sent exactly
-      // once — the desktop keeps a scrypt hash and cannot show it again. A frame
-      // accepted without one would leave this browser believing it had connected
-      // while holding nothing, and the remedy (ask for another code) would never
-      // be offered because the screen would have moved on.
-      if (credential === '' || credential.length > MAX_COPILOT_CREDENTIAL_CHARS || link === null) {
-        return { ok: false, reason: 'incomplete copilot.linked' }
-      }
-      return { ok: true, message: { t: 'copilot.linked', credential, link } }
     }
 
     case 'copilot.ask': {
@@ -931,16 +921,20 @@ export function decodeServerMessage(raw: string): DecodeResult {
    * `ServerMessage` carries `copilot?: CopilotLinkWire` and `parseServerFrame`
    * does not read it — for the reason the shared parser refuses every other
    * `copilot.*` frame: it was written for a desktop acting as the guest of
-   * another desktop, and that guest never connects a copilot, so the field is
-   * one it has no use for. This client negotiates and does use it, and the cost
-   * of not reading it is exact: `linked` would be false on every welcome, the
-   * Copilot screen would ask for a connect code on every reload, and the code
-   * would work — producing a second record for a browser that already had one.
+   * another desktop, and a guest is exactly the device this key is withheld
+   * from, so the field is one it has no use for.
    *
-   * Read defensively and dropped when malformed, which is the same answer as a
-   * desktop too old to send it: ask for a code. That is the safe direction —
-   * the wrong way round would have this browser sending a `copilot.hello` no
-   * machine will honour and counting against its credential limiter.
+   * This client does use it, and since 2026-08-19 it is the *only* thing it
+   * reads on the question: the key is present for one of his own devices and
+   * absent for a guest, which makes its presence the whole of whether there is a
+   * Copilot tab. The cost of not reading it is therefore total rather than
+   * cosmetic — a machine with a copilot and a device entitled to it, drawn as
+   * though neither existed.
+   *
+   * Read defensively and dropped when malformed, and dropping is the safe
+   * direction: a client that invented a link out of an unreadable one would send
+   * `copilot.hello` to a machine that never offered it, and draw a tab whose
+   * every frame comes back refused.
    */
   if (message.t === 'welcome') {
     const link = copilotLink((frame as Record<string, unknown>).copilot)

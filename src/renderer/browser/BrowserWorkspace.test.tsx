@@ -490,6 +490,32 @@ describe('the screenshot popup', () => {
     expect(shortenPath('/Users/apple/Pictures/Terminal Deck/x.png')).not.toMatch(/\/$/)
   })
 
+  it('cuts a Windows path at a folder too, and keeps its backslashes', () => {
+    /*
+     * The input here is a real OS path — `screenshotDir()` is
+     * `join(app.getPath('pictures'), BRAND.name)` — so on Windows it contains
+     * no forward slash at all. Splitting on `'/'` alone made the whole thing
+     * one segment: the folder-boundary loop had nothing to walk, the function
+     * fell through to its raw character slice, and the popup printed an
+     * arbitrary mid-word cut like `…/sad\Pictures\Terminal Deck\…` on every
+     * single screenshot a Windows user took.
+     *
+     * Pinned with a literal rather than by building the path with `join`,
+     * because a `join` here would produce forward slashes on the macOS runner
+     * and assert nothing — which is exactly the shape of Mac-only test this
+     * repo has already had to fix six of.
+     */
+    expect(
+      shortenPath('C:\\Users\\asad\\Pictures\\Terminal Deck\\localhost-8791-20260817-012405.png'),
+    ).toBe('…\\Terminal Deck\\localhost-8791-20260817-012405.png')
+    // The separator the input used is the one it comes back with: this string
+    // sits directly under a `title` carrying the full path, and one tooltip
+    // should not spell the machine's paths two ways.
+    expect(shortenPath('C:\\Users\\asad\\Pictures\\Terminal Deck\\x.png')).not.toContain('/')
+    // Short enough to keep whole, exactly as the POSIX case above.
+    expect(shortenPath('C:\\tmp\\a.png')).toBe('C:\\tmp\\a.png')
+  })
+
   it('hands the agent the path and the size, on one line', () => {
     const line = composeShot(
       { path: '/tmp/page.png', width: 3072, height: 1496, preview: 'data:image/png;base64,AA' },

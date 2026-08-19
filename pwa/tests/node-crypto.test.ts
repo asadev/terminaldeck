@@ -25,20 +25,55 @@
  * a test under `src/` could not import the real one to compare against. This
  * directory is compiled by `pwa/tsconfig.node.json`, which has `@types/node` and
  * no such mapping.
+ *
+ * ## And the compiler was only half of it — 2026-08-19
+ *
+ * That tsconfig reasoning is correct and it was not enough, because **two**
+ * things point `node:crypto` at the shim and moving the file only escaped one.
+ * `vite.config.ts` aliases the specifier as well (`resolve.alias`), and an alias
+ * applies to every module vitest loads regardless of which tsconfig described
+ * it. So the `nodeX` half of every comparison below was resolving to the shim
+ * too, and this file was holding the shim against itself.
+ *
+ * Read the header again with that in mind. This is a test written *because* an
+ * implementation users run and tests do not is the failure mode that cost this
+ * project a day — and it had quietly become an instance of it. It passed
+ * throughout, because comparing a thing to itself always does. What exposed it
+ * was somebody importing `scryptSync`, a name the shim does not export: the
+ * comparison stopped being wrong and started being a `TypeError`.
+ *
+ * The real one is reached through `createRequire` below, which resolves at
+ * runtime and is not rewritten by the bundler. The alias is deliberately left
+ * exactly as it is: it is a guard for the browser build — an `import` from
+ * `node:fs` must still fail there — and weakening it to make one test convenient
+ * would trade a real protection for a local one.
  */
 
-import {
-  createHash as nodeCreateHash,
+import { createRequire } from 'node:module'
+import type { KeyObject } from 'node:crypto'
+
+/*
+ * Node's own crypto, reached at runtime so the bundler cannot substitute it.
+ *
+ * A static `import ... from 'node:crypto'` here is rewritten by the alias in
+ * `vite.config.ts` and lands on the shim — which turned every assertion below
+ * into the shim being compared with itself. See the note in the header.
+ *
+ * `node:module` is not aliased: the mapping is exact rather than a prefix, for
+ * the reason `vite.config.ts` argues at length, and that exactness is what
+ * leaves this door open.
+ */
+const {
+  createHash: nodeCreateHash,
   createPrivateKey,
   createPublicKey,
-  diffieHellman as nodeDiffieHellman,
-  generateKeyPairSync as nodeGenerateKeyPairSync,
-  hkdfSync as nodeHkdfSync,
-  randomBytes as nodeRandomBytes,
+  diffieHellman: nodeDiffieHellman,
+  generateKeyPairSync: nodeGenerateKeyPairSync,
+  hkdfSync: nodeHkdfSync,
+  randomBytes: nodeRandomBytes,
   scryptSync,
-  timingSafeEqual as nodeTimingSafeEqual,
-  type KeyObject,
-} from 'node:crypto'
+  timingSafeEqual: nodeTimingSafeEqual,
+} = createRequire(import.meta.url)('node:crypto') as typeof import('node:crypto')
 import { describe, expect, it } from 'vitest'
 import { scrypt as nobleScrypt, scryptAsync } from '@noble/hashes/scrypt.js'
 import {

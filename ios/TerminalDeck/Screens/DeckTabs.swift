@@ -98,7 +98,13 @@ struct DeckTabs: View {
              * the copilot lives, so the three that survive keep their order; the
              * one case where it would move under a live thumb is held open by
              * the clause above; and connecting has somewhere honest to live now,
-             * which it did not then. See `CopilotConnectionView`.
+             * which it did not then.
+             *
+             * And on 2026-08-19 connecting stopped existing at all: the pill now
+             * follows the *device*, because pairing one as **My device** is the
+             * copilot's authorisation. A guest never sees a fourth pill; one of
+             * his own machines shows it on the first welcome, with nothing to
+             * press in between.
              *
              * It reads the *current* machine rather than a machine named in a
              * route, which is the one thing that changed about the screen when
@@ -192,8 +198,6 @@ struct DeckTabs: View {
                         switch route {
                         case .machines:
                             MachinesView(model: model)
-                        case .copilot:
-                            CopilotConnectionView(model: model)
                         }
                     }
             }
@@ -589,36 +593,31 @@ struct DeckSettingsView: View {
                         SettingsDivider()
 
                         /*
-                         * **Where connecting the copilot lives.**
+                         * **There is no Copilot row here, and that is the
+                         * change of 2026-08-19.**
                          *
-                         * *"Actually connecting copilot should be in the
-                         * settings."* It was a six-digit field on the Copilot
-                         * screen itself, which was tolerable while that screen
-                         * had a pill of its own in every state and is not now:
-                         * the pill only appears once the copilot **is**
-                         * connected, so the form for connecting it would be
-                         * behind a door that opens after you are through it.
+                         * There was one for a day: *"actually connecting copilot
+                         * should be in the settings"*, pushing a screen with a
+                         * six-digit field on it, because the Copilot pill only
+                         * appears once the copilot is connected and a setup form
+                         * behind it would have been a door locked from the
+                         * inside.
                          *
-                         * Second row rather than first because Machines is the
-                         * one that has to come first — a phone with no machine
-                         * paired has no copilot to connect either, and this row
-                         * would be the second thing somebody could not do.
+                         * Then the ceremony itself went — *"if we are connecting
+                         * as my device copilot automatically comes, if we
+                         * connect as guest then copilot don't come"* — and the
+                         * row had nothing left to do. What remains is a status,
+                         * and a status is not a row: tapping it would open a
+                         * page whose only content is a sentence, and the same
+                         * sentence is already on the Copilot tab, one pill away,
+                         * with the conversation under it. The pill's own
+                         * presence says the same thing faster than any row can.
                          *
-                         * A `NavigationLink` for the same reason Machines is
-                         * one: this is somebody standing on Settings tapping a
-                         * row, so it pushes onto the stack it is already inside.
-                         * `DeckModel.showCopilotSettings()` is for the other
-                         * caller, which is not on this tab at all.
+                         * Where the answer is changed is the machine, on the
+                         * approval screen, by choosing what kind of device this
+                         * is. Nothing on a phone can move that, so nothing on a
+                         * phone offers to.
                          */
-                        NavigationLink(value: DeckModel.SettingsRoute.copilot) {
-                            SettingsRowBody(title: "Copilot",
-                                            value: copilotValue,
-                                            icon: "sparkles")
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("settings.copilot")
-
-                        SettingsDivider()
 
                         SettingsRow(title: "GitHub",
                                     value: model.gitHubAccount.map { "@\($0.login)" } ?? "Not connected",
@@ -790,40 +789,6 @@ struct DeckSettingsView: View {
     /// screen is being asked.
     private var machinesValue: String {
         model.hosts.count == 1 ? "1 paired" : "\(model.hosts.count) paired"
-    }
-
-    /**
-     * What the Copilot row says without being opened.
-     *
-     * With one machine it is that machine's answer in one word, because that is
-     * the question — *is my copilot connected* — and a row reading "Copilot"
-     * with a chevron would have to be tapped to find out. With several it is a
-     * count, for the same reason the Machines row is a count: the individual
-     * answers are on the screen behind it and the thing worth carrying out here
-     * is whether they all agree.
-     *
-     * A machine that has no copilot at all is not counted as unconnected. It is
-     * not a thing anybody can act on, and a row reading "0 of 1 connected" over
-     * a desktop that simply has no copilot in it would send somebody looking for
-     * a code that cannot be minted.
-     */
-    private var copilotValue: String {
-        let hosts = model.hosts
-        guard !hosts.isEmpty else { return "" }
-        if hosts.count == 1 {
-            switch hosts[0].copilotAccess {
-            case .notOffered: return "Not on this machine"
-            case .notConnected, .credentialLost: return "Not connected"
-            case .connecting: return "Connecting…"
-            case .notGranted: return "Nothing granted"
-            case .watch: return "Watching"
-            case .direct: return "Connected"
-            }
-        }
-        let offered = hosts.filter { $0.copilotAccess != .notOffered }
-        guard !offered.isEmpty else { return "Not on these machines" }
-        let connected = offered.filter { $0.copilotAccess.isConnected }.count
-        return "\(connected) of \(offered.count) connected"
     }
 
     /// What the Alerts row says without being opened. A row that always read

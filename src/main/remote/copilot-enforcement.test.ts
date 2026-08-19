@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -6,8 +6,8 @@ import { ActionLog } from '../deck-control/action-log'
 import { buildCatalogue } from '../deck-control/catalogue'
 import { ConsentBroker } from '../deck-control/consent'
 import { DeckControl } from '../deck-control/control'
-import type { DeckSurface } from '../deck-control/surface'
-import { CopilotLinks, REMOTE_GRANTABLE_TIERS, remoteCopilotCaller } from './copilot-link'
+import type { DeckSurface, Tier, TierGrant } from '../deck-control/surface'
+import { CopilotAccess, FULL_TIERS, remoteCopilotCaller } from './copilot-access'
 import { copilotFrameAllowed } from './copilot-remote'
 import { COPILOT_FRAME_TIER, COPILOT_UNTIERED_FRAMES } from './protocol'
 
@@ -31,9 +31,26 @@ import { COPILOT_FRAME_TIER, COPILOT_UNTIERED_FRAMES } from './protocol'
  * added rather than the day somebody remembers this file.
  *
  * The test that would have caught the whole class of bug this feature is about
- * is the first one: a device holding the watching grant, asking for every tool
+ * is the first one: a caller holding the watching grant, asking for every tool
  * the catalogue declares above that tier, and being told `not-granted` every
  * time — *without* the transport being involved at all.
+ *
+ * ## Where the grants in this file come from, since 2026-08-19
+ *
+ * Two places, deliberately, and the split is worth reading before the tests are.
+ *
+ * The ones that matter to the product come from a real {@link CopilotAccess}
+ * built the way `index.ts` builds it, off a device's **kind**: one of his own
+ * devices gets everything, a guest gets nothing, and there is no third answer
+ * and no ceremony in between. The separate copilot connection those fixtures
+ * used to perform — mint a six-digit code at the desk, redeem it, let the tiers
+ * travel with it — is gone, and `copilot-access.ts` argues why it was proving a
+ * fact that pairing had already proved.
+ *
+ * The ones that hold a *partial* grant come from {@link narrowed}, a four-line
+ * stub, because nothing in the product can produce one any more. The tier check
+ * they exercise is real and still runs on every dispatch; see that helper for
+ * the full argument for keeping them.
  */
 
 /* ------------------------------------------------------------------ fakes -- */
@@ -116,25 +133,48 @@ function control(): DeckControl {
 }
 
 /**
- * A store with one device **connected to the copilot**, the way a person does it.
+ * Access, produced the only way the product produces it: from a device's kind.
  *
- * Not `set()`, and the difference is the whole revision this file was rewritten
- * for. Copilot access is no longer a box ticked beside a paired device; it is a
- * separate connection with its own code and its own credential, and
- * `CopilotLinks.set` refuses to create a record precisely so that a panel cannot
- * be a second door onto it. A test that reached for `set()` on an unconnected
- * device would be testing a path the product does not have.
+ * This is the whole of the fixture now, and the shrinkage is the point. It used
+ * to mint a six-digit copilot code at the desk, redeem it against a store on
+ * disk, and assert the redemption worked — three lines of ceremony standing in
+ * for a second act of authorisation. There is no such act any more: pairing a
+ * device as **My device** already is one, it is minted at this keyboard, typed
+ * at the other end, and cannot be changed afterwards without pairing again.
+ * `copilot-access.ts` carries that argument and the one it superseded.
  *
- * So every fixture here mints a code at the desk and redeems it, which is what
- * the ceremony is, and the tiers travel with the code because that is where the
- * decision is made.
+ * So there is nothing to construct but the question itself. A `Set` rather than
+ * a list because one test below revokes a device mid-flight, and the live
+ * re-read is exactly what it is proving.
  */
-async function connected(tiers: Record<string, boolean>, deviceId = 'phone-1'): Promise<CopilotLinks> {
-  const links = new CopilotLinks(dir)
-  const offer = links.offer(tiers)
-  const outcome = await links.redeem(offer.code, deviceId)
-  expect(outcome.ok, 'the fixture failed to connect a device').toBe(true)
-  return links
+function access(mine: ReadonlySet<string> = new Set(['phone-1'])): CopilotAccess {
+  return new CopilotAccess({ isMine: (deviceId) => mine.has(deviceId) })
+}
+
+/**
+ * A **narrowed** grant, which only a test can make.
+ *
+ * What is being tested through this is real and still runs on every call:
+ * `DeckControl.call` refuses a tool whose tier the caller does not hold. That
+ * check has not moved and is not weaker than it was.
+ *
+ * What has gone is any way for the *product* to produce a partial remote grant.
+ * A device is one of his or it is a guest; the first gets {@link FULL_TIERS} and
+ * the second gets nothing, and there is deliberately no screen, no file and no
+ * frame that produces anything in between — see `copilot-access.ts`, which
+ * argues that a tick box between the two was proving the same fact twice.
+ *
+ * The alternative to this stub was deleting the tests below, which would mean
+ * deleting the coverage of a check that still runs on every tool call, against
+ * the day somebody reintroduces a narrower caller from a different transport.
+ * `remoteCopilotCaller` takes `Pick<CopilotAccess, 'granted'>` precisely so that
+ * the thing under test is the tier check rather than the store the tiers came
+ * from, and a four-line object is a smaller lie than a green suite that has
+ * stopped checking.
+ */
+function narrowed(tiers: Partial<TierGrant>): Pick<CopilotAccess, 'granted'> {
+  const grant: TierGrant = Object.freeze({ read: false, act: false, alter: false, ...tiers })
+  return { granted: () => grant }
 }
 
 beforeEach(() => {
@@ -148,22 +188,25 @@ afterEach(() => {
 
 /* -------------------------------------------------------- the tier check -- */
 
-describe('a watching connection cannot reach a tool above its grant', () => {
+describe('a caller cannot reach a tool above its grant', () => {
   /**
    * The proof obligation `COPILOT-REMOTE.md` §3 writes out, driven off the
    * catalogue.
    *
    * Every tool that declares `act` or `alter` is asked for by a caller built the
    * only way the transport is allowed to build one — through
-   * {@link remoteCopilotCaller} — from a store in which this device's copilot
-   * connection holds `read` and nothing else. All of them must come back
-   * `not-granted`, and the log row must say so, because the row is what the
-   * device is shown as a refusal in the copilot's own words.
+   * {@link remoteCopilotCaller} — holding `read` and nothing else. All of them
+   * must come back `not-granted`, and the log row must say so, because the row
+   * is what the device is shown as a refusal in the copilot's own words.
+   *
+   * The grant comes from {@link narrowed} rather than from a real
+   * {@link CopilotAccess}, and that helper says at length why: the tier check is
+   * what is under test here, and the product no longer has a way to hand a
+   * remote caller a partial grant.
    */
   it('refuses every act and alter tool in the catalogue', async () => {
-    const links = await connected({ read: true })
     const deck = control()
-    const caller = remoteCopilotCaller(links, 'phone-1')
+    const caller = remoteCopilotCaller(narrowed({ read: true }), 'phone-1')
 
     const above = buildCatalogue().filter((spec) => spec.tier !== 'read')
     // A guard on the guard. If `buildCatalogue()` ever returns nothing — a
@@ -191,68 +234,116 @@ describe('a watching connection cannot reach a tool above its grant', () => {
    * the assertion that would go red if somebody fixed a bug by making the remote
    * caller refuse unconditionally.
    */
-  it('lets the same connection reach a read tool', async () => {
-    const links = await connected({ read: true })
+  it('lets the same caller reach a read tool', async () => {
     const deck = control()
 
-    const result = await deck.call('sessions.list', {}, { caller: remoteCopilotCaller(links, 'phone-1') })
+    const caller = remoteCopilotCaller(narrowed({ read: true }), 'phone-1')
+    const result = await deck.call('sessions.list', {}, { caller })
     expect(result.ok).toBe(true)
     expect(result.refusal).toBeNull()
   })
 
   /**
-   * **A device paired for sessions has no copilot reach.**
+   * **A guest reaches nothing at all**, from a real {@link CopilotAccess}.
    *
-   * This is the headline property of the whole revision and it is asserted at
-   * the layer that matters — the dispatcher, not the transport. `phone-2` is
-   * exactly the shape of a device that has been paired, approved, and given
-   * folders: `RemoteAuth` would let it open a channel and start terminals all
-   * day. It has simply never redeemed a copilot code, so `CopilotLinks.granted`
-   * answers nothing for it and every tool, *including the read ones*, is
-   * refused.
+   * This is the headline property of the whole design and it is asserted at the
+   * layer that matters — the dispatcher, not the transport. `phone-2` is exactly
+   * the shape of a device somebody was lent: `RemoteAuth` would let it open a
+   * channel and start terminals in the folder it was given all day. Its kind is
+   * `guest`, so `CopilotAccess.granted` answers nothing for it and every tool
+   * — *including the read ones* — is refused.
    *
    * The read tools are the important half. A device that could call
-   * `sessions.list` through the copilot would have copilot reach — less of it
-   * than `act`, but not none, and "not none" is what this design exists to
-   * refuse.
+   * `sessions.list` through the copilot would have copilot reach: less of it
+   * than `act`, but not none, and "not none" is what *"the copilot is never
+   * shared"* refuses. So the sweep is the **whole** catalogue rather than the
+   * part above some tier, which is what makes this a different assertion from
+   * every other one in this file.
+   *
+   * A second device is one of his in the same store, so the refusal is about
+   * this device's kind rather than about a question that answers no to everyone.
    */
-  it('refuses a device that is paired but has never connected the copilot', async () => {
-    // A real store with a *different* device connected, so the refusal is about
-    // this device rather than about an empty file.
-    const links = await connected({ read: true, act: true, alter: true }, 'phone-1')
+  it('gives a guest device nothing, and refuses every tool it asks for', async () => {
     const deck = control()
+    const links = access(new Set(['phone-1']))
     const caller = remoteCopilotCaller(links, 'phone-2')
     expect(caller.tiers).toEqual({ read: false, act: false, alter: false })
+    expect(links.linked('phone-2')).toBe(false)
 
-    for (const id of ['sessions.list', 'sessions.send', 'settings.write']) {
-      const result = await deck.call(id, {}, { caller })
-      expect(result.ok, id).toBe(false)
-      expect(result.refusal, id).toBe('not-granted')
+    const everything = buildCatalogue()
+    // The same guard on the guard as above: an empty catalogue would make every
+    // assertion below vacuous and this file would report a boundary it never
+    // touched.
+    expect(everything.length).toBeGreaterThan(3)
+    for (const spec of everything) {
+      const result = await deck.call(spec.id, {}, { caller })
+      expect(result.ok, `${spec.id} was not refused`).toBe(false)
+      expect(result.refusal, `${spec.id} was refused for the wrong reason`).toBe('not-granted')
     }
   })
 
   /**
-   * Disconnecting lands on the **next tool call**, not on the next reconnect.
+   * **One of his own devices holds all three, with nothing else having
+   * happened.**
+   *
+   * The other half of the same fact, and the assertion that would have gone red
+   * on every build of the design this replaced. Nothing is minted, nothing is
+   * typed, nothing is redeemed and nothing is written to disk: the device was
+   * approved as his, and that is the entire ceremony. `alter` is in the list, so
+   * this device can answer its own confirmations — which is what
+   * `copilot-access.ts` argues the approval screen's own wording already told
+   * the person handing it over.
+   *
+   * Swept over {@link FULL_TIERS} rather than written out as three names, so
+   * that a tier added to that literal without being reachable through
+   * `granted()` fails here rather than in somebody's hands. Not swept over
+   * `TIERS`: the whole reason `FULL_TIERS` is a frozen literal is that a fourth
+   * tier added to `deck-control` must **not** become remotely grantable by
+   * existing, and a test walking `TIERS` would demand exactly that.
+   */
+  it('gives one of his own devices every tier FULL_TIERS names, including alter', () => {
+    const links = access()
+    const caller = remoteCopilotCaller(links, 'phone-1')
+
+    expect(links.linked('phone-1')).toBe(true)
+    expect(caller.tiers).toEqual(FULL_TIERS)
+    expect(caller.tiers.alter).toBe(true)
+    for (const tier of Object.keys(FULL_TIERS) as Tier[]) {
+      expect(caller.tiers[tier], tier).toBe(true)
+    }
+  })
+
+  /**
+   * Revoking a device lands on the **next tool call**, not on the next
+   * reconnect.
    *
    * The shape of this test is the whole of its value, so it is worth saying why
    * it is written this way rather than the shorter way.
    *
    * `remoteCopilotCaller` returns a plain `Caller` — a *snapshot* of the tiers at
    * the moment it was called. That is correct, and it is why the live property
-   * cannot live in that function: what re-reads the store is the **caller
-   * function on the token-table entry**, which `deck-control/server.ts` invokes
-   * per request (`grant.caller()`, never captured) and which `copilot-runs.ts`
+   * cannot live in that function: what re-reads access is the **caller function
+   * on the token-table entry**, which `deck-control/server.ts` invokes per
+   * request (`grant.caller()`, never captured) and which `copilot-runs.ts`
    * registers as `() => remoteCopilotCaller(links, deviceId)`.
    *
    * So the entry is modelled here exactly as a live run registers it, and it is
-   * resolved twice across a disconnect. Holding one `Caller` object across the
-   * disconnect instead would test the opposite thing — it would assert that a
-   * snapshot goes stale, which is true, uninteresting, and would go green on a
-   * build where the transport had captured the caller once at hello and lost the
-   * property entirely.
+   * resolved twice across the revocation. Holding one `Caller` object across it
+   * instead would test the opposite thing — it would assert that a snapshot goes
+   * stale, which is true, uninteresting, and would go green on a build where the
+   * transport had captured the caller once at hello and lost the property
+   * entirely.
+   *
+   * What changed with the store's departure is the *event*. There is no
+   * "disconnect the copilot" any more, because there is no separate connection
+   * to disconnect: revoking the **device** is the one remedy, and it drops the
+   * kind record, which is what the `isMine` callback reads. That makes the live
+   * re-read matter more than it did rather than less — it is now the only thing
+   * standing between a revoked phone and the run it left behind.
    */
-  it('refuses on the next call after the copilot is disconnected, with no restart', async () => {
-    const links = await connected({ read: true, act: true })
+  it('refuses on the next call after the device is revoked, with no restart', async () => {
+    const mine = new Set(['phone-1'])
+    const links = access(mine)
     const deck = control()
     // The token-table entry, as `CopilotRuns.start` builds it.
     const entry = { attended: true, caller: () => remoteCopilotCaller(links, 'phone-1') }
@@ -260,7 +351,9 @@ describe('a watching connection cannot reach a tool above its grant', () => {
     const before = await deck.call('sessions.list', {}, { caller: entry.caller() })
     expect(before.ok).toBe(true)
 
-    links.disconnect('phone-1')
+    // What `remote:device:revoke` does, as far as this layer can see it: the
+    // kind is gone, so the device is a guest on the very next question.
+    mine.delete('phone-1')
 
     const after = await deck.call('sessions.list', {}, { caller: entry.caller() })
     expect(after.ok).toBe(false)
@@ -268,22 +361,27 @@ describe('a watching connection cannot reach a tool above its grant', () => {
   })
 
   /**
-   * `alter` is reachable now, and reaching it still means a person said yes.
+   * `alter` is reachable, and reaching it still means a person said yes.
    *
-   * This assertion is the inverse of the one it replaced. The old file proved
-   * that a device holding every grantable tier *still* could not write a
-   * setting, because `alter` was not grantable at all; the argument was that the
-   * tier's safety property is a human at the machine saying yes and the party
-   * holding the phone is not that human.
+   * This assertion is the inverse of the one it replaced twice over. The
+   * original file proved that a device holding every grantable tier *still*
+   * could not write a setting, because `alter` was not grantable at all; the
+   * argument was that the tier's safety property is a human at the machine
+   * saying yes and the party holding the phone is not that human.
    *
-   * What changed is not the safety property, it is what stands behind it — see
-   * `copilot-link.ts`. So the tier check now passes, and the call still only
-   * succeeds because the broker in {@link control} answers yes. The row records
-   * that a confirmation was required and granted, which is what keeps
-   * "authorised by a person" and "allowed by a rule" different rows in the log.
+   * What changed is not the safety property, it is what stands behind it. For
+   * two days that was a separate copilot connection with its own code; it is now
+   * the kind chosen when the device was approved, which has every property the
+   * code was minted to have and one the code did not — it cannot be changed
+   * without pairing again. `copilot-access.ts` carries both arguments.
+   *
+   * So the tier check passes, and the call still only succeeds because the
+   * broker in {@link control} answers yes. The row records that a confirmation
+   * was required and granted, which is what keeps "authorised by a person" and
+   * "allowed by a rule" different rows in the log.
    */
-  it('lets a connection holding alter reach an alter tool, through the gate', async () => {
-    const links = await connected({ read: true, act: true, alter: true })
+  it('lets one of his own devices reach an alter tool, through the gate', async () => {
+    const links = access()
     const deck = control()
     const caller = remoteCopilotCaller(links, 'phone-1')
     expect(caller.tiers.alter).toBe(true)
@@ -301,15 +399,17 @@ describe('a watching connection cannot reach a tool above its grant', () => {
   /**
    * And the tier is still a tier: `act` is not `alter`.
    *
-   * The whole point of keeping tiers as a concept once `alter` became grantable
-   * is that somebody can connect a device read-only, or connect it to work but
-   * not to change things. If this went green with `act` alone, the three
-   * checkboxes on the settings panel would be decoration.
+   * Narrowed through {@link narrowed} for the reason that helper gives — no
+   * remote caller in the shipped product holds `act` without `alter` any more,
+   * and `DeckControl.call` does not know or care where its caller came from.
+   * The ladder between the tiers is checked on every dispatch from every
+   * transport, including the desk's own, so a test that stopped exercising it
+   * because one transport can no longer produce the input would be leaving the
+   * check itself unwatched.
    */
-  it('refuses an alter tool for a connection that holds only act', async () => {
-    const links = await connected({ read: true, act: true })
+  it('refuses an alter tool for a caller that holds only read and act', async () => {
     const deck = control()
-    const caller = remoteCopilotCaller(links, 'phone-1')
+    const caller = remoteCopilotCaller(narrowed({ read: true, act: true }), 'phone-1')
 
     const alter = buildCatalogue().filter((spec) => spec.tier === 'alter')
     expect(alter.length).toBeGreaterThan(0)
@@ -321,29 +421,30 @@ describe('a watching connection cannot reach a tool above its grant', () => {
   })
 
   /**
-   * A hand-edited file cannot mint a connection.
+   * A kind store that cannot answer is a guest, not a grant.
    *
-   * `copilot-link.json` sits under `<userData>`, which the copilot itself can
-   * write until the records fence covers it, so "somebody typed a grant into
-   * this file" is a case with a real path to it rather than a hypothetical.
+   * This is what became of the test above it, which used to write a grant into
+   * `copilot-link.json` by hand and prove the store ignored it. There is no such
+   * file any more, so the hypothetical it defended against — *somebody typed a
+   * permission into a file under `<userData>`* — has moved one module along, to
+   * `remote-device-kinds.json`. `device-kind.ts` owns that surface and its own
+   * tests own the parsing, so what is left to check here is the seam: the
+   * question this file asks reaches a file on disk, a file on disk can be
+   * missing, truncated or unreadable, and a throw crossing that line would land
+   * inside a decision about whether to dispatch a tool.
    *
-   * The rule that replaced the `alter` scrub: **no credential, no link.** A
-   * record with tiers and no credential is a grant with no connection behind it,
-   * which is exactly the shape this design replaced, and it is dropped on read
-   * rather than repaired — there is no honest way to invent the second factor
-   * for somebody. What the old scrub protected against is now protected against
-   * by there being nothing to scrub: the tiers are real, and the thing that
-   * makes them reachable is a credential this file cannot forge.
+   * It fails closed in the same direction as everything else, and the reason it
+   * is worth an assertion rather than a comment is that the safe answer and the
+   * convenient answer point in opposite directions here: a `catch` that
+   * swallowed and returned the last known value would look reasonable in review
+   * and would hand a revoked phone a grant.
    */
-  it('ignores a connection typed into the store by hand with no credential', async () => {
-    writeFileSync(
-      join(dir, 'copilot-link.json'),
-      `${JSON.stringify({
-        version: 1,
-        links: { 'phone-1': { connectedAt: 1, lastSeenAt: null, tiers: { read: true, act: true, alter: true } } },
-      })}\n`,
-    )
-    const links = new CopilotLinks(dir)
+  it('refuses when the kind store throws rather than answers', async () => {
+    const links = new CopilotAccess({
+      isMine: () => {
+        throw new Error('remote-device-kinds.json is not readable')
+      },
+    })
     const deck = control()
     const caller = remoteCopilotCaller(links, 'phone-1')
     expect(caller.tiers).toEqual({ read: false, act: false, alter: false })
@@ -352,21 +453,6 @@ describe('a watching connection cannot reach a tool above its grant', () => {
     const result = await deck.call('sessions.list', {}, { caller })
     expect(result.ok).toBe(false)
     expect(result.refusal).toBe('not-granted')
-  })
-
-  /**
-   * Every tier the ceiling names is genuinely reachable.
-   *
-   * A sweep rather than three named cases, so that a fourth tier added to
-   * `deck-control` and added to {@link REMOTE_GRANTABLE_TIERS} without being
-   * plumbed through the store fails here rather than in somebody's hands.
-   */
-  it('stores and returns every tier in the ceiling', async () => {
-    const links = await connected(Object.fromEntries(REMOTE_GRANTABLE_TIERS.map((tier) => [tier, true])))
-    const caller = remoteCopilotCaller(links, 'phone-1')
-    for (const tier of REMOTE_GRANTABLE_TIERS) {
-      expect(caller.tiers[tier], tier).toBe(true)
-    }
   })
 })
 
@@ -427,13 +513,15 @@ describe('the transport refuses the frame a device should not be able to send', 
    * both of those get the same answer. The permissive reading — "unknown means
    * it must be harmless" — is how a verb added without a tier ships open.
    *
-   * The three untiered frames are in this list too, and that is not an oversight
-   * to be tidied. `copilot.connect`, `copilot.hello` and `copilot.bye` are the
-   * authorisation ceremony and reach `server.ts` by a different door; asking
-   * this function about them must not allow them on the strength of a grant they
-   * exist to establish.
+   * The untiered frames are in this list too, and that is not an oversight to be
+   * tidied. `copilot.hello` and `copilot.bye` open and close the stream and
+   * reach `server.ts` by a different door; asking this function about them must
+   * not allow them on the strength of a grant they exist to establish. There
+   * were three of them until `copilot.connect` was deleted with the copilot's
+   * separate credential, and the list is swept rather than named here so that
+   * arithmetic never needs repeating in a test.
    */
-  it('refuses a verb the tier table has never heard of, including the ceremony', () => {
+  it('refuses a verb the tier table has never heard of, including hello and bye', () => {
     const everything = { read: true, act: true, alter: true }
     expect(copilotFrameAllowed(everything, 'copilot.tool')).toBe(false)
     expect(copilotFrameAllowed(everything, 'copilot.approve')).toBe(false)

@@ -36,6 +36,7 @@ import {
   type DetectedBrowser,
   type DevUrl,
   type SectionProps,
+  type SettingsBridge,
 } from '../settings-bridge'
 
 /**
@@ -245,6 +246,41 @@ export function importedCountText(status: CookieImportStatus): string {
     return `${status.present} imported cookie${status.present === 1 ? '' : 's'}${where}.`
   }
   return `${status.present} of ${status.recorded} imported cookies${where} are still here — the rest have expired.`
+}
+
+/**
+ * Whether the panel should explain the operating system's permission dialog.
+ *
+ * The sentence — "macOS will ask your permission the first time" — used to be
+ * unconditional, printed above the branch that decides whether the feature
+ * exists here at all. `cookie-import.ts` answers `unsupported` for every
+ * platform but darwin (the Windows DPAPI key schedule is not written), so a
+ * Windows user read a paragraph about a macOS dialog and then, one line below
+ * it, the notice "Importing cookies works on macOS only." Two claims that
+ * cannot both be about the reader, on the same screen — the app describing
+ * somebody else's computer.
+ *
+ * A predicate rather than moving the paragraph inside the supported arm of the
+ * ternary, which renders identically. The renderer has no DOM in this repo's
+ * suite — every settings test is `renderToStaticMarkup`, effects do not run,
+ * and `imports` is therefore always `null` at paint — so a branch expressed
+ * only as JSX position cannot be exercised from here at all. Expressed as a
+ * function it can be, in both answers, in one run on a Mac. That is the same
+ * trade `platform/host.ts` argues for in the main process.
+ *
+ * Optimistic while the status is unknown, matching the ternary below: `null`
+ * means the read has not landed, and the alternative is that every macOS user
+ * watches the sentence appear a moment after the pane does.
+ */
+export function explainsCookiePermission(
+  bridge: SettingsBridge,
+  imports: CookieImportStatus | null,
+): boolean {
+  // No channel means the build cannot import at all, so there is no permission
+  // dialog to warn about — the same reason the notice below replaces the whole
+  // block rather than sitting beside it.
+  if (!bridge.importBrowserCookies || !bridge.browserCookieSources) return false
+  return imports === null || imports.supported
 }
 
 /**
@@ -900,13 +936,30 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
           This button hands another application's live credentials to this one,
           and a person who presses it without knowing that has been misled by
           the shortening rather than helped by it.
+
+          The permission sentence moved *inside* the supported branch, and that
+          is the whole of a Windows fix. It used to sit here, above the branch,
+          asserting "macOS will ask your permission the first time" to everyone
+          — so a Windows user read a sentence about a macOS dialog and then, one
+          line below it, a notice saying the feature does not exist on their
+          machine. Two claims that cannot both be about the reader. Inside the
+          branch the noun is true by construction rather than by a platform
+          check, because the branch is the platform check: `imports.supported`
+          is only ever true where the key schedule is implemented, which today
+          is macOS alone (`cookie-import.ts` answers `unsupported` elsewhere).
         */}
         <p className="settings-prose">
           Copies cookies from another browser so a site behind a login opens signed in. They are
           the credentials that keep you signed in, kept in this tab’s own store and never sent
-          anywhere. <strong>macOS will ask your permission</strong> the first time — nothing is
-          read until you press one of these.
+          anywhere.
         </p>
+
+        {explainsCookiePermission(bridge, imports) && (
+          <p className="settings-prose">
+            <strong>macOS will ask your permission</strong> the first time — nothing is read
+            until you press one of these.
+          </p>
+        )}
 
         {!bridge.importBrowserCookies || !bridge.browserCookieSources ? (
           <Notice tone="warn">{missingChannelNote('Importing cookies')}</Notice>

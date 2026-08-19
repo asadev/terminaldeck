@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   app,
@@ -56,7 +56,7 @@ import { registerUpdateIpc } from './updates/updater'
 import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
 import { registerRemoteIpc } from './remote/server'
-import { CopilotLinks } from './remote/copilot-link'
+import { CopilotAccess } from './remote/copilot-access'
 import { CopilotRuns } from './remote/copilot-runs'
 import {
   startCopilotRun,
@@ -65,6 +65,12 @@ import {
   watchRunChat,
 } from './remote/copilot-wiring'
 import { registerMachinesIpc } from './remote/machines/ipc'
+import { registerServersIpc, type ServersIpc } from './servers/ipc'
+import { registerServerReachIpc, type ServerReachIpc } from './servers/reach'
+import { ServerStore } from './servers/store'
+import { ServerCredentials } from './servers/credentials'
+import { ServerConnections } from './servers/connection'
+import { serverTools } from './servers/tools'
 import {
   dropPlanSession,
   notePlanOutput,
@@ -72,6 +78,7 @@ import {
   registerPlanLimitIpc,
 } from './plan-limit'
 import { dropUsageSession, registerUsageIpc } from './usage-ipc'
+import { storedAccountLimits } from './account-limits'
 import { registerGitHubIpc } from './github'
 import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
@@ -315,6 +322,31 @@ let copilotRuns: CopilotRuns | null = null
  * matters.
  */
 let deckControl: DeckControlHandle | null = null
+
+/**
+ * The server room, once the window has been built.
+ *
+ * At module scope for the same reason `copilotRuns` is: `before-quit` has to be
+ * able to close it, and a server connection is not a pty so `killAll` knows
+ * nothing about it. Left open, each one is a live TCP socket and an
+ * authenticated session on somebody else's computer, held by a process that has
+ * gone — which is the state §5.4 spends its whole argument avoiding while the
+ * app is *running*, and there is no reason to abandon it on the way out.
+ */
+let servers: ServersIpc | null = null
+
+/**
+ * The listeners this machine holds on a server's behalf, so they go on quit.
+ *
+ * Its own handle rather than a field on `servers`, because it is registered
+ * beside that module rather than inside it: `host-key-checked.test.ts` allows
+ * exactly one file in that folder to reach the transport, and the two verbs the
+ * browser needs are a different subject from the control room's. What it holds
+ * is a loopback listener per open page plus one connection per server, and a
+ * listener left behind by a process that has gone is an address in somebody's
+ * browser that answers and then hangs.
+ */
+let serverReach: ServerReachIpc | null = null
 
 /**
  * Held so the wake lock and the battery watch can be let go of on quit.
@@ -1166,18 +1198,32 @@ function registerIpc(): void {
   // thunk rather than a value because `pinUserData` can move the directory, and
   // a path captured at wiring time would outlive the move.
   registerVoiceIpc(ipcMain, () => app.getPath('userData'))
-  // `write` is what lets plan:refresh run /usage in the session; without it the
-  // module reports 'unwired' and the strip hides the control rather than
-  // offering a button that does nothing.
-  registerPlanLimitIpc(ipcMain, { write: (id, data) => ptys.write(id, data) })
+  // Which session is what, asked once and shared by both halves of the usage
+  // feature. Two copies of this lookup would be two answers to "whose account is
+  // this session on", and the write side and the read side disagreeing about
+  // that is how one login's figure lands on another login's bar.
+  const describeSession = (id: string): SessionMeta | null =>
+    ptys.list().find((meta) => meta.id === id) ?? null
+  // Read-only now, and takes nothing: this module watches session screens and
+  // reports the limit lines Claude Code prints of its own accord. It used to be
+  // handed a `write` as well, which is what let it type `/usage` into a session
+  // and draw a panel over somebody's conversation — the thing Asad reported
+  // three times. That whole path is gone; the figure now comes from
+  // `usage-probe.ts`, which starts a `claude` of this app's own instead.
+  registerPlanLimitIpc(ipcMain)
   // The read side of the same feature, with Codex's rollout numbers folded in
   // and every reading tagged with the account it describes. `PtyManager` is
   // asked which login a session resolved to rather than that answer being
   // recomputed — see `usage-ipc.ts`, where getting it wrong means two accounts
   // sharing one bar.
-  registerUsageIpc(ipcMain, {
-    describeSession: (id) => ptys.list().find((meta) => meta.id === id) ?? null,
-  })
+  // Its own refresh path, which is the whole of the 2026-08-18 change: the bar
+  // is kept current by reading `.claude.json` and, when that has gone stale, by
+  // one short-lived `claude` of this app's own — never by typing into a session
+  // somebody is working in. `accounts` is shared with `plan-limit.ts` above on
+  // purpose: "this login has no subscription limits" is one fact, and two
+  // modules keeping two copies of it is how one of them starts spending four
+  // seconds of CPU every half hour re-establishing what the other wrote down.
+  registerUsageIpc(ipcMain, { describeSession, accounts: storedAccountLimits() })
   // Checks on a delay after launch and then occasionally; never installs on its
   // own. An unsigned build reports that it cannot self-update rather than
   // checking forever — see updates/updater.ts.
@@ -1216,11 +1262,11 @@ function registerIpc(): void {
   /*
    * Remote copilot access, assembled — the store, and the runs it authorises.
    *
-   * One `CopilotLinks` for the whole process, handed to both halves. The panel
-   * in Settings edits it and the run manager enforces it, and a second instance
-   * would give the panel a store that writes the same file and holds a different
-   * copy of it in memory — the same rule `core.grants` follows one field down in
-   * the call below, for the same reason.
+   * One `CopilotAccess` for the whole process, handed to both halves. It is
+   * derived rather than stored — a device's kind is the whole answer — so there
+   * is no file two instances could disagree about any more; what a second one
+   * would still cost is a second copy of the *rule*, which is the thing this
+   * codebase keeps having to unpick.
    *
    * Built here rather than inside `registerRemoteIpc` because the run manager
    * needs things only this file holds: the core's session starter, the caller
@@ -1235,7 +1281,20 @@ function registerIpc(): void {
    * exactly that, in a sentence, instead of being handed a Start button that
    * spawns an agent with nothing behind it.
    */
-  const copilotLinks = new CopilotLinks(remoteStorageDir())
+  /*
+   * Who reaches the copilot, derived rather than stored.
+   *
+   * There was a `CopilotLinks` here until 2026-08-19 — a file of separate
+   * connections, each minted with its own six-digit code. His instruction
+   * deleted it: *"if we are connecting as my device, copilot automatically
+   * comes; if we connect as guest then copilot don't come."* So the answer is
+   * the kind chosen when the device was approved, read live, and there is
+   * nothing on disk that can disagree with it. `copilot-access.ts` carries the
+   * argument and the one it superseded.
+   */
+  const copilotLinks = new CopilotAccess({
+    isMine: (deviceId) => core.kinds.kindOf(deviceId) === 'mine',
+  })
   copilotRuns = new CopilotRuns({
     links: copilotLinks,
     /*
@@ -1443,11 +1502,11 @@ function registerIpc(): void {
      * phone draws no Copilot tab, rather than drawing one that answers
      * `unauthorized` to every frame it sends.
      *
-     * Both fields, and the same store behind them: this one is the *enforcing*
-     * side, `copilotLinks` is the *editing* side that the settings panel
-     * writes through. Every device is absent from it until somebody mints a
-     * connect code on this machine and it is redeemed — the panel cannot create
-     * a record, only edit one that exists.
+     * Both fields, and the same derivation behind them: this one is the
+     * *enforcing* side, `copilotLinks` is what the settings panel *reads* to
+     * show which of your devices reach the copilot. Neither writes anything —
+     * since 2026-08-19 the answer is the kind chosen when the device was
+     * approved, and the panel has nothing to set.
      */
     copilot: copilotRuns,
     copilotLinks,
@@ -1479,6 +1538,105 @@ function registerIpc(): void {
     status: () => remote.server.status(),
     broadcast: (channel, payload) => send(channel, payload),
   })
+  /*
+   * The other half of Machines: computers nobody sits at. §5.5.
+   *
+   * Assembled here, beside the paired-device half, because they are one panel
+   * and one rail row. Everything below is A's three objects handed to B's
+   * registration through the seam written into `ipc.ts`'s deps — the reason it
+   * takes them as arguments rather than importing them is so the permission and
+   * way-back logic can be exercised with a plain object and no `ssh2` anywhere
+   * near it, and so the headless host can register the identical handlers
+   * against its own transport.
+   *
+   * Its own folder under userData rather than `remote/`. What is stored is a
+   * list of addresses and an encrypted blob of sign-ins, and those belong to a
+   * different subject than the pairing bearer tokens beside them — the file
+   * names collide otherwise, and a `--user-data-dir` scratch instance is meant
+   * to be able to hold a completely separate set of servers.
+   */
+  const serversDir = join(app.getPath('userData'), 'servers')
+  mkdirSync(serversDir, { recursive: true })
+  const serverStore = new ServerStore(serversDir)
+  const serverCredentials = new ServerCredentials(serversDir)
+  const serverConnections = new ServerConnections(serverStore, serverCredentials)
+  servers = registerServersIpc(ipcMain, {
+    storageDir: serversDir,
+    /*
+     * Named fields rather than the stored row, so that a field added to the
+     * store later has to be *chosen* to cross the bridge instead of arriving
+     * because nobody stopped it. What crosses is the identity the server hands
+     * every client that dials it — public, and the thing §3.6's screen exists
+     * to let a person compare — and which *kind* of sign-in is kept, which is
+     * not the sign-in.
+     */
+    servers: () =>
+      serverStore.list().map((row) => ({
+        id: row.id,
+        name: row.name,
+        address: row.address,
+        username: row.username,
+        credential: row.credential,
+        ...(row.hostKey === null ? {} : { hostKey: row.hostKey }),
+      })),
+    store: serverStore,
+    credentials: serverCredentials,
+    facts: (serverId) => serverConnections.probe(serverId),
+    run: (serverId, argv) => serverConnections.run(serverId, argv),
+    runScript: (serverId, script) => serverConnections.runScript(serverId, script),
+    openShell: (serverId, size) => serverConnections.shell(serverId, size),
+    // §5.4 in one pair of lines: the page holds the connection while it is open
+    // and lets go when it closes. There is no timer here and no keep-alive, and
+    // a server nobody is looking at is not dialled at all.
+    acquire: (serverId) => serverConnections.acquire(serverId),
+    release: (serverId) => serverConnections.release(serverId),
+    broadcast: (channel, payload) => send(channel, payload),
+    /*
+     * The panel for a key that is not in `~/.ssh` — a `.pem` a hosting company
+     * gave somebody, which lands in Downloads.
+     *
+     * Injected because a panel needs a window to be a sheet on and windows live
+     * here, which is the same split `copilot-folder.ts` and `project-picker.ts`
+     * make. It stands in Downloads for the reason those two write down at
+     * length: omitting `defaultPath` is not "no preference", it is "open
+     * wherever this app was last left", which is a folder the person did not
+     * choose and cannot predict.
+     *
+     * `showHiddenFiles` is on because `~/.ssh` is hidden on every platform this
+     * ships to, and a panel for choosing a key that cannot show the folder keys
+     * live in would be a control that cannot do its one job.
+     */
+    pickKeyFile: async () => {
+      if (!mainWindow) return null
+      const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openFile', 'showHiddenFiles'],
+        title: 'Choose a key file',
+        buttonLabel: 'Use this key',
+        defaultPath: app.getPath('downloads'),
+      })
+      return canceled || filePaths[0] === undefined ? null : filePaths[0]
+    },
+  })
+  /*
+   * A server's own `localhost`, in the same one browser window.
+   *
+   * Registered here rather than inside `registerServersIpc` because of a fence
+   * that folder puts up: `host-key-checked.test.ts` walks the syntax tree of
+   * every source in `servers/` and fails the build unless `connection.ts` is
+   * the only file that reaches the transport. So this module never names the
+   * library — it is handed a connection somebody else opened, and it asks that
+   * connection for one thing.
+   *
+   * `facts` is the probe that already runs, and only its list of what is
+   * listening is read. A second question to the server would have been a second
+   * way to be wrong about which tool a machine has for answering it.
+   */
+  serverReach = registerServerReachIpc(ipcMain, {
+    servers: () => serverStore.list().map((row) => ({ id: row.id, name: row.name })),
+    withConnection: (serverId, fn) => serverConnections.withConnection(serverId, fn),
+    facts: (serverId) => serverConnections.probe(serverId),
+  })
+
   powerMonitor.on('resume', () => {
     remote.server.wake()
     // A guest link that slept through a suspend is as dead as a host one, and
@@ -2257,7 +2415,23 @@ app.whenReady().then(() => {
     // assertion because a wiring order that changed underneath this should
     // cost the copilot its browser tools, visibly, in a catalogue a person can
     // read, rather than take the launch down.
-    extraTools: browserDriveTools(),
+    /*
+     * And the server room's named actions, on the same terms. §6.1.
+     *
+     * `servers` is built in `registerIpc()` above, so it is present on the
+     * ordinary boot path; the conditional rather than an assertion is the same
+     * judgement `browserDriveTools` makes one line up — a wiring order that
+     * changed underneath this should cost the copilot those tools visibly, in a
+     * catalogue somebody can read, rather than take the launch down.
+     *
+     * There is no `servers.run` in that list and there must not be: an
+     * arbitrary-command tool is the whole machine, and it would make every
+     * consequence sentence and every way-back decorative.
+     */
+    extraTools: [
+      ...browserDriveTools(),
+      ...(servers === null ? [] : serverTools({ room: servers.room, grants: servers.grants })),
+    ],
     /*
      * The one session starter, shared with the window and with a paired phone —
      * with the announcement the window needs wrapped around it.
@@ -2398,6 +2572,15 @@ app.on('before-quit', () => {
    * is left on disk holding a token that authenticates a server that has gone.
    */
   void deckControl?.stop()
+  /*
+   * Every server connection and every server terminal, closed.
+   *
+   * Not covered by `killAll` above: a server shell is a channel on an
+   * authenticated socket to somebody else's computer, not a pty on this one, so
+   * nothing else on this path knows it exists.
+   */
+  servers?.stop()
+  serverReach?.stop()
   updates?.stop()
   lidAwake?.stop()
   void stopHookServer()

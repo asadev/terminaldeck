@@ -21,10 +21,11 @@
  * gone. It fails in the safe direction.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app, session, shell, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { BRAND } from '../shared/brand'
+import { writeFileAtomic } from './atomic-write'
 import { GUEST_PARTITION } from './browser-session'
 import { traceFilePath } from './ipc-trace'
 import { updateSupport } from './updates/updater'
@@ -196,9 +197,18 @@ function persist(values: Record<string, StoredValue>): void {
   const payload = { ...carriedForward, version: SETTINGS_FILE_VERSION, values }
   // Temp file plus rename: a crash mid-write cannot leave a truncated file that
   // would read as "no settings" and silently reset everything on next launch.
-  const tmp = `${file}.tmp`
-  writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8')
-  renameSync(tmp, file)
+  //
+  // Through `writeFileAtomic` rather than written out here, because the two
+  // Windows hazards in that dance were both present. The temp name was the
+  // fixed `${file}.tmp`, which two windows of this app share — and this is the
+  // file two windows are most likely to write at once, since both of them save
+  // settings. And a `rename` over a destination another process holds open
+  // fails on Windows with EPERM where POSIX `rename` always succeeds; that
+  // throw reaches `patchStoredSettings`'s caller as "could not save" with no
+  // cause named and no way for the user to act on it. A short bounded retry
+  // covers the millisecond-scale handle a virus scanner or the search indexer
+  // takes on a file the instant it is closed.
+  writeFileAtomic(file, JSON.stringify(payload, null, 2))
 }
 
 export function getStoredSettings(): StoredSettings {
@@ -328,10 +338,9 @@ export function writeSettingsSnapshot(preferences: unknown, reason: string): { p
     fromCache,
   }
   // Temp file plus rename, like every other write here: a snapshot truncated by
-  // a crash is worse than no snapshot, because it looks like one.
-  const tmp = `${file}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
-  renameSync(tmp, file)
+  // a crash is worse than no snapshot, because it looks like one. Same shared
+  // helper as `persist` above, for the same two Windows reasons — see there.
+  writeFileAtomic(file, `${JSON.stringify(payload, null, 2)}\n`)
   return { path: file, at }
 }
 
@@ -587,6 +596,29 @@ export function updateChannel(): UpdateChannel {
       isPackaged: packaged,
       execPath: process.execPath,
       feedConfigPath: feed,
+      /*
+       * The field this panel used to leave out, and the only one whose absence
+       * changes the answer rather than narrowing it.
+       *
+       * `updateSupport` refuses a portable Windows build outright — an update
+       * on Windows runs an installer, and installing is the one thing a
+       * portable app does not do (`PORTABLE_REASON`). Omitting the value here
+       * made that branch unreachable *from this panel only*, so somebody
+       * running `-portable.exe` read "this build is code-signed and carries a
+       * release feed, so it could install an update" in About while the update
+       * controller in `index.ts` — which does pass it — refused with the
+       * opposite sentence. Two screens of one app disagreeing, on Windows only,
+       * about the one artifact that genuinely cannot update.
+       *
+       * Read from the environment rather than inferred: electron-builder's own
+       * portable launcher sets `PORTABLE_EXECUTABLE_FILE` to the exe's path
+       * before starting the app (`templates/nsis/portable.nsi`), and there is
+       * no other way to tell the two Windows artifacts apart from inside the
+       * process. `?? null` keeps the pure function's contract — absent means
+       * "not the portable build", which is right on every other platform, where
+       * the variable never exists.
+       */
+      portableExecutable: process.env.PORTABLE_EXECUTABLE_FILE ?? null,
     },
     existsSync,
   )

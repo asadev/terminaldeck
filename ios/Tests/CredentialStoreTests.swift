@@ -197,86 +197,73 @@ final class CredentialStoreTests: XCTestCase {
     }
 
     /**
-     * **The copilot credential is a second secret in the same item.**
+     * **A copilot credential an older build stored is erased on the way in.**
      *
-     * `COPILOT-REMOTE.md` §8 asks for it *beside* the pairing credential, with
-     * the same protection class, and the same Keychain item is the strongest
-     * reading of beside: one item cannot go missing while the other survives.
-     * It is sent exactly once — the desktop keeps a scrypt hash — so a phone
-     * that fails to store it has to show the Connect screen and ask for a **new**
-     * code, which is the one outcome worth a test rather than an assumption.
+     * Between 2026-08-17 and 2026-08-19 a `StoredCredential` carried a second
+     * secret in this same item: the credential a six-digit connect code was
+     * redeemed for, worth what the pairing credential is worth because it opened
+     * an agent holding `Write` and `Bash` on somebody's machine.
      *
-     * Read back through a second store over the same drawer, so this is a
-     * Keychain round trip rather than a cache hit.
-     */
-    func testTheCopilotCredentialSurvivesBesideThePairingOne() {
-        store.save(credential("token").withCopilotCredential("c2VjcmV0LWJ5dGVz"))
-
-        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
-        XCTAssertEqual(reloaded.load(Self.macId)?.copilotCredential, "c2VjcmV0LWJ5dGVz")
-        XCTAssertEqual(reloaded.load(Self.macId)?.token, "token", "and the pairing one is untouched")
-    }
-
-    /**
-     * Disconnecting the copilot drops that secret and leaves the pairing alone.
+     * The ceremony is deleted — pairing a device as **My device** is the
+     * copilot's authorisation now — and the property is gone from the struct.
+     * That is enough for the app to stop *using* the secret, and it is not
+     * enough for the secret to stop existing: nothing rewrites a record that has
+     * not changed, so the bytes would sit in the Keychain forever with no code
+     * left in the app that reads them. A live-looking credential nobody knows is
+     * there is a credential nobody revokes.
      *
-     * The two are revoked separately by design — disconnecting the copilot at
-     * the desk leaves every terminal the device was paired for — so the record
-     * has to survive losing one of them. A store that dropped the row, or that
-     * kept a credential whose record on the far machine has gone, would be wrong
-     * in the two opposite directions this separation exists to keep apart.
-     */
-    func testDroppingTheCopilotCredentialKeepsTheMachine() {
-        store.save(credential("token").withCopilotCredential("c2VjcmV0"))
-        store.save(credential("token").withCopilotCredential(nil))
-
-        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
-        XCTAssertNil(reloaded.load(Self.macId)?.copilotCredential)
-        XCTAssertEqual(reloaded.load(Self.macId)?.token, "token")
-        XCTAssertEqual(reloaded.all().count, 1, "the machine is still paired")
-    }
-
-    /**
-     * Re-pairing does **not** carry the copilot credential across.
-     *
-     * Redeeming produces a new device id, and the desktop's copilot record is
-     * keyed by device id — so a secret kept through a re-pair is one this phone
-     * believes in and nothing on that machine has ever heard of. That is the
-     * worse of the two ways to be wrong: the Connect screen would not be drawn,
-     * and every copilot frame would be refused with no explanation on either end.
-     */
-    func testRedeemingAPairingDoesNotCarryTheCopilotCredential() {
-        let paired = credential("pairing-token").withCopilotCredential("c2VjcmV0")
-
-        let durable = paired.redeemed(token: "device-token", deviceId: "device-2",
-                                      deviceName: "iPhone")
-
-        XCTAssertNil(durable.copilotCredential,
-                     "a new device id is a new device, and its copilot record does not exist yet")
-        XCTAssertEqual(durable.token, "device-token")
-    }
-
-    /**
-     * A record written before this field existed still decodes.
-     *
-     * A `StoredCredential` that fails to decode is a machine that has vanished
+     * Two things are asserted and both matter. The record still **decodes** —
+     * a `StoredCredential` that fails to decode is a machine that has vanished
      * from the phone, which is the failure this whole store is designed against
-     * — so the field has to be optional *and* absent from the bytes when there
-     * is nothing to write, which is what makes yesterday's record readable by
-     * today's build.
+     * — and the bytes in the drawer afterwards no longer mention it. The second
+     * store is a real Keychain round trip rather than a cache hit; the raw read
+     * is what proves the item itself was rewritten.
+     */
+    func testACopilotCredentialFromAnOlderBuildIsScrubbedOnLoad() throws {
+        // Written the way the previous build wrote it: the current encoder
+        // cannot produce this field any more, so the legacy shape is composed
+        // here rather than assumed.
+        let current = try JSONEncoder().encode(credential("token"))
+        var object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: current) as? [String: Any])
+        object["copilotCredential"] = "c2VjcmV0LWJ5dGVz"
+        store.writeRawRecordForTesting(hostId: Self.macId,
+                                       data: try JSONSerialization.data(withJSONObject: object))
+
+        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
+        XCTAssertEqual(reloaded.load(Self.macId)?.token, "token",
+                       "the machine is still paired — an unknown key is not a broken record")
+
+        let raw = try XCTUnwrap(reloaded.rawRecordForTesting(hostId: Self.macId))
+        let text = try XCTUnwrap(String(data: raw, encoding: .utf8))
+        XCTAssertFalse(text.contains("copilotCredential"),
+                       "the secret is gone from the drawer, not merely unread")
+        XCTAssertFalse(text.contains("c2VjcmV0LWJ5dGVz"))
+    }
+
+    /**
+     * A record with nothing unusual in it is left exactly where it is.
+     *
+     * The other half of the scrub, and the reason it tests the raw bytes for the
+     * key rather than rewriting every record it reads: `hydrate()` runs on every
+     * launch, for every paired machine, and a store that rewrote every item on
+     * every launch would be doing Keychain writes nobody asked for — the same
+     * objection the code this replaced made about a write per `copilot.grant`.
      *
      * Built by encoding rather than hand-written, because a hand-written blob
      * would be pinning this test's idea of the format instead of the format.
      */
-    func testARecordWithNoCopilotFieldStillDecodes() throws {
+    func testAnOrdinaryRecordIsNotRewrittenOnLoad() throws {
         let encoded = try JSONEncoder().encode(credential("t"))
-        let text = try XCTUnwrap(String(data: encoded, encoding: .utf8))
-        XCTAssertFalse(text.contains("copilotCredential"),
-                       "an absent second secret writes no key at all")
+        XCTAssertFalse(try XCTUnwrap(String(data: encoded, encoding: .utf8))
+                        .contains("copilotCredential"),
+                       "this build cannot write the field at all")
 
-        let decoded = try JSONDecoder().decode(StoredCredential.self, from: encoded)
-        XCTAssertNil(decoded.copilotCredential)
-        XCTAssertEqual(decoded.token, "t")
+        store.writeRawRecordForTesting(hostId: Self.macId, data: encoded)
+        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
+        XCTAssertEqual(reloaded.load(Self.macId)?.token, "t")
+        XCTAssertEqual(try XCTUnwrap(reloaded.rawRecordForTesting(hostId: Self.macId)), encoded,
+                       "byte for byte what was there before")
     }
 
     // MARK: - Damage

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { PlanLimit, SessionSummary, TokenUsage } from './types'
+import type { PlanLimit, SessionSummary, TokenUsage, UsageRefreshOutcome } from './types'
 import {
   contextReadout,
   describeAge,
@@ -11,6 +11,7 @@ import {
   planLabel,
   readPlanSnapshot,
   readProjectSummary,
+  refreshOutcomeMessage,
   sameProject,
   startOfDay,
   tokenTotals,
@@ -244,5 +245,55 @@ describe('project identity', () => {
   it('treats a trailing slash as the same project and an empty path as none', () => {
     expect(sameProject('/a/b/', '/a/b')).toBe(true)
     expect(sameProject('', '')).toBe(false)
+  })
+})
+
+describe('what a refresh is allowed to say', () => {
+  it('does not call an account with no subscription a missing report', () => {
+    const said = refreshOutcomeMessage('no-limits')
+    /*
+     * The wording is the point of this one, so it is asserted rather than left
+     * to a reviewer. An account billed through the Claude API has no rolling
+     * subscription window at all — there is nothing late, nothing coming, and
+     * nothing anybody can do about it — so a sentence in the vocabulary of a
+     * failed reading would be describing an event that did not happen.
+     */
+    expect(said).toContain('no subscription limits')
+    expect(said).not.toMatch(/not reported|could not|failed|did not/i)
+    // And the remembered form of the same fact says the same thing, because it
+    // is the same fact — one read from an account this app asked once already.
+    expect(refreshOutcomeMessage('settled')).toBe(said)
+  })
+
+  it('never claims a session was typed into, in any outcome', () => {
+    /*
+     * The sentence-level half of the 2026-08-18 change, and the one a rewrite
+     * would silently undo. Every one of these used to be the aftermath of
+     * `/usage` going into somebody's prompt — *"clear the prompt"*, *"press Esc
+     * in the session"*, *"Claude Code did not show its usage panel"* — and not
+     * one of them is true of a refresh any more. A build that starts saying so
+     * again is a build that has started doing it again.
+     */
+    const outcomes: UsageRefreshOutcome[] = [
+      'ok',
+      'cached',
+      'no-limits',
+      'settled',
+      'signed-out',
+      'no-binary',
+      'unreadable',
+      'unwatched',
+    ]
+    for (const outcome of outcomes) {
+      expect(refreshOutcomeMessage(outcome)).not.toMatch(/prompt|panel|Esc|typed?\b/i)
+    }
+  })
+
+  it('says what the two free paths cost, which is nothing', () => {
+    // The two that never start a process, and the reason the bar can be honest
+    // about being cheap: one is a file the CLI already wrote, the other is this
+    // app's own process rather than the reader's session.
+    expect(refreshOutcomeMessage('cached')).toContain('nothing was started')
+    expect(refreshOutcomeMessage('ok')).toContain('no session was touched')
   })
 })

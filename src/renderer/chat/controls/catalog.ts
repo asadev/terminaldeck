@@ -280,40 +280,22 @@ export const PRIMARY_CONTROLS: readonly ControlId[] = ['model', 'permission']
  */
 export const MENU_CONTROLS: readonly ControlId[] = ['effort', 'fast']
 
-/**
- * Why these controls are withheld from an agent CLI that is not Claude Code, or
- * null when the provider is one they work on.
+/*
+ * `unsupportedProviderNote` used to live here and it is gone.
  *
- * ## Why there is a sentence here at all
+ * It named the vendor twice — *"These work by typing Claude Code's own commands
+ * into the session. Codex has its own…"* — on the controls bar of a session
+ * running something else, which is exactly the complaint his review made:
+ * *"you should not mention in any settings or any pop-up a specific tool or
+ * LLM, because they can use some other also."* A screen that is showing one
+ * agent while naming another is the sharpest form of it.
  *
- * Every option in this file is a Claude Code command, and every value the
- * pickers display is read back out of Claude Code's own screen or its
- * `settings.json`. Neither half generalises to another CLI. Leaving the pickers
- * on for a Codex or Gemini session would give it five model aliases that mean
- * nothing there, wired to a `/model sonnet` nobody has checked it understands,
- * showing an effort level read out of a file it never wrote — a dead control
- * three ways over, which is the exact failure class this composer keeps being
- * audited for.
- *
- * ## Why the sentence says "not established" rather than "not possible"
- *
- * Because that is what was found. Both were looked at on the machine this was
- * written on and neither could be driven: the Codex install is broken (its
- * vendored binary is missing) and the Gemini CLI stops on an unanswered
- * authentication picker. So this build has no evidence either way, and claiming
- * they *cannot* change a model at runtime would be inventing a fact in order to
- * sound more final. Saying what is true costs nothing and stays true when
- * somebody comes back to add support.
- *
- * `shell` is not here: it has its own sentence, because "there is no model in a
- * shell" and "this build has not learned this CLI's commands" are different
- * things and collapsing them would make the shell case sound like a gap.
+ * `SessionControls.tsx` composes the sentence now, in the category's words
+ * rather than the vendor's, beside the control it withdraws. Moved rather than
+ * reworded here because the sentence belongs where the withdrawal is decided —
+ * a note exported from a catalogue is a second place that has to be kept true.
  */
-export function unsupportedProviderNote(provider: string | undefined): string | null {
-  if (provider !== 'codex' && provider !== 'gemini') return null
-  const name = provider === 'codex' ? 'Codex' : 'Gemini'
-  return `These work by typing Claude Code’s own commands into the session. ${name} has its own, and this build has not been shown what they are — so nothing is offered here rather than a button that types the wrong thing.`
-}
+
 
 /** The short name on the button. Sentence case; it is a name, not a heading. */
 export function controlName(control: ControlId): string {

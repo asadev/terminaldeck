@@ -1,6 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { SERVER_ICON } from '../machines/servers/glyph'
+import { MACHINE_ICON } from '../shell/workspace-tabs'
 import {
+  machineMark,
   offersDevServers,
   portSummary,
   readPorts,
@@ -240,6 +243,120 @@ describe('the start page, listing another machine', () => {
     )
     expect(asking).toContain('Asking office-pc what it is serving')
     expect(asking).not.toContain('Nothing is listening')
+  })
+
+  /**
+   * The third fact, which servers made possible and machines never could.
+   *
+   * A paired computer scans its own ports with the same tool this one uses, so
+   * it either answers or is offline. A server can be reachable, willing, and
+   * have no tool installed for listing what is listening — the probe answers
+   * *"this server has no tool installed for listing what is listening"*, and
+   * that is a fact about the machine rather than a failure of the app.
+   *
+   * Drawing it as an empty list would state something different and false: that
+   * nothing is running on somebody's server. The whole facts model one folder
+   * over exists to keep those two apart, and this is the one place in the
+   * browser where the difference reaches a screen.
+   */
+  it('says why the list is empty rather than saying nothing is listening', () => {
+    const why = 'this server has no tool installed for listing what is listening'
+    const html = renderToStaticMarkup(
+      <StartPage
+        onOpen={() => undefined}
+        bridge={noPorts}
+        source={{ ...source, ports: [], cannot: why }}
+      />,
+    )
+    expect(html).toContain(why)
+    expect(html).not.toContain('Nothing is listening')
+  })
+
+  it('leaves every path that predates servers exactly as it was', () => {
+    // `cannot` is optional and unset everywhere but a server, so an absent one
+    // must behave as it did before the field existed.
+    const html = renderToStaticMarkup(
+      <StartPage onOpen={() => undefined} bridge={noPorts} source={{ ...source, ports: [] }} />,
+    )
+    expect(html).toContain('Nothing is listening on office-pc')
+  })
+
+  /**
+   * The other half of the same review, in his words:
+   *
+   *   > *"list the remote machine's ports with the machine's icon beside them,
+   *   > so remote and local are distinguishable at a glance"*
+   *
+   * The sentence above the list already names the machine, and that was the
+   * whole of the fix for a while. It is not enough by the fifth row: what a
+   * person reads when they press one is `:5173 node`, which is the same six
+   * characters here and in the next room. So the mark is on the **row**, and
+   * these hold that it is on every row rather than only on the first.
+   */
+  it('puts the machine’s mark on every remote row, not just the heading', () => {
+    const marks = html.split(`d="${MACHINE_ICON}"`).length - 1
+    // Two open ports in the fixture, two marks. A count rather than a
+    // `toContain`, because the failure this is guarding against is a mark drawn
+    // once above the list — which is exactly the shape the Remote pane rejected
+    // in `MachineLinks.tsx`: "a row that borrowed its identity from a heading
+    // four rows up is a row that reads as local".
+    expect(marks).toBe(2)
+  })
+
+  it('draws the mark before the port number, where it is read first', () => {
+    // `:5173` means nothing until you know whose 5173 it is, so the order on
+    // the row is the order the question is asked in.
+    //
+    // Against the number's own span rather than against `:5173`, which the
+    // address field's placeholder says first — `localhost:5173, or any address`.
+    // A bare substring here passed for the wrong reason and then failed for the
+    // right one.
+    const number = '<span class="bw-start-port-num">:5173</span>'
+    expect(html).toContain(number)
+    expect(html.indexOf(MACHINE_ICON)).toBeLessThan(html.indexOf(number))
+  })
+
+  it('says the machine once, not twice, to a screen reader', () => {
+    // The button's label already ends "on office-pc" — the name, which is more
+    // than the mark could say. So the mark is hidden rather than labelled, and
+    // this fails the moment somebody gives it a `role="img"` and an aria-label.
+    expect(html).toContain('aria-label="Open port 5173 node on office-pc"')
+    expect(html).toContain('<svg class="bw-start-port-mark"')
+    expect(html).not.toContain('aria-label="office-pc"')
+  })
+
+  it('wears the server’s mark for a server and the desktop’s for a device', () => {
+    // The two are deliberately unalike at a glance — a desktop is a screen on a
+    // stand, a server a stack of boxes with a light on each — and the rail
+    // already draws them that way. A row here that wore the other one would be
+    // naming the wrong computer, which is the failure the mark exists to end.
+    const server = renderToStaticMarkup(
+      <StartPage onOpen={() => undefined} bridge={noPorts} source={{ ...source, kind: 'server' }} />,
+    )
+    expect(server).toContain(SERVER_ICON)
+    expect(server).not.toContain(MACHINE_ICON)
+    expect(SERVER_ICON).not.toBe(MACHINE_ICON)
+  })
+
+  /**
+   * The rule itself, asserted where a test can see it.
+   *
+   * The local list is drawn from an effect and effects do not run here, so
+   * "this machine's rows carry no mark" is unreachable through a render and
+   * would pass whatever this file said. It is held through the function for the
+   * same reason `offersDevServers` is, below.
+   */
+  it('draws no mark at all on this machine’s own list', () => {
+    // A mark whose job is "this row is not here" has to be absent when the row
+    // *is* here, or it stops meaning anything — and the list a person sees most
+    // often is their own.
+    expect(machineMark(null)).toBeNull()
+    // The fixture sets no `kind`, which is every caller that predates servers:
+    // an absent one has to land on a mark rather than on null, because the
+    // failure that would matter is a remote row drawn bare.
+    expect(machineMark(source)).toBe(MACHINE_ICON)
+    expect(machineMark({ ...source, kind: 'device' })).toBe(MACHINE_ICON)
+    expect(machineMark({ ...source, kind: 'server' })).toBe(SERVER_ICON)
   })
 
   it('does not offer to start a dev server here for a list that is over there', () => {

@@ -136,19 +136,20 @@ extension XCUIApplication {
      * one is there.
      *
      * The proof is deliberately loose — *something* the copilot screen draws.
-     * There is no one element common to every access state: a connected phone
-     * has a composer, a disconnected one has a sentence and a button to
-     * Settings, a machine with no copilot has a different sentence. Asserting
-     * any single one of those here would make this helper mean "arrived at the
+     * There is no one element common to every access state: a phone whose socket
+     * is in has a composer, one waiting for its machine has a spinner, and a
+     * machine with no copilot for this phone has a sentence. Asserting any
+     * single one of those here would make this helper mean "arrived at the
      * copilot **and** it is in the state I expected", which is the caller's
      * assertion, not this one's.
      */
     @discardableResult
     func openCopilotTab() -> Bool {
-        // No pill means no copilot connection on the machine on screen, which is
-        // an answer rather than a failure. Checked before tapping, because
-        // `openTab`'s fallback would otherwise find the word "Copilot" somewhere
-        // else on the screen — the Settings row is called that too.
+        // No pill means this phone has no copilot on the machine on screen —
+        // a guest, or a build without one — which is an answer rather than a
+        // failure. Checked before tapping rather than relying on `openTab`'s
+        // fallback, which searches the whole screen for the word and would find
+        // it in a sentence explaining why there is no copilot here.
         guard tabBars.firstMatch.buttons["Copilot"].waitForExistence(timeout: 10) else {
             return false
         }
@@ -175,51 +176,29 @@ extension XCUIApplication {
         return false
     }
 
-    /**
-     * The copilot's **connection** screen, which is in Settings now.
+    /*
+     * **`openCopilotSettings()` used to be here, and there is nothing left for
+     * it to open.**
      *
-     * *"Actually connecting copilot should be in the settings."* The six-digit
-     * code used to be a screen behind the Copilot pill, and it could not stay
-     * there once the pill began appearing only for a copilot that is already
-     * connected. Every suite that connects a copilot comes through here.
+     * It tapped a `settings.copilot` row and waited for a screen with a
+     * six-digit field on it — *"actually connecting copilot should be in the
+     * settings"* — which was where the code went when the Copilot pill started
+     * appearing only for a connected copilot.
      *
-     * The proof is the screen's own root identifier rather than the code field,
-     * because this screen has six states and only two of them have a field on
-     * them — a phone that is already connected arrives at a card and a button,
-     * and that is still arriving.
+     * Then the code itself went: *"if we are connecting as my device copilot
+     * automatically comes, if we connect as guest then copilot don't come."*
+     * There is no connect screen, no row that pushes one, and nothing in
+     * Settings that mentions the copilot at all — a row whose only content was a
+     * status is clutter, and the pill's presence says the same thing faster.
+     *
+     * The lesson underneath it is kept, because it is about SwiftUI rather than
+     * about this feature: an `accessibilityIdentifier` on a container — a
+     * `ScrollView`, a `VStack`, a `ContentUnavailableView` — makes the container
+     * an accessibility *element* and everything inside it stops existing.
+     * Measured here on iOS 26.4, where a text field plainly on screen could not
+     * be found because the stack around it carried the screen's name. Name the
+     * control, not the container.
      */
-    @discardableResult
-    func openCopilotSettings() -> Bool {
-        guard openSettingsTab() else { return false }
-        let row = buttons["settings.copilot"]
-        guard row.waitForExistence(timeout: 10) else { return false }
-        row.tap()
-        /*
-         * Any one of the screen's six states, matched by identifier across
-         * every element type.
-         *
-         * A predicate over the set rather than a single identifier on the
-         * screen's own container, and that is not a stylistic choice: an
-         * identifier on the `ScrollView` **hid the code field from the
-         * accessibility tree entirely** — measured here, on iOS 26.4, where
-         * `textFields["copilot.connect.field"]` then went missing over a screen
-         * that was plainly showing it. A `ScrollView` is already an
-         * accessibility container, and naming it collapses what is inside.
-         *
-         * Matched with `descendants(matching: .any)` for the reason
-         * `waitForConnected` matches the connection pill that way: what a
-         * SwiftUI container is reported as changes with the release, and a query
-         * that names the wrong element type fails as "not there" over a screen
-         * that is on the phone.
-         */
-        let arrived = NSPredicate(format:
-            "identifier BEGINSWITH 'copilot.settings.' OR identifier == 'copilot.notConnected' "
-            + "OR identifier == 'copilot.credentialLost'")
-        return descendants(matching: .any)
-            .matching(arrived)
-            .firstMatch
-            .waitForExistence(timeout: 15)
-    }
 
     /// Back to the sessions, which is where every other suite expects to be.
     func openSessionsTab() {

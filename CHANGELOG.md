@@ -10,6 +10,88 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **Servers.** A machine nobody sits at is now the same shape as a machine you
+  do: it gets a group in the sidebar, its sessions get tab pills, and its
+  private `localhost` opens in the same browser window as everything else. You
+  add one with three things anybody can answer — an address, a name to sign in
+  with, and a password or a key — and nothing has to be installed on it first.
+
+  The page it opens is arranged around one question a non-technical person
+  actually has, which is *is everything all right*: one sentence, a few numbers,
+  then a card per website, app and database with only the actions that thing's
+  own facts support. Every action that changes something says in one sentence
+  what it will do and what it costs, and that sentence is composed beside the
+  code that performs it — so the card, the action log and the copilot's consent
+  dialog are reading the same string rather than three renderings of one event.
+  Nothing irreversible is offered at all: an action either changes nothing, has
+  a named button that puts it back, or records the way back before it acts and
+  refuses if it could not.
+
+  Signing in with a key no longer means opening a file in a text editor. The app
+  reads your key folder itself and offers what it finds **by name**, keeping only
+  files that really are private keys — so the `.pub` sitting beside each one is
+  never in the list. A key from a hosting company gets a file panel, and pasting
+  one still works exactly as before.
+
+### Changed
+
+- **The copilot no longer has a connection of its own.** Asad, 2026-08-19:
+  *"Instead of giving mobile app separate connection for copilot, just make it
+  like — if we are connecting as my device, copilot automatically comes. If we
+  connect as guest then copilot don't come."*
+
+  So it does. Approving a device as **My device** is now the whole
+  authorisation: the copilot is simply there, on the phone and in the web app,
+  with nothing to connect. A **guest** never sees it — not a disabled tab, not a
+  greyed row, absent — which is the same answer it has always given, arrived at
+  in one step instead of two.
+
+  What went with it: the six-digit copilot code, the separate credential, the
+  file that stored them, the screen that minted them, and every state in which a
+  device was paired, trusted, sitting there, and told to connect first. The
+  second factor is not weakened by this, and the reason is worth stating: what
+  made the old code meaningful was never the code, it was that reaching the
+  copilot required an authorisation the requesting party did not already hold.
+  Pairing as your own device *is* that authorisation — it is minted at your
+  keyboard, typed at the other end, and cannot be changed afterwards without
+  pairing again. The old argument is preserved in full in
+  `src/main/remote/copilot-access.ts` rather than deleted, because the next
+  person to read it needs to find out why it was superseded.
+
+  The sandbox fence moved with the permission. It used to make the copilot's own
+  connection file unwritable so the copilot could not grant itself access; that
+  file is gone and the decision now lives in the device-kinds file, which is
+  what the fence names.
+
+- **The usage bar no longer types into a session you are working in — at all.**
+  0.5.0 rationed the typing: it verified the panel closed, treated "no limits"
+  as an answer, and stopped a session that had been asked once for nothing. That
+  was still one `/usage` per login per staleness cycle, and a panel over the
+  conversation each time. Asked a third time, Asad closed the question: *"find
+  out some other way to keep the bar refresh otherwise we will remove it
+  completely if it will be heavy."*
+
+  There is another way, and it is cheaper than the old one. Claude Code keeps a
+  `cachedUsageUtilization` block in `.claude.json` with the same figures the
+  `/usage` panel draws, stamped with the moment it fetched them — free to read,
+  and picked up whether this app or your own terminal produced it. When that has
+  gone stale, the app asks a Claude Code **of its own**: one short-lived process
+  in your home directory, driven over the CLI's own control protocol, which
+  never sends a message and therefore spends no tokens. Measured against a live
+  Max login on this Mac: **3.3–4.4 seconds** wall clock, `total_cost_usd` of
+  `0`, no transcript, no session record, no change to any setting, and the
+  five-hour figure unmoved across three runs a minute apart. Session hooks are
+  switched off for it, so a refresh does not look like a session starting to
+  everything watching.
+
+  It is one process per login, not per session: several bars asking at once
+  share one, and a login already known to have no subscription window is not
+  asked again at all. `plan:refresh` — the channel that typed — is deleted
+  rather than left unwired, and the limit lines the CLI prints of its own accord
+  are still read, because those cost nothing.
+
 ## [0.5.0] — 2026-08-18
 
 ### Fixed

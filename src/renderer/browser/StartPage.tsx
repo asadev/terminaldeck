@@ -2,7 +2,18 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 // Relative rather than '@shared/brand': vitest runs this file without the
 // electron-vite alias, and the alias is not worth a second module resolver.
 import { BRAND } from '../../shared/brand'
+// The two marks, from the two files that own them. Both are path strings and
+// nothing else, so importing them costs this page no component and no
+// stylesheet — see `machineMark` for why the element around them is drawn here
+// rather than shared.
+import { SERVER_ICON } from '../machines/servers/glyph'
+import { MACHINE_ICON } from '../shell/workspace-tabs'
 import { DevServerPanel, type DevServerBridge } from './DevServerPanel'
+// Type-only, so nothing at runtime crosses back from the browser's machine
+// model into this page — the import is erased. The alternative was spelling
+// `'device' | 'server'` a second time, and this codebase has already argued
+// that a glyph spelled twice becomes two glyphs.
+import type { MachineKind } from './machines-bridge'
 import './StartPage.css'
 
 /**
@@ -49,6 +60,21 @@ import './StartPage.css'
  * machine's name in the sentence that used to say "this machine". One list, one
  * shape, because *"shape of the application should not be changing for local and
  * remote devices"*.
+ *
+ * Exactly one thing on the row is not the same, and it is the *other* half of
+ * that review:
+ *
+ *   > *"list the remote machine's ports with the machine's icon beside them, so
+ *   > remote and local are distinguishable at a glance"*
+ *
+ * That is not decoration and it is not a second layout. A row here reads
+ * `:5173 node` whichever computer it came from, and the sentence naming the
+ * machine is four rows up by the time somebody is reading the fifth port — so
+ * without a mark on the row itself, pressing one is a guess about whether it
+ * reaches the thing running here or the thing running in the next room. The
+ * mark is the smallest thing that answers that, and it is the same mark the
+ * rail and the New Session dialog already draw for the same computer. See
+ * {@link machineMark}.
  */
 
 /**
@@ -90,6 +116,29 @@ export interface PortSource {
   /** The machine's name, as it appears in the sentences that name one. */
   name: string
   /**
+   * Which of the two kinds of computer this list is about, for the mark alone.
+   *
+   * `machines-bridge.ts` argues that this discriminator "changes exactly one
+   * line of behaviour — which bridge is asked for an address — and nothing a
+   * person sees", and that a field which started deciding layout would be the
+   * browser growing a second kind of machine. Nothing here contradicts that:
+   * the row is the same row, the sentences are the same sentences, the click is
+   * the same click. What differs is which silhouette the mark is, and it has to
+   * differ, because the rail already draws a desktop as a screen on a stand and
+   * a server as a stack of boxes — *"deliberately unalike at a glance"*, in
+   * `servers/glyph.ts`'s own words. A row that wore the wrong one would be
+   * naming the wrong computer, which is the failure this mark exists to end.
+   *
+   * Optional, and an absent one means a paired desktop. That is not a shrug:
+   * every caller that existed before servers did is one, `machines-bridge.ts`
+   * defaults its own rows to `'device'`, and the field decides nothing but the
+   * mark — so a build whose workspace has not been taught to pass it still gets
+   * the answer to *"is this list this machine's?"*, which is the question he
+   * asked. It is only the second question, *"which kind of far machine?"*, that
+   * waits on the caller.
+   */
+  kind?: MachineKind
+  /**
    * What it says it is serving.
    *
    * Null means it has not answered, and the page waits rather than claiming
@@ -98,6 +147,22 @@ export interface PortSource {
    * sentence and a lie.
    */
   ports: DevPort[] | null
+  /**
+   * Why the list above is empty, when the machine could not say.
+   *
+   * Optional, and absent on every path that existed before servers did: a
+   * paired machine scans its own ports with the same tool this one uses, so it
+   * either answers or is offline. A server may do neither. It can be reachable,
+   * willing, and have no tool installed for listing what is listening — the
+   * probe answers *"this server has no tool installed for listing what is
+   * listening"* and that is a fact about the machine rather than a failure.
+   *
+   * Drawn instead of the empty-list sentence, because the two claims are not
+   * the same one. "Nothing is listening" would be a statement about somebody's
+   * server that this app has no grounds for, and the whole facts model one
+   * folder over exists to keep those apart.
+   */
+  cannot?: string | null
   /** Open one of them. The page never builds a remote address itself. */
   open(port: number): void
   /** Ask it again — the "I have just started my dev server over there" button. */
@@ -193,6 +258,36 @@ export function offersDevServers(source: PortSource | null): boolean {
 }
 
 /**
+ * The mark every row wears, or none at all.
+ *
+ * Null for this machine's own list, and that is the whole rule: a mark whose
+ * job is *"this row is not here"* must be absent when the row **is** here, or it
+ * stops meaning anything. The list a person sees most often is their own, so
+ * putting a computer beside all nine of their own ports would train them to
+ * ignore the one thing that distinguishes the remote list.
+ *
+ * A path string rather than a component, and the `<svg>` around it is written
+ * out below rather than imported. That is the pattern already settled in this
+ * codebase: `GroupHead` keeps a private `Glyph` wrapping `sb-glyph`, the New
+ * Session dialog inlines its own around `ns-where-glyph`, and both draw the
+ * same `MACHINE_ICON`. The *shape* is the thing that must not be spelled twice
+ * — a second hand-drawn computer is how two glyphs happen — and it is not: this
+ * imports the same two constants those surfaces do. The element is six lines of
+ * geometry belonging to the row it sits in.
+ *
+ * Pure and exported for the reason `splitOwnPorts` and `offersDevServers` are:
+ * the render below is an effect away from anything this project's test run can
+ * reach, so a rule that is not a function here is a rule no test holds.
+ */
+export function machineMark(source: PortSource | null): string | null {
+  if (source === null) return null
+  // Not `=== 'device'`, so an absent kind lands on the desktop mark rather than
+  // on no mark at all — see the field's own note. The failure this guards is the
+  // one that matters: never silently drawing *nothing* on a remote row.
+  return source.kind === 'server' ? SERVER_ICON : MACHINE_ICON
+}
+
+/**
  * How a port is described in one line: `5037 adb`, or the port alone.
  *
  * Exported so the wording is testable without a DOM. The process name is
@@ -264,7 +359,13 @@ export function StartPage({ onOpen, failure = null, onRetry, source = null, brid
   const shown: Load = source
     ? source.ports === null
       ? { state: 'loading' }
-      : { state: 'ready', ports: source.ports }
+      : // A machine that answered *"I cannot tell you"* is neither loading nor
+        // holding an empty list, and `failed` is the state that draws its
+        // sentence in place of one. Only a source that says so reaches it —
+        // every path that existed before servers leaves `cannot` unset.
+        source.cannot
+        ? { state: 'failed', message: source.cannot }
+        : { state: 'ready', ports: source.ports }
     : load
   /** What the sentences call it. "this machine" is the words that were there. */
   const where = source ? source.name : 'this machine'
@@ -336,6 +437,7 @@ export function StartPage({ onOpen, failure = null, onRetry, source = null, brid
           <PortList
             ports={shown.ports}
             where={where}
+            mark={machineMark(source)}
             onOpenPort={openPort}
             oursOpen={oursOpen}
             onToggleOurs={() => setOursOpen((open) => !open)}
@@ -403,10 +505,21 @@ export function StartPage({ onOpen, failure = null, onRetry, source = null, brid
  * The fold below is empty for a remote machine and is therefore never drawn —
  * the far end filters its own listeners out before it sends the list, so there
  * is nothing to account for. See `asDevPorts` in `machines-bridge.ts`.
+ *
+ * ## `mark`, which is the one thing that is not identical
+ *
+ * The paragraph above is still true and is why the mark is a *path* and not a
+ * layout: nothing moves, nothing is added to the sentence, no row grows a
+ * second line. A remote row is a local row with a computer drawn in front of
+ * the port number, which is precisely what he asked for and no more than that.
+ * It is passed in already decided, by `machineMark`, because this component's
+ * job is to draw a list and deciding which machine a list is about was never
+ * part of it — the same reason `where` arrives as a word rather than a flag.
  */
 function PortList({
   ports,
   where,
+  mark,
   onOpenPort,
   oursOpen,
   onToggleOurs,
@@ -414,6 +527,8 @@ function PortList({
   ports: readonly DevPort[]
   /** The machine the list is about, as the two sentences name it. */
   where: string
+  /** Its silhouette, from `machineMark`. Null is this machine and draws none. */
+  mark: string | null
   onOpenPort(port: number): void
   oursOpen: boolean
   onToggleOurs(): void
@@ -440,6 +555,40 @@ function PortList({
                   aria-label={`Open port ${portSummary(p)} on ${where}`}
                   onClick={() => onOpenPort(p.port)}
                 >
+                  {/*
+                    First on the row, before the number, because it is the thing
+                    that has to be read before the number means anything: `:5173`
+                    on this machine and `:5173` in the next room are different
+                    addresses and the same six characters.
+
+                    `aria-hidden`, since the button's own label already ends
+                    "on {where}" — a screen reader that also announced the mark
+                    would say the machine twice, and the label is the better of
+                    the two because it says the name rather than the kind.
+
+                    No stylesheet rule behind it: the size, the ink and the
+                    stroke are all on the element, `currentColor` takes the row's
+                    colour in both themes, and an `<svg>` with width and height
+                    is a replaced element with an intrinsic minimum, so flexbox
+                    will not squeeze it when a long process name arrives. The
+                    class is there for a rule that may later want one.
+                  */}
+                  {mark !== null && (
+                    <svg
+                      className="bw-start-port-mark"
+                      width="13"
+                      height="13"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d={mark} />
+                    </svg>
+                  )}
                   <span className="bw-start-port-num">:{p.port}</span>
                   {p.process && <span className="bw-start-port-cmd">{p.process}</span>}
                   {p.guessed && <span className="bw-start-port-tag">port only</span>}

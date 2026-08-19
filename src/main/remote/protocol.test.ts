@@ -78,7 +78,6 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'credential.deny': true,
   'dev.status': true,
   'dev.start': true,
-  'copilot.connect': true,
   'copilot.hello': true,
   'copilot.bye': true,
   'copilot.answer': true,
@@ -128,7 +127,6 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'copilot.log': true,
   'copilot.pending': true,
   'copilot.grant': true,
-  'copilot.linked': true,
   'copilot.ask': true,
   'copilot.settled': true,
 }
@@ -182,12 +180,11 @@ const VALID_CLIENT: ClientMessage[] = [
   // with. The five that carry something are a code, a credential, a decision, a
   // sentence and a log cursor — none of them a tool.
   //
-  // The three that establish the connection. They are the authorisation, so
-  // they carry no tier and cannot: a device with no copilot connection has no
-  // tiers, and requiring one to send the frame that creates the connection
-  // would mean no device could ever connect.
-  { t: 'copilot.connect', code: '481902' },
-  { t: 'copilot.hello', credential: 'Zm9vYmFyLWNyZWRlbnRpYWwtaGVyZQ' },
+  // The two that open and close it. They carry no tier and cannot: the tiers
+  // are read off the connection these very frames establish. `copilot.hello`
+  // carries nothing at all since 2026-08-19 — there is no copilot code and no
+  // credential, because a device's kind is the authorisation.
+  { t: 'copilot.hello' },
   { t: 'copilot.bye' },
   // Answering a confirmation. `approved` is a required boolean and only a
   // literal `true` is yes — a client whose wiring sent `undefined` must not have
@@ -388,8 +385,7 @@ const VALID_SERVER: ServerMessage[] = [
     link: { linked: false, open: false, grant: { read: false, act: false, alter: false } },
   },
   {
-    t: 'copilot.linked',
-    credential: 'Zm9vYmFyLWNyZWRlbnRpYWwtaGVyZQ',
+    t: 'copilot.grant',
     link: { linked: true, open: true, grant: { read: true, act: true, alter: true } },
   },
   {

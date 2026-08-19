@@ -142,8 +142,7 @@ with a copy a person uses.**
 - **Always pass `--user-data-dir`** pointing at a scratch directory. This is
   honoured — `userDataFlag()` in `src/main/user-data.ts` exists so that
   `pinUserData` cannot overwrite it. A separate userData means separate sessions,
-  settings, profiles, machines, hooks and remote identity, so nothing you do can
-  reach his.
+  settings, profiles, machines and remote identity.
 - **Never install over an existing install.** Unpack or install to a scratch
   path. On Windows the installed copy lives at
   `%LOCALAPPDATA%\Programs\Terminal Deck\` and its data at
@@ -152,9 +151,42 @@ with a copy a person uses.**
   your own instance instead. `requestSingleInstanceLock()` only collapses copies
   that share a userData directory, so a distinct `--user-data-dir` starts a
   genuinely separate process and leaves his window untouched.
-- The **hook endpoint** is a socket inside userData, and a live one is refused
-  rather than stolen, so two instances with separate data directories do not
-  fight over it. That is only true while the data directories differ.
+
+**`--user-data-dir` does not isolate hooks. It never did.** This paragraph used
+to say it did, and on 2026-08-18 a `npm run dev -- --user-data-dir=<scratch>`
+run — launched under exactly this rule, to look at a usage bar — rewrote the
+hook commands in his `~/.claude/settings.json`, `~/.codex/hooks.json` and
+`~/.gemini/settings.json` to point at the scratch copy's socket. Ten, five and
+seven commands respectively. His running install kept its socket and kept
+listening; nothing was pointing at it any more, so every session-event hook on
+the machine went quietly dead until the paths were put back.
+
+The reason is structural and worth understanding before the next agent trips
+over it. The socket really is inside userData — `<userData>/hook/hook.sock` —
+and two instances genuinely do not fight over it. But the *pointer* to that
+socket is not in userData at all: `installHooks` in `src/main/hooks.ts` writes
+it into each **agent's own** configuration file, which is one file per agent per
+machine and is shared by every copy of this app. So the isolation is real for
+the endpoint and absent for the thing that names it.
+
+`readStatus` already knows this can happen — it answers `stale` with *"somewhere
+other than this copy"* — but that is a report, not a guard: the install
+overwrites first and the Hooks page says so afterwards, in whichever copy looks.
+
+So, when a scratch instance has been launched on a machine with a real one:
+
+    grep -rl '<your scratch path>' ~/.claude ~/.codex ~/.gemini
+
+and put every hit back to the installed copy's
+`~/Library/Application Support/terminaldeck/hook/hook-endpoint.conf`
+(`%APPDATA%\terminaldeck\hook\hook-endpoint.conf` on Windows) before you
+finish. Then prove it, rather than assuming — his socket answers `204`:
+
+    curl -s -o /dev/null -w '%{http_code}' -X POST \
+      -H 'content-type: application/json' \
+      -K '<installed>/hook/hook-endpoint.conf' \
+      --data-binary '{"hook_event_name":"Notification"}' \
+      http://localhost/hook/claude/Notification
 
 If a verification genuinely cannot be done without touching his install — say so
 and stop. Do not decide on his behalf that the interruption is worth it.

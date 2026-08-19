@@ -104,8 +104,26 @@ export function resolveMachinesApi(host?: unknown): BrowserMachinesBridge | null
 /** The picker's value for "this machine", which is the one it starts on. */
 export const THIS_MACHINE = ''
 
+/**
+ * Which of the two kinds of machine a row is.
+ *
+ * The words are `SERVERS-DESIGN.md` §1.1's, and the discriminator there is
+ * mechanical rather than a matter of taste: **a device runs this app at the far
+ * end and a server does not.** That is why they are paired two different ways
+ * and reached two different ways, and it is the only reason this field exists.
+ *
+ * It changes exactly one line of behaviour — which bridge is asked for an
+ * address — and nothing a person sees. The rows are identical, the sentences
+ * are identical, the tabs are identical: *"shape of the application should not
+ * be changing for local and remote devices."* A field that started deciding
+ * layout would be this browser growing a second kind of machine, which is the
+ * thing it was arranged against.
+ */
+export type MachineKind = 'device' | 'server'
+
 /** One machine as the picker draws it, refusal and all. */
 export interface MachineChoice {
+  kind: MachineKind
   id: string
   /** What it calls itself. */
   name: string
@@ -197,6 +215,7 @@ export function machineChoices(view: MachinesView): MachineChoice[] {
     const noun = machineNoun(link?.hostPlatform === '' || link === null ? machine.platform : link.hostPlatform)
     const name = machine.name === '' ? `That ${noun}` : machine.name
     return {
+      kind: 'device',
       id: machine.id,
       name,
       noun,

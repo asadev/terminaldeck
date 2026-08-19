@@ -144,7 +144,7 @@ const run = promisify(execFile)
  * The things the fence is around, as absolute paths.
  *
  * Composed here rather than imported from `routines/store.ts`,
- * `copilot-home.ts`, `remote/copilot-link.ts` and `remote/device-auth.ts` —
+ * `copilot-home.ts`, `remote/device-kind.ts` and `remote/device-auth.ts` —
  * which is the wrong way round and is deliberate. Those modules own where their
  * files live; this one has to name the same places, and an `import` chain from a
  * confinement module into the routine engine, or into the store that holds the
@@ -160,33 +160,38 @@ export interface RecordsFencePaths {
   /** `<userData>/copilot-log` — `actions.jsonl` and its rolled generation. */
   log: string
   /**
-   * `<userData>/remote/copilot-link.json` — the copilot connections: which
-   * devices hold one, what each may do, and the hash of each credential.
+   * `<userData>/remote/remote-device-kinds.json` — which paired devices are
+   * **his own**, and which are guests.
    *
-   * The newest of the five and the one whose absence would have been the
-   * strangest. While the copilot had no remote surface this file decided
-   * nothing, so leaving it writable cost nothing. The moment a device can be
-   * connected, it becomes **the store that holds the permission, writable by the
-   * party the permission is about** — the same category of mistake as an audited
-   * process holding the pen over its own audit log, one level up.
+   * **This entry moved on 2026-08-19 and the move is the whole point.** It used
+   * to fence `copilot-link.json`, the store of separate copilot connections. His
+   * instruction deleted that store — *"if we are connecting as my device,
+   * copilot automatically comes; if we connect as guest then copilot don't
+   * come"* — and the permission it held did not disappear with it. It moved into
+   * this file, which was not fenced at all.
    *
-   * The bound is worth naming so nobody reads the fence as the only thing
-   * standing there, and it moved when the store did. It used to be that
-   * `copilotGrantFrom` scrubbed `alter` on every read, so the copilot could not
-   * write itself a remotely-grantable alter tier however it edited the file.
-   * `alter` is grantable now, and what bounds the damage instead is that
-   * `CopilotLinks.load` drops any record with **no credential**: the copilot
-   * cannot mint a connection, because it cannot produce a secret whose scrypt
-   * hash it would also have to write. What it could do without this fence is
-   * raise the tiers of a connection that already exists — turning a device
-   * somebody connected read-only into one that can answer confirmations, which
-   * is quite enough.
+   * Leaving the fence where the file used to be would have been the worst
+   * possible outcome of that change: a rule still written, pointed at a path
+   * nothing creates, while the thing it was protecting sat writable one
+   * directory along. `resolveRecordsPaths` warns about exactly this failure two
+   * paragraphs down, and this is it arriving through a refactor rather than a
+   * rename.
    *
-   * The name changed with the file. It was `remote-copilot.json` while copilot
-   * access was a per-device grant; it is `copilot-link.json` now that it is a
-   * separate connection with a credential in it. A fence naming the old path
-   * would refuse nothing at all, silently — the failure `resolveRecordsPaths`
-   * warns about two paragraphs down, arriving by a different route.
+   * What the fence stops, concretely. A kind is what decides whether a device
+   * reaches the copilot at all, and `copilot-access.ts` reads it live on every
+   * tool call. Without this line the copilot could write `"kind": "mine"` beside
+   * a guest's device id and hand a stranger's phone full remote control of this
+   * machine — including the `alter` tier, whose whole safety property is that
+   * somebody deliberately authorised that device. That is **the copilot editing
+   * the store that says who may drive the copilot**: the same category of
+   * mistake as an audited process holding the pen over its own audit log, which
+   * is the sentence this list was assembled around.
+   *
+   * It cannot mint a device out of nothing — a kind is only consulted for a
+   * device id that `device-auth.ts` has already approved, and approving one
+   * needs a pairing code read off this screen. What it could do without this
+   * line is *promote* a device somebody already let in for one folder, which is
+   * quite enough.
    */
   remoteCopilot: string
   /**
@@ -250,7 +255,9 @@ export function recordsFencePaths(
     routines: resolver.real(join(root, 'routines')),
     routineState: resolver.real(join(root, 'routine-state.json')),
     log: resolver.real(join(root, 'copilot-log')),
-    remoteCopilot: resolver.real(join(remote, 'copilot-link.json')),
+    // The literal, not an import — see the header. `device-kind.ts` owns the
+    // spelling and `recordsFenceAgrees` is what pins the two together.
+    remoteCopilot: resolver.real(join(remote, 'remote-device-kinds.json')),
     remoteAuth: resolver.real(join(remote, 'remote-auth.json')),
   }
 }

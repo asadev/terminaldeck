@@ -722,48 +722,53 @@ enum ClientMessage: Equatable {
        for why the second gate is here as well as on the desktop. ------------ */
 
     /**
-     * Redeem a six-digit connect code, minted at the desktop. **No tier.**
-     *
-     * The first of three frames that carry no tier and cannot: they *are* the
-     * authorisation. A device with no copilot connection has no tiers, so
-     * requiring one to send the frame that establishes the connection would mean
-     * no device could ever connect. `COPILOT_UNTIERED_FRAMES` names them on the
-     * desktop so the set is checkable.
-     *
-     * It travels on the **already-authenticated sealed channel**, so the device
-     * id is a fact rather than a claim and the code is the second thing being
-     * proved rather than the first. Answered once with `copilot.linked` carrying
-     * the credential — and never again by any path, because the desktop keeps a
-     * scrypt hash of it.
-     *
-     * **Normalise before sending.** `PairingCodeParser.normalise` is the same
-     * function the pairing screen uses, and the split is deliberate: one place
-     * decides what a code looks like and it is the client, because the client is
-     * where somebody typed it. The desktop hashes the string it is given and
-     * strips nothing, so `481 902` is simply a wrong code.
-     */
-    case copilotConnect(code: String)
-    /**
-     * Open the copilot connection on this socket, with the stored credential.
-     * **No tier.**
+     * Open the copilot connection on this socket. **No tier, and no credential.**
      *
      * **Required after every reconnect**, before any other `copilot.*` frame.
-     * `welcome.copilot.open` is *always* false — a session channel does not
-     * carry the copilot by existing, which is the whole difference between this
-     * design and the per-device grant it replaced — so a client that treats the
-     * welcome as "already in" sends frames that are refused.
+     * `welcome.copilot.open` is *always* false — a socket has presented nothing
+     * at the moment it is greeted — so a client that treats the welcome as
+     * "already in" sends frames that are refused. This is the frame that says
+     * *it is me, on this socket*, and it is answered with `copilot.grant`
+     * carrying `open: true`.
      *
-     * Answered with `copilot.grant` carrying `open: true`.
+     * ## It used to carry a credential, and the credential is gone
+     *
+     * Asad, on 2026-08-19:
+     *
+     * > *"Instead of giving mobile app separate connection for copilot just make
+     * > it like if we are connecting as my device copilot automatically comes,
+     * > if we connect as guest then copilot don't come — that's all we need to
+     * > do instead of two different connections."*
+     *
+     * So the second act of authorisation is deleted. **Pairing a device as "My
+     * device" IS the authorisation for the copilot**, which is what the approval
+     * screen has always said in his own words — *"My device — Full access. It's
+     * you at another keyboard"* against *"Guest — You choose what they can
+     * reach. The copilot is never shared."* A device that has been approved as
+     * his does not then have to prove it a second time with six digits read off
+     * the machine it is already talking to.
+     *
+     * What authorises this frame is therefore the socket's **already
+     * authenticated device identity** plus that device's kind, both of which the
+     * desktop knows before the frame arrives. There is nothing to send and
+     * nothing to store: `copilot.connect` is deleted from the vocabulary, there
+     * is no copilot code, no copilot credential, and no state in which a device
+     * is paired but the copilot is "not connected yet".
      */
-    case copilotHello(credential: String)
+    case copilotHello
     /**
      * Close the copilot connection on this socket, and keep the terminals.
      * **No tier.**
      *
-     * The credential and the record survive: this is the *connection* ending,
-     * not the authorisation, so the next `copilotHello` works with no ceremony.
-     * It is what a person sends when they are done with the copilot on a phone
-     * somebody else might pick up.
+     * The *connection* ends, not the authorisation: the device is still one of
+     * his, so the next `copilotHello` works with no ceremony at all.
+     *
+     * **This client never sends it**, and has not since the *"Close the copilot
+     * here"* item went — *"Why do we have Close the copilot here? It doesn't
+     * make any sense."* It stays in the vocabulary because the browser client
+     * sends it and because `WireCodec` pins its encoding; a verb this app can
+     * spell and does not press is cheaper than a wire the two ends disagree
+     * about. See `CopilotLink`, where the flag behind that menu item used to be.
      */
     case copilotBye
     /**
@@ -868,28 +873,37 @@ enum ServerMessage: Equatable {
      * means a person sat at that machine and granted this device no folders,
      * which is a real answer and the one the New Session button has to respect.
      *
-     * `copilot` carries **four** answers and that is why it is a
-     * `CopilotConnection` rather than a bare grant. Absent and an all-false
-     * grant mean the same thing about the *grant* — no access — because nobody
-     * has ever had remote copilot access, so there is no older behaviour for a
-     * desktop's silence to preserve. They do not mean the same thing about the
-     * *machine*: the field is written by the same object on the desktop that
-     * serves the frames, so its presence is the only trustworthy answer to "does
-     * this machine have a copilot at all". The capability name is not that
-     * answer — see `CopilotConnection`, which is where the difference is argued
-     * and where the host that advertises a feature it does not implement is
-     * named.
+     * **`copilot` is present if and only if this phone has a copilot on that
+     * machine**, and its presence is the whole answer.
+     *
+     * That is the shape as of 2026-08-19, and it is smaller than what it
+     * replaced. The desktop writes the field only when it has a copilot layer
+     * **and** the device this socket belongs to was approved as one of his own —
+     * *"if we are connecting as my device copilot automatically comes, if we
+     * connect as guest then copilot don't come."* A guest receives no `copilot`
+     * key at all: absent, not present-and-false. So this end has one question to
+     * ask of the frame rather than a ceremony to walk, and `CopilotConnection`
+     * is a decoded object rather than a state machine.
+     *
+     * The **capability name is still not that answer**, and the distinction is
+     * the reason `CopilotConnection.stated` exists: the desktop assembles
+     * `capabilities` by filtering `CAPABILITIES` — every extension this build
+     * knows how to serve — against what its injected objects can actually do,
+     * and a build where the filter has drifted advertises a feature it cannot
+     * serve. The field is written by the same object that serves the frames, so
+     * it cannot drift from them. See `CopilotConnection`, where the host that
+     * advertises what it does not implement is named.
      *
      * **`copilot.open` is false on every welcome, always.** Not sometimes, and
-     * not "unless you were connected a moment ago": the copilot is a separate
-     * connection and a session channel does not carry it by existing. A client
-     * reads `linked` to decide between the Connect screen and sending
-     * `copilotHello`, and never reads `open` as "already in".
+     * not "unless you were connected a moment ago": copilot access belongs to
+     * the *socket*, and a socket has presented nothing at the moment it is
+     * greeted. `copilotHello` opens it, on every reconnect, carrying nothing —
+     * the device's identity and its kind are what authorise it. A client that
+     * reads `open` as "already in" sends frames that are refused.
      *
-     * So the collapse is right one level down, inside the grant, and wrong here;
-     * `folders` one field to the left keeps nil and empty apart for a third,
-     * unrelated reason. Three fields, three rules, written differently rather
-     * than tidied into agreement.
+     * `folders`, one field to the left, keeps nil and empty apart for an
+     * unrelated reason of its own. Two fields, two rules, written differently
+     * rather than tidied into agreement.
      */
     case welcome(protocolVersion: Int, deviceId: String, deviceName: String, token: String?,
                  sessions: [RemoteSession], capabilities: Set<String>, hostPlatform: HostPlatform,
@@ -1086,13 +1100,12 @@ enum ServerMessage: Equatable {
     /**
      * This device's copilot connection changed while it was connected.
      *
-     * One frame for four different events, because to this end they are one:
-     * the connection opened (`copilot.hello` answered), it closed
-     * (`copilot.bye`), somebody reticked the boxes, or somebody disconnected the
-     * device entirely — in which case `linked` is false and the sentence a
-     * refusal produces changes from *you do not have enough access* to *this
-     * device is not connected*. Two different remedies, and the second one would
-     * send somebody looking for a checkbox that is no longer the obstacle.
+     * Chiefly this is the answer to `copilot.hello` — the frame carrying
+     * `open: true` that says the socket is in, and the only thing that starts a
+     * subscription. It is also how a `copilot.bye` is confirmed, and how a
+     * device that stops being one of his learns it without waiting for a
+     * reconnect: `linked` goes false, and this end takes the copilot away rather
+     * than leaving a tab whose every press would be refused.
      *
      * The *rule* is already live without this frame — the desktop re-reads the
      * store on every frame and every tool call — which is what makes this honest
@@ -1100,20 +1113,6 @@ enum ServerMessage: Equatable {
      * outcome is a refusal, and nothing more.
      */
     case copilotGrant(CopilotConnection)
-    /**
-     * The copilot connection was established, and here is the credential.
-     *
-     * **Sent exactly once**, in answer to `copilot.connect`, and never again by
-     * any path — the desktop keeps a scrypt hash of it, so there is nothing left
-     * over there to show. A client that drops it cannot ask for it back and has
-     * to show the Connect screen again; a person then mints a new code at the
-     * machine, which is right, because minting one is a deliberate act at the
-     * desk and re-issuing on request would not be.
-     *
-     * It is stored where the pairing credential is stored and with the same
-     * care. The two are worth the same.
-     */
-    case copilotLinked(credential: String, link: CopilotConnection)
     /**
      * A confirmation **this** connection may answer, in full.
      *

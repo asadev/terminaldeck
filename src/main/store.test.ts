@@ -247,3 +247,78 @@ describe('the project list, as an event', () => {
     off()
   })
 })
+
+describe('what is known about a Claude login', () => {
+  const ACCOUNT = '/Users/asad/Library/Application Support/terminaldeck/profiles/one'
+
+  it('says nothing is known, rather than that there is nothing to know', () => {
+    /*
+     * The distinction the gate in `plan-limit.ts` turns on, so it is pinned
+     * here. "Nothing has been established about this account" is a reason to
+     * look; "this account was established to have nothing" is a reason to stop.
+     * A store that answered an empty record for the first would stop this app
+     * asking about every login it has never met.
+     */
+    expect(store().getAccountLimit('/never/seen')).toBeNull()
+  })
+
+  it('merges what is learned separately, because it is learned separately', () => {
+    // The billing comes off a banner that happened to be on screen; the answer
+    // comes off a `/usage` that ran. Neither writer may erase the other's work.
+    store().setAccountLimit(ACCOUNT, { billing: 'api' })
+    store().setAccountLimit(ACCOUNT, { answer: 'no-limits' })
+    expect(store().getAccountLimit(ACCOUNT)).toMatchObject({
+      billing: 'api',
+      answer: 'no-limits',
+    })
+  })
+
+  it('writes through to the file, because a restart is the case it exists for', () => {
+    store().setAccountLimit(ACCOUNT, { answer: 'no-limits' })
+    const written = onDisk().accountLimits as Record<string, { answer?: string }>
+    expect(written[ACCOUNT].answer).toBe('no-limits')
+  })
+
+  it('forgets an account outright, which is what a person pressing Check means', () => {
+    store().setAccountLimit(ACCOUNT, { billing: 'api', answer: 'no-limits' })
+    store().forgetAccountLimit(ACCOUNT)
+    expect(store().getAccountLimit(ACCOUNT)).toBeNull()
+    // Gone from the file too, not merely from memory: forgetting that survives
+    // only until the next launch is not forgetting.
+    expect(onDisk().accountLimits).not.toHaveProperty(ACCOUNT)
+  })
+
+  it('keeps one login out of another login\'s record', () => {
+    store().setAccountLimit('/a', { answer: 'no-limits' })
+    store().setAccountLimit('/b', { billing: 'subscription' })
+    expect(store().getAccountLimit('/a')).toMatchObject({ answer: 'no-limits' })
+    expect(store().getAccountLimit('/b')?.answer).toBeUndefined()
+  })
+
+  it('reads a file that has never heard of any of this as knowing nothing', async () => {
+    const dir = join(tmpdir(), `terminaldeck-store-accounts-${process.pid}`)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'state.json'), JSON.stringify({ version: 1, projects: [] }), 'utf8')
+    const fresh = await freshStore(dir)
+    expect(fresh.store().getAccountLimit(ACCOUNT)).toBeNull()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('reads a hand-edited mess as knowing nothing, rather than as knowing rubbish', async () => {
+    /*
+     * `state.json` is a file on somebody's disk, and this particular field
+     * decides whether this app types into their terminal. Trusting a list where
+     * a map should be costs the feature; distrusting it costs one `/usage`.
+     */
+    const dir = join(tmpdir(), `terminaldeck-store-junk-${process.pid}`)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, 'state.json'),
+      JSON.stringify({ version: 1, projects: [], accountLimits: ['not', 'a', 'map'] }),
+      'utf8',
+    )
+    const fresh = await freshStore(dir)
+    expect(fresh.store().getAccountLimit(ACCOUNT)).toBeNull()
+    rmSync(dir, { recursive: true, force: true })
+  })
+})

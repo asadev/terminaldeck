@@ -62,7 +62,11 @@ function claude(over: Partial<UsageWindowReading> = {}): UsageWindowReading {
     resets: { state: 'described', text: '4am (Asia/Dubai)' },
     observedAt: NOW,
     reportedAt: NOW - MINUTE,
-    source: 'claude-usage-panel',
+    // What the app produces now: the CLI fetched it under its own login, in a
+    // process of this app's own. `claude-usage-panel` is still a real source —
+    // `plan-limit.ts` still reads a limit line the CLI prints of its own accord
+    // — but nothing here goes and makes it print one.
+    source: 'claude-usage-api',
     ...over,
   }
 }
@@ -104,14 +108,18 @@ const NOTHING =
   'Claude Code has not printed a plan-limit line in this session yet — it only does so near a limit, or when /usage is run.'
 const CODEX_SILENT =
   'Codex has not recorded a rate limit under this account yet — it writes one into its rollout when a turn completes.'
-/* The two sentences a settled answer carries, from `refreshFailureMessage` —
+/* The sentences a settled answer carries, from `refreshOutcomeMessage` —
    copied rather than imported so the board shows the words as a reader gets
-   them, and so a change to either is visible here rather than silently
-   absorbed. */
-const NO_LIMITS =
-  'Claude Code’s usage panel shows no plan limits for this account, so there is nothing to read.'
-const PANEL_STUCK =
-  'Claude Code’s usage panel was opened to read this and did not close — press Esc in the session.'
+   them, and so a change to any of them is visible here rather than silently
+   absorbed.
+
+   The panel-left-behind sentence used to be the third of these and is gone with
+   the thing that produced it: nothing in this app opens a panel on somebody's
+   session any more, so there is no panel to fail to close. See
+   `usage-probe.ts`. */
+const NO_LIMITS = 'This login has no subscription limits, so there is nothing to read.'
+const SIGNED_OUT =
+  'That account is not signed in to Claude Code, so it has no plan limits to report.'
 
 interface Case {
   title: string
@@ -278,32 +286,36 @@ const CASES: Case[] = [
     },
   },
   {
-    title: 'Asked, answered, stopped — the account has no plan limits',
+    title: 'Asked, answered, stopped — the login has no plan limits',
     note:
-      'His Windows session. `/usage` was typed once, Claude Code drew its panel, and there was no ' +
-      '“Current session” and no “Current week” anywhere in it — an account billed through the API has no ' +
-      'rolling window to draw. So the app stops asking, says why, and this is the one state with something ' +
-      'to press. Never “Reading…”: that word means wait, and nothing is coming.',
+      'His Windows account. Claude Code was asked, in this app’s own process, and reported no rolling ' +
+      'window — an account billed through the API has none. The answer is remembered against the login, ' +
+      'so nothing is started for it again, and this is the one state with something to press. Never ' +
+      '“Reading…”: that word means wait, and nothing is coming.',
     props: {
       report: report([], NOTHING),
       provider: 'claude',
       accountLabel: 'imzapremium@gmail.com',
       blocked: NO_LIMITS,
+      // The word in the figure column changes with this, and the change is the
+      // point: `Not reported` describes a number that has not arrived, and this
+      // is a number that does not exist.
+      noLimits: true,
       onCheck: () => {},
       now: NOW,
     },
   },
   {
-    title: 'A panel this app opened and could not close',
+    title: 'A configuration directory that is not signed in',
     note:
-      'The failure this feature is not allowed to have, said out loud. The close is verified by reading the ' +
-      'screen back, so this state is reachable at all — the old code wrote one Escape and assumed.',
+      'The other settled answer, and the one a person can act on. Measured: a fresh config directory ' +
+      'answers in 445ms with no subscription and no windows, so this costs a fraction of a second and no ' +
+      'tokens — and it says which of the two states it is, because only this one has a fix.',
     props: {
       report: report([], NOTHING),
       provider: 'claude',
       accountLabel: 'imzapremium@gmail.com',
-      blocked: PANEL_STUCK,
-      residue: true,
+      blocked: SIGNED_OUT,
       onCheck: () => {},
       now: NOW,
     },

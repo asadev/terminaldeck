@@ -85,14 +85,11 @@ enum WireCodec {
                          hostPlatform: HostPlatform(wire: string(object["hostPlatform"])),
                          folders: folders(object["folders"]),
                          // Absent is `.silent`, and so is malformed — both mean
-                         // "this device may do nothing with the copilot". See
-                         // `copilotGrant`, which explains why that collapse is
-                         // right here and wrong for `folders` one line up. What
-                         // is *not* collapsed is whether the field was there at
-                         // all: that is the only honest answer to "does this
-                         // machine have a copilot", and it is a different
-                         // question from what the capability list claims. See
-                         // `CopilotConnection`.
+                         // "this phone has no copilot on that machine", which is
+                         // what a guest device is told by omission. The presence
+                         // of the field is the whole answer now, and it is a
+                         // different question from what the capability list
+                         // claims. See `CopilotConnection`.
                          copilot: copilotConnection(object["copilot"])),
                 activity: list.activity)
 
@@ -377,19 +374,20 @@ enum WireCodec {
              */
             return .ok(.copilotGrant(copilotConnection(object["link"])), activity: [:])
 
-        case "copilot.linked":
-            // The credential is required and is the only thing here that cannot
-            // be recovered: it is sent exactly once, so a frame missing it is a
-            // connection this phone will never be able to reopen, and failing
-            // loudly beats storing an empty string and refusing every frame
-            // afterwards with no explanation.
-            guard let credential = string(object["credential"]), !credential.isEmpty,
-                  credential.count <= Copilot.maxCredentialChars else {
-                return .failed(reason: "copilot.linked without a usable credential")
-            }
-            return .ok(.copilotLinked(credential: credential,
-                                      link: copilotConnection(object["link"])),
-                       activity: [:])
+        /*
+         * There is no `copilot.linked` case here any more, and this note is so
+         * that nobody adds one back by reading an older desktop.
+         *
+         * It carried the copilot credential, exactly once, in answer to a
+         * `copilot.connect`. Both frames went on 2026-08-19 with the second act
+         * of authorisation itself — *"if we are connecting as my device copilot
+         * automatically comes, if we connect as guest then copilot don't come"*
+         * — so there is no code to redeem, no credential to be handed, and
+         * nothing this codec would do with the frame if one arrived. An unknown
+         * `t` falls through to the default below and is reported rather than
+         * half-applied, which is the right answer for a host speaking a
+         * vocabulary this build does not share.
+         */
 
         case "copilot.ask":
             // `raw` is passed through so the arguments keep the order the tool
@@ -677,10 +675,12 @@ enum WireCodec {
          * ("tap that row to run it again") breaks the property the whole
          * enforcement model rests on.
          */
-        case let .copilotConnect(code):
-            object = ["t": "copilot.connect", "code": code]
-        case let .copilotHello(credential):
-            object = ["t": "copilot.hello", "credential": credential]
+        case .copilotHello:
+            // A verb and nothing else. What authorises it is the device identity
+            // this socket already proved and the kind that device was approved
+            // as — see `ClientMessage.copilotHello`, which carries the sentence
+            // that deleted the credential it used to hold.
+            object = ["t": "copilot.hello"]
         case .copilotBye:
             object = ["t": "copilot.bye"]
         case let .copilotAnswer(id, approved):

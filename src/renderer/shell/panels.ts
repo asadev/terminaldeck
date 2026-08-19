@@ -248,14 +248,50 @@ export const PANELS: PanelSpec[] = [
      * something this project integrates with, and the machines you can reach do
      * not change when you open a different folder.
      */
+    /*
+     * And the row is called **Machines** again, which is the third name it has
+     * had and the first one that covers everything behind it.
+     *
+     * It went Machines → Remote when the two screens were merged, and back to
+     * Machines when the row learned about servers. Asad: *"let's replace remote
+     * to **Machines**, and inside machine we can have **server** and **remote
+     * other devices**."* Remote was the right word while the row meant one
+     * thing — the devices that can reach this computer. It is the wrong word
+     * for a rented machine in a data centre that this computer reaches *out*
+     * to, which is not remote from anything in particular and is not paired
+     * with anybody.
+     *
+     * `Machines` is the umbrella. There are two kinds under it, and the line
+     * between them is a fact anybody can check rather than a judgement: **a
+     * device runs this app on the far end, a server does not.** That is why the
+     * two ways in cannot be merged — a six-digit code is minted by the app at
+     * the other end, and a server has nothing there to mint one.
+     *
+     * ## The id does not change, and that is not a detail
+     *
+     * `'remote'` is what a saved rail position and the feature registry are
+     * keyed on. Renaming it would silently drop somebody back to Overview at
+     * their next launch, having changed nothing they can see. The identical
+     * argument is written out one entry down, about `hooks`, and one directory
+     * over about `machines.json` — the file that holds a credential per paired
+     * device, whose rename would drop everybody's pairings without saying so.
+     *
+     * **Only what a person reads changed.** Not the id, not a channel, not a
+     * type name, not a stored filename.
+     */
     id: 'remote',
-    label: 'Remote',
+    label: 'Machines',
     group: 'foot',
-    // Two rectangles, one behind the other, joined by a line — Machines' own
-    // glyph, kept because it is the same subject and people already know it.
-    // Screens, not servers: the thing on the other end is somebody's desk.
+    // Two rectangles, one behind the other, joined by a line — the glyph this
+    // row has worn under all three of its names, kept because it is the same
+    // subject and people already know it. Screens rather than a rack, and that
+    // is still right with servers behind it: the drawing says "somewhere else",
+    // which is the one thing both kinds have in common.
     icon: 'M3.5 5.5h11v8h-11zM9 17.5h11v-8h-5.5M6.5 17.5h2.5M9 13.5v4',
-    blurb: 'Phones and computers that can reach this machine.',
+    // Both kinds, in the order the page puts them, and in the words the page
+    // uses. A blurb naming only one of them would send half the people looking
+    // for the other somewhere else.
+    blurb: 'Servers you look after, and your own computers and phones.',
   },
   {
     id: 'hooks',

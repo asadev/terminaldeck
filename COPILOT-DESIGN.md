@@ -368,6 +368,38 @@ terminal access and no copilot unless you say so.
 > different row from *allowed by the person*. `COPILOT-REMOTE.md` §4 carries the
 > full argument and the one it superseded.
 
+> **Corrected again 2026-08-19 — the separate connection is deleted, and the
+> paragraph above is kept only as the record of a thing that was built.** Asad,
+> having used it:
+>
+> > *"instead of giving mobile app separate connection for copilot just make it
+> > like if we are connecting as my device copilot automatically comes, if we
+> > connect as guest then copilot don't come — that's all we need to do instead
+> > of two different connections"*
+>
+> **Pairing a device as "My device" *is* the copilot authorisation.** One of his
+> own devices reaches the copilot from the moment it is approved at this
+> keyboard, holding every tier and answering its own confirmations; a guest never
+> reaches it and is never told there is anything to reach. There is no copilot
+> code, no copilot credential, no copilot record, no copilot panel and no
+> "connect the copilot" screen anywhere.
+>
+> The correction above was not wrong about the *property* — reaching the copilot
+> must require an authorisation the device cannot give itself — it was wrong
+> about needing a second mechanism to hold it. `device-kind.ts` shipped the day
+> after `copilot-link.ts` and already held it: the choice is made at this
+> keyboard on the approval screen, against a device that has just typed a code
+> minted here, and `claim()` writes once with no method anywhere that overwrites
+> one. Two ceremonies proving one fact cost a screen, a credential, a store and a
+> class of states in which a device is paired as his own and still told to
+> connect.
+>
+> Both `copilot-link.ts` and the tier checkboxes are gone. What survives is what
+> was always the real answer to *"we don't want to give this copilot to others"*:
+> **guest devices have no copilot, and are not shown that they don't.**
+> `COPILOT-REMOTE.md` §6 is the design, §6.6 preserves the version this note
+> describes, and `src/main/remote/device-kind.ts` is the store.
+
 Deliberately phase 4. Remote access to an agent that can rewrite settings and
 spawn sessions is the highest-stakes surface in the product, and it should be
 built last, against a copilot whose permission model has already been used in
@@ -383,7 +415,8 @@ anger locally.
    and do. This is the bulk of the work.
 3. **Copilot sessions group + routines.** Needs 1 and 2; the grouping also needs
    the tab-strip work to have settled.
-4. **Remote capability grant.**
+4. **Remote.** Not a capability grant and no longer a connection: the device's
+   kind decides it. See the 2026-08-19 correction above and `COPILOT-REMOTE.md`.
 
 ---
 

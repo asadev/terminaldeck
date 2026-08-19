@@ -39,6 +39,7 @@
 
 import { Terminal } from '@xterm/headless'
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron'
+import type { ClaudeBilling } from './account-limits'
 import { stripAnsi } from './session-activity'
 import { onWebContentsDestroyed } from './web-contents-teardown'
 import {
@@ -139,69 +140,80 @@ const WARN_NAMED = /(?:approaching|you['’]re close to your|you['’]ve hit you
 const LOOKAHEAD_LINES = 4
 
 /* -------------------------------------------------------------------------- */
-/* Recognising the panel itself, as opposed to the numbers in it               */
+/* Reading the account's billing off the banner, before typing anything        */
 /* -------------------------------------------------------------------------- */
 
 /**
- * The tab row Claude Code draws across the top of every one of its settings
- * panes, `/usage` included.
+ * The five words Claude Code can print for a *subscription*, and the ones it
+ * prints for everything else.
  *
- * Transcribed from two real screens rather than guessed: a PTY here on
- * 2026-08-18 running Claude Code 2.1.234, which drew
- * `   Settings  Status   Config   Usage   Stats`, and a Windows recording of
- * 2.1.224 which drew the same five words with its own spacing. The whole line
- * has to be those five words and nothing else, which is what keeps an agent
- * that happens to write the word "Settings" from reading as an open panel.
+ * Not guessed and not inferred from one screen: they are the whole of the
+ * switch the CLI itself compiles, read out of the 2.1.234 binary on this
+ * machine on 2026-08-18 —
  *
- * This is a different question from {@link parsePlanLimits} and the difference
- * is the whole of the bug this was written for. That function answers *"are
- * there limits on this screen"*; this one answers *"is this app's panel sitting
- * over somebody's work"*. On an account with no subscription limits the first
- * is permanently no and the second is yes, and an app that only knows how to
- * ask the first will type `/usage`, find nothing, and walk away leaving the
- * panel open — which is exactly what a fifteen-second recording from his
- * Windows machine shows, repeatedly.
+ *     switch (subscriptionType()) {
+ *       case "enterprise": return "Claude Enterprise"
+ *       case "team":       return "Claude Team"
+ *       case "max":        return "Claude Max"
+ *       case "pro":        return "Claude Pro"
+ *       default:           return "Claude API"
+ *     }
+ *
+ * with a layer above it that substitutes the inference provider's own name when
+ * the CLI is not talking to Anthropic first-party at all (`Bedrock`,
+ * `Vertex AI`, `Gateway`, `Foundry`, `Bedrock Mantle`), and `API Usage Billing`
+ * for a first-party install with no subscription account behind it.
+ *
+ * The split is the one thing this module needs from it. Everything in the first
+ * list has a rolling window the CLI draws bars for; everything in the second has
+ * none and never will, because there is no subscription for a window to belong
+ * to. That is why an account in the second list must never be typed into: the
+ * `/usage` panel would open, be complete, contain no plan limits, and have to be
+ * dismissed again — which is the whole of the defect this feature has now been
+ * fixed for twice.
  */
-const PANEL_TABS = /^\s*Settings\s+Status\s+Config\s+Usage\s+Stats\s*$/m
+const SUBSCRIPTION_BILLING = /^Claude (?:Max|Pro|Team|Enterprise)$/
+const METERED_BILLING = /^(?:Claude API|API Usage Billing|Bedrock|Bedrock Mantle|Vertex AI|Gateway|Foundry)$/
 
 /**
- * The heading over the panel's lower half, which is on screen whenever the
- * panel is.
+ * The banner clause that carries it.
  *
- * A second, independent marker, because the tab row can be scrolled off: the
- * panel is taller than a 40-row viewport — measured here, the CLI drew a `↓`
- * in the corner — and a reader who scrolls has not closed anything.
+ * Anchored on `with <effort> ·`, which is the same anchor `readModelFromWelcome`
+ * in `agent-controls.ts` already trusts for the model — and for the same reason:
+ * the CLI composes that clause itself, so the words either side of the middle
+ * dot are its own rather than anybody's prose. The effort is allowed to be a
+ * single token because a narrow window truncates it (`with xhig… ·`, from a real
+ * Windows capture in this repo), and the box border is *not* required because
+ * the same clause is drawn without one on a narrow screen.
+ *
+ * The capture is deliberately lazy and stops at the next dot or border, so the
+ * label is exactly one field. It is then checked against the two lists above and
+ * anything unrecognised is null — including a label the CLI has truncated to
+ * `Claude M…`, which is the right answer, because the fallback for "not known"
+ * is to ask once and remember, and the fallback for a wrong guess would be a bar
+ * asserting something false about somebody's billing.
  */
-const PANEL_CONTRIBUTORS = /contributing to your limits usage/i
-
-/** True when Claude Code's `/usage` panel is on the screen. */
-export function usagePanelOnScreen(screen: string): boolean {
-  const flat = stripAnsi(screen)
-  return PANEL_TABS.test(flat) || PANEL_CONTRIBUTORS.test(flat)
-}
+const BANNER_BILLING = /\bwith\s+\S+(?:\s+effort)?\s*·\s*([^·│]+?)\s*(?:·|│|$)/
 
 /**
- * The panel's own words while it is still working.
+ * What the CLI's welcome banner says this session's account is billed as, or
+ * null when no banner is on the screen.
  *
- * It walks the local transcript store to answer *"what's contributing to your
- * limits usage?"*, and says so, with `Esc to cancel` underneath. Two things
- * follow, and the second is the one that was got wrong.
- *
- * The first is that a scan in progress means *still working*, not *nothing
- * here*, so a reader of this screen has to keep waiting rather than conclude.
- *
- * The second is that the offer of Escape belongs to the scan. The plan-limit
- * bars are drawn from a network call the CLI makes on opening the panel and
- * they do not wait for the scan — measured here at 104ms against a scan that
- * ran for 2273ms over a 3.6GB store — so waiting for the scan buys nothing and
- * costs the panel sitting on somebody's screen for as long as it takes. On the
- * Windows recording the scan was still running ten seconds in.
+ * Null is not "no subscription" — it is "the banner is not here", which happens
+ * constantly: the banner is drawn once at start-up and scrolls off as soon as
+ * the conversation is longer than the window. Which is exactly why the answer,
+ * once seen, is written down against the account rather than re-read; see
+ * `account-limits.ts`.
  */
-const PANEL_SCANNING = /Scanning local sessions/i
-
-/** True while the panel's transcript scan is still running. */
-export function usagePanelScanning(screen: string): boolean {
-  return PANEL_SCANNING.test(stripAnsi(screen))
+export function readClaudeBilling(screen: string): ClaudeBilling | null {
+  for (const line of stripAnsi(screen).split('\n')) {
+    const found = BANNER_BILLING.exec(line)
+    if (!found) continue
+    const label = found[1].trim()
+    if (SUBSCRIPTION_BILLING.test(label)) return 'subscription'
+    if (METERED_BILLING.test(label)) return 'api'
+  }
+  return null
 }
 
 /**
@@ -379,7 +391,7 @@ function parseWarning(
  * once, and the CLI's own label rides along untouched in `label` so nothing on
  * screen has to take this translation's word for it.
  */
-function windowForScope(scope: PlanLimitScope): UsageWindowKind {
+export function windowForScope(scope: PlanLimitScope): UsageWindowKind {
   if (scope === 'session') return 'five-hour'
   if (scope === 'week') return 'weekly'
   return 'other'
@@ -437,17 +449,6 @@ const SETTLE_MS = 600
 const DEFAULT_COLS = 120
 const DEFAULT_ROWS = 40
 /**
- * Claude Code draws its prompt as `❯`, verified against real output.
- *
- * Not unique to it: pure, starship and spaceship draw a zsh prompt the same
- * way, so this says "the prompt box is empty", not "this is Claude Code". The
- * consequence of being wrong is bounded — `/usage` typed at a shell is an
- * unknown command — and the refusal wording says as much rather than insisting
- * there is text in a Claude Code prompt that may not exist.
- */
-const EMPTY_PROMPT = /^\s*❯\s*$/m
-
-/**
  * Mirrors one session's screen and reports the plan limits on it.
  *
  * Only sessions the UI is actually watching get one of these, so the cost is a
@@ -460,6 +461,17 @@ export class PlanLimitTracker {
   private snapshot: PlanLimitSnapshot
   /** Set by {@link dispose}; see {@link flush} for the one thing it changes. */
   private disposed = false
+  /**
+   * What the CLI's banner last said this session's account is billed as.
+   *
+   * Kept once seen rather than re-derived, because the banner is drawn once and
+   * then scrolls away — so a reader who only ever asked the current viewport
+   * would know the answer for the first minute of a session and forget it for
+   * the rest. It is replaced rather than frozen when a *new* banner appears, so
+   * a session somebody exited and restarted the CLI in reports the CLI that is
+   * running now.
+   */
+  private lastBilling: ClaudeBilling | null = null
 
   constructor(
     readonly sessionId: string,
@@ -473,6 +485,39 @@ export class PlanLimitTracker {
 
   get current(): PlanLimitSnapshot {
     return this.snapshot
+  }
+
+  /**
+   * The account's billing as the CLI itself stated it, or null when no banner
+   * has been on this session's screen since it was watched.
+   *
+   * The single most valuable thing this class knows, because it is the one
+   * answer that costs nothing to obtain: an `api` here means the `/usage` panel
+   * on this account has no plan limits in it, established without typing a
+   * character into anybody's terminal. See `refresh`.
+   *
+   * It reads the screen rather than only reporting what the settle timer
+   * happened to have caught. That is not belt-and-braces: the timer fires 600ms
+   * after output stops, and a caller that arrived before it would be told
+   * "nothing known" about a banner that is sitting on the screen in front of it
+   * — and would go and type `/usage` to learn what it could already see. The
+   * cost of asking is one pass over forty lines of text.
+   */
+  billing(): ClaudeBilling | null {
+    this.noteBilling(this.screen())
+    return this.lastBilling
+  }
+
+  /**
+   * Remember the banner on this frame, if there is one.
+   *
+   * Absence is never recorded, because the banner scrolls away and its absence
+   * says nothing: a session that showed `· Claude API ·` an hour ago is still
+   * on that login now.
+   */
+  private noteBilling(screen: string): void {
+    const seen = readClaudeBilling(screen)
+    if (seen !== null) this.lastBilling = seen
   }
 
   push(chunk: string): void {
@@ -545,7 +590,20 @@ export class PlanLimitTracker {
    * shrug every time the user pressed a key.
    */
   capture(at = Date.now(), confirmed = false): boolean {
-    const parsed = parsePlanLimits(this.screen())
+    const screen = this.screen()
+    /*
+     * Read before anything else, and read even when there are no limits on the
+     * screen — which is the case this exists for.
+     *
+     * The banner is on screen at exactly the moment there is nothing else to
+     * read: a session that has just started, has printed its welcome box, and
+     * has never been near a limit. That is the frame that decides whether this
+     * app will ever type into the session at all, so it must not sit behind the
+     * early return below, which is taken on every ordinary screen.
+     */
+    this.noteBilling(screen)
+
+    const parsed = parsePlanLimits(screen)
     if (!parsed) return false
 
     const same =
@@ -577,50 +635,6 @@ export class PlanLimitTracker {
   /** True when nothing has been drawn for `ms` — the session is not mid-answer. */
   settled(ms: number, now = Date.now()): boolean {
     return this.lastOutputAt === 0 || now - this.lastOutputAt >= ms
-  }
-
-  /**
-   * True when the prompt box is empty.
-   *
-   * The gate for typing anything into someone's session: with half-typed text
-   * in the box, `/usage` would be appended to it and submitted as a prompt.
-   */
-  promptIsEmpty(): boolean {
-    return EMPTY_PROMPT.test(stripAnsi(this.screen()))
-  }
-
-  /** True when Claude Code's `/usage` panel is on this session's screen. */
-  panelOnScreen(): boolean {
-    return usagePanelOnScreen(this.screen())
-  }
-
-  /** True while that panel is still walking the local transcript store. */
-  panelScanning(): boolean {
-    return usagePanelScanning(this.screen())
-  }
-
-  /**
-   * True when the panel this app opened is demonstrably gone.
-   *
-   * Two independent positives, either of which is enough, because each covers
-   * the other's blind spot.
-   *
-   * The panel marker being *absent* is the direct answer, and it is the one
-   * that can be wrong in the app's favour: on a screen with conversation above
-   * it the CLI draws the panel into the region the prompt normally occupies,
-   * and this code cannot promise that no trace of that text is left in the
-   * viewport once it has been dismissed. So a lingering marker alone must not
-   * be reported as "I could not close it" — a false alarm of that kind is a
-   * lie in the other direction, and it would arrive with an extra Escape in
-   * somebody's terminal.
-   *
-   * The prompt box being *back* is the other, and it cannot linger: the CLI
-   * draws it only when it is at the prompt, and it is drawn nowhere inside the
-   * panel — verified on a real PTY here, where `promptIsEmpty` was false for
-   * every frame the panel was up and true on the first frame after Escape.
-   */
-  panelClosed(): boolean {
-    return this.promptIsEmpty() || !this.panelOnScreen()
   }
 
   dispose(): void {
@@ -664,22 +678,6 @@ interface Entry {
    * reading the other did not get.
    */
   listeners: Set<PlanLimitListener>
-  refreshing: boolean
-  /**
-   * A terminal answer this session has already given, or null.
-   *
-   * Set when a `/usage` ran to completion and established something that will
-   * not change by being asked again: the panel has no plan-limit section for
-   * this account, or the panel would not close. While it is set, nothing this
-   * app decides to do on its own types into the session again — only a person
-   * pressing, which clears it. See `refresh`, and `RefreshReason`.
-   *
-   * It is here rather than in the renderer because this is the side that types.
-   * A window that reloaded, or a second window that never saw the first
-   * refusal, would otherwise be able to walk straight past the block and put
-   * the panel back on somebody's conversation.
-   */
-  blocked: RefreshReason
 }
 
 const entries = new Map<string, Entry>()
@@ -739,8 +737,6 @@ function ensureEntry(sessionId: string): Entry {
     tracker: new PlanLimitTracker(sessionId, (snapshot) => broadcast(entry, snapshot)),
     subscribers: new Set(),
     listeners: new Set(),
-    refreshing: false,
-    blocked: null,
   }
   entries.set(sessionId, entry)
   return entry
@@ -791,6 +787,27 @@ export function planSnapshot(sessionId: string): PlanLimitSnapshot {
 }
 
 /**
+ * What Claude Code's own welcome banner said this session's login is billed as,
+ * or null when no banner has been on its screen since it was watched.
+ *
+ * The cheapest true thing this module knows, and the only reason it is worth
+ * exporting: an `api` here means the login has no rolling subscription window
+ * at all, established from a line the CLI printed of its own accord, at the cost
+ * of nothing whatsoever. `usage-ipc.ts` reads it before deciding whether to
+ * start a process — see `refreshUsage` — which turns "read the usage of an
+ * account that has none" from a four-second spawn into a map lookup, the first
+ * time and every time.
+ *
+ * Null is not "no subscription". It is "no banner has been seen", which is the
+ * ordinary state of a session attached after its CLI had already printed one,
+ * and a caller that read it as an answer would suppress the feature on a
+ * perfectly good login.
+ */
+export function planBilling(sessionId: string): ClaudeBilling | null {
+  return entries.get(sessionId)?.tracker.billing() ?? null
+}
+
+/**
  * Feed a session's terminal output in. Call from wherever PTY data is already
  * fanned out; sessions nobody is watching cost one map lookup.
  */
@@ -828,401 +845,20 @@ function sessionKey(value: unknown): string {
 }
 
 /**
- * Why a refresh did not produce a reading.
- *
- * Two of these are new on 2026-08-18 and they are the two that mattered. The
- * list used to end at `no-panel`, which said *"Claude Code did not show its
- * usage panel"* and was used for every failure including the one where the
- * panel was shown, was read, contained no plan limits at all, and was left
- * sitting on the screen.
- */
-export type RefreshReason =
-  | 'unwired'
-  | 'not-watching'
-  | 'busy'
-  | 'prompt-busy'
-  | 'no-panel'
-  /**
-   * The panel opened and settled and has no plan-limit section in it.
-   *
-   * Not a timeout and not a slow answer — an answer. Claude Code draws
-   * `Current session` and `Current week` from the subscription's own limits,
-   * and an account billed through the API has none, so those blocks are simply
-   * absent. Frames from his Windows machine show exactly that: the panel
-   * complete, `Usage by model` with dollar costs against it, and no bars
-   * anywhere between the cost block and *"What's contributing to your limits
-   * usage?"*.
-   *
-   * It is terminal for the session, which is the point of separating it. The
-   * old code could not tell this apart from "the CLI is being slow", so it
-   * waited eight seconds, gave up, and let the automatic fetcher come back and
-   * do it again — every twenty seconds, for as long as the session was open.
-   */
-  | 'no-limits'
-  /**
-   * The panel was opened by this app and would not close.
-   *
-   * Said out loud rather than swallowed, because the alternative is what the
-   * recording shows: a panel over somebody's conversation and nothing anywhere
-   * that admits to having put it there. Also terminal — an app that could not
-   * clean up after one attempt has no business making a second.
-   */
-  | 'panel-open'
-  | null
-
-export interface RefreshResult {
-  ok: boolean
-  /**
-   * Why a refresh did not run, or did not find anything. Reported rather than
-   * swallowed: a control that appears to do nothing is worse than one that says
-   * why it did not.
-   */
-  reason: RefreshReason
-  /**
-   * Whether this attempt typed anything into the session at all.
-   *
-   * The gates above the typing — busy, prompt-busy, unwired — cost the session
-   * nothing, and an attempt that cost nothing may be made again the moment the
-   * gate clears. Everything after the `/usage` has been sent has left a mark on
-   * somebody's screen, and the retry rule upstream is built on this distinction
-   * rather than on guessing it back out of the reason.
-   */
-  typed: boolean
-  /**
-   * True when this app opened a panel it could not close.
-   *
-   * The one failure this feature is not allowed to have. It exists as a field
-   * rather than only as a reason because it has to survive a *successful*
-   * reading too: a fetch that got its numbers and then could not dismiss the
-   * panel has still left something on the screen, and the person is owed that
-   * sentence either way.
-   */
-  residue: boolean
-  snapshot: PlanLimitSnapshot
-}
-
-const USAGE_COMMAND = '/usage\r'
-/** Escape closes the panel — the same key a person presses to dismiss it. */
-const CLOSE_PANEL = '\u001b'
-const POLL_MS = 250
-
-/**
- * The timings this operation is built out of, all measured rather than picked.
- *
- * They are a value rather than a row of module constants for one reason: a test
- * that proves a five-second rule must not spend five real seconds doing it, and
- * the alternative — a fake clock over `setTimeout` — would be measuring the
- * test harness instead of this. Nothing in the app passes anything but
- * {@link DEFAULT_TIMINGS}.
- */
-export interface RefreshTimings {
-  /**
-   * How long the session must have been quiet before anything is typed into it.
-   *
-   * A second, because the thing being avoided is appending `/usage` to a line
-   * somebody is in the middle of writing, or interrupting an agent mid-answer.
-   */
-  idleBeforeTyping: number
-  /**
-   * How long the panel has to appear at all before this gives up on it.
-   *
-   * Measured on a real PTY here on 2026-08-18: the panel was on screen and
-   * parseable 104ms after the newline. Six seconds is that with two orders of
-   * magnitude of slack, and it is bounded on the other side by what it costs to
-   * be wrong — a session that is not running Claude Code has had `/usage`
-   * submitted to it as a prompt and there is nothing to be gained by waiting
-   * longer to admit it.
-   */
-  panelAppears: number
-  /**
-   * How much longer a settled panel with no limits in it gets, before that is
-   * taken as the answer.
-   *
-   * The limits are not part of the transcript scan — they arrive with the panel
-   * itself, from the network call the CLI makes on opening it — so a panel that
-   * has stopped scanning and still has no `Current session` block is finished
-   * rather than slow. Five seconds is for the case that reasoning is wrong: a
-   * slow link, an OAuth call still in flight, a redraw caught between frames.
-   */
-  settledGrace: number
-  /**
-   * The ceiling on a panel that is open, has no limits in it, and is still
-   * scanning.
-   *
-   * The scan is not what this is waiting for. Measured on a real PTY here: the
-   * `Current session` and `Current week` bars were on screen and parseable
-   * 104ms after the newline, while `Scanning local sessions…` and `Esc to
-   * cancel` sat underneath them for another 2273ms — because the bars come from
-   * the network call the CLI makes on opening the panel and the scan answers a
-   * different question, *"what's contributing"*, which this app does not read.
-   *
-   * So what the scan is evidence of is only that the panel is alive rather than
-   * frozen, and ten seconds is how long that is worth: long enough that a slow
-   * OAuth call still lands inside it, short enough that the worst case — an
-   * account that can never report, on the day the network is bad — is ten
-   * seconds of panel over somebody's conversation, once, and never again.
-   *
-   * It was twenty for a day. Twenty is what his Windows scan needs to finish and
-   * finishing is not the point: waiting out a scan whose result this app does
-   * not even read would be committing the offence in order to be polite about
-   * it. If a slow link ever does cost a wrong `no-limits`, the sentence says
-   * what was seen and the press in the panel undoes it.
-   */
-  scanCeiling: number
-  /**
-   * How long one Escape gets to take effect before another is tried.
-   *
-   * Measured: on Claude Code 2.1.234 a single Escape closed the panel within
-   * 103ms, both mid-scan and after it. A second and a half is that with room
-   * for a machine under load.
-   */
-  closeSettle: number
-}
-
-export const DEFAULT_TIMINGS: RefreshTimings = {
-  idleBeforeTyping: 1_000,
-  panelAppears: 6_000,
-  settledGrace: 5_000,
-  scanCeiling: 10_000,
-  closeSettle: 1_500,
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-export interface PlanLimitOptions {
-  /**
-   * Writes to a session's PTY. Without it `plan:refresh` reports `unwired` and
-   * the UI hides the control instead of offering a button that does nothing.
-   */
-  write?: (sessionId: string, data: string) => void
-  /** See {@link RefreshTimings}. Overridden by tests and by nothing else. */
-  timings?: RefreshTimings
-}
-
-/**
- * Put the panel away, and prove it went.
- *
- * ## Why this is not one `write` and a hope
- *
- * Because that is what it was, and a fifteen-second recording from his Windows
- * machine is what that cost: `/usage` typed into a live conversation, the panel
- * drawn over it, one Escape written into the pty, and the app moving on without
- * ever asking whether the Escape had done anything. It had not. The panel was
- * still there, ten seconds later, over his work.
- *
- * What is *not* known is why it had not, and this deliberately does not need to
- * know. On this Mac, with Claude Code 2.1.234 driven through a real PTY, one
- * Escape closes the panel in about a tenth of a second whether or not the
- * transcript scan is still running and still offering `Esc to cancel` — that
- * was measured three times, and it refutes the first theory, which was that the
- * scan swallows the first press. His build is 2.1.224 on Windows, where the
- * keystroke crosses a conpty rather than a Unix pty, and neither of those can
- * be tested from here. So this does the thing that is right under every one of
- * those explanations: it looks at the screen, and if the panel is still there
- * it presses Escape again, and if it is *still* there it says so.
- *
- * ## Why exactly one more, and not a loop
- *
- * A second Escape is cheap and was measured to be cheap: typed at an ordinary
- * prompt with a half-written line in it, on 2.1.234, the line survived
- * untouched. A third would be a program hammering somebody's keyboard on a
- * theory it has already twice failed to confirm. Two presses, then the truth.
- */
-async function closePanel(
-  entry: Entry,
-  sessionId: string,
-  write: (sessionId: string, data: string) => void,
-  timings: RefreshTimings,
-): Promise<boolean> {
-  for (let press = 0; press < 2; press += 1) {
-    write(sessionId, CLOSE_PANEL)
-    const until = Date.now() + timings.closeSettle
-    while (Date.now() < until) {
-      await delay(POLL_MS)
-      // Everything the CLI has sent, actually on the screen before it is read.
-      // `Terminal.write` is asynchronous, so "the repaint arrived" and "the
-      // repaint is in the buffer" are two moments — and reading between them is
-      // the race that has already failed twice on the Windows runner while
-      // passing on every Mac. See `PlanLimitTracker.flush`.
-      await entry.tracker.flush()
-      if (entry.tracker.panelClosed()) return true
-    }
-  }
-  await entry.tracker.flush()
-  return entry.tracker.panelClosed()
-}
-
-/**
- * Run `/usage` in a session and read the panel it draws.
- *
- * This types into the user's session, so it runs only when the session is quiet
- * *and* its prompt box is empty — otherwise the text would be appended to what
- * they were typing and submitted as a prompt. The panel is closed again with
- * Escape, which is what a person does, and — since 2026-08-18 — the close is
- * verified rather than assumed. See {@link closePanel}.
- *
- * The empty-prompt gate matches an idle prompt glyph. That is Claude Code's,
- * but it is also what several zsh themes draw, so the gate proves the box is
- * empty rather than proving which program owns it; in a plain shell the worst
- * case is an unknown command, and nothing is submitted to an agent.
- *
- * ## Three endings, not two
- *
- * The old loop had two: a panel with limits in it, or eight seconds of silence
- * called `no-panel`. Everything else fell into the second, and the commonest
- * "everything else" turned out to be a panel that opened perfectly and had no
- * plan-limit section in it at all, because the account is billed through the
- * API and therefore has no rolling subscription limits to draw. That is an
- * answer, not a timeout, and telling the two apart is what stops the automatic
- * fetcher trying again for ever.
- *
- * `force` is the difference between a person asking and this app deciding to
- * ask. A session that has already given a terminal answer — no limits, or a
- * panel that would not close — is not asked again on its own; a press says ask
- * anyway, and clears the block.
- */
-async function refresh(
-  sessionId: string,
-  options: PlanLimitOptions,
-  force = false,
-): Promise<RefreshResult> {
-  const timings = options.timings ?? DEFAULT_TIMINGS
-  const entry = entries.get(sessionId)
-  const refused = (reason: RefreshReason, snapshot: PlanLimitSnapshot): RefreshResult => ({
-    ok: false,
-    reason,
-    typed: false,
-    residue: false,
-    snapshot,
-  })
-
-  if (!entry) return refused('not-watching', emptySnapshot(sessionId, NOT_WATCHED))
-  const write = options.write
-  if (!write) return refused('unwired', entry.tracker.current)
-  if (force) entry.blocked = null
-  // A session that has already answered "there is nothing here" is not asked
-  // again by anything except a person. Enforced here rather than only in the
-  // renderer because this is the side that types: a window that has forgotten
-  // the block, or a second window that never knew it, must not be able to reach
-  // past it into somebody's terminal.
-  if (entry.blocked !== null) return refused(entry.blocked, entry.tracker.current)
-  if (entry.refreshing || !entry.tracker.settled(timings.idleBeforeTyping)) {
-    return refused('busy', entry.tracker.current)
-  }
-  if (!entry.tracker.promptIsEmpty()) return refused('prompt-busy', entry.tracker.current)
-
-  entry.refreshing = true
-  const startedAt = Date.now()
-  /** The first moment the panel was seen; null while it has never been seen. */
-  let panelSeenAt: number | null = null
-  /** The first moment the panel was seen up and *not* scanning. */
-  let settledAt: number | null = null
-
-  const finish = async (
-    ok: boolean,
-    reason: RefreshReason,
-    snapshot: PlanLimitSnapshot,
-  ): Promise<RefreshResult> => {
-    const closed = await closePanel(entry, sessionId, write, timings)
-    /*
-     * One rule, and it is deliberately stricter than "give up after three".
-     *
-     * An attempt that got as far as typing has spent something that is not this
-     * app's to spend — a command submitted at somebody's prompt, a panel drawn
-     * over their conversation — and if it came back with nothing to show for it,
-     * doing the same thing again on a timer is how a defect becomes a habit.
-     * Every one of the three endings that reaches here without a reading is also
-     * one whose answer will not change for being asked again: an account with no
-     * subscription limits will not grow some, a panel that ignored two Escapes
-     * will not yield to a third, and a prompt that answered `/usage` with no
-     * panel is not running Claude Code.
-     *
-     * A panel this app could not put away outranks whatever it did or did not
-     * read, because it is the part the person can see.
-     *
-     * A reading blocks nothing. That is the healthy loop — the figure goes
-     * stale, the bar says so, and the next quiet moment reads it again.
-     */
-    if (!closed) entry.blocked = 'panel-open'
-    else if (!ok) entry.blocked = reason
-    return {
-      ok: closed && ok,
-      reason: closed ? reason : 'panel-open',
-      typed: true,
-      residue: !closed,
-      snapshot,
-    }
-  }
-
-  try {
-    write(sessionId, USAGE_COMMAND)
-    for (;;) {
-      await delay(POLL_MS)
-      /*
-       * The session can go away underneath this.
-       *
-       * Closing the tab drops the entry and disposes the tracker, and the pty
-       * behind `write` is gone with it — so there is nothing left to read and
-       * nothing left to close. Reported as `not-watching` with `typed` still
-       * true, because the `/usage` really was sent: it is a statement about what
-       * this attempt did, not about what survived it.
-       */
-      if (entries.get(sessionId) !== entry) {
-        return { ok: false, reason: 'not-watching', typed: true, residue: false, snapshot: entry.tracker.current }
-      }
-      // Same reason as in `closePanel`: read the screen only once everything
-      // pushed into it has been parsed.
-      await entry.tracker.flush()
-      // Confirmed: `/usage` was just typed, so what comes back is a fresh
-      // answer from the CLI even if it prints the same numbers as before.
-      entry.tracker.capture(Date.now(), true)
-      const snapshot = entry.tracker.current
-      if (snapshot.source === 'usage-panel' && snapshot.capturedAt >= startedAt) {
-        return await finish(true, null, snapshot)
-      }
-
-      const now = Date.now()
-      if (entry.tracker.panelOnScreen()) {
-        if (panelSeenAt === null) panelSeenAt = now
-        if (entry.tracker.panelScanning()) {
-          // Still working. Keep waiting — but not for ever: the limits do not
-          // come from the scan, so a scan that outlives this ceiling is holding
-          // the panel over somebody's work for a result this app never reads.
-          settledAt = null
-          if (now - panelSeenAt >= timings.scanCeiling) {
-            return await finish(false, 'no-limits', entry.tracker.current)
-          }
-          continue
-        }
-        if (settledAt === null) settledAt = now
-        else if (now - settledAt >= timings.settledGrace) {
-          return await finish(false, 'no-limits', entry.tracker.current)
-        }
-        continue
-      }
-
-      // No panel yet, and no panel is different from an empty one: the session
-      // may not be running Claude Code at all.
-      if (now - startedAt >= timings.panelAppears) {
-        return await finish(false, 'no-panel', entry.tracker.current)
-      }
-    }
-  } finally {
-    entry.refreshing = false
-  }
-}
-
-/**
  * Register the plan-limit IPC handlers.
  *
  * Channels:
  *  - `plan:watch`   (invoke, sessionId) -> PlanLimitSnapshot   subscribe; pushes `plan:update`
- *  - `plan:refresh` (invoke, sessionId, force?) -> RefreshResult  runs /usage in the session
  *  - `plan:unwatch` (send,   sessionId) -> void
+ *
+ * Two, and both of them read. There used to be a third — `plan:refresh` — which
+ * typed `/usage` into the session and read the panel that came up, and it is
+ * gone rather than merely unwired. Nothing in this module writes to a pty any
+ * more, and the reason is the whole of the 2026-08-18 change: see the note at
+ * the top of this file, and `usage-probe.ts`, which is where the figure comes
+ * from now.
  */
-export function registerPlanLimitIpc(ipcMain: IpcMain, options: PlanLimitOptions = {}): void {
+export function registerPlanLimitIpc(ipcMain: IpcMain): void {
   ipcMain.handle('plan:watch', (event: IpcMainInvokeEvent, sessionId: string): PlanLimitSnapshot => {
     const entry = ensureEntry(sessionKey(sessionId))
     const contents = event.sender
@@ -1236,18 +872,6 @@ export function registerPlanLimitIpc(ipcMain: IpcMain, options: PlanLimitOptions
     onWebContentsDestroyed(contents, 'plan-limit', () => releaseAll(contents))
     return entry.tracker.current
   })
-
-  /*
-   * `force` is a person pressing, and it is the only thing that can reach past
-   * a session's terminal answer. Read defensively rather than trusted: a build
-   * whose renderer predates the argument sends nothing at all, and the honest
-   * default for "did somebody press this" is no.
-   */
-  ipcMain.handle(
-    'plan:refresh',
-    (_e: IpcMainInvokeEvent, sessionId: string, force?: unknown): Promise<RefreshResult> =>
-      refresh(sessionKey(sessionId), options, force === true),
-  )
 
   ipcMain.on('plan:unwatch', (event, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || sessionId.length === 0) return

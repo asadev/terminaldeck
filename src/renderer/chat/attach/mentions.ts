@@ -39,9 +39,14 @@
  *    own write, after a gap — {@link terminalWrites} is that sequence.
  */
 
-/** POSIX separator throughout: these paths come from the main process, which
- *  normalises to forward slashes, and go into a prompt, not into an fs call. */
-const SEP = '/'
+/*
+ * A `const SEP = '/'` used to sit here, and the Windows bug it caused is worth
+ * leaving a marker for. Its comment claimed the paths reaching this file were
+ * already forward-slashed by the main process; nothing anywhere did that, so
+ * every gate in this file was false for every path a Windows user can produce.
+ * The argument, the evidence and the replacement are at the head of the paths
+ * section below.
+ */
 
 /**
  * How many attachments one message may carry.
@@ -135,11 +140,155 @@ export const OUTSIDE_FOLDER_CAUTION =
 
 /* ------------------------------------------------------------------ paths -- */
 
-/** Trailing separators removed, so `/a/b/` and `/a/b` are one path. */
+/*
+ * ## Both spellings, and why this section was rewritten
+ *
+ * What this file used to say, kept because it is the whole reason the bug
+ * existed:
+ *
+ *   > POSIX separator throughout: these paths come from the main process, which
+ *   > normalises to forward slashes, and go into a prompt, not into an fs call.
+ *   > `const SEP = '/'`
+ *
+ * The second clause is still true. The first was never true of anything. No
+ * module on any of the three routes into this file rewrites a separator:
+ * `dialog.showOpenDialog` hands back `C:\Users\asad\Desktop\shot.png`, the
+ * preload's `webUtils` drop path is the same shape, and the only transform in
+ * `main/attach-outside.ts` is `normalisePick`, which rewrites `\\wsl.localhost\…`
+ * into its Linux spelling and returns everything else verbatim — `main/wsl.ts`
+ * matches only the two WSL prefixes and `main/wsl.test.ts` pins
+ * `linuxPathFromUnc('C:\\Users\\Asad\\proj')` as null.
+ *
+ * So `addAttachment`'s `startsWith('/')` was false for every pick on Windows,
+ * and all three doors — Browse, drag-and-drop, paste — ended at
+ * `reason: 'not-absolute'`: the composer telling somebody that the path they had
+ * chosen in the operating system's own file panel two seconds earlier was not a
+ * path. Attaching a file to a chat message was completely dead on Windows and
+ * worked on macOS. `insideRoot`, `relativeTo`, `basename` and `normalise` were
+ * broken the same way underneath it, so even lifting the gate alone would have
+ * produced chips labelled with whole paths and a containment test that answered
+ * no for every file in the project.
+ *
+ * The fix is *not* to introduce the normalisation the old comment imagined. A
+ * pick is shown back to the person who made it — in a chip's hover, in the
+ * message they are about to send — and `C:/Users/asad/Desktop` is not how their
+ * machine spells that. It is also not this module's business: rewriting a
+ * separator here would make this the one place in the app that changes what a
+ * pick *is*, while `folderName` (session-title.ts), `folderOf` (dashboard/board.ts)
+ * and `folderName` (remote/DeviceFolders.tsx) all keep the native spelling and
+ * read both. So this file reads both too.
+ */
+
+/**
+ * Windows-shaped: a drive-lettered path or a UNC share.
+ *
+ * The shape of the *path*, not the platform of the machine, and that is the rule
+ * this file already lives by — see {@link shellQuote}, which picks its quoting
+ * from the path because on Windows a `/home/...` pick launches through `wsl.exe`
+ * into a POSIX shell and a `C:/...` pick through `cmd.exe`, so the machine
+ * cannot answer the question and the path can. The same reasoning settles every
+ * question below: which characters end a segment, whether two spellings name one
+ * file, and which character marks a folder. It also happens to be the only rule
+ * that is right on a Mac reading a Windows path, which the relay makes ordinary.
+ */
+function isWindowsShaped(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\')
+}
+
+/**
+ * The last character that ends a segment, in either spelling.
+ *
+ * `folderName` in `session-title.ts` made this trade first and argues it in
+ * full: a backslash is a legal character in a POSIX directory name, so a Mac
+ * folder literally called `a\b` now reads as `b`. That is the right way round —
+ * the alternative is a function that is wrong for every path on one of the two
+ * platforms this ships to, rather than for a directory nobody has.
+ */
+function lastSeparator(path: string): number {
+  return Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+}
+
+/**
+ * Is this a path the agent can resolve without being told a working directory?
+ *
+ * The two-spelling test this repo already writes in five other places —
+ * `isRecordedAbsolute` (main/artifacts.ts), `isAbsoluteCommand`
+ * (shared/custom-agents.ts), `parseLastFolder` (renderer/session-start.ts),
+ * `isAbsoluteFolder` (main/remote/session-create.ts) and the label test in
+ * `renderer/shell/tooltip.ts` — written out again here rather than imported, for
+ * the reason `renderer/platform.ts` gives for its own copy of a main-process
+ * decision: the renderer cannot import from `src/main`, and `src/shared` is not
+ * a place to put a question only this feature asks.
+ *
+ * UNC is accepted, where `isAbsoluteCommand` deliberately refuses it. The two
+ * are not the same question. That one decides whether to *launch a binary* off
+ * somebody else's file server, which is not a thing to make one click away;
+ * this one decides whether to read a file the user just chose in their own file
+ * panel. A mapped share is where a great deal of ordinary work lives on a
+ * Windows machine, and refusing it would leave this feature half-dead in
+ * precisely the environment where it was already fully dead.
+ */
+export function isAbsolutePath(path: string): boolean {
+  const target = path.trim()
+  return target.startsWith('/') || isWindowsShaped(target)
+}
+
+/**
+ * One path reduced to the form two spellings of the same file agree on.
+ *
+ * For *comparison* only — never for anything a person reads and never for the
+ * mention, both of which must carry the path that was picked. Two transforms,
+ * and both only for a Windows-shaped path:
+ *
+ *  - **Separators unify.** The root and the pick do not always come from the
+ *    same place. `git rev-parse --show-toplevel` prints `C:/Users/asad/app`
+ *    even on Windows, while `dialog.showOpenDialog` hands back
+ *    `C:\Users\asad\app\src\a.ts`; a containment test comparing those character
+ *    by character says no, and every file in the project is then "outside" it.
+ *  - **Case folds.** NTFS is case-insensitive, so `C:\Users\Asad\a.txt` and
+ *    `c:\users\asad\a.txt` are one file. Picking it from two panels must produce
+ *    one chip and one mention rather than two of each — the same file mentioned
+ *    twice is the same source pasted twice into the prompt.
+ *
+ * Neither is applied to a POSIX path, and that restraint is the point rather
+ * than caution. Folding case there would call `README.md` and `readme.md` one
+ * file on a Mac, where they are two; unifying separators there would let
+ * `/Users/asad/proj\secrets` — a legal file *beside* the project — pass as
+ * inside it, and weakening a containment test is a worse failure than a
+ * mislabelled chip. `withinFolder` (main/remote/session-create.ts) folds on
+ * exactly these terms, by platform rather than by shape because it has a
+ * platform argument to hand and this does not.
+ *
+ * Both transforms preserve length, which is what lets {@link relativeTo} keep
+ * slicing by the root's length.
+ */
+function comparable(path: string): string {
+  if (!isWindowsShaped(path)) return path
+  return path.replace(/\\/g, '/').toLowerCase()
+}
+
+/** Two spellings of one file. See {@link comparable} for why this is not `===`. */
+export function samePath(a: string, b: string): boolean {
+  return comparable(normalise(a)) === comparable(normalise(b))
+}
+
+/**
+ * Trailing separators removed, so `/a/b/` and `/a/b` are one path — and
+ * `C:\a\b\` and `C:\a\b` with them.
+ *
+ * The drive root is the one path that must keep its separator: `C:\` names the
+ * top of the drive, and `C:` names *the current directory on that drive*, which
+ * is a different place and one nothing in this app knows. The POSIX root is
+ * held back by the length test above it for the same reason.
+ */
 export function normalise(path: string): string {
   const trimmed = path.trim()
   if (trimmed.length <= 1) return trimmed
-  return trimmed.replace(/\/+$/, '')
+  if (/^[A-Za-z]:[\\/]+$/.test(trimmed)) return trimmed.slice(0, 3)
+  const stripped = trimmed.replace(/[\\/]+$/, '')
+  // `//` and `\\` strip to nothing. Handing back an empty string would turn a
+  // malformed path into one that compares equal to a missing root.
+  return stripped === '' ? trimmed : stripped
 }
 
 /**
@@ -147,28 +296,42 @@ export function normalise(path: string): string {
  *
  * The separator in the comparison is what makes this a containment test rather
  * than a string test: without it `/Users/asad/project-secrets` passes as inside
- * `/Users/asad/project`.
+ * `/Users/asad/project`. One boundary character serves both platforms because
+ * {@link comparable} has already unified a Windows path's separators by the
+ * time the prefix is taken; `/` and `C:/` are the two roots that carry theirs
+ * already.
  */
 export function insideRoot(root: string, path: string): boolean {
   const base = normalise(root)
   const target = normalise(path)
-  if (base === '' || !base.startsWith(SEP) || !target.startsWith(SEP)) return false
-  if (target === base) return true
-  return target.startsWith(base.endsWith(SEP) ? base : base + SEP)
+  if (base === '' || !isAbsolutePath(base) || !isAbsolutePath(target)) return false
+  const top = comparable(base)
+  const inner = comparable(target)
+  if (inner === top) return true
+  return inner.startsWith(top.endsWith('/') ? top : `${top}/`)
 }
 
 /** `path` expressed relative to `root`, or the path itself when it is the root. */
 export function relativeTo(root: string, path: string): string {
   const base = normalise(root)
   const target = normalise(path)
-  if (target === base) return base.slice(base.lastIndexOf(SEP) + 1)
+  if (comparable(target) === comparable(base)) return basename(base)
+  /*
+   * Sliced by the root's *length*, which survives both of `comparable`'s
+   * transforms: `C:/Users/asad/app` and `C:\Users\asad\app` are the same number
+   * of characters, so a root that arrived from git with forward slashes still
+   * cuts a pick that arrived from the open panel with backslashes in the right
+   * place, and the fragment keeps the pick's own spelling. What the slice does
+   * not survive is being called for a path *outside* the root — that is the
+   * caller's job and {@link Attachment.relPath} says so at length.
+   */
   return target.slice(base.length + 1)
 }
 
 /** Last segment of a path — what a chip shows when the folder part is elided. */
 export function basename(path: string): string {
   const target = normalise(path)
-  const cut = target.lastIndexOf(SEP)
+  const cut = lastSeparator(target)
   return cut === -1 ? target : target.slice(cut + 1)
 }
 
@@ -194,10 +357,23 @@ export function kindFor(path: string, isDirectory: boolean): AttachmentKind {
  * their own message: the CLI decides between "read this file" and "list this
  * directory" by stat-ing the resolved path, and `@"/dir"` and `@"/dir/"` were
  * both measured returning the same listing.
+ *
+ * That trailing character follows the path's own spelling, so a folder picked
+ * on Windows reads `@"C:\Users\asad\app\"` rather than the mongrel
+ * `@"C:\Users\asad\app/"`. It changes nothing about what the CLI resolves —
+ * both forms stat the same directory on Windows — and it is the only part of
+ * the mention this function writes, so it is the only part it can get wrong.
+ * Whether the CLI's own mention parser treats a backslash *inside* the quotes as
+ * an escape is a question no measurement on this machine can answer, and it is
+ * not this function's to answer either: the backslashes in the body are the ones
+ * the user picked, and rewriting them would be the normalisation argued against
+ * at the head of the paths section.
  */
 export function mentionFor(attachment: Attachment): string {
   const path = normalise(attachment.path)
-  return attachment.kind === 'folder' ? `@"${path}/"` : `@"${path}"`
+  if (attachment.kind !== 'folder') return `@"${path}"`
+  const sep = isWindowsShaped(path) && path.includes('\\') ? '\\' : '/'
+  return `@"${path}${sep}"`
 }
 
 /**
@@ -286,6 +462,12 @@ export function terminalWrites(message: string): [string, string] {
  *  - Windows (`C:/…`, `\\server\…`): double quotes. `cmd.exe` has no escape
  *    inside them, and it needs none: `"` is one of the characters Windows
  *    forbids in a filename, so the case cannot arise.
+ *
+ * The drive test here is deliberately looser than {@link isWindowsShaped}, and
+ * the difference is one input: a bare `C:` with no separator after it. That is
+ * not a path anything may *attach* — hence the stricter shape rule there — but
+ * it is a word `cmd.exe` understands, so quoting it as a Windows path is right
+ * and single-quoting it for a POSIX shell that will never see it is not.
  */
 export function shellQuote(path: string): string {
   const target = normalise(path)
@@ -322,10 +504,21 @@ export function addAttachment(
   scope: AttachScope = 'project',
 ): AddResult {
   const target = normalise(path)
-  if (!target.startsWith(SEP)) return { ok: false, reason: 'not-absolute' }
+  /*
+   * Absolute in either spelling. This test used to be `startsWith('/')`, which
+   * is false for every path a Windows file panel can produce — see the head of
+   * the paths section: it made this the line that killed the whole feature on
+   * one of the two platforms this ships to, and it did it with the one refusal
+   * message guaranteed to read as a lie ("that path is not absolute" about a
+   * path the user picked in Explorer).
+   */
+  if (!isAbsolutePath(target)) return { ok: false, reason: 'not-absolute' }
   const inside = insideRoot(root, target)
   if (!inside && scope === 'project') return { ok: false, reason: 'outside-root' }
-  if (current.some((a) => a.path === target)) return { ok: false, reason: 'duplicate' }
+  // `samePath`, not `===`: on Windows the same file picked from two panels can
+  // arrive spelled two ways, and two chips for one file means the same source
+  // pasted into the prompt twice.
+  if (current.some((a) => samePath(a.path, target))) return { ok: false, reason: 'duplicate' }
   if (current.length >= MAX_ATTACHMENTS) return { ok: false, reason: 'full' }
   return {
     ok: true,
@@ -346,11 +539,18 @@ export function addAttachment(
   }
 }
 
+/**
+ * Removing has to answer the same question adding did.
+ *
+ * `samePath` rather than a string compare, so the chip that `addAttachment`
+ * refused as a duplicate is the chip this removes — otherwise a Windows user
+ * could hold an attachment that cannot be added again and cannot be taken off.
+ */
 export function removeAttachment(
   current: readonly Attachment[],
   path: string,
 ): Attachment[] {
-  return current.filter((a) => a.path !== normalise(path))
+  return current.filter((a) => !samePath(a.path, path))
 }
 
 /** One candidate, as the three outside routes hand them over. */
@@ -409,16 +609,23 @@ export function addAttachments(
  * picker's candidates come from — every ancestor of every file, deduped. It
  * costs one pass over a list the renderer already holds, and means adding a
  * folder needs no second round trip to the main process.
+ *
+ * That picker is the in-app project list, which was deleted (`outside.ts` has
+ * the quote), so this currently has no caller but its test. It is kept and
+ * fixed rather than left POSIX-only because the separator bug would come back
+ * silently with whoever re-wires it: a Windows file index yields
+ * `src\main\index.ts`, and splitting that on `/` finds no ancestor at all, so
+ * the folder picker would simply be empty on Windows with nothing to see.
  */
 export function foldersFrom(files: readonly string[]): string[] {
   const seen = new Set<string>()
   for (const file of files) {
-    let cut = file.lastIndexOf(SEP)
+    let cut = lastSeparator(file)
     while (cut > 0) {
       const dir = file.slice(0, cut)
       if (seen.has(dir)) break
       seen.add(dir)
-      cut = dir.lastIndexOf(SEP)
+      cut = lastSeparator(dir)
     }
   }
   return [...seen].sort()

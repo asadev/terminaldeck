@@ -216,7 +216,7 @@ broad to fix as a side quest, and each is real.
       Cookies and everything else under the Electron root. Correct call; needs a
       narrower fix.
 
-## Pairing has two kinds of device (2026-08-17) — queued, not built
+## Pairing has two kinds of device (2026-08-17) — BUILT 2026-08-18, and it took the copilot connection with it 2026-08-19
 
 His model, and it supersedes per-tier checkboxes as the thing a person sees:
 
@@ -235,9 +235,21 @@ is this* answers it once, correctly, in the words the person already thinks in.
 - **Someone else** — the existing pickers. Folder grants already exist
   (`folder-grants.ts`, `DeviceFolders`); copilot access and its tiers join them.
 
-This layers **on top of** the separate-copilot-connection work, which is the
-mechanism and is needed either way. What changes is the pairing flow and the
-defaults, not the enforcement.
+> **This sentence said the wrong thing, and it is left standing with the
+> correction under it.** It read: *"This layers **on top of** the
+> separate-copilot-connection work, which is the mechanism and is needed either
+> way."* It was not needed either way. `device-kind.ts` shipped on 08-18 and it
+> holds every property the separate connection was built to hold — minted at this
+> keyboard, proved at the other end, not self-grantable, and write-once with no
+> overwrite method. On 08-19 Asad settled it: *"if we are connecting as my device
+> copilot automatically comes, if we connect as guest then copilot don't come —
+> that's all we need to do instead of two different connections."*
+>
+> So the kind is not a layer on the mechanism, it **is** the mechanism.
+> `copilot.connect`, the copilot credential, the link store and the tier
+> checkboxes are all deleted. What changed is not just the pairing flow and the
+> defaults — the enforcement input changed too, from a link record to a kind.
+> `COPILOT-REMOTE.md` §6 is the design and §6.6 preserves what was removed.
 
 **Decided 2026-08-17.** *"When they connect for someone else, copilot is not an
 option to give at all."* So it is not a grant defaulted off — it is **absent**.
@@ -262,10 +274,16 @@ saying the copilot is never shared, its absence from the guest flow reads as a
 missing feature rather than a decision, and somebody will file it as a bug or
 "fix" it.
 
-Open, and worth his answer when it is built: can a device be changed from one
-kind to the other afterwards, or does that mean re-pairing? Re-pairing is safer
-and is probably right — a device that was a guest becoming an owner by a toggle
-is the kind of quiet escalation this app has been removing all night.
+~~Open, and worth his answer when it is built:~~ **Answered, in the code, on
+08-18.** Can a device be changed from one kind to the other afterwards? No.
+`DeviceKinds.claim` writes once, a second call with a different kind is refused,
+and there is deliberately no method that overwrites one; `forget()` plus pairing
+again is the only route, which is the same two acts that decided it originally.
+The guess above was right — *"re-pairing is safer and is probably right — a
+device that was a guest becoming an owner by a toggle is the kind of quiet
+escalation this app has been removing all night"* — and it is now load-bearing
+rather than a preference, because since 08-19 the kind is the only thing standing
+between a device and the copilot.
 
 ## iOS localhost browsing — DONE, confirmed on screen 2026-08-18
 

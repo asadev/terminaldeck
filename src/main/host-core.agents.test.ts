@@ -7,6 +7,31 @@ import { createHostCore, type HostCore } from './host-core'
 import type { ProviderId } from '../shared/types'
 
 /**
+ * The two ceilings this file states for itself, and why it may not take the
+ * default.
+ *
+ * These cases spawn a *real* pty and wait for a real program's output to come
+ * back through it. On this Mac that is a `fork` and a few milliseconds; on
+ * Windows it is a ConPTY, which is a process launch plus a pseudoconsole
+ * handshake, on a runner `vitest.config.ts` has measured at roughly 25x
+ * scheduling variance for unchanged code.
+ *
+ * Both numbers had to move, because they fail in different ways and only one of
+ * them was visible. The `it()` argument overrides the 30 s Windows allowance the
+ * config exists to provide — so this file opted out of it with a figure chosen
+ * on a Mac. The in-body deadline is worse: no config setting can reach it at
+ * all, so a slow spawn does not time the test out, it makes the loop give up
+ * and assert against whatever had been printed by then — a *wrong answer*
+ * rather than a red clock.
+ *
+ * POSIX values are unchanged, deliberately: this is where the work is done and
+ * the tight ceiling is what would notice a genuine slowdown. The shape is
+ * `readiness.test.ts`'s, which `vitest.config.ts` endorses in as many words.
+ */
+const PTY_ECHO_MS = process.platform === 'win32' ? 20_000 : 4000
+const PTY_CASE_MS = process.platform === 'win32' ? 45_000 : 10_000
+
+/**
  * An added agent, started by the one function that starts sessions.
  *
  * The bug this pins is a silent one and it is the whole reason the wiring goes
@@ -232,7 +257,7 @@ describe('starting a session on an agent somebody added', () => {
       ['--mcp-config', '/state/copilot/deck-control.json', '--strict-mcp-config'],
     )
 
-    const deadline = Date.now() + 4000
+    const deadline = Date.now() + PTY_ECHO_MS
     let printed = ''
     while (Date.now() < deadline) {
       printed = core.ptys.scrollback(meta.id)
@@ -243,13 +268,13 @@ describe('starting a session on an agent somebody added', () => {
     // The agent's own arguments first, then the launch's — `echo` prints them
     // in the order they were passed, which is the order the CLI parses them in.
     expect(printed).toContain('hello --mcp-config /state/copilot/deck-control.json --strict-mcp-config')
-  }, 10_000)
+  }, PTY_CASE_MS)
 
   it('adds nothing to an ordinary session, which is every session but one', async () => {
     // The copilot is the only caller. A session a person opened must have
     // exactly the arguments its agent declares.
     const meta = await core.startSession({ cwd: dir, cols: 80, rows: 24, provider: 'custom:echo' })
-    const deadline = Date.now() + 4000
+    const deadline = Date.now() + PTY_ECHO_MS
     let printed = ''
     while (Date.now() < deadline) {
       printed = core.ptys.scrollback(meta.id)
@@ -257,7 +282,7 @@ describe('starting a session on an agent somebody added', () => {
       await new Promise((done) => setTimeout(done, 25))
     }
     expect(printed).not.toContain('--mcp-config')
-  }, 10_000)
+  }, PTY_CASE_MS)
 
   it('records no account against it, because none was isolated', async () => {
     // `supportsProfiles` is false for an agent whose config directory this app

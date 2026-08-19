@@ -2329,3 +2329,48 @@
   min-height: 0;
   background: var(--terminal-bg);
 }
+
+/* A shell on a server, filling the pane the same way.
+
+   Same box as `.remote-pane` above and deliberately not the same rule: this one
+   is drawn whether or not it is the pane in front, because nothing keeps a
+   server shell's output but the terminal it is written into — see
+   `ServerSessionPane`. So it takes the visibility attribute the local terminals
+   use rather than being mounted only while it is on screen.
+
+   Both themes come out of `--terminal-bg`, which is the same token every other
+   terminal in this window paints on, so a server session and a local one are the
+   same terminal to look at in light and in dark. */
+.server-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--terminal-bg);
+}
+
+.server-pane[data-visible='false'] {
+  display: none;
+}
+
+/* The terminal inside it was written for a fixed-height rectangle on a page and
+   is now a whole pane. Overridden here rather than changed at the source because
+   the height, the radius and the top margin are all correct for the page it was
+   first drawn on, and this is the one place that wants none of them. */
+.server-pane .servers-terminal {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  margin-top: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: 0;
+}
+
+/* Why the terminal is not there, when it is not: a build with no connection
+   layer, or a server that refused. It sits above the terminal in the same pane,
+   so it is read on the dark ground the shell would have been drawn on. */
+.server-pane .servers-card-why {
+  padding: var(--sp-3) var(--sp-4) 0;
+  color: var(--text-secondary);
+}

@@ -85,11 +85,11 @@
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { rmSync } from 'node:fs'
-import { remoteCopilotCaller, type CopilotLinks } from './copilot-link'
 import { hideSession, isHiddenSession, releaseSession } from './hidden-sessions'
 import { writeSecretFile } from './secret-file'
 import { toConsentQuestion, toPendingRow } from './copilot-consent'
-import type { CopilotConnected, CopilotOutcome, CopilotRemote, CopilotSink } from './copilot-remote'
+import type { CopilotOutcome, CopilotRemote, CopilotSink } from './copilot-remote'
+import { remoteCopilotCaller, type CopilotAccess } from './copilot-access'
 import {
   MAX_COPILOT_LOG_ROWS,
   MAX_COPILOT_MESSAGE_CHARS,
@@ -202,16 +202,22 @@ export interface CopilotConsent {
 
 export interface CopilotRunDeps {
   /**
-   * The copilot connections. Read per call, never cached; see the header.
+   * Who reaches the copilot. Read per call, never cached; see the header.
    *
-   * This used to be a `CopilotGrants` — a per-device grant riding the session
-   * channel — and it is now a store of separate connections, each with its own
-   * credential. The mechanical difference here is one line: `granted()` answers
-   * nothing for a device with no *link*, so a device that is paired for
-   * terminals and has never redeemed a copilot code cannot reach a tool through
-   * this file no matter what any panel says.
+   * This has been three things and the direction of travel is the whole story.
+   * It was a `CopilotGrants` — a per-device tick box riding the session channel.
+   * Then a `CopilotLinks` — a separate connection per device, its own code and
+   * its own credential, because a tick box was not an authorisation. It is now a
+   * `CopilotAccess`, which answers from the kind chosen when the device was
+   * approved, because that choice **already is** the authorisation the middle
+   * step was reaching for. `copilot-access.ts` carries the argument and
+   * preserves the one it superseded.
+   *
+   * The mechanical guarantee here is unchanged and is one line: `granted()`
+   * answers nothing for a guest, so a device somebody else is holding cannot
+   * reach a tool through this file no matter what any panel says.
    */
-  links: CopilotLinks
+  links: CopilotAccess
   /** The confirmation gate, or null before `deck-control` has come up. */
   consent(): CopilotConsent | null
   /** Where a run's token is registered, and dropped. */
@@ -346,79 +352,31 @@ export class CopilotRuns implements CopilotRemote {
   /* ------------------------------------------------------ the connection */
 
   /**
-   * Redeem a connect code for this device's copilot credential.
+   * Open this socket's copilot stream.
    *
-   * Everything about *whether* the code is good — its sixty seconds, its single
-   * use, the five wrong guesses that kill it, the per-device and per-address
-   * lockouts — belongs to `copilot-link.ts` and is not second-guessed here. What
-   * this adds is the wire's vocabulary: a refusal becomes `unauthorized` when it
-   * is about the code and `unavailable` when it is about this machine, because
-   * those are the two sentences a client can act on and `PROTOCOL_ERROR_CODES`
-   * already carries the distinction.
+   * **Nothing is proved here any more, and that is the change.** There used to
+   * be a `connect` above this — redeem a six-digit code, receive a credential —
+   * and an `open` that verified that credential against a stored scrypt hash.
+   * Both are gone: the socket arrived already authenticated as this device by
+   * `RemoteAuth`, and whether that device reaches the copilot was decided by a
+   * person at this keyboard when they approved it as one of their own.
+   * `copilot-access.ts` carries the argument.
    *
-   * The reason is deliberately **not** quoted back in the message. `unknown`,
-   * `used` and `expired` are three different facts about a code somebody typed,
-   * and telling a client which one it hit is telling a guesser whether they were
-   * close. One sentence, three causes, exactly as the pairing desk one layer
-   * down already answers.
+   * So this is a *check*, not a handshake. It is still worth making rather than
+   * assuming: `server.ts` gates the frame on eligibility too, and a second
+   * reading here is what keeps the answer honest if a future caller reaches this
+   * class by another door. Nothing is started and nothing is spent.
+   *
+   * A guest gets the same sentence a device with no copilot on the far machine
+   * would get, because from the device's side those are the same fact and it is
+   * entitled to neither more nor less.
    */
-  async connect(deviceId: string, code: string, address?: string): Promise<CopilotConnected> {
-    const outcome = await this.deps.links.redeem(code, deviceId, address)
-    if (outcome.ok) {
-      this.pushLink(deviceId)
-      return { ok: true, credential: outcome.credential }
-    }
-    if (outcome.reason === 'storage') {
-      return {
-        ok: false,
-        code: 'unavailable',
-        message: 'This machine could not save the connection, so nothing was changed.',
-      }
-    }
-    if (outcome.reason === 'too-many-links') {
-      return {
-        ok: false,
-        code: 'unavailable',
-        message: 'Too many devices are connected to this copilot already.',
-      }
-    }
-    if (outcome.reason === 'rate-limited') {
-      return {
-        ok: false,
-        code: 'unauthorized',
-        message: 'Too many attempts. Wait a while, then ask for a new code.',
-      }
-    }
+  async open(deviceId: string): Promise<CopilotOutcome> {
+    if (this.deps.links.linked(deviceId)) return { ok: true }
     return {
       ok: false,
       code: 'unauthorized',
-      message: 'That connect code did not work. Ask for a new one on the machine itself.',
-    }
-  }
-
-  /**
-   * Open this connection's copilot access with the stored credential.
-   *
-   * Nothing is started and nothing is spent — it is the proof, not the work. A
-   * device that has been disconnected gets the same answer as one that never
-   * connected, which is the property that stops this being a way to ask whether
-   * a credential was ever real.
-   */
-  async open(deviceId: string, credential: string, address?: string): Promise<CopilotOutcome> {
-    const outcome = await this.deps.links.open(deviceId, credential, address)
-    if (outcome.ok) return { ok: true }
-    if (outcome.reason === 'rate-limited') {
-      return {
-        ok: false,
-        code: 'unauthorized',
-        message: 'Too many attempts. Wait a while before trying again.',
-      }
-    }
-    return {
-      ok: false,
-      code: 'unauthorized',
-      message:
-        'This device is not connected to the copilot. Connect it on the machine itself, in Settings → Remote.',
+      message: 'This device does not have the copilot.',
     }
   }
 
@@ -895,22 +853,6 @@ export class CopilotRuns implements CopilotRemote {
   private pushPending(): void {
     for (const watcher of this.watchers) {
       watcher.sink.pending(this.pending(watcher.deviceId))
-    }
-  }
-
-  /**
-   * Push this device's connection state to its watchers.
-   *
-   * Only to watchers, which is a real limit worth naming: a socket that has
-   * opened its copilot connection but not attached does not get this. That is
-   * the right shape — `server.ts` sends `copilot.grant` on the connection that
-   * asked, at the moment it asks — and this is the *push*, for the case where
-   * something changed on the desktop while somebody was looking at a screen.
-   */
-  private pushLink(deviceId: string): void {
-    for (const watcher of this.watchers) {
-      if (watcher.deviceId !== deviceId) continue
-      watcher.sink.state(this.state(deviceId))
     }
   }
 

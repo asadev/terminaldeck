@@ -52,7 +52,7 @@ import { homedir } from 'node:os'
 import { dirname, join, win32 } from 'node:path'
 import type { SessionStatus } from '../shared/types'
 import { BRAND } from '../shared/brand'
-import { currentHookEndpoint, type HookEndpoint } from './hook-server'
+import { CONFIG_FILE, currentHookEndpoint, type HookEndpoint } from './hook-server'
 import { currentPlatform, isWindows, type Env, type Platform } from './platform/host'
 
 /* ------------------------------------------------------------------ types -- */
@@ -1078,12 +1078,90 @@ export function removeHooks(context: HookContext, id: HookProviderId): HookWrite
  * does is migrate: an install written by a version of this app that baked the
  * port in reads as `stale` exactly once, gets rewritten once, and is correct
  * from then on without anybody being told to press anything.
+ *
+ * What it deliberately does **not** do is claim hooks another copy of the app
+ * wrote — see {@link staleHooksBelongToAnotherCopy}. Those read `stale` here and
+ * stay that way until somebody presses Reinstall, because a startup pass that
+ * silently re-points them makes the last app launched the owner of every session
+ * event on the machine.
  */
+/**
+ * Which endpoint config files the hooks already in this file point at.
+ *
+ * The command carries no secret and no port any more — the one thing that says
+ * *which copy of this app* an installed hook belongs to is the path it reads
+ * its token from, and that path is inside that copy's own data directory. Both
+ * command shapes name it: POSIX passes it to curl as `-K <path>`, Windows hands
+ * it to the client script as its first argument. Rather than parse two command
+ * grammars, this pulls out every single-quoted path ending in the config file's
+ * name, which is exactly that argument in both.
+ *
+ * An empty result is meaningful and is not the same as "not ours": commands
+ * written before the token moved out of line had no config path at all.
+ */
+function endpointConfigsNamedIn(hooks: Record<string, unknown>): string[] {
+  const found = new Set<string>()
+  const quoted = new RegExp(`'([^']*${CONFIG_FILE.replace('.', '\\.')})'`, 'g')
+  for (const [, entries] of ourEntriesByEvent(hooks)) {
+    for (const entry of entries) {
+      if (typeof entry.command !== 'string') continue
+      for (const match of entry.command.matchAll(quoted)) found.add(match[1])
+    }
+  }
+  return [...found]
+}
+
+/**
+ * Are these stale hooks another running copy's, rather than an older version of
+ * ours?
+ *
+ * This question exists because the answer used to be assumed, and the
+ * assumption cost real damage: a second copy of this app — a dev build, a beta
+ * installed beside the stable one, a scratch profile — starts up, finds hooks
+ * that do not match the command *it* would write, reads that as "stale" and
+ * silently re-points all of them at itself. Every session event on the machine
+ * then goes to whichever copy launched last, and the copy the person is
+ * actually using goes deaf without ever saying so. On this machine that
+ * happened three times in one week, to twenty-two hooks across three CLIs.
+ *
+ * Nothing about it is specific to a developer's machine. Two installs of the
+ * same app is an ordinary thing for a person to have.
+ *
+ * The distinction is drawn from the config path in the installed command, not
+ * from a probe of the socket, because a copy that is merely *closed* still owns
+ * its hooks — it is going to be opened again. Liveness would hand ownership to
+ * whoever happened to be running at the moment of the check, which is the very
+ * behaviour being removed.
+ *
+ * `stale` remains a state the Settings panel reports and offers to fix. What is
+ * withdrawn is doing it silently, at startup, to a file this copy did not write.
+ */
+export function staleHooksBelongToAnotherCopy(context: HookContext, id: HookProviderId): boolean {
+  const ours = context.endpoint?.configPath
+  if (!ours) return false
+  let named: string[]
+  try {
+    const settings = loadSettings(fileFor(context, id))
+    named = endpointConfigsNamedIn(hooksObject(settings.data))
+  } catch {
+    // Unreadable or unparseable is already handled as `error` by readStatus, and
+    // a file we cannot read is not one we should be rewriting either way.
+    return true
+  }
+  // No config path at all is a command from before the token moved out of line.
+  // Those really are ours to migrate — that migration is why this runs at all.
+  if (named.length === 0) return false
+  return named.some((path) => path !== ours)
+}
+
 export function syncInstalledHooks(context: HookContext): HookProviderStatus[] {
   const out: HookProviderStatus[] = []
   for (const id of HOOK_PROVIDER_IDS) {
     const status = readStatus(context, id)
-    if (status.state === 'stale' || status.state === 'partial') {
+    if (
+      (status.state === 'stale' || status.state === 'partial') &&
+      !staleHooksBelongToAnotherCopy(context, id)
+    ) {
       try {
         out.push(installHooks(context, id).status)
         continue

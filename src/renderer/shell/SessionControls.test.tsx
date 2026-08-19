@@ -584,3 +584,54 @@ describe('what the chrome controls tell the main process', () => {
     expect(view).not.toMatch(/const bar = host\.current\?\./)
   })
 })
+
+describe('what a session running some other agent is told', () => {
+  /**
+   * The sweep finding, in the only place it is actually visible.
+   *
+   * Asad's rule about vendor names in copy is about *who is reading*: a row that
+   * is a particular agent may name it, and a screen that serves every agent may
+   * not. This sentence is the sharpest available violation of it, because it is
+   * drawn on exactly one kind of session and that kind is the one guaranteed
+   * not to be running the vendor it named. The bar for a Codex or Gemini session
+   * withdraws its four pickers and says why, and until 2026-08-19 what it said
+   * was that these work by typing *Claude Code's* commands — a vendor name on a
+   * screen showing a different vendor, which is his complaint verbatim.
+   *
+   * The fix is a rewording, not a withdrawal: the reason still has to be there,
+   * or a greyed picker that explains nothing is the dead control this repository
+   * is audited for. So both halves are asserted together — the category is
+   * named, and the agent that is genuinely in this session still is.
+   */
+  it('names the category of tool, not a vendor that is not in this session', () => {
+    withBridge()
+    const html = render({ provider: 'codex' })
+    expect(html).toContain('These work by typing one CLI’s own commands into the session.')
+    expect(html).toContain('has its own, and this build has not been shown what they are')
+  })
+
+  it('still names the agent that is running, which is the readable half', () => {
+    // "Codex has its own" tells somebody what to go and look up. "The other one
+    // has its own" is the same sentence with the useful word removed, and the
+    // rule never asked for that — a row that *is* an agent may say so.
+    withBridge()
+    expect(render({ provider: 'codex' })).toContain('Codex has its own')
+    expect(render({ provider: 'gemini' })).toContain('Gemini has its own')
+  })
+
+  it('carries no other agent’s name anywhere on that bar', () => {
+    /*
+     * The assertion that would have caught this, written against the whole
+     * rendered bar rather than against the one string — because the string is
+     * only where it happened to be this time. `neutral-naming.test.ts` scans
+     * source for the same thing, and it passed throughout: the sentence was on
+     * its allowlist, exempted by a rationale that claimed nothing in that module
+     * is ever drawn where a different agent could be meant. Rendering the bar
+     * for that agent is how you find out whether that claim is true.
+     */
+    withBridge()
+    for (const provider of ['codex', 'gemini'] as const) {
+      expect(render({ provider }), provider).not.toMatch(/claude|anthropic/i)
+    }
+  })
+})

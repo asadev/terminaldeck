@@ -82,11 +82,11 @@ final class CopilotWireTests: XCTestCase {
      * an earlier localhost pass reported as verified against an empty screen.
      *
      * The `copilot` field is the answer, because `copilotFrame()` on the desktop
-     * writes it only when a copilot layer exists — a device with no connection
-     * and a machine with no copilot are different frames there on purpose. So a
-     * welcome that names the capability and says nothing in the field has to
-     * read as "no copilot here" rather than as "you are not connected", which
-     * would send somebody to a Mac to mint a code on a build that cannot.
+     * writes it only when a copilot layer exists *and* the device is one of his.
+     * So a welcome that names the capability and says nothing in the field has
+     * to read as "no copilot here" — which is what drives the fourth pill, and
+     * drawing one on the strength of the name alone would be a tab that refuses
+     * on every press.
      */
     func testTheCapabilityWithoutTheFieldIsNotACopilot() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
@@ -101,35 +101,77 @@ final class CopilotWireTests: XCTestCase {
     }
 
     /**
-     * An unconnected device still gets the object, and that is the point of it.
+     * **A `copilot` object with no `linked` key still means the copilot is
+     * this phone's.**
      *
-     * `linked: false` with an all-false grant is the ordinary state of every
-     * paired device — copilot access is a separate ceremony — and it is the one
-     * state a person can fix in thirty seconds. It has to reach the screen with
-     * the code field on it, which means it must not read the same as a machine
-     * that has no copilot at all.
+     * The one boolean on this wire whose absence reads as *yes*, and it is the
+     * asymmetry most likely to be tidied away by somebody making the codec
+     * consistent. Every other boolean here falls towards *no*, because every
+     * other boolean is a grant and a missing grant must never read as a given
+     * one. `linked` is not a grant: since 2026-08-19 the object's **presence**
+     * is the authorisation — the desktop writes it only for a machine with a
+     * copilot and a device approved as one of his — so a forgotten field on the
+     * far end must not take the copilot away from a phone that has it. That bug
+     * would look exactly like the feature being switched off.
      */
-    func testAnUnconnectedDeviceStillLearnsTheMachineHasOne() {
+    func testACopilotObjectWithoutLinkedIsStillThisPhonesCopilot() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,
          "sessions":[],"capabilities":["copilot"],
-         "copilot":{"linked":false,"open":false,"grant":{"read":false,"act":false,"alter":false}}}
+         "copilot":{"open":false,"grant":{"read":true,"act":true,"alter":true}}}
         """#), case let .welcome(_, _, _, _, _, _, _, _, connection) = message else {
             return XCTFail("the welcome should decode")
         }
         XCTAssertTrue(connection.stated)
-        XCTAssertFalse(connection.linked)
-        XCTAssertTrue(connection.grant.isEmpty)
+        XCTAssertTrue(connection.linked)
     }
 
     /**
-     * A desktop that says nothing about the copilot has connected nothing.
+     * **And an explicit `false` does take it away.**
+     *
+     * The direction the field is actually for. It only ever arrives as a
+     * `copilot.grant` push, and it is how a device demoted from *My device* to a
+     * guest learns so without waiting for a reconnect — capabilities travel in
+     * the `welcome` and nowhere else, so without this frame the phone would keep
+     * a Copilot pill that refuses on every press.
+     *
+     * `0`, `"no"` and `null` are **not** a false. They are a host saying
+     * something this build does not understand, and the safe reading of not
+     * understanding is to leave a working copilot alone rather than to revoke
+     * it — the opposite direction from `literalTrue`, whose whole point is that
+     * `1` is not a granted tier.
+     */
+    func testOnlyALiteralFalseTakesTheCopilotAway() {
+        func linked(_ json: String) -> Bool {
+            guard case let .ok(message, _) = WireCodec.decode(json),
+                  case let .copilotGrant(connection) = message else {
+                XCTFail("a copilot.grant should decode: \(json)")
+                return false
+            }
+            return connection.linked
+        }
+
+        XCTAssertFalse(linked(#"{"t":"copilot.grant","link":{"linked":false,"open":false}}"#))
+        XCTAssertTrue(linked(#"{"t":"copilot.grant","link":{"linked":0,"open":false}}"#),
+                      "a number is not a boolean, and guessing here revokes a copilot")
+        XCTAssertTrue(linked(#"{"t":"copilot.grant","link":{"linked":"no","open":false}}"#))
+        XCTAssertTrue(linked(#"{"t":"copilot.grant","link":{"linked":null,"open":false}}"#))
+    }
+
+    /**
+     * A desktop that says nothing about the copilot has no copilot for this
+     * phone.
+     *
+     * Two things produce that frame and they are deliberately indistinguishable
+     * from here: a build with no copilot in it, and a machine where this device
+     * was approved as a **guest**. `server.ts` strips the capability as well as
+     * the field for a guest, on the argument that *"a tab that refuses on every
+     * press is a worse answer than a client that never knew."*
      *
      * The opposite call to `folders`, one field over, where absent means "this
      * desktop predates per-device folder grants" and empty means "a person
-     * granted this device none" — two answers that lead to two screens. There is
-     * no such history here: nobody has ever had remote copilot access, so
-     * silence has only one honest reading.
+     * granted this device none" — two answers that lead to two screens. Silence
+     * here has only one honest reading, and it is *no*.
      */
     func testAWelcomeWithNoCopilotFieldConnectsNothing() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
@@ -161,10 +203,9 @@ final class CopilotWireTests: XCTestCase {
      *
      * The frame is `{ t: 'copilot.grant', link: CopilotLinkWire }` — `linked`,
      * `open` and the grant inside it. Reading `grant` off the top level, which
-     * is the key the previous design used, decodes every push as no access at
-     * all: the connection would open on the desktop and the phone would put the
-     * not-connected screen over it, with the Connect code field on a device that
-     * had just connected.
+     * is the key an earlier design used, decodes every push as no access at all:
+     * the connection would open on the desktop and the phone would draw the
+     * empty-grant screen over a copilot that is working.
      */
     func testAPushedGrantIsReadOffTheLinkAndOpensTheConnection() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
@@ -180,11 +221,12 @@ final class CopilotWireTests: XCTestCase {
         XCTAssertFalse(connection.grant.canAnswer, "act is not alter")
     }
 
-    /// A disconnect is the same frame with `linked` false, and it has to be
-    /// distinguishable from "you have not been given enough access": the two
-    /// sentences send a person to two different controls, and only one of them
-    /// still exists on that machine.
-    func testADisconnectArrivesAsALinkThatIsNoLongerLinked() {
+    /// The copilot being taken away is the same frame with `linked` false. It is
+    /// what a device demoted from *My device* to a guest receives, and it has to
+    /// be distinguishable from an empty grant: one means *there is no copilot
+    /// here for you* and takes the tab away, the other means *the machine is
+    /// refusing* and keeps it, with a sentence saying so.
+    func testLosingMyDeviceArrivesAsALinkThatIsNoLongerLinked() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"copilot.grant","link":{"linked":false,"open":false,
          "grant":{"read":false,"act":false,"alter":false}}}
@@ -264,44 +306,32 @@ final class CopilotWireTests: XCTestCase {
         XCTAssertFalse(CopilotGrant(read: true, act: true, alter: false).canAnswer)
     }
 
-    // MARK: - The credential
+    // MARK: - The frames that are gone
 
     /**
-     * `copilot.linked` carries the credential, once.
+     * **`copilot.linked` is not a frame this build knows, and that is the
+     * assertion.**
      *
-     * The one frame on this wire with a secret in it, and there is no path on
-     * the desktop that can send it again — it keeps a scrypt hash. A frame
-     * missing it is refused rather than half-applied: storing an empty string
-     * would produce a phone that believes it is connected and is refused every
-     * frame afterwards, with nothing on either end saying why.
+     * It carried the copilot credential — once, because the desktop kept only a
+     * scrypt hash — in answer to a `copilot.connect`. Both went on 2026-08-19
+     * with the ceremony itself: *"instead of giving mobile app separate
+     * connection for copilot just make it like if we are connecting as my device
+     * copilot automatically comes."*
+     *
+     * A vocabulary shrinking is worth pinning as carefully as one growing. This
+     * asserts the codec **fails** rather than half-applying: a build that
+     * quietly decoded the frame again would be a build that had a credential to
+     * store and nowhere to store it, and it would be found by nobody, because
+     * the copilot would work anyway. An unknown `t` falls through to the default
+     * and is reported, which is the right answer for a host speaking a
+     * vocabulary this build does not share.
      */
-    func testTheCredentialArrivesOnceAndIsRequired() {
-        guard case let .ok(message, _) = WireCodec.decode(#"""
+    func testTheCredentialFrameIsNoLongerPartOfThisWire() {
+        guard case .failed = WireCodec.decode(#"""
         {"t":"copilot.linked","credential":"c2VjcmV0LWJ5dGVz",
          "link":{"linked":true,"open":true,"grant":{"read":true,"act":true,"alter":true}}}
-        """#), case let .copilotLinked(credential, connection) = message else {
-            return XCTFail("a linked frame should decode")
-        }
-        XCTAssertEqual(credential, "c2VjcmV0LWJ5dGVz")
-        XCTAssertTrue(connection.open, "redeeming opens this socket as well")
-        XCTAssertTrue(connection.grant.canAnswer)
-
-        guard case .failed = WireCodec.decode(#"""
-        {"t":"copilot.linked","link":{"linked":true,"open":true,"grant":{"read":true}}}
         """#) else {
-            return XCTFail("a linked frame with no credential is not one")
-        }
-    }
-
-    /// And it is bounded here as well as there. `MAX_COPILOT_CREDENTIAL_CHARS`
-    /// exists so a caller that forgets to check a value cannot hand a megabyte
-    /// to a Keychain item; a cap only the far end enforces is not a cap.
-    func testAnOversizeCredentialIsRefused() {
-        let huge = String(repeating: "A", count: Copilot.maxCredentialChars + 1)
-        guard case .failed = WireCodec.decode(#"""
-        {"t":"copilot.linked","credential":"\#(huge)","link":{"linked":true,"open":true}}
-        """#) else {
-            return XCTFail("a credential longer than the cap is not one")
+            return XCTFail("copilot.linked is not a frame this client understands")
         }
     }
 
@@ -839,29 +869,36 @@ final class CopilotWireTests: XCTestCase {
     }
 
     /**
-     * The three ceremony frames, asserted field by field.
+     * The hello, asserted field by field rather than as a string.
      *
-     * Not compared as strings, unlike the single-key verbs above:
      * `JSONSerialization.data(withJSONObject:)` does not promise a key order
      * without `.sortedKeys` and does not deliver one either — this suite has seen
      * the same two-key frame encode both ways round on one machine in one build.
+     * It reads as one assertion now and used to be three; the other two were
+     * `copilot.connect` and a hello that carried a credential.
      */
-    func testTheCeremonyFramesCarryExactlyWhatTheyShould() {
+    func testTheHelloCarriesExactlyWhatItShould() {
         func fields(_ message: ClientMessage) -> [String: Any] {
             guard let object = try? JSONSerialization.jsonObject(with: Data(WireCodec.encode(message).utf8)),
                   let fields = object as? [String: Any] else { return [:] }
             return fields
         }
 
-        let connect = fields(.copilotConnect(code: "481902"))
-        XCTAssertEqual(connect["t"] as? String, "copilot.connect")
-        XCTAssertEqual(connect["code"] as? String, "481902")
-        XCTAssertEqual(connect.count, 2, "a connect is a verb and six digits")
-
-        let hello = fields(.copilotHello(credential: "c2VjcmV0"))
+        /*
+         * **A hello is a verb and nothing else**, and the count is the whole
+         * point of the assertion.
+         *
+         * It used to carry a credential, redeemed from a six-digit code by a
+         * `copilot.connect` that is no longer in the vocabulary at all. What
+         * authorises the frame now is the device identity this socket proved at
+         * pairing time and the kind that device was approved as — neither of
+         * which travels in the frame, because the desktop already holds both. A
+         * field creeping back in here would be this phone offering a secret
+         * nobody asked it for.
+         */
+        let hello = fields(.copilotHello)
         XCTAssertEqual(hello["t"] as? String, "copilot.hello")
-        XCTAssertEqual(hello["credential"] as? String, "c2VjcmV0")
-        XCTAssertEqual(hello.count, 2)
+        XCTAssertEqual(hello.count, 1, "a hello is a verb, and carries nothing")
     }
 
     /**
@@ -943,8 +980,7 @@ final class CopilotWireTests: XCTestCase {
      */
     func testNoClientFrameCanNameATool() {
         let frames: [ClientMessage] = [
-            .copilotConnect(code: "481902"),
-            .copilotHello(credential: "c2VjcmV0LWJ5dGVz"),
+            .copilotHello,
             .copilotBye,
             .copilotAnswer(id: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", approved: true),
             .copilotAttach, .copilotDetach, .copilotState, .copilotSessions,

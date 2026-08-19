@@ -190,7 +190,7 @@ describe('where the fence is held at all', () => {
      *
      * It said three until remote copilot access was built, and here is the
      * justification the assertion exists to demand. The two additions are
-     * `copilot-link.json` and `remote-auth.json`, and neither is about the
+     * `remote-device-kinds.json` and `remote-auth.json`, and neither is about the
      * copilot's *capability*: they are the store that says which paired devices
      * may drive it, and the store that says which devices exist at all. Leaving
      * them writable would put the pen for a permission in the hand of the party
@@ -222,7 +222,7 @@ describe('where the fence is held at all', () => {
      * joining onto it is what makes the fallback safe.
      */
     const fresh = recordsFencePaths(join(root, 'never-used'))
-    expect(fresh.remoteCopilot).toBe(join(root, 'never-used', 'remote', 'copilot-link.json'))
+    expect(fresh.remoteCopilot).toBe(join(root, 'never-used', 'remote', 'remote-device-kinds.json'))
     expect(fresh.remoteAuth).toBe(join(root, 'never-used', 'remote', 'remote-auth.json'))
   })
 })

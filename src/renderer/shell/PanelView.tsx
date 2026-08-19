@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { FileTree, type TreeRootState } from '../components/FileTree'
 import { FileViewer } from '../components/FileViewer'
 import { ArtifactsPanel } from '../components/ArtifactsPanel'
-import { RemoteSection } from '../remote/RemoteSection'
+import { MachinesPanel } from '../machines/MachinesPanel'
 import { GitPanel, type GitFileGroup } from '../components/GitPanel'
 import { GitHubPanel } from '../components/GitHubPanel'
 import { ReadinessPanel } from '../components/ReadinessPanel'
@@ -199,7 +199,17 @@ export function PanelView({
        * first" would hide the feature at exactly the moment somebody wants it.
        */
       case 'remote':
-        return <RemoteSection />
+        /*
+         * The id is still `remote` and the page is **Machines**, which is the
+         * rename described at length in `panels.ts`: the row now leads to two
+         * kinds of far-end machine rather than one, and the id is what a saved
+         * rail position is keyed on, so only the words changed.
+         *
+         * `MachinesPanel` is the umbrella. It puts the servers above the
+         * devices and renders `RemoteSection` — every capability this case used
+         * to render directly — underneath, untouched.
+         */
+        return <MachinesPanel />
       // There was a `machines` case here, above the project check, and it is
       // gone with the panel: the machines this desktop is paired to are now part
       // of Settings → Remote, beside the phones, because they are the same

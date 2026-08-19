@@ -98,11 +98,17 @@ Ticked items were applied directly by me because no agent held the file.
       as an ordinary Claude session, but asking it *"which of my sessions is
       stuck"* gets a model with no `sessions.list` to call.
 
-- [ ] **`src/main/remote/copilot-grants.ts` is still an orphan**, and
+- [x] **`src/main/remote/copilot-grants.ts` is still an orphan**, and
       deliberately: `COPILOT-DESIGN.md` phases remote copilot access last, as the
       highest-stakes surface in the product. It is listed here so nobody reads
       the `reachable.test.ts` failure as an accident. Wiring it is a decision to
       start phase 4, not a tidy-up.
+
+      *Closed. Phase 4 was started on 2026-08-17 and the file no longer exists:
+      `copilot-grants.ts` became `copilot-link.ts`, and on 2026-08-19 that went
+      too — pairing a device as **My device** is the copilot authorisation, so
+      the store is `remote/device-kind.ts` and there is no per-device grant to
+      hold. `COPILOT-REMOTE.md` §6.*
 
 ## Found after wave 1 reported
 

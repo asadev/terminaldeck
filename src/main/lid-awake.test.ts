@@ -968,3 +968,62 @@ onARealMac('read against the machine running this test', () => {
     expect(pmsetScript(false)).not.toMatch(/powerbutton/i)
   })
 })
+
+/* ------------------------------------------------ the console window on Windows -- */
+
+/**
+ * The one thing this module does on Windows that a Mac cannot see at all.
+ *
+ * `runCommand` was the only spawn helper in `src/main` that did not pass
+ * `windowsHide`, and it is the one that runs a Windows *console* binary:
+ * `%SystemRoot%\System32\powercfg.exe`. Without the flag every call paints a
+ * black console window over whatever the user is doing and takes focus with it.
+ * This file calls it on launch, on every AC/battery transition, and four times
+ * in a row when the switch is flipped — `/query`, `/setdcvalueindex`,
+ * `/setacvalueindex`, `/setactive` — so it is a burst of flashes, on the one
+ * feature whose entire purpose is to be left running unattended overnight.
+ *
+ * Asserted against the source rather than by spawning, for the same reason the
+ * launch-wiring test above is: no behavioural test can see a window that
+ * appears on a different operating system, and the command still works either
+ * way — which is exactly why it survived review. `tool-probe.test.ts` runs the
+ * same scan over the files it owns and its header makes the argument at length;
+ * this is that scan pointed at the one call `runCommand` makes, because the
+ * generic version cannot tell this module's *own* injected `run` seam apart
+ * from a real child process.
+ */
+describe('powercfg does not flash a console window', () => {
+  /** The text between a call's parentheses, however deeply nested. */
+  function callArguments(text: string, open: number): string {
+    let depth = 0
+    for (let i = open; i < text.length; i++) {
+      if (text[i] === '(') depth++
+      else if (text[i] === ')') {
+        depth--
+        if (depth === 0) return text.slice(open + 1, i)
+      }
+    }
+    return text.slice(open + 1)
+  }
+
+  it('passes windowsHide on the one real child process this module starts', () => {
+    const source = readFileSync(join(__dirname, 'lid-awake.ts'), 'utf8')
+    // `execFile(` with a newline after it is the call inside `runCommand`; the
+    // import above it is `execFile }` and does not match.
+    const open = source.indexOf('execFile(')
+    expect(open, 'lid-awake.ts no longer spawns anything — delete this test').toBeGreaterThan(-1)
+    const args = callArguments(source, open + 'execFile'.length)
+    expect(
+      args,
+      'On Windows a spawn without `windowsHide: true` flashes a console window over whatever ' +
+        'the user is doing. powercfg.exe is a console program and this helper runs it on every read.',
+    ).toContain('windowsHide: true')
+  })
+
+  it('still works on this Mac, where the flag is ignored', async () => {
+    // The flag is a no-op on POSIX, and that is the claim being made by adding
+    // it unconditionally rather than behind a platform branch.
+    const settings = await runCommand('/usr/bin/pmset', ['-g'])
+    expect(settings.code).toBe(0)
+  })
+})

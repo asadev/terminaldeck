@@ -80,14 +80,6 @@ import {
   type ScanStop,
 } from './copilot-scan'
 import {
-  clearCopilots,
-  loadCopilots,
-  saveCopilots,
-  withCopilot,
-  withoutCopilot,
-  type CopilotCredentials,
-} from './copilot-store'
-import {
   SCAN_ATTRIBUTE,
   focusRect,
   mountScanField,
@@ -188,7 +180,7 @@ import {
 import { VERSION } from './version'
 import { normaliseCode } from '../../src/shared/short-code'
 import { asCodeField } from './code-field'
-import { browserStores, type Remember } from './remember'
+import { browserStores, purgeRetired, type Remember } from './remember'
 import { relaySocket } from './relay-socket'
 import { lookupMachine } from './rendezvous'
 import { chunkInput, type DevServerReport, type RemoteSession, type ServerMessage } from './protocol-client'
@@ -273,9 +265,9 @@ type Screen = 'copilot' | 'pair' | 'sessions' | 'localhost' | 'settings' | 'mach
  * **Copilot is leftmost**, and that supersedes the three-tab arrangement rather
  * than being added beside it: *"A fourth pill, and the copilot goes leftmost —
  * Copilot · Sessions · Localhost · Settings"*, said about the phone after he had
- * looked at it with the copilot in place. It is drawn only against a machine that
- * told *this* device it has a copilot, which is never a guest — see
- * `copilotOffered`.
+ * looked at it with the copilot in place. It is drawn only when the welcome
+ * carried a copilot for *this* device, which never happens for a guest — see
+ * `CopilotState.offered`.
  */
 const LISTING_SCREENS: readonly Screen[] = ['copilot', 'sessions', 'localhost', 'settings', 'machines']
 
@@ -711,19 +703,14 @@ class Deck {
   /* ------------------------------------------------------------- copilot -- */
 
   /**
-   * The copilot connection, which is not the pairing and never rides on it.
+   * The copilot, which arrives with the pairing rather than beside it.
    *
-   * `copilot.ts` carries the argument; the short form is that a browser paired to
-   * run terminals has no copilot reach at all — not a tab, not a frame — until
-   * somebody at the machine mints a connect code and it is redeemed here. A guest
-   * is never told the machine has one, so `offered` is false and the tab is
-   * absent rather than drawn and disabled.
+   * `copilot.ts` carries the argument; the short form is that pairing a device
+   * as one of his own *is* the authorisation, so there is no code to redeem and
+   * nothing held in this browser. A guest's welcome carries no copilot at all,
+   * so `offered` is false and the tab is absent rather than drawn and disabled.
    */
   private copilot: CopilotState = NO_COPILOT
-  /** The copilot credentials this browser holds, keyed by machine. */
-  private copilots: CopilotCredentials = {}
-  /** What is typed into the connect field, so a redraw does not empty it. */
-  private connectText = ''
   /**
    * What is typed into the message box.
    *
@@ -848,12 +835,13 @@ class Deck {
     // The book is written where the pairing chose, so it has to be told which
     // that was before anything can change a name.
     this.portBook.setLifetime(this.remember)
-    // Read here rather than on the first visit to the Copilot screen, because
-    // the first `welcome` is what needs it: a copilot connection is opened by
-    // sending the stored credential the moment a socket says hello, and a client
-    // that read the store later would show a Connect field for the second it took
-    // somebody to look at the tab.
-    this.copilots = loadCopilots(this.stores)
+    // Nothing about the copilot is read here any more, and one thing is thrown
+    // away: `terminaldeck.copilot.v1` held a credential per machine back when
+    // the copilot was a connection of its own, and every browser that ever
+    // connected one is still carrying those strings. `remember.ts` says why a
+    // secret nothing can use is still worth removing from a computer somebody
+    // may not own.
+    purgeRetired(this.stores)
 
     /*
      * Nothing is read out of the URL here any more, and that is a deletion
@@ -980,9 +968,9 @@ class Deck {
     // The copilot goes with the machine, and it is the sharpest case of the rule
     // this method is: a conversation, a run and a grant are each a statement
     // about *one* desktop, and carrying any of them across would put the previous
-    // machine's copilot on screen under the new one's name. The stored credential
-    // stays — it is keyed by machine, and switching back must not need a new
-    // code — but nothing else does.
+    // machine's copilot on screen under the new one's name. Switching back costs
+    // nothing — the next welcome from that machine brings its copilot with it,
+    // because being paired to it as his own is the whole of the entitlement.
     this.forgetCopilot()
 
     this.hostPlatform = machine.credential.hostPlatform
@@ -1009,13 +997,11 @@ class Deck {
       this.forget()
       return
     }
-    // The copilot credential for *that* machine and no other. Forgetting a
-    // machine is the person saying it is not theirs any more, and the copilot
-    // credential is the more powerful of the two secrets this browser held for
-    // it — leaving it behind would be forgetting the half that opens a terminal
-    // and keeping the half that changes settings.
-    this.copilots = withoutCopilot(this.copilots, id)
-    saveCopilots(this.stores, this.remember, this.copilots)
+    // Nothing to drop for the copilot. Forgetting a machine used to have to
+    // forget a second secret alongside the pairing — the more powerful of the
+    // two — and there is now exactly one: the pairing *is* the copilot's
+    // authorisation, so the credential that goes with the machine takes the
+    // copilot with it.
     this.book = next
     this.keep()
     if (!wasCurrent) {
@@ -1229,10 +1215,10 @@ class Deck {
     if (state.phase !== 'online') this.devDo({ t: 'offline' })
     // The copilot connection goes with the socket that carried it, and that is
     // not a client decision — a `copilot.*` verb is refused until this socket has
-    // presented the copilot credential again, so a screen still drawing a
-    // composer would be a control that cannot act. `linked` survives, because it
-    // is a fact about a record on the machine rather than about this socket, so
-    // the next welcome sends a hello instead of asking for a code nobody needs.
+    // said hello again, so a screen still drawing a composer would be a control
+    // that cannot act. Nothing else is lost: whether this device reaches the
+    // copilot is a fact about how it was paired, so the next welcome opens it
+    // again without asking anybody for anything.
     if (state.phase !== 'online') {
       this.copilotDo({ t: 'offline' })
       // A scan is a thing being watched, and what it is watching has gone. Held
@@ -1426,16 +1412,14 @@ class Deck {
   /**
    * Everything on screen about a copilot, taken away.
    *
-   * Called when the machine changes and when the pairing goes. It deliberately
-   * does *not* touch {@link copilots}: those are credentials keyed by machine,
-   * and switching away from a machine and back again must not cost a code minted
-   * at a keyboard. What goes is the conversation, the run, the grant, the scan
-   * and everything drawn from them — each of which is a statement about a
-   * machine this browser is no longer talking to.
+   * Called when the machine changes and when the pairing goes, and it takes
+   * everything, because there is nothing left that is worth keeping: the
+   * conversation, the run, the grant, the scan and everything drawn from them
+   * are each a statement about a machine this browser is no longer talking to,
+   * and the entitlement they hung off was never held here — it is the pairing.
    */
   private forgetCopilot(): void {
     this.copilot = NO_COPILOT
-    this.connectText = ''
     this.composerText = ''
     this.dockFolded = false
     this.scan?.destroy()
@@ -1454,27 +1438,16 @@ class Deck {
    *
    * The same shape as `localhostDo` and `devDo` next door, for the same reason:
    * every rule about what may be sent lives in a module a test can reach, and
-   * this is the four lines that connect it to a socket. The one thing that is
-   * this method's own is persisting a credential — `copilot.ts` owns no storage
-   * on purpose, because *where a secret lives in this browser* is a question
-   * `remember.ts` answers and it depends on what the person said about this
-   * computer.
+   * this is the three lines that connect it to a socket. It used to have a
+   * fourth job — persisting the credential a `copilot.linked` handed over — and
+   * that job went with the separate connection: there is no secret here to put
+   * anywhere.
    */
   private copilotDo(action: CopilotAction): void {
     const before = this.copilot
     const step = copilotStep(this.copilot, action)
     this.copilot = step.state
     for (const message of step.send) this.connection?.send(message)
-    if (step.credential !== undefined) {
-      this.copilots = withCopilot(this.copilots, this.dialledId, step.credential)
-      saveCopilots(this.stores, this.remember, this.copilots)
-      // A connection that has just been made is one somebody is looking at.
-      // Landing on the copilot's own screen rather than leaving them on the
-      // Connect field with a success message is the difference between a
-      // ceremony that finished and one that appears to have done nothing.
-      this.connectText = ''
-      this.screen = 'copilot'
-    }
     if (before === this.copilot && step.send.length === 0) return
     // A question this connection may answer arrives as a sheet over everything,
     // so the countdown has to start with it and stop with it — a timer left
@@ -1606,10 +1579,11 @@ class Deck {
     this.notice = noticeAfter(this.notice, message, this.noun)
     // And the copilot, for the fourth time the same reason: what a frame does to
     // the copilot is a rule, and a rule written inside the switch below is one
-    // nothing in this repository can check. Nine frame types land here and the
-    // switch has a case for none of them by design. `welcome` is handled
-    // separately below rather than here, because opening a copilot connection
-    // needs the stored credential — which this method has no business reading.
+    // nothing in this repository can check. Eight frame types land here and the
+    // switch has a case for none of them by design. `welcome` is the exception
+    // and is handled separately below, because it is not a copilot *frame*: what
+    // it carries has to be turned into a different action, and `copilotStep`
+    // would drop it on the floor if it arrived here as one.
     if (message.t !== 'welcome') this.copilotDo({ t: 'frame', message })
 
     switch (message.t) {
@@ -1651,25 +1625,25 @@ class Deck {
          *
          * `welcome.copilot.open` is *always* false — a session channel does not
          * carry the copilot by existing — so a `copilot.hello` has to go out on
-         * every connect and every reconnect, carrying the credential this
-         * browser was given when somebody redeemed a code at the machine. A
-         * client that skipped it would draw a Copilot tab whose every frame came
-         * back refused.
+         * every connect and every reconnect. It carries nothing: the socket has
+         * already proved which device it is, and the machine reads that device's
+         * kind. A client that skipped the frame would draw a Copilot tab whose
+         * every frame came back refused.
+         *
+         * `message.copilot` is the whole of whether there is a copilot here at
+         * all — present for one of his own devices, absent for a guest — so it is
+         * passed on its own and `capabilities` is not consulted. Two signals for
+         * one question is two answers that can differ.
          */
-        this.copilotDo({
-          t: 'welcome',
-          capabilities: message.capabilities,
-          link: message.copilot ?? null,
-          credential: this.copilots[this.dialledId] ?? null,
-        })
+        this.copilotDo({ t: 'welcome', link: message.copilot ?? null })
         // A desktop that offers neither tunnelling nor dev servers — a different
         // machine on the same pairing, or one launched with a narrower `offer` —
         // must not leave this browser sitting on a screen whose every control it
         // would now refuse.
         if (this.screen === 'localhost' && !this.servesLocalhost) this.forgetLocalhost()
-        // The same rule for the copilot, and it bites in one more case: a machine
-        // that has *disconnected* this browser's copilot since the last socket.
-        // The tab goes, so the screen it was showing has to go with it.
+        // The same rule for the copilot, and it bites in one more case: a device
+        // re-paired as a guest, whose welcome now carries no copilot at all. The
+        // tab goes, so the screen it was showing has to go with it.
         if (this.screen === 'copilot' && !this.copilot.offered) this.screen = 'sessions'
         // Asked on arrival rather than on the first tap, but only for somebody
         // already looking at it — which is the reconnect case, since the tab is
@@ -1872,11 +1846,11 @@ class Deck {
     }
 
     const options: Array<{ screen: Screen; label: string }> = [
-      // Absent — not disabled — for a device the machine did not tell about its
-      // copilot, which is every guest. There is no frame this browser can send
-      // that would measure whether that machine has one, and drawing a dark tab
-      // would be this client making a claim the machine went out of its way not
-      // to make.
+      // Absent — not disabled — for a device whose welcome carried no copilot,
+      // which is every guest and every machine that has none. There is no frame
+      // this browser can send that would measure whether that machine has one,
+      // and drawing a dark tab would be this client making a claim the machine
+      // went out of its way not to make.
       ...(this.copilot.offered ? [{ screen: 'copilot' as Screen, label: 'Copilot' }] : []),
       { screen: 'sessions', label: 'Sessions' },
       ...(this.servesLocalhost ? [{ screen: 'localhost' as Screen, label: 'Localhost' }] : []),
@@ -3901,60 +3875,36 @@ class Deck {
   private copilotScreen(): HTMLElement {
     const screen = element('div', 'screen')
     screen.style.padding = '0'
-    if (!this.copilot.link.linked) {
-      screen.append(this.copilotConnect())
-      return screen
-    }
+    /*
+     * One branch, where there used to be two.
+     *
+     * The other one drew a six-digit field under the heading "Connect the
+     * copilot", and it is deleted along with the ceremony behind it: the tab is
+     * drawn only for a device whose welcome carried a copilot, and a device
+     * whose welcome carried one has it. There is no state in between for a
+     * screen to describe — which is the point of the whole change, in his words
+     * at the top of `copilot.ts`.
+     */
     screen.append(this.copilotBody(false))
     return screen
   }
 
   /**
-   * Six digits, minted at the machine, redeemed here.
+   * Whether an act-tier control would do anything if somebody pressed it.
    *
-   * The whole of the second factor. A browser paired to run terminals holds a
-   * credential that says nothing about the copilot; connecting one is a
-   * deliberate act performed at the machine, and this field is the other half of
-   * it. `normaliseCode` before sending, for the reason the pairing screen gives:
-   * the desktop hashes the string it is handed and does not strip separators, so
-   * one place has to decide what a code looks like and it is the client, because
-   * the client is where somebody typed it.
+   * Both halves, because both can be false separately. `grant.act` is what the
+   * machine allows this device; `link.open` is whether this *socket* has said
+   * hello and been answered. One of his own devices holds every tier, so the
+   * grant is almost always true and the open flag is the half that matters — and
+   * it is false for one round trip on every single connect, which since the
+   * connect screen went away is the first thing anybody sees when they open the
+   * tab. A composer drawn in that window is a box somebody types into and
+   * presses Send on, and `copilotStep` drops the frame on the floor because the
+   * connection is not open. That is precisely the defect this whole review is
+   * built on, so it is gated in the one place both controls read.
    */
-  private copilotConnect(): HTMLElement {
-    const block = element('div', 'screen screen--form copilot-connect')
-    block.append(element('h2', undefined, 'Connect the copilot'))
-    block.append(
-      element(
-        'p',
-        'screen__lead',
-        `Open ${BRAND.name} on the ${this.noun} and ask it for a copilot code. It is separate from the code that paired this browser, and it lasts a minute.`,
-      ),
-    )
-
-    const field = asCodeField(element('input', 'code-field'))
-    field.value = this.connectText
-    field.setAttribute('aria-label', 'Copilot code')
-    field.addEventListener('input', () => {
-      this.connectText = field.value
-      const code = normaliseCode(field.value)
-      // Submits itself on the sixth digit, like the pairing field: a code is
-      // exactly six long, so a button press at that point asks a question with
-      // one possible answer.
-      if (code !== null) this.copilotDo({ t: 'connect', code })
-    })
-    block.append(field)
-
-    if (this.copilot.notice !== null) {
-      block.append(element('p', 'note copilot-notice', plain(this.copilot.notice)))
-    }
-    block.append(
-      element(
-        'p',
-        'note',
-        'The copilot can start sessions, read them and change settings on that machine. Connecting a browser gives it whatever the machine chose to grant, and the machine can take it back at any time.',
-      ),
-    )
-    return block
+  private get copilotCanAct(): boolean {
+    return this.copilot.link.open && this.copilot.link.grant.act
   }
 
   /**
@@ -3998,7 +3948,7 @@ class Deck {
 
     const said = grantSentence(grant)
     if (said !== null) body.append(element('p', 'note copilot-note', said))
-    if (grant.act) body.append(this.composer())
+    if (this.copilotCanAct) body.append(this.composer())
 
     const waiting = this.pendingRows()
     if (waiting !== null) body.append(waiting)
@@ -4213,7 +4163,7 @@ class Deck {
     // when this connection may actually send it. The text is put in the composer
     // rather than sent, so what goes to the copilot is something the person read
     // and pressed send on rather than something this client said on their behalf.
-    if (this.copilot.link.grant.act) {
+    if (this.copilotCanAct) {
       const ask = element('button', 'button button--quiet answer__ask', 'Ask the copilot about this')
       ask.type = 'button'
       ask.addEventListener('click', () => {
@@ -4280,7 +4230,11 @@ class Deck {
     return trail
   }
 
-  /** Talking to the copilot. Drawn only with `act`, because it is an act. */
+  /**
+   * Talking to the copilot. Drawn only when it would work — see
+   * {@link copilotCanAct} — because sending is an act and a dead Send button is
+   * worse than no Send button.
+   */
   private composer(): HTMLElement {
     const block = element('form', 'composer')
     const field = element('textarea', 'composer__field')
@@ -5012,11 +4966,12 @@ class Deck {
     this.picking = false
     this.awaitingCreate = false
     this.forgetLocalhost()
-    // Both secrets, in both stores. A browser somebody has just said is not
-    // theirs must not be left holding a credential that connects to a copilot,
-    // which is the one that can change things rather than merely read them.
-    clearCopilots(this.stores)
-    this.copilots = {}
+    // One secret now, not two, and `clearPairing`/`clearMachineBook` at the top
+    // of this method already took it. A browser somebody has just said is not
+    // theirs used to be left holding a second credential — the more powerful
+    // one, the one that could change things rather than merely read them — and
+    // the way that is guaranteed not to happen again is that there is no second
+    // credential to leave behind.
     this.forgetCopilot()
     this.sessions = []
     this.activity.clear()

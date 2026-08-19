@@ -229,7 +229,7 @@ function baseName(path: string): string {
  * Has the copilot ever run on this machine?
  *
  * Both halves are needed and that is why this is a function rather than an
- * expression inline. A missing `CLAUDE.md` alone is also true of somebody who
+ * expression inline. Missing instructions alone is also true of somebody who
  * deleted the file out of a folder full of memories, and an absent `memory/`
  * alone is true for the one moment between the scaffolder making the folder and
  * writing the index. Together they mean nothing has ever run here — which is a
@@ -1004,7 +1004,16 @@ function FolderRow({
 /* ------------------------------------------------------------- 2. startup -- */
 
 /**
- * The four states `CLAUDE.md` can be in, and what each one licenses.
+ * The four states the copilot's own instructions file can be in, and what each
+ * one licenses.
+ *
+ * Named for the file it is actually about, corrected 2026-08-19. This table
+ * keys on `CopilotState['instructions']`, which `copilot-home.ts` derives from
+ * `<userData>/copilot-layer/instructions.md` — this app's own file, under this
+ * app's own directory. Calling it `CLAUDE.md` was the same mistake the block at
+ * the foot of this file already records having made once: not a naming
+ * preference but a wrong claim, of the kind that type-checks perfectly and
+ * sends whoever reads it looking in a folder where no such file exists.
  *
  * The distinction that earns its keep is between the middle two, and
  * `copilot-home.ts` argues it at length: `superseded` is a default *this app*
@@ -1681,7 +1690,37 @@ function FilesGroup({
           >
             {open === 'folder' && (
               <FileEditor
-                label={baseName(folderFile?.path ?? 'CLAUDE.md')}
+                /*
+                 * The category, not the filename — and this is the one box on
+                 * the pane where those differ.
+                 *
+                 * The other four boxes on this pane pass `baseName(…)` of a real
+                 * path and that is right for them: `instructions.md`,
+                 * `tools.md`, `copilot.md` and a routine are files *this app*
+                 * made up and named, so the filename is neutral and it is the
+                 * most useful thing a screen reader can say. This box edits a
+                 * file in somebody else's
+                 * folder, and the name of that file is one CLI's convention —
+                 * `copilot-home.ts` builds it as `join(paths.root, 'CLAUDE.md')`.
+                 * So `baseName(folderFile?.path ?? 'CLAUDE.md')` announced a
+                 * vendor's filename as the textarea's accessible name, in every
+                 * case rather than only as a fallback: the folder row is emitted
+                 * whether or not the file exists, so `folderFile.path` is that
+                 * path already and the `??` never ran. Reading it out was
+                 * exactly what the 2026-08-17 review asked us to stop doing, and
+                 * it was the last string in this row still doing it — the
+                 * visible label, the two states and the effect sentence were all
+                 * neutralised then, which is what made the leak so hard to see.
+                 *
+                 * The row's own visible label is reused verbatim rather than a
+                 * fourth phrasing of the same idea, so what somebody hears is
+                 * what the person beside them is looking at. Nothing is lost by
+                 * dropping the filename: `Show the file`, in this same box,
+                 * reveals it in the machine's own file manager — which answers
+                 * "which file is this" with the file itself rather than with a
+                 * name.
+                 */
+                label="The folder’s own instructions"
                 text={folderText.text}
                 problem={folderText.problem}
                 rows={18}

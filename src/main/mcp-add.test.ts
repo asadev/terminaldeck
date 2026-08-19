@@ -334,4 +334,28 @@ describe('addMcpServer', () => {
     })
     expect(result).toEqual({ ok: true, message: 'Added files.' })
   })
+
+  it('does not flash a console window over the settings panel on Windows', async () => {
+    /*
+     * On Windows the launcher this uses is `cmd.exe /c claude …` — that is what
+     * `PROVIDERS.claude.spawn` carries, deliberately, because an npm-installed
+     * `claude` is a `.cmd` shim that `execFile` refuses to run directly. cmd.exe
+     * is a console program, so without `windowsHide` pressing Add paints a
+     * black window over the panel for as long as the CLI takes.
+     *
+     * There is no behavioural symptom to measure: the command works either way,
+     * and it works on the machine this is written on with no window at all,
+     * which is exactly how the omission survived. So it is asserted on the
+     * options handed to the spawn, which is the same thing the child sees.
+     */
+    let sawHide: boolean | undefined
+    await addMcpServer(request(), {
+      path,
+      exec: async (_file, _args, options) => {
+        sawHide = options.windowsHide
+        return { stdout: '', stderr: '' }
+      },
+    })
+    expect(sawHide).toBe(true)
+  })
 })

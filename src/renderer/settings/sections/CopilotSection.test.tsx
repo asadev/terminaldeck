@@ -592,15 +592,34 @@ describe('the files, and the one button on each row that acts', () => {
      */
     expect(SOURCE.match(/<FileEditor/g) ?? []).toHaveLength(3)
     /*
-     * No box on this pane spells a filename out; each derives its label from the
-     * path it is actually pointed at. The instructions editor used to be
-     * `label="CLAUDE.md"` — a brand on a control that has nothing to do with any
-     * one agent, and the wrong file besides: the box edits
-     * `<userData>/copilot-layer/instructions.md`, so a screen reader announced a
-     * filename that is not on disk anywhere.
+     * No box on this pane spells a *vendor's* filename out. The instructions
+     * editor used to be `label="CLAUDE.md"` — a brand on a control that has
+     * nothing to do with any one agent, and the wrong file besides: the box
+     * edits `<userData>/copilot-layer/instructions.md`, so a screen reader
+     * announced a filename that is not on disk anywhere.
+     *
+     * It was four boxes deriving their label from the path they are pointed at,
+     * and this said five. The fifth was the folder box, and deriving *its* label
+     * from *its* path was the same leak wearing the fix's clothes: that path is
+     * `join(paths.root, 'CLAUDE.md')`, so `baseName` of it is a vendor's
+     * filename in every case — not, as the `??` in it suggested, only when the
+     * file is missing. The folder row is emitted whether the file exists or not,
+     * so the fallback never ran and the audit of 2026-08-19 found the name being
+     * read aloud on the one pane whose visible copy had been swept clean of it.
+     *
+     * So the split is now four and one, and both halves are pinned. Four boxes
+     * over files *this app* named — `instructions.md`, `tools.md`, `copilot.md`
+     * and a routine — keep the filename, because it is neutral and it is the
+     * most useful thing a screen reader can say. The one box over a file in
+     * somebody else's folder is named by category, in the row's own visible
+     * words, so what is heard is what is read.
      */
     expect(SOURCE).not.toContain('label="CLAUDE.md"')
-    expect(SOURCE.match(/label=\{baseName\(/g) ?? []).toHaveLength(5)
+    expect(SOURCE.match(/label=\{baseName\(/g) ?? []).toHaveLength(4)
+    expect(SOURCE).toContain('label="The folder’s own instructions"')
+    // The regression itself, not the count: a derived label that reaches a
+    // vendor's filename, however it is spelled or defaulted.
+    expect(SOURCE).not.toMatch(/label=\{baseName\([^)]*CLAUDE/i)
   })
 
   it('gives the folder’s own instructions an editor rather than a file manager', () => {

@@ -707,11 +707,26 @@ export function WorkspaceTabStrip({
                   from its row in the rail — so nothing is trapped up here; what
                   is missing is only the control that would have lied.
                 */}
-                {(!tab.machine || (tab.closable && onEndRemote !== undefined)) && (
+                {/*
+                  A shell on a server takes the same road as a remote session.
+
+                  Not the local road, and the difference is worth stating because
+                  the local reading is the tempting one: taking a tab off the
+                  strip is safe *because the rail still holds the row*, and the
+                  rail does hold a server's row. What decides it is what the ✕
+                  means, and Asad settled that for machines that are not this one:
+                  the pill's ✕ ends the thing. A ✕ that meant "hide" on one row
+                  and "end" on the row above it — both of them sessions somewhere
+                  else — would be the same glyph doing two things a centimetre
+                  apart. So: it ends the terminal, through the same confirmation
+                  everything else in this window closes through.
+                */}
+                {(!(tab.machine || tab.server) ||
+                  (tab.closable && onEndRemote !== undefined)) && (
                   <button
                     type="button"
                     className="strip-tab-close"
-                    data-ends={tab.machine ? '' : undefined}
+                    data-ends={tab.machine || tab.server ? '' : undefined}
                     // See the guard in `onDragStart` above: the tab is draggable,
                     // and without this marker a press that slides a few pixels
                     // reorders the strip instead of taking this tab off it.
@@ -719,15 +734,19 @@ export function WorkspaceTabStrip({
                     aria-label={
                       tab.machine
                         ? `Close ${full} on ${tab.machine.name} — ends the session`
-                        : `Remove ${full} from the top bar`
+                        : tab.server
+                          ? `Close ${full} on ${tab.server.name} — ends the terminal`
+                          : `Remove ${full} from the top bar`
                     }
                     title={
                       tab.machine
                         ? `Close ${full} — ends the session on ${tab.machine.name}. That machine stays connected.`
-                        : 'Remove from the top bar. It keeps running, in the sidebar.'
+                        : tab.server
+                          ? `Close ${full} — ends this terminal on ${tab.server.name}. The server itself is left alone.`
+                          : 'Remove from the top bar. It keeps running, in the sidebar.'
                     }
                     onClick={() => {
-                      if (tab.machine) onEndRemote?.(tab.id)
+                      if (tab.machine || tab.server) onEndRemote?.(tab.id)
                       else removeTab(tab.id)
                     }}
                   >

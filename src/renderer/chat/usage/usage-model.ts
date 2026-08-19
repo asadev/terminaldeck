@@ -16,9 +16,9 @@ import type {
   PlanLimit,
   PlanLimitSnapshot,
   ProjectSummary,
-  RefreshReason,
   SessionSummary,
   TokenUsage,
+  UsageRefreshOutcome,
 } from './types'
 
 /* --------------------------------------------------------------- reading -- */
@@ -401,39 +401,42 @@ export function planTitle(limit: PlanLimit): string {
 }
 
 /**
- * Why a `/usage` run did not happen, in a sentence the user can act on.
+ * How a refresh went, in a sentence, whatever happened.
  *
- * A control that appears to do nothing is worse than no control, so every
- * refusal has words.
+ * Every outcome has words, including the ones that worked, because most of this
+ * bar's life is spent with nothing to draw and a figure that is absent without
+ * explanation is the dead end the whole feature was reviewed for.
+ *
+ * The main process sends its own sentence with every result — it knows things
+ * this side does not, like the CLI's own error text — and it is preferred where
+ * there is one. These are the fallback for a payload from a build that sent
+ * none, and they are kept in step with `usage-ipc.ts` deliberately: one answer
+ * must never come to be explained two ways in one app.
  */
-export function refreshFailureMessage(reason: RefreshReason): string {
-  switch (reason) {
-    case 'busy':
-      return 'The session is working — try again once it is idle.'
-    case 'prompt-busy':
-      // The gate is "an empty `❯` prompt is on screen", which a session running
-      // something other than Claude Code will also fail — so this says what was
-      // seen rather than asserting there is text in a prompt that may not exist.
-      return 'No empty Claude Code prompt on screen — clear the prompt, or check this session is running Claude Code.'
-    case 'no-panel':
-      return 'Claude Code did not show its usage panel.'
+export function refreshOutcomeMessage(outcome: UsageRefreshOutcome): string {
+  switch (outcome) {
+    case 'ok':
+      return 'Read from Claude Code, in this app’s own process — no session was touched.'
+    case 'cached':
+      return 'Read from what Claude Code had already written down — nothing was started.'
     case 'no-limits':
-      // Says what was seen, and stops. The cause is almost always an account
-      // billed through the API rather than a subscription — those have no
-      // rolling window for the CLI to draw — but this reports the screen rather
-      // than diagnosing the billing, because the screen is what it read.
-      return 'Claude Code’s usage panel shows no plan limits for this account, so there is nothing to read.'
-    case 'panel-open':
-      // The one failure that is visible to the person before it is described to
-      // them: something is on their screen that this app put there. Saying what
-      // it is, and what closes it, is the least it is owed.
-      return 'Claude Code’s usage panel was opened to read this and did not close — press Esc in the session.'
-    case 'not-watching':
-      return 'This session is not being watched.'
-    case 'unwired':
-      return 'Running /usage is not wired into this build.'
+    case 'settled':
+      /*
+       * Absent, not late, and worded so the two cannot be confused.
+       *
+       * A login billed through the API has no rolling subscription window for
+       * anything to report, so "not reported" — which describes a number on its
+       * way — would be the wrong sentence for a number that does not exist.
+       */
+      return 'This login has no subscription limits, so there is nothing to read.'
+    case 'signed-out':
+      return 'That account is not signed in to Claude Code, so it has no plan limits to report.'
+    case 'no-binary':
+      return 'Claude Code could not be started here, so its usage could not be read.'
+    case 'unwatched':
+      return 'This session runs a different agent, so it has no Claude limits to read.'
     default:
-      return 'Could not read the plan limit.'
+      return 'Claude Code’s usage could not be read just now.'
   }
 }
 

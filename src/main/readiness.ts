@@ -20,8 +20,9 @@ import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
 import { compileIgnorePattern, parseIgnoreFile, safeJoin, type IgnoreRule } from './fs-tree'
 import { findGitDir, readGitStatus } from './git'
-import { currentPlatform, withPath } from './platform/host'
+import { currentPlatform, isWindows, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
+import { launchSpec } from './tool-probe'
 
 const run = promisify(execFile)
 
@@ -87,7 +88,22 @@ export interface ReadinessFix {
   label: string
   /** Everything it will do, in full, so the user can decide before it runs. */
   description: string
-  /** Project-relative paths it creates or edits. */
+  /**
+   * What it creates or edits, as the panel prints it under "Changes".
+   *
+   * Project-relative paths for all but one of them, and paths are what this
+   * field was: `.gitignore`, `package.json`, `git index`. A path is the best
+   * answer here because it cannot drift from the code the way a sentence can,
+   * and because the person reading it is deciding whether to let something
+   * write into their repository.
+   *
+   * The exception is `FIX_CREATE_CLAUDE_MD`, which names the *category* of file
+   * instead — the one path in this list that is one vendor's filename, standing
+   * always-visible on a panel that runs on any repository with any agent in it.
+   * The long note on that fix argues it and states what the substitution costs.
+   * Anything added here is read by `neutral-naming.test.ts` as copy, so a new
+   * vendor filename in this field fails the suite rather than reaching a screen.
+   */
   touches: string[]
   /**
    * Touches git's index rather than only files. The panel asks a second time
@@ -675,10 +691,46 @@ const FIX_CREATE_CLAUDE_MD: ReadinessFix = {
    * branch below used to list the three the scan accepts, and that clause has
    * gone — see the long note there for why a definition of the category is not
    * the same act as a disclosure of what a button is about to write. Which
-   * means this sentence has to carry the whole of the disclosure, and it is
-   * shown twice before anything happens: as the button's tooltip, and in full
-   * beside the confirm step `ReadinessPanel` puts between the press and the
-   * write.
+   * means this sentence has to carry the whole of the disclosure.
+   *
+   * **Where it is shown, corrected on 2026-08-19.** This note used to claim the
+   * description is "shown twice before anything happens: as the button's
+   * tooltip, and in full beside the confirm step `ReadinessPanel` puts between
+   * the press and the write." The second half was never true of *this* fix.
+   * `ReadinessPanel` renders the description only while `confirming`, and it
+   * only ever sets `confirming` for a `destructive` fix — this one is
+   * `destructive: false` just below, because creating a file that refuses to
+   * overwrite anything needs no second ask. So the description reaches a
+   * person exactly once, as the button's `title`. That is a hover, and a hover
+   * is not a thing that happens to somebody on a touch screen or reading with a
+   * keyboard. The disclosure being hover-only is a gap, and it is not this
+   * field's to close — closing it means giving the panel a visible place to put
+   * a non-destructive fix's description, which is a change to how every fix on
+   * that screen is drawn.
+   *
+   * **Why `touches` no longer says it.** `touches` is the always-visible line —
+   * `ReadinessPanel` prints it under "Changes" the moment the row is drawn, on
+   * every project, for everybody, before anything is pressed or hovered. A
+   * vendor's filename standing there unprompted is the exact shape of what the
+   * 2026-08-17 review objected to:
+   *
+   *   > *"You should not mention in any settings or any pop-up a specific tool
+   *   > or LLM, because they can use some other also."*
+   *
+   * A readiness report runs on any repository with any agent in it, so that
+   * line is read by people who have never installed the CLI whose filename it
+   * was reciting. It now names the category, which is what the line is for:
+   * "Changes your instructions file" answers *what part of my project is about
+   * to move*, which is the question somebody deciding whether to press has.
+   *
+   * The cost is real and worth stating, because it is the property the panel's
+   * own note says this line has: a path in `touches` cannot drift from the code
+   * the way a re-worded sentence can, and a category phrase can. What holds it
+   * honest instead is the pair either side of it — the description discloses
+   * the filename, and `applyReadinessFix` writes that same filename — plus the
+   * strict half of
+   * `neutral-naming.test.ts`, which since 2026-08-19 reads `touches` as copy
+   * and fails on any vendor filename put back into it, however short.
    *
    * It stays CLAUDE.md rather than becoming AGENTS.md, and that is a decision
    * rather than an oversight. Both are read: `claude` 2.1.234 on this machine
@@ -689,7 +741,7 @@ const FIX_CREATE_CLAUDE_MD: ReadinessFix = {
    */
   description:
     'Writes an instructions skeleton at the project root — what this is, how to run it, how to test it, layout and conventions — each section left as a prompt for you to fill in. The file is CLAUDE.md. Refuses if one is already there.',
-  touches: ['CLAUDE.md'],
+  touches: ['your instructions file'],
   destructive: false,
 }
 
@@ -1708,22 +1760,83 @@ export type ToolRunner = (
  * is the difference between a person fixing their own machine and a person
  * filing a bug. This app has already shipped that mistake once, in a place where
  * a package manager's prompt was reported as a fifteen-second hang.
+ *
+ * ## Why the command goes through `launchSpec`
+ *
+ * Every command this runner is ever handed is a package manager or an agent
+ * CLI, and on Windows all three of them — `npm`, `npx`, `gemini` — are `.cmd`
+ * shims, not executables. Node has refused to spawn a `.cmd` or `.bat` without
+ * `shell: true` since 18.20.2/20.12.2, deliberately, as the fix for
+ * CVE-2024-27980: `execFile` throws EINVAL before a process is created. This
+ * function's `catch` is written for a tool that ran and failed, so it turned
+ * that into `{ ok: false, output: 'spawn npm EINVAL' }` — every fix that shells
+ * out silently did nothing on Windows and reported a sentence naming no cause.
+ * `tool-probe.ts:launchSpec` is the one place the shim rule and its quoting
+ * live; `prerequisites.ts:version` and `usage-probe.ts` route through it for
+ * exactly this, and this runner was the one that did not.
+ *
+ * `resolved` is null because no lookup has been paid for here — which is the
+ * safe end of `launchSpec`'s contract anyway: with nothing resolved it takes
+ * the command processor, and cmd runs a shim and a real `.exe` alike.
  */
+
+/** Everything about a tool spawn except the spawning, so it can be read here. */
+export interface ToolSpawn {
+  /** The `file` argument for `execFile`. Already quoted when `shell` is set. */
+  file: string
+  spawn: {
+    cwd?: string
+    timeout: number
+    maxBuffer: number
+    windowsHide: boolean
+    shell: boolean
+    env: Record<string, string | undefined>
+  }
+}
+
+/**
+ * The shape of the spawn, worked out without performing it.
+ *
+ * Pure and exported for one reason: the Windows half of this decision cannot be
+ * observed on the machine this repo is written on, and a test that reaches it
+ * by actually spawning `npm.cmd` would need a Windows PC — which is the whole
+ * problem. Splitting the decision from the act lets both spellings be pinned in
+ * one run on a Mac, which is the same technique `platform/lookup.ts` and
+ * `tool-probe.ts:launchSpec` already use.
+ */
+export function toolSpawn(
+  command: string,
+  PATH: string,
+  options: { cwd?: string; timeout: number },
+  platform: Platform = currentPlatform(),
+): ToolSpawn {
+  const launch = launchSpec(command, null, platform)
+  return {
+    file: launch.command,
+    spawn: {
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      timeout: options.timeout,
+      maxBuffer: MAX_BUFFER,
+      windowsHide: true,
+      shell: launch.shell,
+      // `withPath`, not `{ ...process.env, PATH }`: the literal key leaves a
+      // Windows child holding both `Path` and `PATH` and no defined answer to
+      // which it reads. See `platform/host.ts`.
+      env: { ...withPath(process.env, PATH, platform), LC_ALL: 'C' },
+    },
+  }
+}
+
 async function runTool(
   command: string,
   args: string[],
   options: { cwd?: string; timeout: number },
+  platform: Platform = currentPlatform(),
 ): Promise<ToolRun> {
-  const PATH = await loginPath()
-  const spawn = {
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    timeout: options.timeout,
-    maxBuffer: MAX_BUFFER,
-    windowsHide: true,
-    env: { ...withPath(process.env, PATH, currentPlatform()), LC_ALL: 'C' },
-  }
+  const PATH = await loginPath(platform)
+  const { file, spawn } = toolSpawn(command, PATH, options, platform)
   try {
-    const { stdout, stderr } = await run(command, args, spawn)
+    const { stdout, stderr } = await run(file, args, spawn)
     return { ok: true, output: `${stdout}${stderr}`.trim() }
   } catch (error) {
     const carried = error as { stdout?: string; stderr?: string; message?: string }
@@ -1838,10 +1951,24 @@ const UPGRADE_TIMEOUT_MS = 10 * 60 * 1000
  * only honest thing to do there is to refuse and say so rather than run
  * something and hope.
  */
-export async function upgradeRouteFor(exec: ToolRunner = runTool): Promise<UpgradeRoute> {
+export async function upgradeRouteFor(
+  exec: ToolRunner = runTool,
+  platform: Platform = currentPlatform(),
+): Promise<UpgradeRoute> {
   const probe = (command: string, args: string[]): Promise<ToolRun> =>
     exec(command, args, { timeout: ROUTE_TIMEOUT_MS })
-  if ((await probe('brew', ['list', '--formula', '--versions', AGENT_CLI_FORMULA])).ok) return 'brew'
+  // Homebrew is not a Windows package manager, and there is no supported way to
+  // put one on a Windows PC. Probing for it there is not merely a wasted spawn:
+  // this runs on a click, `ROUTE_TIMEOUT_MS` is twenty seconds, and a failed
+  // `brew` lookup is the *first* thing between the button and the answer — so
+  // on Windows the route detection paid a spawn for a program that cannot
+  // exist before it asked the one that can. Skipping it is not a reduction; the
+  // brew branch has no reachable case on that platform at all.
+  if (!isWindows(platform)) {
+    if ((await probe('brew', ['list', '--formula', '--versions', AGENT_CLI_FORMULA])).ok) {
+      return 'brew'
+    }
+  }
   if ((await probe('npm', ['ls', '-g', '--depth=0', AGENT_CLI_PACKAGE])).ok) return 'npm'
   return null
 }
@@ -1854,6 +1981,36 @@ export function upgradeCommandFor(route: Exclude<UpgradeRoute, null>): {
   return route === 'brew'
     ? { command: 'brew', args: ['upgrade', AGENT_CLI_FORMULA] }
     : { command: 'npm', args: ['install', '-g', `${AGENT_CLI_PACKAGE}@latest`] }
+}
+
+/**
+ * What to say when neither package manager claims the CLI.
+ *
+ * This is the refusal a person is most likely to read, because it is the one
+ * that fires on every machine that installed the tool some third way. It used
+ * to name `brew upgrade gemini-cli` first, unconditionally — so a Windows user
+ * who pressed Upgrade was refused and then told to run a command that does not
+ * exist on their PC, cannot be made to exist on their PC, and is listed ahead
+ * of the one that would have worked. That is worse than saying nothing: it
+ * reads as the app being written for somebody else's computer, which is exactly
+ * the impression the port is meant to remove.
+ *
+ * The npm line is identical on both platforms — the Homebrew formula and the
+ * npm package are the same CLI — so Windows loses a route that does not exist
+ * and gains nothing invented. No winget or choco line is offered because
+ * nobody here has checked that the package is published under those, and a
+ * confidently wrong command is the thing being fixed.
+ *
+ * Pure and exported so both sentences can be pinned from a Mac.
+ */
+export function noRouteAdvice(platform: Platform = currentPlatform()): string {
+  const opening =
+    'Neither package manager on this machine claims that agent, so upgrading it is not something this app can do for you.'
+  const npm = `\`npm install -g ${AGENT_CLI_PACKAGE}@latest\``
+  if (isWindows(platform)) {
+    return `${opening} Run ${npm} in your own terminal.`
+  }
+  return `${opening} Run \`brew upgrade ${AGENT_CLI_FORMULA}\` or ${npm} in your own terminal, whichever matches how you installed it.`
 }
 
 /** What the CLI answers `--version` with, or null when it will not say. */
@@ -1873,17 +2030,18 @@ async function agentCliVersion(exec: ToolRunner): Promise<string | null> {
  * package manager has and leaves the person exactly where they were. Comparing
  * what the command *answers* is the only measurement that matches what breaks.
  */
-export async function upgradeAgentCli(exec: ToolRunner = runTool): Promise<ReadinessFixResult> {
+export async function upgradeAgentCli(
+  exec: ToolRunner = runTool,
+  platform: Platform = currentPlatform(),
+): Promise<ReadinessFixResult> {
   const before = await agentCliVersion(exec)
   if (before === null) {
     return refuse('That agent is not installed on this machine, so there is nothing to upgrade here.')
   }
 
-  const route = await upgradeRouteFor(exec)
+  const route = await upgradeRouteFor(exec, platform)
   if (route === null) {
-    return refuse(
-      'Neither package manager on this machine claims that agent, so upgrading it is not something this app can do for you. Run `brew upgrade gemini-cli` or `npm install -g @google/gemini-cli@latest` in your own terminal, whichever matches how you installed it.',
-    )
+    return refuse(noRouteAdvice(platform))
   }
 
   const { command, args } = upgradeCommandFor(route)

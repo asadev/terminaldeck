@@ -128,6 +128,53 @@ describe('closeWarning for a whole project', () => {
   })
 })
 
+describe('closeWarning for a terminal on a server', () => {
+  /*
+   * The sentence is written around the fear rather than around the act.
+   *
+   * Somebody pressing ✕ on a row that belongs to a live server is not worried
+   * about losing a scrollback. They are worried that they have just stopped
+   * their website — which is exactly what the word "close" beside a server's
+   * name suggests to a person who does not know better, and is the same argument
+   * the *Forget this server* control is written around one file over. So what is
+   * still running is said in the second clause, where it will be read.
+   */
+  it('says what it leaves running, on one terminal', () => {
+    const warning = closeWarning('idle', 1, 'server')
+    expect(warning.headline).toBe('This closes the terminal on that server.')
+    expect(warning.detail).toContain('Nothing else on the server is touched')
+    expect(warning.detail).toContain('open another terminal whenever you like')
+  })
+
+  it('counts them when there is more than one, and still says it', () => {
+    const warning = closeWarning('working', 3, 'server')
+    expect(warning.headline).toBe('This closes 3 terminals on that server.')
+    expect(warning.detail).toContain('Nothing else on the server is touched')
+  })
+
+  it('never tells somebody they are closing a project or a machine', () => {
+    /*
+     * The three group subjects share one dialog and differ only in their nouns,
+     * and getting them crossed is how a confirmation stops being read: a
+     * project's close takes its folder off the rail, a machine's leaves it
+     * paired, and a server's leaves a live machine running exactly as it was.
+     */
+    for (const count of [1, 4]) {
+      const warning = closeWarning('idle', count, 'server')
+      expect(warning.headline).not.toMatch(/project|machine/i)
+      expect(warning.detail).not.toMatch(/project|stays connected/i)
+    }
+  })
+
+  it('leaves the other three subjects saying what they always said', () => {
+    // A fourth subject that changed the other three would be a regression this
+    // file could not see, because every assertion above is about the new one.
+    expect(closeWarning('idle', 2, 'machine').headline).toContain('machine')
+    expect(closeWarning('idle', 2, 'project').headline).toContain('project')
+    expect(closeWarning('working', 1).headline).toBe('This session is still working.')
+  })
+})
+
 describe('canResumeProvider', () => {
   it('is true for the agents with a resume command', () => {
     expect(canResumeProvider('claude')).toBe(true)

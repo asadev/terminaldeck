@@ -6,27 +6,43 @@
  * connections, two grants, two action logs and two conversations, and a single
  * app-wide object would be right for whichever machine was greeted last.
  *
- * ## The copilot is a **separate connection**, and this object is where that
- * lives on the phone
+ * ## The copilot comes with the device, and this object is where that lives on
+ * the phone
  *
- * Pairing a device for terminals grants it no copilot reach at all — not a tab,
- * not a frame, not a refusal whose shape it could measure. Somebody at the
- * machine mints a **six-digit connect code**, it is typed in here, and the
- * desktop answers once with a credential this phone stores beside its pairing
- * credential. From then on **every socket sends `copilot.hello` before any other
- * `copilot.*` frame**, on every reconnect, because a session channel does not
- * carry the copilot by existing.
+ * Asad, on 2026-08-19:
  *
- * That is not ceremony. `COPILOT-REMOTE.md` §4 argues it at length: the second
- * factor behind the `alter` tier was never *being at the desk* — somebody who
- * walks away from an unlocked Mac has taken their geography with them — it was
- * *reaching the dialog required an authorisation the requesting party did not
- * already hold*. The connection is that authorisation, and it is the one thing
- * this phone cannot grant itself.
+ * > *"Instead of giving mobile app separate connection for copilot just make it
+ * > like if we are connecting as my device copilot automatically comes, if we
+ * > connect as guest then copilot don't come — that's all we need to do instead
+ * > of two different connections."*
  *
- * So there are three separate questions here and the screens depend on all
- * three: does the machine **have** a copilot (`isImplemented`), does it hold a
- * record for this device (`linked`), and is **this socket** in (`isOpen`).
+ * So **pairing a device as "My device" IS the authorisation for the copilot**,
+ * and there is no second ceremony behind it. This object used to hold one: a
+ * six-digit connect code minted at the machine, a credential the desktop sent
+ * exactly once, a Keychain item beside the pairing one, and a `linked` flag that
+ * decided between a code field and a conversation. All of it is gone. What
+ * replaced it is a single question asked of the `welcome` — *did the machine
+ * write a `copilot` object for this device* — and the desktop writes one only
+ * for a machine that has a copilot and a device its owner approved as his own.
+ *
+ * The property the code was buying is not lost, it is already held. §4 of
+ * `COPILOT-REMOTE.md` argues that the second factor behind the `alter` tier was
+ * never *being at the desk* — somebody who walks away from an unlocked Mac has
+ * taken their geography with them — it was *reaching the dialog required an
+ * authorisation the requesting party did not already hold*. Approving a device
+ * as **My device**, at the keyboard, in the words the approval screen has always
+ * used — *"Full access. It's you at another keyboard"*, against *"Guest — You
+ * choose what they can reach. The copilot is never shared"* — **is** that
+ * authorisation. Asking the same person for it twice is ceremony, and ceremony
+ * people learn to click through is worse than none.
+ *
+ * What is left is two questions rather than three: is there a copilot here for
+ * this phone (`isAvailable`), and is **this socket** in (`isOpen`). The second
+ * still needs a frame, because copilot access belongs to the socket and a
+ * `welcome` never carries it — so **every socket sends `copilot.hello` before
+ * any other `copilot.*` frame**, on every reconnect. It carries nothing: the
+ * device identity behind this connection was proved at pairing time, and its
+ * kind is what the desktop checks.
  *
  * ## What this phone is talking to
  *
@@ -81,69 +97,26 @@ protocol CopilotWire: AnyObject {
     func send(_ message: ClientMessage) -> Bool
 }
 
-/**
- * Where the copilot credential is kept, from this object's point of view.
+/*
+ * **`CopilotVault` used to be here, with two implementations, and all three are
+ * gone.**
  *
- * A second secret, in the Keychain, beside the pairing one and with the same
- * protection class — `COPILOT-REMOTE.md` §8 asks for exactly that and the reason
- * is that the two are worth the same. A copilot credential opens an agent that
- * holds `Write` and `Bash` on somebody's machine; a session credential opens a
- * shell on it. Neither belongs in `UserDefaults`, in a plist, or in an
- * unencrypted backup.
+ * It was the seam onto the copilot credential: a second secret kept in the
+ * Keychain beside the pairing one, minted by redeeming a six-digit code and
+ * dropped when the machine said the record had gone. `COPILOT-REMOTE.md` §8
+ * asked for exactly that, on the argument that the two secrets are worth the
+ * same — a copilot credential opens an agent holding `Write` and `Bash` on
+ * somebody's machine, a session credential opens a shell on it.
  *
- * A seam rather than a direct `CredentialStore` call for the reason `CopilotWire`
- * is one: this object is exercised with no Keychain, no host and no socket, and
- * the credential path is the one that most needs to be drivable in that state —
- * what it does is decide which of two screens somebody sees.
+ * There is no second secret any more. *"If we are connecting as my device
+ * copilot automatically comes, if we connect as guest then copilot don't come."*
+ * The pairing credential is the only thing this phone holds, its device kind is
+ * what the desktop checks, and `copilot.hello` proves neither because it does not
+ * have to — the socket it travels on was authenticated before it was sent.
  *
- * `store(nil)` is a real instruction and not a tidy-up: it is what a
- * `copilot.grant` carrying `linked: false` means. The record on that machine has
- * gone, so the secret this phone is holding opens nothing, and keeping it would
- * leave a live-looking credential in the Keychain with nobody's name against it.
+ * The Keychain field went with it, and `KeychainCredentialStore` scrubs the one
+ * an older build may have left behind. See `StoredCredential`.
  */
-@MainActor
-protocol CopilotVault: AnyObject {
-    func copilotCredential() -> String?
-    func storeCopilotCredential(_ credential: String?)
-}
-
-/**
- * The vault a real link uses: two closures onto whichever object owns the
- * machine's stored record.
- *
- * The same shape as `WireProxy` and for the same reason — one indirection buys
- * back the rule that this object never reaches `HostLink`'s API, and the weak
- * captures at the call site are what stop a link and its host holding each other
- * alive forever.
- */
-@MainActor
-final class CopilotVaultProxy: CopilotVault {
-    private let read: () -> String?
-    private let write: (String?) -> Void
-
-    init(read: @escaping () -> String?, write: @escaping (String?) -> Void) {
-        self.read = read
-        self.write = write
-    }
-
-    func copilotCredential() -> String? { read() }
-    func storeCopilotCredential(_ credential: String?) { write(credential) }
-}
-
-/// A vault that remembers nothing, for a link built without one. Not a fallback
-/// anything ships with — `HostLink` always passes a real one — but the tests and
-/// the previews need a `CopilotLink` that does not reach a Keychain, and a
-/// nil-able vault would put a `?` on every call site of the one thing that must
-/// not be forgotten.
-@MainActor
-final class MemoryCopilotVault: CopilotVault {
-    private var credential: String?
-
-    init(credential: String? = nil) { self.credential = credential }
-
-    func copilotCredential() -> String? { credential }
-    func storeCopilotCredential(_ credential: String?) { self.credential = credential }
-}
 
 /**
  * One thing in the conversation: something that was said, or something that was
@@ -188,7 +161,8 @@ final class CopilotLink {
     /**
      * What this device may do once the connection is open. `.none` until a
      * `welcome` or a `copilot.grant` says otherwise, which is the answer for
-     * every device nobody has connected — the overwhelming majority, by design.
+     * every device the copilot is not for — every guest, and every machine whose
+     * build has none.
      */
     private(set) var grant: CopilotGrant = .none
 
@@ -196,6 +170,13 @@ final class CopilotLink {
     /// question from whether it has one: one is about the host's vocabulary, the
     /// other about its implementation. **On its own it is not enough to draw
     /// anything** — see `isImplemented`.
+    ///
+    /// It is per-device now, though it does not look it: `server.ts` strips the
+    /// name from what a guest is told, so a phone paired as a guest sees exactly
+    /// what a phone talking to a copilot-less build sees. That is deliberate
+    /// there — *"a tab that refuses on every press is a worse answer than a
+    /// client that never knew"* — and it is why `.notOffered` is one screen
+    /// covering two situations.
     private(set) var isOffered = false
 
     /**
@@ -215,9 +196,8 @@ final class CopilotLink {
      * implementation rather than from a name beside it:
      *
      *  - a `welcome` carrying a `copilot` object, which `copilotFrame()` on the
-     *    desktop emits only when there is a copilot layer — including for a
-     *    device it has never connected, which is the case this whole distinction
-     *    exists for;
+     *    desktop emits only when there is a copilot layer **and** this device
+     *    was approved as one of his;
      *  - any `copilot.*` frame arriving, which no host without one can send.
      *
      * It is deliberately **not** cleared by `connectionLost`. Whether a machine
@@ -230,13 +210,19 @@ final class CopilotLink {
     private(set) var isImplemented = false
 
     /**
-     * That machine holds a copilot record for this device.
+     * That machine still counts this phone as one of his own devices.
      *
-     * The difference between *ask somebody for a connect code* and *send the
-     * credential you already have*, and a client that could not tell them apart
-     * would show the wrong screen on every reconnect. It is a fact about the
-     * desktop's store, so it survives a drop for the same reason
-     * `isImplemented` does.
+     * True the moment a `welcome` carries the field — the desktop writes it for
+     * nobody else — so on its own it says nothing a `welcome` has not already
+     * said. What it is kept for is the **push**: a `copilot.grant` carrying
+     * `linked: false` is how a device whose kind was changed at the machine
+     * finds out, and it is the only way it can find out without the socket
+     * dropping, because capabilities travel in the `welcome` and nowhere else.
+     * Without it a phone demoted to a guest would keep a Copilot pill whose
+     * every press is refused until something happened to reconnect it.
+     *
+     * It is a fact about the machine's store rather than about this socket, so
+     * it survives a drop for the same reason `isImplemented` does.
      */
     private(set) var linked = false
 
@@ -247,18 +233,17 @@ final class CopilotLink {
      * on every `welcome` by construction. Every `copilot.*` verb below the
      * ceremony is gated on it here as well as on the desktop — not because this
      * end is a boundary, but because a frame whose only possible answer is
-     * *this device is not connected to the copilot* is a frame worth not
-     * sending.
+     * *this socket has not said hello* is a frame worth not sending.
      */
     private(set) var isOpen = false
 
-    /// A connect code is on the wire and nothing has come back. Drives the
-    /// spinner on the Connect screen, and is cleared by the answer, by an error,
-    /// or by the socket going — never by a timer, because there is nothing here
-    /// a timer would know that the socket does not.
-    private(set) var isConnecting = false
-
-    /// A `copilot.hello` is on the wire. Same rules.
+    /// A `copilot.hello` is on the wire and nothing has come back. Cleared by
+    /// the answer, by an error, or by the socket going — never by a timer,
+    /// because there is nothing here a timer would know that the socket does
+    /// not.
+    ///
+    /// There used to be an `isConnecting` beside it, for the spinner on the
+    /// *"Checking that code…"* button. There is no code and no button.
     private(set) var isOpening = false
 
     /*
@@ -283,13 +268,13 @@ final class CopilotLink {
      *
      * What *is* still reachable, because each of these is a different verb and
      * each is real: **Stop this phone's copilot** ends the run that spends money
-     * (`stop()`, still in the menu); **Forget this machine** on the Machines
-     * screen drops the credential along with everything else; and the connection
-     * itself is granted and revoked **at the machine that minted the code**,
-     * which is what the connect screen has always said. `copilot.bye` remains in
-     * the wire vocabulary — the browser client sends it, and `WireCodec` still
-     * pins its encoding — this client simply no longer has a control that means
-     * it.
+     * (`stop()`, still in the menu); and **Forget this machine** on the Machines
+     * screen unpairs the device altogether, which is the only honest way this
+     * phone can end its own copilot access now that the access *is* the pairing.
+     * Everything else is decided at the machine, by changing what kind of device
+     * this is. `copilot.bye` remains in the wire vocabulary — the browser client
+     * sends it, and `WireCodec` still pins its encoding — this client simply has
+     * no control that means it.
      */
 
     /// What the copilot is, or nil when the machine has not said yet — which is
@@ -366,83 +351,59 @@ final class CopilotLink {
     var onError: ((String) -> Void)?
 
     private let wire: CopilotWire
-    private let vault: CopilotVault
 
-    init(wire: CopilotWire, vault: CopilotVault) {
+    init(wire: CopilotWire) {
         self.wire = wire
-        self.vault = vault
-    }
-
-    /// A link with nowhere to keep a credential, for the previews and the tests
-    /// that are about something else. Written as a convenience initialiser
-    /// rather than as a default argument because a default argument is evaluated
-    /// in the *caller's* isolation, and `MemoryCopilotVault` is main-actor
-    /// isolated like everything else here — so the default form does not
-    /// compile, which is the language telling the truth rather than getting in
-    /// the way.
-    convenience init(wire: CopilotWire) {
-        self.init(wire: wire, vault: MemoryCopilotVault())
     }
 
     // MARK: - What may be drawn
 
-    /// Whether there is a copilot screen on this machine at all. A device that
-    /// has not been connected still gets the screen, because the screen is where
-    /// it is told how to connect — but a machine that only *advertised* one does
-    /// not, because there is nothing on it to point at. See `CopilotAccess` and
-    /// `isImplemented`.
-    var isAvailable: Bool { isOffered && isImplemented }
-
-    /// Whether this phone is holding a copilot credential for this machine.
-    /// Read rather than cached: the Keychain is the truth, and a boolean beside
-    /// it is a second truth that can disagree after a write fails.
-    var holdsCredential: Bool {
-        guard let credential = vault.copilotCredential() else { return false }
-        return !credential.isEmpty
-    }
+    /**
+     * Whether there is a copilot on this machine **for this phone**.
+     *
+     * Three facts, and none of them is redundant even though the desktop makes
+     * all three true at once:
+     *
+     *  - `isOffered` — the capability list names it. Stripped for a guest, so
+     *    for a guest this is already false. It is also the vocabulary check: a
+     *    host this app has no agreed language with must not be sent frames on
+     *    the strength of one field.
+     *  - `isImplemented` — the machine actually showed a copilot, rather than
+     *    advertising one. The capability list can drift from what it advertises;
+     *    the field cannot. See `isImplemented`.
+     *  - `linked` — and it has not since been taken away by a push. See `linked`.
+     *
+     * `isAvailable` **is** the answer to *does this phone get a Copilot pill*.
+     * `DeckModel.showsCopilotTab` asks it through `CopilotAccess.isConnected`,
+     * which is true for every case except `.notOffered`.
+     */
+    var isAvailable: Bool { isOffered && isImplemented && linked }
 
     /**
      * What this phone may do, as one value, so no screen has to re-derive it
      * from a capability, two connection facts and three booleans and get one of
      * the combinations wrong.
      *
-     * The order of the tests is the order of the ceremony, and each answer is a
-     * different sentence with a different remedy — which is the whole reason
-     * this is an enum with seven cases rather than a pile of `if`s at each call
-     * site. Getting one of them wrong does not draw a slightly different screen;
-     * it sends somebody to look for a control on a machine that does not have
-     * one.
+     * Five cases where there were seven. `.notConnected` — *the machine has a
+     * copilot and this device has never been connected to it* — and
+     * `.credentialLost` — *the machine remembers this phone and the key here is
+     * gone* — were the two states the six-digit ceremony could put somebody in,
+     * and both went with it: there is no code to type and no key to lose. What
+     * is left is the honest shape of the thing, which is that either the copilot
+     * is here for this phone or it is not, and if it is then the only questions
+     * left are whether this socket has said hello yet and what the machine is
+     * letting it do.
      */
     var access: CopilotAccess {
-        // Both, and neither alone. The capability without the implementation is
-        // a host advertising a feature it cannot serve; the implementation
-        // without the capability is a host this app has no agreed vocabulary
-        // with, and sending it frames on the strength of one field would be
-        // guessing. See `isImplemented`.
         guard isAvailable else { return .notOffered }
-        // Before anything about grants. A device that has never redeemed a code
-        // is refused *every* `copilot.*` frame, read tier included, so a screen
-        // that talked about tiers here would be explaining the wrong obstacle.
-        guard linked else { return .notConnected }
-        /*
-         * An open connection is an open connection, whatever the Keychain says.
-         *
-         * This test is deliberately **above** the credential one, and the order
-         * cost a test failure to get right. A socket that has been through
-         * `copilot.hello` — or that redeemed a code a second ago — is in, and
-         * the desktop will serve it; a phone that then drew the Connect screen
-         * because a Keychain write had failed would be offering to redo a
-         * ceremony it had just completed, over a working connection, and the
-         * code it asked for would be one nobody had minted.
-         */
         if isOpen {
             if grant.canDirect { return .direct }
             if grant.canWatch { return .watch }
             return .notGranted
         }
-        // Only now. Not holding the credential matters exactly when the phone
-        // needs to *use* it, which is when it is not already in.
-        guard holdsCredential else { return .credentialLost }
+        // The hello is on the wire, or the socket is down and it cannot be.
+        // Nothing for anybody to press either way, which is exactly why this is
+        // drawn as a state rather than left as an empty screen.
         return .connecting
     }
 
@@ -478,96 +439,53 @@ final class CopilotLink {
 
     /**
      * A `welcome` arrived. Take what it said, and open the copilot if this
-     * phone can.
+     * phone has one.
      *
      * Nothing is subscribed here. `welcome.copilot.open` is **always** false —
      * the desktop says so in the type and `host-standin.ts` reproduces it — so
-     * an `attach` sent from this method would be answered *this device is not
-     * connected to the copilot* on every single connection. The subscription
-     * hangs off `copilot.grant` with `open: true`, which is the frame that says
-     * the ceremony is done.
+     * an `attach` sent from this method would be answered *this socket has not
+     * said hello* on every single connection. The subscription hangs off
+     * `copilot.grant` with `open: true`, which is the frame that answers the
+     * hello.
      */
     func welcomed(capabilities: Set<String>, connection: CopilotConnection) {
         isOffered = capabilities.contains(Copilot.capability)
         // Latched rather than assigned. A machine that showed a copilot once has
         // one; a later `welcome` that omitted the field would be a host bug, and
         // taking the screen away over it is a worse answer than leaving it up
-        // over frames that would refuse themselves anyway.
+        // over frames that would refuse themselves anyway. A device that has
+        // stopped being one of his is a different matter and is not this flag —
+        // it arrives as a capability list without the name, or as a
+        // `copilot.grant` carrying `linked: false`, and both of those do take
+        // the screen away.
         if connection.stated { isImplemented = true }
         apply(connection: connection)
         openConnection()
     }
 
     /**
-     * Send the stored credential, if there is one and it is wanted.
+     * Say hello, if there is a copilot here to say it to.
      *
-     * Four guards, and each of them is a frame not worth sending: a host with no
-     * copilot, a device with no record, a phone with no credential, and a person
-     * who deliberately closed it. `Transport.send` refuses rather than queues
-     * when the socket is down, so a failed send is reported rather than
+     * Three guards, and each of them is a frame not worth sending: a host that
+     * does not speak `copilot.*`, a host with no copilot for this phone, and a
+     * socket that is already in. `Transport.send` refuses rather than queues
+     * when the connection is down, so a failed send is reported rather than
      * remembered — the next `welcome` is the retry, and a welcome is exactly
      * what a recovered socket produces.
+     *
+     * **It carries nothing.** There is no credential to look up and no Keychain
+     * read on this path any more; what authorises the frame is the device
+     * identity this socket proved at pairing time and the kind that device was
+     * approved as. Both of those are the desktop's to check, and it has them
+     * before the frame arrives.
      */
     private func openConnection() {
-        guard isOffered, isImplemented, linked, !isOpen else { return }
-        guard let credential = vault.copilotCredential(), !credential.isEmpty else { return }
+        guard isAvailable, !isOpen else { return }
         isOpening = true
-        guard wire.send(.copilotHello(credential: credential)) else {
+        guard wire.send(.copilotHello) else {
             isOpening = false
             return
         }
-    }
-
-    /**
-     * Redeem a six-digit connect code.
-     *
-     * **Normalised here, before it goes anywhere**, with the same function the
-     * pairing screen uses. The desktop hashes the string it is given and strips
-     * nothing — `device-auth.ts` does not either — so a code sent as `481 902`
-     * is not a lenient match, it is a wrong code and a wasted one of five
-     * guesses. That split is deliberate: one place decides what a code looks
-     * like and it is the client, because the client is where somebody typed it.
-     *
-     * Returns whether the frame went. False is already explained on screen —
-     * either by the sentence handed to `onError` or by the field's own "that is
-     * not six digits" — so a caller does not have to say anything more.
-     */
-    @discardableResult
-    func connect(code typed: String) -> Bool {
-        guard isAvailable else { return false }
-        guard let code = PairingCodeParser.normalise(typed) else {
-            onError?("That is not a connect code. It is six digits, like 123456.")
-            return false
-        }
-        guard !isConnecting else { return false }
-        isConnecting = true
-        guard wire.send(.copilotConnect(code: code)) else {
-            isConnecting = false
-            onError?("Not connected — the code was not sent. Try again when the machine is back.")
-            return false
-        }
-        return true
-    }
-
-    /**
-     * The desktop answered `copilot.connect`. Store the credential **first**.
-     *
-     * It is sent exactly once and there is no path on that machine that can show
-     * it again, so anything that happens between receiving it and storing it is
-     * a connection nobody can ever reopen. Writing it before the state is
-     * applied is the cheapest possible ordering guarantee and it costs nothing.
-     */
-    func linked(credential: String, connection: CopilotConnection) {
-        implemented()
-        vault.storeCopilotCredential(credential)
-        isConnecting = false
-        isOpening = false
-        // Redeeming opens the connection on this socket as well — the desktop
-        // says so and it is right: the device has just proved it holds a code
-        // minted at that machine seconds ago, which is a stronger claim than the
-        // credential it is being given. So this frame can carry `open: true` and
-        // the subscription starts from it.
-        apply(connection: connection)
     }
 
     /**
@@ -610,8 +528,6 @@ final class CopilotLink {
         sawPending = false
         isLoadingLog = false
         closeLocally()
-        isConnecting = false
-        isOpening = false
     }
 
     /// Everything that belongs to an open connection rather than to the phone.
@@ -629,10 +545,10 @@ final class CopilotLink {
         settlements = [:]
     }
 
-    /// The machine is being torn down — unpaired, or re-paired. Everything goes,
-    /// including the connection and the credential: a re-pair mints a **new**
-    /// device id, so the desktop drops the copilot record with the old one and
-    /// the secret this phone is holding opens nothing.
+    /// The machine is being torn down — unpaired, or re-paired. Everything goes:
+    /// a re-pair mints a **new** device id, and whether that new device is one
+    /// of his is a question somebody answers again at the machine. Nothing is
+    /// carried across, and there is no secret left to drop.
     func forget() {
         grant = .none
         isOffered = false
@@ -642,7 +558,6 @@ final class CopilotLink {
         // one entirely.
         isImplemented = false
         linked = false
-        vault.storeCopilotCredential(nil)
         state = nil
         timeline = []
         sessions = []
@@ -653,7 +568,6 @@ final class CopilotLink {
         isLoadingLog = false
         chatRun = nil
         closeLocally()
-        isConnecting = false
     }
 
     // MARK: - Inbound
@@ -678,8 +592,7 @@ final class CopilotLink {
      *
      * Separate from `apply(connection:)` only so that arriving as a *frame*
      * confirms the machine has a copilot, while the same object arriving inside
-     * a `welcome` does not — there, the field's presence is what confirms it,
-     * and `welcome` carries it whether or not this device has ever connected.
+     * a `welcome` does not — there, the field's presence is what confirms it.
      */
     func apply(pushed connection: CopilotConnection) {
         implemented()
@@ -687,19 +600,18 @@ final class CopilotLink {
     }
 
     /**
-     * The connection changed, from a `welcome`, a `copilot.linked` or a pushed
-     * `copilot.grant`.
+     * The connection changed, from a `welcome` or a pushed `copilot.grant`.
      *
      * Four things can move and each has a consequence:
      *
-     *  - **`linked` went false** — somebody disconnected this device at the
-     *    machine. The credential this phone holds now opens nothing, so it is
-     *    dropped rather than kept: a secret in a Keychain with no record behind
-     *    it is a secret nobody can revoke because nobody knows it is there.
-     *  - **`open` went true** — the ceremony is done, so subscribe. This is the
-     *    only place that happens.
+     *  - **`open` went true** — the hello was answered, so subscribe. This is
+     *    the only place that happens.
      *  - **`open` went false** — the desktop closed it, or this is a `welcome`.
      *    Anything that needed it goes with it.
+     *  - **`linked` went false** — this device has stopped being one of his.
+     *    Handled by `isAvailable` rather than by a line here: the tab goes, the
+     *    screen says so, and there is no longer any secret to drop. The
+     *    narrowing below takes care of what must not stay on screen.
      *  - **the grant narrowed past `read`** — the screen empties. Leaving it in
      *    memory would mean a phone re-granted a minute later came back showing a
      *    conversation and tool rows from before, with nothing having re-checked
@@ -718,9 +630,6 @@ final class CopilotLink {
         isOpen = connection.open
         if connection.open { isOpening = false }
 
-        if !linked {
-            vault.storeCopilotCredential(nil)
-        }
         if !connection.open, wasOpen { closeLocally() }
         if connection.open, !wasOpen { subscribe() }
         if !grant.canWatch, hadWatch { clearWatched() }
@@ -741,23 +650,21 @@ final class CopilotLink {
     }
 
     /**
-     * An `error` frame arrived on this machine's socket while a ceremony was in
+     * An `error` frame arrived on this machine's socket while the hello was in
      * flight.
      *
-     * Only the flags are touched, and the sentence is left to the one error
+     * Only the flag is touched, and the sentence is left to the one error
      * surface `HostLink` already owns — two banners that can disagree about
-     * which is showing is a defect this app has had once. What this fixes is the
-     * spinner: a wrong connect code comes back as a plain `error`, and a Connect
-     * screen that went on saying *checking…* over it would be a screen that
-     * looks like it is still working.
+     * which is showing is a defect this app has had once. What this fixes is a
+     * screen that goes on saying *opening the copilot…* over a host that has
+     * just refused it.
      *
-     * Any error clears them, not only a copilot one, because the wire's error
+     * Any error clears it, not only a copilot one, because the wire's error
      * frame carries no correlation id and inventing one here would be guessing.
      * The cost of being wrong is a spinner that stops early on a frame that was
      * about something else, which resolves itself on the next answer.
      */
     func wireErrored() {
-        isConnecting = false
         isOpening = false
     }
 
@@ -1099,8 +1006,7 @@ final class CopilotLink {
     @discardableResult
     func answer(_ id: String, approved: Bool) -> Bool {
         guard grant.canAnswer else {
-            onError?("This phone is not allowed to answer the copilot's confirmations. That is a "
-                     + "switch on the machine, in Settings, on this phone's own card.")
+            onError?("\(Self.machineRefusal) answer the copilot's confirmations.")
             return false
         }
         guard wire.send(.copilotAnswer(id: id, approved: approved)) else {
@@ -1112,63 +1018,78 @@ final class CopilotLink {
         return true
     }
 
-    /// The sentence for a control that was drawn under a grant that has since
-    /// gone. It names where the fix is, because the grant is per device and it
-    /// is edited on the machine — a message that only said "not allowed" would
-    /// send somebody hunting on the wrong screen.
+    /// The sentence for a control that was drawn under a grant the machine has
+    /// since narrowed.
     private func refuse() {
-        onError?("This phone is not allowed to direct the copilot. That is a switch on the "
-                 + "machine, in Settings.")
+        onError?("\(Self.machineRefusal) direct the copilot.")
     }
+
+    /**
+     * The opening of both refusal sentences, in one place so they cannot drift.
+     *
+     * It deliberately does **not** name a control to go and change. It used to —
+     * *"that is a switch on the machine, in Settings, on this phone's own card"*
+     * — and that switch is gone: a device approved as **My device** is given
+     * every tier, and a guest is not told the copilot exists at all. So the only
+     * way to reach either of these sentences is a far end that has narrowed a
+     * grant this build does not expect it to narrow, and sending somebody to
+     * hunt for a checkbox that is not there would be worse than saying plainly
+     * that the machine refused.
+     */
+    private static let machineRefusal = "That machine is not letting this phone"
 }
 
 /**
- * The seven things this phone can be, with respect to one machine's copilot.
+ * The five things this phone can be, with respect to one machine's copilot.
  *
- * One type rather than a capability flag and five booleans at every call site,
- * because there are seven states and the screens have to draw seven different
- * things — and the failure mode of re-deriving it is drawing the *third* answer
- * for the *fourth* state, which is a phone hiding a feature that a person could
- * have turned on in ten seconds if anything had told them it existed.
+ * One type rather than a capability flag and three booleans at every call site,
+ * because the screens have to draw five different things and the failure mode of
+ * re-deriving it is drawing the *third* answer for the *fourth* state.
  *
- * They are ordered as the ceremony runs: no copilot, no connection, no
- * credential, opening, open-and-empty, watching, directing. Reading the list top
- * to bottom is reading what has to be true before the next line is reachable.
+ * They are ordered as the connection runs: no copilot here, opening,
+ * open-and-empty, watching, directing.
  *
- * There were eight. `closed` — *shut on this phone on purpose, one tap to
- * re-open* — went with the menu item that was the only way to reach it; the
- * removal and the sentence behind it are recorded on `CopilotLink`, where the
- * `isHeldClosed` flag used to be.
+ * **There were seven, and three have gone.** `closed` — *shut on this phone on
+ * purpose, one tap to re-open* — went with the menu item that was the only way
+ * to reach it. `notConnected` and `credentialLost` went on 2026-08-19 with the
+ * separate copilot connection itself: the first meant *this machine has a
+ * copilot and nobody has minted you a code*, the second meant *it remembers you
+ * and your key is gone*, and neither can happen now that approving a device as
+ * **My device** is the whole authorisation. Both drew a six-digit field; there
+ * is no field, no code, and nothing for a person to do but pair the device as
+ * his.
  *
  * `CaseIterable` so `CopilotPillTests` can walk all of them rather than the two
  * that are interesting today. A state added later and not thought about is a
  * fourth pill appearing or not appearing for it by accident, which is the whole
- * class of failure this review is about.
+ * class of failure that review was about.
  */
 enum CopilotAccess: Equatable, CaseIterable {
-    /// The machine does not speak `copilot.*`. Nothing is drawn — there is no
-    /// switch on that machine to point at, so a screen explaining where to find
-    /// one would be a screen sending somebody to look for a control that is not
-    /// there.
+    /**
+     * There is no copilot here for this phone.
+     *
+     * **One case covering two situations that this end cannot tell apart**, and
+     * that is `server.ts`'s decision rather than a gap here: a machine running a
+     * build with no copilot in it, and a machine where this device was approved
+     * as a **guest**, both send a capability list without the name and a
+     * `welcome` without the field. The reason is written beside the filter —
+     * *"a client that is told the capability exists draws the tab, and a tab
+     * that refuses on every press is a worse answer than a client that never
+     * knew"* — and it is the same reason the copilot is never shared with a
+     * guest in the first place.
+     *
+     * So no pill, and the one screen that can still be standing on this state
+     * says both things in one sentence rather than guessing which.
+     */
     case notOffered
-    /// The machine has a copilot and this device has never been connected to it.
-    /// **Drawn, and explained, with a code field.** This is the state every
-    /// paired device starts in and the one a person can fix in thirty seconds:
-    /// they mint a code at the machine and type it here.
-    case notConnected
-    /// The machine holds a record for this device and this phone does not hold
-    /// the credential — restored from a backup, or a Keychain item that would
-    /// not read. The same code field, and a different sentence: the credential
-    /// is sent exactly once and cannot be asked for again, so the remedy is a
-    /// **new** code rather than a retry.
-    case credentialLost
-    /// The credential is on its way, or the socket is down and it cannot be. A
-    /// state with nothing to do in it, drawn as such rather than as an empty
-    /// screen that looks like a broken one.
+    /// The hello is on its way, or the socket is down and it cannot be. A state
+    /// with nothing to do in it, drawn as such rather than as an empty screen
+    /// that looks like a broken one.
     case connecting
-    /// Connected, and granted nothing. A real state — unticking every box leaves
-    /// a working credential — and it is drawn rather than hidden, because the
-    /// remedy is three checkboxes on the machine.
+    /// Open, and granted nothing. Not something a person can now cause — one of
+    /// his own devices is given every tier — so it is a far end saying something
+    /// this build does not expect, and it is drawn rather than hidden because a
+    /// blank screen would be indistinguishable from a bug in this app.
     case notGranted
     /// Watching: what it is doing, what it started, what it was refused. No
     /// composer, no Start — `copilot.say` is `act`, because talking to the
@@ -1176,49 +1097,42 @@ enum CopilotAccess: Equatable, CaseIterable {
     case watch
     /// Watching, and able to start a run and talk to it. Whether it may also
     /// answer confirmations is `grant.alter`, which is a fourth thing and is
-    /// read where the buttons are drawn rather than folded in here: a phone can
-    /// hold `act` without `alter`, and that is the ordinary careful setup.
+    /// read where the buttons are drawn rather than folded in here.
     case direct
 
     /**
-     * **Whether the copilot is connected, in the sense a person means it** —
-     * and therefore whether this machine gets a fourth pill in the tab bar.
+     * **Whether this machine gets a fourth pill in the tab bar.**
      *
      * Asad: *"if the copilot is not connecting, this icon should not be inside
      * the pill — then it will be three icon pill. Otherwise if the copilot is
-     * connected, then four icon pill, automatically, like that way."* So the bar
+     * connected, then four icon pill, automatically, like that way."* The bar
      * asks this question of the current machine, and `DeckModel.showsCopilotTab`
      * is where the asking happens.
      *
-     * Written as a `switch` over every case rather than as `self != .notConnected
-     * && …`, so that a state added later cannot inherit an answer by accident:
-     * the compiler makes somebody decide which side of the line it falls on, and
+     * It is now exactly *"is `welcome.copilot` there"*, because that is what
+     * every case except `.notOffered` means, and **that is the whole of the
+     * 2026-08-19 change from the tab bar's point of view**. Nothing is
+     * connected, nothing is remembered, and nothing is pressed: pair the device
+     * as his and the pill is there on the first welcome; pair it as a guest and
+     * it never appears.
+     *
+     * Written as a `switch` over every case rather than as `self != .notOffered`,
+     * so that a state added later cannot inherit an answer by accident: the
+     * compiler makes somebody decide which side of the line it falls on, and
      * "which side of the line" here is a whole pill appearing or not appearing.
      *
-     * **Two of the answers are worth arguing about.**
-     *
-     * `connecting` counts as **connected**, and that is the important one. It
-     * means *this phone holds a working credential and the socket is not up
+     * `connecting` counting as **connected** is the answer worth arguing. It
+     * means *this phone has a copilot on that machine and the socket is not up
      * right now* — a machine asleep, a phone on a train, a relay reconnecting.
      * The alternative would be a tab bar that adds and removes a pill every time
-     * the network blinks, sliding the other three pills sideways under a thumb
-     * that had learned where they are. The pill follows **the authorisation, not
-     * the socket**, which is also how the Sessions and Localhost tabs behave when
-     * a machine goes away: they stay, and they say so.
-     *
-     * `notGranted` also counts as connected, because it *is*: the credential
-     * works and the connection is open, and every box beside it is unticked. The
-     * screen behind the pill says exactly that and names the switch to tick.
-     * Hiding the tab would hide the only sentence that explains the situation.
-     *
-     * And `credentialLost` counts as **not** connected, even though the machine
-     * still holds a record for this phone, because the remedy is the same one
-     * `notConnected` has — a new six-digit code, minted at the machine — and
-     * that lives in Settings now.
+     * the network blinks, sliding the other three sideways under a thumb that
+     * had learned where they are. The pill follows **the authorisation, not the
+     * socket**, which is also how the Sessions and Localhost tabs behave when a
+     * machine goes away: they stay, and they say so.
      */
     var isConnected: Bool {
         switch self {
-        case .notOffered, .notConnected, .credentialLost:
+        case .notOffered:
             return false
         case .connecting, .notGranted, .watch, .direct:
             return true

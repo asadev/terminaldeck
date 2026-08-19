@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Caller } from '../deck-control/surface'
-import { CopilotLinks } from './copilot-link'
+import { CopilotAccess } from './copilot-access'
 import type { CopilotSink } from './copilot-remote'
 import { isHiddenSession, resetHiddenSessions } from './hidden-sessions'
 import { CopilotRuns, runConfigName, type CopilotRunDeps, type CopilotRunSpawn } from './copilot-runs'
@@ -33,18 +33,32 @@ let dir: string
 
 interface Harness {
   runs: CopilotRuns
-  links: CopilotLinks
+  links: CopilotAccess
   /**
-   * Connect a device to the copilot the way a person does: mint a code at the
-   * desk, redeem it, and let the tiers travel with the code.
+   * Approve a device as **one of his own**, which is the whole of what a person
+   * does.
    *
-   * Not `links.set()`, and the difference is the revision this file was updated
-   * for. Copilot access is a **separate connection** now, and the store refuses
-   * to create a record from a settings write precisely so the panel cannot be a
-   * second door onto it — so a fixture that reached for `set()` on an
-   * unconnected device would be exercising a path the product does not have.
+   * This has been two other things and the shrinkage is the story. It was
+   * `links.set(deviceId, tiers)` — a tick box beside a paired phone. Then it was
+   * a code minted at the desk and redeemed on the device, with the tiers
+   * travelling with the code, because a tick box was not an authorisation. It is
+   * now one line, and takes no tiers at all: a device is one of his and reaches
+   * everything, or it is a guest and reaches nothing. `copilot-access.ts`
+   * carries the argument for why the middle step was proving a fact that pairing
+   * had already proved.
+   *
+   * Synchronous, because nothing is written and nothing is hashed.
    */
-  connect(deviceId: string, tiers: Record<string, boolean>): Promise<void>
+  own(deviceId: string): void
+  /**
+   * The devices approved as his, so a test can take one away.
+   *
+   * Revoking a device is the only remaining way to take the copilot back — there
+   * is no disconnect and no untick — and `CopilotAccess` asks this question on
+   * every call rather than snapshotting it, which is the property two tests
+   * below drive directly.
+   */
+  mine: Set<string>
   /** Tokens currently registered, and the caller each resolves to right now. */
   tokens: Map<string, { attended: boolean; caller(): Caller; signal?: AbortSignal }>
   spawned: CopilotRunSpawn[]
@@ -73,7 +87,10 @@ function harness(over: Partial<CopilotRunDeps> = {}): Harness {
   const alive = new Set<string>()
   const chatters = new Map<string, (update: { messages: Array<{ id: string; role: 'you' | 'agent'; text: string; at: number }>; reset: boolean }) => void>()
   const clock = { at: 1_000 }
-  const links = new CopilotLinks(dir)
+  // The roster of devices approved as his, which in the app is
+  // `remote-device-kinds.json` read through `DeviceKinds.kindOf`.
+  const mine = new Set<string>()
+  const links = new CopilotAccess({ isMine: (deviceId) => mine.has(deviceId) })
   const questions: ConsentRequest[] = []
   const answered: Array<{ id: string; approved: boolean; by: string }> = []
   const withdrawn: string[] = []
@@ -140,10 +157,13 @@ function harness(over: Partial<CopilotRunDeps> = {}): Harness {
   return {
     runs: new CopilotRuns(deps),
     links,
-    connect: async (deviceId, tiers) => {
-      const offer = links.offer(tiers)
-      const outcome = await links.redeem(offer.code, deviceId)
-      expect(outcome.ok, 'the fixture failed to connect a device').toBe(true)
+    mine,
+    own: (deviceId) => {
+      mine.add(deviceId)
+      // A guard on the fixture. If access ever stopped following the kind, every
+      // test in this file would spawn nothing and assert about an empty table
+      // while reporting green.
+      expect(links.linked(deviceId), 'the fixture failed to approve a device').toBe(true)
     },
     questions,
     answered,
@@ -205,9 +225,28 @@ afterEach(() => {
 /* ---------------------------------------------------------------- the token */
 
 describe('the token is the caller, and it lives exactly as long as the run', () => {
-  it('registers one token per run, re-reading the grant rather than copying it', async () => {
+  /**
+   * The token carries everything, including `alter`, and it is **re-read** on
+   * every call rather than copied at registration.
+   *
+   * Two tests until 2026-08-19, and they are one now because the fact they
+   * distinguished no longer exists. One proved the token carried the tiers a
+   * device's copilot connection had been given; the other proved it carried
+   * `alter` in particular, since `alter` had spent a week being ungrantable on
+   * the argument that the tier's safety property is a human at the machine
+   * saying yes and the party holding the phone is not that human. There is no
+   * longer any grant but the whole of it, so a second case asserting one member
+   * of a frozen literal would be arithmetic rather than a test.
+   *
+   * What survived both is the second half and it is the load-bearing half: the
+   * grant is a *question asked per call*, not a value captured when the run
+   * started. Revoking the device lands on the next tool call, with no restart,
+   * no reconnect and no message from the phone — which is what stops a revoked
+   * device driving the agent it left running.
+   */
+  it('registers one token per run, carrying everything, re-read rather than copied', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
 
     await h.runs.start('phone-1')
     expect(h.tokens.size).toBe(1)
@@ -217,54 +256,38 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
     // and they are holding a device that can display a prompt. See §4.3 — the
     // flag is currently unobservable for a phone and must still say what is true.
     expect(entry.attended).toBe(true)
-    expect(entry.caller()).toEqual({ kind: 'remote', deviceId: 'phone-1', tiers: { read: true, act: true, alter: false } })
+    expect(entry.caller()).toEqual({
+      kind: 'remote',
+      deviceId: 'phone-1',
+      tiers: { read: true, act: true, alter: true },
+    })
 
-    // The property the whole design rests on: the untick lands on the *next*
-    // tool call, with no restart, no reconnect and no message from the phone.
-    await h.connect('phone-1', { read: true })
-    expect(entry.caller().tiers.act).toBe(false)
+    // What `remote:device:revoke` does, as far as this layer can see it: the
+    // kind record is dropped, so the very next question answers guest.
+    h.mine.delete('phone-1')
+    expect(entry.caller().tiers).toEqual({ read: false, act: false, alter: false })
   })
 
   /**
-   * The token carries `alter` when the connection was given it — and carries it
-   * *live*.
+   * A guest carries nothing, whatever anything else was told.
    *
-   * This assertion is the inverse of the one it replaced. That one proved the
-   * token could never carry `alter` whatever the store said, because `alter` was
-   * not remotely grantable; the reasoning was that the tier's safety property is
-   * a human at the machine saying yes and the party holding the phone is not
-   * that human. What changed is what stands behind the tier — a separate copilot
-   * connection rather than a checkbox — not the property. See `copilot-link.ts`.
+   * This is what became of *"cannot be granted anything by a settings write
+   * alone"*, and the reason it is still here is that the door it was watching is
+   * still the door — it has simply been bricked up rather than locked. There
+   * used to be a `links.set()` that a settings panel could call, and the line
+   * that made the design honest was its refusal to *create* a record from a tick
+   * box. There is now no setter at all, no panel channel that writes, and no
+   * record to create: access is derived from the kind, and a kind cannot be
+   * changed without pairing the device again.
    *
-   * The second half is the part worth keeping either way: the tier is re-read
-   * per call, so taking `alter` away in Settings lands on the next tool call
-   * rather than on the next reconnect. That is the property a snapshot would
-   * have lost, and it is what makes the panel a control rather than a label.
+   * So the assertion is the same one and the input is the only input left. A
+   * device nobody approved as his reaches nothing, and `CopilotRuns.granted`
+   * says so — which is the answer the transport and the MCP token table both
+   * read.
    */
-  it('registers a token that carries alter, and gives it up on the next call', async () => {
+  it('gives a guest device nothing at all', () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true, alter: true })
-
-    await h.runs.start('phone-1')
-    const [entry] = [...h.tokens.values()]
-    expect(entry.caller().tiers.alter).toBe(true)
-
-    h.links.set('phone-1', { read: true, act: true })
-    expect(entry.caller().tiers.alter).toBe(false)
-    expect(entry.caller().tiers.act).toBe(true)
-  })
-
-  /**
-   * And a device with no copilot connection carries nothing, whatever the panel
-   * was told.
-   *
-   * `set()` refuses to create a record. Without that line the settings channel
-   * would be a second door onto copilot access and the separate connection would
-   * be decoration — so this is the assertion that keeps the door shut.
-   */
-  it('cannot be granted anything by a settings write alone', async () => {
-    const h = harness()
-    h.links.set('phone-2', { read: true, act: true, alter: true })
+    h.own('phone-1')
 
     expect(h.links.linked('phone-2')).toBe(false)
     expect(h.runs.granted('phone-2')).toEqual({ read: false, act: false, alter: false })
@@ -273,14 +296,20 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
   /**
    * Revocation, in the order §3 sets out.
    *
-   * The store is written first by `server.ts`; by the time `revoked` is called
-   * the grant is already gone. What this pins is the rest: the token leaves the
+   * The kind is dropped first by `server.ts`; by the time `revoked` is called
+   * the access is already gone. What this pins is the rest: the token leaves the
    * table, the signal fires so a tool call in flight aborts with `caller-gone`,
    * the process stops, and the config file holding the token is removed.
+   *
+   * The *cause* is the only part that changed. It used to be a person unticking
+   * `act` on a copilot connection, and it is now a person revoking the device —
+   * which is the one remedy left, deliberately, because there is nothing else to
+   * untick. Everything this test actually asserts happens after that and is
+   * unchanged.
    */
-  it('drops the token, aborts in-flight calls and stops the run when act is revoked', async () => {
+  it('drops the token, aborts in-flight calls and stops the run when access goes', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     await h.runs.start('phone-1')
 
     const [entry] = [...h.tokens.values()]
@@ -289,7 +318,7 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
     const config = join(dir, 'copilot', runConfigName('phone-1'))
     expect(existsSync(config)).toBe(true)
 
-    await h.connect('phone-1', { read: true })
+    h.mine.delete('phone-1')
     h.runs.revoked('phone-1')
 
     expect(h.tokens.size).toBe(0)
@@ -299,19 +328,26 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
   })
 
   /**
-   * Losing `read` while keeping `act` does not stop the run.
+   * And `revoked` for a device that still has access changes nothing.
    *
-   * A phone that may still drive the copilot but no longer watch it is a strange
-   * thing to have granted and the panel does not offer it — but the store can
-   * hold it, and the answer must be the one written down rather than an inferred
-   * ladder. `server.ts` drops the *subscription*; the run is `act`'s.
+   * This is what became of *"losing `read` while keeping `act` does not stop the
+   * run"*. That case was a partial grant — a phone that could still drive the
+   * copilot but no longer watch it — and no such state exists now: a device
+   * reaches everything or nothing.
+   *
+   * The check it was covering does still run, and it is the early return at the
+   * top of `revoked()`: *ask what this device holds now, and stop the run only
+   * if `act` has gone.* The reason that line matters is unchanged and is the
+   * reason it is asked of access rather than of the caller — `server.ts` calls
+   * this on any change to a device, including ones that took nothing away, and a
+   * version that stopped the run on every call would kill a live agent because
+   * somebody edited a folder list.
    */
-  it('keeps the run when only read was taken away', async () => {
+  it('leaves the run alone when the device still reaches the copilot', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     await h.runs.start('phone-1')
 
-    await h.connect('phone-1', { act: true })
     h.runs.revoked('phone-1')
 
     expect(h.tokens.size).toBe(1)
@@ -320,7 +356,7 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
 
   it('writes the token into a config file only this account can read, and nowhere else', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     await h.runs.start('phone-1')
 
     const config = join(dir, 'copilot', runConfigName('phone-1'))
@@ -342,7 +378,7 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
         throw new Error('claude is not installed')
       },
     })
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
 
     const outcome = await h.runs.start('phone-1')
     expect(outcome.ok).toBe(false)
@@ -359,7 +395,7 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
 describe('a run belongs to one device and to nothing else', () => {
   it('answers a second start with the run that already exists', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
 
     await h.runs.start('phone-1')
     await h.runs.start('phone-1')
@@ -370,8 +406,8 @@ describe('a run belongs to one device and to nothing else', () => {
 
   it('gives two devices two runs, two tokens and two conversations', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
-    await h.connect('tablet', { read: true, act: true })
+    h.own('phone-1')
+    h.own('tablet')
 
     await h.runs.start('phone-1')
     await h.runs.start('tablet')
@@ -389,7 +425,7 @@ describe('a run belongs to one device and to nothing else', () => {
    */
   it('refuses to interrupt or stop a run this device does not own', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     await h.runs.start('phone-1')
 
     expect(h.runs.cancel('tablet').ok).toBe(false)
@@ -410,7 +446,7 @@ describe('a run belongs to one device and to nothing else', () => {
    */
   it('names its run sessions as hidden, and stops naming them when they end', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     await h.runs.start('phone-1')
 
     expect(h.runs.isRunSession('run-1')).toBe(true)
@@ -432,7 +468,7 @@ describe('a run belongs to one device and to nothing else', () => {
    */
   it('puts the run in the register the session fanout consults', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     await h.runs.start('phone-1')
 
     expect(isHiddenSession('run-1')).toBe(true)
@@ -444,8 +480,8 @@ describe('a run belongs to one device and to nothing else', () => {
 
   it('releases every run’s id when the app quits', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
-    await h.connect('tablet', { read: true, act: true })
+    h.own('phone-1')
+    h.own('tablet')
     await h.runs.start('phone-1')
     await h.runs.start('tablet')
     expect(isHiddenSession('run-1') && isHiddenSession('run-2')).toBe(true)
@@ -465,7 +501,7 @@ describe('a run belongs to one device and to nothing else', () => {
    */
   it('releases the id when a run times out rather than being stopped', async () => {
     const h = harness({ graceMs: 60_000 })
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     await h.runs.start('phone-1')
     expect(isHiddenSession('run-1')).toBe(true)
 
@@ -480,7 +516,7 @@ describe('a run belongs to one device and to nothing else', () => {
 describe('a run survives a dropped socket for the grace window and no longer', () => {
   it('keeps the run alive while a watcher is attached', async () => {
     const h = harness({ graceMs: 60_000 })
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     const watcher = recorder()
 
     h.runs.watch('phone-1', watcher.sink)
@@ -493,7 +529,7 @@ describe('a run survives a dropped socket for the grace window and no longer', (
 
   it('stops the run once the window passes with nobody watching', async () => {
     const h = harness({ graceMs: 60_000 })
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     const watcher = recorder()
 
     const unwatch = h.runs.watch('phone-1', watcher.sink)
@@ -515,7 +551,7 @@ describe('a run survives a dropped socket for the grace window and no longer', (
    */
   it('only starts the countdown when the last watcher of a device leaves', async () => {
     const h = harness({ graceMs: 60_000 })
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     const first = recorder()
     const second = recorder()
 
@@ -531,7 +567,7 @@ describe('a run survives a dropped socket for the grace window and no longer', (
   /** A reconnect inside the window cancels the countdown and replays. */
   it('gives a reconnecting phone its run back, with a reset', async () => {
     const h = harness({ graceMs: 60_000 })
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     const first = recorder()
 
     const unwatch = h.runs.watch('phone-1', first.sink)
@@ -550,7 +586,7 @@ describe('a run survives a dropped socket for the grace window and no longer', (
   /** A run whose process died on its own is not a run. */
   it('forgets a run whose pty exited, so the next start spawns a fresh one', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     await h.runs.start('phone-1')
 
     h.alive.delete('run-1')
@@ -567,8 +603,8 @@ describe('a run survives a dropped socket for the grace window and no longer', (
 describe('the conversation is parsed messages, and only ever this device’s', () => {
   it('pushes a run’s messages to that device’s watchers and to no others', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
-    await h.connect('tablet', { read: true, act: true })
+    h.own('phone-1')
+    h.own('tablet')
     const mine = recorder()
     const theirs = recorder()
     h.runs.watch('phone-1', mine.sink)
@@ -587,7 +623,7 @@ describe('the conversation is parsed messages, and only ever this device’s', (
 
   it('cuts an over-long bubble with a flag rather than chunking it', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     const watcher = recorder()
     h.runs.watch('phone-1', watcher.sink)
     await h.runs.start('phone-1')
@@ -601,7 +637,7 @@ describe('the conversation is parsed messages, and only ever this device’s', (
 
   it('drops an update from a run that has already ended', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
     const watcher = recorder()
     h.runs.watch('phone-1', watcher.sink)
     await h.runs.start('phone-1')
@@ -619,15 +655,19 @@ describe('the conversation is parsed messages, and only ever this device’s', (
 describe('the state frame and the caps', () => {
   it('reports the desk and this device’s own run as separate facts', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true })
+    h.own('phone-1')
 
+    // Idle, and the grant is full while the run is null. Those are two facts and
+    // the frame carries them separately on purpose: reaching the copilot is what
+    // the device was approved for, and having a process is what it did with it.
+    // A client that inferred one from the other would draw a Stop button for a
+    // device that has started nothing.
     const idle = h.runs.state('phone-1')
     expect(idle.desk).toBe('running')
     expect(idle.run).toBeNull()
-    expect(idle.grant).toEqual({ read: true, act: false, alter: false })
+    expect(idle.grant).toEqual({ read: true, act: true, alter: true })
     expect(idle.tools).toBe(11)
 
-    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
     expect(h.runs.state('phone-1').run).toBe('run-1')
     // Still running at the desk. A phone that drew its Start button off the
@@ -637,7 +677,7 @@ describe('the state frame and the caps', () => {
 
   it('says why a run cannot start rather than offering a button that fails', async () => {
     const h = harness({ endpoint: () => null })
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
 
     const state = h.runs.state('phone-1')
     expect(state.available).toBe(false)
@@ -646,7 +686,7 @@ describe('the state frame and the caps', () => {
 
   it('refuses to start when there is no tool surface to hand it', async () => {
     const h = harness({ endpoint: () => null })
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
 
     const outcome = await h.runs.start('phone-1')
     expect(outcome.ok).toBe(false)
@@ -671,7 +711,7 @@ describe('the state frame and the caps', () => {
 
   it('starts a run for a say that arrives without one, so one intention is one step', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
+    h.own('phone-1')
 
     const outcome = await h.runs.say('phone-1', 'which session is stuck?')
     expect(outcome.ok).toBe(true)
@@ -681,8 +721,8 @@ describe('the state frame and the caps', () => {
 
   it('stops every run when the app quits', async () => {
     const h = harness()
-    await h.connect('phone-1', { read: true, act: true })
-    await h.connect('tablet', { read: true, act: true })
+    h.own('phone-1')
+    h.own('tablet')
     await h.runs.start('phone-1')
     await h.runs.start('tablet')
 

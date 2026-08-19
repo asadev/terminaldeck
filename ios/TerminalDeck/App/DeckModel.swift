@@ -177,20 +177,24 @@ final class DeckModel {
     }
 
     /**
-     * What can be pushed onto Settings. Two things, and both of them are
-     * *connecting something*, which is what this screen turned out to be for.
+     * What can be pushed onto Settings. One thing: the machines.
      *
-     * `machines` is the screen that used to be a tab. `copilot` is where the
-     * six-digit copilot code moved to: *"actually connecting copilot should be
-     * in the settings."* It was on the Copilot screen itself, which put a setup
-     * form behind a pill that only exists once the setup is done — and once the
-     * pill follows the connection, that arrangement cannot work at all, because
-     * the screen holding the only way to connect would be the screen you cannot
-     * reach until you have.
+     * There were two for a day. `copilot` was where the six-digit copilot code
+     * moved to — *"actually connecting copilot should be in the settings"* — and
+     * it went the moment there was no code to type: *"if we are connecting as my
+     * device copilot automatically comes, if we connect as guest then copilot
+     * don't come."* The screen behind it is deleted rather than emptied, and the
+     * Settings row that pushed it with it. A row that only ever reported a
+     * status, leading to a page with nothing on it to press, is the clutter he
+     * objects to everywhere else in the product.
+     *
+     * It stays an enum with one case rather than collapsing to a `Bool`, because
+     * the two things a path is for — being pushed and being popped by
+     * `removeAll()` — read the same whatever its length, and the next screen
+     * that belongs under Settings adds a case instead of a second mechanism.
      */
     enum SettingsRoute: Hashable {
         case machines
-        case copilot
     }
 
     /**
@@ -246,37 +250,45 @@ final class DeckModel {
      * connected, then four icon pill, automatically, like that way."*
      *
      * So: three pills — Sessions · Localhost · Settings — until this phone has a
-     * copilot connection to the machine it is looking at, and four the moment it
-     * does. `CopilotAccess.isConnected` is the rule and carries the argument for
-     * where each of the seven states falls.
+     * copilot on the machine it is looking at, and four the moment it does.
+     * `CopilotAccess.isConnected` is the rule and carries the argument for where
+     * each state falls.
+     *
+     * ## What "connected" means now, which is less than it did
+     *
+     * It is the presence of `welcome.copilot`, and nothing else. There is no
+     * connect step left to be part-way through: *"if we are connecting as my
+     * device copilot automatically comes, if we connect as guest then copilot
+     * don't come."* Pairing the device as one of his **is** the authorisation,
+     * so the pill is there on the first welcome from his own machine and never
+     * appears on a guest's phone — which is *"automatically"* in the strongest
+     * sense the word has, and stronger than the arrangement he said it about.
      *
      * ## The clause that is not in the sentence he said
      *
-     * `tab == .copilot` holds the pill open. Without it, a copilot that
-     * disconnects while somebody is sitting on that tab would delete the tab
-     * they are standing on — SwiftUI would drop the whole `NavigationStack` and
-     * land them on whichever tag the `TabView` fell back to, with no explanation
-     * and nothing on screen relating to what they had been doing. **A tab that
+     * `tab == .copilot` holds the pill open. Without it, a copilot that goes
+     * away while somebody is sitting on that tab would delete the tab they are
+     * standing on — SwiftUI would drop the whole `NavigationStack` and land them
+     * on whichever tag the `TabView` fell back to, with no explanation and
+     * nothing on screen relating to what they had been doing. **A tab that
      * vanishes underneath somebody is worse than one that stays and explains.**
      *
-     * What actually happens instead: the pill stays, and `CopilotView` draws the
-     * disconnected state — what happened, and a button to Settings if there is
-     * something to do about it. The pill then goes on the next tap on another
-     * pill, which is the first moment removing it costs nobody anything. From
-     * every other tab the switch is immediate, so *"automatically"* holds
-     * everywhere except on the one screen where doing it automatically would be
-     * rude.
+     * It is a narrower case than it was: what can now take the copilot away
+     * mid-session is somebody at the machine changing this device from *My
+     * device* to a guest, which arrives as a `copilot.grant` carrying
+     * `linked: false`. The pill stays, `CopilotView` says what happened, and the
+     * pill goes on the next tap on another pill — the first moment removing it
+     * costs nobody anything. From every other tab the switch is immediate.
      *
      * ## And it is derived, never remembered
      *
      * The obvious optimisation is to persist "this phone had a copilot on that
      * machine" so the pill is right on the first frame after launch instead of
      * arriving with the `welcome` a moment later. It is refused: a remembered
-     * yes is a pill drawn for a connection somebody may have revoked at the
-     * machine while this phone was asleep, and tapping it would open a screen
-     * that has to take it back. A pill that appears a beat after launch is a
-     * cosmetic cost; a pill that lies is the complaint this whole review is
-     * about.
+     * yes is a pill drawn for access somebody may have taken away at the machine
+     * while this phone was asleep, and tapping it would open a screen that has
+     * to take it back. A pill that appears a beat after launch is a cosmetic
+     * cost; a pill that lies is the complaint this whole review is about.
      */
     var showsCopilotTab: Bool {
         if tab == .copilot { return true }
@@ -1086,21 +1098,6 @@ final class DeckModel {
      */
     func leaveCopilot() {
         tab = homeTab
-    }
-
-    /**
-     * Show the copilot's own connection screen, inside Settings.
-     *
-     * The counterpart of `showMachines()`, and a method for the same reason:
-     * the two callers are not on the Settings tab. One is the Copilot screen
-     * itself when this phone is not connected to the machine it is showing —
-     * where the whole point is to take somebody to the code field — and the
-     * other is a settings row that is already there and uses a `NavigationLink`.
-     * Idempotent, so arriving twice does not need two taps of Back.
-     */
-    func showCopilotSettings() {
-        tab = .settings
-        if settingsRoute.last != .copilot { settingsRoute.append(.copilot) }
     }
 
     /**

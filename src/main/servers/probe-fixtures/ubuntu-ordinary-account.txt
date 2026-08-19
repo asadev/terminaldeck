@@ -1,0 +1,196 @@
+schema=1
+os=Ubuntu 24.04.4 LTS
+kernel=Linux 6.8.0-137-generic
+arch=x86_64
+host=terminaldeck-server
+user=tddemo
+root=sudo-password
+init=systemd
+containers=present-no-permission
+packages=apt-get
+web=caddy
+cpus=2
+disk_used_kb=5871248
+disk_total_kb=39020108
+memory_total_kb=3911564
+memory_free_kb=3327376
+load1=0.13
+uptime_s=234748
+#services ok
+acpid.service	inactive	dead	ACPI event daemon
+apparmor.service	active	exited	Load AppArmor profiles
+apport-autoreport.service	inactive	dead	Process error reports when automatic reporting is enabled
+apport.service	active	exited	automatic crash report generation
+apt-daily-upgrade.service	inactive	dead	Daily apt upgrade and clean activities
+apt-daily.service	inactive	dead	Daily apt download activities
+atd.service	active	running	Deferred execution scheduler
+blk-availability.service	active	exited	Availability of block devices
+caddy.service	active	running	Caddy
+cloud-config.service	active	exited	Cloud-init: Config Stage
+cloud-final.service	active	exited	Cloud-init: Final Stage
+cloud-init-hotplugd.service	failed	failed	Cloud-init: Hotplug Hook
+cloud-init-local.service	active	exited	Cloud-init: Local Stage (pre-network)
+cloud-init.service	active	exited	Cloud-init: Network Stage
+console-setup.service	active	exited	Set console font and keymap
+containerd.service	active	running	containerd container runtime
+cron.service	active	running	Regular background program processing daemon
+dbus.service	active	running	D-Bus System Message Bus
+dm-event.service	inactive	dead	Device-mapper event daemon
+dmesg.service	inactive	dead	Save initial kernel messages after boot
+docker.service	active	running	Docker Application Container Engine
+dpkg-db-backup.service	inactive	dead	Daily dpkg database backup service
+e2scrub_all.service	inactive	dead	Online ext4 Metadata Check for All Filesystems
+e2scrub_reap.service	inactive	dead	Remove Stale Online ext4 Metadata Check Snapshots
+emergency.service	inactive	dead	Emergency Shell
+finalrd.service	active	exited	Create final runtime dir for shutdown pivot root
+fstrim.service	inactive	dead	Discard unused blocks on filesystems from /etc/fstab
+getty-static.service	inactive	dead	getty on tty2-tty6 if dbus and logind are not available
+getty@tty1.service	active	running	Getty on tty1
+grub-common.service	inactive	dead	Record successful boot for GRUB
+grub-initrd-fallback.service	inactive	dead	GRUB failed boot detection
+initrd-cleanup.service	inactive	dead	Cleaning Up and Shutting Down Daemons
+initrd-parse-etc.service	inactive	dead	Mountpoints Configured in the Real Root
+initrd-switch-root.service	inactive	dead	Switch Root
+initrd-udevadm-cleanup-db.service	inactive	dead	Cleanup udev Database
+iscsid.service	inactive	dead	iSCSI initiator daemon (iscsid)
+keyboard-setup.service	active	exited	Set the console keyboard layout
+kmod-static-nodes.service	active	exited	Create List of Static Device Nodes
+ldconfig.service	inactive	dead	Rebuild Dynamic Linker Cache
+logrotate.service	inactive	dead	Rotate log files
+lvm2-lvmpolld.service	inactive	dead	LVM2 poll daemon
+lvm2-monitor.service	active	exited	Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling
+man-db.service	inactive	dead	Daily man-db regeneration
+modprobe@configfs.service	inactive	dead	Load Kernel Module configfs
+modprobe@dm_mod.service	inactive	dead	Load Kernel Module dm_mod
+modprobe@drm.service	inactive	dead	Load Kernel Module drm
+modprobe@efi_pstore.service	inactive	dead	Load Kernel Module efi_pstore
+modprobe@fuse.service	inactive	dead	Load Kernel Module fuse
+modprobe@loop.service	inactive	dead	Load Kernel Module loop
+motd-news.service	inactive	dead	Message of the Day
+multipathd.service	active	running	Device-Mapper Multipath Device Controller
+netplan-ovs-cleanup.service	inactive	dead	OpenVSwitch configuration for cleanup
+networkd-dispatcher.service	inactive	dead	Dispatcher daemon for systemd-networkd
+open-iscsi.service	inactive	dead	Login to default iSCSI targets
+open-vm-tools.service	inactive	dead	Service for virtual machines hosted on VMware
+plymouth-quit-wait.service	active	exited	Hold until boot process finishes up
+plymouth-quit.service	active	exited	Terminate Plymouth Boot Screen
+plymouth-read-write.service	active	exited	Tell Plymouth To Write Out Runtime Data
+plymouth-start.service	inactive	dead	Show Plymouth Boot Screen
+plymouth-switch-root.service	inactive	dead	Plymouth switch root service
+polkit.service	active	running	Authorization Manager
+pollinate.service	inactive	dead	Pollinate to seed the pseudo random number generator
+qemu-guest-agent.service	active	running	QEMU Guest Agent
+rc-local.service	inactive	dead	/etc/rc.local Compatibility
+rescue.service	inactive	dead	Rescue Shell
+rsyslog.service	active	running	System Logging Service
+secureboot-db.service	inactive	dead	Secure Boot updates for DB and DBX
+serial-getty@ttyS0.service	active	running	Serial Getty on ttyS0
+setvtrgb.service	active	exited	Set console scheme
+snapd.apparmor.service	active	exited	Load AppArmor profiles managed internally by snapd
+snapd.autoimport.service	inactive	dead	Auto import assertions from block devices
+snapd.core-fixup.service	inactive	dead	Automatically repair incorrect owner/permissions on core devices
+snapd.failure.service	inactive	dead	Failure handling of the snapd snap
+snapd.recovery-chooser-trigger.service	inactive	dead	Wait for the Ubuntu Core chooser trigger
+snapd.seeded.service	active	exited	Wait until snapd is fully seeded
+snapd.service	inactive	dead	Snap Daemon
+snapd.snap-repair.service	inactive	dead	Automatically fetch and run repair assertions
+snapd.system-shutdown.service	inactive	dead	Ubuntu core (all-snaps) system shutdown helper setup service
+ssh.service	active	running	OpenBSD Secure Shell server
+sysstat-collect.service	inactive	dead	system activity accounting tool
+sysstat-summary.service	inactive	dead	Generate a daily summary of process accounting
+sysstat.service	active	exited	Resets System Activity Logs
+systemd-ask-password-console.service	inactive	dead	Dispatch Password Requests to Console
+systemd-ask-password-plymouth.service	inactive	dead	Forward Password Requests to Plymouth
+systemd-ask-password-wall.service	inactive	dead	Forward Password Requests to Wall
+systemd-battery-check.service	inactive	dead	Check battery level during early boot
+systemd-binfmt.service	active	exited	Set Up Additional Binary Formats
+systemd-bsod.service	inactive	dead	Displays emergency message in full screen.
+systemd-firstboot.service	inactive	dead	First Boot Wizard
+systemd-fsck-root.service	inactive	dead	File System Check on Root Device
+systemd-fsck@dev-disk-by\x2duuid-2EDC\x2dB10D.service	active	exited	File System Check on /dev/disk/by-uuid/2EDC-B10D
+systemd-fsckd.service	inactive	dead	File System Check Daemon to report status
+systemd-hibernate-resume.service	inactive	dead	Resume from hibernation
+systemd-hibernate.service	inactive	dead	System Hibernate
+systemd-hwdb-update.service	inactive	dead	Rebuild Hardware Database
+systemd-hybrid-sleep.service	inactive	dead	System Hybrid Suspend+Hibernate
+systemd-initctl.service	inactive	dead	initctl Compatibility Daemon
+systemd-journal-catalog-update.service	inactive	dead	Rebuild Journal Catalog
+systemd-journal-flush.service	active	exited	Flush Journal to Persistent Storage
+systemd-journald.service	active	running	Journal Service
+systemd-logind.service	active	running	User Login Management
+systemd-machine-id-commit.service	inactive	dead	Commit a transient machine-id on disk
+systemd-modules-load.service	active	exited	Load Kernel Modules
+systemd-networkd-wait-online.service	active	exited	Wait for Network to be Configured
+systemd-networkd.service	active	running	Network Configuration
+systemd-pcrmachine.service	inactive	dead	TPM2 PCR Machine ID Measurement
+systemd-pcrphase-initrd.service	inactive	dead	TPM2 PCR Barrier (initrd)
+systemd-pcrphase-sysinit.service	inactive	dead	TPM2 PCR Barrier (Initialization)
+systemd-pcrphase.service	inactive	dead	TPM2 PCR Barrier (User)
+systemd-pstore.service	inactive	dead	Platform Persistent Storage Archival
+systemd-quotacheck.service	inactive	dead	File System Quota Check
+systemd-random-seed.service	active	exited	Load/Save OS Random Seed
+systemd-remount-fs.service	active	exited	Remount Root and Kernel File Systems
+systemd-repart.service	inactive	dead	Repartition Root Disk
+systemd-resolved.service	active	running	Network Name Resolution
+systemd-rfkill.service	inactive	dead	Load/Save RF Kill Switch Status
+systemd-soft-reboot.service	inactive	dead	Reboot System Userspace
+systemd-suspend-then-hibernate.service	inactive	dead	System Suspend then Hibernate
+systemd-suspend.service	inactive	dead	System Suspend
+systemd-sysctl.service	active	exited	Apply Kernel Variables
+systemd-sysext.service	inactive	dead	Merge System Extension Images into /usr/ and /opt/
+systemd-sysusers.service	inactive	dead	Create System Users
+systemd-timesyncd.service	active	running	Network Time Synchronization
+systemd-tmpfiles-clean.service	inactive	dead	Cleanup of Temporary Directories
+systemd-tmpfiles-setup-dev-early.service	active	exited	Create Static Device Nodes in /dev gracefully
+systemd-tmpfiles-setup-dev.service	active	exited	Create Static Device Nodes in /dev
+systemd-tmpfiles-setup.service	active	exited	Create Volatile Files and Directories
+systemd-tpm2-setup-early.service	inactive	dead	TPM2 SRK Setup (Early)
+systemd-tpm2-setup.service	inactive	dead	TPM2 SRK Setup
+systemd-udev-settle.service	inactive	dead	Wait for udev To Complete Device Initialization
+systemd-udev-trigger.service	active	exited	Coldplug All udev Devices
+systemd-udevd.service	active	running	Rule-based Manager for Device Events and Files
+systemd-update-done.service	inactive	dead	Update is Completed
+systemd-update-utmp-runlevel.service	inactive	dead	Record Runlevel Change in UTMP
+systemd-update-utmp.service	active	exited	Record System Boot/Shutdown in UTMP
+systemd-user-sessions.service	active	exited	Permit User Sessions
+td-demo-firewall.service	active	exited	Terminal Deck demo egress rules
+td-scratch.service	active	running	Terminal Deck scratch service
+terminaldeck-demo-broker.service	active	running	Terminal Deck demo broker
+tpm-udev.service	inactive	dead	Handle dynamically added tpm devices
+ua-reboot-cmds.service	inactive	dead	Ubuntu Pro reboot cmds
+ua-timer.service	inactive	dead	Ubuntu Pro Timer for running repeated jobs
+ubuntu-advantage.service	inactive	dead	Ubuntu Pro Background Auto Attach
+ubuntu-fan.service	active	exited	Ubuntu FAN network setup
+ufw.service	active	exited	Uncomplicated firewall
+unattended-upgrades.service	active	running	Unattended Upgrades Shutdown
+update-notifier-download.service	inactive	dead	Download data for packages that failed at package install time
+update-notifier-motd.service	inactive	dead	Check to see whether there is a new version of Ubuntu available
+user-runtime-dir@0.service	active	exited	User Runtime Directory /run/user/0
+user-runtime-dir@1000.service	active	exited	User Runtime Directory /run/user/1000
+user@0.service	active	running	User Manager for UID 0
+user@1000.service	active	running	User Manager for UID 1000
+uuidd.service	inactive	dead	Daemon for generating UUIDs
+vgauth.service	inactive	dead	Authentication service for virtual machines hosted on VMware
+#containers cannot this sign-in is not allowed to ask this server about its containers
+#listeners ok
+127.0.0.54	53			
+127.0.0.1	8787			
+0.0.0.0	22			
+127.0.0.53%lo	53			
+127.0.0.1	2019			
+127.0.0.1	42681			
+[::]	22			
+*	80			
+*	443			
+#sites ok
+178-105-239-176.sslip.io
+#adminunits ok
+dbus-org.freedesktop.resolve1.service
+dbus-org.freedesktop.timesync1.service
+iscsi.service
+syslog.service
+td-demo-firewall.service
+td-scratch.service
+terminaldeck-demo-broker.service
+vmtoolsd.service
+#end ok

@@ -2343,10 +2343,6 @@ a.browse__go {
   padding: 14px 16px calc(20px + var(--dock-safe));
 }
 
-.copilot-connect {
-  padding-top: 16px;
-}
-
 .copilot-status__desk {
   margin: 0;
   font-size: 15px;

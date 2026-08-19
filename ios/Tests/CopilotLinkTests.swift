@@ -8,17 +8,20 @@
  *
  * Six properties, in descending order of what they would cost:
  *
- * **The copilot is a separate connection and this phone opens it every time.**
+ * **Copilot access belongs to the socket, and this phone opens it every time.**
  * `welcome.copilot.open` is always false; a client that treated it as "already
  * in" would send an `attach` that comes back `unauthorized` on every single
  * connection, and the screen would look like a copilot that never answers. So
  * the welcome sends `copilot.hello` and nothing else, and the subscription hangs
  * off the `copilot.grant` that answers it.
  *
- * **The credential is stored the moment it arrives, or it is lost forever.**
- * `copilot.linked` is sent exactly once and no path on the desktop can show it
- * again. A phone that dropped it has to show the Connect screen rather than
- * silently failing every copilot frame.
+ * **The hello carries nothing, and there is nothing to press before it.** As of
+ * 2026-08-19 pairing a device as *My device* is the copilot's authorisation —
+ * *"if we are connecting as my device copilot automatically comes, if we connect
+ * as guest then copilot don't come"* — so the six-digit code, the credential and
+ * the two screens that asked for them are deleted. A welcome that carries the
+ * field means the copilot is here; a welcome that does not means it is not, and
+ * there is no third answer for a client to get wrong.
  *
  * **A phone with no connection draws no controls, and a phone whose connection
  * was taken away stops drawing them without a reconnect.** The desktop is the
@@ -74,23 +77,33 @@ final class CopilotLinkTests: XCTestCase {
     }
 
     private var wire = RecordingWire()
-    private var vault = MemoryCopilotVault()
     private var link = CopilotLink(wire: RecordingWire())
     private var errors: [String] = []
 
     override func setUp() {
         super.setUp()
         wire = RecordingWire()
-        vault = MemoryCopilotVault()
-        link = CopilotLink(wire: wire, vault: vault)
+        link = CopilotLink(wire: wire)
         errors = []
         link.onError = { [weak self] sentence in self?.errors.append(sentence) }
     }
 
-    /// A machine that has a copilot, in the state a `welcome` describes it:
-    /// `open` is false, always, whatever this device holds.
-    private func welcome(linked: Bool = true, read: Bool = false, act: Bool = false,
-                         alter: Bool = false, capability: Bool = true) {
+    /**
+     * A machine whose copilot is this phone's, in the state a `welcome` puts it
+     * in: `open` is false, always.
+     *
+     * `linked` defaults to true because that is what the desktop sends whenever
+     * it writes the field at all — the object is only written for a machine with
+     * a copilot and a device approved as one of his. The parameter exists for
+     * the one frame that can carry `false`: a `copilot.grant` push saying this
+     * device has stopped being his.
+     *
+     * A guest is not this method with `linked: false` — it is
+     * `link.welcomed(capabilities: [], connection: .silent)`, because the
+     * desktop strips the capability as well as the field.
+     */
+    private func welcome(linked: Bool = true, read: Bool = true, act: Bool = true,
+                         alter: Bool = true, capability: Bool = true) {
         link.welcomed(capabilities: capability ? [Copilot.capability] : [],
                       connection: CopilotConnection(stated: true, linked: linked, open: false,
                                                     grant: CopilotGrant(read: read, act: act,
@@ -104,10 +117,9 @@ final class CopilotLinkTests: XCTestCase {
                                              grant: CopilotGrant(read: read, act: act, alter: alter)))
     }
 
-    /// The whole ceremony, for the tests that are about what happens afterwards.
+    /// Welcomed and open, for the tests that are about what happens afterwards.
     private func connected(read: Bool = true, act: Bool = true, alter: Bool = true) {
-        vault.storeCopilotCredential("c2VjcmV0")
-        welcome(linked: true, read: read, act: act, alter: alter)
+        welcome(read: read, act: act, alter: alter)
         opened(read: read, act: act, alter: alter)
         wire.clear()
     }
@@ -147,26 +159,23 @@ final class CopilotLinkTests: XCTestCase {
     // MARK: - What may be drawn
 
     /**
-     * The eight states, and the order of the ceremony they describe.
+     * The four states, and the order they run in.
      *
-     * `CopilotAccess` exists so no screen re-derives this from a capability,
-     * two connection facts and three booleans — because the failure mode of
-     * re-deriving it is drawing the *third* answer for the *fourth* case, and
-     * three of these cases have three different remedies: update that machine,
-     * type a code, tick a box.
+     * `CopilotAccess` exists so no screen re-derives this from a capability, two
+     * connection facts and three booleans — because the failure mode of
+     * re-deriving it is drawing the *third* answer for the *fourth* case.
+     *
+     * It walked seven states and a ceremony until 2026-08-19. Three of them —
+     * *no record here*, *the key is gone*, and *closed on purpose* — existed
+     * only because connecting the copilot was a second act of authorisation
+     * with a six-digit code behind it. There is no code, so there is no
+     * half-connected state to be in: either the machine wrote a `copilot` object
+     * for this device or it did not.
      */
-    func testAccessWalksTheCeremonyInOrder() {
+    func testAccessWalksTheConnectionInOrder() {
         XCTAssertEqual(link.access, .notOffered, "before any welcome")
 
-        welcome(linked: false)
-        XCTAssertEqual(link.access, .notConnected, "a copilot, and this device has no record")
-
-        welcome(linked: true)
-        XCTAssertEqual(link.access, .credentialLost,
-                       "the machine remembers this device and this phone does not hold the key")
-
-        vault.storeCopilotCredential("c2VjcmV0")
-        welcome(linked: true)
+        welcome()
         XCTAssertEqual(link.access, .connecting, "the hello is on the wire")
 
         opened(read: true)
@@ -176,37 +185,65 @@ final class CopilotLinkTests: XCTestCase {
         XCTAssertEqual(link.access, .direct)
 
         opened(read: false, act: false, alter: false)
-        XCTAssertEqual(link.access, .notGranted, "connected, and every box unticked")
+        XCTAssertEqual(link.access, .notGranted, "open, and given nothing")
     }
 
     /**
-     * **A connected device with no grant is not the same as an unconnected one.**
+     * **A guest gets nothing at all — not a tab, not a screen, not a sentence
+     * about how to connect.**
      *
-     * Two states with two different remedies — three checkboxes, or a six-digit
-     * code — and a screen that showed the code field to somebody who is already
-     * connected would send them to mint a code they do not need. Unticking every
-     * box leaves a working credential behind, which is why both states are real.
+     * *"If we connect as guest then copilot don't come."* The desktop strips
+     * both the capability and the `welcome` field for a guest — `server.ts`
+     * filters the advertisement rather than only refusing the verb, because *"a
+     * tab that refuses on every press is a worse answer than a client that never
+     * knew"* — so from here a guest and a copilot-less build are the same frame,
+     * which is the whole reason `.notOffered` is one case with one sentence
+     * covering both.
+     *
+     * The important half is the last assertion: nothing is sent. A phone that
+     * hopefully said hello anyway would be a phone probing a permission
+     * boundary once per reconnect.
      */
-    func testConnectedAndGivenNothingIsNotTheSameAsNotConnected() {
-        vault.storeCopilotCredential("c2VjcmV0")
-        welcome(linked: true)
-        opened(read: false)
-        XCTAssertEqual(link.access, .notGranted)
+    func testAGuestIsToldNothingAndSendsNothing() {
+        link.welcomed(capabilities: [], connection: .silent)
+
+        XCTAssertEqual(link.access, .notOffered)
+        XCTAssertFalse(link.isAvailable)
+        XCTAssertFalse(link.isOffered)
+        XCTAssertFalse(link.isImplemented)
+        XCTAssertTrue(wire.sent.isEmpty, "no hello, no attach, nothing")
+    }
+
+    /**
+     * **The copilot can be taken away while the phone is connected, and the
+     * screen goes with it.**
+     *
+     * The one thing `linked` is still for. Capabilities travel in the `welcome`
+     * and nowhere else, so a device demoted from *My device* to a guest while it
+     * is connected cannot learn it from the capability list — it learns it from
+     * a `copilot.grant` carrying `linked: false`, and without that it would keep
+     * a Copilot pill whose every press is refused until something happened to
+     * drop the socket.
+     */
+    func testLosingMyDeviceTakesTheCopilotAwayWithoutAReconnect() {
+        connected()
+        XCTAssertEqual(link.access, .direct)
 
         link.apply(pushed: CopilotConnection(stated: true, linked: false, open: false, grant: .none))
-        XCTAssertEqual(link.access, .notConnected)
+
+        XCTAssertEqual(link.access, .notOffered)
+        XCTAssertFalse(link.isAvailable)
+        XCTAssertFalse(link.access.isConnected, "and the fourth pill goes with it")
     }
 
     /**
      * **A machine that advertised a copilot but never showed one draws nothing.**
      *
-     * The `.notConnected` screen names a control on the desktop, so reading this
-     * case as `.notConnected` would send somebody to a Mac to look for one that
-     * build does not have. `.notOffered` says the honest thing instead.
-     *
-     * This is not a hypothetical host. `host-standin.ts` sends the product's
-     * whole `CAPABILITIES` list verbatim, and verifying against it is how an
-     * earlier feature was reported working against an empty screen.
+     * The capability list is assembled by a filter that can drift from what it
+     * filters; the field is written by the object that serves the frames and
+     * cannot. This is not a hypothetical host: `host-standin.ts` sends the
+     * product's whole `CAPABILITIES` list verbatim, and verifying against it is
+     * how an earlier feature was reported working against an empty screen.
      */
     func testAnAdvertisedButAbsentCopilotIsNotOffered() {
         link.welcomed(capabilities: [Copilot.capability], connection: .silent)
@@ -232,38 +269,42 @@ final class CopilotLinkTests: XCTestCase {
     /// the capability is a host this app has no agreed vocabulary with, and
     /// sending it frames on the strength of one field would be guessing.
     func testTheFieldAloneDoesNotOpenTheScreen() {
-        vault.storeCopilotCredential("c2VjcmV0")
-        welcome(linked: true, read: true, act: true, capability: false)
+        welcome(capability: false)
 
         XCTAssertEqual(link.access, .notOffered)
         XCTAssertTrue(wire.sent.isEmpty)
     }
 
-    // MARK: - The ceremony
+    // MARK: - Saying hello
 
     /**
-     * **A welcome sends the credential, and nothing else.**
+     * **A welcome sends one frame, and it carries nothing.**
      *
-     * The single most important behaviour in this file. `welcome.copilot.open`
-     * is always false — the desktop's own type says so and the stand-in
-     * reproduces it — so an `attach` sent here is refused on every connection,
-     * and the phone shows an empty conversation under a working socket. The
+     * The single most important behaviour in this file, and the assertion that
+     * pins the whole of the 2026-08-19 change at this layer: `.copilotHello` has
+     * no associated value, so there is no credential to look up, no Keychain to
+     * read and nothing that can be missing. What authorises it is the device
+     * identity this socket proved at pairing time and the kind that device was
+     * approved as, both of which the desktop holds already.
+     *
+     * And it is a hello rather than an `attach`. `welcome.copilot.open` is
+     * always false — the desktop's own type says so and the stand-in reproduces
+     * it — so an `attach` sent here would be refused on every connection, and
+     * the phone would show an empty conversation under a working socket. The
      * subscription belongs after the hello, not beside it.
      */
     func testAWelcomeSendsHelloAndNotASubscription() {
-        vault.storeCopilotCredential("c2VjcmV0")
-        welcome(linked: true, read: true, act: true)
+        welcome()
 
-        XCTAssertEqual(wire.sent, [.copilotHello(credential: "c2VjcmV0")])
+        XCTAssertEqual(wire.sent, [.copilotHello])
         XCTAssertFalse(link.isOpen)
         XCTAssertEqual(link.access, .connecting)
     }
 
     /// And the subscription goes out when the connection opens, which is the
-    /// only frame that says the ceremony is done.
+    /// only frame that says this socket is in.
     func testOpeningTheConnectionSubscribes() {
-        vault.storeCopilotCredential("c2VjcmV0")
-        welcome(linked: true, read: true)
+        welcome()
         wire.clear()
 
         opened(read: true)
@@ -272,120 +313,41 @@ final class CopilotLinkTests: XCTestCase {
         XCTAssertTrue(link.isOpen)
     }
 
-    /// On **every** reconnect. The desktop's copilot access belongs to the
-    /// socket, so a second welcome is a second hello — remembering the first
-    /// would be a phone that believes it is in.
-    func testEveryReconnectSendsTheCredentialAgain() {
-        vault.storeCopilotCredential("c2VjcmV0")
-        welcome(linked: true, read: true)
+    /// On **every** reconnect. Copilot access belongs to the socket, so a second
+    /// welcome is a second hello — remembering the first would be a phone that
+    /// believes it is in.
+    func testEveryReconnectSaysHelloAgain() {
+        welcome()
         opened(read: true)
         link.connectionLost()
         wire.clear()
 
-        welcome(linked: true, read: true)
-        XCTAssertEqual(wire.sent, [.copilotHello(credential: "c2VjcmV0")])
+        welcome()
+        XCTAssertEqual(wire.sent, [.copilotHello])
         XCTAssertFalse(link.isOpen, "a dropped socket is not an open copilot")
     }
 
-    /// A device the machine has never connected sends nothing at all — not even
-    /// a hello, which would be a frame with no credential to carry.
-    func testAnUnconnectedDeviceSendsNothing() {
-        welcome(linked: false)
+    /// A machine with no copilot for this phone is sent nothing at all — not
+    /// even a hello, which would be this app probing a permission boundary once
+    /// per reconnect.
+    func testAMachineWithNoCopilotIsSentNothing() {
+        link.welcomed(capabilities: [], connection: .silent)
         link.refresh()
         link.loadLog()
 
         XCTAssertTrue(wire.sent.isEmpty)
-        XCTAssertEqual(link.access, .notConnected)
+        XCTAssertEqual(link.access, .notOffered)
     }
 
-    /**
-     * **Redeeming a code stores the credential before anything else.**
-     *
-     * It is sent exactly once and there is no path on that machine that can show
-     * it again, so anything that happens between receiving it and storing it is
-     * a connection nobody can ever reopen. Redeeming also opens this socket —
-     * the desktop says so, and it is right: the device has just proved it holds
-     * a code minted seconds ago, which is a stronger claim than the credential
-     * it is being given.
-     */
-    func testRedeemingACodeStoresTheCredentialAndOpensTheConnection() {
-        welcome(linked: false)
-        wire.clear()
-
-        XCTAssertTrue(link.connect(code: "481902"))
-        XCTAssertEqual(wire.sent, [.copilotConnect(code: "481902")])
-        XCTAssertTrue(link.isConnecting)
-
-        link.linked(credential: "c2VjcmV0",
-                    connection: CopilotConnection(stated: true, linked: true, open: true,
-                                                  grant: CopilotGrant(read: true, act: true,
-                                                                      alter: true)))
-
-        XCTAssertEqual(vault.copilotCredential(), "c2VjcmV0", "stored, or it is gone forever")
-        XCTAssertFalse(link.isConnecting)
-        XCTAssertEqual(link.access, .direct)
-        XCTAssertEqual(wire.sent.suffix(3), [.copilotAttach, .copilotSessions, .copilotPending])
-    }
-
-    /**
-     * **The code is normalised before it is sent.**
-     *
-     * The desktop hashes the string it is given and strips nothing, exactly as
-     * `device-auth.ts` does not, so `481 902` is not a lenient match — it is a
-     * wrong code and one of five guesses spent. One place decides what a code
-     * looks like and it is the client, because the client is where somebody
-     * typed it.
-     */
-    func testTheCodeIsNormalisedBeforeItGoesOnTheWire() {
-        welcome(linked: false)
-        wire.clear()
-
-        XCTAssertTrue(link.connect(code: " 481-902 "))
-        XCTAssertEqual(wire.sent, [.copilotConnect(code: "481902")])
-    }
-
-    /// Anything that is not six digits never reaches the machine, and says so in
-    /// a sentence somebody can act on rather than as a refusal from a relay.
-    func testSomethingThatIsNotACodeIsRefusedHere() {
-        welcome(linked: false)
-        wire.clear()
-
-        XCTAssertFalse(link.connect(code: "48190"))
-        XCTAssertFalse(link.connect(code: "4819O2"), "a letter is a typo, not an O to fold")
-        XCTAssertTrue(wire.sent.isEmpty)
-        XCTAssertEqual(errors.count, 2)
-        XCTAssertTrue(errors.allSatisfy { $0.contains("six digits") })
-    }
-
-    /// A wrong code comes back as a plain `error` frame, and the spinner has to
-    /// stop over it. The sentence is the desktop's and is shown by the one error
-    /// surface the machine already has.
-    func testAnErrorStopsTheConnectSpinner() {
-        welcome(linked: false)
-        link.connect(code: "481902")
-        XCTAssertTrue(link.isConnecting)
+    /// A refused hello comes back as a plain `error` frame, and the screen has
+    /// to stop saying *opening…* over it. The sentence is the desktop's and is
+    /// shown by the one error surface the machine already has.
+    func testAnErrorStopsTheOpeningSpinner() {
+        welcome()
+        XCTAssertTrue(link.isOpening)
 
         link.wireErrored()
-        XCTAssertFalse(link.isConnecting)
-    }
-
-    /**
-     * **A disconnect at the desk drops the credential here.**
-     *
-     * The record is gone, so the secret this phone holds opens nothing —
-     * and a secret sitting in a Keychain with no record behind it is one nobody
-     * can revoke because nobody knows it is there. The screen goes back to the
-     * code field, which is the honest remedy: connecting again is a new code.
-     */
-    func testADisconnectDropsTheStoredCredential() {
-        connected()
-        XCTAssertEqual(vault.copilotCredential(), "c2VjcmV0")
-
-        link.apply(pushed: CopilotConnection(stated: true, linked: false, open: false, grant: .none))
-
-        XCTAssertNil(vault.copilotCredential())
-        XCTAssertEqual(link.access, .notConnected)
-        XCTAssertFalse(link.isOpen)
+        XCTAssertFalse(link.isOpening)
     }
 
     /**
@@ -399,29 +361,28 @@ final class CopilotLinkTests: XCTestCase {
      * the whole `closed` access state.
      *
      * What replaces it is this, which is the property that actually has to hold
-     * afterwards: a connected phone that goes away and comes back is **still
-     * connected**, and it re-opens by itself with the credential it holds. There
-     * is no state in which somebody has to press something to get their copilot
-     * back — which was the other half of what the close button existed to undo.
+     * afterwards: a phone that goes away and comes back is **still the same
+     * device**, and it re-opens by itself. There is no state in which somebody
+     * has to press something to get their copilot back — which was the other
+     * half of what the close button existed to undo, and which the deletion of
+     * the connect code made unconditional rather than merely usual.
      *
      * The assertion on `wire.sent` is the important one: exactly one
-     * `copilot.hello`, carrying the stored credential, and no `copilot.connect`,
-     * because a phone that already holds a key must never ask a person for a
-     * code it does not need.
+     * `copilot.hello`, carrying nothing, and no second ceremony of any shape.
      */
-    func testAReconnectReopensTheCopilotWithNoCodeAndNothingToPress() {
+    func testAReconnectReopensTheCopilotWithNothingToPress() {
         connected()
 
         link.connectionLost()
         XCTAssertFalse(link.isOpen, "the socket took the copilot connection with it")
         XCTAssertEqual(link.access, .connecting,
-                       "authorised, and waiting for the machine — not asking for a code")
+                       "his device, and waiting for the machine — not asking for anything")
 
         wire.clear()
-        welcome(linked: true, read: true, act: true, alter: true)
+        welcome()
 
-        XCTAssertEqual(wire.sent, [.copilotHello(credential: "c2VjcmV0")],
-                       "it lets itself back in with the key it already has")
+        XCTAssertEqual(wire.sent, [.copilotHello],
+                       "it lets itself back in on the strength of being his phone")
     }
 
     // MARK: - The act tier
@@ -446,8 +407,13 @@ final class CopilotLinkTests: XCTestCase {
         XCTAssertTrue(wire.sent.isEmpty, "not one of them reached the wire")
         XCTAssertEqual(errors.count, 4)
         for sentence in errors {
-            XCTAssertTrue(sentence.contains("Settings"),
-                          "a refusal that does not say where the switch is sends somebody hunting")
+            // It names the *machine* and no longer names a control to go and
+            // change. There was one for a day — three per-device checkboxes
+            // beside a copilot connection — and there is not now, so a sentence
+            // sending somebody to find one would send them hunting for
+            // something that does not exist.
+            XCTAssertTrue(sentence.contains("That machine is not letting this phone"),
+                          "a refusal has to say who refused")
         }
     }
 
@@ -633,17 +599,24 @@ final class CopilotLinkTests: XCTestCase {
     /**
      * The whole vocabulary, asserted as a set.
      *
-     * Fourteen verbs: three that establish the connection, one that answers a
+     * Thirteen verbs: two that open and close the connection, one that answers a
      * confirmation, six that watch and four that act. Written as an assertion
      * about the *whole* list rather than about the absence of one name, because
      * the failure to guard against is a new frame — a "nudge", a snooze, a
      * `copilot.tool` for a re-run button. Any of them fails this the day it is
      * added, which is the point at which somebody has to come and read
      * `COPILOT-REMOTE.md` §2 rather than after it has shipped.
+     *
+     * **It was fourteen.** `copilot.connect` — redeem a six-digit code — is
+     * deleted, along with the `copilot.linked` that answered it, because there
+     * is no second act of authorisation to perform: *"if we are connecting as my
+     * device copilot automatically comes."* A vocabulary shrinking is worth
+     * pinning as carefully as one growing; the way that verb comes back is
+     * somebody re-reading the argument, not somebody adding a case.
      */
-    func testTheVocabularyIsTheseFourteenVerbs() {
+    func testTheVocabularyIsTheseThirteenVerbs() {
         let verbs: [ClientMessage] = [
-            .copilotConnect(code: "481902"), .copilotHello(credential: "c"), .copilotBye,
+            .copilotHello, .copilotBye,
             .copilotAnswer(id: "q1", approved: true),
             .copilotAttach, .copilotDetach, .copilotState, .copilotSessions,
             .copilotLog(limit: Copilot.logPage, before: nil), .copilotPending,
@@ -655,12 +628,13 @@ final class CopilotLinkTests: XCTestCase {
             return fields["t"] as? String
         })
 
-        XCTAssertEqual(names, ["copilot.connect", "copilot.hello", "copilot.bye", "copilot.answer",
+        XCTAssertEqual(names, ["copilot.hello", "copilot.bye", "copilot.answer",
                                "copilot.attach", "copilot.detach", "copilot.state",
                                "copilot.sessions", "copilot.log", "copilot.pending",
                                "copilot.start", "copilot.say", "copilot.cancel", "copilot.stop"],
-                       "the copilot vocabulary is these fourteen — a fifteenth that nudges, "
-                       + "snoozes or names a tool belongs in COPILOT-REMOTE.md first")
+                       "the copilot vocabulary is these thirteen — a fourteenth that nudges, "
+                       + "snoozes, names a tool or redeems a code belongs in COPILOT-REMOTE.md "
+                       + "first")
     }
 
     // MARK: - The conversation
@@ -781,10 +755,9 @@ final class CopilotLinkTests: XCTestCase {
 
     /// And nothing at all is asked for over a connection that is not open. Every
     /// `copilot.*` verb needs the hello first, read tier included, so this would
-    /// be a frame whose only possible answer is *this device is not connected*.
+    /// be a frame whose only possible answer is *this socket has not said hello*.
     func testTheLogIsNotAskedForBeforeTheConnectionIsOpen() {
-        vault.storeCopilotCredential("c2VjcmV0")
-        welcome(linked: true, read: true)
+        welcome()
         wire.clear()
 
         link.loadLog()
@@ -853,10 +826,11 @@ final class CopilotLinkTests: XCTestCase {
         XCTAssertTrue(wire.sent.isEmpty)
     }
 
-    /// Forgetting the machine forgets what it was, and the credential with it: a
-    /// re-pair mints a **new** device id, so the desktop drops the copilot record
-    /// that went with the old one and the secret here opens nothing.
-    func testForgettingTheMachineForgetsTheConnectionAndTheCredential() {
+    /// Forgetting the machine forgets what it was. A re-pair mints a **new**
+    /// device id, and whether that device is one of his is a question somebody
+    /// answers again at the machine — so nothing about the old one, including
+    /// the fact that it had a copilot, may survive into the next.
+    func testForgettingTheMachineForgetsTheCopilot() {
         connected()
         link.apply(tool: action("a1"))
 
@@ -865,7 +839,6 @@ final class CopilotLinkTests: XCTestCase {
         XCTAssertEqual(link.access, .notOffered)
         XCTAssertFalse(link.isImplemented)
         XCTAssertFalse(link.linked)
-        XCTAssertNil(vault.copilotCredential())
         XCTAssertTrue(link.timeline.isEmpty)
     }
 }

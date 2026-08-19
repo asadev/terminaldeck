@@ -6,6 +6,7 @@ import { copilotPaths } from '../copilot-home'
 import {
   createCopilotRunner,
   DENIED_NATIVE_TOOLS,
+  killPlan,
   NOTHING_MARKER,
   parseRunOutput,
   runPrompt,
@@ -17,6 +18,12 @@ import {
 } from './runner'
 import type { RoutineRunRequest } from './engine'
 import type { Routine } from './format'
+// The real table, asserted against rather than restated as literals. A Windows
+// command line written out by hand in a test is a claim about what somebody
+// believed `providers.ts` does; reading it from `providers.ts` is a claim about
+// what it does.
+import { providersFor } from '../providers'
+import type { Env, Platform } from '../platform/host'
 
 /**
  * The other end of every trigger in the engine.
@@ -78,11 +85,26 @@ function runner(options: {
   code?: number
   stderr?: string
   config?: string | null
+  platform?: Platform
+  env?: Env
   launch?: (input: LaunchInput) => Promise<LaunchResult>
 }) {
   return createCopilotRunner({
     mcpConfig: () => (options.config === undefined ? '/state/copilot/deck-control-unattended.json' : options.config),
     paths: () => copilotPaths(dir),
+    /*
+     * Pinned rather than left to the host, and it is not a formality.
+     *
+     * What gets spawned is `providersFor(platform, env).claude`, so a case that
+     * reads `launched[0].command` while the platform is whatever machine ran the
+     * suite is asserting a different thing on each of them — and on the machine
+     * this was written on it would assert the *only* shape that never had the
+     * bug. Every case below that names an argument means "on macOS", and says
+     * so; the Windows cases name win32 and are the only ones that can fail for
+     * Windows' reasons.
+     */
+    platform: options.platform ?? 'darwin',
+    env: options.env ?? { SHELL: '/bin/zsh' },
     launch:
       options.launch ??
       (async (input) => {
@@ -170,6 +192,114 @@ describe('what a routine run is allowed to do', () => {
     // cannot observe.
     expect(outcome.error).toMatch(/no way to see anything/)
     expect(launched).toEqual([])
+  })
+})
+
+/**
+ * The half of the launch that is not the arguments.
+ *
+ * Every one of these forces a platform rather than measuring one, and that is
+ * the whole point of the block: the defect it pins was invisible for as long as
+ * it existed *because* macOS is the platform where the two halves of the
+ * launcher happen to be interchangeable. On macOS `spawn.command` is the string
+ * `claude` and `spawn.args` is empty, so a runner that supplied its own argv and
+ * threw the table's away produced a byte-identical command line. On Windows the
+ * table answers cmd.exe with the actual program in `spawn.args`, and throwing
+ * that away ran `cmd.exe --print --output-format json …` with the routine's
+ * prompt on the interactive interpreter's stdin — every scheduled routine on
+ * Windows failing, and failing as "could not check".
+ *
+ * A test that let the host decide the platform would have gone green here on the
+ * only machine this repository is developed on, which is the shape six tests in
+ * this codebase have already had to be fixed for.
+ */
+describe('how the run is actually launched', () => {
+  const WINDOWS: Env = { COMSPEC: 'C:\\Windows\\system32\\cmd.exe' }
+  const MAC: Env = { SHELL: '/bin/zsh' }
+
+  it('runs the CLI itself on macOS', async () => {
+    await runner({ platform: 'darwin', env: MAC }).run(request())
+    expect(launched[0].command).toBe('claude')
+    // Nothing wraps anything here, so the first argument is the CLI's own.
+    expect(launched[0].args[0]).toBe('--print')
+  })
+
+  it('goes through the command processor on Windows, keeping the program', async () => {
+    await runner({ platform: 'win32', env: WINDOWS }).run(request())
+
+    // Read off the real table rather than written out here: a hand-written
+    // Windows command line asserts what somebody believed `providers.ts` does.
+    const table = providersFor('win32', WINDOWS).claude.spawn
+    expect(launched[0].command).toBe(table.command)
+    expect(launched[0].args.slice(0, table.args.length)).toEqual(table.args)
+
+    // And, said the other way round, because the assertion above would also
+    // pass against a table that had somehow become the macOS one: what runs is
+    // the command processor, and `/c` — the flag whose absence turned cmd.exe
+    // into the interactive interpreter that read the prompt as a batch script.
+    expect(launched[0].command).not.toBe('claude')
+    expect(launched[0].command.toLowerCase().endsWith('cmd.exe')).toBe(true)
+    expect(launched[0].args[0]).toBe('/c')
+    expect(launched[0].args[1]).toBe('claude')
+  })
+
+  it('loses none of the run’s own flags behind that prefix', async () => {
+    await runner({ platform: 'darwin', env: MAC }).run(request())
+    await runner({ platform: 'win32', env: WINDOWS }).run(request())
+    const [mac, win] = launched
+
+    // The exact defect, stated as an equality: Windows is the same argv with
+    // the launcher's prefix in front, not a shorter one.
+    const prefix = providersFor('win32', WINDOWS).claude.spawn.args
+    expect(win.args.slice(prefix.length)).toEqual(mac.args)
+    expect(win.args).toContain('--strict-mcp-config')
+    expect(win.args).toContain('--disallowedTools')
+  })
+
+  it('still sends the prompt on stdin on Windows, never into cmd', async () => {
+    await runner({ platform: 'win32', env: WINDOWS }).run(request())
+    // This is why `/c` above is load-bearing rather than cosmetic. cmd.exe
+    // without it reads stdin as a batch script, so the prompt's own sentences
+    // were being attempted as commands in the runs directory.
+    expect(launched[0].stdin).toContain('Say which session is blocked.')
+    expect(launched[0].args.join(' ')).not.toContain('Say which session is blocked.')
+  })
+
+  it('tells the spawn which platform’s rules to stop the run by', async () => {
+    await runner({ platform: 'win32', env: WINDOWS }).run(request())
+    expect(launched[0].platform).toBe('win32')
+  })
+})
+
+/**
+ * Stopping a run, which stopped meaning `child.kill()` the moment the launcher
+ * fix put cmd.exe between this process and the CLI.
+ *
+ * A pure plan rather than a function that kills, because forcing win32 in a test
+ * on the machine this was written on would otherwise run `taskkill` — and a test
+ * that cannot force the platform says nothing whatever about Windows.
+ */
+describe('stopping a run', () => {
+  it('kills the tree on Windows, where the child is only the shell', () => {
+    // `/T` because the CLI is a grandchild of cmd.exe and Node's kill reaches
+    // the child alone; `/F` because a console app that is not pumping messages
+    // ignores the polite form. Without this an unattended run survives its own
+    // cancellation still holding the unattended MCP token.
+    expect(killPlan(4321, 'win32')).toEqual({
+      kind: 'tree',
+      command: 'taskkill',
+      args: ['/pid', '4321', '/T', '/F'],
+    })
+  })
+
+  it('signals the CLI itself everywhere else', () => {
+    // On macOS the child *is* claude, so the signal lands on the process doing
+    // the work — which is what `overlap: cancel` has always meant there.
+    expect(killPlan(4321, 'darwin')).toEqual({ kind: 'signal', signal: 'SIGTERM' })
+  })
+
+  it('falls back to a signal when there is no pid to name a tree with', () => {
+    expect(killPlan(undefined, 'win32')).toEqual({ kind: 'signal', signal: 'SIGTERM' })
   })
 })
 

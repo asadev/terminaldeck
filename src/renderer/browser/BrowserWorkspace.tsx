@@ -96,6 +96,15 @@ import {
   type ReachedPort,
   type ReachOpened,
 } from './machines-bridge'
+import {
+  portSourceFor,
+  readServerPorts,
+  readServers,
+  resolveServersApi,
+  serverChoices,
+  type ServerPortsState,
+  type ServerRow,
+} from './server-machines'
 import { StartPage, type PortSource } from './StartPage'
 import {
   closeTab as closeInList,
@@ -514,6 +523,29 @@ export function BrowserWorkspace({
   const machinesApi = useMemo(() => resolveMachinesApi(), [])
   const [machineView, setMachineView] = useState<MachineChoice[]>([])
   const [machineId, setMachineId] = useState(THIS_MACHINE)
+  /*
+   * The other kind of machine, in the same picker.
+   *
+   * Two sources rather than one because the two are told apart by how they are
+   * reached and by nothing else — a device runs this app at the far end and a
+   * server does not, so one pushes its state up a connection this desktop
+   * already holds and the other has to be asked. What a person sees is one
+   * list: `machines` below is the concatenation, and every rule from that point
+   * on — the picker, the refusal under a row, the badge, `destinationFor` —
+   * runs over it without knowing which half a row came from.
+   */
+  const serversApi = useMemo(() => resolveServersApi(), [])
+  const [serverList, setServerList] = useState<ServerRow[]>([])
+  /**
+   * What each server last said, keyed by its id.
+   *
+   * Empty for a server nobody has chosen, and that absence is the design rather
+   * than a gap: §5.4 of the servers design says a server nobody is looking at
+   * is not dialled at all, so filling this in for every stored server when a
+   * browser tab opens would dial all of them to populate a dropdown nobody had
+   * opened. Choosing one is what asks it.
+   */
+  const [serverPorts, setServerPorts] = useState<Record<string, ServerPortsState>>({})
   /**
    * Every tunnel this window has opened, so a loopback page can name its source.
    *
@@ -966,6 +998,43 @@ export function BrowserWorkspace({
     }
   }, [machinesApi])
 
+  /*
+   * The servers this app knows, read once.
+   *
+   * A read and no subscription, unlike the machines above, because the two
+   * lists change for different reasons. A paired device goes online and offline
+   * by itself and pushes when it does; a server is only ever *added or
+   * forgotten by the person*, on a screen in another panel, and this panel is
+   * remounted whenever the browser is opened. A push channel for a list that
+   * changes when somebody fills in a form would be a second wire to keep in
+   * step for no observable difference.
+   */
+  useEffect(() => {
+    if (!serversApi) return
+    let alive = true
+    void serversApi
+      .listServers()
+      .then((raw) => {
+        if (alive) setServerList(readServers(raw))
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [serversApi])
+
+  /**
+   * The one list the rest of this panel works from.
+   *
+   * Memoised rather than built in the render body, and that is load bearing:
+   * `lostMachine` runs in an effect that depends on this array, and a fresh
+   * array every render would re-run that effect forever.
+   */
+  const machines = useMemo(
+    () => [...machineView, ...serverChoices(serverList, serverPorts)],
+    [machineView, serverList, serverPorts],
+  )
+
   /**
    * Give the picker back when the machine it is pointing at goes away.
    *
@@ -980,7 +1049,7 @@ export function BrowserWorkspace({
    * would be pointing at a page that has stopped answering.
    */
   useEffect(() => {
-    const lost = lostMachine(machineView, machineId)
+    const lost = lostMachine(machines, machineId)
     if (lost === null) return
     setMachineId(THIS_MACHINE)
     setOpened((prev) => prev.filter((entry) => entry.machineId !== machineId))
@@ -990,7 +1059,7 @@ export function BrowserWorkspace({
     // screen above a dead tab, under a sentence saying the machine had gone.
     setPortNote('')
     setNotice(lost)
-  }, [machineId, machineView])
+  }, [machineId, machines])
 
   /*
    * Ask the chosen machine what it is serving, once, on choosing it.
@@ -1003,8 +1072,53 @@ export function BrowserWorkspace({
    */
   useEffect(() => {
     if (machineId === THIS_MACHINE || !machinesApi) return
+    // Devices only. A server id sent down this channel would name no link and
+    // be refused, which costs nothing and reads, to the next person, as though
+    // the two kinds shared a wire. They do not.
+    if (machines.find((one) => one.id === machineId)?.kind === 'server') return
     void machinesApi.refreshMachinePorts(machineId).catch(() => undefined)
-  }, [machineId, machinesApi])
+  }, [machineId, machines, machinesApi])
+
+  /**
+   * Ask a chosen server the same question, which for a server is a dial.
+   *
+   * Its own effect rather than a branch inside the one above, because the two
+   * are not the same act. A device is already connected and this is a nudge; a
+   * server is not, and choosing it in this dropdown is the thing that opens a
+   * connection to somebody's computer. That deserves to be one legible effect
+   * with one comment on it rather than a condition inside another.
+   *
+   * `asking` is written before the call so the start page says *"Asking … what
+   * it is serving"* rather than drawing an empty list for the second and a half
+   * a real dial takes — measured against a real server, where the handshake and
+   * the probe together are about that.
+   */
+  const askServer = useCallback(
+    (id: string): void => {
+      if (!serversApi) return
+      setServerPorts((prev) => ({ ...prev, [id]: { state: 'asking' } }))
+      void serversApi
+        .serverPorts(id)
+        .then((raw) => setServerPorts((prev) => ({ ...prev, [id]: readServerPorts(raw) })))
+        .catch((cause: unknown) =>
+          setServerPorts((prev) => ({
+            ...prev,
+            [id]: { state: 'refused', message: humanError(cause) },
+          })),
+        )
+    },
+    [serversApi],
+  )
+
+  useEffect(() => {
+    if (machineId === THIS_MACHINE) return
+    // Devices are handled above; a server that has already answered is not
+    // asked again, because this effect re-runs whenever anything about the
+    // list changes and a dial per render is not a question, it is a loop.
+    const chosen = machines.find((one) => one.id === machineId)
+    if (chosen?.kind !== 'server' || serverPorts[machineId] !== undefined) return
+    askServer(machineId)
+  }, [askServer, machineId, machines, serverPorts])
 
   /**
    * Ask the main process for an address on this machine that serves that port.
@@ -1017,12 +1131,24 @@ export function BrowserWorkspace({
    */
   const reachPort = useCallback(
     async (machine: MachineChoice, port: number): Promise<ReachOpened | null> => {
-      if (!machinesApi) {
+      /*
+       * The one place the two kinds of machine part company, and it is one
+       * line: which bridge is asked. Everything after it — the narrowing, the
+       * badge, the caveat about a port number that had to change, the tab the
+       * page opens in — is the same code for both, because the answer shapes
+       * were deliberately made identical in the main process rather than
+       * translated here. Two shapes would have been two of everything below.
+       */
+      const bridge =
+        machine.kind === 'server'
+          ? serversApi && ((port: number) => serversApi.reachOnServer(machine.id, port))
+          : machinesApi && ((port: number) => machinesApi.reachOnMachine(machine.id, port))
+      if (!bridge) {
         setNotice('This build cannot reach another machine’s ports.')
         return null
       }
       const answer = readReach(
-        await machinesApi.reachOnMachine(machine.id, port).catch((cause: unknown) => ({
+        await bridge(port).catch((cause: unknown) => ({
           ok: false,
           message: humanError(cause),
         })),
@@ -1048,7 +1174,7 @@ export function BrowserWorkspace({
       setPortNote(differentPortNote(answer, machine.name))
       return answer
     },
-    [machinesApi],
+    [machinesApi, serversApi],
   )
 
   /**
@@ -1085,7 +1211,7 @@ export function BrowserWorkspace({
        */
       const target = destinationFor(machineId, resolution.url)
       if (target.kind === 'there') {
-        const machine = machineView.find((one) => one.id === target.machineId)
+        const machine = machines.find((one) => one.id === target.machineId)
         // Refused here rather than sent, because a machine that is not in the
         // list is not one this window can say anything about. The effect above
         // has already put the picker back and said why.
@@ -1096,7 +1222,7 @@ export function BrowserWorkspace({
       }
       act((a, id) => a.browserNavigate(id, target.url))
     },
-    [act, machineId, machineView, openThere],
+    [act, machineId, machines, openThere],
   )
 
   const closeTab = useCallback(
@@ -1589,21 +1715,47 @@ export function BrowserWorkspace({
    * "current machine" would have made all three the same answer, and the second
    * one is a fact about a tab while the first is a mode of the window.
    */
-  const machine = machineView.find((one) => one.id === machineId) ?? null
+  const machine = machines.find((one) => one.id === machineId) ?? null
   const served = servedBy(active?.url ?? '', opened)
+  /*
+   * A server's list has a third state a device's cannot have.
+   *
+   * A device scans its own ports with the same tool this machine uses, so it
+   * either answers or is offline. A server can be reachable, willing, and have
+   * no tool installed for listing what is listening — and `null` there means
+   * "still asking", so the page waits rather than claiming nothing is running.
+   */
+  const serverSource = machine?.kind === 'server' ? portSourceFor(serverPorts[machine.id]) : null
   const portSource: PortSource | null =
     machine === null
       ? null
       : {
           name: machine.name,
-          ports: machine.ports,
+          /*
+           * Which mark the rows wear, and it is passed rather than inferred.
+           *
+           * `StartPage` draws a machine's own icon beside every port so a remote
+           * list is distinguishable from this machine's at a glance — his
+           * words: *"with the machine's icon beside them"*. It falls back to the
+           * desktop mark when this is absent, which is right for every caller
+           * that predates servers, and wrong for a server. This is the one place
+           * that knows which it is.
+           */
+          kind: machine.kind,
+          ports: serverSource ? serverSource.ports : machine.ports,
+          cannot: serverSource?.cannot ?? null,
           open: (port) => {
             // The address a person would have typed, so that what lands in the
             // bar and in history is the page — not the row that was clicked.
             void openThere(machine, port, `http://localhost:${port}/`)
           },
           refresh: () => {
-            void machinesApi?.refreshMachinePorts(machine.id).catch(() => undefined)
+            // "I have just started something over there", for either kind. A
+            // device is nudged down a connection this desktop holds; a server
+            // is asked again, which is a fresh probe on the connection it is
+            // already holding for the page.
+            if (machine.kind === 'server') askServer(machine.id)
+            else void machinesApi?.refreshMachinePorts(machine.id).catch(() => undefined)
           },
         }
 
@@ -1618,8 +1770,8 @@ export function BrowserWorkspace({
    * address is on.
    */
   const picker =
-    machineView.length > 0 ? (
-      <MachinePicker machines={machineView} selected={machineId} onSelect={setMachineId} />
+    machines.length > 0 ? (
+      <MachinePicker machines={machines} selected={machineId} onSelect={setMachineId} />
     ) : undefined
 
   /*

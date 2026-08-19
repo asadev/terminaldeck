@@ -63,7 +63,35 @@ export interface MachineActions {
   connect(machine: Machine): void
   disconnect(machine: Machine): void
   forget(machine: Machine): void
-  newSession(machine: Machine, link: MachineLinkState): void
+  /**
+   * Ask the window for a new session on that machine — the dialog, on its
+   * folder step, with the machine already answered.
+   *
+   * ## Why it is optional, and why the row checks
+   *
+   * Because it is the only action here that cannot be performed by this half on
+   * its own. Every other one is a call on the machines bridge, which a page has
+   * or has not got and says so in one notice at the top; this one needs a
+   * *window* around the page, because the dialog it opens is the window's. A
+   * copy of this page rendered without one — the harness, a test, any future
+   * tree that mounts the panel outside the shell — has nowhere for the press to
+   * land, and the standing rule for that in this app is that the control is
+   * **absent**, not dead. `ServerAdvanced` answers the identical question the
+   * identical way, one directory over.
+   *
+   * Optional rather than a function that refuses, so the row cannot draw a
+   * button it has no way to honour: `undefined` is checkable and a no-op is not.
+   *
+   * ## Why the link is no longer an argument
+   *
+   * It used to take one, and read `link.folders?.[0]` off it, and that is the
+   * whole defect this signature ends — see `new-session-context.ts`. The folder
+   * is a question the dialog asks now, of the person, against the list that
+   * machine actually shared. Passing the link in would put the old answer back
+   * within reach. `newSessionOffer(link)` still gates whether the button exists
+   * at all, which is a different question and stays where it was.
+   */
+  newSession?: (machine: Machine) => void
   open(machineId: string, sessionId: string): void
   close(): void
   /** Open `http://localhost:<port>/` **on that machine**, in its own browser. */
@@ -309,8 +337,22 @@ export function MachineRow({
       )}
 
       <div className="machines-actions settings-chips">
-        {offer.can && (
-          <Button onClick={() => actions.newSession(machine, link)}>New session</Button>
+        {/*
+          Two gates, and they answer two different questions.
+
+          `offer.can` is about the *far* machine: is it connected, does its build
+          know how to start one, has anybody over there shared a folder with this
+          device. `actions.newSession` is about *this* end: is there a window
+          around this page to open the dialog in. Either can be false on its own,
+          and the second one is false in exactly the places a screenshot is taken
+          from — so folding them into one condition would have made the harness's
+          copy of this row look like a machine that had refused.
+
+          What is missing is said below rather than here, beside the offer's own
+          note, so a row never grows two explanations in two places.
+        */}
+        {offer.can && actions.newSession !== undefined && (
+          <Button onClick={() => actions.newSession?.(machine)}>New session</Button>
         )}
         {link.state === 'online' || link.state === 'connecting' ? (
           <Button onClick={() => actions.disconnect(machine)}>Disconnect</Button>
@@ -339,6 +381,25 @@ export function MachineRow({
       </div>
 
       {offer.note !== null && <p className="machines-note">{offer.note}</p>}
+
+      {/*
+        The far machine would serve one and this copy of the page cannot ask for
+        it. Said plainly, and only in that combination: a machine that has
+        refused already has its own note above, and stacking a second sentence
+        under it would explain a button whose absence was already explained.
+
+        Worth a sentence at all for the reason `ServerAdvanced`'s equivalent
+        notice is: the difference between "you cannot" and "this copy cannot" is
+        the difference between a task and a bug report. Nobody sees this in the
+        app — the window provides the opener — so what it is really for is the
+        person looking at a harness screenshot or a test's markup, wondering
+        where the button went.
+      */}
+      {offer.can && actions.newSession === undefined && (
+        <p className="machines-note">
+          This page is not inside a window that can open one.
+        </p>
+      )}
     </li>
   )
 }
@@ -610,6 +671,18 @@ export interface MachineActionDeps {
   setOpen(next: { machineId: string; sessionId: string } | null): void
   /** False once the section has gone, so nothing writes to a dead component. */
   isAlive(): boolean
+  /**
+   * Ask the window for a new session on a machine, or null when this copy of
+   * the page has no window around it.
+   *
+   * Null rather than absent-and-optional at the *call* site is deliberate: the
+   * caller reads a context whose default is `null`, and passing that value
+   * straight through keeps one representation of "there is no window" from here
+   * to the button. What comes *out* of this function is the optional one —
+   * `newSession` exists exactly when this does — because that is what the row
+   * has to check before drawing a control.
+   */
+  openNewSession?: ((machineId: string) => void) | null
 }
 
 /**
@@ -626,6 +699,9 @@ export interface MachineActionDeps {
  */
 export function machineActions(deps: MachineActionDeps): MachineActions {
   const { bridge, setView, setPairing, setError, setOpen, isAlive } = deps
+  /* `?? null`, so "nobody passed one" and "there is no window" are one value
+     rather than two the check below would have to spell out separately. */
+  const openNewSession = deps.openNewSession ?? null
 
   const reread = async (): Promise<void> => {
     if (!bridge) return
@@ -687,12 +763,38 @@ export function machineActions(deps: MachineActionDeps): MachineActions {
     forget: (machine) => {
       if (bridge) settle(bridge.forgetMachine(machine.id))
     },
-    newSession: (machine, link) => {
-      // The first shared folder, because that is the only one this end knows is
-      // allowed. A machine that never mentioned folders gets an empty string,
-      // which is that machine's own default rather than a path invented here.
-      if (bridge) void bridge.createMachineSession(machine.id, link.folders?.[0] ?? '')
-    },
+    /*
+     * Up to the window, never out to the machine.
+     *
+     * This used to be `bridge.createMachineSession(machine.id, link.folders?.[0]
+     * ?? '')` — one press, and a session was running on somebody else's computer
+     * under whichever agent that machine defaults to, in whichever folder was
+     * first in the list it advertised. The comment defending it argued that the
+     * first shared folder is "the only one this end knows is allowed", which was
+     * true and beside the point: *allowed* is not *chosen*, and a machine that
+     * shares three folders was being given no say at all.
+     *
+     * Asad, on the local version of the same press: *"we just always wanted this
+     * pop-up to come up so we choose which type of terminal we want to open."*
+     * Every other route to a new session in this app obeys that now. This one is
+     * the last, and it is the one where a wrong guess costs most, because the
+     * folder, the agent and the login it guesses at are on a machine this end
+     * only knows about because that machine described itself.
+     *
+     * `openNewSession` is the window's `openNewSessionDialog(null, machineId)` —
+     * literally the same function the rail's machine heading calls, reached
+     * through `new-session-context.ts`. No bridge call is made here at all: the
+     * dialog's Start is what talks to the far machine, through the same channel
+     * this line used to, once somebody has answered.
+     *
+     * Absent when there is no window, so the row draws no button rather than one
+     * that swallows the press. See {@link MachineActions.newSession}.
+     */
+    newSession: openNewSession
+      ? (machine: Machine) => {
+          openNewSession(machine.id)
+        }
+      : undefined,
     open: (machineId, sessionId) => setOpen({ machineId, sessionId }),
     close: () => setOpen(null),
     openPort: (machine, port) => {

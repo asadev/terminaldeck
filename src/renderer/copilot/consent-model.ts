@@ -60,11 +60,17 @@ export interface ConsentSettledView {
    * Which surface answered it: `'window'`, `device:<id>`, or null for nobody.
    *
    * The dialog on this Mac is no longer the only place a confirmation can be
-   * answered — a device with its own copilot connection can answer its own run's
+   * answered — one of the owner's own devices can answer its own run's
    * questions, and first answer wins. So when this dialog closes without the
    * person having pressed anything, it has to be able to say *where the answer
    * came from* rather than vanishing. A dialog that disappears on its own
    * teaches a person that the app does things behind their back.
+   *
+   * It can only ever be one of their own. There is no separate copilot
+   * connection to hold any more — a device paired as **My device** carries the
+   * copilot, a guest is sent no copilot at all — so a `device:` answer here is
+   * always somebody at another of their own keyboards, never a visitor. That is
+   * why the sentence below can say so.
    *
    * The device id itself is deliberately not rendered. It is opaque, it means
    * nothing to a person reading it, and the Activity pane is where a row can be
@@ -222,10 +228,17 @@ export function settledSentence(settled: ConsentSettledView): string | null {
    *
    * Checked before `granted`, because an *allowed* question is the one case that
    * used to return null — there was nothing to say, since the only surface that
-   * could allow it was this one. That is no longer true: a device holding a
-   * copilot connection can answer its own run's question, and this dialog then
-   * closes on an outcome the person in front of it did not choose. Saying so is
-   * the difference between a race that is visible and one that is not.
+   * could allow it was this one. That is no longer true: one of their own
+   * devices can answer its own run's question, and this dialog then closes on an
+   * outcome the person in front of it did not choose. Saying so is the
+   * difference between a race that is visible and one that is not.
+   *
+   * *"one of your devices"* rather than *"a connected device"*, which is what
+   * this said while reaching the copilot was a second connection a device
+   * acquired separately. It is the kind that decides it now, and only **My
+   * device** carries a copilot — so the reassurance a person needs when a dialog
+   * closes itself, *nobody outside answered this*, is a fact the sentence is
+   * entitled to state.
    *
    * A refusal answered on a device gets the same treatment, and it comes first
    * so that "declined" — which normally returns null, because the person here
@@ -234,8 +247,8 @@ export function settledSentence(settled: ConsentSettledView): string | null {
    */
   if (settled.by?.startsWith('device:') === true) {
     return settled.granted
-      ? 'Allowed on a connected device.'
-      : 'Refused on a connected device.'
+      ? 'Allowed on one of your devices.'
+      : 'Refused on one of your devices.'
   }
   if (settled.granted) return null
   switch (settled.reason) {
@@ -243,8 +256,8 @@ export function settledSentence(settled: ConsentSettledView): string | null {
       return 'Nobody answered in time, so it was refused.'
     case 'caller-gone':
       // Two callers can produce this now: the copilot at the desk hanging up,
-      // and a connected device's copilot connection dropping while its own
-      // question was on screen. The sentence covers both because the outcome is
+      // and one of their own devices dropping its socket while the question it
+      // raised was on screen. The sentence covers both because the outcome is
       // the same — nobody is waiting for the answer any more.
       return 'The copilot stopped waiting, so the question was withdrawn.'
     case 'shutting-down':

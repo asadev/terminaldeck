@@ -9,6 +9,7 @@ import { demote, MAX_PROMOTED, promote, usePromotedOrder } from '../browser/work
 import { accountRail, useKnownSignIns } from '../accounts'
 import { heldAgentName, type HeldSessionView } from '../held-sessions'
 import { CopilotEntry } from '../copilot/CopilotEntry'
+import { SERVER_ICON } from '../machines/servers/glyph'
 import type { CopilotStage, CopilotStateView } from '../copilot/copilot-model'
 import { partitionByOrigin, turnOf } from '../copilot/session-origin'
 import { PANEL_GROUPS, PANELS, type PanelId, type PanelSpec } from './panels'
@@ -64,6 +65,24 @@ export interface SidebarMachine {
   canClose: boolean
 }
 
+/**
+ * One server this window has a shell open on, as the rail lists it.
+ *
+ * Flattened like {@link SidebarMachine} beside it, and deliberately shorter than
+ * it by one field. There is no `canClose`: a machine's ✕ has to ask the far end
+ * to end a session it owns, and a machine paired to an older build never
+ * advertised the verb — so the honest answer there is a Close that says why it
+ * cannot act. A server owns nothing. The shell exists because this window is
+ * holding a connection to it, so closing it is this window letting go, and there
+ * is no version of anything at the far end that can refuse.
+ */
+export interface SidebarServer {
+  serverId: string
+  name: string
+  /** What is open there, as tabs, drawn by the same `rowsFor` a project uses. */
+  sessions: readonly WorkspaceTab[]
+}
+
 interface Props {
   width: number
   projects: Project[]
@@ -112,6 +131,23 @@ interface Props {
    * app rather than requiring a machines bridge to exist.
    */
   machines?: readonly SidebarMachine[]
+  /**
+   * The servers this window has a shell open on, and the shells under each.
+   *
+   * A prop for the same reason `machines` is: this component is the window's
+   * inventory of what you have open, and every decision about what *exists* is
+   * made one level up. Empty by default, which is the ordinary case — a person
+   * who has never opened a terminal on a server sees nothing here at all.
+   *
+   * Unlike `machines`, a group here appears only when something is open on it.
+   * `machines/servers/server-sessions.ts` carries the argument in full; the
+   * short version is that a machine's heading is drawn because the machine is
+   * *reachable*, which is a live fact worth a row, and a server has no
+   * equivalent state — it is a stored address that this app never dials to find
+   * out about, so a heading per stored server would be a permanent row saying
+   * nothing in the list whose whole job is to answer what you have open.
+   */
+  servers?: readonly SidebarServer[]
   /*
    * There was an `activeMachineSession` here — a `{ machineId, sessionId }` pair
    * naming the remote session on screen, so this rail could highlight its row.
@@ -310,6 +346,31 @@ interface Props {
    * `machines` is a prop: every decision about what exists is made one level up.
    */
   onCloseMachine?(machineId: string): void
+  /**
+   * Open another terminal on one server.
+   *
+   * No dialog behind it, and that is the difference from the machine ＋ above
+   * rather than an omission. The New session dialog exists to ask three
+   * questions — which folder, which agent, which login — and this app can answer
+   * none of them about somebody else's server: it has no list of folders over
+   * there, no account there, and no way to know what is installed. A dialog with
+   * every field blank is a step, not a question. So the press opens a shell,
+   * which is the honest floor, and the door to anything more is the server's own
+   * page.
+   */
+  onNewServerSession?(serverId: string): void
+  /**
+   * Close every terminal open on one server, and keep the server.
+   *
+   * Exactly what Close means on a machine's heading, one kind down: *"it should
+   * not disconnect the remote account. It will just close all of the sessions
+   * from that PC."* Here the sessions end, the group goes because it is empty,
+   * and nothing about the stored server changes — it is still in the Machines
+   * panel, still with its sign-in, one press from another terminal. Forgetting a
+   * server is a different act with its own button on its own page, and this
+   * cannot reach it.
+   */
+  onCloseServer?(serverId: string): void
   /** Keep it open (peeking) or put it away (pinned). */
   onToggleCollapsed(): void
   onPeekStart(): void
@@ -360,6 +421,19 @@ const PLUS = 'M12 5.5v13M5.5 12h13'
  */
 function machineFoldKey(machineId: string): string {
   return `machine:${machineId}`
+}
+
+/**
+ * The fold key for a server's group.
+ *
+ * A third key space in the same set, kept apart from the other two the same way
+ * and for the same reason. A server id and a machine id are both UUIDs, so
+ * without a prefix of its own a server whose id happened to match a machine's
+ * would fold both — which is not a real risk with UUIDs, and is exactly the kind
+ * of thing that stops being true the day somebody keys one of them on a name.
+ */
+function serverFoldKey(serverId: string): string {
+  return `server:${serverId}`
 }
 /**
  * The arrow in the gutter, and the only control that opens or closes the rail.
@@ -443,8 +517,11 @@ export function Sidebar({
   browser = true,
   browserOffer = null,
   machines = [],
+  servers = [],
   onNewMachineSession = () => {},
   onCloseMachine = () => {},
+  onNewServerSession = () => {},
+  onCloseServer = () => {},
   alerts = true,
   alertCount = 0,
   unread = [],
@@ -875,7 +952,16 @@ export function Sidebar({
      * name; there is no verb on the wire for renaming one, so there is no
      * gesture here either.
      */
-    tab.kind === 'session' && !tab.machine && sessionRename.available
+    /*
+     * And not a shell on a server, for the same reason one letter along.
+     *
+     * `sessionRename` writes into this app's session store keyed by session id,
+     * and a server shell has no row in that store at all — it is a tab this
+     * window holds and nothing else. The field would have accepted a name and
+     * the row would have gone straight back to what it said, which is a control
+     * that appears to work and does not.
+     */
+    tab.kind === 'session' && !tab.machine && !tab.server && sessionRename.available
 
   const tabRow = (tab: WorkspaceTab, label: string, qualifier: string | null = null) => {
     /*
@@ -1026,7 +1112,19 @@ export function Sidebar({
       ? tab.projectPath
         ? `${tab.projectPath} on ${tab.machine.name}`
         : `on ${tab.machine.name}`
-      : null
+      : /*
+           And the other kind of elsewhere, on the same line and for the same
+           reason. The row itself says nothing about being on a server — the mark
+           is on the heading and on nothing else, which is what he asked for
+           about the machine rows: *"You don't need to give icon of the remote
+           next to all of them — only above there."* No folder is named, because
+           a shell on a server starts wherever that sign-in lands and this app
+           has not asked where that is; claiming one would be the first lie on a
+           screen built not to tell any.
+        */
+        tab.server
+        ? `on ${tab.server.name}`
+        : null
     const rowTitle = [
       label,
       qualifier,
@@ -1236,14 +1334,24 @@ export function Sidebar({
                 second half is the one they are actually worried about.
               */
               aria-label={
-                tab.machine ? `Close ${label} on ${tab.machine.name}` : `Close ${label}`
+                tab.machine
+                  ? `Close ${label} on ${tab.machine.name}`
+                  : tab.server
+                    ? `Close ${label} on ${tab.server.name}`
+                    : `Close ${label}`
               }
               title={
                 tab.machine
                   ? `Close ${label} — ends the session on ${tab.machine.name}. That machine stays connected.`
-                  : tab.kind === 'session'
-                    ? `Close ${label} — ends the session`
-                    : `Close ${label}`
+                  : tab.server
+                    ? /* Both halves again, and the second is the one that is
+                         actually worrying somebody hovering a ✕ on a row that
+                         belongs to a live server: this ends the terminal and
+                         touches nothing else on the machine. */
+                      `Close ${label} — ends this terminal on ${tab.server.name}. The server itself is left alone.`
+                    : tab.kind === 'session'
+                      ? `Close ${label} — ends the session`
+                      : `Close ${label}`
               }
               onClick={() => onCloseTab(tab.id)}
             >
@@ -1441,9 +1549,27 @@ export function Sidebar({
               sessions did not start — the app contradicting itself in one
               glance, in the exact situation where a person is trying to work
               out what happened. */}
-          {projects.length === 0 && browserTabs.length === 0 && held.length === 0 && (
-            <p className="sb-empty">Nothing open yet.</p>
-          )}
+          {/* And the other machines count too.
+ 
+              A shell opened on a server draws its own group *below* this one,
+              so a rail with nothing local on it printed "Nothing open yet."
+              two rows above a live session on somebody's server — the same
+              self-contradiction the note above describes, arriving from the
+              other direction. Found on screen during the walk of 2026-08-18,
+              on a rail that had a server session open at the time.
+ 
+              Sessions rather than groups, and the difference is real: a paired
+              machine that is reachable and idle draws a heading with no rows
+              under it, and over *that* the line is true — there is genuinely
+              nothing open. A server group only exists while something is open
+              on it, so it always counts. */}
+          {projects.length === 0 &&
+            browserTabs.length === 0 &&
+            held.length === 0 &&
+            machines.every((group) => group.sessions.length === 0) &&
+            servers.every((group) => group.sessions.length === 0) && (
+              <p className="sb-empty">Nothing open yet.</p>
+            )}
 
           {projects.map((project) => (
             <div key={project.path} className="sb-project">
@@ -1613,6 +1739,30 @@ export function Sidebar({
                   `GroupHead` makes the control optional for precisely this
                   reason, and it is the same rule the project heading follows
                   when the default agent has no resume command.
+
+                  ## What it would take, named so it is not reconstructed twice
+
+                  A `resume` on the `create` frame is necessary and **not
+                  sufficient**, and that is the trap. The wire's own note lists
+                  resume among the things deliberately left off and says why:
+                  continuing the newest conversation *"is real and the desktop
+                  supports it, but only for providers that have a resume flag; a
+                  toggle that silently does nothing for a plain shell is a fake
+                  feature."* `machines/guest.ts` already sends one and the far
+                  end still drops it. So closing this means the far machine
+                  answering the per-provider question as well — which agent that
+                  session would run and whether *that* agent can continue
+                  anything — and refusing out loud when it cannot. A flag widened
+                  into the type without that answer puts this glyph back on
+                  screen doing the exact silent-fresh-session it was withheld
+                  for, on every machine sitting at a plain shell.
+
+                  The folder is the second half and does not come free either. A
+                  machine heading has no folder to continue *in*, so the control
+                  would have to name one — the newest session's, most likely,
+                  which is another fact the far end would have to report and this
+                  side would have to print, or the press means "continue
+                  something over there" and nothing more.
                 */
                 add={{
                   label: `New session on ${group.name}`,
@@ -1659,6 +1809,86 @@ export function Sidebar({
                 ) : (
                   <ul className="sb-list sb-sessions">{rowsFor(group.sessions)}</ul>
                 ))}
+            </section>
+          )
+        })}
+
+        {/*
+          Terminals open on servers, under the server they are open on.
+
+          The same shape as the machine groups directly above, and that sameness
+          is the whole point of this section existing at all. Asad, for the third
+          night running about machines that are not this one: *"Keep the same one
+          browser window for every device… the shape of the application should
+          not be changing for local and remote devices. It should act like that
+          same."* Until this, opening a shell on a server produced a rectangle
+          inside a settings-shaped panel — no row here, no pill above, no ⌘W,
+          nothing you could drag to the top — while a session on a paired laptop
+          got all four. That is a server being given a lesser product than a
+          laptop, and it is the defect this section closes.
+
+          Below the machines rather than above them, deliberately. The order of
+          this rail is how close a thing is to you: your projects, then the
+          computers you also sit at, then the machines nobody sits at.
+
+          ## One difference from the group above, and it is not an omission
+
+          A machine's heading is drawn whenever the machine is reachable, empty
+          or not. A server's is drawn only when something is open on it. The
+          reason is in `server-sessions.ts`: reachability is a live fact about a
+          paired desktop and worth a row, and a server has no equivalent — it is
+          a stored address this app never dials to find out about — so a heading
+          per stored server would be a permanent row saying nothing, in the list
+          whose entire job is to answer what you have open.
+        */}
+        {servers.map((group) => {
+          const open = !folded.has(serverFoldKey(group.serverId))
+          return (
+            <section className="sb-group sb-project" key={group.serverId}>
+              <GroupHead
+                name={group.name}
+                title={`${group.name} — ${group.sessions.length === 1 ? '1 session' : `${group.sessions.length} sessions`}`}
+                open={open}
+                onToggle={() => toggleFold(serverFoldKey(group.serverId))}
+                icon={SERVER_ICON}
+                /*
+                  No `resume`, for a plainer reason than the machine heading's.
+                  There is nothing to continue: a shell on a server leaves
+                  nothing behind it when it ends — no transcript on this side, and
+                  nothing on the far side that was keeping it — so a glyph here
+                  could only ever open a fresh one wearing the word "continue".
+                */
+                add={{
+                  label: `New terminal on ${group.name}`,
+                  /*
+                    Deliberately not `tip(…, 'session.new')`, exactly as the
+                    machine heading's is not. ⌘T starts a session on *this*
+                    computer, and printing it beside a button that opens one
+                    somewhere else would be the app claiming a key that goes
+                    elsewhere.
+                  */
+                  title: `New terminal on ${group.name}`,
+                  onPress: () => onNewServerSession(group.serverId),
+                }}
+                /*
+                  Close ends the terminals and keeps the server.
+
+                  The same sentence the machine heading makes, one kind down, and
+                  the second half is the one a person is actually worried about:
+                  the server stays in the Machines panel with its sign-in intact.
+                  Forgetting one is a different act, on the server's own page,
+                  and this cannot reach it. There is no `disabledReason` because
+                  there is no state in which this cannot act — see
+                  `SidebarServer`.
+                */
+                close={{
+                  label: `Close the terminals on ${group.name}`,
+                  title: `Close the terminals on ${group.name}. The server itself is left alone.`,
+                  onPress: () => onCloseServer(group.serverId),
+                  disabledReason: null,
+                }}
+              />
+              {open && <ul className="sb-list sb-sessions">{rowsFor(group.sessions)}</ul>}
             </section>
           )
         })}

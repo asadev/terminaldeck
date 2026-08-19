@@ -13,6 +13,7 @@ import {
   machineActions,
   type MachinesHalf,
 } from '../machines/MachineLinks'
+import { useMachineSessionOpener } from '../machines/new-session-context'
 import { asView, resolveBridge, type MachinesBridge, type MachinesView } from '../machines/types'
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
 import {
@@ -21,7 +22,6 @@ import {
   type ApprovalStep,
   type DeviceKind,
 } from './DeviceApproval'
-import { DeviceCopilot, type CopilotDevice } from './DeviceCopilot'
 import './RemoteSection.css'
 
 /**
@@ -1106,16 +1106,29 @@ export interface RemoteViewProps {
    * built here. Null before anything has been read — see where it is passed.
    */
   folders?: ReactNode
-  /**
-   * The per-device copilot grants, which read their own store and so cannot be
-   * built here either.
+  /*
+   * There was a second node here — the per-device copilot grants — and its
+   * absence is the whole of this revision rather than a tidy-up.
    *
-   * A second node rather than a field on the folder chooser, because they are
-   * two different permissions over two different stores — losing a folder list
-   * costs a preference, losing this costs a permission — and the main process
-   * keeps them in two files for exactly that reason.
+   * It drew a **Connect the copilot…** button, a six-digit code with a
+   * countdown, three tier checkboxes and a **Disconnect the copilot** action:
+   * a second authorisation, on top of pairing, before one of his own devices
+   * could reach the copilot. Asad, 2026-08-19: *"instead of giving mobile app
+   * separate connection for copilot just make it like if we are connecting as
+   * my device copilot automatically comes, if we connect as guest then copilot
+   * don't come — that's all we need to do instead of two different
+   * connections."*
+   *
+   * So the authorisation did not move, it collapsed into the one that was
+   * already being made three paragraphs up this screen. Pairing a device **as
+   * your own** is the grant; the approval flow's own card has said so all
+   * along — *"My device — Full access. It's you at another keyboard."* against
+   * *"Guest — You choose what they can reach. The copilot is never shared."*
+   * There is nothing left for a panel here to decide, and a panel with no
+   * decision in it is the "control that cannot act" this product removes
+   * everywhere else. What survives is a statement of fact on each device's own
+   * row in the roster, where the kind is already printed.
    */
-  copilot?: ReactNode
   actions: RemoteActions
   now: number
   /**
@@ -1194,7 +1207,6 @@ export function RemoteView({
   approving = null,
   machines,
   folders = null,
-  copilot = null,
   actions,
   now,
   platform = detectPlatform(),
@@ -1858,13 +1870,24 @@ export function RemoteView({
                       why a phone that worked yesterday does not today. There is
                       deliberately no control here; changing a kind means
                       revoking and pairing again. See `device-kind.ts`.
+
+                      The copilot is named on both of the first two, and that is
+                      the entire remaining user interface for it. It used to be
+                      a panel below the folders with a Connect button, a code
+                      and three checkboxes; the kind decides it now, so the only
+                      honest thing left to draw is what the kind already means.
+                      Saying it on both rows rather than only the guest's is
+                      deliberate: "full access" is a phrase somebody reads past,
+                      and the question they actually arrived with is whether the
+                      phone in their hand can reach the copilot. Neither line is
+                      a control and neither can be clicked.
                     */}
                     {device.state === 'approved' && kinds !== null && (
                       <span className="remote-row-note">
                         {kinds.get(device.id) === 'mine' ? (
-                          <>Your device — full access.</>
+                          <>Your device — full access, the copilot included.</>
                         ) : kinds.get(device.id) === 'guest' ? (
-                          <>Guest — only the folders you chose. No copilot.</>
+                          <>Guest — only the folders you chose. Never the copilot.</>
                         ) : (
                           <>
                             Paired before folder approval existed, so it is treated as a guest and
@@ -1950,17 +1973,12 @@ export function RemoteView({
       {approved.length > 0 && folders}
 
       {/*
-        Directly under the folders, on the same card, and withheld on the same
-        condition.
-
-        Both answer *what may this device do here*, and somebody deciding about a
-        phone should see both answers at once rather than finding the second one
-        under a different heading a month later. The order is the argument the
-        screen makes, continued: pair a device, approve it, choose what it may
-        open — and then, separately and off by default, whether it may reach the
-        copilot at all.
+        The copilot panel stood here, directly under the folders, and it is gone
+        rather than moved. See `RemoteViewProps` above for his sentence: pairing
+        a device as your own **is** the copilot's authorisation, so there was no
+        longer a second question for this block to ask. What it used to say is
+        now one clause on each approved device's row.
       */}
-      {approved.length > 0 && copilot}
 
       {/*
         The outward half, last — and only when there is one.
@@ -2389,6 +2407,26 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
 
   /* ------------------------------------------------- the machines half -- */
 
+  /**
+   * The window's route to the new-session dialog, or null when this section is
+   * drawn outside one — the harness, a test, `renderToStaticMarkup`.
+   *
+   * Read here rather than passed down from `MachinesPanel`, and for the same
+   * reason `ServerAdvanced` reads its own opener rather than taking it through
+   * `ServerPage`: the only route from the window to this component is
+   * `PanelView`, which draws all ten views from a `PanelId` and takes no
+   * per-view props, so a prop would have to be widened onto that file and then
+   * carried through two components that have no use for it. Nothing between the
+   * window and this line has to know the opener exists.
+   *
+   * It goes into `machineActions` below rather than into `MachineLinks`
+   * directly, because the presses are the thing that has to be pinned: there is
+   * no DOM in this repository's test environment, so a handler left inside a
+   * component's closure is reachable by nothing but a person clicking it in a
+   * packaged build. See `new-session-context.ts` for what this replaced.
+   */
+  const newSessionOpener = useMachineSessionOpener()
+
   const [machineView, setMachineView] = useState<MachinesView>({
     machines: [],
     links: [],
@@ -2650,6 +2688,16 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       setError: setPairError,
       setOpen: setOpenSession,
       isAlive: () => alive.current,
+      /*
+        Null travels rather than being turned into a no-op, so that "there is no
+        window around this page" reaches the row that has to decide whether to
+        draw a button at all. Wrapped in an arrow rather than passed as
+        `newSessionOpener.open`, because an unbound method would work only for as
+        long as the window's opener stays a closure over its own state — and the
+        day it stops being one, this line would break somewhere else.
+      */
+      openNewSession:
+        newSessionOpener === null ? null : (machineId: string) => newSessionOpener.open(machineId),
     }),
   }
 
@@ -2690,11 +2738,6 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
           <DeviceFolders devices={grantableDevices(state.devices, kinds)} />
         ) : null
       }
-      copilot={
-        wired && state !== null ? (
-          <DeviceCopilot devices={copilotDevices(state.devices, kinds)} />
-        ) : null
-      }
     />
   )
 }
@@ -2733,46 +2776,4 @@ export function grantableDevices(
     // nothing, and this panel is where somebody fixes that.
     .filter((device) => kinds === null || kinds.get(device.id) !== 'mine')
     .map((device) => ({ id: device.id, name: device.name }))
-}
-
-/**
- * The devices worth showing copilot grants for.
- *
- * The same approved-only filter, and one extra fact carried rather than one
- * extra filter: whether the device has a key.
- *
- * A device that paired before sealed channels has no static key, so it cannot
- * open a sealed channel at all — and `copilot.*` frames ride inside that channel
- * like every other frame. Offering it a grant would be a switch with nothing
- * behind it, which is precisely the defect this whole panel was warned about
- * shipping.
- *
- * It is **carried, not filtered**, and that is the decision worth defending. A
- * device silently missing from this list while sitting in the roster two
- * headings above would read as a bug in the panel, and the person would go
- * looking for the row rather than learning why it is not there. So the row is
- * drawn, and it says what is wrong and what fixes it.
- */
-export function copilotDevices(
-  devices: readonly RemoteDevice[],
-  kinds: ReadonlyMap<string, DeviceKind> | null = null,
-): CopilotDevice[] {
-  return devices
-    .filter((device) => device.state === 'approved')
-    /*
-     * A guest is **filtered**, not carried, and it is the opposite decision from
-     * the one two paragraphs up — so it is worth saying why they differ.
-     *
-     * A device with no key is carried because the thing standing in its way is
-     * fixable and the row is how somebody learns to fix it: pair it again. A
-     * guest is not in that position. His rule is *"the copilot is never
-     * shared"*, so there is no state in which this row would become available,
-     * and drawing a row that can never act is the "unchecked box still
-     * advertises the feature and invites the ask" this rule exists to prevent.
-     *
-     * Before the kinds read lands nothing is filtered, for the reason above: a
-     * list that shrinks is worse than one that briefly showed a row too many.
-     */
-    .filter((device) => kinds === null || kinds.get(device.id) === 'mine')
-    .map((device) => ({ id: device.id, name: device.name, sealed: device.fingerprint !== null }))
 }

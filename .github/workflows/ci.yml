@@ -15,17 +15,32 @@ permissions:
 
 jobs:
   check:
-    # macOS only, deliberately. This is a macOS app: `electron-builder.yml`
-    # targets mac, the tests exercise real `git`, `mkfifo` and Chrome-profile
-    # paths, and nobody has ever run the product on Linux. A green Ubuntu job
-    # would be testing a platform we do not ship, and a red one would be
-    # telling us about a platform we never promised.
-    runs-on: macos-latest
-    timeout-minutes: 25
+    # macOS **and Windows**, and the second one arrived on 2026-08-19 after a
+    # sweep found 62 places where the Windows build behaves differently — four
+    # of them blockers, and thirty-three of them accidents nobody intended.
+    #
+    # The comment that used to sit here said macOS only, "deliberately", because
+    # this is a macOS app and nobody had run the product on Linux. That was true
+    # when it was written and it stopped being true the day a Windows installer
+    # started being published from `release.yml`. What it left behind is the
+    # shape this repo keeps finding under other names: **a guard that has
+    # stopped guarding looks exactly like a guard.** Every merge was gated, and
+    # gated on half the product.
+    #
+    # Linux is still absent and that half of the original argument stands: no
+    # Linux artifact is published, so a red Ubuntu job would be reporting on a
+    # platform nobody was promised.
+    #
+    # Windows runs the same `npm test`, not a subset. A subset would be a second
+    # decision about what matters on Windows, and the six Mac-only tests already
+    # caught by the release workflow are the argument against ever making it.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
 
     strategy:
       fail-fast: false
       matrix:
+        os: [macos-latest]
         # 22 is the floor the README states and `engines.node` enforces; 24 is
         # the next line a contributor is likely to have.
         #
@@ -34,6 +49,12 @@ jobs:
         # copy in the comment is the one that goes stale silently. `npm test`
         # prints the real one.
         node: ['22', '24']
+        # Windows on one Node line rather than two: what this job adds is the
+        # platform, not another version, and doubling a 580 MB install to learn
+        # the same thing twice is how a check becomes one people skip.
+        include:
+          - os: windows-latest
+            node: '22'
 
     steps:
       - uses: actions/checkout@v5
@@ -69,6 +90,22 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # The browser client's own suite, which nothing ran until 2026-08-19.
+      #
+      # `pwa/` is a separate npm project with its own vitest, and leaving it out
+      # of CI meant nobody found out when it went red. It had been red since
+      # 16 August, and the test it was red in is the one that holds the browser's
+      # crypto primitives against Node's — the single test in that directory
+      # whose failure would matter most. A suite nothing runs is not a suite.
+      #
+      # Its own job would be tidier and would double the ~580 MB install above,
+      # so it rides here and installs only what `pwa/` itself needs.
+      - name: Install the browser client
+        run: npm --prefix pwa ci
+
+      - name: Test the browser client
+        run: npm --prefix pwa exec vitest run
 
       # Last, because a bundling failure is the least interesting failure and
       # this step overwrites `out/`.

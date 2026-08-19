@@ -48,7 +48,7 @@
  * this socket** — {@link CopilotRemote.open}, with a credential minted by a
  * separate ceremony at the desktop. A device paired to run terminals has no
  * copilot reach at all until that happens: not a tab, not a frame, not a
- * refusal it could measure the shape of. `copilot-link.ts` carries the argument
+ * refusal it could measure the shape of. `copilot-access.ts` carries the argument
  * and the argument it superseded; the short form is that the second factor
  * behind `alter` moved from *be at the desk* to *have been deliberately
  * authorised for the copilot*, which is a boundary rather than a geography.
@@ -116,9 +116,6 @@ export interface CopilotRefusal {
 
 export type CopilotOutcome = { ok: true } | CopilotRefusal
 
-/** What redeeming a connect code produces, once. */
-export type CopilotConnected = { ok: true; credential: string } | CopilotRefusal
-
 /**
  * The copilot, as the relay endpoint may touch it.
  *
@@ -156,31 +153,21 @@ export interface CopilotRemote {
   linked(deviceId: string): boolean
 
   /**
-   * Redeem a connect code, minted at the desktop, for this device's copilot
-   * credential.
-   *
-   * The second act of authorisation, and the whole of what replaced *"the alter
-   * tier cannot be granted remotely"*. A device paired for terminals reaches
-   * this and nothing else until somebody at this machine mints a code and reads
-   * it out. See `copilot-link.ts` for the argument in full, including the one it
-   * supersedes.
-   *
-   * Answers once with the credential. There is no path that shows it again: the
-   * desktop keeps a scrypt hash, so a client that loses it asks for a new code —
-   * which is right, because minting one is a deliberate act at the machine and
-   * re-issuing on request would not be.
-   */
-  connect(deviceId: string, code: string, address?: string): Promise<CopilotConnected>
-
-  /**
-   * Open this connection's copilot access with the stored credential.
+   * Open this socket's copilot stream.
    *
    * Required on **every** socket, after every reconnect, before any `copilot.*`
-   * verb is served — read tier included. A session channel does not carry the
-   * copilot by existing; that is the entire difference between this and the
-   * per-device grant it replaced.
+   * verb is served — read tier included. What it no longer requires is a
+   * credential, and there is no `connect` above it any more: the six-digit
+   * copilot code and the separate credential were deleted on 2026-08-19 when a
+   * device's *kind* became the whole answer. `copilot-access.ts` carries that
+   * argument and preserves the one it superseded.
+   *
+   * So this frame is now a check rather than a proof. The socket is already
+   * authenticated as this device, and whether this device reaches the copilot
+   * was decided by a person at the machine when they approved it as one of
+   * their own.
    */
-  open(deviceId: string, credential: string, address?: string): Promise<CopilotOutcome>
+  open(deviceId: string): Promise<CopilotOutcome>
 
   /**
    * Every copilot connection this device had is closed.
@@ -211,7 +198,7 @@ export interface CopilotRemote {
    * never be an `answer` beside it: *the alter tier's entire safety property is
    * that a human at the machine says yes, and the party holding the phone is by
    * definition not that human.* That is superseded — see {@link answer} and
-   * `copilot-link.ts` — but only the second half of it. The **watching** half is
+   * `copilot-access.ts` — but only the second half of it. The **watching** half is
    * unchanged and is still most of what this is worth: a device sees questions
    * it cannot answer too, including ones raised at the desk, so it can say *go
    * and look* instead of a dialog timing out in silence on an empty room.

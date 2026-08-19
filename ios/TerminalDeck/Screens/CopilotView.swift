@@ -4,9 +4,15 @@
  * Asad, holding the iOS release for this: *"We need to build a copilot in the
  * phone app too, because we need to connect the copilot also and we should be
  * able to control the copilot from the phone also."* And, settling the shape of
- * it a week later: *"Phones will have full control over copilot, same as the
- * actual machine app. But connecting copilot will be a separate connection than
- * the sessions."*
+ * it: *"Phones will have full control over copilot, same as the actual machine
+ * app."*
+ *
+ * That sentence used to end *"but connecting copilot will be a separate
+ * connection than the sessions"*, and on 2026-08-19 he took the second half
+ * back: *"instead of giving mobile app separate connection for copilot just make
+ * it like if we are connecting as my device copilot automatically comes, if we
+ * connect as guest then copilot don't come."* So a phone paired as one of his
+ * devices arrives on this screen with nothing to do first.
  *
  * ## Where it goes: the leftmost pill
  *
@@ -47,17 +53,19 @@
  * only way off this screen. Anything that removes or conditions it strands
  * somebody here.
  *
- * ## And the pill itself comes and goes with the connection
+ * ## And the pill itself comes and goes with the device
  *
  * *"If the copilot is not connecting, this icon should not be inside the pill —
  * then it will be three icon pill. Otherwise if the copilot is connected, then
- * four icon pill, automatically."* `DeckModel.showsCopilotTab` decides, and the
- * consequence for this file is that **the connect form moved out of it**: a
- * six-digit code field behind a pill that only exists once you are connected is
- * a door locked from the inside. Connecting lives in Settings now — see
- * `CopilotConnectionView` — and what is left here is the conversation, plus one
- * short screen for the case where somebody is standing on this tab and the
- * machine under it is not connected.
+ * four icon pill, automatically."* `DeckModel.showsCopilotTab` decides.
+ *
+ * The consequence for this file used to be that **the connect form moved out of
+ * it** — a six-digit code field behind a pill that only exists once you are
+ * connected is a door locked from the inside — into a screen under Settings.
+ * That screen is now deleted along with the form: there is nothing to connect,
+ * so the pill follows the *device kind*, which is decided once at the machine.
+ * What is left here is the conversation, plus two short screens for the states
+ * either side of it.
  *
  * ## One list: what it said and what it did, interleaved
  *
@@ -69,29 +77,31 @@
  * machinery in the other and leave a person correlating them by timestamp on a
  * four-inch screen.
  *
- * ## Eight states, and none of them is a lie
+ * ## Five states, and none of them is a lie
  *
- * `CopilotAccess` has eight cases and this screen draws eight different things.
- * Three are worth naming here.
+ * `CopilotAccess` has five cases and this screen draws five different things.
+ * Two are worth naming here.
  *
- * `.notConnected` is the one every paired device starts in, and the one this
- * whole redesign is about: the machine **has** a copilot and this phone has
- * never been connected to it. That is not hidden, and it is not a disabled
- * composer — it is a six-digit field and a sentence saying where the code comes
- * from, because it is the state a person can fix in thirty seconds and the fix
- * is a deliberate act at their own machine.
+ * `.notOffered` — there is no copilot here **for this phone** — is nearly
+ * unreachable, because the pill only exists when the copilot does. It is drawn
+ * anyway, and it says two things in one sentence on purpose: that machine may be
+ * running a build with no copilot in it, or this phone may be paired with it as
+ * a guest. This end genuinely cannot tell, by design, and the case block says
+ * why.
  *
- * `.notGranted` is *connected, and given nothing*. It is a real state — unticking
- * every box at the desk leaves a working credential behind — and its remedy is
- * three checkboxes rather than a code, so it must not say the same thing as the
- * one above it.
+ * `.notGranted` is *open, and given nothing*. It should not happen — one of his
+ * own devices is granted every tier — so it is drawn as what it is: a machine
+ * saying something this build did not expect, stated rather than hidden behind a
+ * blank screen that would read as a bug here.
  *
- * `.notOffered` — a desktop that does not speak `copilot.*` at all — used to
- * draw nothing, because the way in was a row and a row could simply be left out.
- * The way in is a pill now and a pill that came and went as machines were
- * switched would move the bar under a thumb that had learned where things are.
- * So it draws the one honest sentence instead: that machine's app is too old,
- * and updating it is what changes the answer.
+ * **Three states went on 2026-08-19**, with the separate copilot connection
+ * itself: *"if we are connecting as my device copilot automatically comes, if we
+ * connect as guest then copilot don't come — that's all we need to do instead of
+ * two different connections."* `.notConnected` was a six-digit field and a
+ * sentence about where to get a code; `.credentialLost` was the same field with
+ * a different opening line; and the door to both was a Settings screen that is
+ * deleted. Nothing replaced them, because there is nothing left to do: the
+ * copilot is simply there for one of his own devices and absent for a guest.
  */
 
 import SwiftUI
@@ -274,27 +284,36 @@ struct CopilotView: View {
         switch host?.copilotAccess ?? .notOffered {
         case .notOffered:
             /*
-             * An ordinary screen now, not a leftover. The copilot is a tab, the
-             * tab is drawn for every machine, and a desktop old enough not to
-             * speak `copilot.*` is the case this answers: it names the machine,
-             * says what is missing, and names the one thing that fixes it. A
-             * blank screen under a pill would read as a bug in this app rather
-             * than as a version gap on that computer.
+             * **Two situations, one sentence, on purpose.**
+             *
+             * This screen is nearly unreachable — the pill only exists when the
+             * copilot does — and the way in is the switcher in the title, or a
+             * machine taking the copilot away while somebody is standing here.
+             * Either way there are two things it can mean and this end cannot
+             * tell them apart: that machine's build has no copilot in it, or
+             * this phone is paired with it as a **guest**. Both send a
+             * capability list without the name and a `welcome` without the
+             * field, deliberately — `server.ts` strips it for a guest rather
+             * than refusing the verbs, because *"a tab that refuses on every
+             * press is a worse answer than a client that never knew."*
+             *
+             * So it says both, plainly, rather than picking one and being wrong
+             * half the time. Naming the guest case is not a hint about how to
+             * get around it: changing what kind of device this is happens at the
+             * machine, on the approval screen, by the person sitting at it — and
+             * *"the copilot is never shared"* is his rule, in his words, printed
+             * on that screen.
              */
             ContentUnavailableView {
                 Label("No copilot here", systemImage: "sparkles")
             } description: {
-                Text("\(host?.label ?? "That machine") is running a version of \(Brand.name) "
-                     + "without a copilot in it. Update the \(host?.hostPlatform.noun ?? "desktop") "
-                     + "and it will appear here.")
+                Text("There is no copilot on \(host?.label ?? "that machine") for this phone. "
+                     + "Either that \(hostNoun) is running a version of \(Brand.name) without "
+                     + "one, or this phone is paired with it as a guest — the copilot is only "
+                     + "there for your own devices, and which one this is decided at the machine "
+                     + "when the phone was approved.")
             }
             .accessibilityIdentifier("copilot.notOffered")
-
-        case .notConnected:
-            notConnectedHere(lostCredential: false)
-
-        case .credentialLost:
-            notConnectedHere(lostCredential: true)
 
         case .connecting:
             connectingScreen
@@ -307,74 +326,26 @@ struct CopilotView: View {
         }
     }
 
-    /**
-     * **Somebody is on the Copilot tab and this machine's copilot is not
-     * connected.** One short screen, and a button that goes where the fix is.
+    /*
+     * **`notConnectedHere(lostCredential:)` used to be here, and both of its
+     * states are gone.**
      *
-     * The pill appears only for a connected copilot, so most of the time this is
-     * unreachable. Three ways in remain, and all three are ordinary:
+     * It drew *"Copilot not connected — it takes a six-digit code from that
+     * desktop"*, with a button pushing the connect form in Settings, and a
+     * variant for a phone whose stored key had been lost. Neither can happen
+     * now: there is no code, no key, and no state between *paired as his* and
+     * *watching the copilot*. A device either has one or it does not, and both
+     * answers are drawn by the two cases either side of this note.
      *
-     *  - the copilot was connected, is standing on this tab, and the machine
-     *    disconnected it. The pill is held open on purpose while somebody is on
-     *    it — see `DeckModel.showsCopilotTab` — precisely so this sentence can
-     *    be shown instead of the screen being pulled away;
-     *  - the switcher in the title was used to move to a machine whose copilot
-     *    this phone has never connected;
-     *  - `openCopilot(on:)` was asked for a machine that is not connected.
-     *
-     * The **code field is not here**, and that is the point of the whole change:
-     * *"actually connecting copilot should be in the settings."* Two code fields
-     * for one ceremony is two places to keep in step, and this one would live
-     * behind a pill that is drawn only once the ceremony is done. So this states
-     * the situation and hands over to the screen that owns it.
-     *
-     * `lostCredential` is the case where that machine still lists this phone but
-     * the key here is gone — restored from a backup, or a Keychain item that
-     * would not read. Different sentence, same button, because the remedy is the
-     * same one screen away: a new code, since the credential is sent exactly
-     * once and nothing on that machine can show it again.
+     * The observation the block ended on is worth keeping, because it is about
+     * SwiftUI rather than about this feature: **naming a `ContentUnavailableView`
+     * makes the container an accessibility element and everything inside it
+     * stops existing**, for a UI test and for VoiceOver alike — measured on iOS
+     * 26.4, where a text field plainly on screen could not be found because the
+     * stack around it carried the screen's name. The three states in this file
+     * that do carry an identifier get away with it because they hold nothing but
+     * words. Anything with a control in it must name the control instead.
      */
-    private func notConnectedHere(lostCredential: Bool) -> some View {
-        ContentUnavailableView {
-            Label(lostCredential ? "This phone needs a new code" : "Copilot not connected",
-                  systemImage: "sparkles")
-        } description: {
-            Text(lostCredential
-                 ? "\(host?.label ?? "That machine") still has this phone on its copilot list, but "
-                    + "this phone no longer holds the key it was given. Connecting again takes a "
-                    + "fresh six-digit code."
-                 : "The copilot is a separate connection from your terminals, and this phone has "
-                    + "not made it to \(host?.label ?? "that machine") yet. It takes a six-digit "
-                    + "code from that \(hostNoun).")
-        } actions: {
-            Button("Connect it in Settings") { model.showCopilotSettings() }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.accent)
-                .accessibilityIdentifier("copilot.toSettings")
-        }
-        /*
-         * **No identifier on the `ContentUnavailableView` itself**, and the
-         * button below is why.
-         *
-         * Naming a SwiftUI container makes the container an accessibility
-         * *element*, and everything inside it stops existing — for a UI test and
-         * for VoiceOver alike. Measured on iOS 26.4 while moving the connect
-         * form to Settings: a code field plainly on screen could not be found,
-         * because the stack around it carried the screen's name.
-         *
-         * The three sibling states in this file get away with it because they
-         * hold nothing but words. This one holds the only control on the screen,
-         * and a person using VoiceOver would have found a screen telling them to
-         * connect the copilot with no way to reach the place that does it. So
-         * the button *is* the identifier — which is the better handle anyway,
-         * since what a test wants to know here is whether the way out is
-         * offered.
-         *
-         * The one place this app already had the bug went out with the same
-         * change: `closedScreen` wrapped an "Open the copilot" button in
-         * `copilot.closed`, and the whole state is gone.
-         */
-    }
 
     /// The credential is on its way, or the socket is down and it cannot be.
     /// Drawn as a state rather than left as an empty screen, because an empty
@@ -394,30 +365,30 @@ struct CopilotView: View {
     }
 
     /**
-     * Connected, and granted nothing.
+     * Open, and granted nothing.
      *
-     * A different sentence from the Connect screen and a different remedy, which
-     * is why it is a different case rather than a variant. This phone **has** a
-     * copilot connection — the credential works, the connection is open — and
-     * every box beside it is unticked. Saying "connect the copilot" here would
-     * send somebody to mint a code they do not need.
+     * **A state nobody should be able to reach.** One of his own devices is
+     * given every tier — *"My device — full access, it's you at another
+     * keyboard"* — and a guest is never told the copilot exists, so a socket
+     * that is *open* with an empty grant is a far end saying something this
+     * build does not expect rather than a person having unticked a box. It used
+     * to be ordinary: for one day there were three per-device checkboxes beside
+     * a copilot connection, and this screen named them.
      *
-     * There is deliberately no button. Nothing on this phone can grant this —
-     * `settings.write` refuses the `copilot.` prefix, there is no frame that
-     * edits a grant, and the panel on the desktop is the only door. A control
-     * here would be the exact defect `reachable.test.ts` warns about: a
-     * permission control that changes nothing, believed by the person who
-     * pressed it.
+     * It is drawn rather than hidden, because a blank screen under a pill reads
+     * as a bug in this app, and it says the honest thing: the machine is
+     * refusing, and the machine is where that is decided. There is deliberately
+     * no button — nothing on this phone can widen its own grant, and a control
+     * that changes nothing while looking like it does is the exact defect
+     * `reachable.test.ts` warns about.
      */
     private var notGranted: some View {
         ContentUnavailableView {
-            Label("Connected, and given nothing", systemImage: "lock")
+            Label("Nothing granted here", systemImage: "lock")
         } description: {
-            Text("This phone is connected to \(host?.label ?? "that machine")'s copilot and every "
-                 + "box beside it is unticked, so there is nothing it may do yet. Tick one at the "
-                 + "\(hostNoun) — Settings, under Remote, on this phone's own card. Watching is "
-                 + "the one to start with: it shows what the copilot is doing and carries no "
-                 + "power at all.")
+            Text("This phone reached \(host?.label ?? "that machine")'s copilot and was given "
+                 + "nothing it may do. That is unusual — a device paired as your own gets the "
+                 + "copilot in full — so it is worth a look at that \(hostNoun).")
         }
         .accessibilityIdentifier("copilot.notGranted")
     }
@@ -661,7 +632,7 @@ struct CopilotView: View {
     @ViewBuilder
     private var footer: some View {
         switch host?.copilotAccess ?? .notOffered {
-        case .notOffered, .notConnected, .credentialLost, .connecting, .notGranted:
+        case .notOffered, .connecting, .notGranted:
             EmptyView()
         case .watch:
             watchingNote
@@ -708,15 +679,19 @@ struct CopilotView: View {
     /**
      * What a watching phone is told, where the composer would be.
      *
-     * Not a warning and not an error — nothing is wrong. This is a grant working
-     * exactly as intended, and the read tier is the one worth handing out: it
-     * shows the fleet, the log, the sessions and the refusals, and it carries no
-     * power at all. So it says what this phone *can* do first, and names the
-     * second switch second.
+     * Not a warning and not an error — the read tier is real and it is the one
+     * worth having on its own: it shows the state, the log, the sessions and the
+     * refusals, and it carries no power at all. So it says what this phone *can*
+     * do first.
+     *
+     * Like `notGranted`, it is a narrower case than it was. His own devices are
+     * granted every tier, so a watch-only grant is the machine having decided
+     * something this build does not expect — which is why the second sentence
+     * names the machine rather than a switch to go and find.
      */
     private var watchingNote: some View {
         Text("This phone can watch the copilot. Talking to it, and letting it start work, "
-             + "is a second switch at the \(hostNoun).")
+             + "is something that \(hostNoun) is not allowing.")
             .font(.system(size: 12))
             .foregroundStyle(Theme.faint)
             .multilineTextAlignment(.leading)

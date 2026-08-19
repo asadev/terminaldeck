@@ -17,7 +17,6 @@ import {
   optionsFor,
   previousModelOptions,
   reachOf,
-  unsupportedProviderNote,
   type ControlId,
   type ControlOption,
 } from '../chat/controls/catalog'
@@ -599,6 +598,64 @@ export function ConnectorsPicker({
   )
 }
 
+/**
+ * Why this cluster has nothing to offer a session running some other agent.
+ *
+ * ## Why the sentence is composed here rather than quoted from the catalogue
+ *
+ * It used to be `unsupportedProviderNote` in `chat/controls/catalog.ts`, and
+ * quoting it was deliberate: the rule `blockedFor` follows a few hundred lines
+ * below is that the reason shown *before* a click is the same string the far
+ * end returns *after* one, so the two cannot drift. That rule still stands.
+ * This one string is the exception, and the reason is what it said:
+ *
+ *   > *"These work by typing Claude Code's own commands into the session."*
+ *
+ * That sentence is only ever drawn on a session that is **not** running Claude
+ * Code. It is the note the Codex and Gemini bars get and no other bar gets it,
+ * so the one person guaranteed not to be using that vendor was the only person
+ * being shown its name — which is Asad's complaint about vendor names in copy,
+ * in its purest available form. A screen that serves every agent does not carry
+ * one agent's name; a row that *is* that agent may.
+ *
+ * The catalogue is the wrong place to correct it, and that is not a technicality.
+ * Every option in `catalog.ts` is one CLI's slash-command grammar — `/model`,
+ * `/effort`, the permission modes read back off that CLI's own settings file —
+ * so a module that named it in its own doc comment would be describing itself
+ * accurately. This sentence is not about the controls. It is about the *bar*,
+ * and about who is standing in front of it, and that question is this file's.
+ *
+ * ## What it says instead
+ *
+ * The same three facts with the category where the vendor was: these work by
+ * typing one CLI's own commands; the agent in this session has its own; this
+ * build has not been shown what they are. "Has not been shown" rather than
+ * "cannot" for the reason the catalogue argued and which has not changed —
+ * both were looked at on the machine this was written on and neither could be
+ * driven (the Codex install's vendored binary was missing, the Gemini CLI stops
+ * on an unanswered authentication picker), so calling them incapable would be
+ * inventing a fact in order to sound final.
+ *
+ * The running agent's own name stays. Naming the thing a row *is* is the half
+ * of the rule that was never in question, and "Codex has its own" is a good
+ * deal more use to the person reading it than "the other one has its own".
+ *
+ * ## And the two different nulls
+ *
+ * `claude` and a CLI this app never saw both get their controls drawn: the far
+ * end is the authority there, and `refuseByProvider` in
+ * `src/main/agent-controls.ts` reads the session's screen and refuses if the
+ * guess was wrong, which is a better answer than withdrawing a control on a
+ * suspicion. `shell` never reaches this function at all — the cluster returns
+ * null for a bare shell well before `blockedFor` exists — and that is why there
+ * is no shell branch here to keep in step with the one in `catalog.ts`.
+ */
+function foreignAgentNote(provider: ProviderId | undefined): string | null {
+  if (provider !== 'codex' && provider !== 'gemini') return null
+  const agent = provider === 'codex' ? 'Codex' : 'Gemini'
+  return `These work by typing one CLI’s own commands into the session. ${agent} has its own, and this build has not been shown what they are — so nothing is offered here rather than a button that types the wrong thing.`
+}
+
 export function SessionControls({
   sessionId,
   cwd,
@@ -659,15 +716,28 @@ export function SessionControls({
    * the model chip would draw itself disabled over a running agent, which is
    * the same wrong answer as drawing nothing, only louder.
    *
-   * `UsageBar` is handed it too, and there the cost of "not known" is worth
-   * stating rather than leaving to be discovered. `auto-usage.ts` types
-   * `/usage` into a session by itself and refuses to do that for anything but
-   * `claude`, so a session whose CLI this app never saw does not get that
-   * unasked fetch. The reading still arrives — `notePlanOutput` reads the plan
-   * lines off the session's own output for every session regardless of provider
-   * — it simply is not forced. That is the right way round: typing a slash
-   * command into a terminal on the strength of a guess about which CLI is in it
-   * is precisely the thing `undefined` exists to stop.
+   * `UsageBar` is handed it too, and what "not known" costs *there* has now
+   * moved twice, so it is written down rather than left to be rediscovered.
+   * This paragraph used to read:
+   *
+   *   > *"`auto-usage.ts` types `/usage` into a session by itself and refuses
+   *   > to do that for anything but `claude`, so a session whose CLI this app
+   *   > never saw does not get that unasked fetch. … typing a slash command
+   *   > into a terminal on the strength of a guess about which CLI is in it is
+   *   > precisely the thing `undefined` exists to stop."*
+   *
+   * That was the right trade for as long as a refresh meant typing into
+   * somebody's live terminal. It stopped being one on 2026-08-18, when
+   * `usage:refresh` became a file read plus, at worst, a four-second `claude`
+   * of this app's own in the user's home directory — and from that day the
+   * refusal it describes was the bug rather than the caution, because
+   * `undefined` is exactly what a shell with `claude` running in it arrives as.
+   * `mayFetchFor` in `auto-usage.ts` now lets it through, matching
+   * `mayShareClaude` in `src/main/usage-ipc.ts`, which had been letting it
+   * through the whole time. What is unchanged is the half that was never about
+   * cost: nothing is typed anywhere, and `notePlanOutput` still reads the plan
+   * lines off the session's own output for every session regardless of
+   * provider, so a reading arrives on that bar by two routes rather than none.
    */
   const running = runningProvider(provider, agent.running)
   const { readings, busy, notice, dismissNotice, wired, pick, models, discoverModels } = useSessionControls(
@@ -848,7 +918,7 @@ export function SessionControls({
    */
   if (running === 'shell') return null
 
-  const foreignNote = unsupportedProviderNote(running)
+  const foreignNote = foreignAgentNote(running)
   /*
    * Why nothing can be changed at this instant, for one control.
    *
@@ -859,10 +929,14 @@ export function SessionControls({
    * one that comes and goes.
    *
    * Every sentence is quoted from somewhere it is already written — the
-   * provider note from `catalog.ts`, the account's refusal from whatever the
-   * CLI itself printed, the keyboard gate from `refuseToType` in
-   * `src/main/agent-controls.ts`. None of them is composed here, so the reason
-   * shown before a click and the reason returned after one cannot drift.
+   * account's refusal from whatever the CLI itself printed, the keyboard gate
+   * from `refuseToType` in `src/main/agent-controls.ts` — so the reason shown
+   * before a click and the reason returned after one cannot drift. The one
+   * exception is `foreignAgentNote`, which used to be quoted out of
+   * `catalog.ts` and is now written above: nothing at the far end ever returns
+   * it, because a session it applies to is one this app never types into at
+   * all, so there is no second copy for it to drift from. See its own note for
+   * why the wording had to leave the catalogue.
    */
   const blockedFor = (control: ControlId): string | null => {
     if (!wired) return 'Model, effort and fast mode are not wired into this build.'

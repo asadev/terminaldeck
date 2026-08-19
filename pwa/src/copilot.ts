@@ -9,54 +9,84 @@
  * `pwa/src` contained zero occurrences of the word. There was no surface to
  * attach anything to, so this is a build rather than a port.
  *
- * ## The one rule that shapes everything below: it is a **separate connection**
+ * ## The one rule that shapes everything below: **pairing is the whole of it**
  *
- * A browser paired to run terminals has no copilot reach whatsoever — not a tab,
- * not a frame, not a refusal it could measure — until somebody at the machine
- * mints a copilot code and it is redeemed here. `src/main/remote/copilot-link.ts`
- * carries the argument and it is his sentence that settled it:
+ * This module used to open with the opposite sentence. A copilot connection was
+ * a *separate* connection with its own six-digit code, its own credential and
+ * its own record, and a browser paired to run terminals had no copilot reach at
+ * all until somebody minted a second code at the machine and it was redeemed
+ * here. That is deleted, on 2026-08-19, in his words:
  *
- *   > *"Phones will have full control over copilot, same as the actual machine
- *   > app. But connecting copilot will be a separate connection than the
- *   > sessions."*
+ *   > *"instead of giving mobile app separate connection for copilot just make
+ *   > it like if we are connecting as my device copilot automatically comes, if
+ *   > we connect as guest then copilot don't come — that's all we need to do
+ *   > instead of two different connections"*
+ *
+ * The second ceremony proved a fact the first one had already established. A
+ * device's **kind** is decided by a person at that keyboard when they approve
+ * it, it cannot be changed without pairing again, and the approval screen says
+ * so in the wording that is already his: *"My device — Full access. It's you at
+ * another keyboard."* against *"Guest — You choose what they can reach. The
+ * copilot is never shared."* Asking for six more digits on top of that was
+ * asking somebody to say yes twice to the same question.
  *
  * Three consequences this module is built around, and getting any of them wrong
  * is a client that ships broken:
  *
- *  1. **`welcome.copilot.open` is always false.** A reconnect has `linked: true`
- *     and `open: false` until `copilot.hello` is sent again. A client that
- *     treated the welcome as "already in" would send frames that are all refused.
- *  2. **The credential arrives exactly once**, in `copilot.linked`, and the
- *     desktop keeps only a scrypt hash of it. A browser that loses it asks for a
- *     new code; there is no frame that will hand it over again.
- *  3. **A guest never has any of this.** The desktop does not advertise the
- *     `copilot` capability to a device that is not the owner's own, so
- *     {@link copilotOffered} is false and the tab is *absent* — never drawn and
- *     disabled. His words, about the public demo box: *"we don't want to give
- *     this copilot to others to see how we use it."*
+ *  1. **The copilot is present or absent, never pending.** `welcome.copilot` is
+ *     sent to one of his own devices and is *absent* — not false — for a guest.
+ *     There is no third state in which a device is paired and the copilot is
+ *     "not connected yet", so there is no screen for one and no code field.
+ *  2. **`welcome.copilot.open` is still always false**, and `copilot.hello` is
+ *     still sent on every socket. What changed is that it carries nothing: the
+ *     socket is already authenticated as this device, and the machine reads the
+ *     device's kind rather than a secret. A session channel does not carry the
+ *     copilot by existing, and a client that read the welcome as "already in"
+ *     would send frames that are all refused.
+ *  3. **Nothing is stored.** There is no copilot credential in this browser, so
+ *     there is nothing to persist, nothing to clear when a machine is forgotten,
+ *     and nothing left behind on a computer somebody does not own. The old
+ *     `copilot-store.ts` is deleted; `remember.ts` sweeps the key it wrote.
  *
- * ## Controls come off the grant, never off the capability
+ * ## Why the presence of the key, and not the capability string
  *
- * `read` is a watching grant and carries no new power: what is my copilot doing,
- * what did it start, what was it refused. `act` is Start, the message box,
- * Cancel and Stop — talking to the copilot spends money and causes tool calls.
- * `alter` is the Allow/Refuse pair on a confirmation, and nothing else.
- * `COPILOT_FRAME_TIER` on the desktop is what is actually enforced; this file
- * draws from the same three booleans so that a control is never offered for a
- * frame that would be refused.
+ * `welcome.capabilities` still names `copilot` and the client no longer reads
+ * it, deliberately. Two signals for one question is two answers that can differ,
+ * and the difference would land on the one screen where being wrong is a claim
+ * about somebody else's machine: a tab drawn for a guest, or a tab withheld from
+ * one of his own devices. The copilot key is the per-device answer — it is
+ * filtered by kind at the machine — so it is the only thing asked here.
+ *
+ * ## Controls come off the grant, never off the presence
+ *
+ * A device that gets the key at all is now granted everything: `{read, act,
+ * alter}`, all three, because *full access* is what "my device" means. The three
+ * booleans are still **read off the wire** rather than assumed, and every
+ * outbound frame is still gated on them. The machine is the authority on what it
+ * will serve, this client's job is never to offer a control for a frame that
+ * would come back refused, and a client that assumed the grant would be drawing
+ * buttons from a value it made up.
+ *
+ * ## What a mismatched pair does
+ *
+ * `app.terminaldeck.dev` deploys on its own and the desktop somebody has
+ * installed is whatever they last updated to, so a new client will meet an old
+ * machine. It sends a bare `copilot.hello`, that machine refuses it for want of
+ * a credential, and the refusal lands on screen in the machine's own words
+ * through {@link CopilotState.notice} — which is why {@link CopilotState.opening}
+ * exists at all. There is deliberately no fallback path: a client that kept the
+ * old ceremony in reserve would be keeping the credential store, and the store
+ * is the thing being deleted.
  *
  * ## No DOM, no timers, no socket
  *
  * Same shape as `localhost.ts` next door and for the same reason: every branch
  * returns the frames it wants sent rather than sending them, so the wire traffic
  * is assertable from a test with no browser in it. The caller's only job is to
- * put them on the socket in order, persist a credential when one comes back, and
- * redraw.
+ * put them on the socket in order and redraw.
  */
 
 import {
-  CAPABILITY,
-  MAX_COPILOT_CREDENTIAL_CHARS,
   copilotSayFits,
   type ClientMessage,
   type CopilotActionRow,
@@ -74,23 +104,41 @@ import {
 
 export const NO_GRANT: CopilotGrantWire = { read: false, act: false, alter: false }
 
-/**
- * Not linked, not open, nothing granted.
- *
- * The same value stands for two different facts — *this desktop has no copilot*
- * and *this desktop has one and this browser has not been connected to it* — and
- * that is safe only because {@link CopilotState.offered} is what tells them
- * apart. Folding the two would draw a Connect screen against a machine with
- * nothing to connect to.
- */
+/** Nothing here, nothing open, nothing granted. */
 export const NO_LINK: CopilotLinkWire = { linked: false, open: false, grant: NO_GRANT }
 
 export interface CopilotState {
-  /** Did this desktop advertise `copilot` to *this* device. See the header. */
+  /**
+   * Did this machine's welcome carry a copilot for *this* device.
+   *
+   * The whole of the guest rule on this side, and the only thing that decides
+   * whether a Copilot tab is drawn. False stands for two facts — *this machine
+   * has no copilot* and *this device is a guest* — and folding them is safe
+   * precisely because the client owes the same answer to both: draw nothing, say
+   * nothing, and make no claim about a machine that went out of its way not to
+   * make one.
+   */
   offered: boolean
+  /**
+   * What the machine said this connection has.
+   *
+   * `open` and `grant` are what anything below reads. `linked` comes along
+   * because it is on the wire, and nothing branches on it any more: a device
+   * that receives this object at all is one the machine holds a copilot for, so
+   * there is no longer a state in which it is false and the client has a screen
+   * to draw about it.
+   */
   link: CopilotLinkWire
-  /** A `copilot.connect` is on the wire and has not been answered. */
-  connecting: boolean
+  /**
+   * A `copilot.hello` is on the wire and has not been answered.
+   *
+   * Not a second authorisation — there is none — but the window in which a
+   * refusal is worth putting on screen. Without it an old machine's *"copilot.
+   * hello without a credential"* would be swallowed and the tab would sit at
+   * "Asking the machine…" with no explanation, which is the exact failure this
+   * client exists not to produce.
+   */
+  opening: boolean
   /**
    * The last state report, or null when none has arrived.
    *
@@ -132,7 +180,7 @@ export interface CopilotState {
 export const NO_COPILOT: CopilotState = {
   offered: false,
   link: NO_LINK,
-  connecting: false,
+  opening: false,
   report: null,
   run: null,
   chat: [],
@@ -161,16 +209,14 @@ export const MAX_TOOL_ROWS = 60
 
 export type CopilotAction =
   /**
-   * A `welcome` arrived: this is what the desktop advertised, and this is the
-   * copilot credential this browser holds for it, if any.
+   * A `welcome` arrived, carrying this device's copilot or carrying nothing.
    *
-   * Sending `copilot.hello` from here rather than from a later tap is the whole
-   * of point 3 in the header — a copilot connection is not carried by a session
-   * channel existing, and every reconnect has to open it again.
+   * `link` is `welcome.copilot`, and null is the guest — and also the machine
+   * with no copilot layer at all. The hello goes out from here rather than from
+   * a later tap because a session channel does not carry the copilot by
+   * existing: every socket, every reconnect, has to open it again.
    */
-  | { t: 'welcome'; capabilities: readonly string[]; link: CopilotLinkWire | null; credential: string | null }
-  /** Six digits, typed. */
-  | { t: 'connect'; code: string }
+  | { t: 'welcome'; link: CopilotLinkWire | null }
   /** Start watching: state, sessions, pending and the conversation. */
   | { t: 'attach' }
   | { t: 'detach' }
@@ -180,8 +226,6 @@ export type CopilotAction =
   | { t: 'cancel' }
   | { t: 'stop' }
   | { t: 'answer'; id: string; approved: boolean }
-  /** Leave the copilot connection, without touching the pairing. */
-  | { t: 'bye' }
   | { t: 'frame'; message: ServerMessage }
   /** The socket went down. */
   | { t: 'offline' }
@@ -192,34 +236,10 @@ export interface CopilotStep {
   state: CopilotState
   /** Frames to put on the wire, in order. Empty is the common case. */
   send: ClientMessage[]
-  /**
-   * A copilot credential to persist, when one has just been handed over.
-   *
-   * Carried out rather than written here because this module owns no storage and
-   * must not: the answer to *where does a secret live in this browser* is
-   * `remember.ts`'s, and it depends on what the person said about whether this
-   * computer is theirs.
-   */
-  credential?: string
 }
 
 function still(state: CopilotState): CopilotStep {
   return { state, send: [] }
-}
-
-/* --------------------------------------------------------------- offered -- */
-
-/**
- * Did this desktop tell *this* device that it has a copilot.
- *
- * The capability is filtered per device on the machine — a guest is never told —
- * so this is the whole of the guest rule on this side. There is no second check
- * anywhere in this client, deliberately: a client that drew the tab and then
- * hid the controls would have made a claim about somebody else's machine that
- * the machine went out of its way not to make.
- */
-export function copilotOffered(capabilities: readonly string[]): boolean {
-  return capabilities.includes(CAPABILITY.copilot)
 }
 
 /* --------------------------------------------------------------- the run -- */
@@ -237,11 +257,10 @@ export function copilotOffered(capabilities: readonly string[]): boolean {
 export function copilotStep(state: CopilotState, action: CopilotAction): CopilotStep {
   switch (action.t) {
     case 'welcome': {
-      const offered = copilotOffered(action.capabilities)
-      if (!offered) {
-        // Everything held about a copilot is about *that* machine, so a desktop
-        // that no longer offers one — a different machine on the same pairing,
-        // or one launched with a narrower offer — leaves nothing behind.
+      if (action.link === null) {
+        // A guest, or a machine with no copilot at all, or a different machine
+        // on the same pairing. Everything held is a statement about the one that
+        // is no longer answering, so none of it survives.
         return still({ ...NO_COPILOT })
       }
       // `open` is forced false whatever the welcome said. The desktop always
@@ -249,33 +268,21 @@ export function copilotStep(state: CopilotState, action: CopilotAction): Copilot
       // believes otherwise sends frames that are all refused; taking the value
       // on trust would make this client's correctness depend on the far end
       // never having a bug.
-      const link: CopilotLinkWire = { ...(action.link ?? NO_LINK), open: false }
+      const link: CopilotLinkWire = { ...action.link, open: false }
       const opened: CopilotState = {
         ...NO_COPILOT,
         offered: true,
         link,
+        opening: true,
         // The conversation is not carried across a reconnect. A `copilot.attach`
         // answers with the whole thing and `reset` on that frame is what says so;
         // keeping the old bubbles would show a run that may have ended while the
         // socket was down.
         notice: state.notice,
       }
-      if (!link.linked || action.credential === null || action.credential === '') return still(opened)
-      if (action.credential.length > MAX_COPILOT_CREDENTIAL_CHARS) {
-        // Stored rubbish rather than a credential — a hand-edited store, or a
-        // format from a build that is not this one. Refused here rather than put
-        // on the wire, because the desktop counts failed credential attempts.
-        return still({ ...opened, notice: 'The copilot connection on this browser is unreadable. Connect it again.' })
-      }
-      return { state: opened, send: [{ t: 'copilot.hello', credential: action.credential }] }
-    }
-
-    case 'connect': {
-      if (!state.offered || state.connecting) return still(state)
-      return {
-        state: { ...state, connecting: true, notice: null },
-        send: [{ t: 'copilot.connect', code: action.code }],
-      }
+      // Nothing to look up and nothing to decide: the socket has already proved
+      // which device it is, and the machine reads that device's kind.
+      return { state: opened, send: [{ t: 'copilot.hello' }] }
     }
 
     case 'attach': {
@@ -327,7 +334,9 @@ export function copilotStep(state: CopilotState, action: CopilotAction): Copilot
       // `alter`, and only `alter`. A connection that may not perform alter-tier
       // work has no business deciding whether alter-tier work happens — letting
       // a watching device answer would make the read tier a way to authorise
-      // everything the act tier refuses.
+      // everything the act tier refuses. One of his own devices holds all three,
+      // so this gate never fires in practice; it stays because the grant is read
+      // off the wire and the machine is the party that decides what is in it.
       if (!state.link.open || !state.link.grant.alter) return still(state)
       if (state.ask === null || state.ask.id !== action.id) return still(state)
       // The sheet closes on the send rather than on the `copilot.settled` that
@@ -338,22 +347,15 @@ export function copilotStep(state: CopilotState, action: CopilotAction): Copilot
       return { state: { ...state, ask: null }, send: [{ t: 'copilot.answer', id: action.id, approved: action.approved }] }
     }
 
-    case 'bye': {
-      if (!state.link.open) return still(state)
-      return {
-        state: { ...state, link: { ...state.link, open: false }, chat: [], tools: [], ask: null, run: null },
-        send: [{ t: 'copilot.bye' }],
-      }
-    }
-
     case 'offline':
-      // The connection is gone with the socket. `linked` survives — it is a fact
-      // about a record on the machine, not about this socket — so the next
-      // welcome sends a hello rather than asking for a code that is not needed.
+      // The connection is gone with the socket, and that is all that is gone:
+      // whether this device reaches the copilot is a fact about how it was
+      // paired, so the next welcome opens it again with a hello rather than
+      // asking anybody for anything.
       return still({
         ...state,
         link: { ...state.link, open: false },
-        connecting: false,
+        opening: false,
         sending: false,
         ask: null,
       })
@@ -375,24 +377,12 @@ function canAct(state: CopilotState): boolean {
 
 function frame(state: CopilotState, message: ServerMessage): CopilotStep {
   switch (message.t) {
-    case 'copilot.linked': {
-      // The credential goes out to be stored, and the connection is open from
-      // this instant: the desktop answers a connect by opening the socket's
-      // copilot connection as well as minting the record, so a client that
-      // waited for a hello would ask for a second one it does not need.
-      return {
-        state: { ...state, connecting: false, link: message.link, notice: null },
-        send: openingFrames(message.link),
-        credential: message.credential,
-      }
-    }
-
     case 'copilot.grant': {
       const wasOpen = state.link.open
-      const next: CopilotState = { ...state, connecting: false, link: message.link }
-      // A grant that closes the connection — a disconnect at the machine — takes
-      // the conversation with it. Leaving the bubbles up would be a screen
-      // showing a copilot this browser can no longer reach.
+      const next: CopilotState = { ...state, opening: false, link: message.link }
+      // A grant that closes the connection — this device revoked at the machine
+      // — takes the conversation with it. Leaving the bubbles up would be a
+      // screen showing a copilot this browser can no longer reach.
       if (!message.link.open) {
         return still({ ...next, chat: [], tools: [], ask: null, run: null, sending: false })
       }
@@ -452,12 +442,13 @@ function frame(state: CopilotState, message: ServerMessage): CopilotStep {
     case 'error':
       // Every copilot verb this client sends is gated on the grant before it
       // goes, so an `unauthorized` here is the machine having changed its mind
-      // between the draw and the tap — which is exactly what the sentence should
-      // say, in the machine's own words rather than in one composed here.
-      if (!state.connecting && !state.sending) return still(state)
+      // between the draw and the tap — or, on a hello, a machine old enough to
+      // still want a credential. Either way the sentence is the machine's own
+      // rather than one composed here.
+      if (!state.opening && !state.sending) return still(state)
       return still({
         ...state,
-        connecting: false,
+        opening: false,
         sending: false,
         notice: message.message !== '' ? message.message : 'The machine refused that.',
       })
@@ -554,17 +545,18 @@ export function unavailableSentence(report: CopilotStateReport | null): string |
 }
 
 /**
- * The one line under the tier controls, when there is something to say.
+ * The one line under the copilot's status, when there is something to say.
  *
- * A connection with `read` and nothing else is the grant worth handing out first
- * — *what is my copilot doing, what did it start, what was it refused* — and it
- * is also the one that looks broken if nothing explains the missing composer. So
- * the absence of a control is stated rather than left as a gap.
+ * One of his own devices is granted all three tiers, so the common case is null
+ * and this whole function is about the two that are not: a machine that has
+ * narrowed what this device may do, and one that has not answered the hello yet.
+ * Both look identical on screen — a missing composer — and the absence of a
+ * control is worth stating rather than leaving as a gap.
  */
 export function grantSentence(grant: CopilotGrantWire): string | null {
   if (grant.act) return null
   if (grant.read) return 'This browser can watch the copilot. Talking to it was not granted.'
-  return 'This browser is connected to the copilot but was granted nothing yet.'
+  return 'This browser has not been granted anything on the copilot yet.'
 }
 
 /**

@@ -80,9 +80,9 @@ import { execFile, type ChildProcess } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { appendCopilotAction, copilotPaths, type CopilotPaths } from '../copilot-home'
-import { currentPlatform, withPath, type Platform } from '../platform/host'
+import { currentPlatform, isWindows, withPath, type Env, type Platform } from '../platform/host'
 import { userDataDir } from '../platform/paths'
-import { loginPath, PROVIDERS } from '../providers'
+import { loginPath, providersFor, withLaunchArgs } from '../providers'
 import type { RoutineRunner, RoutineRunOutcome, RoutineRunRequest } from './engine'
 
 /* ------------------------------------------------------------------ tuning -- */
@@ -187,6 +187,16 @@ export interface LaunchInput {
   stdin: string
   signal: AbortSignal
   timeoutMs: number
+  /**
+   * Which platform's rules the *stopping* of this process follows.
+   *
+   * Carried on the input rather than read from `process.platform` inside the
+   * spawn, because on Windows the thing this launches is `cmd.exe` and the CLI
+   * is its grandchild — so "cancel this run" is a different system call there,
+   * and a decision that cannot be pinned from a Mac is a decision nobody here
+   * can check. See {@link killPlan}.
+   */
+  platform: Platform
 }
 
 export type LaunchFn = (input: LaunchInput) => Promise<LaunchResult>
@@ -206,6 +216,17 @@ export interface CopilotRunnerOptions {
   /** Injected for tests; the default spawns the real Claude CLI. */
   launch?: LaunchFn
   platform?: Platform
+  /**
+   * The environment the launcher table is built from, and the base of the
+   * child's own environment.
+   *
+   * A parameter for the same reason `platform` is one: on Windows the command
+   * that gets spawned is `%COMSPEC%`, so what this build does on Windows can
+   * only be asserted from a Mac if both the platform *and* the environment it
+   * reads can be handed in. Defaults to `process.env`, which is what production
+   * gets and is exactly what the module-level `PROVIDERS` table reads.
+   */
+  env?: Env
   now?(): number
   /**
    * Which model a run uses. Null follows the CLI's own default.
@@ -343,6 +364,7 @@ export function worthReporting(text: string): boolean {
 export function createCopilotRunner(options: CopilotRunnerOptions): RoutineRunner {
   const paths = options.paths ?? ((): CopilotPaths => copilotPaths(userDataDir()))
   const platform = options.platform ?? currentPlatform()
+  const env = options.env ?? process.env
   const launch = options.launch ?? spawnClaude
   const now = options.now ?? Date.now
 
@@ -372,7 +394,7 @@ export function createCopilotRunner(options: CopilotRunnerOptions): RoutineRunne
       const home = paths()
       const where = runsDir(home)
       const startedAt = now()
-      const args = [
+      const flags = [
         '--print',
         '--output-format',
         'json',
@@ -394,16 +416,95 @@ export function createCopilotRunner(options: CopilotRunnerOptions): RoutineRunne
         ...(options.model ? ['--model', options.model] : []),
       ]
 
+      /*
+       * The command comes out of the provider table whole — both halves of it.
+       *
+       * This line used to read `command: PROVIDERS.claude.spawn.command` with
+       * the whole argv built locally, and it was right on exactly one platform.
+       * On macOS `spawn.command` is the string `claude` and `spawn.args` is
+       * `[]` (AGENT_CATALOG.claude.args), so supplying our own argv discarded
+       * nothing and the bug was invisible. On Windows `launcher()` in
+       * `providers.ts` answers `command = windowsShellPath(env)` — cmd.exe —
+       * and puts the actual program in `spawn.args` as `['/c', 'claude']`,
+       * because what answers a PATH lookup for `claude` there is an npm `.cmd`
+       * shim and `CreateProcess` will not run a batch file. Dropping those two
+       * elements left every unattended routine on Windows executing
+       *
+       *     cmd.exe --print --output-format json --mcp-config … --allowedTools …
+       *
+       * with the routine's prompt going down cmd.exe's own stdin. cmd.exe with
+       * no `/c` is the *interactive* interpreter: it read the prompt as a batch
+       * script, tried each line as a command in the runs directory, and printed
+       * something that is not JSON — which `parseRunOutput` then handed back as
+       * the run's answer. Every scheduled routine on Windows failed, and failed
+       * as "could not check" rather than as anything a person could diagnose,
+       * while the same routine on a Mac ran correctly. `mcp-add.ts` already had
+       * the right shape (`exec(launcher.command, [...launcher.args, ...args])`)
+       * and this file simply never learned it.
+       *
+       * `withLaunchArgs` rather than a `[...spawn.args, ...flags]` spread here,
+       * and the difference is the one launch shape nobody in this repository can
+       * run: inside WSL `spawn.args` is a whole `wsl.exe` invocation whose last
+       * element is a quoted shell command *line*, so appending to it hands the
+       * flags to the login shell as positional parameters and the CLI never
+       * sees them. That knowledge lives in that function, `host-core.ts` gives
+       * the copilot its `--mcp-config` through the same call, and a routine run
+       * is the same shape of launch — the same agent with extra flags folded in.
+       * A routine run is always a host-side process, so the WSL target stays
+       * null here; going through the function anyway means the day that changes
+       * it is a parameter rather than a rewrite.
+       *
+       * `providersFor(platform, env)` rather than the module-level `PROVIDERS`,
+       * because `PROVIDERS` is `providersFor(currentPlatform(), process.env)`
+       * evaluated at import — with it, the Windows shape of this line could not
+       * be asserted from the only machine this was written on, and six tests in
+       * this repository have already had to be fixed for passing on macOS by
+       * accident. In production the two are the same object graph: `platform`
+       * defaults to `currentPlatform()` and `env` to `process.env`.
+       *
+       * Not `resolvedProvidersFor`, which a session start uses. On Windows it
+       * returns this very table unchanged, so it would change nothing about the
+       * bug being fixed here; on macOS its one difference — pointing
+       * `spawn.command` at an alternate copy when the name on PATH will not
+       * execute — costs a binary probe per run and is a macOS-only nicety. Left
+       * undone deliberately, and written down so the next person reads a
+       * decision rather than an omission.
+       *
+       * One thing this deliberately does *not* do is quote anything itself.
+       * `execFile` with an argument array is not a shell: libuv builds the
+       * command line and quotes each element by the MSVCRT rules, so a config
+       * path with a space in it — `C:\Users\Asad Iqbal\AppData\…` is the
+       * ordinary case, not a corner one — arrives at cmd.exe already wrapped and
+       * reaches the CLI intact. Quoting it here as well would be actively worse:
+       * libuv would see the `"` we added, take its "argument contains a quote"
+       * branch, and emit `\"` — an escape cmd.exe does not know — so the quotes
+       * it *does* understand would land in the wrong places and the path would
+       * split anyway. `tool-probe.ts`'s `launchSpec` quotes because it passes
+       * `shell: true`, where Node joins everything into one string and quotes
+       * nothing; that is a different transport and its rule does not carry here.
+       *
+       * The residue, recorded rather than papered over: libuv quotes only an
+       * argument containing a space, a tab or a quote, and cmd.exe's own
+       * metacharacters (`&`, `|`, `^`, `<`, `>`) are none of those. A Windows
+       * account named `R&D` gives a config path cmd would split at the `&`. That
+       * is the same exposure `host-core.ts` already carries on the identical
+       * `--mcp-config` argument for a copilot session, so the answer belongs to
+       * the launcher in `providers.ts` and to every caller at once — not to a
+       * private second answer here.
+       */
+      const spec = withLaunchArgs(providersFor(platform, env).claude, flags, platform, env)
+
       let result: LaunchResult
       try {
         result = await launch({
-          command: PROVIDERS.claude.spawn.command,
-          args,
+          command: spec.spawn.command,
+          args: spec.spawn.args,
           cwd: where,
-          env: withPath({ ...process.env }, await loginPath(platform), platform),
+          env: withPath({ ...env }, await loginPath(platform), platform),
           stdin: runPrompt(request),
           signal: request.signal,
           timeoutMs: RUN_TIMEOUT_MS,
+          platform,
         })
       } catch (error) {
         return { ok: false, error: `The run could not be started: ${message(error)}` }
@@ -493,6 +594,70 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/* -------------------------------------------------------------------- kill -- */
+
+/**
+ * How long to wait for a killed run's pipes to close before answering anyway.
+ *
+ * Only ever reached when a kill did not take. `RoutineEngine.start` awaits
+ * `runner.run` with no timeout of its own and leaves `entry.running` set until
+ * it resolves, so a launch promise that never settles does not merely lose one
+ * run — it wedges that routine for the life of the process, because every later
+ * fire sees an overlap and skips. Ten seconds is long enough that an ordinary
+ * exit always beats it and short enough that a person watching the log sees the
+ * routine come back.
+ */
+export const KILL_GRACE_MS = 10_000
+
+/**
+ * What "stop this run" actually is, which on Windows is not `child.kill()`.
+ *
+ * On macOS the child *is* the CLI: `spawn.command` is `claude`, so a SIGTERM
+ * reaches the process doing the work and the pipes close. On Windows the child
+ * is `cmd.exe` and the CLI is its grandchild (see the launcher argument at the
+ * call site), and Node's `kill` — whatever signal name is passed — maps to
+ * `TerminateProcess` on the direct child only. Killing cmd.exe there leaves the
+ * agent running, and leaves it running while holding the *unattended* MCP token:
+ * `overlap: cancel` and `RUN_TIMEOUT_MS` would both be lies, and a routine the
+ * person cancelled would keep making tool calls.
+ *
+ * It is worse than a leak, which is why this landed in the same change as the
+ * launcher fix rather than after it. This promise settles on `close`, and
+ * `close` waits for the *stdio pipes* — which the grandchild inherited. So a
+ * killed cmd.exe with a live claude underneath it does not resolve at all until
+ * claude finishes on its own, and the paragraph above about a wedged routine is
+ * what happens next.
+ *
+ * `taskkill /T /F` is the tree kill Windows actually has. `/T` is the whole
+ * point (the shell plus everything under it), `/F` because a console
+ * application that is not pumping messages ignores the polite form. The name is
+ * left bare rather than resolved under `%SystemRoot%\System32`: PATH on Windows
+ * always contains System32, `windowsShellPath`'s absolute-path argument is about
+ * node-pty resolving a *relative program name against the app's own working
+ * directory*, and `execFile` does no such thing. If the spawn fails anyway the
+ * caller falls back to `child.kill()`, which is what this build did before.
+ *
+ * A pure function returning the plan rather than a function that kills, because
+ * the only machine this was written on would run `taskkill` for real if the
+ * platform were forced to win32 in a test — and a test that cannot force the
+ * platform is a test that says nothing about Windows.
+ *
+ * Owed, and deliberately not done here: `usage-probe.ts`, `agent-binaries.ts`,
+ * `tool-probe.ts` and `prerequisites.ts` have the identical grandchild problem
+ * and are owned by another lane in this wave. When a shared helper lands beside
+ * `launchSpec`, this should call it and this comment should move there.
+ */
+export type KillPlan =
+  | { kind: 'signal'; signal: NodeJS.Signals }
+  | { kind: 'tree'; command: string; args: string[] }
+
+export function killPlan(pid: number | undefined, platform: Platform): KillPlan {
+  // No pid means the spawn never got far enough to have one; there is no tree
+  // to name, and `child.kill()` is still the honest attempt.
+  if (!isWindows(platform) || pid === undefined) return { kind: 'signal', signal: 'SIGTERM' }
+  return { kind: 'tree', command: 'taskkill', args: ['/pid', String(pid), '/T', '/F'] }
+}
+
 /* ------------------------------------------------------------------- spawn -- */
 
 /**
@@ -518,8 +683,24 @@ function spawnClaude(input: LaunchInput): Promise<LaunchResult> {
         {
           cwd: input.cwd,
           env: input.env,
-          timeout: input.timeoutMs,
+          /*
+           * No `timeout` here, and the timer below replaces it exactly.
+           *
+           * `execFile`'s own timeout sends its `killSignal` (SIGTERM by
+           * default) to the direct child, which on Windows is now cmd.exe —
+           * the wrong process, and one whose death does not close the pipes
+           * this promise settles on. {@link killPlan} owns that difference, so
+           * the deadline has to go through it. On macOS the two are the same
+           * call on the same process, so nothing about a Mac run changes.
+           */
           maxBuffer: 8 * 1024 * 1024,
+          /*
+           * Load-bearing on Windows since the launcher fix, rather than merely
+           * tidy: the thing being spawned is a console application, so without
+           * this every scheduled routine — a feature whose whole point is that
+           * it runs while nobody is looking — would flash a black window on the
+           * person's screen at whatever o'clock it fires.
+           */
           windowsHide: true,
           encoding: 'utf8',
         },
@@ -549,18 +730,67 @@ function spawnClaude(input: LaunchInput): Promise<LaunchResult> {
       stderr += String(chunk)
     })
 
+    let settled = false
+    let deadline: NodeJS.Timeout | null = null
+    let grace: NodeJS.Timeout | null = null
+
+    const done = (): void => {
+      if (deadline !== null) clearTimeout(deadline)
+      if (grace !== null) clearTimeout(grace)
+      input.signal.removeEventListener('abort', onAbort)
+    }
+
+    const finish = (result: LaunchResult): void => {
+      if (settled) return
+      settled = true
+      done()
+      resolve(result)
+    }
+
+    /**
+     * Stop the run, then bound how long we wait for it to admit it stopped.
+     *
+     * Neither timer is `unref`'d. A run in flight is work the app owes an
+     * answer for, and an unreferenced timer is one the event loop is allowed to
+     * skip on the way out — which would turn "the routine was cancelled" into
+     * "the routine never resolved" in exactly the shutdown case where the
+     * engine is trying to finish its rows.
+     */
+    const stop = (): void => {
+      const plan = killPlan(child.pid, input.platform)
+      if (plan.kind === 'signal') {
+        child.kill(plan.signal)
+      } else {
+        try {
+          execFile(plan.command, plan.args, { windowsHide: true }, (error) => {
+            // `taskkill` itself missing or refused. Back to what this build did
+            // before, which at least stops the shell even if the CLI outlives
+            // it — and the grace timer below is what keeps that from wedging
+            // the routine forever.
+            if (error) child.kill()
+          })
+        } catch {
+          child.kill()
+        }
+      }
+      if (grace === null) grace = setTimeout(() => finish({ stdout, stderr, code: null }), KILL_GRACE_MS)
+    }
+
     const onAbort = (): void => {
-      child.kill('SIGTERM')
+      stop()
     }
     input.signal.addEventListener('abort', onAbort, { once: true })
 
+    deadline = setTimeout(stop, input.timeoutMs)
+
     child.once('error', (error) => {
-      input.signal.removeEventListener('abort', onAbort)
+      if (settled) return
+      settled = true
+      done()
       reject(error)
     })
     child.once('close', (code) => {
-      input.signal.removeEventListener('abort', onAbort)
-      resolve({ stdout, stderr, code })
+      finish({ stdout, stderr, code })
     })
 
     // Written and closed immediately: the CLI reads the whole prompt from stdin

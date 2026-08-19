@@ -34,6 +34,7 @@ import {
   type RemoteViewProps,
 } from './RemoteSection'
 import { withDeadline } from '../deadline'
+import type { DeviceKind } from './DeviceApproval'
 import type { MachineActions, MachinesHalf } from '../machines/MachineLinks'
 import type { Machine, MachineLinkState } from '../machines/types'
 import { CODE_LENGTH } from '../../shared/short-code'
@@ -1205,6 +1206,110 @@ describe('turning it on', () => {
     ]) {
       expect(html).toContain(clause)
     }
+  })
+})
+
+/* ------------------------------------------------ the copilot, by kind -- */
+
+/**
+ * The copilot follows the kind, and there is nothing else on this screen for it.
+ *
+ * There used to be: a **Copilot** panel under the folders with a *Connect the
+ * copilot…* button, a six-digit code on a countdown, three tier checkboxes and
+ * a *Disconnect the copilot* action. Pairing a phone gave it no copilot reach
+ * at all until somebody performed that second ceremony. Asad, 2026-08-19:
+ *
+ *   > *"instead of giving mobile app separate connection for copilot just make
+ *   > it like if we are connecting as my device copilot automatically comes, if
+ *   > we connect as guest then copilot don't come — that's all we need to do
+ *   > instead of two different connections."*
+ *
+ * So the whole panel went, and what replaced it is one clause on each approved
+ * device's row. The tests below are in two halves for the two ways this can go
+ * wrong, and the second half is the one that matters more.
+ *
+ * The **positive** half pins that the fact is actually said. A device kind is
+ * not self-explanatory: "full access" is a phrase people read past, and the
+ * question somebody opens this screen holding is whether the phone in their
+ * hand can reach the copilot.
+ *
+ * The **negative** half pins that no second act comes back. A permission that
+ * has been folded into another one is exactly the kind of thing a later change
+ * re-adds "for clarity" as a switch defaulted off — and an unticked box still
+ * advertises a feature and invites the ask, which is the argument
+ * `DeviceApproval` makes about why a guest is never offered the copilot at all
+ * rather than offered it and refused. It renders the panel with everything on
+ * it at once, both kinds of device included, so a control added anywhere on
+ * this screen fails here.
+ */
+describe('the copilot follows the kind', () => {
+  const MINE = { ...PHONE, id: 'dev-mine', name: 'Asad’s iPhone', state: 'approved' as const }
+  const GUEST = { ...PHONE, id: 'dev-guest', name: 'Colleague’s laptop', state: 'approved' as const }
+
+  const kinds = new Map<string, DeviceKind>([
+    [MINE.id, 'mine'],
+    [GUEST.id, 'guest'],
+  ])
+
+  /** Both kinds approved, a live code, an attachment and a page open. */
+  const everything = {
+    state: { ...RUNNING, devices: [MINE, GUEST], connections: [TUNNELLED] },
+    kinds,
+    pairing: { token: '482913', expiresAt: NOW + 60_000, findable: true } as RemotePairing,
+    secondsLeft: 42,
+    folders: <div className="folders-stand-in" />,
+  }
+
+  it('says on the row that one of your own devices reaches it', () => {
+    const markup = render(everything)
+    expect(markup).toContain('Your device — full access, the copilot included.')
+  })
+
+  it('says on the row that a guest never does', () => {
+    const markup = render(everything)
+    expect(markup).toContain('Guest — only the folders you chose. Never the copilot.')
+  })
+
+  it('offers no second act for it: no code, no connect, no tier, no disconnect', () => {
+    const markup = render(everything)
+    for (const gone of [
+      'Connect the copilot',
+      'Disconnect the copilot',
+      'not connected to any device',
+      'Pairing a device for terminals gives it no copilot access',
+      'copilot of its own',
+      'Watch the copilot',
+      'Ask it to work',
+      'Change settings and stop your sessions',
+    ]) {
+      expect(markup, `${gone} came back`).not.toContain(gone)
+    }
+  })
+
+  it('draws no control at all beside the copilot sentence', () => {
+    // The sentence is a fact, not a switch, and the tier grid was three
+    // checkboxes — so a plain checkbox appearing anywhere on this panel is that
+    // grid coming back, whatever it ends up being called.
+    //
+    // One is allowed through by name rather than by count: remote access itself
+    // is a `Switch`, which is an `<input type="checkbox" role="switch">`. The
+    // role is what separates them, and matching on it means a tier box added
+    // beside the switch still fails this rather than hiding inside a tally.
+    const markup = render(everything)
+    const boxes = (markup.match(/<input[^>]*type="checkbox"[^>]*>/g) ?? []).filter(
+      (tag) => !tag.includes('role="switch"'),
+    )
+    expect(boxes).toEqual([])
+  })
+
+  it('leaves the row alone entirely until the kinds read lands', () => {
+    // `kinds` is null before the first answer, and a row that guessed would be
+    // telling somebody a permission that is not the one on disk. Neither
+    // sentence is drawn; the device is still listed.
+    const markup = render({ ...everything, kinds: null })
+    expect(markup).toContain('Asad’s iPhone')
+    expect(markup).not.toContain('the copilot included')
+    expect(markup).not.toContain('Never the copilot')
   })
 })
 

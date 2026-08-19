@@ -1,74 +1,52 @@
-What to test — 0.4.0, build 2608180034
+What to test — 0.6.0, build TBD
 
-This is the whole 17 August review, on the phone. Your last build is 0.3.0 from
-16 August; the desktop has since tagged 0.4.0 and the phone follows it, because
-they are one product and two numbers that disagree cannot tell you at a glance
-whether your phone is too old to talk to your Mac.
+Your last build is 0.5.0 from yesterday. The headline is that the copilot no
+longer has a connection of its own, and most of what to test is that absence.
 
-FOUR TABS, COPILOT FIRST
-"Copilot · Sessions · Localhost · Settings", copilot leftmost, as you asked
-after looking at it with the copilot in place. The pinned copilot row is gone
-from the session list — its badge moved onto the pill, which is strictly better,
-because a consent question expires into a refusal after two minutes and a badge
-on the session list could only ever be seen from the session list.
+THERE IS NOTHING TO CONNECT ANY MORE
+"Instead of giving mobile app separate connection for copilot, just make it like
+— if we are connecting as my device, copilot automatically comes. If we connect
+as guest then copilot don't come." That is now exactly what happens. The six
+digit copilot code is gone, the Connect screen is gone, the Settings row for it
+is gone, and there is no state where this phone is paired, trusted, and told to
+connect something first.
 
-Open a session from inside the copilot conversation and press Back: you should
-land back in the conversation, not on the session list.
+So the test is: pair this phone again as MY DEVICE, and the Copilot tab should
+simply be there, first press, nothing typed. Then pair a second device — an old
+phone, a friend's — as a GUEST, and it should have no Copilot tab at all. Not a
+greyed one, not one that explains itself. Absent.
 
-SWIPE, AND IT DOES SOMETHING NOW
-Swipe was opening the session, which tapping already did. Now: swipe right to
-Pin or Unpin, swipe left for Archive, Details and Close. Neither edge does a
-full-swipe, so nothing fires from a careless drag.
+Worth being hard on: the credential this app used to keep for the copilot is
+deleted from the Keychain the first time you open this build, not merely stopped
+being written. And if you were connected on 0.5.0, this build should carry on
+working with no ceremony — if it asks you for anything, that is a bug.
 
-Archive is a shelf, not an ending — the session keeps running, and the Archived
-screen says so in as many words. Bring one back with the same swipe. Close
-genuinely ends the session and asks first, because it cannot be undone.
+THE SAME CHANGE ON THE MAC AND IN THE BROWSER
+The desktop's "Connect the copilot" panel is gone with its code and its three
+tier checkboxes; the approval screen is where the whole decision is made now. Try
+app.terminaldeck.dev too — same rule there, and it clears its old stored key on
+every launch.
 
-Two things worth being hard on. Pin and archive cancel each other, so pinning an
-archived session should unarchive it; and if you archive everything the empty
-state should say "All archived" rather than blaming your Mac for an empty list.
+A SERVER IS A MACHINE LIKE ANY OTHER
+New on the desktop, and you will feel it from here: a rented server gets a group
+in the sidebar, its shells are ordinary sessions with tab pills, and its private
+localhost opens through the same browser window. You add one with an address, a
+username, and a password or a key.
 
-Move became Pin, deliberately. On a phone there is nowhere for a session to move
-to — it is a shell in a folder fixed when it started. What somebody dragging a
-row in a list of forty actually wants is that row at the top.
+Signing in with a key no longer tells you to open the file in a text editor —
+the app reads your key folder and offers what it finds by name, and never offers
+the .pub sitting next to it.
 
-LOCALHOST TAKES AN ADDRESS
-The "+" replaces the old Refresh button: type "3000", or "localhost:3000", or
-"127.0.0.1:3000/admin", and it opens on the machine you are inside. That reaches
-ports the list has folded away or has not rescanned, and paths — neither was
-reachable before.
+WINDOWS
+A sweep found sixty-two places where the Windows build behaved differently from
+the Mac, four of them serious, and this build closes the ones that were
+accidents. If you have the PC to hand, the two worth trying are attaching a file
+to a chat message — which did not work on Windows at all — and letting a
+scheduled routine run, which always failed there. Windows now runs the same test
+suite as the Mac on every change, which it never did before.
 
-A live link is refused on purpose, and it says so, naming the machine. Driving
-your Mac's browser from a phone is a way to put any page you like in front of
-somebody in trusted chrome, and loading it in the phone's own web view instead
-would be the web-view-pretending you said you did not want.
-
-REFRESH AND RECONNECT ARE GONE
-You asked what they actually did. Refresh sent exactly the frame that pulling
-the list down already sends — a duplicate of a gesture you named yourself.
-Reconnect asked for something the app already does on foreground, on a network
-change, and on a backoff; a button for it is an admission it might not work.
-The one manual retry left appears only when the connection is down AND is not
-already retrying, which is the one moment you are staring at nothing.
-
-So: pull both lists down to refresh, and please try to catch the app failing to
-come back by itself — turn off Wi-Fi, wait, turn it on; lock the phone for five
-minutes; switch to cellular mid-session.
-
-PAIRING NOW ASKS WHOSE DEVICE THIS IS
-"My device" is you at another keyboard: every session, any folder, the copilot.
-"Guest" reaches only the folders you tick and is never offered the copilot at
-all. You cannot change one into the other afterwards — that means pairing again,
-which is the honest cost of not making an escalation one tap deep.
-
-IMPORTANT: this phone will need re-pairing. A device paired by an older build
-has no kind recorded, and the app now reads that as a guest with nothing rather
-than as permission for everything. That is deliberate.
-
-THE COPILOT, IN FULL
-Its own connection, separate from the one carrying sessions, with its chat, its
-tools and its consent prompts. Driving is not here — text is enough on a phone
-for now.
-
-WHAT IS NOT HERE
-The driving tour and its scanning view are desktop and web only.
+WHAT IS STILL NOT DONE, SO YOU ARE NOT LOOKING FOR IT
+Sessions started from a phone are still not confined on Windows the way they are
+on a Mac — the machinery is built and tested, and the button that switches it on
+is the missing piece. And the Windows download is still unsigned, so SmartScreen
+will still stop you on first run until there is a certificate.

@@ -6,6 +6,7 @@ import {
   composeMessage,
   foldersFrom,
   insideRoot,
+  isAbsolutePath,
   isImagePath,
   kindFor,
   MAX_ATTACHMENTS,
@@ -15,6 +16,7 @@ import {
   REJECTION_TEXT,
   relativeTo,
   removeAttachment,
+  samePath,
   shellQuote,
   SUBMIT_GAP_MS,
   terminalPayload,
@@ -387,5 +389,281 @@ describe('a path typed at a shell prompt', () => {
 
   it('drops a trailing separator, so a folder arrives as one word', () => {
     expect(shellQuote('/Users/asad/project/')).toBe("'/Users/asad/project'")
+    // The same on the other spelling. `normalise` trimmed `/+$` only, so a
+    // folder inserted into a Windows command line arrived as
+    // `"C:\\Users\\asad\\project\\"` — a trailing backslash inside double
+    // quotes, which cmd.exe reads as escaping the quote.
+    expect(shellQuote('C:\\Users\\asad\\project\\')).toBe('"C:\\Users\\asad\\project"')
+  })
+})
+
+/* ------------------------------------------------------------- windows ----- */
+
+/**
+ * The shape all three doors actually hand over on Windows.
+ *
+ * Every path in this section is a literal `C:\…` or `\\server\…` string, which
+ * is what makes these tests worth anything: they are not asking the machine
+ * running them what platform it is — there is no Windows machine here and there
+ * was none when the bug shipped — they are forcing the *data* the Windows
+ * routes produce through the same functions the Mac routes use. Run on this
+ * Mac against the code as it stood, every assertion below fails.
+ *
+ * Where the strings come from, so they cannot drift into being invented:
+ * `dialog.showOpenDialog` (Browse), the preload's `webUtils` path for a drop,
+ * and the clipboard for a paste all return the native spelling, and
+ * `normalisePick` in `main/attach-outside.ts` rewrites only `\\wsl.localhost\…`
+ * — `main/wsl.test.ts` pins `linuxPathFromUnc('C:\\Users\\Asad\\proj')` as null.
+ */
+
+/** A project as `dialog.showOpenDialog` spells it on Windows. */
+const WIN_ROOT = 'C:\\Users\\asad\\Projects\\terminaldeck'
+
+describe('a Windows path', () => {
+  describe('absolute, in the spelling this machine cannot produce', () => {
+    it('accepts both spellings and a UNC share', () => {
+      expect(isAbsolutePath('/Users/apple/Projects/app')).toBe(true)
+      expect(isAbsolutePath('C:\\Users\\asad\\app')).toBe(true)
+      expect(isAbsolutePath('C:/Users/asad/app')).toBe(true)
+      // A mapped share is where a lot of ordinary work lives on a Windows
+      // machine. `isAbsoluteCommand` refuses UNC because it decides whether to
+      // launch a binary off someone else's file server; reading a file the user
+      // just chose in their own panel is a different question.
+      expect(isAbsolutePath('\\\\fileserver\\design\\brief.docx')).toBe(true)
+    })
+
+    it('still refuses a relative path in either spelling', () => {
+      // Reaching both platforms is one gate widened, not removed.
+      expect(isAbsolutePath('src/main/index.ts')).toBe(false)
+      expect(isAbsolutePath('src\\main\\index.ts')).toBe(false)
+      expect(isAbsolutePath('..\\..\\secrets')).toBe(false)
+      expect(isAbsolutePath('')).toBe(false)
+      // A drive letter with nothing after the colon is `C:`-relative — the
+      // current directory on that drive, which nothing here knows.
+      expect(isAbsolutePath('C:notes.txt')).toBe(false)
+    })
+  })
+
+  describe('the blocker itself: adding one', () => {
+    it('attaches a file from the project, which used to be refused as not absolute', () => {
+      /*
+       * This is the whole defect in one assertion. `addAttachment` gated on
+       * `target.startsWith('/')`, so this returned
+       * `{ ok: false, reason: 'not-absolute' }` and the composer printed "That
+       * path is not absolute, so the agent could not resolve it." about a file
+       * the user had picked in Explorer two seconds earlier.
+       */
+      const result = addAttachment([], WIN_ROOT, `${WIN_ROOT}\\src\\main\\index.ts`, false)
+      expect(result).toMatchObject({ ok: true })
+      if (!result.ok) return
+      expect(result.attachments[0]).toEqual({
+        path: `${WIN_ROOT}\\src\\main\\index.ts`,
+        // The pick's own spelling, not a rewritten one: this string is shown
+        // back to the person who chose it.
+        relPath: 'src\\main\\index.ts',
+        kind: 'file',
+      })
+    })
+
+    it('attaches a file from anywhere on the disk, which is the outside route', () => {
+      const desktop = 'C:\\Users\\asad\\Desktop\\screenshot.PNG'
+      const result = addAttachment([], WIN_ROOT, desktop, false, 'anywhere')
+      expect(result).toMatchObject({ ok: true })
+      if (!result.ok) return
+      expect(result.attachments[0]).toEqual({
+        path: desktop,
+        relPath: desktop,
+        kind: 'image',
+        outside: true,
+      })
+    })
+
+    it('attaches from a UNC share', () => {
+      const share = '\\\\fileserver\\design\\brief.docx'
+      const result = addAttachment([], WIN_ROOT, share, false, 'anywhere')
+      expect(result).toMatchObject({ ok: true })
+      if (!result.ok) return
+      expect(result.attachments[0]?.path).toBe(share)
+    })
+
+    it('keeps every file of a Windows batch — Browse, a drop and a paste all fold here', () => {
+      const result = addAttachments(
+        [],
+        WIN_ROOT,
+        [
+          { path: 'C:\\Users\\asad\\Desktop\\one.png', isDirectory: false },
+          { path: '\\\\fileserver\\design\\brief.docx', isDirectory: false },
+          { path: `${WIN_ROOT}\\README.md`, isDirectory: false },
+        ],
+        'anywhere',
+      )
+      expect(result.attachments.map((a) => a.path)).toEqual([
+        'C:\\Users\\asad\\Desktop\\one.png',
+        '\\\\fileserver\\design\\brief.docx',
+        `${WIN_ROOT}\\README.md`,
+      ])
+      expect(result.notice).toBeNull()
+    })
+
+    it('refuses a relative Windows path, so the gate is widened and not lifted', () => {
+      expect(addAttachment([], WIN_ROOT, 'src\\main\\index.ts', false, 'anywhere')).toEqual({
+        ok: false,
+        reason: 'not-absolute',
+      })
+    })
+  })
+
+  describe('containment', () => {
+    it('accepts the root and anything under it', () => {
+      expect(insideRoot(WIN_ROOT, WIN_ROOT)).toBe(true)
+      expect(insideRoot(WIN_ROOT, `${WIN_ROOT}\\src\\main\\index.ts`)).toBe(true)
+      expect(insideRoot(WIN_ROOT, `${WIN_ROOT}\\`)).toBe(true)
+    })
+
+    it('rejects a sibling whose name starts with the root', () => {
+      // The same directory-traversal-without-a-`..` this suite already pins for
+      // POSIX, in the spelling where the separator is a backslash.
+      expect(insideRoot(WIN_ROOT, `${WIN_ROOT}-secrets\\.env`)).toBe(false)
+    })
+
+    it('holds across the two spellings, because the root and the pick have different sources', () => {
+      /*
+       * `git rev-parse --show-toplevel` prints forward slashes even on Windows
+       * (main/git.ts), while a pick comes from the open panel with backslashes.
+       * Comparing those character by character answers no for every file in the
+       * project — the same class of failure as `fleet-diff.ts:263`, which is a
+       * separate finding in this sweep.
+       */
+      expect(insideRoot('C:/Users/asad/Projects/terminaldeck', `${WIN_ROOT}\\src\\a.ts`)).toBe(true)
+      expect(relativeTo('C:/Users/asad/Projects/terminaldeck', `${WIN_ROOT}\\src\\a.ts`)).toBe(
+        'src\\a.ts',
+      )
+    })
+
+    it('folds case for a Windows path only, because NTFS does and APFS is asked not to', () => {
+      expect(insideRoot(WIN_ROOT, 'c:\\users\\asad\\projects\\terminaldeck\\src\\a.ts')).toBe(true)
+      // A Mac is not told the same thing. `README.md` and `readme.md` are two
+      // files there, and a containment test that folded case would be answering
+      // a question about a filesystem it is not on.
+      expect(insideRoot('/Users/apple/Projects/App', '/users/apple/projects/app/a.ts')).toBe(false)
+    })
+
+    it('does not let a backslash in a POSIX name pass as a separator', () => {
+      /*
+       * The one thing separator-folding must not buy. `proj\secrets` is a legal
+       * file name on a Mac sitting *beside* `proj`, so unifying separators for
+       * every path would turn this containment test into a way out of the
+       * project. `comparable` therefore only touches a Windows-shaped path.
+       */
+      expect(insideRoot('/Users/asad/proj', '/Users/asad/proj\\secrets')).toBe(false)
+    })
+
+    it('handles the drive root, which is the one path that keeps its separator', () => {
+      // `C:\` is the top of the drive; `C:` is the current directory *on* that
+      // drive, which is a different place. So `normalise` may not trim it.
+      expect(normalise('C:\\')).toBe('C:\\')
+      expect(insideRoot('C:\\', 'C:\\Users\\asad\\a.txt')).toBe(true)
+    })
+  })
+
+  describe('naming', () => {
+    it('strips a trailing backslash so one folder has one identity', () => {
+      expect(normalise('C:\\a\\b\\')).toBe('C:\\a\\b')
+      expect(normalise('  C:\\a\\b  ')).toBe('C:\\a\\b')
+    })
+
+    it('reads the last segment', () => {
+      /*
+       * Split on `/` alone this returned the *whole path*, and that was visible
+       * on Windows even with the attach gate shut: `partialRefusal`
+       * (outside.ts) names a refused pick with `basename`, and on a confined
+       * session every pick was refused because `insideRoot` was POSIX-only too
+       * — so the sentence under the composer read
+       * "C:\Users\asad\Desktop\shot.png was not attached." where a filename
+       * belongs. It is also what every chip's label and the folder in
+       * `confinedRefusal` go through.
+       */
+      expect(basename('C:\\a\\b\\c.ts')).toBe('c.ts')
+      expect(basename('C:\\a\\b\\')).toBe('b')
+      expect(basename('\\\\fileserver\\design\\brief.docx')).toBe('brief.docx')
+    })
+
+    it('names the root by its own folder', () => {
+      expect(relativeTo(WIN_ROOT, WIN_ROOT)).toBe('terminaldeck')
+    })
+
+    it('recognises an image by extension', () => {
+      /*
+       * Honest note: this one passed before the fix as well, by accident. The
+       * old `basename` handed back the whole path, and the last dot in a whole
+       * Windows path is still the extension's — so `isImagePath` is the one
+       * function in this file the separator bug happened to miss. It is pinned
+       * because it now rides on the *new* `basename`, and because `kindFor` is
+       * what tells the chip the model will actually see the file.
+       */
+      expect(isImagePath('C:\\Users\\asad\\Desktop\\shot.PNG')).toBe(true)
+      expect(isImagePath('C:\\Users\\asad\\Projects\\app\\index.ts')).toBe(false)
+    })
+  })
+
+  describe('one file, however it is spelled', () => {
+    it('calls two spellings of one Windows file the same path', () => {
+      expect(samePath('C:\\Users\\Asad\\App\\README.md', 'c:\\users\\asad\\app\\readme.md')).toBe(
+        true,
+      )
+      expect(samePath('C:/Users/asad/app/a.ts', 'C:\\Users\\asad\\app\\a.ts')).toBe(true)
+      expect(samePath('C:\\a\\b\\', 'C:\\a\\b')).toBe(true)
+    })
+
+    it('keeps two POSIX files that differ only in case apart', () => {
+      expect(samePath('/Users/apple/app/README.md', '/Users/apple/app/readme.md')).toBe(false)
+    })
+
+    it('refuses the same Windows file picked from two panels', () => {
+      const first = addAttachment([], WIN_ROOT, `${WIN_ROOT}\\README.md`, false)
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+      expect(addAttachment(first.attachments, WIN_ROOT, `${WIN_ROOT}\\readme.md`, false)).toEqual({
+        ok: false,
+        reason: 'duplicate',
+      })
+    })
+
+    it('removes the chip the duplicate test would have matched', () => {
+      // Otherwise a Windows user holds an attachment that can neither be added
+      // again nor taken off.
+      const list: Attachment[] = [{ path: 'C:\\a\\b', relPath: 'b', kind: 'folder' }]
+      expect(removeAttachment(list, 'C:\\A\\B\\')).toEqual([])
+    })
+  })
+
+  describe('the mention', () => {
+    it('carries the path the user picked, backslashes and all', () => {
+      // A guard rather than a proof — the old code drew this line correctly
+      // too. It is here because the tempting fix for everything above was to
+      // rewrite separators on the way in, and that would have changed it.
+      expect(mentionFor(file(`${WIN_ROOT}\\src\\main\\index.ts`))).toBe(
+        `@"${WIN_ROOT}\\src\\main\\index.ts"`,
+      )
+    })
+
+    it('marks a folder with the separator the path already uses', () => {
+      // Not `C:\a\b/` — the only character this function writes is the one it
+      // can get wrong, and the CLI stats the same directory either way.
+      expect(mentionFor({ path: 'C:\\a\\b', relPath: 'b', kind: 'folder' })).toBe('@"C:\\a\\b\\"')
+      // A forward-slashed Windows path keeps its own spelling too.
+      expect(mentionFor({ path: 'C:/a/b', relPath: 'b', kind: 'folder' })).toBe('@"C:/a/b/"')
+    })
+  })
+
+  describe('folders derived from a Windows file index', () => {
+    it('collects every ancestor once', () => {
+      // No live caller since the in-app project list was deleted; fixed anyway,
+      // because on `/`-only splitting this returned nothing at all for a
+      // Windows index and the picker would simply have been empty.
+      expect(
+        foldersFrom(['src\\main\\index.ts', 'src\\main\\git.ts', 'src\\renderer\\App.tsx', 'README.md']),
+      ).toEqual(['src', 'src\\main', 'src\\renderer'])
+    })
   })
 })

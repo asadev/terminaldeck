@@ -6,6 +6,7 @@ import {
   blockedNote,
   BrowserSection,
   browserButtonLabel,
+  explainsCookiePermission,
   forgetAllConfirmText,
   groupSources,
   importedCountText,
@@ -441,6 +442,58 @@ describe('groupSources', () => {
 
   it('is empty for nothing, rather than one empty group', () => {
     expect(groupSources([])).toEqual([])
+  })
+})
+
+describe('the sentence about the permission dialog', () => {
+  const wired = {
+    importBrowserCookies: async () => ({ ok: true }),
+    browserCookieSources: async () => [],
+  }
+  const status = (supported: boolean) => ({
+    present: 0,
+    recorded: 0,
+    importedAt: null,
+    source: '',
+    supported,
+  })
+
+  it('is not shown to somebody the dialog will never appear for', () => {
+    /*
+     * `cookie-import.ts` answers `unsupported` for every platform but darwin —
+     * the Windows DPAPI key schedule is not written — so on Windows this pane
+     * shows "Importing cookies works on macOS only." The permission sentence
+     * used to be printed above that notice, unconditionally, so a Windows user
+     * read a paragraph about a macOS dialog immediately above a notice saying
+     * the feature does not exist on their machine: two claims that cannot both
+     * be about the reader, on one screen.
+     *
+     * Asked of the predicate rather than of the markup because every settings
+     * test in this repo is `renderToStaticMarkup` — no DOM, no effects — so
+     * `imports` is always `null` at paint and the loaded state is unreachable
+     * from a rendered assertion. A branch expressed only as JSX position could
+     * not be exercised at all; expressed as a function, both answers can be.
+     */
+    expect(explainsCookiePermission(wired, status(false))).toBe(false)
+  })
+
+  it('is shown where the dialog really does appear', () => {
+    expect(explainsCookiePermission(wired, status(true))).toBe(true)
+  })
+
+  it('is shown while the answer is still on its way, like the block below it', () => {
+    // `null` is "the read has not landed". The alternative is that every macOS
+    // user watches the sentence appear a moment after the pane does.
+    expect(explainsCookiePermission(wired, null)).toBe(true)
+  })
+
+  it('is not shown by a build that cannot import at all', () => {
+    // No channel, no import, no permission dialog to warn about — the same
+    // reason the missing-channel notice replaces the whole block.
+    expect(explainsCookiePermission({}, status(true))).toBe(false)
+    expect(explainsCookiePermission({ importBrowserCookies: wired.importBrowserCookies }, null)).toBe(
+      false,
+    )
   })
 })
 

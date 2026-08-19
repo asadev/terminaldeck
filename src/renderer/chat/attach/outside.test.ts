@@ -320,3 +320,77 @@ describe('the calls themselves', () => {
     expect(await picksFromDrop(bridge, [asFile('dragged text')])).toEqual([])
   })
 })
+
+/* ------------------------------------------------------------- windows ----- */
+
+/**
+ * The same three routes, on the machine none of them worked on.
+ *
+ * Every path here is a literal `C:\…` string rather than anything derived from
+ * the platform this runs on, which is the only way a Mac can check a Windows
+ * answer: it forces the *data* the Windows routes produce — `showOpenDialog`,
+ * `webUtils` and the clipboard all hand back native spellings, and
+ * `normalisePick` rewrites only `\\wsl.localhost\…` — through the functions the
+ * macOS routes use. Every assertion below fails against the code as it stood.
+ *
+ * This file has no separator logic of its own: `readableOn` is `insideRoot` and
+ * the two refusal sentences are `basename`, both from `mentions.ts`. That is
+ * exactly why it is checked here as well. The confined session is the one a
+ * Windows user is most likely to meet — the copilot's own, and any session a
+ * phone started — and with `insideRoot` answering no for every Windows path,
+ * `splitByBoundary` refused the entire batch and `partialRefusal` then named the
+ * casualty with a whole path where a filename goes.
+ */
+describe('a confined session on Windows', () => {
+  const boundary = {
+    confined: true,
+    folder: 'C:\\Users\\asad\\AppData\\Roaming\\terminaldeck\\copilot',
+    projects: ['C:\\Users\\asad\\Projects\\thing'],
+  }
+
+  it('lets it attach the files it can actually read', () => {
+    expect(readableOn(boundary, `${boundary.folder}\\memory\\today.md`)).toBe(true)
+    expect(readableOn(boundary, 'C:\\Users\\asad\\Projects\\thing\\src\\index.ts')).toBe(true)
+    expect(readableOn(boundary, 'C:\\Users\\asad\\Desktop\\shot.png')).toBe(false)
+  })
+
+  it('still refuses a sibling folder whose name merely starts the same way', () => {
+    expect(readableOn(boundary, 'C:\\Users\\asad\\Projects\\thing-secrets\\.env')).toBe(false)
+  })
+
+  it('splits a batch rather than refusing all of it', () => {
+    // The whole batch was refused before, because `insideRoot` said no to every
+    // Windows path — so a copilot session on Windows could attach nothing at
+    // all, including the files inside the very folder it is held in.
+    const { allowed, refused } = splitByBoundary(boundary, [
+      { path: `${boundary.folder}\\notes.md`, isDirectory: false },
+      { path: 'C:\\Users\\asad\\Desktop\\shot.png', isDirectory: false },
+    ])
+    expect(allowed.map((p) => p.path)).toEqual([`${boundary.folder}\\notes.md`])
+    expect(refused.map((p) => p.path)).toEqual(['C:\\Users\\asad\\Desktop\\shot.png'])
+  })
+
+  it('names the folder and the file by their last segment, not by their whole path', () => {
+    /*
+     * Both sentences go through `basename`. With it splitting on `/` only, the
+     * hint under the composer read "This session is held inside
+     * C:\Users\asad\AppData\Roaming\terminaldeck\copilot, so it cannot read…"
+     * — the four-line paragraph the last-segment rule was introduced to avoid,
+     * in a popover 336px wide.
+     */
+    const reason = confinedRefusal(boundary.folder, boundary.projects)
+    expect(reason).toContain('held inside copilot and the projects you have open')
+    const one = partialRefusal(
+      [{ path: 'C:\\Users\\asad\\Desktop\\shot.png', isDirectory: false }],
+      reason,
+    )
+    expect(one.startsWith('shot.png was not attached.')).toBe(true)
+  })
+
+  it('opens the panel in the project when the session can read it', () => {
+    expect(browseStart(boundary, 'C:\\Users\\asad\\Projects\\thing')).toBe(
+      'C:\\Users\\asad\\Projects\\thing',
+    )
+    expect(browseStart(boundary, 'C:\\Users\\asad\\Projects\\other')).toBe(boundary.folder)
+  })
+})

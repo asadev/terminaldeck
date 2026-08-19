@@ -158,7 +158,26 @@ export interface CloseWarning {
  * project when they pressed ✕ on a computer is the kind of wrong that makes a
  * confirmation stop being read.
  */
-export type CloseSubject = 'session' | 'project' | 'machine'
+export type CloseSubject = 'session' | 'project' | 'machine' | 'server'
+
+/**
+ * The nouns, per subject, in one table.
+ *
+ * A fourth subject arrived with terminals on servers, and it is genuinely a
+ * fourth case rather than a machine by another name. The one question a person
+ * has at this dialog is *what else does this take with it*, and the answers are
+ * different: a project's close takes its folder off the rail, a machine's leaves
+ * it paired, and a server's leaves a live machine — somebody's website — running
+ * exactly as it was. Telling them they are about to close a *server* would be
+ * the worst sentence on this screen, which is why the group heading below says
+ * terminals and not the thing they are running on.
+ */
+const GROUP_NOUN: Record<CloseSubject, string> = {
+  session: 'project',
+  project: 'project',
+  machine: 'machine',
+  server: 'terminals',
+}
 
 /**
  * What is actually at stake, in the words of the state it is in.
@@ -191,6 +210,30 @@ export function closeWarning(
       headline: 'This ends the session on that machine.',
       detail:
         'The agent stops there and its terminal goes, with its scrollback. The machine itself stays connected.',
+    }
+  }
+  /*
+   * A server, and the sentence is written around the fear rather than the act.
+   *
+   * Somebody pressing ✕ on a row that belongs to a live server is not worried
+   * about losing a scrollback. They are worried that they have just stopped
+   * their website, which is exactly what the word "close" beside a server's name
+   * suggests to a person who does not know better — the same argument the
+   * *Forget this server* control is written around one file over. So the detail
+   * says what is left running, in the second clause, where it will be read.
+   */
+  if (subject === 'server' && count > 1) {
+    return {
+      headline: `This closes ${count} terminals on that server.`,
+      detail:
+        'Each of them stops where it is, and anything half-typed goes with it. Nothing else on the server is touched — whatever it was running before, it is still running now.',
+    }
+  }
+  if (subject === 'server') {
+    return {
+      headline: 'This closes the terminal on that server.',
+      detail:
+        'Whatever is running inside it stops, and the terminal goes with its scrollback. Nothing else on the server is touched — it keeps running exactly as it was, and you can open another terminal whenever you like.',
     }
   }
   if (count > 1) {
@@ -343,12 +386,23 @@ export function CloseSessionConfirm({
    * plural sentence would be counting to one.
    */
   const group = count > 1
-  const noun = subject === 'machine' ? 'machine' : 'project'
+  const noun = GROUP_NOUN[subject]
+  /*
+   * "Close these terminals?" and not "Close this server?".
+   *
+   * The other three subjects name the container because closing it is what the
+   * press does — a project, a machine's group. A server's container is a machine
+   * that is still running, and putting its name after the word Close in the
+   * largest type on the dialog is the one thing this screen must not do. The
+   * name is still on screen, in `description` just below, where it identifies
+   * which server without being the object of the verb.
+   */
+  const groupTitle = subject === 'server' ? 'Close these terminals?' : `Close this ${noun}?`
 
   return (
     <Modal
       open={open}
-      title={group ? `Close this ${noun}?` : 'Close this session?'}
+      title={group ? groupTitle : 'Close this session?'}
       description={title}
       onClose={onCancel}
       footer={
@@ -362,7 +416,13 @@ export function CloseSessionConfirm({
             disabled={busy}
             onClick={() => void confirm()}
           >
-            {busy ? 'Closing…' : group ? `Close ${noun}` : 'Close session'}
+            {busy
+              ? 'Closing…'
+              : group
+                ? subject === 'server'
+                  ? 'Close terminals'
+                  : `Close ${noun}`
+                : 'Close session'}
           </button>
         </>
       }

@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { shell, type IpcMain } from 'electron'
-import { currentPlatform, withPath } from './platform/host'
+import { currentPlatform, isWindows, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
+import { launchSpec } from './tool-probe'
 
 const run = promisify(execFile)
 
@@ -278,13 +279,41 @@ export async function readCliVersion(
    * `withPath` rather than `{ ...process.env, PATH }`: on Windows the literal
    * key leaves the child holding both `Path` and `PATH`, and which one it reads
    * is undefined. See `platform/host.ts`.
+   *
+   * `launchSpec` rather than the bare name — the second half of the same
+   * lesson, and the one this function shipped without.
+   *
+   * What answers a PATH lookup for `gemini` on Windows is `gemini.cmd`, an
+   * npm shim, and Node has refused to spawn a `.cmd`/`.bat` without
+   * `shell: true` since 18.20.2/20.12.2 (the CVE-2024-27980 fix): `execFile`
+   * throws EINVAL before the process is created. The `catch` below then does
+   * exactly what the paragraph above calls catastrophic — it answers
+   * `version: null, stale: false`, which is the same answer as "your CLI is
+   * fine". So on Windows this check could not fire at all: the one warning that
+   * exists to stop somebody signing in successfully and then watching every
+   * request fail was silently disabled on the platform, not by a decision, by a
+   * default argument. `tool-probe.ts:launchSpec` was written for this exact
+   * failure and already carries the quoting half of it (a resolved path with a
+   * space in it splits inside `cmd /d /s /c`), so this routes through it rather
+   * than re-deriving the rule here — `prerequisites.ts:version` and
+   * `usage-probe.ts` reach it the same way.
+   *
+   * `resolved` is passed as `null` deliberately. We have not paid for a
+   * `where.exe` here and guessing would be worse than not knowing: with `null`
+   * `launchSpec` takes the command processor, which runs a shim and a real
+   * `.exe` alike, so the answer is right either way. `usage-probe.ts:713` makes
+   * the same call for the same reason.
    */
-  exec: (cmd: string, args: string[]) => Promise<{ stdout: string }> = async (cmd, args) =>
-    run(cmd, args, {
+  exec: (cmd: string, args: string[]) => Promise<{ stdout: string }> = async (cmd, args) => {
+    const platform = currentPlatform()
+    const launch = launchSpec(cmd, null, platform)
+    return run(launch.command, args, {
       timeout: 5000,
       windowsHide: true,
-      env: withPath(process.env, await loginPath(), currentPlatform()),
-    }),
+      shell: launch.shell,
+      env: withPath(process.env, await loginPath(platform), platform),
+    })
+  },
 ): Promise<AgentCliVersion> {
   try {
     const { stdout } = await exec(command, ['--version'])
@@ -298,18 +327,50 @@ export async function readCliVersion(
 }
 
 /**
+ * What to tell somebody to type, on the machine they are actually sitting at.
+ *
+ * The sentence used to lead with `brew upgrade gemini-cli` unconditionally.
+ * Homebrew is not a Windows package manager — there is no `brew` on a stock
+ * Windows PC, and there is no supported way to get one — so a Windows user who
+ * did get this warning was handed a command that cannot run as the *first*
+ * thing to try, with the one that does work relegated to "or". Advice a reader
+ * has to filter is advice they stop reading.
+ *
+ * npm is the common half: the Homebrew formula and the npm package are the same
+ * CLI, and `npm install -g @google/gemini-cli@latest` is exactly right on
+ * Windows (it is how the `.cmd` shim got there in the first place). So Windows
+ * gets that line alone rather than a reworded one — nothing is lost by dropping
+ * a route that does not exist, and inventing a winget/choco line for a package
+ * nobody here has checked is published would be the same mistake pointing the
+ * other way.
+ *
+ * Pure and exported so both spellings can be pinned from a Mac, which is the
+ * only machine this repo is written on.
+ */
+export function staleGeminiAdvice(platform: Platform = currentPlatform()): string {
+  const opening =
+    'Google turns away builds this old after you sign in — the sign-in succeeds and the first request fails. Upgrade it:'
+  const npm = '`npm install -g @google/gemini-cli@latest`'
+  if (isWindows(platform)) return `${opening} ${npm}.`
+  return `${opening} \`brew upgrade gemini-cli\`, or ${npm}.`
+}
+
+/**
  * Every agent CLI whose sign-in is known to fail on an old build.
  *
  * A list of one, and it stays a list. The next CLI to start refusing old clients
  * needs a row here and nothing else, and a list of one is what a second entry
  * gets appended to rather than the shape somebody has to invent under pressure.
+ *
+ * `platform` is a parameter rather than a read of `process.platform` inside,
+ * for the reason `platform/host.ts` gives at length: a branch written inline is
+ * a branch only the machine it was written on can ever exercise, and CI here is
+ * macOS-only.
  */
-export async function staleAgentCli(): Promise<AgentCliVersion[]> {
-  const gemini = await readCliVersion(
-    'gemini',
-    GEMINI_SUPPORTED_FROM,
-    'Google turns away builds this old after you sign in — the sign-in succeeds and the first request fails. Upgrade it: `brew upgrade gemini-cli`, or `npm install -g @google/gemini-cli@latest`.',
-  )
+export async function staleAgentCli(
+  platform: Platform = currentPlatform(),
+): Promise<AgentCliVersion[]> {
+  const gemini = await readCliVersion('gemini', GEMINI_SUPPORTED_FROM, staleGeminiAdvice(platform))
   return [gemini].filter((entry) => entry.stale)
 }
 

@@ -15,6 +15,7 @@ import { THIS_MACHINE, type MachineChoice } from './machines-bridge'
  */
 
 const OFFICE: MachineChoice = {
+  kind: 'device',
   id: 'mach-1',
   name: 'office-pc',
   noun: 'PC',
@@ -60,6 +61,27 @@ describe('the machine picker', () => {
     expect(markup).toContain('aria-haspopup="menu"')
     expect(markup).toContain('aria-expanded="false"')
     expect(markup).toContain('<button')
+  })
+
+  /**
+   * A server draws the same control, in the same words.
+   *
+   * Asserted by comparing the two renders rather than by matching strings,
+   * because the requirement is a *sameness* rather than a particular sentence:
+   * *"shape of the application should not be changing for local and remote
+   * devices."* A future change that gave servers their own label, their own
+   * glyph or their own row would pass a string test written about servers and
+   * fail this one.
+   */
+  it('draws a server exactly as it draws a computer somebody sits at', () => {
+    const server: MachineChoice = { ...OFFICE, kind: 'server', id: 's1', noun: 'server' }
+    const asServer = renderToStaticMarkup(
+      <MachinePicker machines={[server]} selected="s1" onSelect={() => {}} />,
+    )
+    const asDevice = renderToStaticMarkup(
+      <MachinePicker machines={[OFFICE]} selected="mach-1" onSelect={() => {}} />,
+    )
+    expect(asServer).toBe(asDevice)
   })
 
   it('still points at a machine that has gone, so the sentence can be read', () => {

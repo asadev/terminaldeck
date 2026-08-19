@@ -167,19 +167,14 @@ final class HostLink: Identifiable {
      */
     @ObservationIgnored
     private(set) lazy var copilot: CopilotLink = {
-        let link = CopilotLink(
-            wire: WireProxy { [weak self] message in
-                self?.transport?.send(message) ?? false
-            },
-            // The copilot credential lives in this machine's own Keychain record
-            // — a second secret beside the pairing one, with a separate life:
-            // separately minted, separately revoked, and gone with the pairing.
-            // Reached through closures rather than by handing the link this
-            // object, so that the rule about a view never reaching the transport
-            // holds one layer further in.
-            vault: CopilotVaultProxy(
-                read: { [weak self] in self?.credential.copilotCredential },
-                write: { [weak self] value in self?.storeCopilotCredential(value) }))
+        // A wire and nothing else. It used to be handed a `CopilotVaultProxy`
+        // as well — two closures onto the copilot credential kept in this
+        // machine's Keychain record — and there is no second credential any
+        // more: pairing this device as one of his *is* the copilot's
+        // authorisation. See `CopilotLink`.
+        let link = CopilotLink(wire: WireProxy { [weak self] message in
+            self?.transport?.send(message) ?? false
+        })
         // One error surface per machine. A second `lastError` on the copilot
         // would be a second banner that can disagree with this one about which
         // of them is showing.
@@ -188,25 +183,6 @@ final class HostLink: Identifiable {
         }
         return link
     }()
-
-    /**
-     * The copilot credential, written through the one writer this app has.
-     *
-     * `onCredential` is how every other change to this record reaches the
-     * Keychain — `DeckModel` owns the drawer, because a link that saved for
-     * itself would be N writers and the bug that must not exist is a write for
-     * one host landing on another.
-     *
-     * Guarded on a change, because this is called on every `copilot.grant`
-     * carrying `linked: false` — which is most of them, for a device nobody has
-     * connected — and a Keychain write per frame is a Keychain write nobody
-     * asked for.
-     */
-    private func storeCopilotCredential(_ value: String?) {
-        guard credential.copilotCredential != value else { return }
-        credential = credential.withCopilotCredential(value)
-        onCredential?(credential)
-    }
 
     private var bridges: [String: TerminalBridge] = [:]
     /// Confirmed by the host.
@@ -1017,14 +993,17 @@ final class HostLink: Identifiable {
              * welcome: the desktop's subscription belongs to the connection this
              * frame arrived on, and its copilot access belongs to this *socket*.
              * `welcome.copilot.open` is always false, so what goes out of here
-             * is a `copilot.hello` carrying the stored credential — not an
-             * `attach`, which would be refused.
+             * is a `copilot.hello` — not an `attach`, which would be refused.
+             * The hello carries nothing: the device behind this socket proved
+             * who it is at pairing time, and whether it is one of *his* devices
+             * is what the desktop checks.
              *
-             * All four parts of the field go in, not just the grant: whether it
-             * was there at all is what tells this phone the machine really has a
-             * copilot, `linked` is what tells it whether to show a code field,
-             * and those are three different questions from what the capability
-             * list claims. See `CopilotConnection`.
+             * The whole field goes in, not just the grant, because the thing
+             * that matters most about it is whether it was there at all — the
+             * desktop writes it only for a machine with a copilot and a device
+             * approved as his, so its presence is the authorisation and its
+             * absence is a guest. That is a different question from what the
+             * capability list claims. See `CopilotConnection`.
              */
             copilot.welcomed(capabilities: capabilities, connection: copilotConnection)
             // After `granted` is set, because the folders this asks about are
@@ -1147,12 +1126,12 @@ final class HostLink: Identifiable {
         case let .error(code, text):
             lastError = text.isEmpty ? code.rawValue : text
             openWhenCreated = false
-            // A wrong connect code comes back as a plain `error` — the sentence
-            // is the desktop's and it is already on screen in the banner above,
-            // so all this does is stop the Connect screen spinning over it. The
-            // wire's error frame carries no correlation id, so this cannot be
-            // narrowed to copilot errors without inventing one; see
-            // `CopilotLink.wireErrored`.
+            // A refused `copilot.hello` comes back as a plain `error` — the
+            // sentence is the desktop's and it is already on screen in the
+            // banner above, so all this does is stop the copilot screen saying
+            // *opening…* over it. The wire's error frame carries no correlation
+            // id, so this cannot be narrowed to copilot errors without inventing
+            // one; see `CopilotLink.wireErrored`.
             copilot.wireErrored()
 
         case let .ports(list):
@@ -1224,24 +1203,18 @@ final class HostLink: Identifiable {
             copilot.apply(pending: questions)
 
         case let .copilotGrant(connection):
-            // Four events on one frame: the connection opened, it closed,
-            // somebody reticked the boxes, or somebody disconnected this device.
-            // A revoke lands here without a reconnect, which is the whole point
-            // — the *rule* is already live because the desktop re-reads the
-            // store on every call, so all this does is stop the phone offering a
-            // control whose only outcome is a refusal.
+            // Chiefly the answer to `copilot.hello` — the frame carrying
+            // `open: true`. It is also how this end learns, without waiting for
+            // a reconnect, that the device has stopped being one of his: the
+            // frame carries `linked: false`, and the tab goes. The *rule* is
+            // already live either way, because the desktop re-reads the store on
+            // every call; all this does is stop the phone offering a control
+            // whose only outcome is a refusal.
             //
             // `pushed` rather than the plain `apply`, because a connection that
             // arrives as a frame is also proof this machine has a copilot, and
             // the same object arriving inside a `welcome` is not.
             copilot.apply(pushed: connection)
-
-        case let .copilotLinked(credential, connection):
-            // The one frame on this wire carrying a secret, and it arrives
-            // exactly once — there is no path on the desktop that can send it
-            // again, because it keeps a scrypt hash. `CopilotLink` stores it
-            // before it does anything else with the frame.
-            copilot.linked(credential: credential, connection: connection)
 
         case let .copilotAsk(question):
             copilot.apply(ask: question)

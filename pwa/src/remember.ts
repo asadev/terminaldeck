@@ -168,3 +168,50 @@ export function clearAcross(stores: Stores, clear: (storage: StorageLike) => voi
   clear(stores.tab)
   clear(stores.browser)
 }
+
+/* --------------------------------------------------------------- retired -- */
+
+/**
+ * Keys this client used to write and no longer does.
+ *
+ * There is one, and it held a secret: `terminaldeck.copilot.v1` was a map of
+ * copilot credentials keyed by machine, written by `copilot-store.ts` when the
+ * copilot was a **separate connection** with a six-digit code of its own. That
+ * ceremony was deleted on 2026-08-19 — pairing a device as one of his own is now
+ * the whole authorisation — and the module that wrote this went with it.
+ *
+ * Listed rather than forgotten because deleting the writer does not delete what
+ * it wrote. Every browser that ever connected a copilot is still holding those
+ * strings, in `localStorage` on the ones that answered *"this browser is mine"*,
+ * and nothing would ever read them again. A secret nobody can see, that nothing
+ * can use, sitting on a work laptop until somebody clears their browsing data,
+ * is the exact shape of leftover this client's storage rules exist to prevent —
+ * and the browser client's whole reason to exist is the computer you do not own.
+ */
+export const RETIRED_KEYS: readonly string[] = ['terminaldeck.copilot.v1']
+
+/**
+ * Sweep {@link RETIRED_KEYS} out of both stores.
+ *
+ * Both, unconditionally, on every launch — not "whichever store this browser
+ * chose". The answer to *is this browser yours* can have changed since the value
+ * was written, and the copy that would be missed is the durable one on a
+ * computer somebody has since said is not theirs.
+ *
+ * Cheap enough to do every launch that no flag records it having been done: a
+ * flag would be a key written to avoid removing a key, and it would outlive the
+ * removal it was tracking.
+ */
+export function purgeRetired(stores: Stores): void {
+  for (const storage of [stores.tab, stores.browser]) {
+    for (const key of RETIRED_KEYS) {
+      try {
+        storage.removeItem(key)
+      } catch {
+        // Private mode, or storage switched off. Nothing here is load-bearing —
+        // a store that refuses a write is a store that is not keeping the value
+        // either — and throwing would take the whole launch with it.
+      }
+    }
+  }
+}

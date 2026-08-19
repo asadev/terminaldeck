@@ -26,38 +26,48 @@
  * tool id. If a future frame needs one, this comment is where the argument
  * against it is.
  *
- * ## The copilot is a **separate connection**, and that is the whole design
+ * ## Pairing as **his** device *is* the copilot's authorisation
  *
- * This is the part that changed on 2026-08-17 and it changed everything else in
- * the file. Copilot access used to be a box ticked beside an already-paired
- * device, carried on the session channel, with `alter` deliberately absent from
- * the wire in any spelling — three independent refusals guarding the tier whose
- * safety property is *a human at the machine says yes*.
+ * This is the part that changed on 2026-08-19, and it deleted more of this file
+ * than any change before it. Between 2026-08-17 and that date the copilot was a
+ * **separate connection**: its own six-digit code minted at the desktop, its own
+ * credential stored in the Keychain beside the pairing one, its own record and
+ * its own revoke. A device paired to run ten terminals had no copilot reach at
+ * all until somebody minted a code for it and it was redeemed.
  *
- * Asad:
+ * Asad, looking at that:
  *
- * > *"Phones will have full control over copilot, same as the actual machine
- * > app. But connecting copilot will be a separate connection than the
- * > sessions."*
+ * > *"Instead of giving mobile app separate connection for copilot just make it
+ * > like if we are connecting as my device copilot automatically comes, if we
+ * > connect as guest then copilot don't come — that's all we need to do instead
+ * > of two different connections."*
  *
- * The property was not abandoned; the second factor moved. It was never really
- * *geography* — somebody who walks away from an unlocked Mac has taken their
- * geography with them — it was *reaching the dialog required an authorisation
- * the requesting party did not already hold.* So the copilot now has its own
- * six-digit code minted at the desktop, its own credential, its own record and
- * its own revoke, and a device paired to run ten terminals has no copilot reach
- * whatsoever until somebody mints a code for it and it is redeemed.
+ * The property the second connection protected is not abandoned — it is simply
+ * already held. What the code was buying was *reaching the copilot required an
+ * authorisation the requesting party did not already hold*, and approving a
+ * device as **My device** at the machine is exactly that authorisation, made
+ * once, deliberately, at the keyboard. The approval screen has said so in his
+ * own words the whole time: *"My device — Full access. It's you at another
+ * keyboard"*, against *"Guest — You choose what they can reach. The copilot is
+ * never shared."* Asking the same person to prove the same thing twice is
+ * ceremony, and ceremony people learn to click through is worse than no
+ * ceremony at all.
  *
- * Three consequences this file has to get right, each of which is a screen:
+ * So there is no copilot code, no copilot credential, no `copilot.connect`, and
+ * no state where a device is paired and the copilot is "not connected yet". What
+ * is left of the wire is two facts and a grant:
  *
- *  - **`linked`** — does that desktop hold a copilot record for this device.
- *    False means *ask the person at the machine for a connect code*; there is no
- *    frame that will work before one is redeemed, read tier included.
- *  - **`open`** — has *this socket* presented the credential. It is false on
- *    every `welcome`, always, and a client that treats it as "already in" sends
- *    frames that are refused. `copilot.hello` opens it, on every reconnect.
- *  - **`grant`** — what the connection may do once open. All three tiers,
- *    `alter` included.
+ *  - **the field's presence** — the desktop writes `welcome.copilot` only when
+ *    it has a copilot *and* this device was approved as one of his. A guest gets
+ *    no key at all, and is not even told the capability exists — `server.ts`
+ *    filters the advertisement rather than only refusing the verb, because *"a
+ *    client that is told the capability exists draws the tab, and a tab that
+ *    refuses on every press is a worse answer than a client that never knew."*
+ *  - **`open`** — has *this socket* said hello. False on every `welcome`,
+ *    always, and a client that treats it as "already in" sends frames that are
+ *    refused. `copilot.hello` opens it, on every reconnect, carrying nothing.
+ *  - **`grant`** — what the connection may do once open. All three tiers, and
+ *    for one of his own devices all three are true.
  *
  * ## Read is the floor; act and alter are two more switches on top of it
  *
@@ -75,16 +85,25 @@ import Foundation
 enum Copilot {
 
     /**
-     * The desktop can speak `copilot.*` frames.
+     * The desktop can speak `copilot.*` frames **to this device**.
      *
      * Advertised in `welcome.capabilities`, like every other name past protocol
-     * v1, and read the same way: absent means "this desktop has never heard of
-     * the feature", which is every build shipping before 0.4. It is **not** the
-     * same question as whether this device may use it — that is the connection
-     * and the grant, which travel separately, for the reason `folders` travels
-     * separately from `create`. One is about the host, the other is about this
-     * device, and folding them together is exactly how a phone ends up drawing a
-     * control that is always refused.
+     * v1, and read the same way: absent means "there is no copilot here for
+     * you", which covers two machines that are not the same and that this phone
+     * cannot tell apart — a build old enough never to have heard of the feature,
+     * and a machine where this device was approved as a **guest**.
+     *
+     * That they are indistinguishable is `server.ts`'s decision, not an
+     * omission. `capabilitiesFor` strips `copilot` from what a guest is told,
+     * with the reason written beside it: *"a client that is told the capability
+     * exists draws the tab, and a tab that refuses on every press is a worse
+     * answer than a client that never knew."* So the only sentence this end can
+     * honestly print for an absent capability has to cover both, which is what
+     * the `.notOffered` screen does.
+     *
+     * It is still **not** on its own the answer to *does that machine have a
+     * copilot* — see `CopilotConnection.stated` for the drift this list can have
+     * from the frames it advertises.
      */
     static let capability = "copilot"
 
@@ -132,24 +151,21 @@ enum Copilot {
      */
     static let maxTimelineRows = 600
 
-    /**
-     * Digits in a connect code. `CODE_LENGTH` in `src/shared/short-code.ts`, and
-     * the same six digits the pairing code uses.
+    /*
+     * **`codeLength` and `maxCredentialChars` used to be here, and both are
+     * gone with the ceremony that needed them.**
      *
-     * Deliberately the same format and deliberately **not** the same code: this
-     * one is minted by `CopilotLinks.mintCode` and redeemed by
-     * `copilot.connect`, and typing a pairing code here would be six digits that
-     * hash to nothing. The two screens say which is which; the format is shared
-     * because a person should not have to learn a second shape of code for the
-     * second thing they connect.
+     * `codeLength` was the six digits of a *connect code* — minted by
+     * `CopilotLinks.mintCode`, redeemed by `copilot.connect`, deliberately the
+     * same shape as a pairing code and deliberately not the same code.
+     * `maxCredentialChars` bounded the secret that came back. Neither has
+     * anything left to measure: approving a device as **My device** is the
+     * authorisation now, so nothing is minted, nothing is typed and nothing is
+     * stored.
+     *
+     * `PairingCodeParser.codeLength` is untouched. Pairing still uses six
+     * digits, and it is the one ceremony that was never in question.
      */
-    static let codeLength = 6
-
-    /// `MAX_COPILOT_CREDENTIAL_CHARS`. 32 bytes of base64url is 43 characters;
-    /// the ceiling is generous and finite for the reason `device-auth.ts` gives
-    /// about its own — a client that forgets to check a value must not be able
-    /// to hand a megabyte to a keychain item or to a frame.
-    static let maxCredentialChars = 512
 }
 
 /**
@@ -170,9 +186,13 @@ enum Copilot {
  * property, and every existing grant silently widens the day somebody inserts a
  * tier between two others.
  *
- * `none` is the answer for every device with no copilot record — the
- * overwhelming majority, by design, because nobody has ever had remote copilot
- * access and so nobody can lose it.
+ * `none` is the answer for every device the copilot is not for — a guest, or a
+ * machine whose build has no copilot in it — and it is what an absent or
+ * malformed `grant` decodes to. For one of **his** devices the desktop sends all
+ * three: *"My device — Full access. It's you at another keyboard."* There is no
+ * per-device tier switch any more, so a connected device with an empty grant is
+ * a host saying something this build does not expect rather than a person having
+ * unticked a box.
  */
 struct CopilotGrant: Equatable {
     let read: Bool
@@ -209,62 +229,72 @@ struct CopilotGrant: Equatable {
      */
     var canAnswer: Bool { alter }
 
-    /// True when this device has been granted nothing, which is a real state —
-    /// a connection whose boxes are all unticked still holds a working
-    /// credential — and the one the screen exists to explain rather than hide.
+    /// True when the frame granted nothing. For a device the copilot is not for
+    /// that is the ordinary answer; for a connected one it is a far end saying
+    /// something this build does not expect, and the screen says so rather than
+    /// drawing controls whose only outcome is a refusal.
     var isEmpty: Bool { !read && !act && !alter }
 }
 
 /**
- * What a `welcome` or a `copilot.grant` said about this device's copilot: does
- * the machine have one, does this device hold a record for it, is *this socket*
- * in, and what may it do.
+ * What a `welcome` or a `copilot.grant` said about this device's copilot: is
+ * there one here for this phone, is *this socket* in, and what may it do.
  *
- * Four facts and not one, because a client has four screens to draw and folding
- * any two of them together makes one of them wrong.
+ * `stated` is this end's own bit and is not on the wire — it records whether the
+ * frame carried a `copilot` object at all, which is the field's whole meaning
+ * now. The desktop writes it only when it has a copilot layer **and** this
+ * device was approved as one of his: a guest gets no key. So *presence* is the
+ * authorisation, and there is nothing inside the object a client has to walk to
+ * find out whether it is allowed in.
  *
- * `stated` is this end's own bit and is not on the wire. `welcome.capabilities`
- * is not a reliable answer to "does this machine have a copilot": the desktop
- * assembles that list by filtering `CAPABILITIES` — *every extension this build
- * knows how to serve* — against what its injected objects can actually do, and
- * the filter is a separate line of code from the thing it is filtering for. A
- * build where the two have drifted advertises a feature it cannot serve, which
- * is not hypothetical: `ios/Harness/host-standin.ts` sends the whole of
- * `CAPABILITIES` verbatim and implements almost none of it, and an earlier pass
- * over a different feature was reported as verified against the empty screen
- * that produced.
+ * `welcome.capabilities` is not a substitute for it. The desktop assembles that
+ * list by filtering `CAPABILITIES` — *every extension this build knows how to
+ * serve* — against what its injected objects can actually do, and the filter is
+ * a separate line of code from the thing it is filtering for. A build where the
+ * two have drifted advertises a feature it cannot serve, which is not
+ * hypothetical: `ios/Harness/host-standin.ts` sends the whole of `CAPABILITIES`
+ * verbatim, and an earlier pass over a different feature was reported as
+ * verified against exactly the empty screen that produces. The field cannot
+ * drift the same way, because `copilotFrame()` on the desktop is written by the
+ * same object that serves the frames.
  *
- * The `copilot` **field** is the reliable answer, because it is written by the
- * same object that serves the frames: `copilotFrame()` on the desktop returns
- * `{}` when there is no copilot layer and the object — *even when the device
- * holds nothing* — when there is one. A host that has a copilot says so in this
- * field by construction; a host that merely advertises the name cannot.
+ * `linked` survives the deletion of the connect ceremony with a smaller job than
+ * it had. It used to mean *that desktop holds a copilot record for this device*,
+ * minted by a six-digit code, and false was a screen with a code field on it.
+ * There is no record and no code any more; it is true for every device the field
+ * is written for. What it is still worth reading is the one thing it can say
+ * that a `welcome` cannot: a **`copilot.grant` push carrying `linked: false`**,
+ * which is how a device that has stopped being one of his finds out without
+ * waiting for a reconnect — capabilities travel only in the `welcome`, so
+ * without this frame a phone whose kind changed at the machine would keep a tab
+ * that refuses on every press until the socket happened to drop.
  *
- * So `stated` answers *does this machine have a copilot at all*, `linked`
- * answers *and have I been connected to it*, `open` answers *and is this socket
- * in*, and `grant` answers *and what may I do*. Keeping them apart is what lets
- * a phone tell **update that desktop** from **ask for a connect code** from
- * **send your credential** from **somebody unticked your boxes** — four
- * sentences that send a person to four different places, three of which exist.
+ * So: `stated` answers *is there a copilot here for me*, `linked` answers *and
+ * is that still true*, `open` answers *and is this socket in*, and `grant`
+ * answers *and what may I do*.
  */
 struct CopilotConnection: Equatable {
     /// The frame carried a `copilot` object. See the type's header: this is the
     /// honest signal, and the capability name is not.
     let stated: Bool
-    /// That desktop holds a copilot record for this device. False is *ask for a
-    /// connect code*, and it is the state every paired device starts in.
+    /// That desktop still counts this device as one of his. True for every
+    /// device the field is written for; false only ever arrives as a push, and
+    /// it means the copilot has been taken away. See the type's header.
     let linked: Bool
     /**
-     * **This socket** has presented the credential.
+     * **This socket** has said hello.
      *
-     * False on every `welcome`, always — that is not a quirk to work around, it
-     * is the difference between this design and the per-device grant it
-     * replaced. A session channel does not carry the copilot by existing.
+     * False on every `welcome`, always — copilot access belongs to the socket,
+     * and a socket has presented nothing at the moment it is greeted. That is
+     * not a quirk to work around; it is why `copilot.hello` exists and why it
+     * goes out on every reconnect.
      */
     let open: Bool
     let grant: CopilotGrant
 
-    /// A desktop that said nothing. Every build shipping before this feature.
+    /// A desktop with no copilot for this phone: an older build, or a machine
+    /// where this device is a guest. The two are deliberately indistinguishable
+    /// from here — see `Copilot.capability`.
     static let silent = CopilotConnection(stated: false, linked: false, open: false, grant: .none)
 }
 
@@ -486,8 +516,10 @@ struct CopilotAction: Equatable, Identifiable {
  * A port of `CopilotPendingRow`. This type used to carry no `mine` and its
  * header said, in those words, that there must never be an Allow or a Refuse on
  * it. That was true while copilot access was a box ticked beside a paired phone.
- * It is not true now that a copilot connection is its own act of authorisation —
- * see `CopilotConnection` and `COPILOT-REMOTE.md` §4.
+ * It is not true of a device approved as **My device** — *"full access, it's you
+ * at another keyboard"* — which is an act of authorisation made deliberately, at
+ * the machine, by the one person whose confirmation this is. See
+ * `CopilotConnection` and `COPILOT-REMOTE.md` §4.
  *
  * What survives unchanged is the **watching** half, and it is still most of the
  * value: the failure the design named is a desktop dialog on a screen nobody is
@@ -701,9 +733,9 @@ extension WireCodec {
      *
      * The grant, the two connection facts, plus the one bit none of them can
      * carry: whether the field was there at all. See `CopilotConnection` — that
-     * bit is the difference between a desktop with a copilot this device has not
-     * been connected to, and a desktop with no copilot whose capability list
-     * says otherwise.
+     * bit is now the authorisation itself, because the desktop writes the object
+     * only for a machine that has a copilot and a device that was approved as
+     * one of his.
      *
      * Only an object counts as having said something. `"copilot": "yes"` and
      * `"copilot": null` are a host this app does not understand, and the honest
@@ -713,7 +745,30 @@ extension WireCodec {
     static func copilotConnection(_ value: Any?) -> CopilotConnection {
         guard let object = value as? [String: Any] else { return .silent }
         return CopilotConnection(stated: true,
-                                 linked: literalTrue(object["linked"]),
+                                 /*
+                                  * **Absent reads as `true` here, and it is the
+                                  * one field on this wire that does.**
+                                  *
+                                  * Every other boolean in this codec falls
+                                  * towards *no*, because every other boolean is
+                                  * a grant and a missing grant must never read
+                                  * as a given one. This one is not a grant: the
+                                  * object's presence is the grant, and the
+                                  * desktop writes `linked: true` in every frame
+                                  * it writes the object into. Reading a missing
+                                  * key as false would mean one forgotten field
+                                  * on the far end takes the copilot away from a
+                                  * device that has it — a bug that looks exactly
+                                  * like the feature being switched off.
+                                  *
+                                  * What the field is *for* is the opposite
+                                  * direction: an explicit `false`, which only
+                                  * ever arrives as a `copilot.grant` push and
+                                  * means this device has stopped being one of
+                                  * his. That is honoured, strictly, by
+                                  * `literalFalse`.
+                                  */
+                                 linked: !literalFalse(object["linked"]),
                                  // Read rather than assumed false, even though
                                  // the desktop swears it is false on every
                                  // `welcome`: this same decoder reads the
@@ -723,6 +778,27 @@ extension WireCodec {
                                  // second decoder for the frame that matters.
                                  open: literalTrue(object["open"]),
                                  grant: copilotGrant(object["grant"]))
+    }
+
+    /**
+     * A JSON `false`, and nothing that merely resembles one.
+     *
+     * The mirror of `literalTrue`, and it exists for one field: `linked`, which
+     * is the only boolean on this wire whose *absence* means yes. `0`, `"no"`
+     * and `null` are not a `false` — they are a host saying something this build
+     * does not understand, and the safe reading of not understanding is to leave
+     * a working copilot alone rather than to take it away.
+     *
+     * The `CFBooleanGetTypeID` test is why this cannot be written as
+     * `!literalTrue(_:)`: that spelling would read *every* absent or malformed
+     * value as `false`, which is exactly the collapse this function exists to
+     * refuse.
+     */
+    static func literalFalse(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            return false
+        }
+        return !number.boolValue
     }
 
     /**

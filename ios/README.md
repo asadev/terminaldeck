@@ -360,35 +360,49 @@ looked up somewhere the host is not sitting.
 
 ```sh
 ios/Harness/run.sh host --port 8930 --rendezvous wss://relay.terminaldeck.dev \
-  --copilot alter --approve-after 3000 --folders /tmp/td-work &
-TEST_RUNNER_TD_CONTROL=127.0.0.1:8931 TEST_RUNNER_TD_COPILOT=alter \
+  --copilot mine --approve-after 3000 --folders /tmp/td-work &
+TEST_RUNNER_TD_CONTROL=127.0.0.1:8931 TEST_RUNNER_TD_COPILOT=mine \
 TEST_RUNNER_TD_SHOTS=/tmp/td/appearance \
   xcodebuild test -project ios/TerminalDeck.xcodeproj -scheme TerminalDeck \
   -destination 'platform=iOS Simulator,id=<UDID>' \
   -only-testing:TerminalDeckUITests/AppearanceShotsUITests/testTheCopilotScreensInBothSchemes
 ```
 
-### Connecting the copilot, which is a second ceremony
+### The copilot, which is not a second ceremony any more
 
-A paired device has **no copilot reach at all** until somebody at the machine
-mints a six-digit connect code and it is redeemed — `COPILOT-REMOTE.md` §6. So a
-walk that wants the timeline has to mint one; the stand-in grew a control
-endpoint for exactly that, because a script cannot press a button on a Mac:
+There is nothing to connect. A device approved at the machine as **My device**
+has the copilot; a guest does not, and is not even told the capability exists.
+Asad, on 2026-08-19: *"instead of giving mobile app separate connection for
+copilot just make it like if we are connecting as my device copilot
+automatically comes, if we connect as guest then copilot don't come — that's all
+we need to do instead of two different connections."*
+
+So the six-digit connect code is gone, the `/copilot-code` endpoint with it, and
+the phone has no connect screen, no code field and no Settings row for any of it.
+What the stand-in's control server still offers is the half a script genuinely
+cannot press:
 
 ```sh
-curl 127.0.0.1:8931/copilot-code     # six digits, sixty seconds, single use
 curl 127.0.0.1:8931/copilot-ask      # raise a confirmation on the connected device
 curl 127.0.0.1:8931/copilot-pending  # what is waiting, and who owns it
 ```
 
-`CopilotScreensUITests` walks the whole thing: connect with a code, start a run,
-ask it something, answer the confirmation it raises, and read a question raised
-at the desk that this phone may watch and must not answer.
+`--copilot` now has two states — `mine` and `absent` — with `guest` reaching the
+second, because from the client's side a guest and a machine with no copilot are
+the same frame. The old level names (`read`, `act`, `alter`, `none`) are still
+accepted and all mean `mine`, so an existing script reports a client problem
+rather than an unknown-flag one.
+
+`CopilotScreensUITests` walks it: the pill is simply there, then start a run, ask
+it something, answer the confirmation it raises, and read a question raised at
+the desk that this phone may watch and must not answer. Every case also asserts
+that nothing anywhere offers to connect a copilot, because a deletion is worth
+walking rather than assuming.
 
 ```sh
 ios/Harness/run.sh host --port 8887 --rendezvous wss://relay.terminaldeck.dev \
-  --copilot alter --folders /tmp/tdwork &
-TEST_RUNNER_TD_CONTROL=127.0.0.1:8888 TEST_RUNNER_TD_COPILOT=alter \
+  --copilot mine --folders /tmp/tdwork &
+TEST_RUNNER_TD_CONTROL=127.0.0.1:8888 TEST_RUNNER_TD_COPILOT=mine \
 TEST_RUNNER_TD_SHOTS=/tmp/td/copilot-shots \
   xcodebuild test -project ios/TerminalDeck.xcodeproj -scheme TerminalDeck \
   -destination 'platform=iOS Simulator,id=<UDID>' \
@@ -397,8 +411,11 @@ TEST_RUNNER_TD_SHOTS=/tmp/td/copilot-shots \
 
 Against the **real** desktop the same walk is `LiveCopilotUITests`, whose header
 carries the command: a window build under a scratch `--user-data-dir`, with the
-two codes minted over CDP into two files because each lives sixty seconds and a
-Simulator takes longer than that to arrive.
+pairing code minted over CDP into a file because it lives sixty seconds and a
+Simulator takes longer than that to arrive. **Approve the phone as "My device"**
+when the request appears — that approval is the whole of the copilot's
+authorisation, and approving it as a guest is the `TD_COPILOT_EXPECTED=no` case
+rather than a failure.
 
 **Two frames need a real device and are not in the set**, both for the same
 reason and it is the harness rather than the app. `PortTunnel` binds the *same

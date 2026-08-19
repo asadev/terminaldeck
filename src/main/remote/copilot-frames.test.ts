@@ -56,8 +56,10 @@ const ALLOWED_FIELDS: Readonly<Record<string, readonly string[]>> = {
    * authorisation that replaced *"the alter tier cannot be granted remotely"* —
    * and they carry no tier for the reason `COPILOT_UNTIERED_FRAMES` gives.
    */
-  'copilot.connect': ['code'],
-  'copilot.hello': ['credential'],
+  // Both empty since 2026-08-19: there is no copilot code and no credential.
+  // The socket is already authenticated as this device and the kind chosen when
+  // it was paired decides the rest. `copilot-access.ts`.
+  'copilot.hello': [],
   'copilot.bye': [],
   /*
    * Answering a confirmation: a question id and a boolean.
@@ -99,8 +101,10 @@ const ALLOWED_FIELDS: Readonly<Record<string, readonly string[]>> = {
 
 /** Every copilot client frame a phone can build, as it goes onto the wire. */
 const FRAMES: ClientMessage[] = [
-  { t: 'copilot.connect', code: '481902' },
-  { t: 'copilot.hello', credential: 'Zm9vYmFyLWNyZWRlbnRpYWwtaGVyZQ' },
+  // No `copilot.connect`, and `copilot.hello` carries nothing: the separate
+  // copilot connection was deleted on 2026-08-19 and a device's kind is the
+  // authorisation. See `copilot-access.ts`.
+  { t: 'copilot.hello' },
   { t: 'copilot.bye' },
   { t: 'copilot.answer', id: '9f1c2ae0-8f1d-4b1e-9a2f-77d7c0a1b3e5', approved: true },
   { t: 'copilot.attach' },

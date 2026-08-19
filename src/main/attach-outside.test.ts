@@ -65,6 +65,35 @@ describe('reading file paths off the clipboard', () => {
     expect(clipboardFilePaths(board)).toEqual(['/tmp/only.txt'])
   })
 
+  it('reads a Windows clipboard, which holds neither macOS name', () => {
+    /*
+     * The defect this closes: copying a file in Explorer and pressing paste
+     * reported "There is no file or image on the clipboard" over a clipboard
+     * that had a file on it, because both formats asked for were macOS
+     * pasteboard types and a Windows clipboard has neither.
+     *
+     * Forced by the DATA rather than by the platform — the reader is injected,
+     * so this measures what the function does with what Windows hands it, on
+     * whatever machine the suite happens to be running on.
+     */
+    const board = (format: string): string =>
+      format === 'FileNameW' ? 'C:\\Users\\Asad\\notes.txt\u0000' : ''
+    expect(clipboardFilePaths(board)).toEqual(['C:\\Users\\Asad\\notes.txt'])
+  })
+
+  it('prefers the format that can carry several files, where there is one', () => {
+    // `FileNameW` holds exactly one path, so it is asked for last. A board
+    // answering both would otherwise turn a three-file copy into a one-file
+    // paste.
+    const board = (format: string): string =>
+      format === 'NSFilenamesPboardType'
+        ? plistOf(['/tmp/a.txt', '/tmp/b.txt'])
+        : format === 'FileNameW'
+          ? 'C:\\only.txt'
+          : ''
+    expect(clipboardFilePaths(board)).toEqual(['/tmp/a.txt', '/tmp/b.txt'])
+  })
+
   it('answers nothing for a clipboard holding text', () => {
     expect(clipboardFilePaths(() => '')).toEqual([])
     expect(clipboardFilePaths((f) => (f === 'public.file-url' ? 'just some words' : ''))).toEqual([])
@@ -84,6 +113,36 @@ describe('reading file paths off the clipboard', () => {
     expect(pathFromFileUrl('file://server/share/x.png')).toBeNull()
     expect(pathFromFileUrl('')).toBeNull()
     expect(pathFromFileUrl('file:///%E0%A4%A')).toBeNull()
+  })
+
+  it('does not hand back the /C:/ shape a Windows file URL decodes to', () => {
+    /*
+     * `file:///C:/Users/asad/a.png` leaves `/C:/Users/asad/a.png` after the
+     * scheme — a leading slash in front of a drive letter. That is not a near
+     * miss, it is the exact `new URL(…).pathname` → `/D:/…` shape the Windows
+     * CI has already caught once in this repository, written by hand here. A
+     * `/C:/…` string is accepted by no Windows API: `existsSync` says no, the
+     * composer's absolute-path gate says no, and the agent asked to read the
+     * file says no, each in its own words.
+     *
+     * It cannot fire today, because `clipboardFilePaths` only asks for the two
+     * macOS pasteboard types — so this is pinned as a trap that has been
+     * removed rather than as a bug that was seen. The person who adds the
+     * `FileNameW`/`CF_HDROP` branch Windows paste needs should not have to know
+     * this function was waiting for them.
+     */
+    expect(pathFromFileUrl('file:///C:/Users/asad/a%20file.png')).toBe('C:\\Users\\asad\\a file.png')
+    // Lower-case drive letters are as legitimate as upper-case ones; Windows
+    // hands out both from different APIs.
+    expect(pathFromFileUrl('file:///d:/tmp/x.txt')).toBe('d:\\tmp\\x.txt')
+    // A drive root keeps its separator. `C:` alone means "the current directory
+    // on drive C" to Windows, not the root of it — the one answer here that
+    // would be silently wrong rather than visibly wrong.
+    expect(pathFromFileUrl('file:///C:/')).toBe('C:\\')
+    // And the POSIX answers are untouched, separator for separator: this is a
+    // port of the rule, not a rewrite of the function.
+    expect(pathFromFileUrl('file:///tmp/x.png')).toBe('/tmp/x.png')
+    expect(pathFromFileUrl('file:///tmp/dir/')).toBe('/tmp/dir')
   })
 })
 
