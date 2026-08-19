@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-08-19
+
 ### Added
 
 - **Windows can hold a session inside its folder now, and there is a button that
@@ -1387,7 +1389,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.6.1
 [0.6.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.6.0
 [0.5.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.5.0
 [0.4.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.4.0
