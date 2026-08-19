@@ -101,11 +101,19 @@ jobs:
       #
       # Its own job would be tidier and would double the ~580 MB install above,
       # so it rides here and installs only what `pwa/` itself needs.
+      # `working-directory`, not `npm --prefix`. The prefix flag resolves the
+      # *package* from `pwa/` and leaves the working directory at the repo root,
+      # so `vitest run` there discovered the desktop suite and ran all ten
+      # thousand of its tests a second time under the browser client's name.
+      # Caught on the first run of this step, on macOS, where the second run
+      # failed for reasons that had nothing to do with `pwa/`.
       - name: Install the browser client
-        run: npm --prefix pwa ci
+        working-directory: pwa
+        run: npm ci
 
       - name: Test the browser client
-        run: npm --prefix pwa exec vitest run
+        working-directory: pwa
+        run: npx vitest run
 
       # Last, because a bundling failure is the least interesting failure and
       # this step overwrites `out/`.
