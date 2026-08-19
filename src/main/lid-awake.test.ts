@@ -1020,10 +1020,31 @@ describe('powercfg does not flash a console window', () => {
     ).toContain('windowsHide: true')
   })
 
-  it('still works on this Mac, where the flag is ignored', async () => {
-    // The flag is a no-op on POSIX, and that is the claim being made by adding
-    // it unconditionally rather than behind a platform branch.
-    const settings = await runCommand('/usr/bin/pmset', ['-g'])
-    expect(settings.code).toBe(0)
+  /*
+   * The same claim, on whichever machine is running the suite.
+   *
+   * This used to run `/usr/bin/pmset` unconditionally and assert it exited 0 —
+   * which is a fact about macOS, not about the flag. On the Windows runner it
+   * answered `-1`, because the binary is not there, and the test reported a
+   * defect that did not exist. It is one of the six shapes this repository has
+   * been caught by: **a test that measures the machine it happens to be on.**
+   * There is an `onARealMac` gate a few lines above it in this same file; this
+   * one simply predates it.
+   *
+   * Gating alone would have been the wrong fix, because the claim is about
+   * `windowsHide` being harmless — and the platform where it is *not* a no-op
+   * is the one a skip would stop checking. So each side runs a command it
+   * actually has, and both assert the same thing: the helper spawns, with the
+   * flag on, and comes back.
+   */
+  const alwaysThere =
+    process.platform === 'win32'
+      ? { file: 'cmd.exe', args: ['/c', 'echo', 'ok'] }
+      : { file: '/bin/echo', args: ['ok'] }
+
+  it('spawns with the flag on and comes back, on whichever machine this is', async () => {
+    const answer = await runCommand(alwaysThere.file, alwaysThere.args)
+    expect(answer.code, `${alwaysThere.file} did not run`).toBe(0)
+    expect(answer.stdout).toContain('ok')
   })
 })

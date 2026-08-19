@@ -35,6 +35,54 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   never in the list. A key from a hosting company gets a file panel, and pasting
   one still works exactly as before.
 
+### Fixed
+
+- **Windows was not a port, it was half a product.** A sweep found sixty-two
+  places where it behaved differently from macOS — four blockers, and
+  thirty-three of them accidents nobody intended. Closed in this release:
+
+  *Attaching a file to a chat message was completely dead on Windows.* All three
+  doors — browse, drag-and-drop, paste — failed on a `/`-prefix check whose own
+  comment claimed the main process normalised the path. Nothing did. Paths are
+  now tested in both spellings everywhere in that directory, including the
+  mixed-source case where a folder arrived as `C:/Users/…` and the file as
+  `C:\Users\…`; and the paste door, which could not see a Windows clipboard at
+  all, now reads the format Windows actually offers.
+
+  *Every scheduled routine failed on Windows.* The runner took the agent's
+  command and discarded its arguments, which is correct on macOS by accident —
+  there the command is the program — and on Windows throws away the half that
+  makes it run.
+
+  *Nothing gated Windows on a merge.* CI was macOS-only, which is why the other
+  three drifted for months. It now runs the same suite on Windows on every
+  change — not a subset, because a subset is a second decision about what
+  matters there.
+
+- **The browser client's own tests had never run anywhere.** Five hundred and
+  seventy-eight of them, in no CI, red since 16 August. Among them the one that
+  holds the browser's crypto primitives against Node's — which had itself gone
+  blind: the bundler pointed its `node:crypto` import at the browser shim, so it
+  was comparing the shim with itself and passing. The shim turns out to be
+  correct; nothing had been checking.
+
+- **Token totals were inflated on any project with no live session.** Resumed
+  and forked conversations copy history into a new transcript, and only one of
+  the two paths that count them de-duplicated across files.
+
+- **The driving-mode answer never appeared.** The scan worked; the card that
+  shows the combined answer fetched once when it mounted and never again, so the
+  result of the scan you had just watched was not there.
+
+- **The usage bar would not fetch on its own for a session started as a shell** —
+  which is the case somebody hits by typing the agent's name into a terminal.
+
+- **A session running one agent's CLI was told about another's** on the controls
+  bar, and the vendor's filename reached the readiness card on every repository.
+  The guard meant to prevent this only read plain string labels, so a label built
+  by a function call walked past it; it reads through calls, fallbacks, ternaries
+  and templates now.
+
 ### Changed
 
 - **The copilot no longer has a connection of its own.** Asad, 2026-08-19:

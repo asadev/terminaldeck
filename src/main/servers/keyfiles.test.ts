@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { KeyFileOffers, describeKey, listKeyFiles, type KeyFolderReader } from './keyfiles'
 
@@ -49,21 +50,35 @@ kQz9mF3rT5vX7yA1bC2dE4fG6hJ8kL0mN2pQ4rS6tU8vW0xY2zA4bC6dE8fG0hJ2
 
 const PUBLIC = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA9jMNl2H7uIMQAiassGJwHWBmotPG0tlQw2S0wowTs/ test\n'
 
+/**
+ * The last segment of a path, in either spelling.
+ *
+ * Split on `/` alone and this fixture works on this Mac and fails on the
+ * Windows runner, because `listKeyFiles` builds its paths with `join()` — which
+ * answers `C:\\Users\\x\\.ssh\\id_ed25519` there. The lookup then misses,
+ * every file reads as absent, and the suite reports a defect in the key reader
+ * that does not exist.
+ *
+ * That is the same "measures the machine it runs on" shape this repository has
+ * been caught by six times, arriving in a *fixture* rather than in an
+ * assertion — which is the harder place to see it, because nothing in the test
+ * body looks platform-specific.
+ */
+function lastSegment(path: string): string {
+  const at = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return at === -1 ? path : path.slice(at + 1)
+}
+
 function folder(files: Record<string, string>): KeyFolderReader {
+  const find = (path: string): string => {
+    const text = files[lastSegment(path)]
+    if (text === undefined) throw new Error('ENOENT')
+    return text
+  }
   return {
     entries: () => Object.keys(files),
-    read: (path) => {
-      const name = path.split('/').pop() ?? ''
-      const text = files[name]
-      if (text === undefined) throw new Error('ENOENT')
-      return text
-    },
-    size: (path) => {
-      const name = path.split('/').pop() ?? ''
-      const text = files[name]
-      if (text === undefined) throw new Error('ENOENT')
-      return text.length
-    },
+    read: find,
+    size: (path) => find(path).length,
   }
 }
 
@@ -135,7 +150,7 @@ describe('the paths this process will read a key out of', () => {
      */
     const offers = new KeyFileOffers()
     offers.list('/home/x/.ssh', REAL_SHAPE)
-    const refused = offers.read('/home/x/.ssh/config', REAL_SHAPE)
+    const refused = offers.read(join('/home/x/.ssh', 'config'), REAL_SHAPE)
     expect(refused.ok).toBe(false)
     expect(refused.ok === false && refused.sentence).toContain('not one this app offered')
   })
@@ -143,7 +158,14 @@ describe('the paths this process will read a key out of', () => {
   it('reads one it offered, and hands back the file unchanged', () => {
     const offers = new KeyFileOffers()
     offers.list('/home/x/.ssh', REAL_SHAPE)
-    const got = offers.read('/home/x/.ssh/hetzner_personal', REAL_SHAPE)
+    /*
+     * Built with `join`, not written out, because the allowlist holds the exact
+     * string `listKeyFiles` put in it — and that is `join`'s answer, which is
+     * back-slashed on Windows. A literal forward-slash path here passes on this
+     * Mac and is refused on the Windows runner, reporting the guard as broken
+     * when it is doing precisely its job.
+     */
+    const got = offers.read(join('/home/x/.ssh', 'hetzner_personal'), REAL_SHAPE)
     expect(got.ok).toBe(true)
     expect(got.ok === true && got.key).toBe(OPENSSH_OPEN)
   })

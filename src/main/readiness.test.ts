@@ -1224,7 +1224,13 @@ describe('upgrading the agent CLI', () => {
       if (command === 'brew' && args[0] === 'list') return { ok: true, output: 'gemini-cli 0.32.1' }
       return { ok: true, output: 'Upgrading gemini-cli' }
     }
-    const result = await upgradeAgentCli(exec)
+    // `'darwin'`, said out loud, because these three describe a machine with
+    // Homebrew on it. Left to `currentPlatform()` they passed here and failed on
+    // the Windows runner the moment it existed — where there is no brew, the
+    // route is npm alone, and the code was right while the test was measuring
+    // the machine it happened to be on. The section further down this file
+    // already made that argument; these predate it.
+    const result = await upgradeAgentCli(exec, 'darwin')
     expect(result.ok).toBe(true)
     // The package manager saying it succeeded is not the measurement — an
     // upgrade that installs somewhere the PATH does not reach succeeds by every
@@ -1239,7 +1245,7 @@ describe('upgrading the agent CLI', () => {
       'brew list': { ok: true, output: 'gemini-cli 0.32.1' },
       'brew upgrade': { ok: false, output: 'Error: gemini-cli 0.32.1 already installed' },
     })
-    const result = await upgradeAgentCli(exec)
+    const result = await upgradeAgentCli(exec, 'darwin')
     expect(result.ok).toBe(false)
     expect(result.message).toContain('0.32.1')
     // The tool's own last words, which `execFile` hides on the error object and
@@ -1249,14 +1255,14 @@ describe('upgrading the agent CLI', () => {
 
   it('refuses, with both commands, when neither manager claims it', async () => {
     const exec = machine({ 'gemini --version': { ok: true, output: '0.32.1' } })
-    const result = await upgradeAgentCli(exec)
+    const result = await upgradeAgentCli(exec, 'darwin')
     expect(result.ok).toBe(false)
     expect(result.message).toContain('brew upgrade gemini-cli')
     expect(result.message).toContain('npm install -g @google/gemini-cli@latest')
   })
 
   it('refuses when the CLI is not installed at all', async () => {
-    const result = await upgradeAgentCli(machine({}))
+    const result = await upgradeAgentCli(machine({}), 'darwin')
     expect(result.ok).toBe(false)
     expect(result.message).toContain('not installed')
   })
