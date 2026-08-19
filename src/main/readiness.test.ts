@@ -1162,14 +1162,18 @@ describe('upgrading the agent CLI', () => {
       asked.push(`${command} ${args[0]}`)
       return { ok: command === 'npm', output: '' }
     }
-    expect(await upgradeRouteFor(probe)).toBe('npm')
+    // `'darwin'` said out loud: asking brew at all is a macOS behaviour, and
+    // left to `currentPlatform()` this asserted it on a Windows runner that
+    // correctly never asks. Two more calls further down this file already name
+    // their platform; this was the one that did not.
+    expect(await upgradeRouteFor(probe, 'darwin')).toBe('npm')
     // brew first, and npm only because brew said no — a machine where both
     // claim it runs the one that put the binary on the PATH.
     expect(asked).toEqual(['brew list', 'npm ls'])
   })
 
   it('answers null when neither manager claims it', async () => {
-    expect(await upgradeRouteFor(async () => ({ ok: false, output: '' }))).toBeNull()
+    expect(await upgradeRouteFor(async () => ({ ok: false, output: '' }), 'darwin')).toBeNull()
   })
 
   it('quotes the tool’s diagnosis, not the last thing it printed', () => {
