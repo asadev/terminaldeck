@@ -1,4 +1,4 @@
-What to test — 0.6.0, build TBD
+What to test — 0.6.0
 
 Your last build is 0.5.0 from yesterday. The headline is that the copilot no
 longer has a connection of its own, and most of what to test is that absence.
