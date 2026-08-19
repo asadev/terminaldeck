@@ -60,6 +60,35 @@ import { defineConfig } from 'vitest/config'
  */
 const WINDOWS_SCHEDULING_ALLOWANCE_MS = 30_000
 
+/**
+ * A worker died once on the Windows runner, and this is the trail.
+ *
+ * 2026-08-19, the second CI run that had ever included Windows: every test
+ * passed — `474 passed | 7 skipped` — and the job still exited 1 with a
+ * pool-level `Worker exited unexpectedly`, no test attached to it. Repeated
+ * afterwards on the same code: two Windows runs, both green. So it is rare
+ * rather than deterministic, and it is not a failing assertion.
+ *
+ * What is known. The step's stderr carries many `AttachConsole failed` lines,
+ * which is Windows' console-attach talking, so a native child is involved; the
+ * suspects are the tests that spawn one. It is not `agent-controls-conpty` —
+ * that reads a captured fixture rather than spawning — and it is not
+ * `confine/pty`, which is macOS-only.
+ *
+ * **The arithmetic names it, next time it happens.** The summary counts every
+ * file that reported, so `passed + skipped` one short of the total is the
+ * crashed file, by subtraction. Diffing the reporter's per-file lines against
+ * `find src -name '*.test.ts*'` narrows it in one pass; running Windows with
+ * `--reporter=verbose` names it outright. Neither is on by default, because a
+ * slower job on every push is a poor trade for an event seen once — but do not
+ * spend an afternoon guessing when two commands answer it.
+ *
+ * It is written down rather than mitigated because a mitigation nobody can
+ * reproduce is a change that might do nothing, dressed as a fix. A flaky gate
+ * gets ignored, and a gate nobody trusts is how Windows drifted for months in
+ * the first place — so if this recurs, chase it rather than retry it.
+ */
+
 export default defineConfig({
   test: {
     testTimeout: process.platform === 'win32' ? WINDOWS_SCHEDULING_ALLOWANCE_MS : 5_000,
