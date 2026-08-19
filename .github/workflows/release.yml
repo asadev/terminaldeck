@@ -298,9 +298,38 @@ jobs:
           path: release
           merge-multiple: true
 
+      # The server half, which was on npm and nowhere on this page.
+      #
+      # Somebody opening the releases page saw a Mac download and a Windows
+      # download and nothing at all for a Linux server — while the thing that
+      # runs on one is the same source tree, tagged the same way. It is built
+      # here rather than uploaded from a developer's machine for the reason the
+      # dispatched-run comment at the top of this file gives: a tarball packed
+      # locally carries whatever was on that disk, and this one provably
+      # corresponds to the tag.
+      #
+      # `npm pack` rather than `npm publish`: publishing is a separate act with
+      # a separate credential, and a release asset is what a box with no route
+      # to the registry needs.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Build the server package
+        run: |
+          npm ci
+          npm run dist:headless
+          npm pack ./out/headless --pack-destination release
+
+      # The installer, beside the package it installs. `terminaldeck.dev/install.sh`
+      # serves this same file; having it here as well is what makes a release
+      # self-contained — the script, the tarball, and a checksum for both.
+      - name: The installer, beside it
+        run: cp scripts/install-headless.sh release/install.sh
+
       - name: Checksums
         working-directory: release
-        run: shasum -a 256 *.dmg *.zip *.exe > SHA256SUMS.txt
+        run: shasum -a 256 *.dmg *.zip *.exe *.tgz install.sh > SHA256SUMS.txt
 
 
       # `--generate-notes` writes the commit summary; `--notes` is prepended to
@@ -349,6 +378,22 @@ jobs:
           The app checks for new versions and installs them itself, so the
           `.zip` and `latest*.yml` files are for the updater rather than for
           you. `SHA256SUMS.txt` lists the checksum of every artifact below.
+
+          ### On a server
+
+          `install.sh` and `terminaldeck-*.tgz` are the headless host: a Linux
+          box with no screen, driven from the app or a phone. It dials out to
+          the relay, so there is no port to open and nothing to reach it at.
+
+              curl -fsSL https://terminaldeck.dev/install.sh | sh
+              terminaldeck pair
+
+          Or install the tarball beside it — `npm install -g ./terminaldeck-*.tgz`
+          — which is what a machine with no route to the npm registry needs. It
+          builds `node-pty`, so `python3`, `make` and `g++` have to be there;
+          the script checks before it downloads anything and names the packages
+          for your distro. Node 22 or newer is required and the script fetches
+          one into its own folder when the machine has none.
           NOTE
           )"
 
@@ -365,4 +410,6 @@ jobs:
             release/*.blockmap \
             release/latest-mac.yml \
             release/latest.yml \
-            release/SHA256SUMS.txt
+            release/SHA256SUMS.txt \
+            release/*.tgz \
+            release/install.sh
