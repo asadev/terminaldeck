@@ -20,6 +20,15 @@
 /src/*
 !/src/shared
 
+# The repository's own `package.json`, which `pwa/vite.config.ts` reads for the
+# version it stamps into the page. It is one file and it is not source, so it is
+# easy to leave out of an allowlist written around directories — and leaving it
+# out does not degrade the build, it **stops** it: the config throws `ENOENT`
+# before vite starts, so every deploy since that read was added has failed and
+# the live client has been serving whatever was there before. Found 2026-08-19,
+# when the deployed app turned out to be older than the source.
+!/package.json
+
 # `pwa/src/protocol-client.ts` imports the wire protocol's own definition rather
 # than restating it, which is the same argument `src/shared/` exists for and one
 # the file makes at length. It has not moved into `shared/` yet, so the one file
