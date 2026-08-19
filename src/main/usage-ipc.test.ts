@@ -605,7 +605,22 @@ describe('refreshing the figure without touching a session', () => {
 
     invoke('usage:watch', fakeContents(), 'stale-1')
     const result = (await invoke('usage:refresh', fakeContents(), 'stale-1')) as UsageRefreshResult
-    expect(result).toMatchObject({ ok: true, outcome: 'ok', spawned: true })
+    expect(result.ok).toBe(true)
+    /*
+     * **One probe ran** is the claim, and `spawned: true` on *this* call is not.
+     *
+     * `usage:watch` above can finish its own refresh first, in which case the
+     * explicit one below it honestly answers `cached` — the reading it would
+     * have fetched is already there. Which of the two spawned it is a race, and
+     * asserting the loser of that race is what made this test fail on one Node
+     * version and pass on two others and on Windows.
+     *
+     * What is not a race, and is the whole point of the fixture, is that the
+     * two-hour-old block on disk was **not** used: past the CLI's own one-hour
+     * ceiling it is not even parsed, so something had to go and ask. `calls()`
+     * of exactly one says that, and says it whoever made the call.
+     */
+    expect(result.outcome === 'ok' || result.outcome === 'cached', result.outcome).toBe(true)
     expect(probe.calls()).toBe(1)
 
     const report = invoke('usage:watch', fakeContents(), 'stale-1') as UsageReport
