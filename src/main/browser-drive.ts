@@ -31,138 +31,50 @@ import type { DriveState } from './browser-cdp'
  * screenshot, no element outline and no navigation report. **You cannot redact
  * what was never produced.**
  *
- * ## Taking it back without being asked
+ * ## Taking it back — by disconnecting, and by nothing else
  *
- * The other half of what he described — *"I do my step on the Chromium which is
- * attached to your Playwright"* — needs no gesture at all. Any real interaction
- * with the page while the state is `agent` flips it to `human` immediately and
- * the driver's next command is refused. That mirrors the house pattern in
- * `DRIVING-MODE.md` §8, where a `pointerdown` anywhere pauses the tour.
+ * A person touching the page is **not** an event here, and that is a change of
+ * 2026-08-21 rather than an omission. It used to be one: any unclaimed click or
+ * keystroke while the state was `agent` flipped it to `human`, put a question in
+ * the banner over the page, and refused the agent's next command until one of
+ * two buttons was pressed. He filmed it happening to him and said what he wants
+ * instead:
  *
- * The hard part is telling his input from the driver's, and it is worth
- * recording what was measured rather than what the design hoped:
+ *   > *"if I click inside, nothing should happen actually. It should keep giving
+ *   > the access until I click here and I disconnect the browser from any of the
+ *   > session."*
  *
- *  - CDP-dispatched input is `isTrusted: true` — that is why it works at all —
- *    so the *page* cannot tell them apart, and neither can a capture-phase
- *    listener.
- *  - `webContents.on('input-event')` **does** fire for CDP-dispatched input.
- *    Measured on Electron 41.10.5: dispatching `Input.dispatchMouseEvent` and
- *    `Input.insertText` produced `mouseDown`, `mouseUp`, `rawKeyDown`, `char`,
- *    `keyUp` on that listener, indistinguishable by type from the events
- *    `sendInputEvent` produces. So the clean signal the design hoped for does
- *    not exist, and this is the heuristic branch it named as the fallback.
- *  - `before-input-event` fires for keys in both cases and not at all for the
- *    mouse, so it is no better.
+ * So the baton is moved by deliberate acts only — a tool claiming the tab, the
+ * agent *asking* for the person through `browser.handover`, that person
+ * answering, and the drive ending. Disconnecting the window from its session is
+ * what ends the agent's access, and it is one control on the browser's own
+ * toolbar (`BindChip.tsx`).
  *
- * So {@link DispatchRing} correlates: the driver announces each event it is
- * about to send, and an observed event that matches a recent announcement is
- * consumed as its own. Anything left over is a person.
+ * ### What went with it, and why none of it can be half-kept
  *
- * **The failure directions are deliberately asymmetric.** Reading a synthetic
- * event as human parks the drive and costs a retry. Reading a human keystroke
- * as synthetic means the agent keeps typing while he does, into a form he is
- * filling. So an unmatched event is *always* a person, and the ring is
- * deliberately generous about what counts as a match.
+ * The old rule needed to tell his input from the driver's, and that was never
+ * clean: CDP-dispatched input is `isTrusted: true` and arrives on
+ * `webContents.on('input-event')` with the same type names as a real press —
+ * measured on Electron 41.10.5, `Input.dispatchMouseEvent` and
+ * `Input.insertText` produce `mouseDown`, `mouseUp`, `rawKeyDown`, `char`,
+ * `keyUp`, indistinguishable from `sendInputEvent`'s. A `DispatchRing`
+ * correlated announcements with observations to guess, and its failure
+ * directions were deliberately asymmetric: an event it could not account for was
+ * always read as a person, so the drive parked on anything it had not
+ * announced. With human input no longer a takeover at all there is nothing left
+ * to guess about, so the ring, the claim window and the type list are gone
+ * rather than left switched off — a heuristic nobody consults is a thing the
+ * next reader has to prove is dead.
  *
- * ## What is deliberately not watched
+ * ### What is *not* weakened by it
  *
- * Pointer *movement*. A single dispatched `mouseMoved` was observed to produce
- * five `mouseMove`s and a `mouseLeave` on the listener — Chromium re-synthesises
- * moves when content shifts under a stationary cursor — so treating a move as a
- * takeover would park the drive constantly, on its own output. Only the events
- * that carry an intention are watched: a press, and a key.
+ * `human` still refuses every command, reads included, exactly as the table
+ * above says. The password guarantee is unchanged; what changed is only how the
+ * page *enters* that state — the agent asks, rather than the app guessing from
+ * a click. A person who wants the agent to stop has the banner's own
+ * `Stop — I'll take it from here` while it is asking, and Disconnect at any
+ * time.
  */
-
-/* ------------------------------------------------------- observed input -- */
-
-/**
- * The `input-event` types this module reacts to at all.
- *
- * A press and a key are intentions. Everything else — moves, leaves, enters,
- * wheels, releases — is either noise or the tail of an intention already
- * counted, and counting the tail twice would need the ring to hold two entries
- * per gesture for no gain.
- */
-const TAKEOVER_TYPES = new Set(['mouseDown', 'keyDown', 'rawKeyDown', 'char'])
-
-export function isTakeoverCandidate(type: unknown): boolean {
-  return typeof type === 'string' && TAKEOVER_TYPES.has(type)
-}
-
-/**
- * How long a dispatched event stays claimable, in milliseconds.
- *
- * Generous on purpose. The driver announces an event and then hands it to
- * Chromium, which delivers it to the guest process, which reports it back on
- * this listener — three process hops, and the app is also drawing a window. Too
- * short and the drive parks itself on its own clicks, which is the failure mode
- * that reads as the flakiness this whole feature exists to remove. Too long and
- * a genuine human click landing within the window is missed, which costs one
- * beat before the *next* one parks it.
- *
- * 750 ms was chosen against the second consideration rather than the first: a
- * person who has just watched the agent click something does not click in the
- * same three-quarters of a second, because they are still reading what happened.
- */
-export const DISPATCH_CLAIM_MS = 750
-
-/** One event the driver is about to send, remembered so it can be claimed back. */
-interface Announced {
-  type: string
-  at: number
-}
-
-/**
- * The short memory of what the driver just did.
- *
- * A queue rather than a set: two clicks on the same button are two entries and
- * must be claimed twice, or the second one — which could be his — would be
- * matched against the first one's announcement and treated as synthetic.
- *
- * Bounded, because a driver in a tight loop on a page that is not responding
- * would otherwise grow this without limit. The bound is generous relative to
- * anything a single tool call dispatches (a click is one entry, typing a
- * password's worth of text is one `insertText`), so hitting it means something
- * has already gone wrong.
- */
-export const MAX_ANNOUNCED = 64
-
-export class DispatchRing {
-  private entries: Announced[] = []
-
-  /** The driver is about to send this. Call immediately before dispatching. */
-  announce(type: string, now: number): void {
-    if (!isTakeoverCandidate(type)) return
-    this.entries.push({ type, at: now })
-    if (this.entries.length > MAX_ANNOUNCED) this.entries.shift()
-  }
-
-  /**
-   * Was this observed event ours?
-   *
-   * Consumes the match, so the same announcement cannot absorb two events.
-   * Expired announcements are dropped on the way past rather than on a timer:
-   * this is called on every input event, which is the only moment the answer
-   * matters, and a timer would be a second thing to tear down per tab.
-   */
-  claim(type: string, now: number): boolean {
-    const cutoff = now - DISPATCH_CLAIM_MS
-    this.entries = this.entries.filter((entry) => entry.at > cutoff)
-    const index = this.entries.findIndex((entry) => entry.type === type)
-    if (index === -1) return false
-    this.entries.splice(index, 1)
-    return true
-  }
-
-  /** Everything still claimable. For a test, and for the state report. */
-  size(): number {
-    return this.entries.length
-  }
-
-  clear(): void {
-    this.entries = []
-  }
-}
 
 /* ------------------------------------------------------------ transitions -- */
 
@@ -177,7 +89,7 @@ export class DispatchRing {
 export type DriveEvent =
   /** A tool claimed the tab. */
   | { kind: 'claimed' }
-  /** The agent asked for the person, or the person took it. */
+  /** The agent asked for the person. Never the person simply using the page. */
   | { kind: 'handover' }
   /** The person said "done, carry on". */
   | { kind: 'resumed' }

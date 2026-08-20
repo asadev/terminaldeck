@@ -395,6 +395,17 @@ page while the state is `agent` flips it to `human` immediately, and the agent's
 command is refused with *"the person took over"*. This mirrors `DRIVING-MODE.md` §8's
 `pointerdown anywhere → pause`, which is already the house pattern for exactly this.
 
+> **Withdrawn on 2026-08-21, after watching him use it.** This paragraph and the two
+> beneath it shipped, and the thing they produced is a page that stops under his hands
+> and asks him a question: *"if I click inside, nothing should happen actually. It should
+> keep giving the access until I click here and I disconnect the browser from any of the
+> session."* Human input is no longer a takeover signal at all, the `DispatchRing` that
+> guessed at it is deleted, and the baton leaves `agent` only when the agent asks through
+> `browser.handover`. What ends the agent's access is Disconnect on the browser toolbar —
+> one control, in sight, at the window's own end of the relation. Spike 3 below was run
+> and its answer stands (it does fire, and it is a heuristic); the conclusion drawn from
+> it is what changed.
+
 **The hard part, honestly:** telling his input from the driver's. CDP-dispatched input is
 `isTrusted: true` — that is why it works at all — so the page cannot tell them apart, and
 neither can a capture-phase listener. Two candidate mechanisms, and the spike decides:

@@ -324,6 +324,36 @@ describe('the tab strip gives its tabs up before it makes you scroll', () => {
     expect(rail).toMatch(/overflow-x:\s*auto/)
     expect(rail, 'the rail must be able to shrink or it never overflows').toMatch(/min-width:\s*0/)
   })
+
+  /**
+   * And ends where the tabs end, so the two openers are beside the last pill.
+   *
+   * *"these two buttons, new tab and new session, should be next to the pill,
+   * not like here."* — 2026-08-21, of ~225px of empty bar between the last tab
+   * and the corner. The rail was `flex: 1`, so it was the whole bar however few
+   * tabs were in it.
+   *
+   * Measured in Chromium against the real declarations before it was written,
+   * because the interaction between the two rules below is not something this
+   * repo's test run can execute: at 1600px, 3 tabs → 232px each with a 6px gap
+   * to the openers; 6 tabs at 1000px → 147px each, 6px gap; 11 tabs at 1000px →
+   * the 112px floor, the rail scrolling, the openers still in the corner. With
+   * `width` off `.strip-tab`, the same run put **every** tab at the floor at
+   * every width — an intrinsically-sized flex item contributes its content, not
+   * its basis — which is why the two are pinned together here.
+   */
+  it('ends where the tabs end, so the corner is not 225px of nothing', () => {
+    const rail = rule(strip, '.strip-rail')
+    expect(rail, 'a growing rail is the whole bar, and the openers ride the far corner').toMatch(
+      /flex:\s*0\s+1\s+auto/,
+    )
+    const tab = rule(strip, '.strip-tab')
+    expect(
+      tab,
+      'without a width the intrinsically-sized rail collapses every tab to its floor',
+      // `[^-]` so this cannot be satisfied by the `max-width` two lines above it.
+    ).toMatch(/[^-]width:\s*var\(--strip-tab-w\)/)
+  })
 })
 
 /* ---------------------------------------------------- scrolling and edges -- */

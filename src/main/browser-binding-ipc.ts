@@ -77,6 +77,32 @@ interface KnownWindow {
 
 const known = new Map<string, KnownWindow>()
 
+/**
+ * How to end a drive on a window, once something has told us.
+ *
+ * Module-level and set at registration, beside `known` and for the same reason:
+ * the three places a window can be disconnected — the toolbar's own control, the
+ * browser-side checklist and the session-side one — are a channel handler and
+ * two menu templates, and only one of them is ever handed `deps`. A parameter
+ * threaded through all three would be a third spelling of the same fact in the
+ * file whose entire argument is that there is one.
+ */
+let endDrive: ((browserTabId: string) => void) | null = null
+
+/**
+ * Break the relation between a window and its session, everywhere at once.
+ *
+ * **The** disconnect. Every door — the `B1` control on the browser's toolbar,
+ * the ticked row in either menu — comes through here, so that "is this browser
+ * connected" has one answer and ending it has one meaning: the binding goes,
+ * the strip's chip and the rail's row lose it in the same publish, and anything
+ * the copilot was doing in that window stops there.
+ */
+function disconnect(browserTabId: string): void {
+  detach(browserTabId)
+  endDrive?.(browserTabId)
+}
+
 /** The last window number handed out. Never decremented; see `KnownWindow.w`. */
 let windowSeq = 0
 
@@ -112,6 +138,23 @@ export interface BindingIpcDeps {
    * second case arrives regularly and is not hypothetical.
    */
   knowsSession(sessionId: string, machineId: string): boolean
+  /**
+   * End whatever the copilot was doing in a window that has just been
+   * disconnected.
+   *
+   * A dependency rather than a call into `browser-drive-ipc.ts`, for the reason
+   * every other handle on this interface is one: what this file decides has to
+   * be readable without a drive, a window or an Electron app. Absent in a build
+   * with no drive wired, and then disconnecting is exactly what it was before —
+   * the relation ends and nothing else has to happen.
+   *
+   * It exists because Disconnect is meant to be the whole truth of the
+   * connection: *"we should be have a button here to disconnect also, or it
+   * should only this way."* Without it, breaking the relation mid-drive leaves
+   * the debugger attached and the banner over the page still saying the copilot
+   * is driving, until the agent's next call happens to be refused.
+   */
+  endDrive?(browserTabId: string): void
 }
 
 /**
@@ -491,7 +534,7 @@ export function bindMenuItems(
          */
         label: menuRow(bound ? slotName(bound.n) : windowNumber(entry), windowSays(entry)),
         click: () => {
-          if (bound) detach(entry.tabId)
+          if (bound) disconnect(entry.tabId)
           else
             attach({
               sessionId: request.sessionId,
@@ -563,6 +606,25 @@ export interface SessionChoice {
  * is what {@link attach} does and what the session-side menu has always done;
  * unticking the one that is ticked detaches.
  *
+ * ## The Disconnect row — 2026-08-21
+ *
+ * Unticking is not an affordance. It is a gesture you have to already know, on a
+ * row that says the opposite of what pressing it does, and on the tab he filmed
+ * there was nothing ticked at all — so the only way out of a connection was
+ * invisible and, on that window, unreachable:
+ *
+ *   > *"when we connect any browser, and we should be have a button here to
+ *   > disconnect also, or it should only this way."*
+ *
+ * So a window that is attached gets a first row that says the word, above a
+ * separator, before the list. It is drawn only when there is something to
+ * disconnect — a permanently greyed `Disconnect` at the top of every menu is the
+ * dead control this round is about — and it goes through the same
+ * {@link disconnect} the tick does, because two ways out that do different
+ * amounts of work is how a drive carries on under a window nothing is holding.
+ * The toolbar carries the same act as a button of its own; see
+ * `ConnectSessionButton` in `BindChip.tsx`.
+ *
  * Sessions are grouped under the machine they run on, and the machine **this
  * window is on** leads — which is the other half of *"if I connect it to, let's
  * say, desktop, now this is in desktop, it should come under this table, under
@@ -578,7 +640,23 @@ export function connectMenuItems(
   const owner = ownerOf(request.browserTabId)
   const items: MenuItemConstructorOptions[] = []
 
+  /*
+   * The way out, first and in words. See the note above; the slot leads because
+   * `B1` is the name on the tab, in the rail and in the agent's own context.
+   */
+  const held = owner?.windows.find((window) => window.browserTabId === request.browserTabId)
+  if (owner && held) {
+    items.push({
+      label: `Disconnect ${slotName(held.n)}`,
+      click: () => disconnect(request.browserTabId),
+    })
+    items.push({ type: 'separator' })
+  }
+
   if (request.sessions.length === 0) {
+    // Still after the Disconnect row: a window attached to a session whose
+    // process has gone is exactly the case where the only thing left to do is
+    // let go of it.
     items.push({ label: 'No sessions are open.', enabled: false })
     return items
   }
@@ -615,7 +693,7 @@ export function connectMenuItems(
         // context are stating.
         label: bound ? `${slotName(bound.n)}   ${session.name}` : session.name,
         click: () => {
-          if (holds) detach(request.browserTabId)
+          if (holds) disconnect(request.browserTabId)
           else
             attach({
               sessionId: session.sessionId,
@@ -660,6 +738,8 @@ function str(value: unknown): string {
  * protocol for a handful of rows is a second thing to keep correct.
  */
 export function registerBrowserBindingIpc(ipcMain: IpcMain, deps: BindingIpcDeps): () => void {
+  endDrive = deps.endDrive ?? null
+
   ipcMain.on('browser:window-opened', (_event, raw: unknown) => {
     const input = (raw ?? {}) as Record<string, unknown>
     const tabId = str(input.tabId)
@@ -734,7 +814,7 @@ export function registerBrowserBindingIpc(ipcMain: IpcMain, deps: BindingIpcDeps
 
   ipcMain.on('browser:unbind', (_event, raw: unknown) => {
     const tabId = str(raw)
-    if (tabId) detach(tabId)
+    if (tabId) disconnect(tabId)
   })
 
   ipcMain.on('link:opened', (_event, raw: unknown) => {

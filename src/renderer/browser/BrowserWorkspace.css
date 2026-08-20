@@ -1226,6 +1226,18 @@
   flex-direction: column;
   gap: var(--sp-2);
   width: min(26rem, calc(100vw - 2 * var(--sp-4)));
+  /*
+    Never taller than the window, and scrolling when it would be.
+
+    `anchorPopup` places this box from its measured height and clamps the result
+    into the viewport, so a popup taller than the window is pinned at the top
+    and simply runs off the bottom — the last row of a long menu is then off
+    screen with nothing saying so. `--sp-2` is `MARGIN` in `popup-anchor.ts`,
+    the clearance that arithmetic already keeps at both ends, so the cap and the
+    placement agree instead of fighting on a short window.
+  */
+  max-height: calc(100vh - 2 * var(--sp-2));
+  overflow-y: auto;
   padding: var(--sp-3);
   border-radius: var(--radius-lg);
   background: var(--material-bg);

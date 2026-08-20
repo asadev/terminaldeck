@@ -733,6 +733,25 @@ export function WorkspaceTabStrip({
    * this block is a sibling of `.strip-rail` now instead of its last child, and
    * the openers are the one part of the bar that never moves.
    *
+   * ## And why they are back beside the last tab — 2026-08-21
+   *
+   * Being outside the rail is what stops them riding over a tab. It is not what
+   * put them in the far corner: that was `flex: 1` on the rail, which made the
+   * rail the whole bar whatever was in it, so with three tabs open there were
+   * 225 pixels of nothing between the last pill and the terminal glyph —
+   * *"these two buttons, new tab and new session, should be next to the pill,
+   * not like here."*
+   *
+   * Both facts hold together, and neither is a revert of the other: the rail is
+   * sized from its own tabs now (`.strip-rail`, `flex: 0 1 auto`), so it ends
+   * where the tabs end and these sit 6px after it — and when the strip fills,
+   * the rail takes the bar and scrolls *underneath its own right edge*, with
+   * these still outside it, still pressable, still over no tab's title.
+   *
+   * The bar itself is the drop target rather than the rail, and that is part of
+   * the same change: with the rail no longer covering the empty half of the bar,
+   * a page dragged to the end of the row would have been dropped on nothing.
+   *
    * The terminal opens the **dialog**, which is the whole of the change he asked
    * for in the same breath: *"if we click directly on the whole button it opens
    * a quick window. We don't want this quick window at all."* The globe opens a
@@ -1065,6 +1084,14 @@ export function WorkspaceTabStrip({
       className="strip"
       data-sidebar-collapsed={sidebarHidden || undefined}
       data-armed={armed || undefined}
+      /* The whole bar takes the drop, not just the rail. The rail is only as
+         wide as its tabs now — see `openers` — so the empty half of the bar is
+         no longer inside it, and that is exactly where a hand aiming at "the end
+         of the row" lets go. `dropIndex` reads the tabs' own boxes against the
+         pointer, so it answers the same thing from either element. */
+      onDragOver={onDragOver}
+      onDragLeave={() => setDropAt(null)}
+      onDrop={onDrop}
     >
       {reveal}
       {offEdgeButton('start')}
@@ -1081,13 +1108,7 @@ export function WorkspaceTabStrip({
         now, which only means anything if there is a box that scrolls and a box
         that does not.
       */}
-      <div
-        className="strip-rail"
-        ref={railRef}
-        onDragOver={onDragOver}
-        onDragLeave={() => setDropAt(null)}
-        onDrop={onDrop}
-      >
+      <div className="strip-rail" ref={railRef}>
         <div className="strip-list" role="tablist" aria-label="Open tabs" ref={listRef}>
           {/*
             One flat row — no machine headings, no runs, no chip between the

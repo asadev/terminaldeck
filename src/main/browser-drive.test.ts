@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { DriveState } from './browser-cdp'
+import * as drive from './browser-drive'
 import {
-  DISPATCH_CLAIM_MS,
-  DispatchRing,
-  MAX_ANNOUNCED,
   MAX_PROMPT_CHARS,
-  isTakeoverCandidate,
   nextDriveState,
   sanitizeHandoverPrompt,
   type DriveEvent,
@@ -72,64 +69,45 @@ describe('the baton', () => {
   })
 })
 
-describe('telling his input from the driver’s', () => {
-  it('only reacts to events that carry an intention', () => {
-    expect(isTakeoverCandidate('mouseDown')).toBe(true)
-    expect(isTakeoverCandidate('keyDown')).toBe(true)
-    expect(isTakeoverCandidate('rawKeyDown')).toBe(true)
-    expect(isTakeoverCandidate('char')).toBe(true)
-    // Movement is deliberately not watched. One dispatched `mouseMoved` was
-    // measured to produce five `mouseMove`s and a `mouseLeave` on the
-    // listener, so a driver that treated a move as a takeover would park
-    // itself on its own output, constantly.
-    expect(isTakeoverCandidate('mouseMove')).toBe(false)
-    expect(isTakeoverCandidate('mouseLeave')).toBe(false)
-    expect(isTakeoverCandidate('mouseUp')).toBe(false)
-    expect(isTakeoverCandidate('mouseWheel')).toBe(false)
-    expect(isTakeoverCandidate(undefined)).toBe(false)
+/**
+ * Nothing here tells his input from the driver's any more — 2026-08-21.
+ *
+ * There used to be eight tests in this place, over a `DispatchRing` that
+ * correlated the events the driver announced with the events Chromium reported,
+ * so that anything left over could be read as a person and park the drive. The
+ * whole mechanism is deleted, because the behaviour it fed is:
+ *
+ *   > *"if I click inside, nothing should happen actually. It should keep giving
+ *   > the access until I click here and I disconnect the browser from any of the
+ *   > session."*
+ *
+ * This block is what is left of them, and it is deliberately a test rather than
+ * a comment: the guarantee now is that **no** event exists for "the person
+ * touched the page", so the way to state it is over the closed set of events the
+ * baton has. If somebody adds one back, this fails.
+ */
+describe('a person using the page is not an event', () => {
+  const move = (from: DriveState, kind: DriveEvent['kind']): DriveState =>
+    nextDriveState(from, { kind })
+
+  it('has no way to reach human except the agent asking', () => {
+    const kinds: DriveEvent['kind'][] = ['claimed', 'handover', 'resumed', 'released']
+    const reachesHuman = kinds.filter((kind) => move('agent', kind) === 'human')
+    // `handover` is `browser.handover` — the agent asking for the person, with
+    // a sentence it wrote. There is no second door, and there is no listener
+    // anywhere that raises one on a click. See `browser-driver.ts`'s `watch`.
+    expect(reachesHuman).toEqual(['handover'])
   })
 
-  it('claims back an event the driver just sent', () => {
-    const ring = new DispatchRing()
-    ring.announce('mouseDown', 1_000)
-    expect(ring.claim('mouseDown', 1_050)).toBe(true)
-  })
-
-  it('does not claim the same announcement twice', () => {
-    // Two clicks on the same button are two entries. Without this, his click
-    // landing right after the agent's would be matched against the agent's
-    // announcement and the takeover would be missed.
-    const ring = new DispatchRing()
-    ring.announce('mouseDown', 1_000)
-    expect(ring.claim('mouseDown', 1_010)).toBe(true)
-    expect(ring.claim('mouseDown', 1_020)).toBe(false)
-  })
-
-  it('stops claiming once the announcement is stale', () => {
-    const ring = new DispatchRing()
-    ring.announce('mouseDown', 1_000)
-    expect(ring.claim('mouseDown', 1_000 + DISPATCH_CLAIM_MS + 1)).toBe(false)
-  })
-
-  it('treats an event it cannot account for as the person', () => {
-    // The asymmetry, stated as a test. Reading a synthetic event as human
-    // parks the drive and costs a retry; reading his keystroke as synthetic
-    // means the agent keeps typing while he does.
-    const ring = new DispatchRing()
-    ring.announce('mouseDown', 1_000)
-    expect(ring.claim('keyDown', 1_010)).toBe(false)
-  })
-
-  it('does not remember events it would never watch for', () => {
-    const ring = new DispatchRing()
-    ring.announce('mouseMove', 1_000)
-    expect(ring.size()).toBe(0)
-  })
-
-  it('is bounded, so a driver stuck in a loop cannot grow it forever', () => {
-    const ring = new DispatchRing()
-    for (let i = 0; i < MAX_ANNOUNCED * 3; i++) ring.announce('mouseDown', 1_000 + i)
-    expect(ring.size()).toBeLessThanOrEqual(MAX_ANNOUNCED)
+  it('exports nothing to guess a person’s input with', () => {
+    // The ring, its claim window and its type list are gone rather than left
+    // switched off: a heuristic nobody consults is a thing the next reader has
+    // to prove is dead.
+    const module = drive as Record<string, unknown>
+    expect(module.DispatchRing).toBeUndefined()
+    expect(module.isTakeoverCandidate).toBeUndefined()
+    expect(module.DISPATCH_CLAIM_MS).toBeUndefined()
+    expect(module.MAX_ANNOUNCED).toBeUndefined()
   })
 })
 

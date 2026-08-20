@@ -41,7 +41,9 @@
  * whenever the pointer rested on a sidebar row. Most overlays in this app are
  * over the rail or the toolbar and never touch the page's rectangle, so the
  * decision is made by intersection: only a surface that actually lands on the
- * page hides it.
+ * page hides it. Geometry decides *whether* a surface is on the page; what
+ * **kind** of surface it is decides whether a shallow clip at the page's own
+ * edge may be forgiven — see {@link Overlay}.
  *
  * ## What counts as a surface, and why that list needs no other file's help
  *
@@ -86,6 +88,41 @@ export interface Rect {
 }
 
 /**
+ * A floating surface, and whether the page is allowed to paint over its edge.
+ *
+ * ## Why the kind of surface is a fact and not a nuance
+ *
+ * {@link grazesTheEdge} used to decide, from the depth of the band alone,
+ * whether the part of a surface lying on the page was a part anybody was meant
+ * to read. That worked for the two tooltips it was measured against and it was
+ * wrong about the thing it was never shown: a menu.
+ *
+ * Filmed on 2026-08-21, with a site loaded and the profile menu open off the
+ * browser toolbar — *"if I now click on three dots, the drop-down is coming in
+ * the backside, both of them. They should be the top first layer."* The menu is
+ * 61px tall, hangs from a button 25px above the page, and so reaches **26px**
+ * in. Twenty-six is under the 32 this file calls a graze, so the page was not
+ * parked and those 26 pixels were painted over — and they were not a rounding
+ * error at the boundary, they were the menu's second row, `New profile…`,
+ * entirely. A row that is not on screen is a row that does not exist.
+ *
+ * Depth in pixels was only ever a proxy for *"this is a hover hint and losing
+ * it costs nothing"*. So the proxy is gone and the thing itself is read from
+ * the DOM: a surface with `role="tooltip"` — `shell/Tooltips.tsx` and
+ * `components/HoverNote.tsx`, the only two in this renderer — may be sacrificed
+ * to keep a website on screen. Everything else portalled over the page is a
+ * dialog, a menu or a popup: something a person opened in order to read and
+ * click, and the page parks for the whole of it.
+ *
+ * Absent means "not a hint", which is the safe direction: an unrecognised
+ * surface parks the page rather than being quietly painted over.
+ */
+export interface Overlay extends Rect {
+  /** A hover hint — `role="tooltip"` — rather than something to be read and clicked. */
+  hint?: boolean
+}
+
+/**
  * The element a native page view is painted into, as a selector.
  *
  * The other half of this module's subject, and the reason it is a constant
@@ -111,15 +148,24 @@ export const NATIVE_VIEW_SELECTOR = '.bw-stage'
 
 /* ------------------------------------------------------------- geometry -- */
 
-/** Same rectangles, in the same order? */
-export function sameRects(a: readonly Rect[], b: readonly Rect[]): boolean {
+/**
+ * The same surfaces, in the same order?
+ *
+ * `hint` is compared as well as the geometry, and it is not padding: a tooltip
+ * closing in the same frame a menu opens in the same place is two different
+ * answers to {@link isCovered} from one rectangle, and a comparison that only
+ * read the numbers would report no change and leave the page painted over the
+ * menu.
+ */
+export function sameRects(a: readonly Overlay[], b: readonly Overlay[]): boolean {
   if (a.length !== b.length) return false
   return a.every(
     (rect, index) =>
       rect.x === b[index].x &&
       rect.y === b[index].y &&
       rect.width === b[index].width &&
-      rect.height === b[index].height,
+      rect.height === b[index].height &&
+      rect.hint === b[index].hint,
   )
 }
 
@@ -162,6 +208,11 @@ export function overlap(a: Rect, b: Rect): Rect | null {
  * (`--sp-8`) that sits between them, with enough room above 21 that a longer
  * word wrapping a one-line bubble, or a larger type scale, does not tip it
  * over.
+ *
+ * Both measurements are of a **tooltip**, and that is now written into who this
+ * number is asked about: only a surface {@link Overlay.hint} is true of reaches
+ * this test at all. Read as a rule about size it had already been stretched
+ * past what was measured — see {@link Overlay} for the 26px menu row it ate.
  */
 const EDGE_GRAZE = 32
 
@@ -179,6 +230,9 @@ const EDGE_GRAZE = 32
  *
  * `shared` is already clipped into `stage` by {@link overlap}, so each of the
  * four distances below is zero or positive, and zero means "flush".
+ *
+ * Asked only of a hover hint. See {@link Overlay}: for anything a person opened
+ * in order to read, there is no such thing as a part of it that may be lost.
  */
 function grazesTheEdge(stage: Rect, shared: Rect): boolean {
   const fromTop = shared.y - stage.y
@@ -209,9 +263,12 @@ function grazesTheEdge(stage: Rect, shared: Rect): boolean {
  * against the page — a dialog, the command palette, a menu opened over it — and
  * some of those are small. A menu is 420×313 and a paragraph tooltip is 320×68;
  * both are a rounding error next to the page and both must park it. What
- * separates them from the Cookies bubble is *where* their overlap sits: theirs
- * is on the page, the bubble's is a band along the page's own edge, no deeper
- * than the gap between the toolbar and the page. See {@link grazesTheEdge}.
+ * separates them from the Cookies bubble is *what they are*: a bubble is a hint
+ * that appeared under a pointer and can be lost without anybody noticing, and
+ * the rest are things somebody opened. Only the first kind is allowed to be
+ * clipped by the page's own edge, and only then by a band no deeper than the
+ * gap between the toolbar and the page. See {@link Overlay} for the menu row
+ * this rule ate while it was written as a size, and {@link grazesTheEdge}.
  *
  * ## What this costs, said plainly, and where the other half of it is
  *
@@ -235,11 +292,14 @@ function grazesTheEdge(stage: Rect, shared: Rect): boolean {
  * whose stage has not been measured, and reporting it as covered would park a
  * page for a reason that has nothing to do with overlays.
  */
-export function isCovered(stage: Rect, overlays: readonly Rect[]): boolean {
+export function isCovered(stage: Rect, overlays: readonly Overlay[]): boolean {
   if (stage.width <= 0 || stage.height <= 0) return false
   return overlays.some((overlay) => {
     const shared = overlap(stage, overlay)
-    return shared !== null && !grazesTheEdge(stage, shared)
+    if (shared === null) return false
+    // A hint may be clipped by the page's own edge; a menu, a dialog or a popup
+    // may not. See {@link Overlay}.
+    return !(overlay.hint === true && grazesTheEdge(stage, shared))
   })
 }
 
@@ -256,6 +316,14 @@ export function isCovered(stage: Rect, overlays: readonly Rect[]): boolean {
 export interface OverlayElement {
   getBoundingClientRect(): { left: number; top: number; width: number; height: number }
   querySelector(selectors: string): OverlayElement | null
+  /**
+   * Read for one attribute, `role`, which is what says a surface is a hint.
+   *
+   * A method rather than a `role` field because the thing on the other side of
+   * this interface is a real `Element` and an element's role is an attribute
+   * read on demand, not a property that would have to be kept in step.
+   */
+  getAttribute(name: string): string | null
 }
 
 export interface OverlayBody {
@@ -266,6 +334,20 @@ function boxOf(element: OverlayElement): Rect | null {
   const box = element.getBoundingClientRect()
   if (box.width <= 0 || box.height <= 0) return null
   return { x: box.left, y: box.top, width: box.width, height: box.height }
+}
+
+/**
+ * Is this surface a hover hint?
+ *
+ * One attribute, on the portalled element itself, and no list of class names:
+ * `role="tooltip"` is written by the two components that draw one — `Tooltips`
+ * and `HoverNote` — because it is what a screen reader needs, so it is already
+ * correct and already maintained. A rule keyed on `.tooltip` would be a second
+ * spelling of the same fact, and the next hint somebody writes would be the one
+ * that forgets it. See {@link Overlay}.
+ */
+function isHint(element: OverlayElement): boolean {
+  return element.getAttribute('role') === 'tooltip'
 }
 
 /**
@@ -283,8 +365,8 @@ function boxOf(element: OverlayElement): Rect | null {
  * forget to empty, which is why a page can never be parked by something that is
  * no longer on screen.
  */
-export function overlayRects(body: OverlayBody, appRoot: OverlayElement | null): Rect[] {
-  const rects: Rect[] = []
+export function overlayRects(body: OverlayBody, appRoot: OverlayElement | null): Overlay[] {
+  const rects: Overlay[] = []
 
   for (let index = 0; index < body.children.length; index++) {
     const child = body.children[index]
@@ -293,7 +375,7 @@ export function overlayRects(body: OverlayBody, appRoot: OverlayElement | null):
     // keeps the node and swaps its contents. An empty container has no box, and
     // treating it as a surface would park every page permanently.
     const box = boxOf(child)
-    if (box) rects.push(box)
+    if (box) rects.push({ ...box, hint: isHint(child) })
   }
 
   // The peeked rail, which is inside the app rather than portalled out of it.
@@ -303,7 +385,8 @@ export function overlayRects(body: OverlayBody, appRoot: OverlayElement | null):
   // own stylesheet already selects.
   const rail = appRoot?.querySelector('[data-peek]') ?? null
   const railBox = rail ? boxOf(rail) : null
-  if (railBox) rects.push(railBox)
+  // Never a hint: the rail is a column of rows somebody is reading.
+  if (railBox) rects.push({ ...railBox, hint: false })
 
   return rects
 }
@@ -394,10 +477,10 @@ export function browserOverlayDom(): OverlayDom | null {
  * at 0,0 — which is over the sidebar, not over the page, and would have made
  * this miss every menu it exists to catch.
  */
-export function watchOverlays(dom: OverlayDom, onChange: (rects: Rect[]) => void): () => void {
+export function watchOverlays(dom: OverlayDom, onChange: (rects: Overlay[]) => void): () => void {
   let cancelFrame: (() => void) | null = null
   let stopped = false
-  let last: Rect[] = []
+  let last: Overlay[] = []
 
   /*
    * Reported only when it genuinely changed.

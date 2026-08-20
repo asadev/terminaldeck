@@ -162,6 +162,7 @@ describe('it does not park the browser pages it is drawn over', () => {
     const appRoot = {
       getBoundingClientRect: () => ({ left: 0, top: 0, width: 1440, height: 920 }),
       querySelector: () => null,
+      getAttribute: () => null,
     }
     const body = { children: [appRoot] }
     expect(overlayRects(body, appRoot)).toEqual([])
@@ -172,10 +173,14 @@ describe('it does not park the browser pages it is drawn over', () => {
     const appRoot = {
       getBoundingClientRect: () => ({ left: 0, top: 0, width: 1440, height: 920 }),
       querySelector: () => null,
+      getAttribute: () => null,
     }
     const portalled = {
       getBoundingClientRect: () => ({ left: 500, top: 300, width: 400, height: 120 }),
       querySelector: () => null,
+      // Not `role="tooltip"`, so the page parks for the whole of it rather than
+      // letting it be clipped at an edge. See `Overlay` in `overlay-watch.ts`.
+      getAttribute: () => null,
     }
     const body = { children: [appRoot, portalled] }
     expect(overlayRects(body, appRoot)).toHaveLength(1)
