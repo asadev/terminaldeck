@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-20
+
 ### Added
 
 - **A file dropped on a session goes into that session** — including one running
@@ -1628,7 +1630,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.7.0
 [0.6.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.6.1
 [0.6.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.6.0
 [0.5.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.5.0
