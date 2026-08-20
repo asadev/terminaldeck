@@ -1,0 +1,348 @@
+/*
+ * The remote folder picker: one line on a page, and the window it opens.
+ *
+ * Its own file rather than lines in `servers.css` or `NewSessionDialog.css`,
+ * because it is drawn in both places — the New session dialog and a server's
+ * own page — and a rule that lived in either one would style it in that place
+ * only. It is imported by the component, so it arrives wherever the component
+ * does.
+ *
+ * That is also why the window below repeats what `Modal.css` says about scrims
+ * and sheets instead of borrowing its class names. `Modal.tsx` is a component
+ * this one deliberately does not use — see its own note about Escape closing
+ * two dialogs — and reaching into another component's stylesheet for a look
+ * would make this window depend on a file nothing here imports.
+ *
+ * Every value below is a token. Nothing here picks a colour: the dialog and the
+ * server page are two different surfaces and a hard-coded grey that reads
+ * correctly on one is the wrong grey on the other. The one exception is the
+ * scrim, which is mixed from a token per theme exactly as `Modal.css` mixes
+ * its own — a blur over the work rather than a blackout.
+ */
+
+.srvpick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+/* The whole of this control while the window is shut: where a session will
+   start, and the button that opens the folders. */
+.srvpick-chosen {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* The answer. The head of a long path is the part worth losing — unlike a
+   project list, where several folders share a basename, this is one path and
+   its tail is the folder you are in. */
+.srvpick-path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+/* Deliberately the same shape and weight as the local *Browse…* in the New
+   session dialog's own header, because the two are one question asked about two
+   machines and the remote one having a different look is what made it read as
+   something other than a folder chooser. */
+.srvpick-browse {
+  flex-shrink: 0;
+  padding: var(--sp-05) var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  color: var(--accent);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.srvpick-browse:hover {
+  background: var(--bg-hover);
+}
+
+/* ------------------------------------------------------------- the window -- */
+
+.srvpick-scrim {
+  position: fixed;
+  inset: 0;
+  /* Above `Modal`'s own 100, because this window is opened from inside one and
+     has to sit over it rather than under it. */
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-10) var(--sp-6);
+  background: color-mix(in srgb, var(--text-primary) 38%, transparent);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+[data-theme='dark'] .srvpick-scrim {
+  background: color-mix(in srgb, #000 52%, transparent);
+}
+
+.srvpick-window {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 480px;
+  max-width: 100%;
+  max-height: 100%;
+  padding: var(--sp-4);
+  border-radius: var(--radius-xl);
+  /* The same glass as every other sheet in this app, one step more opaque: a
+     window has to be readable over whatever it covers. */
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  animation: srvpick-window-in var(--dur) var(--ease-emphasis);
+}
+
+/* The panel takes focus on open; it is a container, so no ring for it. */
+.srvpick-window:focus {
+  outline: none;
+}
+
+.srvpick-window :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.srvpick-window-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.srvpick-window-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The folder the window is in, which is the answer *Use this folder* gives. */
+.srvpick-window-path {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.srvpick-up {
+  flex-shrink: 0;
+  padding: var(--sp-05) var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.srvpick-up:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.srvpick-up:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Ten rows. This is a window whose whole job is the list, so it gets twice the
+   room the inline version had — and it still stops, because a list that grows
+   until it pushes the footer off the screen takes *Use this folder* with it. */
+.srvpick-list {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(var(--control-h) * 3);
+  max-height: calc(var(--control-h) * 10);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.srvpick-row {
+  display: block;
+  width: 100%;
+  min-height: var(--control-h);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-md);
+  text-align: left;
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.srvpick-row:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.srvpick-row:disabled {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.srvpick-note {
+  margin: 0;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+/* A refusal from somebody else's server is not this app failing, so it is not
+   drawn as an error banner. It is a sentence under the list, in the tone the
+   rest of the panel uses, and the list above it is still usable. */
+.srvpick-problem {
+  margin: 0;
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+}
+
+.srvpick-typed {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.srvpick-input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+}
+
+.srvpick-go {
+  flex-shrink: 0;
+  padding: var(--sp-05) var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.srvpick-go:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.srvpick-go:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.srvpick-input::placeholder {
+  color: var(--text-muted);
+}
+
+.srvpick-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ------------------------------------------------------------- the footer -- */
+
+.srvpick-window-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-top: var(--sp-1);
+}
+
+/* Pushed hard left so the two buttons sit together on the right, which is where
+   every other dialog in this app puts Cancel and its primary. */
+.srvpick-default {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.srvpick-default:has(input:disabled) {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* macOS push button: 28px tall, 8px radius, quiet fill, no border. */
+.srvpick-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  border: none;
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+
+.srvpick-btn:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.srvpick-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.srvpick-btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: var(--shadow-sm);
+}
+
+.srvpick-btn-primary:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+@keyframes srvpick-window-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .srvpick-window {
+    animation: none;
+  }
+}

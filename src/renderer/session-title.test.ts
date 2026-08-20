@@ -6,6 +6,7 @@ import {
   deriveSessionTitle,
   distinguishingIdLength,
   folderName,
+  isMachineAndPath,
   isUsableTitle,
   MAX_TITLE_LENGTH,
   MIN_ID_CHARS,
@@ -591,5 +592,56 @@ describe('userSessionTitle', () => {
     expect(name).not.toBeNull()
     expect(name?.length).toBeLessThanOrEqual(MAX_TITLE_LENGTH)
     expect(name?.endsWith('…')).toBe(true)
+  })
+})
+
+describe('a shell titling itself with the machine and the folder', () => {
+  /*
+   * The reported bug, as data. Asad, on the rail: *"it is showing the full
+   * machine and path, everything in the pill. It should not show. It should only
+   * show the name of the session."* The string comes from the shell itself —
+   * `%n@%m: %~` is what the stock zsh and bash profiles write into the
+   * terminal's window title — so it arrives as a session's "title" without
+   * anything in this app having decided it was one.
+   */
+  it('recognises the shapes a prompt writes', () => {
+    for (const title of [
+      'apple@Mac-mini: ~/Projects/terminaldeck',
+      'apple@Mac-mini',
+      'root@178.105.239.176:/var/log',
+      'DESKTOP-DDGMNCV: C:\\Users\\asad\\site',
+      'Mac-mini: ~/Projects',
+      '/Users/apple/Projects/terminaldeck',
+      '~/Projects/terminaldeck',
+      'C:\\Users\\asad\\site',
+    ]) {
+      expect(isMachineAndPath(title), title).toBe(true)
+    }
+  })
+
+  it('leaves a title a person or an agent actually wrote', () => {
+    /*
+     * The half that matters more, because the cost of over-matching is a
+     * session that loses its real name and reads `Session 3` forever. Every one
+     * of these has a colon, an at sign or a slash in it and none of them is a
+     * prompt: the patterns require no spaces around the `@`, and a tail that
+     * begins with `~` or `/` after the colon.
+     */
+    for (const title of [
+      'Fix: the login race',
+      'Rewrite the relay handshake',
+      'Deploy to prod: staging first',
+      'Review the diff',
+      'Update Claude Code to 2.1',
+      'asad@example.com signed in twice',
+      'terminaldeck',
+    ]) {
+      expect(isMachineAndPath(title), title).toBe(false)
+    }
+  })
+
+  it('says nothing about an empty title, which has its own fallback', () => {
+    expect(isMachineAndPath('')).toBe(false)
+    expect(isMachineAndPath('   ')).toBe(false)
   })
 })

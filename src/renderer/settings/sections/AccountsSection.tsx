@@ -1,10 +1,16 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import type { ProviderId } from '@shared/types'
-import { Button, Explain, Group, Notice, SectionHead } from '../controls'
+import { Button, Group, Notice, SectionHead } from '../controls'
+import { HoverNote } from '../../components/HoverNote'
 import type { SectionProps } from '../settings-bridge'
 import { AgentCliUpdate } from '../../components/AgentCliUpdate'
 import { ProviderBadge } from '../../components/ProviderBadge'
-import { providerOption, useAccountProviderRows, type AccountProviderRow } from '../../components/ProviderPicker'
+import {
+  PROVIDER_OPTIONS,
+  providerOption,
+  useAccountProviderRows,
+  type AccountProviderRow,
+} from '../../components/ProviderPicker'
 import { AddAccountDialog } from './AddAccountDialog'
 import { agentCanStart, agentProblem, canHaveMore } from './account-agent'
 import {
@@ -13,8 +19,10 @@ import {
   normalizeAccountName,
   profileLoginLabel,
   renameAccount,
+  useAccountHistory,
   useAccounts,
   MAX_ACCOUNT_NAME_LENGTH,
+  type AccountHistoryView,
   type AccountView,
   type AccountsSnapshot,
   type AccountsBridge,
@@ -52,13 +60,52 @@ import {
  *   > "If I add any new account it just redirects me to claude only, not to the
  *   > other ones I want to connect."
  *
- * **The agent is chosen before the name.** An account is a login of one specific
- * CLI, so "add an account" has no meaning until it is known which one. The list
- * above the name field is the question, and it lists every agent — including the
- * one that is refused, with the reason on the row, because a missing row is
+ * **The agent is chosen before the address.** An account is a login of one
+ * specific CLI, so "add an account" has no meaning until it is known which one.
+ * The list above the field is the question, and it lists every agent — including
+ * the one that is refused, with the reason on the row, because a missing row is
  * indistinguishable from an oversight. Which agents can hold a second login, and
  * how each answer was measured, is in `main/provider-accounts.ts`; nothing on
  * this screen decides it.
+ *
+ * ## What the rows stopped saying, 2026-08-19
+ *
+ * Each row used to carry four lines under the name: the sign-in sentence, the
+ * config directory, where its conversations live, and — after a share — where
+ * any folder that could not be merged was left. Every one of them was true and
+ * the four together are what he was reading when he said:
+ *
+ *   > "Remove big descriptions under each account (private, temporary, folder
+ *   > link…). Organise properly."
+ *
+ * and, about the window as a whole:
+ *
+ *   > "Every single time you bring some card, you put something new… We want
+ *   > simplicity. Let the smart people use it."
+ *
+ * So a row is now a name, a state, and an ⓘ. The folder and the conversation
+ * location moved *into* the ⓘ rather than out of the app — see `accountNote` —
+ * because they are the two facts that prove the accounts are genuinely separate
+ * and nothing else on the screen can say them. The state line went terse in the
+ * two cases where the name above it already carried the address, and stayed
+ * verbatim in the case that matters: an account whose state could not be read
+ * still prints the reason, because "not signed in" would send somebody to redo a
+ * login that is perfectly fine.
+ *
+ * "Stop sharing history" is not on the row any more either. *"This is
+ * nonsense"* — as presented, and he is right: a button that relinks a
+ * conversation directory, on a row in a settings list, with the consequence a
+ * confirmation away. The mechanism is untouched and is still what a new account
+ * arrives in; what is gone is the control, and the ⓘ says where the
+ * conversations are so the state is never a surprise.
+ *
+ * ## One list per agent
+ *
+ * *"Group accounts by provider."* `groupAccountsByProvider` does it in
+ * catalogue order — Claude, then Codex, then Gemini — and an agent with no
+ * accounts gets no heading, because a heading over nothing is the "control over
+ * nothing" fault one step up. The agent mark moved to the heading with them: it
+ * was on every row, saying the same word the heading now says once.
  */
 
 /**
@@ -79,18 +126,13 @@ const MAX_NAME_LENGTH = MAX_ACCOUNT_NAME_LENGTH
  */
 const SYSTEM_ACCOUNT_ID = 'system'
 
-/**
- * The agent's name for a screen reader, or undefined when there is no mark to
- * announce.
- *
- * `undefined` is what puts `ProviderBadge` into its decorative mode, and that
- * is the right mode for an account whose agent the main process did not name:
- * the badge draws nothing, so announcing something would describe a shape that
- * is not on screen.
+/*
+ * `agentName` was here — the agent's label, handed to `ProviderBadge` so a
+ * screen reader could announce the mark on every row. The mark is on the group
+ * heading now, and the heading is the agent's name in words, so the badge is
+ * decorative: labelling it would announce "Claude Code Claude Code", which is
+ * the case `ProviderBadge` documents as worse than announcing it once.
  */
-function agentName(provider: ProviderId | null): string | undefined {
-  return provider === null ? undefined : providerOption(provider)?.label
-}
 
 /**
  * The three per-agent readings this screen makes live in `account-agent.ts`.
@@ -102,6 +144,148 @@ function agentName(provider: ProviderId | null): string | undefined {
  * not about which file it is typed in.
  */
 export { agentCanStart, agentProblem, canHaveMore }
+
+/* -------------------------------------------------- one shared history -- */
+
+/**
+ * The shape of a shared-history answer, and the narrowing of one, live in
+ * `renderer/accounts.ts` — deliberately not here.
+ *
+ * The same argument the rename makes one file over. This pane is not the only
+ * surface onto an account: the chip inside a session is another, and a reply
+ * parsed twice is two answers to "what does a reply with no sentence in it
+ * mean". `parseAccountHistory` settles it once, and settles it the careful way
+ * — an unrecognised link becomes `unmanaged`, never `shared`, because `shared`
+ * is a claim that a conversation survives changing account and that deleting
+ * this account loses nothing.
+ *
+ * What belongs here is only what is about this screen: the one line a row
+ * shows, and which rows get a button at all.
+ */
+
+/**
+ * The one line under a row that says where that account's conversations are.
+ *
+ * Short on purpose: the consequences are long, and they belong in the
+ * confirmation a person reads with their finger over the button, not in a list
+ * they are scanning. The four cases are four different situations and none of
+ * them collapses into another — in particular `elsewhere` is not a broken
+ * `shared`. Somebody pointed that folder at a location of their own, on purpose,
+ * outside this app; `shareProjects` refuses to replace it and this says so
+ * rather than offering a button that would only ever fail.
+ */
+export function historyLine(history: AccountHistoryView): string {
+  switch (history.link) {
+    case 'shared':
+      return `Conversations are kept in ${history.root}, shared with your own install.`
+    case 'elsewhere':
+      return `Its conversations folder is a link to ${history.target ?? 'somewhere else'}, which was set up outside this app and is left exactly as it is.`
+    case 'separate':
+      return history.ownProjects > 0
+        ? `Keeps its own conversations — ${history.ownProjects} folder${history.ownProjects === 1 ? '' : 's'} of them, which no other account can read.`
+        : 'Keeps its own conversations, which no other account can read.'
+    default:
+      return 'Keeps its own conversations. Nothing has been written yet.'
+  }
+}
+
+/**
+ * Everything a row used to print under its name, in the one place a reader can
+ * ask for it.
+ *
+ * Two facts and no more: which directory makes this account a separate login,
+ * and where its conversations are. Both were lines on the row and both are
+ * worth keeping — the directory is the only proof on screen that two accounts
+ * of one agent are not one account listed twice, and the conversation location
+ * is a real consequence of adding an account that `ACCOUNT-MODEL.md` requires
+ * the screen to state rather than let somebody discover.
+ *
+ * What changed is that they are no longer *standing* text. `HoverNote` keeps
+ * the string in the document for a screen reader and costs the pane no height,
+ * which is the trade every long half of an explanation in this window makes.
+ */
+export function accountNote(account: AccountView, history: AccountHistoryView | null): string {
+  const where = `Its own folder is ${account.configDir}.`
+  return history ? `${where} ${historyLine(history)}` : where
+}
+
+/**
+ * The one line under a name that says whether this account can start a session.
+ *
+ * Terse for the two answers the name above has already half-given: a row headed
+ * with an address does not need "Signed in as <that same address> · max" under
+ * it, and a row with a Sign in button beside it does not need "Open a session
+ * with this account to log in".
+ *
+ * Verbatim for the rest, and that is the load-bearing half. An old CLI, a
+ * missing binary or a timeout all produce `unknown`, and the agent's own reason
+ * is the only thing on screen that separates "we could not ask" from "you are
+ * logged out" — shortening it to a word is exactly how somebody is sent to redo
+ * a login that was fine.
+ */
+export function accountStateLine(state: SignInView | undefined): string {
+  if (!state) return 'Checking with the agent…'
+  if (state.state === 'signed-in') return 'Signed in'
+  if (state.state === 'signed-out') return 'Not signed in'
+  return state.detail
+}
+
+/** One agent's logins, under that agent's name. */
+export interface AccountGroup {
+  provider: ProviderId | null
+  label: string
+  accounts: AccountView[]
+}
+
+/**
+ * Catalogue order, spelled once.
+ *
+ * Not alphabetical and not the order the accounts happen to be filed in: the
+ * list of agents in the New-session picker, the Add-account popup and the
+ * installed list on the pane above are all in this order, and a fourth order
+ * here would be the same three agents in a fourth arrangement on one screen.
+ */
+const PROVIDER_ORDER: readonly string[] = PROVIDER_OPTIONS.map((option) => option.id)
+
+/**
+ * The accounts, gathered under the agent each one is a login of.
+ *
+ * *"Group accounts by provider — all Claude accounts together, then Codex, then
+ * Gemini."* The list was flat, which is readable at two accounts and stops
+ * being readable at six, because the only thing distinguishing a Claude row
+ * from a Codex row was a 14px mark at the far left.
+ *
+ * A pure function so the ordering can be asserted without a render, and because
+ * the interesting cases are the ones a screenshot never shows: an agent this
+ * build does not know, and an account whose provider the main process did not
+ * name. Neither is dropped — an unknown id keeps its own heading and an unnamed
+ * one lands under "Other agents", after everything the catalogue knows about.
+ */
+export function groupAccountsByProvider(accounts: readonly AccountView[]): AccountGroup[] {
+  const groups: AccountGroup[] = []
+  for (const account of accounts) {
+    let group = groups.find((entry) => entry.provider === account.provider)
+    if (!group) {
+      group = {
+        provider: account.provider,
+        label:
+          account.provider === null
+            ? 'Other agents'
+            : (providerOption(account.provider)?.label ?? account.provider),
+        accounts: [],
+      }
+      groups.push(group)
+    }
+    group.accounts.push(account)
+  }
+  // Anything the catalogue has never heard of sorts after everything it has,
+  // and `sort` is stable, so those keep the order the accounts came in.
+  const rank = (group: AccountGroup): number => {
+    const at = group.provider === null ? -1 : PROVIDER_ORDER.indexOf(group.provider)
+    return at === -1 ? PROVIDER_ORDER.length : at
+  }
+  return groups.sort((a, b) => rank(a) - rank(b))
+}
 
 /* ----------------------------------------------------------------- view -- */
 
@@ -142,7 +326,14 @@ export interface AccountsViewProps {
   providerRows: readonly AccountProviderRow[]
   /** Null when nothing in this window can start a session — no Sign in button. */
   onSignIn: ((account: AccountView) => void) | null
-  onCheck(): void
+  /*
+   * `onCheck` was here, behind a "Check again" button in the foot with a line
+   * of help under it saying what it asked. The read runs when the pane opens —
+   * `useAccounts` probes on mount — so the button re-ran work that had finished
+   * a second earlier, and the pane's one primary action was sitting beside it
+   * competing for the eye. *"Don't put any single statement in anywhere."* The
+   * sentence went with the button; the probe was never the button's.
+   */
   /**
    * Add the account **and** start its sign-in, as one action.
    *
@@ -160,6 +351,29 @@ export interface AccountsViewProps {
   onRename(account: AccountView, name: string): void
   onRemove(account: AccountView): void
   onMakeDefault(account: AccountView): void
+  /**
+   * Where each account's conversations live, by account id, as the main process
+   * last read it off the disk.
+   *
+   * A map with a missing entry rather than a per-row loading flag, because an
+   * account this window could not ask about and an account whose answer has not
+   * arrived yet want the same treatment: draw nothing about its history. The
+   * section re-reads the entry after every act, which is what makes "shared" on
+   * screen a fact rather than the memory of a button press.
+   */
+  history?: Readonly<Record<string, AccountHistoryView>>
+  /*
+   * `moves`, `onShareHistory` and `onUnshareHistory` were here.
+   *
+   * They drew the Share / Stop sharing button on every row, the confirmation
+   * under it, and the amber line recording what a share had left behind. The
+   * mechanism is untouched — `shareAccountHistory` is still what every new
+   * account is put through in `signInToNewAccount`, and the main process's
+   * `shared-projects` module has not moved — but the *control* is off this
+   * pane, on his word: *"this is nonsense"*, of a button that relinks a
+   * conversation directory from a settings list. Where an account's
+   * conversations are is still said, once, behind the row's ⓘ.
+   */
 }
 
 /**
@@ -182,11 +396,11 @@ export function AccountsView({
   busy,
   providerRows,
   onSignIn,
-  onCheck,
   onSignInNew,
   onRename,
   onRemove,
   onMakeDefault,
+  history = {},
 }: AccountsViewProps) {
   /*
    * `sectionMeta('profiles')` answers with Agents now — the merge table routes
@@ -217,30 +431,256 @@ export function AccountsView({
   }
 
   const accounts = snapshot.accounts
+  const groups = groupAccountsByProvider(accounts)
+
+  /**
+   * One account, as a row.
+   *
+   * A named function rather than an inline map body, because the list is drawn
+   * once per agent now: writing it in the loop would put a hundred lines of row
+   * inside two nested maps, and the grouping is the outer one.
+   */
+  function accountRow(account: AccountView) {
+    const state = signIn[account.id]
+    /*
+     * One default, not one per agent.
+     *
+     * This was `account.system && defaultId === null`, which was right
+     * while Claude's install was the only system row. There are three now
+     * — Claude's, Codex's and Gemini's — so on a fresh machine all three
+     * wore a "Default" badge, next to three rows already named "Default
+     * (…)", which is the "printed the word twice" problem this badge has
+     * had before, tripled.
+     *
+     * `SYSTEM_PROFILE_ID` is the id `resolveProfileId` terminates on when
+     * nothing else resolves, so it is the one row for which "default with
+     * nothing set" is literally true.
+     */
+    const isDefault =
+      account.id === snapshot.defaultId ||
+      (snapshot.defaultId === null && account.id === SYSTEM_ACCOUNT_ID)
+    // Held as the value rather than a boolean so the form below narrows
+    // without an assertion.
+    const editing = renaming?.id === account.id ? renaming : null
+    const rowProblem = agentProblem(providerRows, account.provider)
+    /*
+     * Undefined until the state channel has answered for this row — and
+     * for an `unmanaged` account it answers `unmanaged` forever, because
+     * an account pointed at a directory somebody already had is not one
+     * this app may relink. Both draw nothing.
+     */
+    const known = history[account.id]
+    const rowHistory = known && known.link !== 'unmanaged' ? known : null
+
+    return (
+      <li key={account.id} className="settings-profile">
+        <span
+          className="settings-profile-dot"
+          style={{ background: `var(${account.color})` }}
+          aria-hidden="true"
+        />
+
+        <span className="settings-profile-main">
+          {editing ? (
+            <form
+              className="settings-inline-form"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const name = normalizeAccountName(editing.name, account.name)
+                setRenaming(null)
+                if (name !== null) onRename(account, name)
+              }}
+            >
+              <input
+                className="settings-input"
+                value={editing.name}
+                maxLength={MAX_NAME_LENGTH}
+                autoFocus
+                /* The row's own label, so what a screen reader hears is
+                   what the list shows — the field holds the stored name
+                   because that is the string being edited, but "New name
+                   for Default" over a row headed with an address is the
+                   slug leaking through the accessibility tree. */
+                aria-label={`New name for ${profileLoginLabel(account, state)}`}
+                onChange={(event) => setRenaming({ id: account.id, name: event.target.value })}
+              />
+              <Button type="submit" tone="primary">
+                Save
+              </Button>
+              <Button onClick={() => setRenaming(null)}>Cancel</Button>
+            </form>
+          ) : (
+            <>
+              <span className="settings-profile-name">
+                {/* The agent's mark was here, once per row, saying the
+                    same thing for every row under one heading. It is on
+                    the heading now — see `groupAccountsByProvider`. */}
+                {/* The login, not the key. These rows read `Default`,
+                    `Default (Codex CLI)`, `Default (Gemini CLI)` — three
+                    generated keys sitting one above the other, which is
+                    also the shape of his complaint that the list gives no
+                    way to tell which login is which. This pane probes on
+                    open, so the address is usually already in hand;
+                    `profileLoginLabel` prints it, and says which install
+                    a row is when the agent named nobody. */}
+                {profileLoginLabel(account, state)}
+                {/* A badge is a comparison, so it needs something to
+                    compare with: on a fresh install there is one account
+                    and it is *called* Default, and the badge printed the
+                    word twice, eight pixels apart. */}
+                {isDefault && accounts.length > 1 && (
+                  <span className="settings-badge">Default</span>
+                )}
+                {/* Only when the label has not already said it. With no
+                    address to show, the label *is* "Your own Claude Code
+                    install", and the badge beside it would be the same
+                    sentence twice on one line. */}
+                {account.system && accountLabel(state) !== null && (
+                  <span className="settings-badge quiet">Your own install</span>
+                )}
+              </span>
+
+              {/* The one line that answers "can this account start a
+                  session right now". Read from the agent, never inferred
+                  from the presence of a directory — and cut to a word
+                  wherever the name above has already carried the address.
+                  The ⓘ beside it holds the two facts the row used to
+                  print underneath: which folder makes this account
+                  separate, and where its conversations are. */}
+              <span className="settings-account-state" data-state={state?.state ?? 'unknown'}>
+                <span className="settings-account-mark" aria-hidden="true" />
+                <span>{accountStateLine(state)}</span>
+                <HoverNote label={profileLoginLabel(account, state)}>
+                  {accountNote(account, rowHistory)}
+                </HoverNote>
+              </span>
+
+              {/* Why Sign in is not there. One sentence and a command —
+                  never the launcher's own `Error: spawn … ENOENT`, which
+                  is what this row used to print verbatim. */}
+              {rowProblem && (
+                <span className="settings-account-blocked">
+                  {rowProblem.text}
+                  {rowProblem.install && <code>{rowProblem.install}</code>}
+                </span>
+              )}
+
+              {/* The config directory and the conversation location were
+                  two more lines here. Both are behind the ⓘ above — see
+                  `accountNote`, and the header on this file for why four
+                  lines under a name is the thing that had to go. */}
+            </>
+          )}
+        </span>
+
+        {!editing && (
+          <span className="settings-profile-actions">
+            {/* Offered when the agent said no, and when it could not be
+                asked — both are cases where signing in is the next thing
+                to try. Never offered against a verified "signed in",
+                where it would only start a session nobody asked for.
+
+                And never offered when the agent will not start. That is
+                the button that opened a blank terminal and printed a Node
+                stack trace into it, five times in one recording; the row
+                below says what is wrong and what to type instead. */}
+            {onSignIn &&
+              state &&
+              state.state !== 'signed-in' &&
+              state.state !== 'unsupported' &&
+              agentCanStart(providerRows, account.provider) && (
+                <Button tone="primary" disabled={busy} onClick={() => onSignIn(account)}>
+                  Sign in
+                </Button>
+              )}
+            {/* Meaningless where there is only ever one. Gemini keeps a
+                single login per machine, so "use this one by default"
+                offers a choice between it and itself. */}
+            {!isDefault && canHaveMore(providerRows, account.provider) && (
+              <Button disabled={busy} onClick={() => onMakeDefault(account)}>
+                Use by default
+              </Button>
+            )}
+            {/* Share / Stop sharing history was the fourth button on this
+                row, behind a confirmation. *"This is nonsense"* — of a
+                control that relinks a conversation directory from a
+                settings list, on a row a person is scanning for their own
+                address. The plumbing is untouched; where the
+                conversations are is said behind the ⓘ above, so nothing
+                about this row is a surprise. */}
+            {!account.system && (
+              <>
+                <Button
+                  disabled={busy}
+                  onClick={() => setRenaming({ id: account.id, name: account.name })}
+                >
+                  Rename
+                </Button>
+                <Button tone="danger" disabled={busy} onClick={() => setConfirmRemove(account.id)}>
+                  Remove
+                </Button>
+              </>
+            )}
+          </span>
+        )}
+
+        {confirmRemove === account.id && (
+          <div className="settings-confirm">
+            <span>
+              Remove “{account.name}” from the list? Its folder stays on disk and its login
+              stays in your keychain — adding it again at the same place signs straight back
+              in.
+            </span>
+            {/* What deleting this account would actually cost, which is
+                a different answer depending on where its conversations
+                live: a sharing account owns none of them, because its
+                `projects/` is a link and removing a link removes a link.
+                The rule this satisfies is explicit — never offer to
+                delete a directory holding transcripts without saying what
+                is lost — and `describeDelete` in the main process is the
+                only thing that has counted them.
+
+                Absent for an `unmanaged` account rather than substituted,
+                and that is not a gap. `shareState` answers `unmanaged`
+                without ever looking inside the directory, so its count is
+                zero because nothing counted rather than because there is
+                nothing there — printing the sentence built from it would
+                promise a Codex account with a year of history that it has
+                none. */}
+            {rowHistory && <span>{rowHistory.remove}</span>}
+            <Button
+              tone="danger"
+              disabled={busy}
+              onClick={() => {
+                setConfirmRemove(null)
+                onRemove(account)
+              }}
+            >
+              Remove
+            </Button>
+            <Button onClick={() => setConfirmRemove(null)}>Keep it</Button>
+          </div>
+        )}
+      </li>
+    )
+  }
 
   return (
     <Group title={head ? undefined : title}>
       {head && <SectionHead title={title} blurb="One app, several agent logins." />}
 
       {/*
-        Three sentences became one.
+        The headed paragraph that was here is gone.
 
-        This block replaced a headed paragraph called "Claude only, and why",
-        which was written when Claude was the only agent that could hold a
-        second login and had become wrong about Codex. Then it grew to three
-        sentences of its own — what an account is, which agents can hold
-        several, and where to switch between them — which is how a pane becomes
-        a document one true clause at a time. What is left on screen is the
-        clause somebody actually needs before they press Add; the rest is behind
-        the ⓘ, where it can be read by anyone who wants it and skipped by
-        everyone who does not.
+        It had already been cut twice — from "Claude only, and why", to three
+        sentences, to one line and an ⓘ — and one line was still one line too
+        many: *"don't put any single statement in anywhere… we want simplicity.
+        Let the smart people use it."* Nothing it said is unreachable. Which
+        agents can hold a second login is on the agent's own row in the
+        Add-account popup, where it is the answer to a question somebody is in
+        the middle of asking, and where a session's account is chosen is the
+        button beside the folder that does it.
       */}
-      <Explain
-        title="One app, several logins"
-        more="An account is a separate login for one agent, with its own history and its own transcripts, and two can run side by side. Pick which one a session uses from the account button beside the folder."
-      >
-        Claude and Codex can hold several; Gemini keeps one per machine.
-      </Explain>
 
       {error && <Notice tone="error">{error}</Notice>}
 
@@ -251,230 +691,53 @@ export function AccountsView({
       */}
       <AgentCliUpdate />
 
-      <ul className="settings-profiles">
-        {accounts.map((account) => {
-          const state = signIn[account.id]
-          /*
-           * One default, not one per agent.
-           *
-           * This was `account.system && defaultId === null`, which was right
-           * while Claude's install was the only system row. There are three now
-           * — Claude's, Codex's and Gemini's — so on a fresh machine all three
-           * wore a "Default" badge, next to three rows already named "Default
-           * (…)", which is the "printed the word twice" problem this badge has
-           * had before, tripled.
-           *
-           * `SYSTEM_PROFILE_ID` is the id `resolveProfileId` terminates on when
-           * nothing else resolves, so it is the one row for which "default with
-           * nothing set" is literally true.
-           */
-          const isDefault =
-            account.id === snapshot.defaultId ||
-            (snapshot.defaultId === null && account.id === SYSTEM_ACCOUNT_ID)
-          // Held as the value rather than a boolean so the form below narrows
-          // without an assertion.
-          const editing = renaming?.id === account.id ? renaming : null
-          const rowProblem = agentProblem(providerRows, account.provider)
+      {/*
+        One list per agent, and no heading over an agent with nothing under it.
 
-          return (
-            <li key={account.id} className="settings-profile">
-              <span
-                className="settings-profile-dot"
-                style={{ background: `var(${account.color})` }}
-                aria-hidden="true"
-              />
-
-              <span className="settings-profile-main">
-                {editing ? (
-                  <form
-                    className="settings-inline-form"
-                    onSubmit={(event) => {
-                      event.preventDefault()
-                      const name = normalizeAccountName(editing.name, account.name)
-                      setRenaming(null)
-                      if (name !== null) onRename(account, name)
-                    }}
-                  >
-                    <input
-                      className="settings-input"
-                      value={editing.name}
-                      maxLength={MAX_NAME_LENGTH}
-                      autoFocus
-                      /* The row's own label, so what a screen reader hears is
-                         what the list shows — the field holds the stored name
-                         because that is the string being edited, but "New name
-                         for Default" over a row headed with an address is the
-                         slug leaking through the accessibility tree. */
-                      aria-label={`New name for ${profileLoginLabel(account, state)}`}
-                      onChange={(event) => setRenaming({ id: account.id, name: event.target.value })}
-                    />
-                    <Button type="submit" tone="primary">
-                      Save
-                    </Button>
-                    <Button onClick={() => setRenaming(null)}>Cancel</Button>
-                  </form>
-                ) : (
-                  <>
-                    <span className="settings-profile-name">
-                      {/* Which agent this is a login of, in the one list that
-                          now holds accounts of more than one. The name cannot
-                          answer it — "Work" is a word somebody typed, and the
-                          same word is a legal name on every agent here. Labelled
-                          rather than `aria-hidden`, unlike the copy of this mark
-                          in the Add list: there the agent's name is the next
-                          thing on the row, and here nothing else on the row says
-                          it. */}
-                      <ProviderBadge provider={account.provider} label={agentName(account.provider)} />
-                      {/* The login, not the key. These rows read `Default`,
-                          `Default (Codex CLI)`, `Default (Gemini CLI)` — three
-                          generated keys sitting one above the other, which is
-                          also the shape of his complaint that the list gives no
-                          way to tell which login is which. This pane probes on
-                          open, so the address is usually already in hand;
-                          `profileLoginLabel` prints it, and says which install
-                          a row is when the agent named nobody. */}
-                      {profileLoginLabel(account, state)}
-                      {/* A badge is a comparison, so it needs something to
-                          compare with: on a fresh install there is one account
-                          and it is *called* Default, and the badge printed the
-                          word twice, eight pixels apart. */}
-                      {isDefault && accounts.length > 1 && (
-                        <span className="settings-badge">Default</span>
-                      )}
-                      {/* Only when the label has not already said it. With no
-                          address to show, the label *is* "Your own Claude Code
-                          install", and the badge beside it would be the same
-                          sentence twice on one line. */}
-                      {account.system && accountLabel(state) !== null && (
-                        <span className="settings-badge quiet">Your own install</span>
-                      )}
-                    </span>
-
-                    {/* The one line that answers "can this account start a
-                        session right now". Read from the agent, never inferred
-                        from the presence of a directory. */}
-                    <span className="settings-account-state" data-state={state?.state ?? 'unknown'}>
-                      <span className="settings-account-mark" aria-hidden="true" />
-                      <span>{state ? state.detail : 'Checking with the agent…'}</span>
-                    </span>
-
-                    {/* Why Sign in is not there. One sentence and a command —
-                        never the launcher's own `Error: spawn … ENOENT`, which
-                        is what this row used to print verbatim. */}
-                    {rowProblem && (
-                      <span className="settings-account-blocked">
-                        {rowProblem.text}
-                        {rowProblem.install && <code>{rowProblem.install}</code>}
-                      </span>
-                    )}
-
-                    <span className="settings-profile-path" title={account.configDir}>
-                      {account.configDir}
-                    </span>
-                  </>
-                )}
-              </span>
-
-              {!editing && (
-                <span className="settings-profile-actions">
-                  {/* Offered when the agent said no, and when it could not be
-                      asked — both are cases where signing in is the next thing
-                      to try. Never offered against a verified "signed in",
-                      where it would only start a session nobody asked for.
-
-                      And never offered when the agent will not start. That is
-                      the button that opened a blank terminal and printed a Node
-                      stack trace into it, five times in one recording; the row
-                      below says what is wrong and what to type instead. */}
-                  {onSignIn &&
-                    state &&
-                    state.state !== 'signed-in' &&
-                    state.state !== 'unsupported' &&
-                    agentCanStart(providerRows, account.provider) && (
-                      <Button tone="primary" disabled={busy} onClick={() => onSignIn(account)}>
-                        Sign in
-                      </Button>
-                    )}
-                  {/* Meaningless where there is only ever one. Gemini keeps a
-                      single login per machine, so "use this one by default"
-                      offers a choice between it and itself. */}
-                  {!isDefault && canHaveMore(providerRows, account.provider) && (
-                    <Button disabled={busy} onClick={() => onMakeDefault(account)}>
-                      Use by default
-                    </Button>
-                  )}
-                  {!account.system && (
-                    <>
-                      <Button
-                        disabled={busy}
-                        onClick={() => setRenaming({ id: account.id, name: account.name })}
-                      >
-                        Rename
-                      </Button>
-                      <Button tone="danger" disabled={busy} onClick={() => setConfirmRemove(account.id)}>
-                        Remove
-                      </Button>
-                    </>
-                  )}
-                </span>
-              )}
-
-              {confirmRemove === account.id && (
-                <div className="settings-confirm">
-                  <span>
-                    Remove “{account.name}” from the list? Its folder stays on disk and its login
-                    stays in your keychain — adding it again at the same place signs straight back
-                    in.
-                  </span>
-                  <Button
-                    tone="danger"
-                    disabled={busy}
-                    onClick={() => {
-                      setConfirmRemove(null)
-                      onRemove(account)
-                    }}
-                  >
-                    Remove
-                  </Button>
-                  <Button onClick={() => setConfirmRemove(null)}>Keep it</Button>
-                </div>
-              )}
-            </li>
-          )
-        })}
-      </ul>
+        The mark that used to sit on every row is on the heading instead: it was
+        answering "which agent is this" once per account, which is the question
+        the heading now answers once per group.
+      */}
+      {groups.map((group) => (
+        <div key={group.label} className="settings-account-group">
+          <h5 className="settings-account-group-title">
+            <ProviderBadge provider={group.provider} />
+            {group.label}
+          </h5>
+          <ul className="settings-profiles">{group.accounts.map(accountRow)}</ul>
+        </div>
+      ))}
 
       {accounts.length === 0 && !loading && (
         <p className="settings-prose">No accounts yet.</p>
       )}
 
       {/*
-        Two buttons, and the second one is the whole of this change.
+        One button, and it is the whole of this pane's foot.
 
         Everything that used to sit under this line — a heading, the agent
         question, the list, a name field, its own Sign in button, three notices
-        and an ⓘ — is now behind **Add account**, in a popup that carries the
+        and an ⓘ — is behind **Add account**, in a popup that carries the
         sign-in steps and nothing else. His words: *"'Add' and 'Sign in' should
         be one thing, called Add account. It must open a small popup with only
-        the sign-in steps — not the whole Agents page. It is confusing. Just
-        give me the login, sign-in steps."*
+        the sign-in steps — not the whole Agents page. It is confusing."*
 
         It is one button rather than two because it is one act. Adding an
         account without signing it in leaves a directory that no agent has ever
         written to, which is not an account in any sense a person cares about —
         `signInToNewAccount` makes both happen on one press and unmakes the
         first if the second fails.
+
+        And it is one button rather than three because the other two were not
+        acts at all. "Check again" re-ran a probe that runs when the pane opens,
+        and the line of help under it described that probe — a control and a
+        statement, side by side with the only thing on the foot anybody came
+        here to press.
       */}
       <div className="settings-account-foot">
         <Button tone="primary" disabled={busy} onClick={() => setAdding(true)}>
           Add account
         </Button>
-        <Button disabled={busy || accounts.length === 0} onClick={onCheck}>
-          Check again
-        </Button>
-        <span className="settings-help">
-          Asks the agent, once per account, which of them are signed in.
-        </span>
       </div>
 
       <AddAccountDialog
@@ -574,6 +837,34 @@ export async function signInToNewAccount(
   const id = createdAccountId(created)
   if (id === null) return { ok: false, error: 'Could not add that account.' }
 
+  /*
+   * Shared history from the first moment, and before the session starts.
+   *
+   * A second account exists because the first one ran out, which means it is
+   * reached in the middle of a piece of work — and an account with a history of
+   * its own drops that work on the floor at exactly that moment. Option C in
+   * `ACCOUNT-MODEL.md` is the settled answer, so it is the state a new account
+   * arrives in rather than a switch somebody has to find afterwards. The row's
+   * own button is the way back out, and it is offered on every row.
+   *
+   * Before `start`, because sharing relinks `projects/`: a session opened first
+   * would write its first conversation into the directory that is about to stop
+   * being read.
+   *
+   * A refusal is not a failure of anything. `shareProjects` throws for an
+   * account this app may not relink — a login of an agent whose history has a
+   * different shape, or a directory the person pointed at themselves — and
+   * those accounts are perfectly good accounts that simply keep their own
+   * conversations. Turning that into an error would refuse to add an account
+   * over a preference.
+   */
+  try {
+    await bridge?.shareAccountHistory?.(id)
+  } catch {
+    // Nothing to say: the row will read "keeps its own conversations", which is
+    // both true and the whole of the answer.
+  }
+
   try {
     await start({ profileId: id, provider })
     return { ok: true, error: null }
@@ -658,6 +949,34 @@ export function AccountsSection({ startSession, head }: SectionProps & { head?: 
 
   const bridge = accountsBridge() as Partial<AccountsBridge> | null
 
+  /**
+   * Where each account's conversations live, and the two acts that move them.
+   *
+   * `useAccountHistory` rather than a read of its own, and rather than a field
+   * on `useAccounts`: it fans one `lstat` out per account, files each answer
+   * under the id it asked about, leaves an account it could not read simply
+   * absent — which every reader here draws as nothing at all — and, crucially,
+   * re-reads the row after either act instead of believing the reply. That last
+   * property is the honesty rule of this feature, and it belongs in one place
+   * because the account chip in a session is a second surface onto the same
+   * accounts.
+   */
+  const ids = useMemo(
+    () => accounts.snapshot.accounts.map((account) => account.id),
+    [accounts.snapshot.accounts],
+  )
+  const histories = useAccountHistory(ids)
+
+  /*
+   * `changeHistory` was here — the one write this pane made into
+   * `shared-projects`, behind the Share / Stop sharing button on every row.
+   * The button is gone (see the header) and so is the call, but nothing under
+   * it moved: `useAccountHistory().set` is still the one way to change the
+   * sharing, and `signInToNewAccount` still puts every new account through
+   * `shareAccountHistory` on the way in. What this pane does with the hook now
+   * is read it, for the line behind each row's ⓘ.
+   */
+
   return (
     <AccountsView
       head={head}
@@ -682,7 +1001,6 @@ export function AccountsSection({ startSession, head }: SectionProps & { head?: 
          so what is sent can be asserted in a test — there is no DOM here to
          press the button in. */
       onSignIn={startSession ? (account) => startSession(signInRequest(account)) : null}
-      onCheck={() => accounts.check(true)}
       /* One press: make the account, open its sign-in, and unmake it if the
          session cannot start. `signInToNewAccount` holds all three so the
          cleanup branch can be asserted without a DOM. */
@@ -716,6 +1034,7 @@ export function AccountsSection({ startSession, head }: SectionProps & { head?: 
       onMakeDefault={(account) =>
         run(bridge?.setDefaultProfile?.(account.id), 'Could not change the default account.')
       }
+      history={histories.known}
     />
   )
 }

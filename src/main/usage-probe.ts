@@ -132,12 +132,12 @@
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { AgentBinary } from './agent-binaries'
 import { killTree, systemRootOf } from './kill-tree'
 import { identifyLimit, windowForScope, type PlanLimit } from './plan-limit'
 import { currentPlatform, withPath, type Platform } from './platform/host'
-import { findProfile, getState, sessionEnv, systemProfileFor } from './profiles'
+import { findProfile, getState, sessionEnv, systemProfileFor, type Profile } from './profiles'
 import { agentBinaries, loginPath, PROVIDERS } from './providers'
 import { launchSpec } from './tool-probe'
 import {
@@ -433,16 +433,70 @@ export function readingsFromUtilization(
  * found either. `sessionEnv` returns `{}` for the system profile precisely to
  * avoid that, and it is the only correct source of this answer.
  */
-function profileFor(account: UsageAccountRef) {
+function profileFor(account: UsageAccountRef): Profile | null {
   const state = getState()
   const found = account.id === null ? null : findProfile(state, account.id)
   if (found && found.provider === 'claude') return found
-  return systemProfileFor('claude', state)
+
+  /*
+   * The id resolved to nothing, and what happens next used to be the defect.
+   *
+   * It fell through to the machine's own install unconditionally, which is a
+   * substitution rather than a fallback: everything below would then read the
+   * *default* login's `.claude.json`, or start a `claude` under the default
+   * login, and hand the answer back to a caller that stamps it with the account
+   * it was asked about. One account's figures drawn under another account's name
+   * is the single thing this feature is not allowed to do — Asad recorded
+   * exactly that on 2026-08-19, and could only tell because he happened to have
+   * the other account open in another app at the time.
+   *
+   * The ref carries its own directory, so there is no need to guess at one. Two
+   * answers below and neither is a substitution:
+   *
+   *  - the directory *is* the machine's own install, so the system profile is
+   *    the right record and its empty environment is load-bearing — see
+   *    `profiles.ts` on why `CLAUDE_CONFIG_DIR=$HOME/.claude` makes a working
+   *    login read as unconfigured;
+   *  - the directory is some other account's, whose record this app no longer
+   *    has: deleted since the reading was taken, or a ref rebuilt from a stored
+   *    one. That directory is read, because that is the account being asked
+   *    about, and reading it is the only answer that is about the right login.
+   *
+   * A ref that names no directory at all is genuinely unattributed, and there is
+   * nothing to read for it. Null, and every caller turns that into "nothing was
+   * read" with a sentence rather than into somebody else's number.
+   */
+  const system = systemProfileFor('claude', state)
+  const dir = account.configDir
+  if (dir === null) return null
+  if (resolve(dir) === resolve(system.configDir)) return system
+  return {
+    ...system,
+    id: account.id ?? dir,
+    name: account.name ?? dir,
+    configDir: dir,
+    // Not the machine's own install, so `sessionEnv` must export the directory
+    // rather than returning `{}`.
+    system: false,
+  }
 }
 
-/** The account's `.claude.json`, at the path the CLI itself would use. */
-export function claudeConfigJsonPath(account: UsageAccountRef): string {
-  const env = sessionEnv(profileFor(account), 'claude')
+/**
+ * The account's `.claude.json`, at the path the CLI itself would use, or null
+ * when this app cannot say which file that is.
+ *
+ * Not `join(configDir, '.claude.json')`, which is wrong for exactly one account
+ * and it is the commonest one: a default install keeps its config at
+ * `~/.claude.json`, *one level above* `~/.claude`. `sessionEnv` is the only
+ * thing that knows the difference — it returns `{}` for the system profile
+ * precisely so that nothing sets `CLAUDE_CONFIG_DIR` to a path the CLI would
+ * then read the wrong file under — so the answer is composed from what it
+ * exports rather than from the directory.
+ */
+export function claudeConfigJsonPath(account: UsageAccountRef): string | null {
+  const profile = profileFor(account)
+  if (profile === null) return null
+  const env = sessionEnv(profile, 'claude')
   const dir = env.CLAUDE_CONFIG_DIR?.trim()
   return dir && dir.length > 0 ? join(dir, '.claude.json') : join(homedir(), '.claude.json')
 }
@@ -468,9 +522,14 @@ export async function readCachedUsage(
   now = Date.now(),
 ): Promise<CachedUsageRead> {
   const empty: CachedUsageRead = { readings: [], fetchedAtMs: null }
+  const path = claudeConfigJsonPath(account)
+  // No file this app can name for that account. "Nothing known" and not the
+  // machine's own block, which is what a substitution here would have produced
+  // — see `profileFor`.
+  if (path === null) return empty
   let parsed: unknown
   try {
-    parsed = JSON.parse(await readFile(claudeConfigJsonPath(account), 'utf8'))
+    parsed = JSON.parse(await readFile(path, 'utf8'))
   } catch {
     return empty
   }
@@ -756,11 +815,30 @@ export async function probeUsage(
     return done('no-binary', [], 'Claude Code could not be started here, so its usage could not be read.')
   }
 
+  /*
+   * Which login this probe runs as, established before anything is spawned.
+   *
+   * A null here means the ref names an account this app can no longer place, and
+   * the only alternative to refusing is running the probe under the machine's
+   * own install and returning its subscription under the asked-for account's
+   * name. That is the defect this whole pass exists to end, so it is a sentence
+   * rather than a figure. It costs nothing on the ordinary path: every account
+   * that resolves reaches the spawn exactly as before.
+   */
+  const profile = profileFor(account)
+  if (profile === null) {
+    return done(
+      'unreadable',
+      [],
+      'This app cannot tell which login that session is running as, so its plan limits are not shown — the figures below it would be a different account’s.',
+    )
+  }
+
   const launch = launchSpec(binary?.runnable ?? bin, null, platform)
   const PATH = options.path ?? (await loginPath(platform))
   const env: NodeJS.ProcessEnv = {
     ...withPath(process.env, PATH, platform),
-    ...sessionEnv(profileFor(account), 'claude'),
+    ...sessionEnv(profile, 'claude'),
   }
   /*
    * The inherited identity, scrubbed.

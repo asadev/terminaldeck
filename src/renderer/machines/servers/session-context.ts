@@ -20,8 +20,10 @@ import { createContext, useContext } from 'react'
  * exactly how one comes to be drawn. `null` is a fact the consumer can act on:
  * the harness, a unit test rendering the panel on its own, and any future tree
  * that mounts this panel outside the window all get a page with no *open a
- * terminal* control rather than one that swallows the press. `ServerAdvanced`
- * reads it and says what it can do instead.
+ * terminal* control rather than one that swallows the press. `ServerPage`
+ * reads it and says what it can do instead — it moved there on 2026-08-19 when
+ * *open a terminal* was promoted out of Advanced, because a server he had just
+ * connected offered no visible way to open anything on it.
  */
 export interface ServerSessionOpener {
   /**
@@ -31,8 +33,13 @@ export interface ServerSessionOpener {
    * list — the list lives inside this panel, which is usually not the thing on
    * screen — and the rail heading, the pill's tooltip, the window bar and the
    * close confirmation all print it.
+   *
+   * `startIn` is the folder on the server the terminal should open in, added on
+   * 2026-08-19 with `ServerFolderPicker`. Left off — which every caller did
+   * until that day — means wherever the account's own sign-in lands, which is
+   * what SSH gives you and what this app did for the whole life of the feature.
    */
-  open(serverId: string, serverName: string): void
+  open(serverId: string, serverName: string, startIn?: string | null): void
   /** How many are already open on that one, so a page can say so. */
   openOn(serverId: string): number
   /**

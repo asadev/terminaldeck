@@ -52,6 +52,7 @@ import {
   type Reachability,
 } from '../main/reachability'
 import type { Device } from '../main/remote/device-auth'
+import type { DeviceKindRecord } from '../main/remote/device-kind'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import { registerMachinesIpc } from '../main/remote/machines/ipc'
 import {
@@ -68,6 +69,7 @@ import {
 } from '../main/session-restore'
 import { getState as profilesState, resolveProfile } from '../main/profiles'
 import { store } from '../main/store'
+import { NO_COPILOT_HERE } from './cli'
 import { ChannelDesk } from './desk'
 import {
   createPublicHost,
@@ -110,6 +112,17 @@ export interface HostStatus {
   idle: IdleReport
   remote: RemoteStatus
   devices: Device[]
+  /**
+   * What each device is, alongside the roster rather than folded into it.
+   *
+   * Two lists because they are two files with opposite failure directions —
+   * `device-kind.ts` is explicit that a kind must never be a field on a record
+   * the trust store rewrites, since `asStoredDevice` drops what it does not
+   * recognise and would erase one on the next approve. A device with no row here
+   * is not a device with no kind; it is one nobody has decided about, which
+   * `kindOf` enforces as `guest` and which the CLI prints as its own state.
+   */
+  kinds: DeviceKindRecord[]
   folders: DeviceFolderGrant[]
   sessions: SessionMeta[]
   /**
@@ -353,6 +366,40 @@ export async function createHeadlessHost(
     // every device is a guest with no folders.
     kinds: core.kinds,
     /*
+     * No `copilot`, and that is a limit this build states rather than an
+     * argument somebody forgot.
+     *
+     * It matters because the wire makes "this host has no copilot" and "you are
+     * a guest" the **same shape** — `copilotFrame` in `server.ts` argues that
+     * those are one fact from the device's point of view and it is entitled to
+     * neither more nor less. Between a desktop and a guest that is right. Here
+     * it is exactly wrong: the owner's own phone is told nothing, and what it
+     * sees is indistinguishable from having been approved as the wrong kind. So
+     * `NO_COPILOT_HERE` is said on the side that knows — at the moment a device
+     * is approved, and in `status` — and the absence is never met in silence.
+     *
+     * ## Why it is not simply wired, measured rather than assumed
+     *
+     * `CopilotRuns` assembles outside Electron; `scripts/remote-host.ts` does
+     * it. What it cannot do here is have any tools. A run with no `deck-control`
+     * behind it is refused by design and in as many words — *"a Claude CLI in
+     * the copilot's folder with no deck-control is not a copilot"* — and
+     * `CopilotRuns.state` reports `available: false` with *"The copilot's tools
+     * are not running on this machine."* Passing the layer without its tool
+     * server would therefore draw a fourth pill on the phone whose every Start
+     * button refuses, which is worse than the absence, not better.
+     *
+     * And `deck-control` cannot be imported into this bundle today.
+     * `deck-control/index.ts` imports `browserDrive` from
+     * `../browser-drive-ipc`, which loads `browser-tab` and `browser-driver` —
+     * `BrowserWindow`, `WebContentsView`, `nativeImage` — at module scope; and
+     * its `live-surface.ts` imports `settings-extra`, which loads `app`,
+     * `session` and `shell`. Both are real value imports rather than types, so
+     * the bundle would not start. Giving a server a copilot means putting a seam
+     * under those two edges the way `platform/paths.ts` did for `app.getPath`,
+     * which is a change to the copilot's whole tool surface.
+     */
+    /*
      * The git credential proxy, on every host except the public one.
      *
      * Withholding it is what stops the `credential` capability being advertised
@@ -556,12 +603,18 @@ export async function createHeadlessHost(
       idle: idle.report(),
       remote: remote.server.status(),
       devices: remote.auth.listDevices(),
+      kinds: core.kinds.list(),
       folders: core.grants.list(),
       sessions: core.ptys.list(),
       neverRunning: [
         'file watchers (a window feature; this build has no project tree)',
         'transcript tailing (a window feature; the clients read their own)',
         'usage polling (a window feature; nothing here draws a chart)',
+        // The one entry in this list that changes what a *device* gets rather
+        // than what this process spends, which is why it is also said at the
+        // moment somebody approves one. This list is where a reader who counts
+        // goes looking; `pair` is where they are standing when it matters.
+        NO_COPILOT_HERE,
       ],
       publicHost: publicHost?.sentence() ?? null,
     }

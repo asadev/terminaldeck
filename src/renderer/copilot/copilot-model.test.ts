@@ -118,14 +118,24 @@ describe('the stage', () => {
 })
 
 describe('which pane opens', () => {
-  it('opens the terminal on the first run, because a login needs one', () => {
-    expect(defaultPane('first-run')).toBe('terminal')
+  /*
+   * One answer, and it used to be two.
+   *
+   * The rule was `first-run ? terminal : chat`, so which pane the window opened
+   * on depended on whether a sign-in probe had come back yet — a race, decided
+   * by something nobody on the outside can see. Asad, 2026-08-20: *"And always
+   * terminal should be the default view."*
+   *
+   * There is no stage to pass any more, which is the point: the two cases below
+   * are the same call, written twice, because the thing worth pinning is that
+   * nothing can make it answer anything else.
+   */
+  it('opens the terminal', () => {
+    expect(defaultPane()).toBe('terminal')
   })
 
-  it('opens the conversation everywhere else', () => {
-    for (const stage of ['ready', 'unverified', 'checking', 'stopped', 'starting'] as const) {
-      expect(defaultPane(stage), stage).toBe('chat')
-    }
+  it('opens the terminal again, whatever has happened since', () => {
+    expect(defaultPane()).toBe('terminal')
   })
 })
 

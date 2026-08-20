@@ -29,13 +29,23 @@
  * important one.
  */
 
+// Relative rather than '@shared/search': vitest runs this file without the
+// alias electron-vite supplies, and `omnibox.test.ts` is the file that proves it.
+import { DEFAULT_SEARCH, searchUrl } from '../../shared/search'
+
 export type OmniboxResolution =
   | { kind: 'empty' }
   | { kind: 'url'; url: string; display: string }
   | { kind: 'search'; url: string; query: string; display: string }
 
-/** Where a search term goes. `%s` is replaced with the encoded query. */
-export const DEFAULT_SEARCH = 'https://duckduckgo.com/?q=%s'
+/**
+ * Where a search term goes. `%s` is replaced with the encoded query.
+ *
+ * Re-exported rather than declared: the guest page's right-click menu searches
+ * too, and that menu is built in the main process, which cannot see this file.
+ * `shared/search.ts` says why the one definition lives where it lives.
+ */
+export { DEFAULT_SEARCH }
 
 /** `host:port` with an optional path — the shape that fools `new URL`. */
 const HOST_PORT = /^(?:[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*|\[[0-9a-fA-F:]+\]):\d{1,5}(?:[/?#].*)?$/
@@ -117,10 +127,7 @@ function toUrl(candidate: string): string | null {
 }
 
 function searchFor(query: string, template: string): OmniboxResolution {
-  const url = template.includes('%s')
-    ? template.replace('%s', encodeURIComponent(query))
-    : `${template}${encodeURIComponent(query)}`
-  return { kind: 'search', url, query, display: query }
+  return { kind: 'search', url: searchUrl(query, template), query, display: query }
 }
 
 /**

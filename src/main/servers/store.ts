@@ -53,6 +53,14 @@ const MAX_USERNAME_LENGTH = 64
 /** Refuses to grow without bound if adding ever runs in a loop. */
 const MAX_SERVERS = 64
 
+/**
+ * A path's maximum length, which is Linux's own `PATH_MAX`.
+ *
+ * A longer string cannot name a folder on the far end, so storing it would only
+ * move the failure into a terminal that answers `cd: File name too long`.
+ */
+const MAX_PATH_LENGTH = 4096
+
 /** The port a server is reached on when nobody says otherwise. */
 export const DEFAULT_PORT = 22
 
@@ -95,6 +103,27 @@ export interface StoredServer {
   hostKey: HostKeyRecord | null
   addedAt: number
   lastConnectedAt: number | null
+  /**
+   * The folder a session on this server starts in when nothing else names one.
+   *
+   * Asad, having found the folder picker and used it once: *"I can make one of
+   * them as default or something so you can always start seamlessly a new
+   * session."* Choosing a folder every time you open a terminal on the same box
+   * is the picker charging rent, and the answer is nearly always the same
+   * folder — so it is remembered here, beside the name and the address, and
+   * `servers:shell:open` reads it whenever a caller names no folder of its own.
+   *
+   * Null is *wherever the sign-in lands*, which is what every terminal this app
+   * opened before the picker existed did and is still what a server nobody has
+   * chosen a default for gets. That is why clearing the default has to exist and
+   * is not the same act as choosing a different one.
+   *
+   * It lives in this file rather than in `credentials.ts` for the reason the
+   * header states: it is something a person can see on a screen, and it crosses
+   * the bridge to the window that draws it. It is not a secret; it is a
+   * preference about a folder.
+   */
+  startIn: string | null
 }
 
 /** What is needed to add one. Everything else is filled in here. */
@@ -155,6 +184,12 @@ function validPort(raw: unknown): number {
   return raw
 }
 
+/** A stored folder, or null for none. Empty and unusable are both none. */
+function folderPath(raw: unknown): string | null {
+  const value = clean(raw, MAX_PATH_LENGTH)
+  return value === '' ? null : value
+}
+
 function readHostKey(raw: unknown): HostKeyRecord | null {
   if (typeof raw !== 'object' || raw === null) return null
   const record = raw as Record<string, unknown>
@@ -197,6 +232,11 @@ export function readServers(raw: unknown): StoredServer[] {
       hostKey: readHostKey(record.hostKey),
       addedAt: typeof record.addedAt === 'number' ? record.addedAt : 0,
       lastConnectedAt: typeof record.lastConnectedAt === 'number' ? record.lastConnectedAt : null,
+      // Absent is the ordinary case — every server stored before the default
+      // existed, and every server nobody has chosen one for — and it reads the
+      // same as an empty string: no default, so a session lands wherever the
+      // sign-in does.
+      startIn: folderPath(record.startIn),
     })
     if (out.length >= MAX_SERVERS) break
   }
@@ -279,6 +319,7 @@ export class ServerStore {
       hostKey: null,
       addedAt: Date.now(),
       lastConnectedAt: null,
+      startIn: null,
     }
     this.persist([...list, server])
     return { ...server }
@@ -288,6 +329,26 @@ export class ServerStore {
     const cleaned = clean(name, MAX_NAME_LENGTH)
     if (cleaned === '') return false
     return this.update(id, (server) => ({ ...server, name: cleaned }))
+  }
+
+  /**
+   * Remember the folder a session on this server should start in — or forget it.
+   *
+   * Null clears it, and clearing is a real answer rather than a way of saying
+   * nothing: it is how somebody goes back to landing wherever the sign-in
+   * lands, which is the behaviour a server has before anybody chooses. A blank
+   * string means the same thing, because that is what an emptied text box
+   * hands over.
+   *
+   * Nothing here asks the server whether the folder exists. It cannot usefully:
+   * a folder that is there when this is written can be gone by the next
+   * session, so a check would buy a moment's confidence and still leave the
+   * failure to be reported in the terminal — where `connection.ts` already puts
+   * it, in the scrollback the person is looking at, signed in at home.
+   */
+  setStartIn(id: string, path: string | null): boolean {
+    const folder = path === null ? null : folderPath(path)
+    return this.update(id, (server) => ({ ...server, startIn: folder }))
   }
 
   /** Record which kind of sign-in is stored, after `credentials.ts` stored it. */

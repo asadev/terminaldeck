@@ -54,6 +54,11 @@ function session(id: string, label = id): WorkspaceTab {
   return { id, kind: 'session', label, closable: true }
 }
 
+/** A browser window — the only kind of tab that draws a ✕ since 2026-08-20. */
+function page(id: string, label = id): WorkspaceTab {
+  return { id, kind: 'browser', label, closable: true }
+}
+
 const OPEN = [session('a'), session('b'), session('c')]
 
 describe('promote', () => {
@@ -271,7 +276,7 @@ describe('the strip’s markup', () => {
      * other. The strip is the half that can give.
      */
     const html = renderToStaticMarkup(
-      <WorkspaceTabStrip tabs={OPEN} activeTabId="a" onSelect={() => undefined} onShowInstead={() => undefined} storage={store()} />,
+      <WorkspaceTabStrip tabs={OPEN} activeTabId="a" onSelect={() => undefined} storage={store()} />,
     )
     expect(html).not.toContain('Drag a session or a page here')
     expect(html).toContain('aria-selected="true"')
@@ -295,7 +300,6 @@ describe('the strip’s markup', () => {
         tabs={[session('a', 'api')]}
         activeTabId="a"
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         storage={store()}
       />,
     )
@@ -310,7 +314,6 @@ describe('the strip’s markup', () => {
         tabs={[session('a', 'api'), session('b', 'web')]}
         activeTabId="b"
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         storage={store({ 'terminaldeck.strip.promoted': '["b","a"]' })}
       />,
     )
@@ -321,17 +324,18 @@ describe('the strip’s markup', () => {
     expect(html).toContain('aria-selected="true"')
   })
 
-  it('says its ✕ removes the tab, and never that it closes anything', () => {
+  it('draws a ✕ on a session tab that only takes it off the bar', () => {
     /*
-     * The behaviour change of 2026-08-17, in the one place a user can read it
-     * before pressing anything: *"it should not delete the session… side panel
-     * will have everything inside, and above we just set a view which one we
-     * want to see."*
+     * The correction of 2026-08-20, after a first pass deleted this control
+     * outright: *"from the windows it should be able to close it, but at least
+     * from the top bar… for the sessions it will just close from the top bar,
+     * but it will still stay in the side panel."*
      *
-     * There is a second ✕ in this window, on the sidebar row, and that one does
-     * end the session. Two identical glyphs with two outcomes is only safe if
-     * they say different things — so this asserts both halves: the sentence
-     * this control does say, and the word it must never say.
+     * What is pinned is the pair of things that make it safe. It is **not**
+     * marked `[data-ends]` — that attribute is the whole of the stylesheet's
+     * difference between the ✕ that destroys and the ✕ that tidies — and its
+     * title names the act in three words rather than explaining it, because the
+     * standing rule this round is no prose on screen.
      */
     const html = renderToStaticMarkup(
       <WorkspaceTabStrip
@@ -339,19 +343,95 @@ describe('the strip’s markup', () => {
         activeTabId="a"
         onSelect={() => undefined}
         onShowInstead={() => undefined}
+        onCloseWindow={() => undefined}
         storage={store({ 'terminaldeck.strip.promoted': '["a"]' })}
       />,
     )
-    expect(html).toContain('aria-label="Remove api from the top bar"')
-    expect(html).toContain('It keeps running, in the sidebar.')
-    expect(html).not.toContain('Close api')
-    // And no host can put a close on this bar by wiring a prop: there is none.
+    expect(html.match(/strip-tab-close/g)).toHaveLength(1)
+    expect(html).toContain('title="Take off the bar"')
+    expect(html).toContain('aria-label="Take api off the bar"')
+    // Nothing on this bar closes a session, so nothing on it says it does.
     expect(html).not.toMatch(/aria-label="[^"]*[Cc]lose/)
+    expect(/<button[^>]*class="strip-tab-close"[^>]*>/.exec(html)?.[0]).not.toContain('data-ends')
+  })
+
+  it('draws the two ✕s so that they cannot be read as the same control', () => {
+    /*
+     * The whole hazard, in one render: two identical glyphs a centimetre apart,
+     * one of which throws away the page you were reading and one of which tidies
+     * a tab. *"for the windows it will completely close, and for the sessions it
+     * will just close from the top bar."*
+     *
+     * They are told apart by the mark and by the words, and both are asserted
+     * here rather than in two places, because the assertion that matters is the
+     * *contrast* — either one alone reads as fine.
+     */
+    const html = renderToStaticMarkup(
+      <WorkspaceTabStrip
+        tabs={[session('a', 'api'), page('b1', 'New tab')]}
+        activeTabId="a"
+        onSelect={() => undefined}
+        onShowInstead={() => undefined}
+        onCloseWindow={() => undefined}
+        storage={store({ 'terminaldeck.strip.promoted': '["a","b1"]' })}
+      />,
+    )
+    const buttons = html.match(/<button[^>]*class="strip-tab-close"[^>]*>/g) ?? []
+    expect(buttons).toHaveLength(2)
+    // In tab order: the session first, then the page.
+    expect(buttons[0]).not.toContain('data-ends')
+    expect(buttons[0]).toContain('title="Take off the bar"')
+    // `[data-ends]` is what the stylesheet paints `--color-critical` on: this
+    // one destroys something, so it wears the window's mark for that.
+    expect(buttons[1]).toContain('data-ends=""')
+    expect(buttons[1]).toContain('title="Close this page"')
+    expect(html).toContain('aria-label="Close New tab"')
+    // No sentence on either. The reasoning lives in the source, not on screen.
+    expect(html).not.toContain('top bar. It keeps running')
+  })
+
+  it('has no handler through which a session ✕ could end anything', () => {
+    /*
+     * The strongest form the rule can take, and the reason it is asserted
+     * against the source rather than against markup: a rendered strip can only
+     * show what the ✕ *says*, and the failure being guarded is one where it says
+     * the right thing and calls the wrong function.
+     *
+     * `onEndRemote` is named because it is the one that did. It took a press on
+     * a pill up here and ended the session on the machine it was running on, and
+     * it was deleted rather than reworded when Asad settled that the top bar
+     * demotes and the sidebar deletes. A prop declaration is how it would come
+     * back, so a prop declaration is what this looks for — the word may still
+     * appear in the prose explaining its absence.
+     */
+    const source = readFileSync(join(__dirname, 'WorkspaceTabStrip.tsx'), 'utf8')
+    expect(source).not.toMatch(/onEndRemote\??\s*[(?:]/)
+    // And the one handler a session tab does reach only moves the selection.
+    expect(source).toMatch(/onClick=\{\(\) => removeTab\(tab\.id\)\}/)
+  })
+
+  it('draws no ✕ where the host cannot finish the act', () => {
+    // Absent rather than inert, on both kinds — a test or a board mounting this
+    // bare gets no control at all instead of one that swallows the press.
+    //
+    // For the session that hangs on `onShowInstead`, which is not decoration:
+    // taking the tab you are *looking at* off the bar is the ordinary press, and
+    // without it the strip redraws that tab as transient and the press appears
+    // to do nothing.
+    const html = renderToStaticMarkup(
+      <WorkspaceTabStrip
+        tabs={[session('a', 'api'), page('b1', 'New tab')]}
+        activeTabId="b1"
+        onSelect={() => undefined}
+        storage={store({ 'terminaldeck.strip.promoted': '["a","b1"]' })}
+      />,
+    )
+    expect(html).not.toContain('strip-tab-close')
   })
 
   it('renders with no storage at all rather than throwing', () => {
     const html = renderToStaticMarkup(
-      <WorkspaceTabStrip tabs={OPEN} activeTabId={null} onSelect={() => undefined} onShowInstead={() => undefined} storage={null} />,
+      <WorkspaceTabStrip tabs={OPEN} activeTabId={null} onSelect={() => undefined} storage={null} />,
     )
     expect(html).toContain('Drag a session or a page here')
   })
@@ -372,7 +452,6 @@ describe('the strip’s markup', () => {
         tabs={[session('a', 'api'), session('b', 'web')]}
         activeTabId="a"
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         onNewSession={() => undefined}
         onNewBrowserTab={() => undefined}
         storage={store({ 'terminaldeck.strip.promoted': '["a","b"]' })}
@@ -385,10 +464,67 @@ describe('the strip’s markup', () => {
     // One pair for the whole bar, not one pair per tab — which is the same
     // count mistake the ＋ made in the other direction.
     expect(html.match(/class="strip-open"/g)).toHaveLength(2)
-    // After the last tab. `strip-openers` is a sibling of the tablist and comes
-    // second, which is what puts the icons beside the last window rather than
-    // pinned to the right-hand end of the bar.
+    // After the last tab, and — since 2026-08-20 — *outside the scroll box*.
+    // See the test below, which is the whole of what he asked for here.
     expect(html.indexOf('strip-openers')).toBeGreaterThan(html.lastIndexOf('data-strip-tab'))
+  })
+
+  it('pins the openers in the corner, outside the rail that scrolls', () => {
+    /*
+     * *"these two buttons to start new session and new window are like coming
+     * above the tab. So they should be always in the corner and whenever we
+     * start new, these will become smaller."* — 2026-08-20.
+     *
+     * They used to be the last child of `.strip-rail`, which is the element
+     * that scrolls. So on a full bar they scrolled with the tabs and came to
+     * rest on top of the last tab's name, which is the frame he stopped on.
+     *
+     * Asserted as *markup structure* rather than as a rendered position,
+     * because there is no layout engine here and because the structure is what
+     * the behaviour follows from: a control that is a sibling of the scroll box
+     * cannot scroll with its contents, whatever the stylesheet later says. The
+     * shrinking half is the stylesheet's and is pinned in `finish.test.ts`.
+     */
+    const html = renderToStaticMarkup(
+      <WorkspaceTabStrip
+        tabs={[session('a', 'api'), session('b', 'web')]}
+        activeTabId="a"
+        onSelect={() => undefined}
+        onNewSession={() => undefined}
+        onNewBrowserTab={() => undefined}
+        storage={store({ 'terminaldeck.strip.promoted': '["a","b"]' })}
+      />,
+    )
+    // The rail closes before the openers open: `</div>` for `.strip-rail` has to
+    // fall between the last tab and `strip-openers`, which is only true when the
+    // openers are outside it.
+    const lastTab = html.lastIndexOf('data-strip-tab')
+    const openers = html.indexOf('strip-openers')
+    expect(openers).toBeGreaterThan(lastTab)
+    /*
+     * Three closing tags, not two, and the third one is the whole assertion.
+     * The last tab closes, then `.strip-list`, then `.strip-rail` — and only
+     * then do the openers open. With them back inside the rail there would be
+     * two, because the rail would still be open when they started.
+     */
+    const between = html.slice(lastTab, openers)
+    expect(
+      between.match(/<\/div>/g)?.length ?? 0,
+      'the openers are back inside the scrolling rail',
+    ).toBe(3)
+    // And the corner survives the empty bar, where somebody most wants to start
+    // something — `.strip-empty` has no rail at all, so this is a second shape.
+    const empty = renderToStaticMarkup(
+      <WorkspaceTabStrip
+        tabs={[session('a', 'api')]}
+        activeTabId={null}
+        onSelect={() => undefined}
+        onNewSession={() => undefined}
+        onNewBrowserTab={() => undefined}
+        storage={store()}
+      />,
+    )
+    expect(empty).toContain('strip-openers')
   })
 
   it('draws neither opener the host has not wired', () => {
@@ -399,7 +535,6 @@ describe('the strip’s markup', () => {
         tabs={[session('a', 'api')]}
         activeTabId="a"
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         storage={store()}
       />,
     )
@@ -421,7 +556,6 @@ describe('the strip’s markup', () => {
         tabs={OPEN}
         activeTabId={null}
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         onNewSession={() => undefined}
         onNewBrowserTab={() => undefined}
         storage={store()}
@@ -444,7 +578,6 @@ describe('the strip’s markup', () => {
         tabs={[session('a', 'api')]}
         activeTabId="a"
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         sidebarHidden
         onRevealSidebar={() => undefined}
         storage={store()}
@@ -458,7 +591,6 @@ describe('the strip’s markup', () => {
         tabs={[session('a', 'api')]}
         activeTabId="a"
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         onRevealSidebar={() => undefined}
         storage={store()}
       />,
@@ -503,7 +635,6 @@ describe('the strip’s markup', () => {
         activeTabId="a"
         covered
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         storage={store({ 'terminaldeck.strip.promoted': '["a"]' })}
       />,
     )
@@ -528,7 +659,6 @@ describe('the strip’s markup', () => {
         tabs={tabs}
         activeTabId="a"
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         storage={store({ 'terminaldeck.strip.promoted': '["a","b"]' })}
       />,
     )
@@ -606,7 +736,7 @@ describe('the strip on a window with nothing in it', () => {
    */
   it('draws nothing when there is nothing that could be dragged into it', () => {
     const html = renderToStaticMarkup(
-      <WorkspaceTabStrip tabs={[]} activeTabId={null} onSelect={() => {}} onShowInstead={() => {}} storage={null} />,
+      <WorkspaceTabStrip tabs={[]} activeTabId={null} onSelect={() => {}} storage={null} />,
     )
     expect(html).toBe('')
   })
@@ -621,7 +751,7 @@ describe('the strip on a window with nothing in it', () => {
      */
     const tabs: WorkspaceTab[] = [session('s1', 'Session 1')]
     const html = renderToStaticMarkup(
-      <WorkspaceTabStrip tabs={tabs} activeTabId="s1" onSelect={() => {}} onShowInstead={() => {}} storage={null} />,
+      <WorkspaceTabStrip tabs={tabs} activeTabId="s1" onSelect={() => {}} storage={null} />,
     )
     expect(html).toContain('Session 1')
     expect(stripIsPresent(tabs)).toBe(true)
@@ -980,7 +1110,6 @@ describe('a strip tab', () => {
       tabs={tabs}
       activeTabId="a"
       onSelect={() => undefined}
-      onShowInstead={() => undefined}
       storage={store({ 'terminaldeck.strip.promoted': '["a","b"]' })}
     />,
   )
@@ -1049,35 +1178,53 @@ describe('promoting from the sidebar', () => {
   it('offers every open window a way up that is not a gesture', () => {
     /*
      * A drag is invisible until somebody tries it and impossible without a
-     * mouse, and it was the only route into the strip. This button is both
-     * halves of that: the row's hover controls are revealed by
-     * `:focus-within` as well as `:hover`, so it is reachable by Tab.
+     * mouse, and it was the only route into the strip. The row's ⋯ menu is both
+     * halves of that: the hover controls are revealed by `:focus-within` as well
+     * as `:hover`, so it is reachable by Tab, and the entry inside it says the
+     * placement in words instead of asking the reader to recognise an arrow.
+     *
+     * It was a button of its own until 2026-08-20 — *"instead of these two
+     * buttons, give … one three-dot button"* — so what is asserted here is that
+     * every open window still has a route up, one per row, rather than that a
+     * particular glyph is on screen.
      */
     const html = rail(store())
-    expect(html).toContain('aria-label="Show Fix the login redirect at the top"')
-    expect(html.match(/class="sb-row-action sb-promote"/g)).toHaveLength(2)
+    expect(html).toContain('aria-label="More for Fix the login redirect"')
+    expect(html.match(/class="sb-row-action sb-more"/g)).toHaveLength(2)
   })
 
-  it('reads its pressed state off the same order the strip draws', () => {
-    // The failure this rules out is the one that makes assistive tech lie: a
-    // toggle with private state, next to a strip with its own.
-    const disk = store({ 'terminaldeck.strip.promoted': '["a"]' })
-    const html = rail(disk)
-    expect(html).toContain('aria-pressed="true"')
-    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1)
-    expect(html).toContain('aria-label="Fold Fix the login redirect back into the sidebar"')
+  it('reads its state off the same order the strip draws', () => {
+    /*
+     * The failure this rules out is the one that makes assistive tech lie: a
+     * toggle with private state, next to a strip with its own. The toggle is a
+     * menu entry now and the menu is native, so the check moved down one level
+     * — to the value the row hands the menu, which is read from `promotedOrder`
+     * in the same frame the strip reads it.
+     */
+    const source = readFileSync(join(__dirname, '..', 'shell', 'Sidebar.tsx'), 'utf8')
+    expect(source).toContain('const promoted = promotedOrder.includes(tab.id)')
+    expect(source).toContain('promoted,')
+    // And the menu says which of the two it is offering, in words.
+    const menu = readFileSync(join(__dirname, '..', '..', 'main', 'session-row-menu.ts'), 'utf8')
+    expect(menu).toContain("request.promoted ? 'Fold back into the sidebar' : 'Show at the top'")
   })
 
   it('refuses rather than silently dropping a tab off the far end', () => {
+    /*
+     * Disabled and saying why, because `promote` past the cap is a no-op and an
+     * entry that does nothing when chosen is indistinguishable from a bug. The
+     * reason travels as the sentence itself rather than as a boolean, so the
+     * menu has no wording of its own to keep in step with the cap.
+     */
     const full = Array.from({ length: MAX_PROMOTED }, (_, index) => `t${index}`)
     const disk = store({ 'terminaldeck.strip.promoted': JSON.stringify(full) })
-    const html = rail(disk)
-    // Disabled and saying why, because `promote` past the cap is a no-op and a
-    // button that does nothing when pressed is indistinguishable from a bug.
-    expect(html).toMatch(/class="sb-row-action sb-promote"[^>]*disabled/)
-    expect(html).toContain(`The top strip is full (${MAX_PROMOTED})`)
-    // And live again the moment there is room, rather than staying dead.
-    expect(rail(store())).not.toMatch(/class="sb-row-action sb-promote"[^>]*disabled/)
+    // The rail still renders with the cap reached; the refusal is inside the
+    // menu it opens, not on the row.
+    expect(rail(disk)).toContain('class="sb-row-action sb-more"')
+    const source = readFileSync(join(__dirname, '..', 'shell', 'Sidebar.tsx'), 'utf8')
+    expect(source).toContain('stripFull ? `The top strip is full (${MAX_PROMOTED})` : null')
+    const menu = readFileSync(join(__dirname, '..', '..', 'main', 'session-row-menu.ts'), 'utf8')
+    expect(menu).toContain('enabled: request.promoted || !request.promoteBlocked')
   })
 
   it('carries a drag image that is a tab, not a photograph of the row', () => {
@@ -1105,16 +1252,20 @@ describe('promoting from the sidebar', () => {
     expect(html.match(/class="sb-new-alt"/g)).toHaveLength(1)
   })
 
-  it('warns on the row ✕ that it ends the session, which the tab’s ✕ does not', () => {
+  it('warns on the rail’s close that it ends the session, which the tab’s ✕ does not', () => {
     /*
      * The pair, checked as a pair, because neither half means anything on its
-     * own. This is the ✕ that kills a pty; the strip's takes the tab off the bar
-     * and leaves everything running. They are the same glyph, so the difference
-     * has to be carried by the words and by the hover colour — and the hover
-     * colour is in `shell.css`, which `chrome-render.test.tsx` reads.
+     * own. The rail's is the control that kills a pty; the strip's takes the tab
+     * off the bar and leaves everything running. They are two panels apart and
+     * they are both a way of getting rid of a session tab, so the difference has
+     * to be in the words — and, on the strip's side, in the mark it refuses to
+     * wear.
      */
-    const html = rail(store())
-    expect(html).toContain('title="Close Fix the login redirect — ends the session"')
+    const source = readFileSync(join(__dirname, '..', 'shell', 'Sidebar.tsx'), 'utf8')
+    // The ✕ became a menu entry, and the entry is the sentence — see
+    // `closeSentence`. A native menu is not in this document, so the assertion
+    // reads the words where they are now written.
+    expect(source).toContain('ends the session`')
 
     const strip = renderToStaticMarkup(
       <WorkspaceTabStrip
@@ -1125,8 +1276,10 @@ describe('promoting from the sidebar', () => {
         storage={store({ 'terminaldeck.strip.promoted': '["a"]' })}
       />,
     )
-    expect(strip).toContain('It keeps running, in the sidebar.')
+    // The strip's answer says the opposite thing, and says nothing about ending.
+    expect(strip).toContain('title="Take off the bar"')
     expect(strip).not.toContain('ends the session')
+    expect(strip).not.toContain('data-ends')
   })
 })
 
@@ -1217,7 +1370,6 @@ describe('keeping a window that was just opened', () => {
         tabs={tabs}
         activeTabId="b"
         onSelect={() => undefined}
-        onShowInstead={() => undefined}
         storage={store({
           'terminaldeck.strip.promoted': JSON.stringify(keepInStrip(['a'], 'b')),
         })}
@@ -1437,40 +1589,52 @@ describe('every route that opens a window keeps it', () => {
 /* ------------------------------------------------- how wide a tab sits at -- */
 
 /**
- * *"on the top header the pills of the windows, it got smaller. So let's make
- * them a little bit more wider, just like before."*
+ * *"session tabs and browser tabs should be the same size. I see sometimes
+ * inconsistency. Some of them are more wide, some of them are less wide. They
+ * should be all at the same size. … this one is the perfect size, the one B1
+ * and B2, this tab."* — 2026-08-20.
  *
  * Read out of the stylesheet, which is the only place this exists — there is no
  * layout engine in this test run, so the alternative is nothing at all. What
- * makes it worth reading as text is that the cause was invisible in the
- * numbers: the rebuild raised the cap from 220px to 280px while the tabs got
- * narrower, because a tab is sized by its contents and the same pass took an
- * 18px control out of it. A floor is what was missing, and a floor is what a
- * future edit is most likely to delete as redundant next to the cap.
+ * makes it worth reading as text is that "the same width" is not one
+ * declaration: it is a basis that is equal on every tab, a ceiling at the same
+ * number so a half-empty bar does not stretch them, and a floor that is *not*
+ * that number so a full one can still compress. Delete any one of the three as
+ * redundant and the row goes back to being sized by its contents, which is the
+ * ragged row in his recording — 155, 110, 110, 140, 178, 109 pixels.
+ *
+ * The equal-basis half is the one that is easy to lose: `min`/`max` alone
+ * cannot make two tabs agree, because between them a tab is still as wide as
+ * what is written on it.
  */
 describe('the width of a tab', () => {
   const css = readFileSync(join(__dirname, 'WorkspaceTabStrip.css'), 'utf8')
   const rule = /\.strip-tab \{[\s\S]*?\n\}/.exec(css)?.[0] ?? ''
 
   it('is stated once, as a ratio on the tab’s own height', () => {
-    // Not `144px`. The tab's height is already derived from the bar's, so a
+    // Not `180px`. The tab's height is already derived from the bar's, so a
     // pixel here would be the one measurement in this sheet that stops moving
     // when `--toolbar-h` does.
-    expect(css).toContain('--strip-tab-w: calc(var(--strip-tab-h) * 4);')
-    expect(rule, '.strip-tab has changed shape').not.toBe('')
-    expect(rule).toContain('min-width: var(--strip-tab-w);')
+    expect(css).toContain('--strip-tab-w: calc(var(--strip-tab-h) * 5);')
+    expect(css).toContain('--strip-tab-min: calc(var(--strip-tab-h) * 3.5);')
   })
 
-  it('keeps a ceiling as well, so a tab can still carry its project', () => {
-    expect(rule).toContain('max-width: 280px;')
+  it('gives every tab the same basis, which is what makes them equal', () => {
+    expect(rule, '.strip-tab has changed shape').not.toBe('')
+    expect(rule).toMatch(/flex: 0 1 var\(--strip-tab-w\);/)
+  })
+
+  it('caps at that same width, so four tabs do not stretch across the bar', () => {
+    expect(rule).toContain('max-width: var(--strip-tab-w);')
   })
 
   it('can still shrink, so a full bar compresses before it starts scrolling', () => {
-    // `flex-shrink: 0` was what was here, and with a floor underneath it every
-    // crowded window would jump straight to a scrolling strip. The floor is the
-    // limit now; the shrink is what gets you to it.
-    expect(rule).toMatch(/flex: 0 1 auto;/)
+    // The floor is a different token from the width now. A floor equal to the
+    // width would be a fixed size, and the bar would scroll at six tabs rather
+    // than give — *"whenever we start new, these will become smaller."*
+    expect(rule).toContain('min-width: var(--strip-tab-min);')
     expect(rule).not.toMatch(/flex-shrink: 0;/)
+    expect(rule).not.toContain('min-width: var(--strip-tab-w);')
   })
 })
 
@@ -1668,26 +1832,29 @@ describe('the ✕ at the end of a tab', () => {
     expect(css).not.toMatch(/\.strip-tab-close[^{]*\{[^}]*display: none/)
   })
 
-  it('is still the ✕ that does not end the session', () => {
+  it('keeps the destroying ✕ marked and the tidying one plain', () => {
     /*
-     * Moved, and nothing else about it touched. The tooltip and the grey hover
-     * are the two things standing between this and the rail's destructive ✕,
-     * and a change of position is exactly the sort of pass in which one of them
-     * quietly goes missing.
+     * The one thing about this control that a layout pass must not quietly
+     * flatten. Two identical glyphs share every rule in the stylesheet — the
+     * geometry, the reveal on hover, the grey — and `[data-ends]` is the single
+     * declaration that separates the browser window's ✕ from the session's. A
+     * destructive control drawn in the same grey as a harmless one is exactly the
+     * confusion this bar has spent three revisions on.
      */
     const strip = renderToStaticMarkup(
       <WorkspaceTabStrip
-        tabs={[session('a', 'Session 1')]}
-        activeTabId="a"
+        tabs={[session('a', 'api'), page('b1', 'New tab')]}
+        activeTabId="b1"
         onSelect={() => undefined}
         onShowInstead={() => undefined}
-        storage={store({ 'terminaldeck.strip.promoted': '["a"]' })}
+        onCloseWindow={() => undefined}
+        storage={store({ 'terminaldeck.strip.promoted': '["a","b1"]' })}
       />,
     )
-    expect(strip).toContain('Remove from the top bar. It keeps running, in the sidebar.')
-    expect(strip).toContain('aria-label="Remove Session 1 from the top bar"')
+    expect(strip).toContain('title="Close this page"')
+    expect(strip).toContain('title="Take off the bar"')
     expect(rule('.strip-tab-close:hover')).toContain('color: var(--text-primary)')
-    expect(rule('.strip-tab-close:hover')).not.toContain('--color-critical')
+    expect(rule('.strip-tab-close[data-ends]:hover')).toContain('color: var(--color-critical)')
   })
 })
 

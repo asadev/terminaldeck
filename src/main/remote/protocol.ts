@@ -179,6 +179,203 @@ export const PROTOCOL_VERSION = 1
  * same reason: a capability list assembled from a boolean somebody has to
  * remember to set is a capability list that will one day lie.
  */
+/**
+ * `controls` is the model, the effort and fast mode, on a session that is on
+ * somebody else's computer.
+ *
+ * ## The gap it closes, in his words
+ *
+ * Asad, three times, the last on 2026-08-18:
+ *
+ *   > *"why it is all the options are not available with the connected ones
+ *   > from other devices. We should have all the options up on the same
+ *   > identical options for the remote sessions too, not just for our
+ *   > sessions."*
+ *
+ * He is describing an absence with a mechanical cause. This app has no API
+ * client for any agent: `src/main/agent-controls.ts` sets a model by **typing
+ * `/model` into that session's pty and reading the reply back off that
+ * session's own screen**, keyed on a local session id, held by the process that
+ * spawned it. Until this capability existed, not one frame on this wire named a
+ * model, an effort or a fast mode, so the window drew nothing over a remote
+ * session because it had nothing to draw.
+ *
+ * ## Why the answer is a courier and not a second implementation
+ *
+ * A paired machine is, by definition, a machine running this app — that is the
+ * line `MachinesPanel` draws between a device and a server. So the far end
+ * already has `agent-controls.ts`, already has the pty, and already knows how
+ * to read its own screen. These two frames carry the *request* there and the
+ * *answer* back; nothing about the mechanism is reimplemented on the asking
+ * side, and a machine one version ahead sets a model the way its own build
+ * does rather than the way this one remembers.
+ *
+ * That is also why the reading travels rather than only the setting. Every
+ * value on those menus is scraped off the far screen, so a client that could
+ * write and not read would draw chips that say "Unknown" for ever and a menu
+ * with no tick in it.
+ *
+ * ## What it is gated on, and what an older host does
+ *
+ * The capability is advertised only by a host whose session layer can actually
+ * read a screen — see `SessionAccess.controls` in `server.ts`. A host that
+ * predates this says nothing, and a client that hears nothing draws the
+ * sentence it drew before rather than a menu whose every press is refused. The
+ * same additive rule `create`, `close` and `devserver` follow.
+ *
+ * ## What it is not
+ *
+ * It is not a keyboard by another name. `controls.apply` names one of four
+ * controls and a value, never a command line, and the far end runs it through
+ * the same `refuseByProvider` / `refuseToType` gates a press at that machine's
+ * own keyboard goes through — including the refusal to type into a session that
+ * is mid-turn or has a draft in its composer. A device that may not `input` to
+ * a session may not do this to it either; `server.ts` asks the same door.
+ */
+/**
+ * `usage` is the plan limits and the context window of a session that is on
+ * somebody else's computer.
+ *
+ * ## The same defect as `controls`, one bar to the left
+ *
+ * The usage bar has two figures on it and both of them were read from the
+ * asking machine: the plan limits are the subscription of the login signed in
+ * *here*, and the context window is a transcript file on *this* disk, found by
+ * an id this machine's own agent wrote. Over a session running on a paired PC
+ * the first is a different account's spending and the second is a lookup for a
+ * conversation this disk has never seen. `usage-reach.ts` withheld both rather
+ * than show them, which was honest and was not the goal; this capability is
+ * what makes them true instead of absent.
+ *
+ * ## Why the frame carries a `want`, and why one of the three words is dear
+ *
+ * Because the two figures cost opposite amounts on the far machine, measured on
+ * this one on 2026-08-19, and a single verb would put the cheap one on the
+ * expensive one's schedule:
+ *
+ *  - `context` is a bounded tail read of the JSONL the agent is already
+ *    writing — 2–17 ms, no process, no network. It may ride the same events the
+ *    local figure rides: output, focus, a bar mounting.
+ *  - `plan` is whatever the far machine's process *already knows* about that
+ *    login. Also free: it reads memory and, for Codex, a file.
+ *  - `refresh` boots a whole Claude Code over there — **725 MB peak, about
+ *    three seconds**. That is affordable exactly once, when a person opens the
+ *    panel to read it, because it is the same cost the local bar pays for the
+ *    same press. It must never be sent on a mount, an attach, a focus or a
+ *    timer, and it is spelled as its own word rather than as a flag so that a
+ *    call site cannot reach it by accident or hide it in a boolean.
+ *
+ * `force` rides along and is meaningful only to `refresh`. It is what a person
+ * pressing *Check again* means — reach past the far end's own five-minute
+ * throttle and past a login that has settled on "no subscription limits" — and
+ * it travels rather than being assumed, because assuming it would turn every
+ * ordinary open of the panel into a spawn on somebody else's machine.
+ *
+ * ## What travels back, and why it is the far end's own shape
+ *
+ * A record, passed through rather than mirrored field by field. The reading
+ * this answers with is the same object that machine's own window is handed over
+ * its own IPC, and the asking side puts it through `readUsageReport` /
+ * `readContextReading` — which are already total, already defensive, and are
+ * already the only door that payload comes through on the local path. One door
+ * rather than two, so a machine one version ahead degrades on the asking side
+ * exactly as it would on its own: an unknown window kind or a new source is
+ * read by the reader that knows about it, and a malformed answer produces
+ * "nothing was read" rather than a plausible number.
+ *
+ * ## What an older host does
+ *
+ * Nothing, which is the whole of the additive rule. It never advertises this,
+ * the guest never sends the frame, and the answer it composes locally is a
+ * reading carrying the far end's absence as a *sentence* — so the reason is on
+ * the bar from the moment it mounts rather than after somebody has pressed
+ * something and got silence.
+ *
+ * ## What it is not
+ *
+ * It is not a way into an account. Nothing here names a token, a login or a
+ * config directory that the asking side could act on; what comes back is a
+ * percentage, a window, a reset time and the far end's own words about them.
+ * And it is not for servers: a server does not run this app, so there is no
+ * account signed in there to have limits and no transcript on this side to
+ * read. That case stays permanently withheld and says so in its own words.
+ */
+/**
+ * `send` is typing into a session **without attaching to it**.
+ *
+ * ## The gap it closes, in his words
+ *
+ * Asad, on the 2026-08-20 review, looking at a picker that listed the sessions
+ * running on his PC and then refused every one of them:
+ *
+ *   > *"I cannot send from my local browser to remote one, remote session, or
+ *   > remote browser to my local session… So let's make it, if the browser is
+ *   > local, it should be able to send to the remote session too. Not just
+ *   > local sessions. If they are visible here, they should be working too."*
+ *
+ * The browser's Send-to-session picker has listed every session on every paired
+ * machine since 2026-08-18 and refused the remote rows, and the refusal was a
+ * fact about this wire rather than a decision anybody took in a renderer. The
+ * only verb that put characters into a session was `input`, and `server.ts`
+ * will not act on one until the connection holds an **attach handle** for that
+ * session. `renderer/browser/agent-target.ts` carries the long form of the
+ * argument; the short form is that attaching *in order to type* costs a
+ * terminal somebody is reading. There is one connection per machine and
+ * `connection.handles` is keyed by session id, so a second attach for a session
+ * a pane already holds makes the host drop the pane's handle and replay the
+ * whole scrollback into the person's face — and when that pane closes, its
+ * detach takes the browser's target away with it. One handle, two owners, and
+ * no way for either to know about the other.
+ *
+ * ## Why this is not a hole in `input`'s gate
+ *
+ * *"Attachment is the authorisation"* is a true sentence about `input` and it
+ * was never the only door. {@link CAPABILITY.controls}'s `controls.apply`
+ * **writes characters and a return into a pty with no attach anywhere in the
+ * path**, and it has shipped that way since 2026-08-18 without anybody calling
+ * it a hole — because the door it goes through is `mayTouch`, the per-device
+ * folder reach, which is asked on the welcome, on `list`, on every `attach` and
+ * on every keystroke of `input` as well. An attach is a subscription to
+ * *output*; the reach is the permission to *touch*. This verb asks for the
+ * second without buying the first, which is exactly what a caller with
+ * something to say and nothing to read wants.
+ *
+ * So the authorisation here is `mayTouch` and nothing else, and it is not
+ * weaker than what `input` gets — `input` asks the very same question one line
+ * after its handle check, because a handle only proves an attach that was
+ * allowed *then* and folders are edited while a device is connected.
+ *
+ * ## Why a reply, when `input` has none
+ *
+ * Because nobody is watching the screen. A lost keystroke on an attached
+ * session is visible a moment later in the terminal the person is reading; a
+ * lost `session.send` is a spinner in a browser panel over a machine in another
+ * room, and this project has found that shape of defect too many times to add
+ * another. Every path on the far end ends in a `session.sent` — the write
+ * landed, the session is not one this device may touch, the host is too old to
+ * serve the verb at all — and the sentence is the payload, because those are
+ * three different things to do about it.
+ *
+ * ## What it is gated on, and what an older host does
+ *
+ * Nothing, which is the one place this differs from `controls` and `usage`.
+ * Those are advertised only by a host whose session layer carries the optional
+ * object behind them; `SessionAccess.write` is a **required** member of that
+ * interface, so every host that exists can already serve this and there is
+ * nothing for the advertisement to be honest about. A host older than the name
+ * simply never says it, the guest never sends the frame, and the picker keeps
+ * the sentence it has today rather than sending a verb that would close the
+ * channel.
+ *
+ * ## What it is not
+ *
+ * It is not `input` with the check removed and it is not a way to reach a
+ * session a device was never shown. The same `mayTouch` that hides a session
+ * from `list` and refuses an `attach` refuses this, with the same sentence an
+ * unknown id gets — these ids are recoverable from an alert, a transcript path
+ * or an older list, and a distinct refusal would confirm that one names
+ * something real.
+ */
 export const CAPABILITY = {
   localhost: 'localhost',
   create: 'create',
@@ -188,6 +385,9 @@ export const CAPABILITY = {
   devserver: 'devserver',
   copilot: 'copilot',
   web: 'web',
+  controls: 'controls',
+  usage: 'usage',
+  send: 'send',
 } as const
 
 /**
@@ -209,6 +409,9 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.devserver,
   CAPABILITY.copilot,
   CAPABILITY.web,
+  CAPABILITY.controls,
+  CAPABILITY.usage,
+  CAPABILITY.send,
 ]
 
 /**
@@ -933,6 +1136,175 @@ export interface CopilotSettledRow {
   reason: string | null
 }
 
+/* ---- capability `controls` ---------------------------------------------- */
+
+/**
+ * The four controls a session has, named on the wire.
+ *
+ * A frozen list rather than a free string, for the reason `create.provider` is a
+ * bare identifier: the value on the far end selects a branch that **types into
+ * somebody's terminal**, and a name nothing recognises must be refused at the
+ * parser rather than carried inwards to be compared against a table halfway
+ * down `applyControl`.
+ *
+ * It is the same four `ControlId` in `src/main/agent-controls.ts` carries, and
+ * deliberately a second copy rather than an import: that module reaches
+ * Electron and the CLI's own screen readers, and this file is bundled for a
+ * plain-Node host and for the PWA. The names are pinned against each other in
+ * `protocol.test.ts` so the two cannot drift apart in silence.
+ */
+export const CONTROL_IDS = ['model', 'effort', 'fast', 'permission'] as const
+
+export type ControlName = (typeof CONTROL_IDS)[number]
+
+/** The longest a control's value may be. A model name is the long one. */
+export const MAX_CONTROL_VALUE_LENGTH = 64
+
+/**
+ * One control's current reading, as the far machine read it.
+ *
+ * Mirrors `ControlReading` in `src/main/agent-controls.ts`, and the fields are
+ * what they are because every one of them is something the *reader* must not
+ * invent. `value` and `label` are null together when nothing real could be read
+ * — the far end has no default for anything a person can see — and `source`
+ * says which of that machine's four sources answered, so a client can show its
+ * working rather than asserting a number.
+ *
+ * `unavailableReason` is the far end's own sentence for a control its account
+ * cannot use. It travels rather than being reduced to a flag because the whole
+ * value of it is the wording: *"Fast mode requires usage credits"* is something
+ * a person can act on and "unavailable" is not.
+ */
+export interface ControlReadingWire {
+  value: string | null
+  label: string | null
+  /** `screen`, `transcript`, `settings` or `env`; null when nothing answered. */
+  source: string | null
+  unavailableReason?: string
+}
+
+/**
+ * Everything one session's control cluster needs, in one answer.
+ *
+ * `gate` is the half a client would otherwise have to guess at. It says whether
+ * a command could be typed at that session *this instant* and, when it could
+ * not, the far end's sentence for why — a session mid-turn, a dialog waiting on
+ * an answer, a draft in the composer. Sending it with the reading is what lets a
+ * remote menu grey out for the same reasons a local one does, instead of letting
+ * somebody press and then apologising.
+ */
+export interface ControlsReadingWire {
+  model: ControlReadingWire
+  effort: ControlReadingWire
+  fast: ControlReadingWire
+  permission: ControlReadingWire
+  /** False when the far end had no such session, so nothing could be read. */
+  live: boolean
+  /** Whether an agent CLI is drawing that session's screen over there. */
+  agent: { running: boolean; saw: string | null }
+  gate: { canType: boolean; reason: string | null }
+}
+
+/* ---- capability `usage` -------------------------------------------------- */
+
+/**
+ * Which of the far machine's three usage answers is being asked for.
+ *
+ * A frozen list rather than a free string, for the reason {@link CONTROL_IDS}
+ * is one: the word selects a branch on somebody else's computer, and one of the
+ * three branches boots a 725 MB agent CLI there. A name nothing recognises must
+ * be refused at the parser rather than carried inwards to fall through a
+ * `switch` three files away.
+ *
+ * The order is the order of what they cost:
+ *
+ *  - `plan` — what that machine's process already knows about that login's
+ *    subscription windows. Memory and, for Codex, one file. Free.
+ *  - `refresh` — go and *find out*. Boots Claude Code over there: 725 MB peak,
+ *    about three seconds, measured. Only ever sent because a person opened the
+ *    panel or pressed the retry inside it.
+ *  - `context` — how full that session's context window is, read off the
+ *    transcript the agent is already writing. 2–17 ms, so it may ride the same
+ *    events the local figure rides.
+ */
+export const USAGE_WANTS = ['plan', 'refresh', 'context'] as const
+
+export type UsageWant = (typeof USAGE_WANTS)[number]
+
+/**
+ * One usage answer, or the far end's sentence for why there is none.
+ *
+ * `reading` is deliberately the far machine's *own* record, not a shape mirrored
+ * here. Every other reading on this wire is mirrored because the client that
+ * has to draw it is a phone with its own renderer; this one is drawn by a copy
+ * of this app, whose `readUsageReport` and `readContextReading` are already
+ * total over `unknown` and are already the only door the identical payload comes
+ * through on the local path. Mirroring it here would be a second, older copy of
+ * a shape that grows — a new window kind, a new source — and the visible cost of
+ * that copy falling behind is a figure silently dropped from a bar that the far
+ * machine reported perfectly well.
+ *
+ * Null is "there is no reading", never an empty one. A caller handed a blank
+ * report could not tell "that account has nothing to report" from "nobody
+ * answered", and those want opposite things said about them.
+ *
+ * `unavailableReason` is the far end's own wording for the second of those, and
+ * it travels rather than being reduced to a flag for the reason
+ * {@link ControlReadingWire}'s does: the whole value of it is the sentence.
+ */
+export interface UsageAnswerWire {
+  reading: Record<string, unknown> | null
+  unavailableReason?: string
+}
+
+/**
+ * A reading with no figure in it, carrying the sentence that says why.
+ *
+ * Here, in the file both ends import, because both ends need one and they must
+ * be the same shape. The host composes one for a session it will not discuss;
+ * the guest composes one for a link that is down and for a machine whose build
+ * predates this capability — and it is the guest's that matters most, because
+ * that is the sentence a person sees on a remote bar *before* pressing
+ * anything, which is the whole point of composing it rather than answering
+ * null.
+ *
+ * Three shapes because the three answers are three shapes, and each is the empty
+ * one its own reader already knows how to draw: a report with no readings and a
+ * reason, a refresh outcome that will not change for being asked again, and a
+ * `not-reported` context reading with its detail. Nothing here invents a
+ * number — every figure is null and every state is the one that means "there
+ * isn't one" — which is the property that makes an absence safe to draw at all.
+ */
+export function emptyUsageReading(want: UsageWant, detail: string): Record<string, unknown> {
+  const now = Date.now()
+  if (want === 'context') {
+    return {
+      provider: null,
+      state: 'not-reported',
+      tokens: null,
+      window: null,
+      percent: null,
+      windowBasis: null,
+      model: null,
+      modelLabel: null,
+      source: null,
+      reportedAt: 0,
+      observedAt: now,
+      detail,
+    }
+  }
+  const report = { sessionId: null, readings: [], reason: detail, account: null, assembledAt: now }
+  if (want === 'plan') return report
+  /*
+   * `unwatched` is the outcome the local path already answers for a session it
+   * cannot describe, and it is deliberately not one of the settled ones: a link
+   * that is down or a machine that needs updating is a state with a remedy, and
+   * marking it settled would have the bar stop offering to look after the remedy
+   * had been applied. The report rides along because there is no push on this
+   * wire to send it separately.
+   */
+  return { ok: false, outcome: 'unwatched', detail, elapsedMs: 0, spawned: false, report }
+}
 
 export type ClientMessage =
   /**
@@ -1344,6 +1716,106 @@ export type ClientMessage =
   | { t: 'copilot.cancel' }
   /** End this device's own run. */
   | { t: 'copilot.stop' }
+  /* ---- capability `controls`. Refused when it is not advertised. ---------- */
+  /**
+   * What is this session's model, effort and fast mode right now?
+   *
+   * Passive: the far end reads its own screen and its own settings and answers.
+   * Nothing is typed, which is why this is the frame a client may send whenever
+   * the session prints something — and why it is a separate verb from
+   * {@link ClientMessage} `controls.apply` rather than a flag on it. Folding the
+   * two together would put a keystroke on a code path that fires on output,
+   * which is how an app comes to open a dialog in somebody's terminal while
+   * they are working in it. `agent-controls.ts` split its own IPC channels for
+   * exactly this reason and the wire keeps the split.
+   *
+   * `rid` names *this question*, and it is here because there can be more than
+   * one in flight: a split window mounts a control cluster per pane, and two
+   * panes showing two sessions on the same machine each ask. Without it the
+   * asking side would have to match answers by session id, and two clusters
+   * over one session — which is a thing this window does — would resolve each
+   * other's reads. It is minted by the client and echoed back untouched; the
+   * host never interprets it.
+   *
+   * `id` is the session, and it is authorised at the same door `input` is. A
+   * device that may not type into a session may not read the screen it would
+   * have typed into.
+   */
+  | { t: 'controls.read'; rid: string; id: string }
+  /**
+   * Set one control on that session. **This types into somebody's terminal.**
+   *
+   * There is no command line on this frame and there must never be one. It
+   * names one of {@link CONTROL_IDS} and a value, and the far end composes the
+   * command itself — so the worst a hostile client can ask for is a model name
+   * the CLI refuses in its own words. A `command` field here would turn a
+   * paired machine into a remote shell that bypasses `input`'s own gate, which
+   * is the whole reason the pair is a control and a value rather than a string.
+   *
+   * Refused over there rather than negotiated here. `applyControl` runs the
+   * same two gates a press at that machine's own keyboard runs — the provider
+   * check, which refuses to type Claude Code's commands at a CLI nobody has
+   * established, and the composer check, which refuses to type at a session
+   * that is mid-turn, has a draft, or is waiting on a dialog — and the refusal
+   * comes back as the sentence it wrote. Silence is never an answer to this
+   * frame: every path ends in a `controls.applied`.
+   */
+  | { t: 'controls.apply'; rid: string; id: string; control: ControlName; value: string }
+  /* ---- capability `usage`. Refused when it is not advertised. ------------- */
+  /**
+   * What has this session's account spent, and how full is its context window?
+   *
+   * Passive on every branch — nothing is typed and no session is touched — but
+   * not therefore free, which is why {@link UsageWant} is on the frame rather
+   * than one verb serving all three. `plan` and `context` are a memory read and
+   * a bounded file read over there; `refresh` boots a whole agent CLI on that
+   * machine, 725 MB and about three seconds, and is only ever sent because
+   * somebody opened the panel to look. A client that put `refresh` on a mount,
+   * an attach or a timer would be spending that on every tab of every window.
+   *
+   * `force` says a person pressed rather than this app deciding to look. It is
+   * meaningful only to `refresh`, where it reaches past the far end's own
+   * five-minute throttle and past a login that has settled on "no subscription
+   * limits" — the two things that make an ordinary open cost nothing.
+   *
+   * `rid` names *this question*, for the reason `controls.read`'s does: a split
+   * window mounts a bar per pane, and two bars over one session on one machine
+   * would otherwise resolve each other's reads.
+   *
+   * `id` is the session, authorised at the same door `input` is. A device that
+   * may not type into a session may not learn what its account has spent.
+   */
+  | { t: 'usage.read'; rid: string; id: string; want: UsageWant; force: boolean }
+  /* ---- capability `send`. Refused when it is not advertised. ------------- */
+  /**
+   * Put text into that session **without subscribing to it**.
+   *
+   * The same bytes `input` carries and a different authorisation, which is the
+   * whole of the frame. `input` requires an attach and this does not, because
+   * the caller here has something to say and nothing to read: a browser panel
+   * handing an agent the element it just inspected, a page's console error, a
+   * selection. Attaching to say it would displace the handle a terminal pane on
+   * this connection already holds and replay that pane's whole scrollback at
+   * the person reading it — see {@link CAPABILITY.send} for the mechanics.
+   *
+   * Authorised over there by `mayTouch` and by nothing else: the same
+   * per-device folder reach `input` asks on every keystroke, and the same one
+   * `controls.apply` goes through while typing a slash command into a pty. A
+   * device that may not type into a session may not send to it either.
+   *
+   * `rid` names *this* send, for the reason `controls.read`'s does: there can be
+   * more than one in flight, and without it two panels sending to two sessions
+   * on one machine would resolve each other's answers. Minted by the client and
+   * echoed back untouched.
+   *
+   * `data` is capped at {@link MAX_INPUT_BYTES}, the same cap `input` gets and
+   * for the same reason — it is a paste, not a file upload, and the far end
+   * writes it into a pty verbatim.
+   *
+   * Never silent. Every path over there ends in a `session.sent`; a request
+   * that was dropped is a spinner on a panel that has no other way to find out.
+   */
+  | { t: 'session.send'; rid: string; id: string; data: string }
 
 export type ServerMessage =
   | {
@@ -1694,6 +2166,102 @@ export type ServerMessage =
    * person's back.
    */
   | { t: 'copilot.settled'; settled: CopilotSettledRow }
+  /* ---- capability `controls` --------------------------------------------- */
+  /**
+   * The answer to one `controls.read`, and only ever to one.
+   *
+   * Never pushed. The far end has no idea when this session's model matters to
+   * the asking window, and a machine that volunteered a reading on every chunk
+   * of output would be sending a frame per keystroke of somebody's agent
+   * printing a file. The client already knows when to ask: it watches the
+   * session's own output, waits for a pause, and asks once — the same rule
+   * `useSessionControls` follows for a local session, which is why the two
+   * surfaces cost the same.
+   *
+   * `rid` is the client's own, echoed. `id` rides along so a client can drop an
+   * answer about a session it has since closed without having to remember what
+   * every outstanding request was about.
+   */
+  | { t: 'controls.reading'; rid: string; id: string; reading: ControlsReadingWire }
+  /**
+   * What happened to one `controls.apply`, in the CLI's own words.
+   *
+   * `ok` says whether the change landed, and `message` is the sentence to show
+   * either way: the CLI's confirmation on success — *"Model is now Sonnet 5 —
+   * saved as your default for new sessions"* — and, on failure, whatever it
+   * actually said. A refusal from the account (*"Mythos 5 isn't available for
+   * your account yet"*) and a refusal from this app's own gates (*"This session
+   * is mid-turn"*) both arrive here as prose, which is the point: they are two
+   * different things to do about it, and a code would collapse them into one
+   * shrug on the far side of a relay.
+   *
+   * `reading` is re-read from the session *after* the change settled, never
+   * echoed from the request. A picker that ticks the row you pressed is showing
+   * your intention rather than the machine's state, and this app has shipped
+   * that bug once already — see `applyControl`, which is the code this frame
+   * carries the output of.
+   *
+   * There is no `controls.failed`. A refusal is this frame with `ok: false`,
+   * for the reason `tunnel.closed` gives about its own: to the client they are
+   * one event — the menu has an answer — and which of the several kinds it was
+   * is in the sentence rather than in a code. A device that may not touch the
+   * session at all is the one exception and gets a plain `error` with
+   * `unauthorized`, because there is no control state to report about a session
+   * the host will not discuss.
+   */
+  | { t: 'controls.applied'; rid: string; id: string; ok: boolean; message: string; reading: ControlReadingWire }
+  /* ---- capability `usage` ------------------------------------------------ */
+  /**
+   * The answer to one `usage.read`, and only ever to one.
+   *
+   * Never pushed, for the reason `controls.reading` is not: the far machine has
+   * no idea when another window's bar cares, and a desktop that volunteered a
+   * reading would be sending frames about an account nobody is looking at. The
+   * asking side already knows when to ask — a bar mounted, the session printed,
+   * a person opened the panel — which is the same set of events the local bar
+   * re-reads on, so the two surfaces cost the same.
+   *
+   * `want` is echoed rather than inferred from the answer's contents. A plan
+   * report and a context reading are both records and a client that guessed
+   * which one it had asked for could put a context figure where a plan figure
+   * goes; echoing the word makes that impossible rather than unlikely, and it
+   * costs one field.
+   *
+   * There is no `usage.failed`. A session that cannot be read, an account with
+   * nothing to say and a build that cannot answer all arrive as
+   * {@link UsageAnswerWire} with a sentence in it, because to the bar they are
+   * one event — there is no figure, and here is why — and the difference is in
+   * the wording rather than in a code. A device that may not touch the session
+   * at all is the one exception and gets a plain `error` with `unknown-session`,
+   * because there is no usage to report about a session the host will not
+   * discuss.
+   */
+  | { t: 'usage.reading'; rid: string; id: string; want: UsageWant; answer: UsageAnswerWire }
+  /* ---- capability `send` ------------------------------------------------- */
+  /**
+   * What happened to one `session.send`, and only ever to one.
+   *
+   * `ok` says whether the bytes were written; `message` is the sentence to show
+   * either way, because the caller is a panel with no terminal on screen to
+   * read the outcome off. There is no `session.failed`, for the reason
+   * `controls.applied` gives about its own: to the client they are one event —
+   * the send has an answer — and which kind of failure it was belongs in the
+   * words rather than in a code.
+   *
+   * A session this device may not touch comes back here too, with `ok: false`
+   * and deliberately the same sentence an unknown id gets — a distinct one
+   * would confirm the id names something real. That is where this frame parts
+   * company with `controls.applied`, which sends a plain `error` for that case:
+   * an `error` carries no `rid`, so it cannot be matched to the request that
+   * caused it, and the asking side — which holds a promise per `rid` — would sit
+   * out its own deadline over a refusal the host had already decided. Every
+   * path lands here so that every path is answered *now*.
+   *
+   * `rid` is the client's own, echoed. `id` rides along so a client can drop an
+   * answer about a session it has since closed without having to remember what
+   * every outstanding request was about.
+   */
+  | { t: 'session.sent'; rid: string; id: string; ok: boolean; message: string }
 
 /**
  * Every refusal this protocol can name, as a value rather than only a type.
@@ -2302,6 +2870,104 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return { ok: true, message: { t: verb, folder: checked.folder } }
     }
 
+    /* ---- capability `controls` ------------------------------------------ */
+    // Shape only, and the shape is unusually strict for one reason: the far side
+    // of `controls.apply` **types into a terminal**. Whether this desktop offers
+    // the capability at all, and whether this device may touch the session
+    // named, are the server's questions — it is the only thing that knows which
+    // device the socket belongs to.
+    case 'controls.read': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('controls.read without a request id')
+      const sessionId = id(parsed.id)
+      if (!sessionId) return bad('controls.read without a session id')
+      return { ok: true, message: { t: 'controls.read', rid: requestId, id: sessionId } }
+    }
+    case 'controls.apply': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('controls.apply without a request id')
+      const sessionId = id(parsed.id)
+      if (!sessionId) return bad('controls.apply without a session id')
+      // Against the list rather than against a shape. `applyControl` branches on
+      // this word and each branch composes a different slash command, so a name
+      // it does not recognise has nowhere honest to go — and a parser that let
+      // one through would be relying on a `return` at the bottom of a function
+      // three files away to be the thing that stops it.
+      const control = CONTROL_IDS.find((name) => name === parsed.control)
+      if (control === undefined) return bad('controls.apply naming no known control')
+      // Read once into a local, for the reason spelled out on `input.data`: on
+      // the object path a property can be a getter, and the string that is
+      // measured has to be the string that is forwarded.
+      //
+      // The character class is what stops this being a hole rather than a field.
+      // The value ends up inside a line typed at somebody's command prompt, so a
+      // control byte — a return above all — is refused outright rather than
+      // stripped: stripping turns a hostile value into a *different* legal-looking
+      // one, and a `\r` in here would be a second command nobody asked for.
+      // Everything the CLI actually accepts (`sonnet`, `opus-4-1`, `xhigh`,
+      // `on`) is inside this, and a name that is not is the CLI's to refuse in
+      // its own words rather than this parser's to guess about.
+      const rawValue = parsed.value
+      if (typeof rawValue !== 'string' || rawValue === '') return bad('controls.apply without a value')
+      if (rawValue.length > MAX_CONTROL_VALUE_LENGTH) {
+        return tooLarge('controls.apply with a value over the length limit')
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9 ._()-]*$/.test(rawValue)) return bad('controls.apply with an unusable value')
+      return { ok: true, message: { t: 'controls.apply', rid: requestId, id: sessionId, control, value: rawValue } }
+    }
+
+    /* ---- capability `usage` --------------------------------------------- */
+    // Shape only, and the shape matters more here than the frame's passivity
+    // suggests: one of the three words this checks makes the host start an agent
+    // CLI. Whether this desktop serves these frames at all, and whether this
+    // device may ask about the session named, are the server's questions.
+    case 'usage.read': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('usage.read without a request id')
+      const sessionId = id(parsed.id)
+      if (!sessionId) return bad('usage.read without a session id')
+      // Against the list rather than against a shape, for the reason
+      // `controls.apply` checks its control name that way: `usageServe`
+      // branches on this word, one branch spends 725 MB on the host, and a
+      // parser that let an unknown one through would be relying on a `default`
+      // at the bottom of a function in another file to be the thing that stops
+      // it.
+      const want = USAGE_WANTS.find((known) => known === parsed.want)
+      if (want === undefined) return bad('usage.read naming no known reading')
+      // `=== true` and nothing looser. Truthiness would let a garbled frame
+      // read as a person pressing, which is the one value that reaches past the
+      // host's own throttle — so a missing field must mean "no" rather than
+      // "probably".
+      return { ok: true, message: { t: 'usage.read', rid: requestId, id: sessionId, want, force: parsed.force === true } }
+    }
+
+    /* ---- capability `send` ---------------------------------------------- */
+    // Shape only, and the shape is `input`'s: this frame carries the same bytes
+    // to the same `SessionAccess.write`. What it does not carry is an attach,
+    // which is the point of the verb — whether this desktop serves it at all,
+    // and whether this device may touch the session named, are the server's
+    // questions, because it is the only thing that knows which device the socket
+    // belongs to.
+    case 'session.send': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('session.send without a request id')
+      const sessionId = id(parsed.id)
+      if (!sessionId) return bad('session.send without a session id')
+      // Bound to a local before anything looks at it, for the reason spelled
+      // out on `input.data`: type-checking `parsed.data`, measuring
+      // `parsed.data` and then forwarding `parsed.data` is three reads of one
+      // property, and the value that reaches `SessionAccess.write` would be the
+      // third — the one nothing checked. Only reachable on the object path,
+      // where a property can be a getter, which is precisely the path this
+      // parser exists to cover.
+      const data = parsed.data
+      if (typeof data !== 'string') return bad('session.send without data')
+      // The same cap `input` gets, in bytes rather than characters, because it
+      // is the same paste going into the same pty.
+      if (overBytes(data, MAX_INPUT_BYTES)) return tooLarge('session.send larger than the paste limit')
+      return { ok: true, message: { t: 'session.send', rid: requestId, id: sessionId, data } }
+    }
+
     /* ---- capability `upload` -------------------------------------------- */
     // Shape-checked here and authorised nowhere near here. Whether this desktop
     // will write a file at all, and what the name becomes on disk, are answered
@@ -2624,6 +3290,113 @@ export function chunkOutput(data: string, size = OUTPUT_CHUNK_BYTES): string[] {
   return out
 }
 
+/**
+ * What one code point costs as UTF-8, which is what `input.data` is measured in.
+ *
+ * A second cost function beside {@link jsonCostOf} rather than a parameter on
+ * it, because the two answer different questions about the same character and
+ * `chunkInput` has to satisfy both at once: `parseClientMessage` measures the
+ * *payload* in UTF-8 against {@link MAX_INPUT_BYTES}, and the socket measures
+ * the *frame* in JSON against {@link MAX_MESSAGE_BYTES}. An escape byte is one
+ * here and six there; a paste of escape sequences that satisfied only this one
+ * would still be refused by the frame cap, and refusing at the frame cap is a
+ * closed socket rather than a message.
+ *
+ * Matches `utf8Length` exactly, lone surrogates included: three bytes, which is
+ * what an encoder spends replacing one with U+FFFD.
+ */
+function utf8CostOf(code: number): number {
+  if (code < 0x80) return 1
+  if (code < 0x800) return 2
+  if (code >= 0xd800 && code <= 0xdfff) return 3
+  if (code < 0x10000) return 3
+  return 4
+}
+
+/**
+ * Split a paste into `input` frames the far machine will accept.
+ *
+ * ## The defect it removes
+ *
+ * Asad, 2026-08-20: *"if I am in this PC and I copy something from this PC and
+ * if I paste that into remote session it will not work."* It was not a paste
+ * that never reached the wire. Measured end to end over a real relay in
+ * `machines/transfer-live.test.ts`, a 49,160-character paste into a session on
+ * a paired machine produced **zero bytes typed** and this sequence of link
+ * states:
+ *
+ *     online: "input larger than the paste limit"
+ *     error:  "input larger than the paste limit"
+ *     connecting
+ *     online
+ *
+ * The far end refuses an oversized frame by *closing the socket* — that is what
+ * `too-large` means in `server.ts` — so a long paste cost the link, took every
+ * remote pane's subscription down with it, and reconnected a second later
+ * looking untouched. From the keyboard that is indistinguishable from the paste
+ * being ignored, which is exactly how it was reported.
+ *
+ * ## Why chunking and not a bigger cap
+ *
+ * The cap is what stops a client making the main process buffer, and it is
+ * enforced by every desktop already installed. Raising it would need both ends
+ * updated in step, which is the thing the capability rule at the top of this
+ * file exists to avoid; splitting needs only the sending end. A pty is a byte
+ * stream and reads a split paste identically — including a bracketed one, whose
+ * `ESC[200~` and `ESC[201~` are just bytes at the front and the back of the run
+ * and stay in order because frames on this socket do.
+ *
+ * ## Both budgets, in one pass
+ *
+ * Cut on code-point boundaries, for the reason `chunkOutput` gives: slicing
+ * UTF-16 at a fixed offset eventually lands between the halves of a surrogate
+ * pair and delivers two replacement characters instead of an emoji. And spent
+ * against **two** counters rather than one — see {@link utf8CostOf}. `size` is
+ * the payload cap; the JSON budget is derived from {@link MAX_MESSAGE_BYTES}
+ * with room left for the envelope, and it is the one that actually binds when
+ * somebody pastes a block of ANSI art.
+ *
+ * Refusing an oversized *gesture* is not this function's job — that cap lives
+ * in `shared/paste-cap.ts`, beside the callers that can say a sentence about it.
+ * This one splits whatever it is given.
+ */
+export function chunkInput(data: string, size = MAX_INPUT_BYTES): string[] {
+  if (data === '') return []
+
+  // Half the frame cap, the same headroom `OUTPUT_CHUNK_BYTES` takes against the
+  // same number and for the same reason: the field names and the session id are
+  // under a hundred bytes, and what the headroom must never have to absorb is a
+  // multiplier.
+  const frameBudget = MAX_MESSAGE_BYTES / 2
+
+  const out: string[] = []
+  let start = 0
+  let raw = 0
+  let json = 0
+  let at = 0
+  while (at < data.length) {
+    const code = data.codePointAt(at) as number
+    const units = code > 0xffff ? 2 : 1
+    const rawCost = utf8CostOf(code)
+    const jsonCost = jsonCostOf(code)
+    // `at > start` keeps a single code point that is somehow over the budget in
+    // a frame of its own rather than looping for ever on an empty slice. No
+    // character costs more than six, so this cannot actually produce an
+    // oversized frame at any sane cap.
+    if ((raw + rawCost > size || json + jsonCost > frameBudget) && at > start) {
+      out.push(data.slice(start, at))
+      start = at
+      raw = 0
+      json = 0
+    }
+    raw += rawCost
+    json += jsonCost
+    at += units
+  }
+  if (start < data.length) out.push(data.slice(start))
+  return out
+}
+
 /* ============================================================================ */
 /* The other direction: what a client makes of what the desktop sent            */
 /* ============================================================================ */
@@ -2696,6 +3469,306 @@ function parsePort(value: unknown): LocalPort | null {
   const process = asString(value.process)
   if (port === null || process === null) return null
   return { port, process, guessed: value.guessed === true }
+}
+
+/**
+ * One control's reading off the wire, folded onto "nothing was read" whenever
+ * the frame does not clearly say otherwise.
+ *
+ * Total: it takes `unknown` and always answers, because the alternative — a
+ * null return that a caller has to remember to turn into four blank chips — is
+ * one forgotten branch away from a menu asserting a model the far machine never
+ * named. Unknown is a real state on this bar and it is drawn as "Unknown"; the
+ * one thing that must never happen is a confident wrong value.
+ *
+ * `source` is passed through as a plain string rather than narrowed to the four
+ * names this build knows. It is display text on the far end's behalf, and a
+ * machine one version ahead may have a fifth source it can honestly cite;
+ * refusing it here would blank a reading that was perfectly good.
+ */
+function parseReading(value: unknown): ControlReadingWire {
+  if (!isRecord(value)) return { value: null, label: null, source: null }
+  const reading: ControlReadingWire = {
+    value: asString(value.value),
+    label: asString(value.label),
+    source: asString(value.source),
+  }
+  const reason = asString(value.unavailableReason)
+  // Spread rather than assigned, so "the far end said nothing" stays absent
+  // instead of becoming an empty sentence the chip would then draw.
+  if (reason !== null && reason !== '') reading.unavailableReason = reason
+  return reading
+}
+
+/**
+ * A whole cluster's reading, with both booleans defaulting to the safe answer.
+ *
+ * `live` false is "there is no such session over there", and `gate.canType`
+ * false is "do not offer to change anything". Both are what a malformed frame
+ * should mean: a build whose answer this end could not read has not established
+ * that the session exists or that typing at it is safe, and an open default
+ * would draw live-looking pickers over exactly the states the gate exists to
+ * keep this app's fingers out of. The renderer's own `asGate` defaults the same
+ * way for the same reason.
+ */
+function parseControls(value: unknown): ControlsReadingWire {
+  const record = isRecord(value) ? value : {}
+  const agent = isRecord(record.agent) ? record.agent : {}
+  const gate = isRecord(record.gate) ? record.gate : {}
+  return {
+    model: parseReading(record.model),
+    effort: parseReading(record.effort),
+    fast: parseReading(record.fast),
+    permission: parseReading(record.permission),
+    live: record.live === true,
+    agent: { running: agent.running === true, saw: asString(agent.saw) },
+    gate: { canType: gate.canType === true, reason: asString(gate.reason) },
+  }
+}
+
+/**
+ * One usage answer off the wire, folded onto "nothing was read" whenever the
+ * frame does not clearly say otherwise.
+ *
+ * Total, like {@link parseReading}: it takes `unknown` and always answers,
+ * because a null return a caller had to remember to turn into an empty bar is
+ * one forgotten branch away from a figure about the wrong machine.
+ *
+ * What it does *not* do is look inside `reading`. That record is the far
+ * machine's own report and it is handed on untouched, deliberately — see
+ * {@link UsageAnswerWire} for why one defensive reader on the drawing side beats
+ * two mirrors that can drift. The one thing checked here is that it is a record
+ * at all: anything else is not a reading, and becomes null rather than an empty
+ * object that the bar would then draw as "reported nothing".
+ */
+function parseUsageAnswer(value: unknown): UsageAnswerWire {
+  if (!isRecord(value)) return { reading: null }
+  const answer: UsageAnswerWire = { reading: isRecord(value.reading) ? value.reading : null }
+  const reason = asString(value.unavailableReason)
+  // Spread rather than assigned, so "the far end said nothing" stays absent
+  // instead of becoming an empty sentence the bar would then print.
+  if (reason !== null && reason !== '') answer.unavailableReason = reason
+  return answer
+}
+
+/* ---------------------------------------------------- capability `copilot` -- */
+
+/*
+ * The copilot frames, read here rather than in each client that wants them.
+ *
+ * This block and the `copilot` key on `welcome` arrived together, and the
+ * reason is the same fault: the parser advertised itself as the one door
+ * inbound frames come through and then refused every frame of a capability the
+ * host has served for weeks. The visible cost was borne by
+ * `machines/guest.ts` — this desktop, being another desktop's client — which
+ * could not see a copilot it was entitled to.
+ *
+ * Everything the host pushes to a watching connection is read, including the
+ * four frames this desktop does not yet draw. That is deliberate: a frame the
+ * parser refuses is reported by `guest.ts` as *"sent something unreadable"*,
+ * which is the sentence reserved for a captive portal answering with HTML, and
+ * a tool call on the far machine must not produce it. `copilot.log` is the one
+ * omission and it is a real one — it answers `copilot.log` and is never pushed,
+ * and nothing on this side sends one, so a reader for it would be a reader for
+ * a conversation this end is not in.
+ */
+
+/** Three booleans, all three of them, or null. Never a partial grant. */
+function copilotGrant(value: unknown): CopilotGrantWire | null {
+  if (!isRecord(value)) return null
+  // Every field required and every field a boolean, because `CopilotGrantWire`
+  // promises a client exactly one shape to read and the reason it does is that
+  // "no access" must have one spelling. A grant read as `{read: true}` with the
+  // other two missing would draw a watching surface for a device that may have
+  // been given everything, or nothing.
+  if (typeof value.read !== 'boolean' || typeof value.act !== 'boolean' || typeof value.alter !== 'boolean') {
+    return null
+  }
+  return { read: value.read, act: value.act, alter: value.alter }
+}
+
+function copilotLink(value: unknown): CopilotLinkWire | null {
+  if (!isRecord(value)) return null
+  const grant = copilotGrant(value.grant)
+  if (grant === null || typeof value.linked !== 'boolean' || typeof value.open !== 'boolean') return null
+  return { linked: value.linked, open: value.open, grant }
+}
+
+/** The three things the copilot at the desk can be doing, and only those three. */
+const COPILOT_DESK: readonly CopilotStateReport['desk'][] = ['stopped', 'starting', 'running']
+
+function copilotState(value: unknown): CopilotStateReport | null {
+  if (!isRecord(value)) return null
+  const desk = COPILOT_DESK.find((known) => known === value.desk)
+  const grant = copilotGrant(value.grant)
+  // Refused rather than defaulted, and `desk` is the one that decides it: a
+  // report drawn as `stopped` because the word was unreadable says the copilot
+  // is not running, which is the one claim on this surface somebody would act
+  // on by pressing Start against something that is already up.
+  if (desk === undefined || grant === null) return null
+  return {
+    desk,
+    run: nonEmpty(value.run),
+    profile: nonEmpty(value.profile),
+    // Three states, and null is one of them — "it has not been asked" is not
+    // the same as "no". Anything that is not a boolean folds onto null rather
+    // than onto false, because false is a claim.
+    signedIn: typeof value.signedIn === 'boolean' ? value.signedIn : null,
+    tools: counted(value.tools),
+    turnTokens: counted(value.turnTokens),
+    pending: counted(value.pending),
+    grant,
+    // `available` decides whether a Start control can act, so an unreadable one
+    // is false: offering a button that cannot work is the defect this whole
+    // area exists to remove, and `reason` carries the far end's own words when
+    // it sent any.
+    available: value.available === true,
+    reason: nonEmpty(value.reason),
+  }
+}
+
+function copilotChatMessage(value: unknown): CopilotChatMessage | null {
+  if (!isRecord(value)) return null
+  const rowId = asString(value.id)
+  // The id is what makes a growing message *replace* rather than duplicate, so
+  // a bubble without one would arrive again on every extension and stack up a
+  // paragraph at a time. Dropped rather than given a generated id, because an
+  // id invented here would never match the next frame's.
+  if (rowId === null || rowId === '') return null
+  if (value.role !== 'you' && value.role !== 'agent') return null
+  const message: CopilotChatMessage = {
+    id: rowId,
+    role: value.role,
+    text: asString(value.text) ?? '',
+    at: stamp(value.at),
+  }
+  // Carried through rather than recomputed: `truncated` is the desktop saying
+  // *there is more of this, go and look on the machine*, and a reader that
+  // decided for itself would be saying it about something else.
+  if (value.truncated === true) message.truncated = true
+  return message
+}
+
+/** The three outcomes an action row can carry. Anything else drops the row. */
+const COPILOT_OUTCOMES: readonly CopilotActionRow['outcome'][] = ['ok', 'refused', 'error']
+
+function copilotActionRow(value: unknown): CopilotActionRow | null {
+  if (!isRecord(value)) return null
+  const rowId = asString(value.id)
+  const tool = asString(value.tool)
+  const outcome = COPILOT_OUTCOMES.find((known) => known === value.outcome)
+  // An outcome this build has never heard of drops the row rather than being
+  // folded onto `ok`. This is the line in the whole feature where a permission
+  // boundary becomes visible — `outcome: 'refused'` is how somebody finds out
+  // the gate held — and a fourth outcome added on the desktop must produce a
+  // missing row here, never one that says the call succeeded.
+  if (rowId === null || rowId === '' || tool === null || tool === '' || outcome === undefined) return null
+  return {
+    id: rowId,
+    at: asString(value.at) ?? '',
+    tool,
+    tier: asString(value.tier) ?? '',
+    outcome,
+    detail: asString(value.detail) ?? '',
+    refusal: nonEmpty(value.refusal),
+    deviceId: nonEmpty(value.deviceId),
+  }
+}
+
+function copilotSessionRow(value: unknown): CopilotSessionRow | null {
+  if (!isRecord(value)) return null
+  const rowId = asString(value.id)
+  if (rowId === null || rowId === '') return null
+  return {
+    id: rowId,
+    title: asString(value.title) ?? '',
+    cwd: asString(value.cwd) ?? '',
+    provider: asString(value.provider) ?? '',
+    status: asString(value.status) ?? '',
+    startedAt: stamp(value.startedAt),
+    // The join back to the action log. Null when the desktop did not say, which
+    // is a real state: a session the copilot started before that machine began
+    // recording the link has no row to point at.
+    originRunId: nonEmpty(value.originRunId),
+  }
+}
+
+function copilotPendingRow(value: unknown): CopilotPendingRow | null {
+  if (!isRecord(value)) return null
+  const rowId = asString(value.id)
+  if (rowId === null || rowId === '') return null
+  return {
+    id: rowId,
+    tool: asString(value.tool) ?? '',
+    summary: asString(value.summary) ?? '',
+    requestedAt: stamp(value.requestedAt),
+    expiresAt: stamp(value.expiresAt),
+    // `mine` decides whether an Allow button is drawn at all, so anything that
+    // is not literally true is false. A client that guessed would offer a
+    // control over somebody else's question that the desktop always refuses.
+    mine: value.mine === true,
+  }
+}
+
+function copilotQuestion(value: unknown): CopilotConsentQuestion | null {
+  if (!isRecord(value)) return null
+  const rowId = asString(value.id)
+  const tool = asString(value.tool)
+  // Refused whole when any of it is missing, unlike a row inside a list. A
+  // consent prompt drawn from half a frame is the reflex Yes that
+  // `CopilotConsentQuestion` exists to prevent: the arguments are what turn it
+  // from a shape into a decision, and a prompt without them asks somebody to
+  // approve "something, somewhere".
+  if (rowId === null || rowId === '' || tool === null || tool === '') return null
+  if (!isRecord(value.args)) return null
+  return {
+    id: rowId,
+    tool,
+    tier: asString(value.tier) ?? '',
+    summary: asString(value.summary) ?? '',
+    // Handed on untouched, for the reason `UsageAnswerWire.reading` is: this is
+    // the far machine's own report of what a tool is about to be given, and a
+    // second reader of it here would be a second thing to keep in step with a
+    // tool surface that lives over there.
+    args: value.args,
+    origin: asString(value.origin) ?? '',
+    requestedAt: stamp(value.requestedAt),
+    expiresAt: stamp(value.expiresAt),
+  }
+}
+
+function copilotSettled(value: unknown): CopilotSettledRow | null {
+  if (!isRecord(value)) return null
+  const rowId = asString(value.id)
+  if (rowId === null || rowId === '') return null
+  return {
+    id: rowId,
+    // Only a literal true is "allowed". A dialog withdrawn on the strength of a
+    // garbled frame must not report that somebody said yes.
+    granted: value.granted === true,
+    // Null is a real answer here and it is the timeout: nobody answered. It has
+    // to survive as itself, because "it expired" and "somebody refused it" are
+    // different sentences on the surface that was showing the dialog.
+    by: nonEmpty(value.by),
+    reason: nonEmpty(value.reason),
+  }
+}
+
+/** A string the far end actually filled in, or null. Empty is "said nothing". */
+function nonEmpty(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+/** A whole non-negative count, or zero. Never a negative and never a fraction. */
+function counted(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+  return value < 0 ? 0 : Math.floor(value)
+}
+
+/** Epoch milliseconds as the wire may carry them, or 0 for "no time given". */
+function stamp(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0
+  return Math.floor(value)
 }
 
 function asString(value: unknown): string | null {
@@ -2803,18 +3876,39 @@ export function parseServerFrame(parsed: unknown): ServerParse {
         sessions,
         capabilities: stringList(parsed.capabilities, MAX_CAPABILITY_LENGTH) ?? [],
       }
-      // Both of the optional fields are assigned only when they are there, and
-      // `folders` is the one where it matters: an absent list and an empty one
-      // are two different facts about this device. Absent means the desktop
-      // never mentioned folders — every build older than the field — and the
-      // guest must keep doing whatever it did before. Empty means somebody
-      // chose no folders for *this* device, which is a real state with a real
-      // remedy, and flattening the two turns "your other machine is old" into
-      // "you have been shut out".
+      // Each optional field is assigned only when it is there, and `folders` is
+      // the one where it matters most: an absent list and an empty one are two
+      // different facts about this device. Absent means the desktop never
+      // mentioned folders — every build older than the field — and the guest
+      // must keep doing whatever it did before. Empty means somebody chose no
+      // folders for *this* device, which is a real state with a real remedy,
+      // and flattening the two turns "your other machine is old" into "you have
+      // been shut out".
       const hostPlatform = asString(parsed.hostPlatform)
       if (hostPlatform !== null) message.hostPlatform = hostPlatform
       const folders = stringList(parsed.folders, MAX_CWD_BYTES)
       if (folders !== null) message.folders = folders
+      /*
+       * And the copilot link, which this parser used to drop on the floor.
+       *
+       * Every field above it was rebuilt by name and this one was not, so a
+       * `welcome` carrying a copilot arrived at every consumer of this function
+       * with the copilot silently removed. `pwa/src/protocol-client.ts` survived
+       * only because it carried a private shim that re-attached the key, and its
+       * own comment says why that is not a cosmetic loss: the presence of this
+       * key *is* whether there is a copilot to draw, so losing it renders a
+       * machine with a copilot and a device entitled to it as though neither
+       * existed. `machines/guest.ts` — this desktop as another desktop's client
+       * — had no such shim and was handed the amputated frame.
+       *
+       * Assigned only when it reads back whole, and dropping is the safe
+       * direction for the same reason the shim gives: a client that invented a
+       * link out of an unreadable one would send `copilot.hello` to a machine
+       * that never offered it and then draw a surface whose every frame comes
+       * back refused. Absent is the answer a guest is supposed to get.
+       */
+      const copilot = copilotLink(parsed.copilot)
+      if (copilot !== null) message.copilot = copilot
       return { ok: true, message }
     }
     case 'sessions': {
@@ -2993,10 +4087,254 @@ export function parseServerFrame(parsed: unknown): ServerParse {
         ? { ok: false, reason: 'folders without a list' }
         : { ok: true, message: { t: 'folders', folders } }
     }
+    /* ---- capability `copilot` ---------------------------------------------- */
+    /*
+     * What is refused whole and what merely loses a row.
+     *
+     * The same split every reader above settles on. A frame that *is* one fact
+     * — a state, a grant, a question, a settlement — is refused whole when that
+     * fact is incomplete, because a half-read one puts a wrong claim on screen:
+     * a grant missing a tier is a control drawn for a permission nobody holds.
+     * A frame carrying a *list* drops the unreadable row and keeps the rest,
+     * because a surface showing four of five bubbles is useful and one showing
+     * none because the fifth had a null role is not.
+     */
+    case 'copilot.state': {
+      const state = copilotState(parsed.state)
+      return state === null
+        ? { ok: false, reason: 'copilot.state without a state' }
+        : { ok: true, message: { t: 'copilot.state', state } }
+    }
+    case 'copilot.chat': {
+      // The run id is what makes a frame from a *previous* run droppable rather
+      // than mergeable, and the type says so in as many words: without it a
+      // client that reconnected after the grace window would splice the end of
+      // a dead conversation onto the start of a live one, and somebody would
+      // read an answer to a question nobody asked in this run. So a chat frame
+      // with no run is refused rather than accepted with a blank one.
+      const run = asString(parsed.run)
+      if (run === null || run === '') return { ok: false, reason: 'copilot.chat without a run' }
+      if (!Array.isArray(parsed.messages)) return { ok: false, reason: 'copilot.chat without messages' }
+      const messages: CopilotChatMessage[] = []
+      for (const row of parsed.messages) {
+        const bubble = copilotChatMessage(row)
+        if (bubble !== null) messages.push(bubble)
+      }
+      const chat: Extract<ServerMessage, { t: 'copilot.chat' }> = { t: 'copilot.chat', run, messages }
+      // `reset` is an instruction to throw away everything held, so it is acted
+      // on only when the desktop said it in so many words.
+      if (parsed.reset === true) chat.reset = true
+      return { ok: true, message: chat }
+    }
+    case 'copilot.tool': {
+      const row = copilotActionRow(parsed.row)
+      return row === null
+        ? { ok: false, reason: 'copilot.tool without a row' }
+        : { ok: true, message: { t: 'copilot.tool', row } }
+    }
+    case 'copilot.sessions': {
+      if (!Array.isArray(parsed.sessions)) return { ok: false, reason: 'copilot.sessions without a list' }
+      const sessions: CopilotSessionRow[] = []
+      for (const row of parsed.sessions) {
+        const session = copilotSessionRow(row)
+        if (session !== null) sessions.push(session)
+      }
+      return { ok: true, message: { t: 'copilot.sessions', sessions } }
+    }
+    case 'copilot.pending': {
+      if (!Array.isArray(parsed.questions)) return { ok: false, reason: 'copilot.pending without a list' }
+      const questions: CopilotPendingRow[] = []
+      for (const row of parsed.questions) {
+        const question = copilotPendingRow(row)
+        if (question !== null) questions.push(question)
+      }
+      return { ok: true, message: { t: 'copilot.pending', questions } }
+    }
+    case 'copilot.grant': {
+      const link = copilotLink(parsed.link)
+      return link === null
+        ? { ok: false, reason: 'copilot.grant without a link' }
+        : { ok: true, message: { t: 'copilot.grant', link } }
+    }
+    case 'copilot.ask': {
+      const question = copilotQuestion(parsed.question)
+      return question === null
+        ? { ok: false, reason: 'copilot.ask without a question' }
+        : { ok: true, message: { t: 'copilot.ask', question } }
+    }
+    case 'copilot.settled': {
+      const settled = copilotSettled(parsed.settled)
+      return settled === null
+        ? { ok: false, reason: 'copilot.settled without a row' }
+        : { ok: true, message: { t: 'copilot.settled', settled } }
+    }
+    /* ---- capability `controls` --------------------------------------------- */
+    /*
+     * Read defensively and **never guessed at**, which is the one rule this pair
+     * of frames exists to keep across a relay.
+     *
+     * Every field on a reading has a "nothing was read" value — null for a
+     * value, null for a source, false for the gate — and a malformed answer is
+     * folded onto those rather than onto a plausible-looking default. A frame
+     * that arrived with `model.label` missing must produce a chip that says
+     * "Unknown", not one that says Opus because Opus is what the sender usually
+     * runs. `parseReading` below is the whole of that policy and it is total by
+     * construction: it takes `unknown` and always returns a reading.
+     */
+    case 'controls.reading': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'controls.reading without a request id' }
+      const sessionId = id(parsed.id)
+      if (sessionId === null) return { ok: false, reason: 'controls.reading without a session id' }
+      // Refused rather than half-read: without a body there is nothing to show,
+      // and resolving the waiting request with four blank chips would be this
+      // end inventing an answer the far machine never gave.
+      if (!isRecord(parsed.reading)) return { ok: false, reason: 'controls.reading without a reading' }
+      return {
+        ok: true,
+        message: { t: 'controls.reading', rid: requestId, id: sessionId, reading: parseControls(parsed.reading) },
+      }
+    }
+    case 'controls.applied': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'controls.applied without a request id' }
+      const sessionId = id(parsed.id)
+      if (sessionId === null) return { ok: false, reason: 'controls.applied without a session id' }
+      /*
+       * `ok` must be the literal `true` and nothing else is read as success.
+       *
+       * The truthiness of a missing field would make a garbled answer look like
+       * a change that landed, and the visible consequence is a menu ticking a
+       * model the far machine never moved to. The same rule `copilot.answer`
+       * keeps in the other direction, and for the same reason.
+       */
+      return {
+        ok: true,
+        message: {
+          t: 'controls.applied',
+          rid: requestId,
+          id: sessionId,
+          ok: parsed.ok === true,
+          // Uncapped, like `error` and `tunnel.closed` below it: the whole frame
+          // is already bounded by the message cap the socket enforces, and this
+          // sentence is the far end's own words about a refusal — truncating it
+          // would cut the half that says what to do.
+          message: asString(parsed.message) ?? '',
+          reading: parseReading(parsed.reading),
+        },
+      }
+    }
+    /* ---- capability `usage` ------------------------------------------------ */
+    /*
+     * Refused when it carries no `want`, and read defensively when it does.
+     *
+     * The word is checked rather than trusted because it is what tells the
+     * asking side which of the two figures it is holding, and a frame that
+     * arrived without one is not an answer this end can file — it would have to
+     * guess, and a context reading filed as a plan reading is a token count
+     * printed as a percentage of somebody's subscription. Better to drop the
+     * frame and let the request time out into "nobody answered", which is a
+     * state the bar already knows how to be honest about.
+     */
+    case 'usage.reading': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'usage.reading without a request id' }
+      const sessionId = id(parsed.id)
+      if (sessionId === null) return { ok: false, reason: 'usage.reading without a session id' }
+      const want = USAGE_WANTS.find((known) => known === parsed.want)
+      if (want === undefined) return { ok: false, reason: 'usage.reading naming no known reading' }
+      return {
+        ok: true,
+        message: { t: 'usage.reading', rid: requestId, id: sessionId, want, answer: parseUsageAnswer(parsed.answer) },
+      }
+    }
+    /* ---- capability `send` ------------------------------------------------- */
+    /*
+     * The answer to one `session.send`, read the way `controls.applied` is.
+     *
+     * `ok` must be the literal `true` and nothing else is read as success: the
+     * truthiness of a missing field would make a garbled frame look like text
+     * that landed in somebody's agent, and the visible consequence is a panel
+     * reporting a send that never happened. The sentence is uncapped, like
+     * `error` below it — the whole frame is already bounded by the message cap
+     * the socket enforces, and truncating a refusal cuts the half that says what
+     * to do about it.
+     */
+    case 'session.sent': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'session.sent without a request id' }
+      const sessionId = id(parsed.id)
+      if (sessionId === null) return { ok: false, reason: 'session.sent without a session id' }
+      return {
+        ok: true,
+        message: {
+          t: 'session.sent',
+          rid: requestId,
+          id: sessionId,
+          ok: parsed.ok === true,
+          message: asString(parsed.message) ?? '',
+        },
+      }
+    }
     case 'error': {
       const code = asErrorCode(parsed.code)
       if (code === null) return { ok: false, reason: 'error with an unknown code' }
       return { ok: true, message: { t: 'error', code, message: asString(parsed.message) ?? '' } }
+    }
+    /* ---- capability `upload`, read by whoever is sending the file --------- */
+    /*
+     * The four answers a host gives an upload, narrowed the same way everything
+     * above them is.
+     *
+     * They were missing from this parser for as long as the only client that
+     * uploaded was a phone, and both phones decode their own frames in their own
+     * language. A desktop dropping a file onto a session running on another
+     * desktop reads its wire *here*, and a frame this function does not know is
+     * refused as `unknown message type` — so without these four the guest half
+     * of a transfer would announce a file and then never hear the path, the
+     * acknowledgements or the refusal. Silence in all three directions at once,
+     * which is the failure mode this pass exists to remove.
+     *
+     * `path` is display text and a value this end will type into a terminal, so
+     * it is treated as untrusted and quoted at the point it becomes a command
+     * line — see `shellQuote` in `machines/upload-send.ts`. Nothing here checks
+     * that it names anything: it is a path on somebody else's computer and this
+     * process has no way to know, which is precisely why it must not pretend to.
+     */
+    case 'upload.ready': {
+      const id = asString(parsed.id)
+      const path = asString(parsed.path)
+      if (id === null || id === '' || path === null) return { ok: false, reason: 'incomplete upload.ready' }
+      return { ok: true, message: { t: 'upload.ready', id, path } }
+    }
+    case 'upload.ack': {
+      const id = asString(parsed.id)
+      const bytes = asWhole(parsed.bytes)
+      // A negative or fractional count would run the sender's window backwards
+      // and stall a transfer that is otherwise healthy.
+      if (id === null || id === '' || bytes === null || bytes < 0) {
+        return { ok: false, reason: 'incomplete upload.ack' }
+      }
+      return { ok: true, message: { t: 'upload.ack', id, bytes } }
+    }
+    case 'upload.done': {
+      const id = asString(parsed.id)
+      const path = asString(parsed.path)
+      const bytes = asWhole(parsed.bytes)
+      const sha256 = asString(parsed.sha256)
+      if (id === null || id === '' || path === null || bytes === null || sha256 === null) {
+        return { ok: false, reason: 'incomplete upload.done' }
+      }
+      return { ok: true, message: { t: 'upload.done', id, path, bytes, sha256 } }
+    }
+    case 'upload.failed': {
+      const id = asString(parsed.id)
+      if (id === null || id === '') return { ok: false, reason: 'incomplete upload.failed' }
+      // The sentence may be empty and that is not a reason to drop the frame:
+      // what matters is that the transfer is over, and a caller with no words
+      // for it has its own. Losing the frame would leave a progress line moving
+      // for ever.
+      return { ok: true, message: { t: 'upload.failed', id, message: asString(parsed.message) ?? '' } }
     }
     case 'pong':
       return { ok: true, message: { t: 'pong' } }

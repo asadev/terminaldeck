@@ -11,6 +11,7 @@ import { readFailure, withDeadline } from '../deadline'
 import { recall, remember } from '../panel-cache'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty, PageNote } from './PageEmpty'
+import { HoverNote } from './HoverNote'
 import './McpInspector.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -542,16 +543,22 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
       */}
       {!blank && (
       <header className="mcp-head">
-        <div>
-          {/* Three sentences down to one and a half. The middle one explained
-              that adding here writes the file Claude Code reads — which is the
-              plumbing, and is exactly what a reader would assume anyway. The
-              last one stays: removing genuinely cannot be done from this
-              window, and a panel that says nothing about what it cannot do
-              reads as broken rather than as limited. */}
-          <p className="mcp-subheading">
-            From your Claude Code configuration. To remove one, run <code>claude mcp remove</code>.
-          </p>
+        <div className="mcp-subheading">
+          {/*
+            The sentence that used to stand here is behind the dot now.
+
+            It said where the list comes from and that removing a server has to
+            happen in a terminal — both true, both worth having, and neither
+            worth a standing line of prose above every visit to this page.
+            Asad, this round: *"I don't want any kind of long descriptions
+            anywhere. Just if somewhere it's very required, give the i icon
+            like other ones, information icon in the settings, same way."*
+            `HoverNote` is that icon, and this is the same component Settings
+            uses, so it behaves identically.
+          */}
+          <HoverNote label="Where these come from">
+            {'These are read from your Claude Code configuration. To remove one, run claude mcp remove in a terminal.'}
+          </HoverNote>
         </div>
         <div className="mcp-head-actions">
           {!blank && (
@@ -612,7 +619,10 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
       {blank && (
         <PageEmpty
           icon={panelSpec('mcp').icon}
-          title="No MCP servers configured"
+          /* Three words. It was "No MCP servers configured" over a sentence
+             defining what an MCP server is — a definition, on the page called
+             MCP servers, read by somebody who navigated there. */
+          title="No servers yet"
           action={{
             label: 'Add a server',
             primary: true,
@@ -621,11 +631,6 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
               setAdded(null)
             },
           }}
-          hint={
-            <>
-              Or run <code>claude mcp add</code> in a terminal.
-            </>
-          }
           /* The reload the header would have carried, kept where the rest of
              the page is: somebody who has just added a server from a terminal
              needs it, and it is the only reason to reread an empty list. */
@@ -634,9 +639,7 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
               {loading ? 'Reading…' : 'Reload'}
             </button>
           }
-        >
-          An MCP server is a tool your agents can reach — a database, a browser, an API.
-        </PageEmpty>
+        />
       )}
 
       <ul className="mcp-servers">
@@ -650,10 +653,22 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
           return (
             <li className="mcp-server" key={server.id} data-state={server.state} data-open={open}>
               <div className="mcp-server-head">
+                {/*
+                  An HTTP or SSE server cannot be opened, so its row is not a
+                  control that looks like one.
+
+                  `mcp-client.ts` marks every non-stdio server `unsupported`,
+                  and `toggle` has always skipped the connect for those — so the
+                  row expanded to an empty body and nothing else happened. That
+                  is the dead click this app is not allowed to have, and the
+                  reason is already printed on the row itself two lines below.
+                */}
                 <button
                   type="button"
                   className="mcp-server-toggle"
-                  aria-expanded={open}
+                  aria-expanded={server.unsupported ? undefined : open}
+                  disabled={Boolean(server.unsupported)}
+                  title={server.unsupported ?? undefined}
                   onClick={() => toggle(server)}
                 >
                   <span className="mcp-dot" data-state={server.state} aria-hidden="true" />

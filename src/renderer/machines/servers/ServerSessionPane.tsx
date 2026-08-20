@@ -45,9 +45,11 @@ import type { ServersBridge } from './types'
 export function ServerSessionPane({
   serverId,
   shellKey,
+  startIn,
   bridge,
   visible,
   onEnded,
+  onOpened,
 }: {
   serverId: string
   /**
@@ -61,9 +63,25 @@ export function ServerSessionPane({
    * terminal that flickers between two shells.
    */
   shellKey: string
+  /**
+   * The folder the shell opens in, or null for wherever the sign-in lands.
+   *
+   * Passed through rather than read here: the terminal is what opens the shell,
+   * and this is the one fact about the shell that has to be in hand at that
+   * moment. See `ServerFolderPicker` for where the answer comes from.
+   */
+  startIn: string | null
   bridge: ServersBridge
   visible: boolean
   onEnded(): void
+  /**
+   * The far end's id for this shell, once it exists.
+   *
+   * Passed straight through. The window keeps it because the control cluster on
+   * the bar addresses a server terminal by that id — see `ServerTerminal`'s own
+   * note for why this pane cannot mint it.
+   */
+  onOpened(shellId: string): void
 }) {
   /*
    * Read here rather than threaded down from the window.
@@ -81,11 +99,13 @@ export function ServerSessionPane({
     <div className="server-pane" data-visible={visible} data-shell={shellKey}>
       <ServerTerminal
         serverId={serverId}
+        startIn={startIn}
         bridge={bridge}
         fontSize={fontSize}
         fontFamily={fontFamily}
         visible={visible}
         onEnded={onEnded}
+        onOpened={onOpened}
       />
     </div>
   )

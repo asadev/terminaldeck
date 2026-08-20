@@ -150,3 +150,51 @@ describe('renderer → preload contract', () => {
     expect(declared.filter((name) => !exposed.has(name))).toEqual([])
   })
 })
+
+/**
+ * A fourth shape of the same seam bug: the channel matches, and an **argument**
+ * does not travel.
+ *
+ * The three cases at the top of this file are all "the names do not line up".
+ * This one lines up perfectly — same channel, same handler, no type error — and
+ * still breaks, because the preload forwards fewer arguments than the handler
+ * reads.
+ *
+ * MCP is where it happened. `~/.claude.json` holds servers at three scopes:
+ * `user` at its root, and `project` and `local` keyed on the open folder. So
+ * every MCP call has to carry that folder or main cannot find the row the panel
+ * has just drawn. `mcp:list` carried it and listed all three; `mcp:connect`,
+ * `mcp:inventory` and `mcp:call` did not, so main resolved them against the
+ * user scope alone and threw `mcp: no configured server with id local:<name>`
+ * — on a page whose expand gesture *is* its connect gesture. Asad: *"On MCP
+ * servers did nothing."*
+ *
+ * Both ends were already right. `mcp-client.ts` has always accepted the
+ * argument and `McpInspector`'s own bridge type has always declared it; this
+ * file was the one link that dropped it.
+ */
+describe('the preload forwards what the handler reads', () => {
+  const scoped = ['mcp:connect', 'mcp:inventory', 'mcp:call'] as const
+
+  it.each(scoped)('%s carries the project path', (channel) => {
+    // The invoke, up to its closing bracket, so this reads the actual call
+    // rather than the surrounding function's signature.
+    const call = new RegExp(`ipcRenderer\\.invoke\\('${channel}'[^)]*\\)`).exec(preload)?.[0] ?? ''
+    expect(call, `${channel} is not invoked from the preload at all`).not.toBe('')
+    expect(call, `${channel} drops projectPath, so project- and local-scope servers cannot resolve`)
+      .toContain('projectPath')
+  })
+
+  it('reads that path in main for the same three channels', () => {
+    // The other half: an argument that travels to a handler ignoring it is the
+    // same defect wearing the opposite jacket.
+    for (const channel of scoped) {
+      const handler =
+        new RegExp(`ipcMain\\.handle\\('${channel}'[\\s\\S]{0,400}?\\n  \\}?\\)`).exec(main)?.[0] ?? ''
+      expect(handler, `${channel} has no handler`).not.toBe('')
+      expect(handler, `${channel} ignores the project path the preload now sends`).toContain(
+        'projectPath',
+      )
+    }
+  })
+})

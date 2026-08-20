@@ -16,6 +16,33 @@ import { describe, expect, it } from 'vitest'
  * of them is precise, each of them is what the thing is actually called, and
  * each of them tells a person who does not already know exactly nothing.
  *
+ * ## One of them is now on a screen, once, and that is a decision
+ *
+ * **Port**, as the label of one optional box on the add form. The rule is not
+ * relaxed and the word is still banned everywhere else, including in the two
+ * sentences that field prints when what was typed cannot be read — both of
+ * those are written to work under the label without repeating it.
+ *
+ * The exemption is narrow because the *argument* for the ban is narrow, and it
+ * turns out not to reach this case. Every other word on that list is one this
+ * app would use to **describe** something to a reader who never asked: nobody
+ * arrives at this screen holding a PID. A port is the opposite — it is a value
+ * somebody was **handed**, by whoever set the server up, in a sentence that
+ * already used the word. Nothing about what a port *is* has to be understood in
+ * order to type the number you were given into the box named after it, and
+ * there is no plainer word to name that box with: every alternative is a
+ * coinage the person holding the number would not recognise.
+ *
+ * It is also the exemption with a measured cost behind it. Asad's own WSL box
+ * listens on 2222 and could not be added at all while this form had nowhere to
+ * say so — and what he was shown blamed his machine and his network. See
+ * `AddServer.tsx`. A rule that forbids naming the one thing a person is holding
+ * is a rule that has stopped protecting them.
+ *
+ * `only that one word, in only that one place` below is what keeps this from
+ * becoming a precedent: it fails if the word appears anywhere else in this
+ * area's copy, and it fails if the label ever stops being the reason.
+ *
  * ## What is *not* banned, and why the line is there
  *
  * A real program's name may appear — *Served by nginx*, *Running in a
@@ -109,6 +136,11 @@ describe('the words a person reads on these screens', () => {
     /\bopenrc\b/i,
     /\bstd(out|err)\b/i,
     /\bSIG[A-Z]+\b/,
+    // See the header, and `only that one word, in only that one place` below:
+    // the label of the add form's optional box is the single exemption, and it
+    // is exempted by being invisible to `copyIn` rather than by being listed
+    // here — a one-word JSX text node has no three words in a row. That is an
+    // accident of the collector, so the test below turns it into a decision.
     /\bports?\b/i,
     /\bSSH\b/i,
     /\bhost keys?\b/i,
@@ -162,5 +194,63 @@ describe('consequence sentences are not composed here', () => {
       /\bsummary\s*:/.test(withoutComments(readFileSync(file, 'utf8'))),
     )
     expect(writers).toEqual([])
+  })
+})
+
+/**
+ * The one exemption, pinned so that it stays one.
+ *
+ * `copyIn` above only collects text that reads like a sentence, so a one-word
+ * label is invisible to it — which is how **Port** reaches a screen in an area
+ * that bans the word. That is a property of the collector rather than a
+ * decision, and a rule with an accidental hole in it is a rule that will be
+ * widened by somebody who finds the hole and assumes it was meant.
+ *
+ * So this reads *every* text node, however short, and every quoted string, and
+ * insists the word appears exactly once and only as that label. Add it to a
+ * second field, a help line, a button or a notice and this fails.
+ */
+describe('only that one word, in only that one place', () => {
+  const BANNED_WORD = /\bports?\b/i
+
+  /** Every readable fragment, with no sentence filter at all. */
+  function everythingReadable(file: string): string[] {
+    const source = withoutComments(readFileSync(file, 'utf8'))
+    const found: string[] = []
+    if (file.endsWith('.tsx')) {
+      for (const [, between] of source.matchAll(/>([^<>{}]+)</g)) {
+        const text = between.trim()
+        if (text !== '') found.push(text)
+      }
+    }
+    for (const [, literal] of source.matchAll(/'([^'\\\n]+)'/g)) found.push(literal)
+    for (const [, literal] of source.matchAll(/"([^"\\\n]+)"/g)) found.push(literal)
+    return found
+  }
+
+  it('says it once, as a label, and nowhere else on these screens', () => {
+    const said = AREA.flatMap((file) =>
+      everythingReadable(file)
+        .filter((text) => BANNED_WORD.test(text))
+        .map((text) => `${file}: ${text}`),
+    )
+    // Exactly one, and it is the label of the add form's optional box. The path
+    // is part of the assertion: the same word on a different screen in this
+    // area would be a second decision nobody argued for.
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain('AddServer.tsx')
+    expect(said[0]).toMatch(/: Port$/)
+  })
+
+  it('is not repeated in what that field says when it cannot read what was typed', () => {
+    // The two correction sentences sit directly under the label, so the noun is
+    // already on screen. Repeating it there would make the correction longer
+    // for no reader — and would be the first step in the widening this block
+    // exists to stop.
+    const form = withoutComments(
+      readFileSync(join(HERE, 'AddServer.tsx'), 'utf8'),
+    )
+    expect(form).toContain('Leave it empty for the usual one.')
+    expect(form).not.toMatch(/A port is/)
   })
 })

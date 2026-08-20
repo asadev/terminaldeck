@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceTabStrip } from './browser/WorkspaceTabStrip'
-import type { ProviderId, SessionStatus } from '@shared/types'
+import type { ProviderId, SessionMeta, SessionStatus } from '@shared/types'
 import { StoreProvider, useStore, type Session } from './state/store'
 import { TerminalView } from './components/TerminalView'
 import { MachineSessionPane } from './machines/MachineLinks'
@@ -8,7 +8,7 @@ import { useMachines } from './machines/useMachines'
 import { EmptyState } from './components/EmptyState'
 import { SettingsWindow } from './settings/SettingsWindow'
 import type { SectionId } from './settings/settings-schema'
-import { NewSessionDialog } from './components/NewSessionDialog'
+import { NewSessionDialog, type StartServer } from './components/NewSessionDialog'
 import { HelpDialog } from './components/HelpPanel'
 import { JoinRemoteDialog } from './components/JoinRemoteDialog'
 import { SessionInspector } from './components/SessionInspector'
@@ -29,6 +29,7 @@ import { Onboarding } from './components/Onboarding'
 import { ChatView } from './components/ChatView'
 import { PageEmpty } from './components/PageEmpty'
 import { BRAND } from '@shared/brand'
+import { setBindings } from './browser/binding-view'
 import { UpdateBanner } from './updates/UpdateBanner'
 import { ModeSwitch, type SessionViewMode, type WorkspaceMode } from './shell/ModeSwitch'
 import { BrowserWorkspace } from './browser/BrowserWorkspace'
@@ -53,7 +54,7 @@ import {
 } from './layout/panes'
 import { CopilotConsent } from './copilot/CopilotConsent'
 import { CopilotSetup } from './copilot/CopilotSetup'
-import { CopilotStop } from './copilot/CopilotStop'
+import { CopilotRestart } from './copilot/CopilotRestart'
 import { CopilotView } from './copilot/CopilotView'
 import { defaultPane } from './copilot/copilot-model'
 import { useConsent } from './copilot/useConsent'
@@ -71,6 +72,13 @@ import { AccountChip } from './shell/AccountChip'
 import type { ChromeSession } from './shell/agent-presence'
 import { PaneBar } from './shell/PaneBar'
 import { SessionControls } from './shell/SessionControls'
+// What stands in that cluster's place over a session running on one of his
+// other machines, so the space it leaves is explained rather than merely empty.
+import { RemoteControlsNote } from './shell/RemoteControlsNote'
+// Which computer a session's controls have to be asked of. See the module's own
+// note: it is the router that made the model, effort and fast-mode cluster reach
+// a session on a paired machine and on a server.
+import type { ControlsTarget } from './shell/controls-target'
 import { PanelView } from './shell/PanelView'
 import { useSidebar } from './shell/useSidebar'
 import { PANELS, panelSpec, type PanelId } from './shell/panels'
@@ -93,7 +101,7 @@ import {
 import { ServerSessionPane } from './machines/servers/ServerSessionPane'
 import { MachineSessions } from './machines/new-session-context'
 import { ServerSessions } from './machines/servers/session-context'
-import { resolveServersBridge } from './machines/servers/types'
+import { asServers, resolveServersBridge } from './machines/servers/types'
 import {
   newShellKey,
   renameServersIn,
@@ -142,17 +150,46 @@ import './shell/shell.css'
  */
 type PendingClose =
   | { kind: 'session'; tab: WorkspaceTab }
-  | { kind: 'project'; path: string; name: string; status: SessionStatus; count: number }
-  | { kind: 'machine-session'; machineId: string; sessionId: string; name: string; status: SessionStatus }
-  | { kind: 'machine'; machineId: string; name: string; status: SessionStatus; count: number }
+  | {
+      kind: 'project'
+      path: string
+      name: string
+      status: SessionStatus
+      count: number
+    }
+  | {
+      kind: 'machine-session'
+      machineId: string
+      sessionId: string
+      name: string
+      status: SessionStatus
+    }
+  | {
+      kind: 'machine'
+      machineId: string
+      name: string
+      status: SessionStatus
+      count: number
+    }
   /*
    * And the two a server adds. `name` is the *server's* name on both, not the
    * terminal's, because that is what the dialog has to identify — a row called
    * "Session 2" names nothing on its own, and the one fact a person needs at
    * this moment is which machine it is on.
    */
-  | { kind: 'server-session'; tabId: string; name: string; status: SessionStatus }
-  | { kind: 'server'; serverId: string; name: string; status: SessionStatus; count: number }
+  | {
+      kind: 'server-session'
+      tabId: string
+      name: string
+      status: SessionStatus
+    }
+  | {
+      kind: 'server'
+      serverId: string
+      name: string
+      status: SessionStatus
+      count: number
+    }
 
 /**
  * The three facts the session chrome needs about a session, off the store.
@@ -169,7 +206,13 @@ function chromeSession(
 ): ChromeSession | null {
   if (id === null) return null
   const found = sessions.find((session) => session.id === id)
-  return found ? { id: found.id, provider: found.provider, exited: found.exitCode !== null } : null
+  return found
+    ? {
+        id: found.id,
+        provider: found.provider,
+        exited: found.exitCode !== null,
+      }
+    : null
 }
 
 /** Last segment of a path, or null. The store's own `folderName`, minus the store. */
@@ -455,6 +498,18 @@ function Workspace() {
    */
   const switcher = useSwitchAccount()
   /**
+   * Sessions with an account switch waiting for the next message, by the name
+   * of the account they are waiting to become.
+   *
+   * Window state rather than a read of the main process's register, because the
+   * only thing drawn from it is a hint on a chip and the register is authoritative
+   * about a thing that has already been agreed. It is written when the main
+   * process confirms the arming, and cleared by both of the events that end one —
+   * so it can go stale only by this window being closed, which takes the chip
+   * with it.
+   */
+  const [armedSwitches, setArmedSwitches] = useState<Record<string, string>>({})
+  /**
    * The addresses the account menu has already read, for the sheet's title.
    *
    * A store read and nothing more — no probe. `finish.test.ts` enumerates which
@@ -557,6 +612,34 @@ function Workspace() {
     { machineId: string; sessionId: string } | null
   >(null)
   /**
+   * Every remote session this window has opened, whether or not it is in front.
+   *
+   * ## Why this list exists, in his words
+   *
+   *   > *"If I go to other page and come back, it will start from beginning
+   *   > again… If I come to this one, it will again start from the beginning."*
+   *
+   * `mainView` draws one thing. So opening Files, Settings or another session
+   * unmounted the remote pane, which detached from the far machine and disposed
+   * its terminal — and coming back attached again, which is a round trip to
+   * another computer and up to two megabytes of replay, every visit. The screen
+   * no longer *scrolls* through that replay (`terminal-backfill.ts`), but a
+   * terminal that has to be rebuilt from another machine is still a terminal
+   * that reloads, and reloading is what he is describing.
+   *
+   * So the panes are mounted beside the pane and hidden, exactly as the shells
+   * open on servers are and as the local terminals are one level down. Coming
+   * back to one is then the same event as coming back to a local session:
+   * nothing happens, because it never went away.
+   *
+   * It is *these* rather than `machineTabs` — which is every session on every
+   * paired machine — because attaching to a session nobody has opened would put
+   * a machine's whole afternoon on this window's wire for nothing.
+   */
+  const [machineSessionPanes, setMachineSessionPanes] = useState<
+    readonly { machineId: string; sessionId: string }[]
+  >([])
+  /**
    * The way to a server, and nothing else read from one.
    *
    * `resolveServersBridge` is pure — it looks at what the preload actually
@@ -567,6 +650,22 @@ function Workspace() {
    * when somebody opens it.
    */
   const serversBridge = useMemo(() => resolveServersBridge(), [])
+  /**
+   * The stored servers, for the New session dialog's *Where* list.
+   *
+   * ## Read on the press, not on a timer and not at launch
+   *
+   * Reading the list dials nothing — a row is a name, an address and a username
+   * — but it is still a round trip through the main process, and the standing
+   * rule is *events, not polling*. Opening the dialog is the event. That also
+   * settles staleness without a subscription: a server added, renamed or
+   * forgotten on the Machines panel is picked up the next time this dialog
+   * opens, which is before anybody could pick it here.
+   *
+   * Empty is the ordinary case — most people have no servers — and it draws no
+   * server rows at all, which leaves the dialog exactly as it was.
+   */
+  const [startServers, setStartServers] = useState<readonly StartServer[]>([])
   /**
    * The shells this window has open on servers.
    *
@@ -823,7 +922,13 @@ function Workspace() {
      * to ask.
      */
     ...(copilotSession
-      ? [{ ...windowTab(copilotSession), label: copilotSetup.name, isCopilot: true as const }]
+      ? [
+          {
+            ...windowTab(copilotSession),
+            label: copilotSetup.name,
+            isCopilot: true as const,
+          },
+        ]
       : []),
   ]
 
@@ -884,6 +989,66 @@ function Workspace() {
         closable: row.link?.capabilities.includes('close') === true,
       })),
     )
+
+  /**
+   * What every linked machine says it is running, as one string.
+   *
+   * A dependency, not a value anything reads. The two effects below have to run
+   * when the *set* of live sessions changes and not on every render — and
+   * `machines.machines` is a fresh array each time the link state is pushed, so
+   * listing it would be the same thing as listing nothing.
+   */
+  const linkedMachineSessions = machines.machines
+    .map((row) => (row.link ? `${row.machine.id}:${row.link.sessions.map((s) => s.id).join(',')}` : ''))
+    .join('|')
+
+  /** The rows themselves, for the pruning effect. See the string above. */
+  const machinesRef = useRef(machines.machines)
+  machinesRef.current = machines.machines
+
+  /*
+   * The machine channels, read out once.
+   *
+   * A property on a mutable object does not stay narrowed inside a callback, and
+   * the panes at the bottom of this component are built in one — so the guard
+   * and the value have to be the same binding or the pane is handed a `null`
+   * bridge that TypeScript cannot rule out.
+   */
+  const machinesBridge = machines.bridge
+
+  // Opening one is what puts a pane on the list. It stays there afterwards,
+  // which is the whole point — see `machineSessionPanes`.
+  useEffect(() => {
+    if (openMachineSession === null) return
+    const { machineId, sessionId } = openMachineSession
+    setMachineSessionPanes((open) =>
+      open.some((pane) => pane.machineId === machineId && pane.sessionId === sessionId)
+        ? open
+        : [...open, { machineId, sessionId }],
+    )
+  }, [openMachineSession])
+
+  /*
+   * And a session that has ended over there takes its pane with it.
+   *
+   * Read through a ref rather than depended on, so this runs when the far
+   * machine's list actually changes rather than on every render.
+   *
+   * A machine with **no link right now keeps its panes**, and that is the
+   * load-bearing half: a link drops and reconnects on its own, and a pane thrown
+   * away during those seconds is exactly the reload this list exists to remove.
+   * Only a machine that is connected and says the session is gone is believed.
+   */
+  useEffect(() => {
+    setMachineSessionPanes((open) => {
+      const kept = open.filter((pane) => {
+        const row = machinesRef.current.find((entry) => entry.machine.id === pane.machineId)
+        if (!row?.link) return true
+        return row.link.sessions.some((session) => session.id === pane.sessionId)
+      })
+      return kept.length === open.length ? open : kept
+    })
+  }, [linkedMachineSessions])
 
   /**
    * The shells open on servers, as tabs.
@@ -1518,6 +1683,103 @@ function Workspace() {
   }, [replaceSession, switcher])
 
   /**
+   * Arm the same switch for his next message instead of making it now.
+   *
+   * Nothing is swapped here and nothing will be for a while: the session runs
+   * on untouched until he sends something, and the replacement arrives through
+   * `onSessionSwitched` below. That is the whole difference between the two
+   * buttons on the sheet, and it is why this one has no `.then`.
+   */
+  const deferAccountSwitch = useCallback(() => {
+    /*
+     * The name is captured before the call, not after.
+     *
+     * `defer` shuts the sheet on success, which clears the plan the name comes
+     * from — so reading it afterwards reads null and the chip would promise a
+     * switch to nobody. It is only committed once the main process has said it
+     * took the arming, because a hint drawn from a button press rather than from
+     * an answer is the shape of dishonesty this feature is fenced against.
+     */
+    const sessionId = switcher.asking?.sessionId ?? null
+    const name = switcher.plan?.to?.name ?? null
+    void switcher.defer().then((armed) => {
+      if (!armed || sessionId === null || name === null) return
+      setArmedSwitches((current) => ({ ...current, [sessionId]: name }))
+    })
+  }, [switcher])
+
+  /**
+   * Put the replacement where the old session was.
+   *
+   * The same four moves `confirmAccountSwitch` makes, lifted out because the
+   * deferred switch needs every one of them and arrives by a different route:
+   * nothing in the window asked for it, so there is no promise to hang the swap
+   * off — it lands as an event, inside a keystroke, and the window has to do
+   * exactly what it would have done had it been the one to ask.
+   */
+  const adoptSwitched = useCallback(
+    (previous: string, meta: SessionMeta) => {
+      replaceSession(previous, meta)
+      setPanes((current) => replaceTabInPanes(current, previous, meta.id))
+      replaceWindowInStrip(previous, meta.id)
+      setSelection((current) =>
+        current.kind === 'tab' && current.id === previous ? showTabSelection(meta.id) : current,
+      )
+    },
+    [replaceSession],
+  )
+
+  /**
+   * A switch that was armed for his next message has happened.
+   *
+   * Subscribed for the whole life of the window rather than while a sheet is
+   * open, because that is the point of the feature: the sheet was shut long
+   * before this fires and he is looking at a terminal, not at a dialog. Nothing
+   * is announced on success on purpose — the tab is the tab it was, the account
+   * chip above it now reads the other account, and that *is* the feedback. An
+   * extra banner for something he asked for and can already see would be the
+   * app congratulating itself.
+   */
+  useEffect(() => {
+    const off = window.deck.onSessionSwitched?.((previous, meta) => {
+      adoptSwitched(previous, meta)
+      // The promise has been kept, so it stops being drawn. Keyed by the *old*
+      // id, which is the one it was armed against; the replacement is a session
+      // nothing is armed on.
+      setArmedSwitches(({ [previous]: _done, ...rest }) => rest)
+    })
+    return off
+  }, [adoptSwitched])
+
+  /**
+   * And one that did not take.
+   *
+   * Nothing is swapped, deliberately. The main process starts the replacement
+   * before it stops anything, so the session named here is still running as it
+   * was — drawing the new account now would be the app showing a switch that
+   * did not happen, which is the one rule this feature must not break.
+   *
+   * It is put back in front of him rather than logged, because he armed this
+   * and then stopped thinking about it: a failure nobody is told about reads as
+   * the account silently refusing to change. The sheet is the right home for it
+   * — it is the surface that already knows how to say "this session is still
+   * running as it was" — and reopening it also names the account that was not
+   * reached, which a bare sentence could not.
+   */
+  useEffect(() => {
+    const off = window.deck.onSessionSwitchFailed?.((sessionId, profileId, why) => {
+      // `ask` first, so the sheet fills in with the two account names and the
+      // tab's label; then the reason on top of it. `ask` clears `problem` as it
+      // opens, which is why the order is this way round and not the other.
+      switcher.ask({ sessionId, profileId })
+      switcher.report(why)
+      // It is not going to happen, so the chip must stop saying it will.
+      setArmedSwitches(({ [sessionId]: _failed, ...rest }) => rest)
+    })
+    return off
+  }, [switcher])
+
+  /**
    * Choose a folder, then start a session in it — optionally under a chosen
    * account.
    *
@@ -1657,6 +1919,33 @@ function Workspace() {
     [],
   )
 
+  /*
+   * The servers, re-read each time the dialog opens. See `startServers`.
+   *
+   * The failure path sets an empty list rather than a message: the dialog's
+   * Where section is an *offer*, and an offer nobody can make is one that is not
+   * drawn. A person with an unreadable servers list still gets exactly the
+   * dialog they had before servers existed, and the Machines panel is where a
+   * broken servers list is reported, because that is the screen about servers.
+   */
+  useEffect(() => {
+    if (!newSessionOpen || serversBridge === null) return
+    let cancelled = false
+    void serversBridge.listServers().then(
+      (raw) => {
+        if (!cancelled) {
+          setStartServers(asServers(raw).map((row) => ({ id: row.id, name: row.name })))
+        }
+      },
+      () => {
+        if (!cancelled) setStartServers([])
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [newSessionOpen, serversBridge])
+
   /**
    * A tab has been taken off the top bar and it was the one on screen.
    *
@@ -1726,74 +2015,88 @@ function Workspace() {
    * the globe, so they take the same route and get the same treatment on the
    * bar rather than a second path that could drift from it.
    */
-  const newBrowserTab = useCallback((target?: string) => {
-    /*
-     * Only a string is an address, and this is the boundary that says so.
-     *
-     * This function is handed to `onNewBrowserTab` in two components, and both
-     * put it straight on a button's `onClick` — so React calls it with a
-     * `MouseEvent`. TypeScript cannot see that: `(target?: string) => void` is
-     * assignable to `() => void`, because a handler that ignores its argument
-     * and one that reads it are the same type. Both call sites now pass
-     * `() => newBrowserTab()` and this line means the next one does not have to
-     * remember.
-     *
-     * It was not hypothetical for long. On 2026-08-17 the event travelled from
-     * here as `WorkspaceTab.url`, arrived in `BrowserWorkspace` as `initialUrl`,
-     * became a tab's `draft`, and threw `input.trim is not a function` out of
-     * `resolveOmnibox` during render — which the error boundary turned into
-     * "New tab stopped working" across every pane in the window.
-     */
-    const url = typeof target === 'string' ? target : ''
-    /*
-     * Asking for a browser tab you do not have installs the pane and opens one.
-     *
-     * The same bargain `setMode('split')` makes, and for the same reason: the
-     * globe beside New session is drawn as an offer in that state (see
-     * `useControlOffer`), so this is not a surprise — and a pane appearing under
-     * the pointer that asked for it is a better "where to find it" than any
-     * sentence about somewhere else.
-     */
-    if (!features.on('browser')) features.install('browser')
-    /*
-     * Unique even when two arrive in the same millisecond.
-     *
-     * `Date.now()` alone was enough while the only way in was a click on the
-     * globe. It is not any more: a page is allowed to open two `target="_blank"`
-     * links from one gesture, and two tabs sharing an id would be two React
-     * children with the same key, one strip entry for both, and a ✕ that closes
-     * whichever the map happened to keep.
-     */
-    tabSeq.current += 1
-    const id = `browser:${Date.now()}:${tabSeq.current}`
-    setExtraTabs((prev) => [...prev, { id, kind: 'browser', label: 'New tab', closable: true, url }])
-    showTab(id)
-    /*
-     * Started while the window is split: the page belongs in the pane you are
-     * looking at, which is the same rule `newSessionIn` follows.
-     *
-     * This line was written once before and taken straight back out, because it
-     * did select the tab and it also destroyed the split — a pane holding an id
-     * that was not in the *session* list was a dead pane, and the prune
-     * collapsed the layout on the next render. It was pinned as "never call
-     * `setPanes` from here", which pinned the workaround.
-     *
-     * What made it safe is not this call site. It is that a pane holds a tab
-     * rather than a session and the prune is told about pages — see
-     * `layout/panes.ts` — so there is no longer anything special about a page
-     * for the layout to choke on. Without this, a page opened from the globe
-     * while split arrives on the bar unselected and stays behind the split,
-     * which is where the whole defect was first seen.
-     */
-    setPanes((current) => (isSplit(current) ? showInFocusedPane(current, id) : current))
-    // Kept on the bar, exactly as a new session is — *"if I open any new session
-    // and any new browser from the header, it should automatically open in the
-    // top bar"*. The globe at the end of the strip is one of this function's
-    // three callers; the sidebar's globe and the palette's New browser tab are
-    // the others, and all three open a window in the same sense, so all three
-    // keep it. See `keepInStrip`.
-    keepNewWindowInStrip(id)
-  }, [showTab, features])
+  const newBrowserTab = useCallback(
+    (target?: string) => {
+      /*
+       * Only a string is an address, and this is the boundary that says so.
+       *
+       * This function is handed to `onNewBrowserTab` in two components, and both
+       * put it straight on a button's `onClick` — so React calls it with a
+       * `MouseEvent`. TypeScript cannot see that: `(target?: string) => void` is
+       * assignable to `() => void`, because a handler that ignores its argument
+       * and one that reads it are the same type. Both call sites now pass
+       * `() => newBrowserTab()` and this line means the next one does not have to
+       * remember.
+       *
+       * It was not hypothetical for long. On 2026-08-17 the event travelled from
+       * here as `WorkspaceTab.url`, arrived in `BrowserWorkspace` as `initialUrl`,
+       * became a tab's `draft`, and threw `input.trim is not a function` out of
+       * `resolveOmnibox` during render — which the error boundary turned into
+       * "New tab stopped working" across every pane in the window.
+       */
+      const url = typeof target === 'string' ? target : ''
+      /*
+       * Asking for a browser tab you do not have installs the pane and opens one.
+       *
+       * The same bargain `setMode('split')` makes, and for the same reason: the
+       * globe beside New session is drawn as an offer in that state (see
+       * `useControlOffer`), so this is not a surprise — and a pane appearing under
+       * the pointer that asked for it is a better "where to find it" than any
+       * sentence about somewhere else.
+       */
+      if (!features.on('browser')) features.install('browser')
+      /*
+       * Unique even when two arrive in the same millisecond.
+       *
+       * `Date.now()` alone was enough while the only way in was a click on the
+       * globe. It is not any more: a page is allowed to open two `target="_blank"`
+       * links from one gesture, and two tabs sharing an id would be two React
+       * children with the same key, one strip entry for both, and a ✕ that closes
+       * whichever the map happened to keep.
+       */
+      tabSeq.current += 1
+      const id = `browser:${Date.now()}:${tabSeq.current}`
+      setExtraTabs((prev) => [...prev, { id, kind: 'browser', label: 'New tab', closable: true, url }])
+      showTab(id)
+      /*
+       * Started while the window is split: the page belongs in the pane you are
+       * looking at, which is the same rule `newSessionIn` follows.
+       *
+       * This line was written once before and taken straight back out, because it
+       * did select the tab and it also destroyed the split — a pane holding an id
+       * that was not in the *session* list was a dead pane, and the prune
+       * collapsed the layout on the next render. It was pinned as "never call
+       * `setPanes` from here", which pinned the workaround.
+       *
+       * What made it safe is not this call site. It is that a pane holds a tab
+       * rather than a session and the prune is told about pages — see
+       * `layout/panes.ts` — so there is no longer anything special about a page
+       * for the layout to choke on. Without this, a page opened from the globe
+       * while split arrives on the bar unselected and stays behind the split,
+       * which is where the whole defect was first seen.
+       */
+      setPanes((current) => (isSplit(current) ? showInFocusedPane(current, id) : current))
+      // Kept on the bar, exactly as a new session is — *"if I open any new session
+      // and any new browser from the header, it should automatically open in the
+      // top bar"*. The globe at the end of the strip is one of this function's
+      // three callers; the sidebar's globe and the palette's New browser tab are
+      // the others, and all three open a window in the same sense, so all three
+      // keep it. See `keepInStrip`.
+      keepNewWindowInStrip(id)
+      /*
+       * Handed back, so a caller that has to *say* which window it opened can.
+       *
+       * The shim holds an agent's `curl` open while this runs and then prints
+       * "Opened in B2"; the main process reserved that number before asking, and
+       * this id is what it attaches the number to. Without a return value the
+       * only way to connect the two would be to guess at the newest tab, which is
+       * wrong the moment a page opens two links from one gesture — the same race
+       * `tabSeq` above exists for.
+       */
+      return id
+    },
+    [showTab, features],
+  )
 
   const selectTab = useCallback(
     (id: string) => {
@@ -2010,14 +2313,62 @@ function Workspace() {
    * installing a pane in answer to a link would be the app arguing with them.
    * The link opening somewhere is the requirement; opening here is the default.
    */
+  /**
+   * Which browser windows belong to which session, pushed from the main
+   * process.
+   *
+   * Read-only, and there is deliberately no second copy: the relation is owned
+   * by `main/browser-binding.ts`, because the two things that read it — a shim's
+   * HTTP request from inside a session, and a hook response an agent's turn is
+   * blocked on — both arrive there and neither can wait for a renderer. What
+   * this does is take the pushed view into the store the chips and the pane bar
+   * read.
+   *
+   * Asked for once as well as subscribed to. A push reaches whoever is
+   * listening at the time it is sent, and a window that has just reloaded is
+   * not: without the first call this window would draw no chips at all until
+   * something else changed, which is the "built, and never wired to boot"
+   * failure this file keeps finding.
+   */
+  useEffect(() => {
+    void window.deck
+      .browserBindings?.()
+      .then(setBindings)
+      .catch(() => undefined)
+    return window.deck.onBrowserBindings?.(setBindings)
+  }, [])
+
   useEffect(
     () =>
-      window.deck.onOpenLinkTab((url) => {
+      window.deck.onOpenLinkTab((request) => {
+        const { url, requestId } = request
         if (!features.on('browser')) {
+          /*
+           * Somebody waiting for an answer is told, rather than having the link
+           * opened for them.
+           *
+           * The waiting caller is the shim, holding an agent's `curl` open, and
+           * it opens the URL itself the moment it hears `system`. Opening it
+           * here as well would put the same page on screen twice. Without a
+           * `requestId` nobody is waiting and this is the ordinary link that has
+           * always gone straight out.
+           */
+          if (requestId) {
+            window.deck.browserLinkOpened({
+              requestId,
+              refused: `${BRAND.name}'s browser is switched off in Features — opened in your default browser.`,
+            })
+            return
+          }
           openLinkExternally(url)
           return
         }
-        newBrowserTab(url)
+        const tabId = newBrowserTab(url)
+        // Answered in the same handler, synchronously, because the id exists by
+        // now and the caller is a process that is blocked. Every request that
+        // carries an id is answered on every path through here — an unanswered
+        // one is a session waiting out a two-second timeout for nothing.
+        if (requestId) window.deck.browserLinkOpened({ requestId, tabId })
       }),
     [features, newBrowserTab],
   )
@@ -2076,6 +2427,11 @@ function Workspace() {
         void window.deck.killSession(id)
         removeSession(id)
       } else {
+        // The main process holds the session ↔ browser relation, and it cannot
+        // see a tab leave a React array. Its number is *not* handed out again:
+        // closing B1 leaves B2 called B2, because an agent told to look at a
+        // renumbered window points confidently at the wrong page.
+        window.deck.browserWindowClosed?.(id)
         setExtraTabs((prev) => prev.filter((t) => t.id !== id))
       }
       // `nextActiveId` answers null when that was the last window, and null now
@@ -2182,6 +2538,17 @@ function Workspace() {
         current && current.machineId === machineId && current.sessionId === sessionId
           ? null
           : current,
+      )
+      /*
+       * And take its pane off the list that keeps one mounted.
+       *
+       * Without this the terminal would stay in the window — hidden, attached to
+       * a session that is ending — until the far machine's next push happened to
+       * drop it. Here rather than left to the pruning effect because this end
+       * already knows: it just asked for the session to end.
+       */
+      setMachineSessionPanes((open) =>
+        open.filter((pane) => pane.machineId !== machineId || pane.sessionId !== sessionId),
       )
     },
     [machines],
@@ -2314,13 +2681,21 @@ function Workspace() {
    * at once, and the pane below asks for the shell — which is also where a
    * refusal is said, in the terminal itself, where the person is already looking.
    *
-   * ## Why it does not go through the New session dialog
+   * ## The dialog reaches this too, since 2026-08-19
    *
-   * That dialog exists to ask three questions — which folder, which agent, which
-   * login — and this app can answer none of them about a stranger's server. It
-   * has no list of folders over there, no account there, and no way to know what
-   * is installed without asking the machine. A dialog with every field blank is a
-   * step, not a question.
+   * This note used to say the New session dialog was *not* a route to a server,
+   * and the argument was that the dialog asks three questions — which folder,
+   * which agent, which login — that this app could answer none of about a
+   * stranger's machine. Two of the three still stand and are now stated on
+   * screen: a server session is a login shell, so the Agent cards and the Login
+   * pop-up are absent there with a sentence saying they are programs on this
+   * Mac. The third was simply untrue, and Asad said so — *"it should give me a
+   * window to choose the path from server to start a session."* The folders are
+   * knowable; nothing had asked. `ServerFolderPicker` asks, over SFTP.
+   *
+   * So the dialog now routes here rather than growing a second way to mint a
+   * terminal on a server, which is what makes the server page's own button and
+   * the rail's New session the same act arrived at from two places.
    *
    * `keepNewWindowInStrip`, because this window *created* this one: *"if I open
    * any new session and any new browser from the header, it should automatically
@@ -2328,9 +2703,9 @@ function Workspace() {
    * machine, which was already running over there and is merely being looked at.
    */
   const openServerShell = useCallback(
-    (serverId: string, serverName: string) => {
+    (serverId: string, serverName: string, startIn: string | null = null) => {
       const key = newShellKey()
-      setServerSessions((current) => withServerSession(current, serverId, serverName, key))
+      setServerSessions((current) => withServerSession(current, serverId, serverName, key, startIn))
       const id = serverTabId(serverId, key)
       /*
        * The same three things selecting a remote session does, and for the same
@@ -2447,6 +2822,46 @@ function Workspace() {
    */
   const serverShellEnded = useCallback((tabId: string) => {
     setServerSessions((current) => serverSessionEnded(current, tabId))
+    // The id is dropped with the shell. Keeping it would leave the bar
+    // addressing a channel the main process has already closed, which reads back
+    // as a session that is "no longer running" — true, but arriving from a stale
+    // handle rather than from the row that is plainly gone.
+    setServerShellIds((current) => {
+      if (!(tabId in current)) return current
+      const next = { ...current }
+      delete next[tabId]
+      return next
+    })
+  }, [])
+
+  /**
+   * The far end's id for each open server shell, by tab id.
+   *
+   * ## Why the window has to hold this at all
+   *
+   * Because the bar over a server terminal now carries the same model, effort
+   * and fast-mode cluster every other session gets — *"I don't see it in server
+   * sessions and in the remote sessions both"* — and that cluster addresses a
+   * server shell by the id the main process holds its SSH channel under. That id
+   * is minted on the far side of `servers:shell:open`, which only `ServerTerminal`
+   * calls, so until it was reported upwards it lived and died inside that
+   * component's effect.
+   *
+   * It is deliberately *not* `ServerSession.shellKey`. The key is this window's
+   * handle, minted before anything is opened so a tab can exist while the shell
+   * is still being asked for; this is the handle the channel actually has. Two
+   * ids for one shell is not a design anybody would choose, but the alternative
+   * — waiting for the far end before drawing a tab — is a tab that appears a
+   * second after the click that made it.
+   *
+   * Absent while a shell is opening, which is the honest state: there is nothing
+   * to read a screen off yet, and the cluster simply has no session id until
+   * there is.
+   */
+  const [serverShellIds, setServerShellIds] = useState<Record<string, string>>({})
+
+  const serverShellOpened = useCallback((tabId: string, shellId: string) => {
+    setServerShellIds((current) => (current[tabId] === shellId ? current : { ...current, [tabId]: shellId }))
   }, [])
 
   /**
@@ -2488,7 +2903,9 @@ function Workspace() {
    * props, and the button is three components below it.
    */
   const machineSessionOpener = useMemo(
-    () => ({ open: (machineId: string) => openNewSessionDialog(null, machineId) }),
+    () => ({
+      open: (machineId: string) => openNewSessionDialog(null, machineId),
+    }),
     [openNewSessionDialog],
   )
 
@@ -2731,26 +3148,27 @@ function Workspace() {
   }, [copilotPending, copilotSessionId, selectTab])
 
   /**
-   * Which half of the copilot a first run opens on, seeded once.
+   * Which half of the copilot the window opens on, seeded once.
    *
-   * `defaultPane` says the terminal for a signed-out copilot, and it is not a
-   * preference: the login prints a URL and reads a code back, and a conversation
-   * pane can do neither. It goes into the same `sessionView` map every other
-   * session's mode lives in — so the window's own mode switch reads and writes
-   * it, and there is one answer to "how is this drawn" rather than two.
+   * `defaultPane` says the terminal, always — *"and always terminal should be
+   * the default view"* — and it says so without being told anything, which is
+   * why this effect no longer watches the copilot's stage. It used to: the
+   * seeded pane depended on whether the sign-in probe had come back yet, so the
+   * window opened on whichever half a race had settled on.
+   *
+   * It goes into the same `sessionView` map every other session's mode lives in
+   * — so the window's own mode switch reads and writes it, and there is one
+   * answer to "how is this drawn" rather than two.
    *
    * Seeded only where the map has no entry, so the moment somebody presses
-   * Terminal or Chat themselves that decision stands. A stage that changes
-   * afterwards — a login completing — must not move the pane under them.
+   * Terminal or Chat themselves that decision stands.
    */
   useEffect(() => {
     if (copilotSessionId === null) return
     setSessionView((views) =>
-      copilotSessionId in views
-        ? views
-        : { ...views, [copilotSessionId]: defaultPane(copilot.stage) },
+      copilotSessionId in views ? views : { ...views, [copilotSessionId]: defaultPane() },
     )
-  }, [copilotSessionId, copilot.stage])
+  }, [copilotSessionId])
 
   /** Source control hands a file here; the Files page is what can show it. */
   const showFile = useCallback(
@@ -2975,7 +3393,12 @@ function Workspace() {
       // because that accelerator is printed by an Electron menu in the main
       // process and a chord this window silently stopped answering to would be
       // worse than a duplicate row.
-      { id: 'session.new', title: 'New session…', group: 'Session', run: () => openNewSessionDialog() },
+      {
+        id: 'session.new',
+        title: 'New session…',
+        group: 'Session',
+        run: () => openNewSessionDialog(),
+      },
       /*
        * Continue-last-session, offered only to an agent that has one.
        *
@@ -2997,10 +3420,30 @@ function Workspace() {
       ...(canResumeDefault
         ? [{ id: 'session.resume', title: 'Continue last session', group: 'Session', run: () => newSession(undefined, true) }]
         : []),
-      { id: 'project.open', title: 'Open a project', group: 'Project', run: () => void openProject() },
-      { id: 'palette.quickOpen', title: 'Open a file…', group: 'Project', run: () => setPaletteMode('files') },
-      { id: 'view.browser', title: 'New browser tab', group: 'View', run: () => newBrowserTab() },
-      { id: 'pane.split', title: 'Split the window', group: 'View', run: () => splitPanes() },
+      {
+        id: 'project.open',
+        title: 'Open a project',
+        group: 'Project',
+        run: () => void openProject(),
+      },
+      {
+        id: 'palette.quickOpen',
+        title: 'Open a file…',
+        group: 'Project',
+        run: () => setPaletteMode('files'),
+      },
+      {
+        id: 'view.browser',
+        title: 'New browser tab',
+        group: 'View',
+        run: () => newBrowserTab(),
+      },
+      {
+        id: 'pane.split',
+        title: 'Split the window',
+        group: 'View',
+        run: () => splitPanes(),
+      },
       /*
        * Only while there is a split, because outside one it would be a row that
        * runs and does nothing — the exact shape the note beside ⌘D calls
@@ -3047,18 +3490,53 @@ function Workspace() {
       // the chrome of one. The id keeps its `view.` prefix because that is what
       // the feature registry and any menu item dispatch, and renaming it to
       // describe a change the user cannot see would drop it out of both.
-      { id: 'view.copilot', title: copilotSetup.name, group: 'View', run: () => openCopilot() },
-      { id: 'view.dashboard', title: 'Overview', group: 'View', run: () => showPanel('overview') },
-      { id: 'view.files', title: 'Files', group: 'View', run: () => showPanel('files') },
+      {
+        id: 'view.copilot',
+        title: copilotSetup.name,
+        group: 'View',
+        run: () => openCopilot(),
+      },
+      {
+        id: 'view.dashboard',
+        title: 'Overview',
+        group: 'View',
+        run: () => showPanel('overview'),
+      },
+      {
+        id: 'view.files',
+        title: 'Files',
+        group: 'View',
+        run: () => showPanel('files'),
+      },
       // `view.search` keeps its id, and therefore its ⌘⇧F chord, while what it
       // opens has moved. Searching past sessions is no longer a page — it is the
       // command palette's `?` sigil, beside `>` for commands. Renaming the id
       // would silently drop the chord out of `keymap.ts`, so the entry stays and
       // its `run` changes.
-      { id: 'view.search', title: 'Search past sessions', group: 'View', run: () => setPaletteMode('sessions') },
-      { id: 'view.artifacts', title: 'Artifacts', group: 'View', run: () => showPanel('artifacts') },
-      { id: 'view.git', title: 'Source control', group: 'View', run: () => showPanel('git') },
-      { id: 'view.github', title: 'GitHub', group: 'View', run: () => showPanel('github') },
+      {
+        id: 'view.search',
+        title: 'Search past sessions',
+        group: 'View',
+        run: () => setPaletteMode('sessions'),
+      },
+      {
+        id: 'view.artifacts',
+        title: 'Artifacts',
+        group: 'View',
+        run: () => showPanel('artifacts'),
+      },
+      {
+        id: 'view.git',
+        title: 'Source control',
+        group: 'View',
+        run: () => showPanel('git'),
+      },
+      {
+        id: 'view.github',
+        title: 'GitHub',
+        group: 'View',
+        run: () => showPanel('github'),
+      },
       // The id stays `view.alerts`, and what it opens has moved — the same
       // trade `view.search` above makes, for the same reason. The id is what
       // the feature registry gates on and what a chord would bind to; renaming
@@ -3066,16 +3544,66 @@ function Workspace() {
       // and out of whatever menu item lands on it, to describe a change the
       // user cannot see. What they can see is that the row no longer takes the
       // window away.
-      { id: 'view.alerts', title: 'Alerts', group: 'View', run: () => setAlertsOpen(true) },
-      { id: 'view.readiness', title: 'AI readiness', group: 'View', run: () => showPanel('readiness') },
-      { id: 'view.mcp', title: 'MCP servers', group: 'View', run: () => showPanel('mcp') },
-      { id: 'view.hooks', title: 'Hooks', group: 'View', run: () => showPanel('hooks') },
-      { id: 'view.sidebar', title: 'Show or hide the sidebar', group: 'View', run: () => sidebar.toggleCollapsed() },
-      { id: 'view.inspector', title: 'Session details', group: 'App', run: () => setInspectorOpen(true) },
-      { id: 'app.preferences', title: 'Settings', group: 'App', run: () => openSettings() },
-      { id: 'app.help', title: 'Help', group: 'App', run: () => setHelpOpen(true) },
-      { id: 'app.join', title: 'Join a remote session', group: 'App', run: () => setJoinOpen(true) },
-      { id: 'app.shortcuts', title: 'Keyboard shortcuts', group: 'App', run: () => setShortcutsOpen(true) },
+      {
+        id: 'view.alerts',
+        title: 'Alerts',
+        group: 'View',
+        run: () => setAlertsOpen(true),
+      },
+      {
+        id: 'view.readiness',
+        title: 'AI readiness',
+        group: 'View',
+        run: () => showPanel('readiness'),
+      },
+      {
+        id: 'view.mcp',
+        title: 'MCP servers',
+        group: 'View',
+        run: () => showPanel('mcp'),
+      },
+      {
+        id: 'view.hooks',
+        title: 'Hooks',
+        group: 'View',
+        run: () => showPanel('hooks'),
+      },
+      {
+        id: 'view.sidebar',
+        title: 'Show or hide the sidebar',
+        group: 'View',
+        run: () => sidebar.toggleCollapsed(),
+      },
+      {
+        id: 'view.inspector',
+        title: 'Session details',
+        group: 'App',
+        run: () => setInspectorOpen(true),
+      },
+      {
+        id: 'app.preferences',
+        title: 'Settings',
+        group: 'App',
+        run: () => openSettings(),
+      },
+      {
+        id: 'app.help',
+        title: 'Help',
+        group: 'App',
+        run: () => setHelpOpen(true),
+      },
+      {
+        id: 'app.join',
+        title: 'Join a remote session',
+        group: 'App',
+        run: () => setJoinOpen(true),
+      },
+      {
+        id: 'app.shortcuts',
+        title: 'Keyboard shortcuts',
+        group: 'App',
+        run: () => setShortcutsOpen(true),
+      },
     ]
     /*
      * Every uninstalled feature, offered by name.
@@ -3319,14 +3847,17 @@ function Workspace() {
    *
    * `mode` is its entry in the same `sessionView` map every other session's mode
    * lives in, written by the same segmented control in the same bar — the whole
-   * of what "a window like the others" means here. It falls to the conversation
-   * before the session exists, where there is nothing to draw either pane of
-   * yet; `defaultPane` seeds the real answer the moment there is a session, and
-   * on a first run that answer is the terminal, because a login prints a URL and
-   * reads a code back and a chat pane can do neither.
+   * of what "a window like the others" means here.
+   *
+   * The fallback is the **terminal**, in both branches, and it used to be the
+   * conversation in both. That was visible: press the pinned row and the window
+   * opened on an empty chat pane, then swapped to a terminal a second later when
+   * `defaultPane` seeded the map. Two panes for one press. `defaultPane` is the
+   * one rule now — always the terminal — and this agrees with it before there is
+   * a session to seed for, so nothing on screen moves when the seeding lands.
    */
   const copilotMode: SessionViewMode =
-    copilotSessionId === null ? 'chat' : sessionView[copilotSessionId] ?? 'chat'
+    copilotSessionId === null ? 'terminal' : sessionView[copilotSessionId] ?? 'terminal'
   const copilotWindow = (visible: boolean) => (
     <CopilotView
       copilot={copilot}
@@ -3363,41 +3894,25 @@ function Workspace() {
      */
     if (openServerSession !== null) return null
     /*
-     * A session on another machine, filling the pane exactly as a local one
-     * does.
+     * A session on another machine is on screen, and this function draws
+     * nothing — for the reason the branch above draws nothing for a server.
      *
-     * First, above the panel branch, and that ordering is the feature. His
-     * complaint about remote was that it lived on a page of its own with its own
-     * vocabulary — *"the Remote page is for connecting only, not controlling"* —
-     * and the fix is that opening one from the rail puts it where every other
+     * Its pane used to be *returned from here*, and that placement is half of
+     * what he filmed: `mainView` draws one thing, so a trip to Files or Settings
+     * unmounted the terminal, detached from the far machine, and made coming
+     * back a fresh attach and a fresh replay. *"If I go to other page and come
+     * back, it will start from beginning again."* The panes are mounted beside
+     * this one now and hidden — see `machineSessionPanes` and the block at the
+     * bottom of this component.
+     *
+     * Still decided above the panel branch, because that ordering is the
+     * feature: his complaint about remote was that it lived on a page of its own
+     * with its own vocabulary — *"the Remote page is for connecting only, not
+     * controlling"* — and opening one from the rail puts it where every other
      * session goes, in the same frame, in the same terminal, with the same
-     * theme. `RemoteTerminal` already shares `terminalTheme()` with the local
-     * one for precisely this reason.
-     *
-     * Keyed on both handles so switching between two remote sessions builds a
-     * new terminal rather than writing the next one's bytes into the last one's
-     * scrollback — the same rule the settings pane's copy follows.
+     * theme.
      */
-    if (openMachineSession && machines.bridge) {
-      return (
-        /*
-         * Wrapped, because `.panes` is `flex: 1; position: relative` and not a
-         * flex container — so `.machines-terminal`'s own `flex: 1` does nothing
-         * here and the terminal took its natural height, leaving a band of empty
-         * chrome under it. The settings pane it was written for *is* a flex
-         * column, which is why it has never needed this. Caught by looking:
-         * nothing about either stylesheet says which of the two a pane is.
-         */
-        <div className="remote-pane">
-          <MachineSessionPane
-            key={`${openMachineSession.machineId}\u0000${openMachineSession.sessionId}`}
-            machineId={openMachineSession.machineId}
-            sessionId={openMachineSession.sessionId}
-            bridge={machines.bridge}
-          />
-        </div>
-      )
-    }
+    if (openMachineSession !== null && machines.bridge !== null) return null
     if (showingPanel && panel) {
       return (
         <PanelView
@@ -3700,9 +4215,20 @@ function Workspace() {
                       // Where a *link* asked this page to open, when one did.
                       // Empty for the globe, which goes to the start page.
                       initialUrl={pageTab.url}
+                      // Which window this *is*, for the session ↔ browser
+                      // binding. Passed at BOTH mount sites, and that is the
+                      // point: this one keys the mount `${paneId}:${pageTab.id}`
+                      // and the flat one keys it `tab.id`, so the same page
+                      // remounts when the window is split or unsplit. A binding
+                      // that lived in this component's state would be silently
+                      // reset by that remount; the shell tab id is the same
+                      // string either side of it.
+                      tabId={pageTab.id}
                       onStartUrl={(url) => {
                         applySettings({ ...settings, 'browser.startUrl': url })
-                        void window.deck.setSettings({ 'browser.startUrl': url })
+                        void window.deck.setSettings({
+                          'browser.startUrl': url,
+                        })
                       }}
                       onTitle={(title) => renameBrowserTab(pageTab.id, title)}
                       onSendToAgent={(context) => {
@@ -3729,7 +4255,10 @@ function Workspace() {
                       // empty pane below this branch already went through the
                       // dialog, so this pane and that one were asking different
                       // questions for the same press.
-                      action={{ label: 'New session', onClick: () => openNewSessionDialog() }}
+                      action={{
+                        label: 'New session',
+                        onClick: () => openNewSessionDialog(),
+                      }}
                     >
                       Pick a session in the sidebar and it opens here.
                     </PageEmpty>
@@ -3764,7 +4293,10 @@ function Workspace() {
       return (
         <PageEmpty
           title="Nothing in this pane yet"
-          action={{ label: 'New session', onClick: () => openNewSessionDialog() }}
+          action={{
+            label: 'New session',
+            onClick: () => openNewSessionDialog(),
+          }}
         >
           Pick a session in the sidebar and it opens here.
         </PageEmpty>
@@ -3793,6 +4325,8 @@ function Workspace() {
               // Where a *link* asked this page to open, when one did. Empty for
               // the globe, which goes to the start page.
               initialUrl={tab.url}
+              // The other mount site. See the note beside the split one.
+              tabId={tab.id}
               onStartUrl={(url) => {
                 applySettings({ ...settings, 'browser.startUrl': url })
                 void window.deck.setSettings({ 'browser.startUrl': url })
@@ -3825,7 +4359,10 @@ function Workspace() {
                   // pane reads the folder's newest transcript, which is any
                   // `claude` running here — including ones this app did not
                   // start.
-                  session={{ startedAt: session.createdAt, resumed: session.resumed }}
+                  session={{
+                    startedAt: session.createdAt,
+                    resumed: session.resumed,
+                  }}
                   // Without this the controls row and the usage strip both
                   // render in their "no session focused" state: model, effort
                   // and permission mode are read off this session's screen.
@@ -4008,18 +4545,37 @@ function Workspace() {
     ? {
         // Its own title, and the machine underneath — the one fact that makes
         // this window different from the identical-looking local one above it.
-        // The folder is the far machine's, so it is *not* passed as `folder`:
-        // `FolderChip` opens a path on this computer, and a chip that opened
-        // nothing would be the dead control this whole pass is removing.
+        //
+        // The folder *is* passed now, and the paragraph that used to be here
+        // saying it must not be was arguing from a file that has since changed
+        // underneath it. It read: "`FolderChip` opens a path on this computer,
+        // and a chip that opened nothing would be the dead control this whole
+        // pass is removing." That was true of the dropdown; the dropdown went on
+        // 2026-08-16 and what is exported now is `FolderTitle`, a mono `<span>`
+        // with a tooltip that opens nothing at all. So there is no dead control
+        // to avoid, and withholding it was costing a real thing: the far
+        // machine's path was being smeared into this subtitle in proportional
+        // text while every local session got it on the chip. Same fact, same
+        // chip, same place — which is the whole of what was being asked for.
+        //
+        // The machine's name stays in the subtitle slot, because `meta` replaces
+        // the subtitle rather than joining it and losing which computer this is
+        // running on would be a far worse trade than the one just made.
         title: openRemoteSession?.title ?? 'Session',
-        subtitle: openMachine
-          ? `${openRemoteSession?.cwd ?? ''} on ${openMachine.machine.name}`.trim()
-          : null,
-        folder: null,
+        subtitle: openMachine ? `on ${openMachine.machine.name}` : null,
+        folder: openRemoteSession?.cwd ?? null,
+        // No login, and this one really is absent. Which account an agent was
+        // spawned under is not a fact any frame on the wire carries, and the
+        // chip is a menu whose every row acts on a local session. See the note
+        // that stands in the control cluster's place on the bar.
         account: null,
       }
     : showingPanel && panel
-    ? { title: panelSpec(panel).label, subtitle: panelSpec(panel).blurb, folder: null, account: null }
+    ? // No subtitle. Each view used to print a sentence here — "Browse the
+      // project and read any file in it." under a page called Files — and the
+      // whole set is deleted rather than reworded; `shell/panels.ts` carries
+      // the argument and no longer has a field to hold one.
+      { title: panelSpec(panel).label, subtitle: null, folder: null, account: null }
     : headingTab
       ? {
           title: labelOf(headingTab),
@@ -4032,32 +4588,42 @@ function Workspace() {
           account: headingTab.kind === 'session' ? headingTab.account ?? null : null,
         }
       : copilotPending
-        // The copilot, starting, with no tab yet. It is named because there is
-        // something true to name — the window below is its own starting state —
-        // and because a bar reading "Terminal Deck" over it would say the app
-        // had nothing open while a CLI was being spawned three lines down.
-        ? { title: copilotSetup.name, subtitle: null, folder: null, account: null }
-        : splitting || tabs.length > 0
-        // Two states with one right answer, which is to say nothing.
-        //
-        // A split whose host pane has not been filled: printing the app's own
-        // name over an empty pane would read as "nothing is open" while two
-        // sessions run beside it, and falling back to the *guest's* name is the
-        // claim this bar must never make. The pane's body already says what it
-        // is; the bar keeps the mode switch, which is the only way back out.
-        //
-        // And, since 2026-08-17, a window whose last tab has been taken off the
-        // bar. Every session is still running and still in the rail, so the app's
-        // name would be as wrong here as it is over an empty pane — and naming
-        // whichever session happens to be first is precisely the fallback that
-        // made the ✕ on the last tab look broken.
-        ? { title: null, subtitle: null, folder: null, account: null }
-        // No subtitle. "Nothing open yet." is the sidebar's line, and it is there to
-        // explain why the list beneath it is empty — a job this heading does not
-        // share. Saying it here too put the same sentence on screen twice, a few
-        // centimetres apart, while the page in the middle was already explaining
-        // the same emptiness with a button. The title alone is enough.
-        : { title: BRAND.name, subtitle: null, folder: null, account: null }
+            ? // The copilot, starting, with no tab yet. It is named because there is
+              // something true to name — the window below is its own starting state —
+              // and because a bar reading "Terminal Deck" over it would say the app
+              // had nothing open while a CLI was being spawned three lines down.
+              {
+                title: copilotSetup.name,
+                subtitle: null,
+                folder: null,
+                account: null,
+              }
+            : splitting || tabs.length > 0
+              ? // Two states with one right answer, which is to say nothing.
+                //
+                // A split whose host pane has not been filled: printing the app's own
+                // name over an empty pane would read as "nothing is open" while two
+                // sessions run beside it, and falling back to the *guest's* name is the
+                // claim this bar must never make. The pane's body already says what it
+                // is; the bar keeps the mode switch, which is the only way back out.
+                //
+                // And, since 2026-08-17, a window whose last tab has been taken off the
+                // bar. Every session is still running and still in the rail, so the app's
+                // name would be as wrong here as it is over an empty pane — and naming
+                // whichever session happens to be first is precisely the fallback that
+                // made the ✕ on the last tab look broken.
+                { title: null, subtitle: null, folder: null, account: null }
+              : // No subtitle. "Nothing open yet." is the sidebar's line, and it is there to
+                // explain why the list beneath it is empty — a job this heading does not
+                // share. Saying it here too put the same sentence on screen twice, a few
+                // centimetres apart, while the page in the middle was already explaining
+                // the same emptiness with a button. The title alone is enough.
+                {
+                  title: BRAND.name,
+                  subtitle: null,
+                  folder: null,
+                  account: null,
+                }
 
   /**
    * The folder the heading's two chips act on.
@@ -4068,6 +4634,169 @@ function Workspace() {
    */
   const headingFolder = heading.folder
 
+  /** The row behind the open server terminal, for the facts the tab does not carry. */
+  const openServerRow = openServerSession
+    ? (serverSessions.find((entry) => entry.tabId === openServerSession) ?? null)
+    : null
+
+  /**
+   * The session the window's control cluster acts on, and which computer it is on.
+   *
+   * ## What this replaces, and why it is one object rather than three mounts
+   *
+   * The bar used to draw the control cluster only when
+   * `openMachineSession === null && openServerSession === null`, with a
+   * paragraph explaining that the model, the effort and fast mode are read off a
+   * *local* pty by *local* session id and that no frame on the wire carried any
+   * of them. Both halves of that were true and neither is any more:
+   * `CAPABILITY.controls` carries the question to a paired machine, and
+   * `servers:controls:*` drives the same two functions against the SSH channel a
+   * server terminal already is. Asad asked for this three times, most recently:
+   *
+   *   > *"I still don't see all of these things inside like this header with
+   *   > model, high effort and all of these things — I don't see it in server
+   *   > sessions and in the remote sessions both."*
+   *
+   * One object feeding one mount, rather than three mounts with three gates,
+   * because *"the same identical options"* is a claim about sameness — three
+   * call sites are three things to keep in step, and the first one to drift
+   * would be the remote one nobody looks at.
+   *
+   * ## What each branch carries, and the two deliberate absences
+   *
+   * `cwd` is null for both remote branches. It is only ever used for two things
+   * — the transcript the model is read from, and the folder the connectors are
+   * resolved in — and both of those are files on **this** computer. A paired
+   * machine reads its own; a server has none here. Passing a far path would have
+   * resolved this machine's project connectors under somebody else's session on
+   * any machine where the two happen to share a checkout path.
+   *
+   * `provider` is undefined for a server terminal, and that is the honest value
+   * rather than a gap: this app did not launch whatever is in that shell, so
+   * `refuseByProvider` is handed the absence it is built around and consults the
+   * screen instead. A plain `sh` is refused with a sentence; a `claude` somebody
+   * started in there is driven exactly as a local one is.
+   */
+  const barControls: {
+    sessionId: string
+    cwd: string | null
+    provider: ProviderId | undefined
+    exited: boolean
+    target: ControlsTarget | undefined
+  } | null =
+    swarm || showingPanel
+      ? null
+      : openServerRow
+        ? /*
+           * Only once the far end has handed back its id for the shell.
+           *
+           * The tab exists from the moment of the click and the shell is opened
+           * asynchronously, so for a beat there is a terminal on screen with
+           * nothing behind it to read. Drawing the cluster then would be four
+           * chips saying "Unknown" about a session that has not started, which
+           * is a worse answer than the bar being briefly plain. See
+           * `serverShellIds`.
+           */
+          serverShellIds[openServerRow.tabId] === undefined
+          ? null
+          : {
+              sessionId: serverShellIds[openServerRow.tabId],
+              cwd: null,
+              provider: undefined,
+              // The one fact this window genuinely observes about a server
+              // shell: `servers:shell:closed` fired. There is no exit code on
+              // that channel and none is invented here.
+              exited: openServerRow.status === 'exited',
+              target: { kind: 'server' },
+            }
+        : openMachineSession
+          ? /*
+             * Only while that machine is still listing the session.
+             *
+             * `openRemoteSession` is read out of the link's own roster, so it
+             * goes when the link drops — and falling through to `headingSession`
+             * there would put a *local* session's model chip on the bar above a
+             * remote pane, which is the worst outcome available: a control that
+             * looks right and acts on the wrong computer.
+             */
+            !openRemoteSession
+            ? null
+            : {
+                sessionId: openRemoteSession.id,
+                cwd: null,
+                // The far machine's own record of what it launched, narrowed
+                // because it arrives as a free-form string off a network. Anything
+                // this build does not recognise becomes `undefined`, which means
+                // "ask the screen" — the same answer a shell with an agent typed
+                // into it produces, and the safe one.
+                provider: isProviderId(openRemoteSession.provider) ? openRemoteSession.provider : undefined,
+                exited: openRemoteSession.exitCode !== null,
+                target: {
+                  kind: 'machine',
+                  machineId: openMachineSession.machineId,
+                },
+              }
+          : headingSession
+            ? {
+                sessionId: headingSession.id,
+                cwd: headingSession.projectPath ?? null,
+                provider: headingSession.provider,
+                /* The same fact the account chip beside it already gets through
+                   `chromeSession`, and for the same reason: presence is settled
+                   off the record first and off the screen only for a session
+                   that is still alive. See the note on the `exited` prop. */
+                exited: headingSession.exitCode !== null,
+                target: undefined,
+              }
+            : null
+
+  /**
+   * Which segments of the mode switch cannot act on what is on screen, and why.
+   *
+   * ## Why the switch is drawn at all now
+   *
+   * It used to vanish over a session on a paired machine or a terminal on a
+   * server, and vanishing was wrong for the segment that works: **Terminal is
+   * exactly what both of those are already showing**. Withdrawing the whole
+   * control because two of its three answers are unreachable left an empty
+   * stretch of toolbar, and an empty stretch of toolbar cannot tell "not built"
+   * from "not possible" — which is the complaint that produced this pass.
+   *
+   * ## Why the other two genuinely cannot, checked rather than assumed
+   *
+   * **Chat** renders a conversation out of the agent's own transcript file,
+   * parsed by `chat-transcript.ts` from a path under this machine's Claude
+   * config directory. That file is on the far machine's disk for a paired
+   * session and on the server's for an SSH one, and nothing on either wire
+   * carries it — the only parsed conversation that travels is the copilot's own
+   * `copilot.chat`, which is a different feature about a different session.
+   *
+   * **Split** arranges *this window's* panes, and `panes` are filled from the
+   * local session list. A remote session is drawn by `mainView` as one whole
+   * window and a server terminal is mounted outside the pane tree entirely — see
+   * the note beside `ServerSessionPane` — so there is nothing for a second pane
+   * to hold.
+   *
+   * Neither sentence is an apology and neither is permanent. They say what would
+   * have to travel, which is the honest description of a gap.
+   */
+  const modesBlocked: Partial<Record<WorkspaceMode, string>> | undefined =
+    openMachineSession !== null
+      ? {
+          chat: `Chat reads the agent's own transcript file, which is on ${
+            openMachine ? openMachine.machine.name : 'that machine'
+          }'s disk. Nothing on the link between these two machines carries it.`,
+          split:
+            'Split arranges this window’s own panes, and a session running on another machine is drawn as a window rather than as a pane.',
+        }
+      : openServerSession !== null
+        ? {
+            chat: 'Chat reads the agent’s own transcript file, which is on that server’s disk. This app opens a terminal there, not a filesystem it reads conversations out of.',
+            split:
+              'Split arranges this window’s own panes, and a terminal on a server is mounted beside them so its scrollback survives being switched away from.',
+          }
+        : undefined
+
   /**
    * What the mode switch is showing, and what it will not offer.
    *
@@ -4075,12 +4804,16 @@ function Workspace() {
    * and `sessionView` already knows how the focused session is drawn, so a
    * third piece of state saying the same thing could only ever be the one that
    * is wrong.
+   *
+   * Both halves are handed over, because `mode` collapses to `split` the moment
+   * there are panes and the switch still has to name the view underneath — it
+   * labels its toggle with it, and it hands it back when the split is closed so
+   * that splitting while reading a chat does not quietly turn the session into a
+   * terminal. `sessionMode` is the same expression `mode` falls through to, not
+   * a second reading of anything.
    */
-  const mode: WorkspaceMode = splitting
-    ? 'split'
-    : focusedId
-      ? sessionView[focusedId] ?? 'terminal'
-      : 'terminal'
+  const sessionMode: SessionViewMode = focusedId ? sessionView[focusedId] ?? 'terminal' : 'terminal'
+  const mode: WorkspaceMode = splitting ? 'split' : sessionMode
 
   /**
    * Whether there is a tab strip, and therefore which bar is the window's top
@@ -4410,12 +5143,14 @@ function Workspace() {
           tab in the strip at all. `shownTabs` closes the other half of that by
           always drawing the active tab, promoted or not.
 
-          There is no `onClose` on this bar any more, and its absence is the
-          behaviour change of 2026-08-17. The ✕ on a tab takes the tab off the
-          strip and stops: *"it should not delete the session… side panel will
-          have everything inside, and above we just set a view which one we want
-          to see."* The only ✕ that ends a session is the rail's, which still
-          goes through `closeTab` and its confirmation.
+          Both kinds of tab carry a ✕ and the two do opposite things, which is
+          the shape of 2026-08-20: *"for the windows it will completely close,
+          and for the sessions it will just close from the top bar, but it will
+          still stay in the side panel."* So the strip is handed two different
+          handlers — `showInstead` for the session ✕, which only moves what is on
+          screen, and `closeTab` for the browser one, which really ends the
+          window. Nothing here can end a session; that stays the rail's ⋯ →
+          Delete, with its confirmation.
         */}
         {hasStrip && (
           <WorkspaceTabStrip
@@ -4438,20 +5173,31 @@ function Workspace() {
                the opposite direction. */
             covered={showingPanel}
             onSelect={selectTab}
-            onShowInstead={showInstead}
-            /* The ✕ on a *remote* pill, and the one control in this bar that
-               ends something.
+            /* The ✕ on a session tab. It takes the tab off the bar and ends
+               nothing, so the only thing this window has to do about it is stop
+               showing a tab that is no longer up there — which is all
+               `showInstead` does. Not `selectTab`: that is a navigation and
+               would pull a covering view (Files, Overview) off the window, so
+               tidying a tab while reading Files would throw you out of Files.
 
-               A local pill's ✕ takes the tab off the bar and leaves the session
-               running in the rail — *"it should not delete the session"* — and
-               that reading is only available because the rail still has the row.
-               For a remote session the strip and the rail both list it and
-               neither owns it, and he asked for the ✕ to mean what Close on the
-               machine's heading means: end the session over there, keep the
-               machine. `closeTab` routes it, so it gets the same confirmation
-               every other close in this window gets. */
-            onEndRemote={closeTab}
-            /* The two icons after the last tab. The terminal opens the dialog,
+               A remote session's ✕ comes through here too, and must: the tab is
+               taken off the bar and the session keeps running on its machine.
+               The handler that once let a pill up here end one on its machine is
+               deleted, not rewired — `WorkspaceTabStrip.tsx` names it, and two
+               tests assert that no prop by that name is passed from this tag. */
+            onShowInstead={showInstead}
+            /* The ✕ on a browser tab, which is the other thing entirely.
+
+               It closes the window. Not "takes it off the strip", because as of
+               2026-08-20 the rail lists sessions only — *"Browser windows will
+               not be on the side bar at all"* — so a page taken off the strip
+               would be open, bound to a session, and drawn nowhere. `closeTab`
+               routes it down the same path ⌘W takes, which tells the main
+               process the window is gone; a page is never asked about, because
+               there is no work in one to lose. */
+            onCloseWindow={closeTab}
+            /* The two icons pinned in the bar's trailing corner. The terminal
+               opens the dialog,
                not a session — the same single route the rail's button takes —
                and the globe opens a page on the start page. */
             onNewSession={() => openNewSessionDialog()}
@@ -4476,10 +5222,38 @@ function Workspace() {
                host session's, in the same place, so double-click and F2 rename
                it in the same place. A guest's name is renamed in the guest's
                own bar, which carries the same control. */
-            sessionId={
-              !showingPanel && headingTab?.kind === 'session' ? headingTab.id : null
-            }
-            /* The host pane's focus, said in the host pane's chrome — which is
+                /*
+                 * And only while that heading is one of *this* window's sessions.
+                 *
+                 * `headingTab` is `activeTab`, which is a local tab — but the title
+                 * above it is `heading.title`, which a session on another machine or
+                 * on a server overrides. So with a remote session on screen this bar
+                 * was drawing the remote name and handing the rename the id of a
+                 * local session sitting behind it: double-click, type, and you had
+                 * silently renamed a session you were not looking at, while the
+                 * heading carried on showing the remote name because it never came
+                 * from the tab in the first place. A control acting on something
+                 * other than the thing it is drawn over.
+                 *
+                 * Null is the honest answer rather than a stopgap: `SessionTitle`
+                 * draws its plain heading for it, and there is nothing to route a
+                 * rename to — no frame on the wire renames a session on another
+                 * machine, and a shell on a server has no session record to rename.
+                 *
+                 * Written without any angle bracket in it on purpose. `wiring.test.ts`
+                 * reads this opening tag by scanning for the first unbraced `(gt)`,
+                 * so a tag name quoted in a comment between props truncates the tag
+                 * and the seam check silently stops seeing every prop after it.
+                 */
+                sessionId={
+                  !showingPanel &&
+                  openMachineSession === null &&
+                  openServerSession === null &&
+                  headingTab?.kind === 'session'
+                    ? headingTab.id
+                    : null
+                }
+                /* The host pane's focus, said in the host pane's chrome — which is
                up here. Without it the pane drawn flush with the window has no
                focus mark at all, because it deliberately has no border to ring. */
             headingFocused={headingFocused}
@@ -4491,73 +5265,116 @@ function Workspace() {
                    only ever have offered to start a different session, and he
                    asked for the word instead. The account beside it keeps its
                    menu, because picking a login *is* a real decision about the
-                   session you are about to start. */
-                <div className="toolbar-chips">
-                  <FolderTitle path={headingFolder} />
-                  <span className="toolbar-chip-sep" aria-hidden="true" />
-                  <AccountChip
-                    current={heading.account}
-                    projectPath={headingFolder}
-                    /*
-                     * The agent a session started from this chip would run — the
-                     * same setting `newSessionIn` sends, read the same way, so the
-                     * menu cannot promise an account that the spawn then drops.
-                     * Undefined when the stored value is not a provider id, which
-                     * is the honest answer to "which agent" and leaves the menu
-                     * saying nothing rather than explaining a reason it has not
-                     * established. Spelled as a plain prop rather than a
-                     * conditional spread so `wiring.test.ts` can see it: a spread
-                     * is invisible to that guard, and this is exactly the seam it
-                     * was written to watch.
-                     */
-                    provider={isProviderId(defaultProvider) ? defaultProvider : undefined}
-                    /* The account *and* the agent it is a login of. The menu
-                       lists accounts of every agent now, so picking a Codex one
-                       and starting the default agent would hand a Codex config
-                       directory to Claude — which `resolveProfileId` declines,
-                       leaving the click with nothing to show for itself. */
-                    onPick={(accountId, runAs) =>
-                      newSession(headingFolder, false, accountId, runAs)
-                    }
-                    /*
-                     * The session this chip is over, and what a row does to it.
-                     *
-                     * Both, or neither: `session` is how the chip knows there is
-                     * an agent running to switch, and `onSwitchAccount` is how it
-                     * knows this caller can actually perform one. With only the
-                     * first it would draw a switch-shaped menu whose rows opened
-                     * a second session, which is the reported bug wearing the fix
-                     * as a costume.
-                     *
-                     * Spelled as plain props rather than a conditional spread so
-                     * `wiring.test.ts` can see them — a spread is invisible to
-                     * that guard, and this is exactly the seam it watches.
-                     */
-                    session={chromeSession(
-                      !showingPanel && headingTab?.kind === 'session' ? headingTab.id : null,
-                      sessions,
-                    )}
-                    onSwitchAccount={(sessionId, accountId) =>
-                      switcher.ask({ sessionId, profileId: accountId })
-                    }
-                    onManage={() => openSettings('profiles')}
-                  />
-                </div>
-              ) : null
-            }
-            /*
-             * The *pinned* state, not the visible one.
-             *
-             * A peeked rail floats over the bar rather than taking room from
-             * it, so the traffic lights are still sitting on the chrome and it
-             * still needs their 82px of clearance. Passing `!revealed` here made
-             * that padding come and go with the peek, which slid the window's
-             * title 66px sideways every time a pointer brushed the left edge.
-             * The reveal button goes with it and is simply covered by the rail
-             * while it is out — the same control, in the same place, either way.
-             */
-            sidebarHidden={sidebar.collapsed}
-            /* With a strip above, none of that is this bar's job any more: the
+                   session you are about to start.
+
+                   The folder half is now the same for a session on one of his
+                   other machines: same chip, same mono, same place. Only the
+                   thing beside it changes, and the note below says why. */
+                    <div className="toolbar-chips">
+                      <FolderTitle path={headingFolder} />
+                      {/*
+                    And beside it, the second fact — which is a different fact
+                    for a session running somewhere else.
+
+                    `meta` *replaces* the subtitle rather than joining it, so
+                    giving a remote session the folder chip would have taken the
+                    machine's name off the bar altogether, and which computer a
+                    session is running on is the one thing that must never stop
+                    being visible. It moves here instead, in the slot the account
+                    holds for a local session, and it is `heading.subtitle`
+                    itself rather than a second composition of the same words so
+                    the two cannot drift.
+
+                    The account chip is not drawn over a remote session and that
+                    is not a layout decision. Every row of its menu acts on a
+                    session this app spawned — start one here, switch this one's
+                    login — and which account an agent on another machine was
+                    spawned under is not a fact any frame on the wire carries. It
+                    would be a menu of choices that reach the wrong computer. The
+                    sentence saying so is on the bar's other half; see
+                    `RemoteControlsNote`.
+                  */}
+                      {openMachineSession !== null ? (
+                        heading.subtitle !== null ? (
+                          <>
+                            <span className="toolbar-chip-sep" aria-hidden="true" />
+                            <span className="toolbar-subtitle">{heading.subtitle}</span>
+                          </>
+                        ) : null
+                      ) : (
+                        <>
+                          <span className="toolbar-chip-sep" aria-hidden="true" />
+                          <AccountChip
+                            current={heading.account}
+                            /* The account this session is waiting to become, when
+                               one is armed. Named on the chip because arming a
+                               deferred switch otherwise has no visible effect at
+                               all until the next message, which reads as a button
+                               that did nothing. */
+                            pendingAccount={
+                              focusedSession ? (armedSwitches[focusedSession.id] ?? null) : null
+                            }
+                            projectPath={headingFolder}
+                            /*
+                             * The agent a session started from this chip would run — the
+                             * same setting `newSessionIn` sends, read the same way, so the
+                             * menu cannot promise an account that the spawn then drops.
+                             * Undefined when the stored value is not a provider id, which
+                             * is the honest answer to "which agent" and leaves the menu
+                             * saying nothing rather than explaining a reason it has not
+                             * established. Spelled as a plain prop rather than a
+                             * conditional spread so `wiring.test.ts` can see it: a spread
+                             * is invisible to that guard, and this is exactly the seam it
+                             * was written to watch.
+                             */
+                            provider={isProviderId(defaultProvider) ? defaultProvider : undefined}
+                            /* The account *and* the agent it is a login of. The menu
+                           lists accounts of every agent now, so picking a Codex one
+                           and starting the default agent would hand a Codex config
+                           directory to Claude — which `resolveProfileId` declines,
+                           leaving the click with nothing to show for itself. */
+                            onPick={(accountId, runAs) => newSession(headingFolder, false, accountId, runAs)}
+                            /*
+                             * The session this chip is over, and what a row does to it.
+                             *
+                             * Both, or neither: `session` is how the chip knows there is
+                             * an agent running to switch, and `onSwitchAccount` is how it
+                             * knows this caller can actually perform one. With only the
+                             * first it would draw a switch-shaped menu whose rows opened
+                             * a second session, which is the reported bug wearing the fix
+                             * as a costume.
+                             *
+                             * Spelled as plain props rather than a conditional spread so
+                             * `wiring.test.ts` can see them — a spread is invisible to
+                             * that guard, and this is exactly the seam it watches.
+                             */
+                            session={chromeSession(
+                              !showingPanel && headingTab?.kind === 'session' ? headingTab.id : null,
+                              sessions,
+                            )}
+                            onSwitchAccount={(sessionId, accountId) =>
+                              switcher.ask({ sessionId, profileId: accountId })
+                            }
+                            onManage={() => openSettings('profiles')}
+                          />
+                        </>
+                      )}
+                    </div>
+                  ) : null
+                }
+                /*
+                 * The *pinned* state, not the visible one.
+                 *
+                 * A peeked rail floats over the bar rather than taking room from
+                 * it, so the traffic lights are still sitting on the chrome and it
+                 * still needs their 82px of clearance. Passing `!revealed` here made
+                 * that padding come and go with the peek, which slid the window's
+                 * title 66px sideways every time a pointer brushed the left edge.
+                 * The reveal button goes with it and is simply covered by the rail
+                 * while it is out — the same control, in the same place, either way.
+                 */
+                sidebarHidden={sidebar.collapsed}
+                /* With a strip above, none of that is this bar's job any more: the
                lights are up there and so is the one reveal button. */
             underStrip={hasStrip}
             // Which page is under the bar, so the heading can line up with
@@ -4593,92 +5410,136 @@ function Workspace() {
               terminal is drawn at once and there is no single session for a
               model to be the model of.
             */}
-            {/*
-              Absent while a remote session is on screen, and the reason is the
-              same one that hides the account picker in the New Session dialog:
-              the model, the effort and the connectors are read off *this*
-              machine's session — `SessionControls` drives `agent-controls.ts`
-              against a local pty — and there is no frame on the wire that
-              carries any of them. A model chip over somebody else's session
-              would be naming a setting it cannot see and cannot change.
-            */}
-            {/*
-              And absent over a terminal on a server, for a reason that is
-              mechanical rather than a matter of taste — which matters, because
-              the tempting shortcut is to say *servers do not have agents* and
-              that is an assumption about somebody else's machine, which is the
-              one thing this whole area is arranged against.
+                {/*
+              And over a session on one of his own machines, or a terminal on a
+              server, it is **the same mount** — which is the whole of the change.
 
-              The real reason is that every control in this cluster is a
-              conversation with a **local pty, by session id**. `useSessionControls`
-              reads `agent:controls:read` and writes `agent:controls:set`, both
-              keyed on a session this app spawned; `agent-controls.ts` performs a
-              change by typing `/model` into that pty and waiting for the screen
-              to echo it back. A shell on a server has no such id — what it has
-              is a channel on a connection — so there is nothing for any of them
-              to act on and nothing for the usage strip to read.
+              This is where two paragraphs used to stand explaining why it could
+              not be. Both were mechanically true when they were written: every
+              control here is a conversation with a pty *by session id*,
+              `agent-controls.ts` performs a change by typing `/model` into that
+              pty and reading the screen, and no frame on the wire named a model,
+              an effort or a fast mode. What they concluded from that was the part
+              that has now changed.
 
-              And it stays absent even on a server that *does* have an agent CLI
-              installed on it. Installed is not running: `agent-presence.ts` is
-              explicit that for a shell session the question cannot be answered
-              from the record and has to be read off the screen, through the same
-              local channel — so for a server shell the answer is permanently
-              `null`, which is the state that file already says draws neither
-              control. Typing `/model` into a shell on a hunch does not change a
-              model; it submits the word to whatever happens to be in front of
-              it, which might be a database prompt on somebody's live machine.
+              A paired machine is a machine running this app, so it already has
+              that module and that pty — `CAPABILITY.controls` carries the
+              request there and the answer back, and the far end sets the model
+              exactly as its own window would. A server is not, and the old note
+              said so and stopped; what it did not check is that a server shell is
+              a **real pty** — `client.shell({ term: 'xterm-256color' })` — whose
+              bytes arrive in this main process, which is the only thing the
+              mechanism ever needed. `servers/ipc.ts` attaches the same shadow
+              terminal a local session keeps and drives the same two functions
+              against it.
+
+              The old note's caution was right and is kept where it belongs. It
+              worried that typing `/model` into a plain shell "submits the word to
+              whatever happens to be in front of it, which might be a database
+              prompt on somebody's live machine" — and that is refused twice over
+              there, by `refuseByProvider` finding no Claude Code markers on the
+              screen and by `refuseToType` finding no composer to type into. The
+              refusal arrives as a sentence on the chips rather than as an
+              absence.
+
+              What is still withheld is the connectors chip and the account chip,
+              and only those. See `RemoteControlsNote` below, which is now down to
+              exactly the two things that genuinely cannot travel.
             */}
-            {headingSession && !swarm && openMachineSession === null && openServerSession === null ? (
+            {barControls ? (
               <SessionControls
-                sessionId={headingSession.id}
-                cwd={headingSession.projectPath ?? null}
-                provider={headingSession.provider}
-                /* The same fact the account chip beside it already gets through
-                   `chromeSession`, and for the same reason: presence is settled
-                   off the record first and off the screen only for a session
-                   that is still alive. See the note on the prop. */
-                exited={headingSession.exitCode !== null}
+                sessionId={barControls.sessionId}
+                cwd={barControls.cwd}
+                provider={barControls.provider}
+                /* Never a literal. `barControls` computes it per branch from the
+               one fact each kind of session genuinely has — an exit code for
+               a local or a paired-machine session, and for a server terminal
+               the `servers:shell:closed` this window observed. A hardcoded
+               `false` here would keep live model and effort chips on the bar
+               of a session whose process is already gone: the screen those
+               values are read from still carries a killed CLI's banner. */
+                exited={barControls.exited}
                 onOpenConnectors={openConnectors}
+                /* Which computer to ask. Undefined for a session on this one,
+               which is what every mount meant before the prop existed. */
+                target={barControls.target}
               />
             ) : null}
             {/*
-              And the mode switch with them. Chat is a view of a transcript file
-              on this machine's disk, and Split arranges this window's own panes
-              — neither has anything to show for a session running somewhere
-              else. Absent rather than disabled, which is this product's rule for
-              a control that cannot act.
+              And beside the cluster — not in place of it — the two facts that
+              still do not travel.
+
+              The note used to stand *instead* of the whole cluster and said so:
+              "Model, effort, connectors and login are set on {machine}." Three
+              quarters of that sentence has stopped being true, because the model,
+              the effort and fast mode now act on the far session. What is left is
+              the connectors chip, whose list is resolved from a folder on this
+              computer, and the account chip, whose every row acts on a session
+              this app spawned — and neither of those has anything on either wire
+              to ride on.
+
+              Drawn only over a paired machine, deliberately, and not over a
+              server terminal. It names a place to go — the window on the far end,
+              which has both of these live — and that is true precisely because a
+              paired machine is one running this app, which is the line
+              `MachinesPanel` draws between a device and a server. The same words
+              over a server would point at nothing.
+
+              `!swarm` with the cluster above it: swarm draws every terminal at
+              once, so there is no single session for a note to be about either.
             */}
-            {(activeSession || splitting) &&
-            !showingPanel &&
-            !swarm &&
-            openMachineSession === null &&
-            /* And the mode switch with them, for the same reason one line up:
-               Chat is a view of a transcript file on this machine's disk and
-               Split arranges this window's own panes, and a shell on a server
-               has neither. Absent rather than disabled, which is this product's
-               rule for a control that cannot act. */
-            openServerSession === null ? (
-              <ModeSwitch mode={mode} onChange={setMode} splitOffer={!features.on('split')} />
+            {openMachineSession !== null && openMachine && !swarm ? (
+              <RemoteControlsNote machine={openMachine.machine.name} />
             ) : null}
             {/*
-              Stop — the one control here a session's bar does not have, and the
-              only thing about this window that is *more* rather than the same.
+              And the mode switch, which is now drawn over a remote session too —
+              with whichever of its two buttons cannot act on one saying why.
 
-              It is here because of what the copilot does not have: a row in the
-              rail, and so the ✕ that ends a session. It is a singleton, and the
-              rail deliberately gives it neither a ＋ nor a ✕; the ✕ on its pill
-              takes the pill off the bar like every other pill's does. Without
-              this it would be the one session in the window that cannot be
-              switched off anywhere you can see it. Stopping is restartable from
-              the pinned row, which is what makes it safe to offer — see
-              `CopilotStop`.
+              It used to be withdrawn entirely, on the argument that Chat reads a
+              transcript on this machine's disk and Split arranges this window's
+              panes. Both of those are still true and neither was ever true of
+              **Terminal**, which is exactly what a remote session and a server
+              terminal are already showing — so the whole control was being taken
+              away because two of its three answers were unreachable, leaving a
+              gap that reads as unbuilt. `modesBlocked` carries the sentences;
+              see its note for what would have to travel for either to work.
+
+              Still absent in swarm and behind a panel, for the original reason:
+              every terminal is drawn at once, or none is, so there is no session
+              for a mode to be a mode of.
+            */}
+            {(activeSession || splitting || openMachineSession !== null || openServerSession !== null) &&
+            !showingPanel &&
+            !swarm ? (
+              <ModeSwitch
+                mode={mode}
+                view={sessionMode}
+                onChange={setMode}
+                splitOffer={!features.on('split')}
+                unavailable={modesBlocked}
+              />
+            ) : null}
+            {/*
+              Restart — the one control here a session's bar does not have, and
+              the only thing about this window that is *more* rather than the
+              same.
+
+              It said Stop until 2026-08-20, and Stop was a button whose only
+              visible effect was this window disappearing: the copilot's tab is
+              derived from its pty, so ending the pty ended the tab the button
+              was drawn on. *"I don't understand what is the purpose of stop
+              button."* Restart is the act somebody standing in this bar
+              actually wants — a fresh conversation, same copilot, window stays
+              — and switching the copilot off entirely has moved to Settings →
+              Copilot, where there is room to say what it costs. The whole
+              argument is in `CopilotRestart`.
 
               Last in the row, where the rail puts a session's ✕ at the end of
               its own row, and after the mode switch so it can never come between
               the controls and the way out of a split.
             */}
             {headingTab?.isCopilot && !showingPanel && !swarm ? (
-              <CopilotStop copilot={copilot} />
+              <CopilotRestart copilot={copilot} />
             ) : null}
           </WindowToolbar>
         )}
@@ -4722,10 +5583,57 @@ function Workspace() {
                 key={entry.tabId}
                 serverId={entry.serverId}
                 shellKey={entry.shellKey}
+                startIn={entry.startIn}
                 bridge={serversBridge}
                 visible={openServerSession === entry.tabId}
                 onEnded={() => serverShellEnded(entry.tabId)}
+                /* The one thing this pane knows that the bar above it needs.
+                   See `serverShellIds`. */
+                onOpened={(shellId) => serverShellOpened(entry.tabId, shellId)}
               />
+            ))}
+          {/*
+            The sessions opened on paired machines — every one of them, always,
+            hidden unless it is the one in front.
+
+            Here rather than inside `mainView` for the reason the server shells
+            are, and the reason is his: *"If I go to other page and come back, it
+            will start from beginning again."* `mainView` draws one thing, so a
+            pane returned from it is a pane that is unmounted the moment anything
+            else takes the frame — which for a remote session means detaching
+            from the far machine and disposing the terminal, and coming back
+            means attaching again and being sent the whole scrollback again. A
+            local session survives that because the main process is holding its
+            output; a remote one now survives it the same way every other pane in
+            this window does, by not going anywhere.
+
+            The wrapper is what makes a terminal written for a settings pane fill
+            a whole one: `.panes` is a positioned block rather than a flex
+            container, so `.machines-terminal`'s own `flex: 1` has no column to
+            grow in and the terminal took its natural height, leaving a band of
+            empty chrome under it.
+
+            Nothing is drawn at all before this window has opened one, which is
+            every window that never touches another machine, and a build whose
+            preload has no machine channels draws nothing either.
+          */}
+          {machinesBridge !== null &&
+            machineSessionPanes.map((pane) => (
+              <div
+                key={`${pane.machineId}\u0000${pane.sessionId}`}
+                className="remote-pane"
+                data-visible={
+                  openMachineSession !== null &&
+                  openMachineSession.machineId === pane.machineId &&
+                  openMachineSession.sessionId === pane.sessionId
+                }
+              >
+                <MachineSessionPane
+                  machineId={pane.machineId}
+                  sessionId={pane.sessionId}
+                  bridge={machinesBridge}
+                />
+              </div>
             ))}
         </div>
       </main>
@@ -4794,6 +5702,8 @@ function Workspace() {
         problem={switcher.problem}
         onCancel={switcher.cancel}
         onConfirm={confirmAccountSwitch}
+        canDefer={switcher.canDefer}
+        onDefer={deferAccountSwitch}
       />
       <CloseSessionConfirm
         open={pendingClose !== null}
@@ -4841,6 +5751,10 @@ function Workspace() {
             ? sessions.find((s) => s.id === pendingClose.tab.id)?.provider
             : undefined
         }
+        /* So the dialog can name the browser windows this lets go of. Only for
+           a single session: a project's or a machine's dialog is about a set,
+           and `B1` is a fact about one session's numbering. */
+        sessionId={pendingClose?.kind === 'session' ? pendingClose.tab.id : undefined}
         onCancel={() => setPendingClose(null)}
         onConfirm={() => {
           const closing = pendingClose
@@ -4877,71 +5791,87 @@ function Workspace() {
           this side, which is what makes a row in that picker a row its own rule
           will accept.
         */
-        machines={machines.machines.map((row) => ({
-          id: row.machine.id,
-          name: row.machine.name,
-          folders: row.link?.folders ?? [],
-        }))}
-        machineId={newSessionMachine}
-        onClose={() => setNewSessionOpen(false)}
-        onStart={async (request, machineId) => {
-          setNewSessionOpen(false)
-          /*
-           * A session on another machine, started the same way and landing in
-           * the same place — the rail, beside the local ones.
-           *
-           * It returns before any of the local bookkeeping below, and every line
-           * of that bookkeeping is why: `addProject` would put another
-           * computer's folder in *this* one's project list, `addSession` would
-           * put a session this window does not own into the store that decides
-           * what ⌘W closes, and `keepNewWindowInStrip` would give it a tab with
-           * a ✕ that promises to end something living on a different machine.
-           *
-           * What it does instead is ask the far end to start it and then open
-           * it, which is the whole flow: New session → the machine → its folder
-           * → a terminal.
-           */
-          if (machineId !== null) {
-            // `startSession` waits for the session to actually exist on the far
-            // machine rather than for the request to have been sent — see the
-            // long note on it. Null means it refused or did not appear, and the
-            // rail is the honest place for that: the machine's own heading is
-            // there, and a session that turns up a moment later lands in it.
-            const sessionId = await machines.startSession(machineId, request.cwd, request.provider)
-            machines.reread()
-            if (sessionId === null) return
-            clearPanel()
-            setOpenMachineSession({ machineId, sessionId })
-            return
-          }
-          // Refusals land in the rail as a held row — see `newSessionIn`, which
-          // carries the reasoning. This dialog does not draw the picker's
-          // "could not start" line for it, because by the time the dialog has
-          // closed the answer belongs where the session would have been.
-          const meta = await window.deck.createSession(request).catch(() => null)
-          if (!meta) return
-          /*
-           * The folder joins the rail, exactly as it does on every other route.
-           *
-           * `newSessionIn` has done this since the day it was written — *"a
-           * session in a folder the sidebar is not listing is a session with no
-           * row"* — and this path, which became the *only* path when every
-           * button started opening this dialog, never did. Browse to a folder
-           * the app has not seen, press Start, and the session lands in the
-           * rail's orphan bucket, which means "your project was closed out from
-           * under this" and is not what happened.
-           *
-           * It is what makes the copilot's own folder work as a place to start a
-           * normal session in — *"it will just be a normal another session"* —
-           * because `projects` gives that folder a heading precisely when one of
-           * his sessions is in it, and nothing here would ever have put it in
-           * the list for that test to pass.
-           */
-          addProject(request.cwd)
-          void window.deck.addProject(request.cwd)
-          addSession(meta)
-          showTab(meta.id)
-          /*
+            machines={machines.machines.map((row) => ({
+              id: row.machine.id,
+              name: row.machine.name,
+              folders: row.link?.folders ?? [],
+            }))}
+            machineId={newSessionMachine}
+            /*
+          And the servers, which until 2026-08-19 this dialog had never heard
+          of: *"its giving new session option inside the server page not with
+          the main button."* Every stored one is offered — `NewSessionDialog`'s
+          own note on the prop carries the argument for why filtering them on a
+          live connection would show an empty list on every launch.
+        */
+            servers={startServers}
+            serversBridge={serversBridge}
+            onStartOnServer={(serverId, serverName, path) => {
+              setNewSessionOpen(false)
+              // The same call the server's own page makes, folder and all. A second
+              // implementation here is how two doors to one act start behaving
+              // differently — which is the thing this whole change is closing.
+              openServerShell(serverId, serverName, path)
+            }}
+            onClose={() => setNewSessionOpen(false)}
+            onStart={async (request, machineId) => {
+              setNewSessionOpen(false)
+              /*
+               * A session on another machine, started the same way and landing in
+               * the same place — the rail, beside the local ones.
+               *
+               * It returns before any of the local bookkeeping below, and every line
+               * of that bookkeeping is why: `addProject` would put another
+               * computer's folder in *this* one's project list, `addSession` would
+               * put a session this window does not own into the store that decides
+               * what ⌘W closes, and `keepNewWindowInStrip` would give it a tab with
+               * a ✕ that promises to end something living on a different machine.
+               *
+               * What it does instead is ask the far end to start it and then open
+               * it, which is the whole flow: New session → the machine → its folder
+               * → a terminal.
+               */
+              if (machineId !== null) {
+                // `startSession` waits for the session to actually exist on the far
+                // machine rather than for the request to have been sent — see the
+                // long note on it. Null means it refused or did not appear, and the
+                // rail is the honest place for that: the machine's own heading is
+                // there, and a session that turns up a moment later lands in it.
+                const sessionId = await machines.startSession(machineId, request.cwd, request.provider)
+                machines.reread()
+                if (sessionId === null) return
+                clearPanel()
+                setOpenMachineSession({ machineId, sessionId })
+                return
+              }
+              // Refusals land in the rail as a held row — see `newSessionIn`, which
+              // carries the reasoning. This dialog does not draw the picker's
+              // "could not start" line for it, because by the time the dialog has
+              // closed the answer belongs where the session would have been.
+              const meta = await window.deck.createSession(request).catch(() => null)
+              if (!meta) return
+              /*
+               * The folder joins the rail, exactly as it does on every other route.
+               *
+               * `newSessionIn` has done this since the day it was written — *"a
+               * session in a folder the sidebar is not listing is a session with no
+               * row"* — and this path, which became the *only* path when every
+               * button started opening this dialog, never did. Browse to a folder
+               * the app has not seen, press Start, and the session lands in the
+               * rail's orphan bucket, which means "your project was closed out from
+               * under this" and is not what happened.
+               *
+               * It is what makes the copilot's own folder work as a place to start a
+               * normal session in — *"it will just be a normal another session"* —
+               * because `projects` gives that folder a heading precisely when one of
+               * his sessions is in it, and nothing here would ever have put it in
+               * the list for that test to pass.
+               */
+              addProject(request.cwd)
+              void window.deck.addProject(request.cwd)
+              addSession(meta)
+              showTab(meta.id)
+              /*
              The bar keeps it — and this is the one that answers what he asked
              for, because the strip's terminal glyph opens *this* dialog rather
              than a session (*"we just always wanted this pop-up to come up so we
@@ -4957,27 +5887,30 @@ function Workspace() {
              accepting one started on a paired phone are *not* this act, and
              neither of them promotes anything.
           */
-          keepNewWindowInStrip(meta.id)
-        }}
-      />
-      <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <JoinRemoteDialog open={joinOpen} onClose={() => setJoinOpen(false)} />
-      <SessionInspector
-        open={inspectorOpen}
-        onClose={() => setInspectorOpen(false)}
-        cwd={focusedSession?.projectPath ?? activeProjectPath}
-        // The session in front of you, not whatever the store last marked
-        // active — those disagree the moment you switch to a browser page, and
-        // the dialog was heading one session's numbers with another's name.
-        session={
-          focusedSession
-            ? { startedAt: focusedSession.createdAt, resumed: focusedSession.resumed }
-            : null
-        }
-        sessionTitle={focusedSession?.title}
-      />
-      <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
-      {/*
+              keepNewWindowInStrip(meta.id)
+            }}
+          />
+          <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+          <JoinRemoteDialog open={joinOpen} onClose={() => setJoinOpen(false)} />
+          <SessionInspector
+            open={inspectorOpen}
+            onClose={() => setInspectorOpen(false)}
+            cwd={focusedSession?.projectPath ?? activeProjectPath}
+            // The session in front of you, not whatever the store last marked
+            // active — those disagree the moment you switch to a browser page, and
+            // the dialog was heading one session's numbers with another's name.
+            session={
+              focusedSession
+                ? {
+                    startedAt: focusedSession.createdAt,
+                    resumed: focusedSession.resumed,
+                  }
+                : null
+            }
+            sessionTitle={focusedSession?.title}
+          />
+          <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+          {/*
         The copilot's alter-tier confirmation.
 
         Mounted here with the rest of the dialogs, and — unlike every one of

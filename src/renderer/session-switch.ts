@@ -43,9 +43,10 @@ import { isProviderId } from './preferences'
 /* ------------------------------------------------------------------ model -- */
 
 /** Mirror of `SwitchConversation` in `main/session-switch.ts`. */
-export type SwitchConversation = 'stays' | 'theirs' | 'taken' | 'unreadable' | 'none'
+export type SwitchConversation = 'follows' | 'stays' | 'theirs' | 'taken' | 'unreadable' | 'none'
 
 const CONVERSATIONS: readonly SwitchConversation[] = [
+  'follows',
   'stays',
   'theirs',
   'taken',
@@ -192,6 +193,18 @@ export function switchConversationNote(
 ): string {
   const stays = `This conversation stays with ${names.from}.`
   switch (plan.conversation) {
+    case 'follows':
+      /*
+       * The one outcome where the opening clause would be a lie, so it is not
+       * used. These two accounts share one conversation history — Option C, and
+       * `shared-projects.ts` is where it is turned on — which means the file the
+       * replacement continues is the file this session is writing. Nothing stays
+       * behind because nothing is left behind.
+       */
+      return (
+        `This conversation comes with you. ${names.to} shares the same conversation history, so the ` +
+        `session picks up exactly where it is now — same conversation, new account.`
+      )
     case 'theirs':
       return (
         `${stays} ${names.to} has its own conversation in this folder and that is the one that ` +
@@ -231,6 +244,17 @@ export const SWITCH_KEEPS =
 export interface SwitchBridge {
   planSessionSwitch(sessionId: string, profileId: string): Promise<unknown>
   switchSessionAccount(sessionId: string, profileId: string): Promise<SessionMeta>
+  /**
+   * Arm the same switch for his next message instead of doing it now.
+   *
+   * Optional, and the whole controller must keep working without it: a build
+   * whose preload predates this answers `undefined` here, and the sheet then
+   * offers the immediate switch alone rather than disabling itself. That is why
+   * `bridge()` below does not test for it — requiring it would turn a missing
+   * *extra* into "switching accounts is not wired into this build", which is
+   * the failure shape this file already carries a comment about.
+   */
+  switchSessionAccountLater?(sessionId: string, profileId: string): Promise<unknown>
 }
 
 function bridge(): SwitchBridge | null {
@@ -270,6 +294,33 @@ export interface SwitchController {
   cancel(): void
   /** Do it. Resolves with the replacement session, or null if it did not happen. */
   confirm(): Promise<SessionMeta | null>
+  /**
+   * Whether this build can defer a switch at all.
+   *
+   * Read from the bridge rather than assumed, so the second button is absent on
+   * a build whose preload predates it instead of present and inert.
+   */
+  canDefer: boolean
+  /**
+   * Arm it for his next message and shut the sheet.
+   *
+   * Resolves `true` when the main process took it. Nothing is stopped and
+   * nothing has started, so there is no session to hand back — the replacement
+   * arrives later, through `onSessionSwitched`, whenever he next sends
+   * something.
+   */
+  defer(): Promise<boolean>
+  /**
+   * Put a failure that happened without anybody asking in front of the person.
+   *
+   * The one caller is the deferred switch: it fires inside a keystroke, minutes
+   * after the sheet was shut, so a rejection there has no promise to reject and
+   * no dialog to land in. Called straight after `ask`, which is what fills the
+   * sheet in with the two account names — this only adds the reason, and does
+   * not touch the plan, because the plan is still the true description of what
+   * *would* have happened.
+   */
+  report(problem: string): void
 }
 
 /**
@@ -360,5 +411,44 @@ export function useSwitchAccount(injected?: SwitchBridge | null): SwitchControll
     }
   }, [asking, deck, plan])
 
-  return { asking, plan, busy, problem, ask, cancel, confirm }
+  /**
+   * Arm the switch instead of making it.
+   *
+   * The sheet is shut on success, because there is nothing left to watch: the
+   * session carries on exactly as it was and the only visible change is the
+   * hint on the chip. On failure it stays open holding the reason, for the same
+   * reason `confirm` does — an armed switch that was refused and a sheet that
+   * closed anyway is a person believing something is going to happen that is
+   * not.
+   */
+  const defer = useCallback(async (): Promise<boolean> => {
+    const later = deck?.switchSessionAccountLater
+    if (!deck || !later || asking === null || plan === null || plan.refusal !== null) return false
+    setBusy(true)
+    setProblem(null)
+    try {
+      await later.call(deck, asking.sessionId, asking.profileId)
+      setAsking(null)
+      setPlan(null)
+      return true
+    } catch (error) {
+      setProblem(switchProblem(error))
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }, [asking, deck, plan])
+
+  return {
+    asking,
+    plan,
+    busy,
+    problem,
+    ask,
+    cancel,
+    confirm,
+    canDefer: typeof deck?.switchSessionAccountLater === 'function',
+    defer,
+    report: setProblem,
+  }
 }

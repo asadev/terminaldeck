@@ -52,6 +52,14 @@
 /src/renderer/assets/*
 !/src/renderer/assets/fonts
 
+# And one module, for the same reason the protocol comes: the browser client
+# holds a session's replay off the screen using the **desktop's** policy rather
+# than a second copy of it — see `pwa/tests/backfill.test.ts`, which exists so
+# that moving this file breaks a test here instead of a deploy on Vercel.
+!/src/renderer/components
+/src/renderer/components/*
+!/src/renderer/components/terminal-backfill.ts
+
 # Built and installed by Vercel from pwa/package-lock.json. Uploading either
 # would ship this Mac's copy — the wrong architecture for the build container in
 # the first case, and in the second a `dist/` that predates the sources beside

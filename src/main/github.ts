@@ -22,6 +22,24 @@ const run = promisify(execFile)
  * whole point of this module is that "you are not logged in" and "this folder
  * has no GitHub remote" never look the same to the user.
  */
+/**
+ * What a folder with no repository is told, on this page.
+ *
+ * It used to be *"This folder is not a git repository."* with `git init` as the
+ * action, and the block that draws it heads every failure with a title — for
+ * this kind, "Not a git repository". So the page printed the same sentence
+ * twice, three lines apart, and then told the reader to go and type a command
+ * in a terminal. Asad has now caught the duplicate-then-explain shape all over
+ * the app: *"don't put any single statement in anywhere."*
+ *
+ * The title carries the fact. This line carries the one thing the title cannot:
+ * where in this app the situation is fixed — Source control has a button for it
+ * since 2026-08-20 (`main/git.ts`, `initRepository`), so the advice is no longer
+ * "leave the app". It matches the sentence `git.ts` hands its own surfaces, so
+ * the two pages describing one folder describe it the same way.
+ */
+const NOT_A_REPO = 'This folder is not a git repository. Source control can create one.'
+
 export type GitHubErrorKind =
   | 'gh-missing'
   | 'not-authenticated'
@@ -317,7 +335,7 @@ export function classifyGhError(error: unknown): GitHubFailure {
 
   // Local git problems reach here when repo resolution shelled out to gh.
   if (/not a git repository/i.test(text)) {
-    return fail('not-a-repo', 'This folder is not a git repository.', 'git init', text)
+    return fail('not-a-repo', NOT_A_REPO, null, text)
   }
   if (/no git remotes found/i.test(text)) {
     return fail('no-remote', 'This repository has no remotes.', 'git remote add origin <url>', text)
@@ -731,7 +749,7 @@ export async function resolveRepo(cwd: string): Promise<RepoRef | GitHubFailure>
     }
     const text = failure?.stderr ?? ''
     if (/--local can only be used inside a git repository|not a git repository/i.test(text)) {
-      return fail('not-a-repo', 'This folder is not a git repository.', 'git init', text)
+      return fail('not-a-repo', NOT_A_REPO, null, text)
     }
     return classifyGhError(error)
   }

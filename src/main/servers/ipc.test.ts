@@ -77,6 +77,8 @@ function serverFacts(): ServerFacts {
     containers: factNo(AT, 'asked'),
     listeners: factYes([], AT, 'asked'),
     siteNames: factNo(AT, 'asked'),
+    agents: factYes([], AT, 'looked for a coding assistant'),
+    agentInstall: nothing,
   }
 }
 
@@ -286,7 +288,10 @@ describe('when it lets go', () => {
     const openShell = vi.fn(async () => shell)
     const { call } = harness({ openShell })
     const opened = (await call('servers:shell:open', 's1', 132, 43)) as { shellId: string }
-    expect(openShell).toHaveBeenCalledWith('s1', { cols: 132, rows: 43 })
+    // Three arguments: the third is the folder the terminal should start in,
+    // and `undefined` is what a press that chose none sends — which is every
+    // press this channel had until the folder picker existed.
+    expect(openShell).toHaveBeenCalledWith('s1', { cols: 132, rows: 43 }, undefined)
     await call('servers:shell:resize', opened.shellId, 100, 25)
     expect(sizes).toEqual([{ cols: 100, rows: 25 }])
   })
@@ -328,6 +333,12 @@ describe('adding, and forgetting', () => {
     setCredentialKind: kinds,
     rename: () => true,
     forget: vi.fn(() => true),
+    // The default folder is part of the slice `ipc.ts` asks for, and none of
+    // the tests in this block is about it: a store with no row for the id
+    // answers null, which is also what a server nobody has chosen a default
+    // for answers.
+    get: () => null,
+    setStartIn: () => false,
   }
 
   /*
@@ -452,7 +463,18 @@ describe('adding, and forgetting', () => {
     const forget = vi.fn(() => true)
     const forgetCredential = vi.fn(() => ({ ok: true, message: '' }))
     const { call } = harness({
-      store: { add: () => ({ id: 'new-1' }), setCredentialKind: () => true, rename: () => true, forget },
+      store: {
+        add: () => ({ id: 'new-1' }),
+        setCredentialKind: () => true,
+        rename: () => true,
+        forget,
+        // This test is about forgetting a server that never connected, so the
+        // default folder is only here because the slice `ipc.ts` asks for
+        // includes it. A store with no row for the id answers null, which is
+        // what a server with no default answers too.
+        get: () => null,
+        setStartIn: () => false,
+      },
       credentials: {
         available: () => true,
         save: () => ({ ok: true, message: '' }),

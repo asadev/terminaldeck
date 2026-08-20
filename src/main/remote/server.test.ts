@@ -526,7 +526,13 @@ describe('a paired device', () => {
     client.send(HELLO)
 
     const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
-    expect(welcome.t === 'welcome' && welcome.capabilities).toEqual(['localhost'])
+    // Two, and they are the only two that no session layer can take away.
+    // `localhost` has no object behind it at all, and `send` is read off
+    // `SessionAccess.write`, which is a *required* member of that interface —
+    // so this stub-shaped host, which cannot create, close, read a screen or
+    // report a plan, still serves both. Everything else on the list is gated on
+    // something this fake deliberately does not have.
+    expect(welcome.t === 'welcome' && welcome.capabilities).toEqual(['localhost', 'send'])
     expect(CAPABILITIES).toContain('localhost')
   })
 
@@ -774,6 +780,105 @@ describe('input', () => {
     const error = await client.until((m) => m.t === 'error', 'the refusal')
     expect(error).toMatchObject({ code: 'unauthorized' })
     // A remembered session id is not a keyboard.
+    expect(harness.sessions.written).toEqual([])
+  })
+})
+
+/**
+ * Typing into a session this connection never attached to.
+ *
+ * `input`'s gate — *"Attachment is the authorisation"* — is a true sentence
+ * about `input` and it was never the only door. The reach is, and `mayTouch` is
+ * asked at four of them including on every `input` keystroke *after* the handle
+ * check. What this capability does is let a caller that has something to say and
+ * nothing to read through the second door without buying the first, which is
+ * what the browser's Send-to-session picker needed: it has listed every session
+ * on every paired machine since 2026-08-18 and could type into none of them,
+ * because earning a handle would have meant displacing the one a terminal pane
+ * on the same connection already held — dropping that pane's subscription and
+ * replaying its whole scrollback at whoever was reading it.
+ *
+ * The assertions worth having are therefore about what is *not* in the path.
+ * `attachCount` is the one that would catch a fix that worked by attaching
+ * quietly, which is the tempting shape and the one his review was complaining
+ * about.
+ */
+describe('sending to a session without attaching to it', () => {
+  it('is advertised by every host, because every session layer can write', async () => {
+    // Not gated the way `controls` and `usage` are: those hang off an optional
+    // member of `SessionAccess` and this one is `write`, which is required. The
+    // default fake here is the stub-shaped host that advertises neither of the
+    // other two, and it still offers this.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.send)
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.controls)
+  })
+
+  it('reaches the session with no attach anywhere in the path', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'session.send', rid: 'snd-1', id: 'sess-1', data: 'look at this button\r' })
+    const answer = await client.until((m) => m.t === 'session.sent', 'the answer')
+    expect(answer).toMatchObject({ t: 'session.sent', rid: 'snd-1', id: 'sess-1', ok: true })
+
+    // The same bytes `input` delivers, at the same door.
+    expect(harness.sessions.written).toEqual([{ id: 'sess-1', data: 'look at this button\r' }])
+    // And the whole point of the verb: nothing subscribed. A fix that worked by
+    // attaching first would pass every assertion above this line and would take
+    // a terminal pane's handle away in the real app.
+    expect(harness.sessions.attachCount, 'the send attached to the session').toBe(0)
+    expect(harness.sessions.detached).toEqual([])
+  })
+
+  it('refuses a device that may not touch that session, and writes nothing', async () => {
+    /*
+     * The door, and the only one this verb has. The sentence is deliberately the
+     * one an unknown id gets — these ids are recoverable from an alert, a
+     * transcript path or an older list, so a distinct refusal would confirm that
+     * this one names something real.
+     *
+     * It arrives as a `session.sent` rather than as an `error`, unlike the same
+     * refusal on `controls.apply`, because an `error` carries no `rid`: the
+     * asking side holds a promise per request and would sit out its own deadline
+     * over a refusal this host decided immediately.
+     */
+    const sessions = { ...fakeSessions(), visible: () => false }
+    const harness = await serve({ sessions })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'session.send', rid: 'snd-2', id: 'sess-1', data: 'rm -rf /\r' })
+    const answer = await client.until((m) => m.t === 'session.sent', 'the refusal')
+    expect(answer).toMatchObject({ t: 'session.sent', rid: 'snd-2', id: 'sess-1', ok: false })
+    expect(answer.t === 'session.sent' && answer.message).toContain('sess-1')
+    expect(sessions.written, 'a session this device may not see was written to').toEqual([])
+
+    // And the connection survives, like every other refused request in this file.
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+  })
+
+  it('answers a host that was told not to offer it, rather than dropping the frame', async () => {
+    // `options.offer` is the one thing that can take this capability away — the
+    // public demo box is that host — and a client that never read the welcome
+    // still sends the frame. Silence would be a spinner on the other machine.
+    const harness = await serve({ offer: [] })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.send)
+
+    client.send({ t: 'session.send', rid: 'snd-3', id: 'sess-1', data: 'hello' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unavailable')
     expect(harness.sessions.written).toEqual([])
   })
 })
@@ -3383,6 +3488,114 @@ describe('opening a page on the machine', () => {
  * the capability exists, and a guest that sends the frames anyway is refused
  * without losing the connection it is holding.
  */
+/**
+ * The model, the effort and fast mode of a session, over the wire.
+ *
+ * Two properties, and the second is the one that would be dangerous to get
+ * wrong. The first is the negotiation: a host whose session layer cannot read a
+ * screen does not advertise this, so a client talking to one never draws a menu
+ * whose every press is refused. The second is the door — `controls.apply` ends
+ * in characters and a return written into somebody's pty, so it is authorised
+ * exactly as `input` is and a device that may not see a session may not set its
+ * model either.
+ */
+describe('the controls capability', () => {
+  const controls = {
+    read: async () => ({
+      model: { value: 'Opus 5', label: 'Opus 5', source: 'screen' },
+      effort: { value: null, label: null, source: null },
+      fast: { value: null, label: null, source: null },
+      permission: { value: null, label: null, source: null },
+      live: true,
+      agent: { running: true, saw: 'Claude Code' },
+      gate: { canType: true, reason: null },
+    }),
+    apply: async () => ({
+      ok: true,
+      message: 'Model is now Sonnet 5.',
+      reading: { value: 'Sonnet 5', label: 'Sonnet 5', source: 'screen' },
+    }),
+  }
+
+  it('is not advertised by a host whose session layer cannot read a screen', async () => {
+    // The stub host and the demo box are both in this position: terminals, and
+    // no shadow emulator to read one off. Advertising it there would draw a
+    // model menu on the far window that could only ever come back empty.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.controls)
+  })
+
+  it('carries a reading back, keyed to the request that asked for it', async () => {
+    const harness = await serve({ sessions: { ...fakeSessions(), controls } })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.controls)
+
+    client.send({ t: 'controls.read', rid: 'ctl-1', id: 'sess-1' })
+    const answer = await client.until((m) => m.t === 'controls.reading', 'the reading')
+    // The request id is echoed untouched. Two panes of a split ask about the
+    // same session at once, and without this they resolve each other's reads.
+    expect(answer.t === 'controls.reading' && answer.rid).toBe('ctl-1')
+    expect(answer.t === 'controls.reading' && answer.reading.model.label).toBe('Opus 5')
+  })
+
+  it('answers a change with what the CLI said about it', async () => {
+    const harness = await serve({ sessions: { ...fakeSessions(), controls } })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'controls.apply', rid: 'ctl-2', id: 'sess-1', control: 'model', value: 'sonnet' })
+    const answer = await client.until((m) => m.t === 'controls.applied', 'the answer')
+    expect(answer.t === 'controls.applied' && answer.ok).toBe(true)
+    // The sentence is the payload. A refusal from the account arrives the same
+    // way, in the CLI's own words, because that is the only thing that tells
+    // somebody at the other end what to do about it.
+    expect(answer.t === 'controls.applied' && answer.message).toBe('Model is now Sonnet 5.')
+  })
+
+  it('refuses a device that may not touch that session, and never asks the layer', async () => {
+    /*
+     * The door that matters. `controls.apply` types into a pty, so it is
+     * authorised exactly as `input` is — and the refusal is deliberately the
+     * same sentence an unknown id gets, because a distinct one would confirm the
+     * id names something real. These ids are recoverable from an alert, a
+     * transcript path or an older list.
+     */
+    let asked = 0
+    const watched = {
+      read: async () => {
+        asked += 1
+        return controls.read()
+      },
+      apply: async () => {
+        asked += 1
+        return controls.apply()
+      },
+    }
+    const harness = await serve({
+      sessions: { ...fakeSessions(), controls: watched, visible: () => false },
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'controls.apply', rid: 'ctl-3', id: 'sess-1', control: 'model', value: 'sonnet' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unknown-session')
+    expect(asked, 'the session layer was reached for a session this device may not see').toBe(0)
+
+    // And the connection survives, like every other refused request here.
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+  })
+})
+
 describe('a guest gets no port list and no tunnel', () => {
   /** Every connection is a guest: `device-1` is the only device this file knows. */
   const everyoneIsAGuest = (): boolean => false

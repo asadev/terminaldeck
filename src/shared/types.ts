@@ -1,5 +1,33 @@
 /** Shared contract between the main process and the renderer. */
 
+/** Where a link opened. `main/link-open.ts` owns the decision. */
+export type LinkRoute = 'tab' | 'system' | 'refused'
+
+/**
+ * A URL on its way into a browser window of this app's.
+ *
+ * Here rather than in `main/link-open.ts` because all three sides have to agree
+ * on it — main pushes it, the preload carries it, the renderer opens it — and
+ * this is the only file all three are allowed to import. `link-open.ts` re-
+ * exports it beside the channel constant so the payload and the channel name
+ * stay next to each other for a reader.
+ */
+export interface LinkTabRequest {
+  url: string
+  /** The session this URL came from, when it came from one. */
+  sessionId?: string
+  /** Empty or absent for a session on this machine. */
+  machineId?: string
+  /**
+   * Set when the sender is waiting to be told which window this became.
+   *
+   * A request carrying one **must** be answered, either way. The sender is a
+   * `curl` inside somebody's session, holding a connection open; an unanswered
+   * id is that session waiting out a timeout for nothing.
+   */
+  requestId?: string
+}
+
 /**
  * An agent this build was shipped knowing about.
  *
@@ -126,6 +154,32 @@ export interface SessionMeta {
    * fresh run writes a new file, a continued one appends to an older one.
    */
   resumed?: boolean
+  /**
+   * The conversation id this app gave the agent when it started it, so the
+   * transcript can be found by name instead of guessed at.
+   *
+   * Claude Code files a conversation at
+   * `<configDir>/projects/<encoded cwd>/<id>.jsonl`, and until this existed
+   * nothing here knew that id: the app spawned `claude` with no id, the CLI
+   * invented one, and every reader afterwards had to pick "the most recently
+   * written transcript in this folder" and hope. Two sessions open in one folder
+   * therefore reported the *same* context window, which is what Asad recorded on
+   * 2026-08-19 — *"it is showing same context window for your session too, so all
+   * the sessions show same context window"*. Both tabs were reading one file.
+   *
+   * `claude --session-id <uuid>` is what closes it, verified against 2.1.235 on
+   * this machine: a run with a generated id wrote exactly
+   * `…/projects/<encoded cwd>/<that uuid>.jsonl` and nothing else.
+   *
+   * Absent, and honestly absent, for three kinds of session. A resumed one — the
+   * CLI refuses `--continue` beside `--session-id` unless the conversation is
+   * forked, and forking would copy somebody's history into a new file to make a
+   * number easier to read. A session running any other agent. And every session
+   * this app did not start, which is the case Asad asked to keep working: *"I did
+   * not start this session … which is okay, I want it that way"*. Those keep the
+   * inference, and it is labelled as an inference.
+   */
+  agentSessionId?: string
   /**
    * The account this session actually runs as — the *resolved* profile, not the
    * one that was asked for.
@@ -277,6 +331,27 @@ export interface DeckApi {
    * appears in the app that owns it.
    */
   onSessionCreated(cb: (meta: SessionMeta) => void): () => void
+  /**
+   * An account switch that was armed for the next message has happened.
+   *
+   * Declared optional because it is: a window running against an older preload
+   * has no such method, and the two subscribers are written to cope with that
+   * rather than to assume it. The immediate switch needs no equivalent — it
+   * answers with the replacement as the return value of the call that asked for
+   * it, and this one had nothing to answer, because it fired inside a keystroke
+   * long after the sheet was shut.
+   */
+  onSessionSwitched?(cb: (previousId: string, meta: SessionMeta, note: string) => void): () => void
+  /**
+   * And one that did not take. The session is still running as it was.
+   *
+   * Carries the account it failed to reach as well as the reason, so the window
+   * can name it rather than saying "an account" about a login somebody chose by
+   * name.
+   */
+  onSessionSwitchFailed?(
+    cb: (sessionId: string, profileId: string, why: string) => void,
+  ): () => void
   /** Application-menu items, dispatched as command ids. */
   onMenuCommand(cb: (command: string) => void): () => void
   /**
@@ -299,9 +374,96 @@ export interface DeckApi {
    * back; the other two are the way out, for the person who wants this
    * particular link in the browser they are already signed into.
    */
-  onOpenLinkTab(cb: (url: string) => void): () => void
+  onOpenLinkTab(cb: (request: LinkTabRequest) => void): () => void
   openLinkExternally(url: string): Promise<boolean>
   showLinkMenu(url: string): Promise<boolean>
+  /**
+   * A link somebody clicked **inside a session** — a URL an agent printed in
+   * the terminal, above all.
+   *
+   * Separate from `window.open` and from {@link onOpenLinkTab} because it is the
+   * only one that knows which session it came from, and that is the whole point:
+   * the main process routes it to a browser window attached to *that* session
+   * rather than to a new tab at the end of the strip. It resolves with what was
+   * decided, so a caller that wants to say what happened can; the terminal does
+   * not wait, because a click is not a place to await.
+   */
+  openLink(request: { url: string; sessionId?: string; machineId?: string }): Promise<LinkRoute>
+  /** Tell the main process which browser windows this window is showing. */
+  browserWindowOpened(window: {
+    tabId: string
+    viewId?: string | null
+    url?: string
+    title?: string
+    /**
+     * Which machine is really serving this page. Empty for this computer.
+     *
+     * Not derivable from the URL and that is the point: a page reached on
+     * another machine wears a `localhost` address on **this** one, because the
+     * tunnel put it there. *"We always need a truth."*
+     */
+    machineId?: string
+    machineName?: string
+    /** True while this is the page on screen. */
+    visible?: boolean
+  }): void
+  /** A browser window that has been closed. Its number is not handed out again. */
+  browserWindowClosed(tabId: string): void
+  /** Attach a browser window to a session, or move it from the session it is on. */
+  browserBind(request: { tabId: string; sessionId: string; machineId?: string }): void
+  /** Detach a browser window. The page stays open. */
+  browserUnbind(tabId: string): void
+  /** The answer to a {@link LinkTabRequest} that carried a `requestId`. */
+  browserLinkOpened(reply: { requestId: string; tabId?: string; refused?: string }): void
+  /** Every session's attached windows, pushed whenever the relation changes. */
+  onBrowserBindings(cb: (view: unknown) => void): () => void
+  /** The relation as it stands, for a window that has just come up. */
+  browserBindings(): Promise<unknown>
+  /**
+   * Pop the attach/detach menu for one session, at the pointer.
+   *
+   * A native menu, built in the main process, for the reason `link-open.ts`
+   * gives at `showLinkMenu`: a `WebContentsView` composites above the entire
+   * renderer, so an HTML menu would be invisible in exactly the situation this
+   * feature exists for — a browser window on screen.
+   */
+  showBrowserBindMenu(request: { sessionId: string; machineId?: string }): Promise<boolean>
+
+  /**
+   * The same relation from the browser's end: which session this window is on.
+   *
+   * *"Both sides should be the option."* It reads and writes the one map in
+   * `main/browser-binding.ts`, so a change made here is on the session's pane
+   * bar and in the rail in the same frame. The sessions travel in the request
+   * because their names are this window's — main has ids.
+   */
+  showBrowserConnectMenu(request: {
+    tabId: string
+    sessions: { sessionId: string; machineId?: string; name: string; machineName?: string }[]
+  }): Promise<boolean>
+
+  /**
+   * The ⋯ menu on a sidebar row, and what the person chose from it.
+   *
+   * `'promote' | 'close' | 'copilot'`, or null when the menu was dismissed —
+   * which is the ordinary outcome and not an error. Native for the reason above,
+   * and doubly so here: the entry people open it for is **Connect browser**, so
+   * the moment it is most used is the moment a browser page is on screen.
+   *
+   * Every sentence in it is passed in rather than derived, because the row's own
+   * tooltips already carry them and a second copy in the main process is the one
+   * that keeps the old wording. See `main/session-row-menu.ts`.
+   */
+  showSessionRowMenu(request: {
+    sessionId: string
+    machineId?: string
+    name: string
+    promoted: boolean
+    promoteBlocked?: string | null
+    close?: string | null
+    copilotTurn?: boolean
+    browser?: boolean
+  }): Promise<string | null>
 
   // Feature modules. These cross the bridge as `unknown` and each consumer
   // narrows to its own module's types — the main-process modules own those
@@ -314,6 +476,7 @@ export interface DeckApi {
   onCostUpdate(cb: (summary: unknown) => void): () => void
 
   gitStatus(cwd: string): Promise<unknown>
+  gitInit(cwd: string): Promise<unknown>
   gitDiff(cwd: string, path: string, options?: { staged?: boolean; untracked?: boolean }): Promise<string>
   watchGit(cwd: string): Promise<unknown>
   unwatchGit(cwd: string): void
@@ -416,6 +579,20 @@ export interface DeckApi {
   attachMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
   detachMachineSession(id: string, sessionId: string): Promise<unknown>
   writeToMachineSession(id: string, sessionId: string, data: string): Promise<unknown>
+  /**
+   * Type into a session on another machine **without attaching to it**.
+   *
+   * The line above is a remote terminal pane's keyboard and is served only to a
+   * connection that attached first; this is for a surface that has something to
+   * say and nothing to read, where taking out an attach would displace the
+   * handle a pane on that link already holds and replay its scrollback at
+   * whoever is reading it.
+   *
+   * Answers `{ ok, message }` — never a bare boolean and never a throw — because
+   * the caller has no terminal on screen to read the outcome off and draws that
+   * sentence itself.
+   */
+  sendToMachineSession(machineId: string, sessionId: string, data: string): Promise<unknown>
   resizeMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
   createMachineSession(id: string, cwd?: string, provider?: string): Promise<unknown>
   /**
@@ -433,8 +610,52 @@ export interface DeckApi {
   refreshMachinePorts(id: string): Promise<unknown>
   /** Open a page in the browser **on that machine**. Refused unless it advertised `web`. */
   openOnMachine(id: string, url: string): Promise<unknown>
+  /**
+   * The copilot on one of his *other* machines.
+   *
+   * The switcher at the top of the copilot page is what these are under: two
+   * paired machines, one page, either copilot. Nothing opens the connection —
+   * the link sends `copilot.hello` on every welcome that carried one, because
+   * that machine refuses every copilot verb until this socket has, and the
+   * socket is new after every reconnect.
+   *
+   * Each resolves `{ ok, message }`, where `ok` is *the frame left this
+   * machine*. There is no request id on the copilot wire, so it cannot mean
+   * more; what the far end made of it arrives on the two subscriptions below,
+   * and a refusal arrives as that machine's `reason` on `machines:state`.
+   */
+  attachMachineCopilot(machineId: string): Promise<unknown>
+  /** Start a run of this desktop's own over there. `sayToMachineCopilot` has nothing to talk to until it has. */
+  startMachineCopilot(machineId: string): Promise<unknown>
+  sayToMachineCopilot(machineId: string, text: string): Promise<unknown>
+  /** Ask again for that machine's copilot state. The answer arrives on `onMachineCopilotState`. */
+  refreshMachineCopilot(machineId: string): Promise<unknown>
+  /** The whole `CopilotStateReport` that machine sent — `desk`, `run` and `profile` included. */
+  onMachineCopilotState(cb: (machineId: string, state: unknown) => void): () => void
+  /**
+   * A slice of the conversation with that machine's copilot.
+   *
+   * The whole `copilot.chat` frame rather than one bubble: `run` says which run
+   * it belongs to, so a frame from a run that has ended is dropped instead of
+   * spliced onto a live conversation, and `reset` says to throw away what is
+   * held. Merging is the renderer's — nothing in main keeps a transcript.
+   */
+  onMachineCopilotChat(cb: (machineId: string, bubble: unknown) => void): () => void
   onMachinesState(cb: (view: unknown) => void): () => void
   onMachineOutput(cb: (chunk: unknown) => void): () => void
+  /**
+   * Send a file from this machine into a session running on that one.
+   *
+   * A path, never the bytes: `pathForDroppedFile` has already turned the dropped
+   * `File` into a real path, and streaming it off disk in the main process is
+   * what keeps a 200 MB video out of the renderer's heap. Answers with the path
+   * it landed at over there — which is what gets typed at the prompt, and which
+   * may not be the name it left with — or with a sentence.
+   */
+  uploadToMachine(id: string, filePath: string): Promise<unknown>
+  cancelMachineUpload(id: string): Promise<unknown>
+  /** Slice-by-slice progress for the transfer to that machine. */
+  onMachineUpload(cb: (progress: unknown) => void): () => void
 }
 
 declare global {

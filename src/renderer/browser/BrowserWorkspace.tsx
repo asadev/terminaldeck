@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { AnchoredPopup } from './AnchoredPopup'
 import { BrowserMenu } from './BrowserMenu'
+import { ProfileMenu } from './ProfileMenu'
 import { CapturePopup } from './CapturePopup'
 import { DeviceBar } from './DeviceBar'
 import { PasswordOffer } from './PasswordOffer'
@@ -31,6 +32,8 @@ import {
 import { anchorInWindow, type Box } from './popup-anchor'
 import {
   passwordsAvailable,
+  profilesAvailable,
+  readProfileState as readProfiles,
   readSignInTrouble,
   resolveAccountsApi,
   signInHelpAvailable,
@@ -80,6 +83,7 @@ import {
 } from './drive-bridge'
 import { resolveOmnibox, securityOf } from './omnibox'
 import { browserOverlayDom, isCovered, watchOverlays, type Rect as OverlayRect } from './overlay-watch'
+import { ConnectSessionButton } from './BindChip'
 import { MachinePicker } from './MachinePicker'
 import {
   destinationFor,
@@ -87,6 +91,7 @@ import {
   lostMachine,
   machineChoices,
   readMachines,
+  moveFor,
   reachedAddress,
   readReach,
   resolveMachinesApi,
@@ -179,6 +184,24 @@ export interface BrowserWorkspaceProps {
    * live page somewhere else is a navigation nobody asked for.
    */
   initialUrl?: string
+  /**
+   * The shell tab id of the window this panel *is*.
+   *
+   * This panel had no id of any kind until 2026-08-19, because nothing outside
+   * it had ever needed to name one browser window as against another. A session
+   * ↔ browser binding needs exactly that: `B2` is a fact about one window, and
+   * the only handle that is one-to-one with what a person calls a browser
+   * window — and that lasts its whole life — is the id `App.tsx` mints in
+   * `newBrowserTab`. The main-process view id underneath is per *page* and is
+   * re-minted when the isolation switch closes and reopens the view, so a
+   * binding keyed on it would lose its number the first time somebody pressed
+   * Isolated.
+   *
+   * Optional, because a host that has no notion of windows (the tests, a future
+   * embedder) is not obliged to invent one; without it this panel simply never
+   * reports itself and can never be bound.
+   */
+  tabId?: string
   /** Persist a new start page — the panel's own "set as start page" button. */
   onStartUrl?: (url: string) => void
   /**
@@ -396,6 +419,7 @@ export function BrowserWorkspace({
   visible = true,
   parkPage = false,
   onTitle,
+  tabId,
   startUrl = '',
   initialUrl = '',
   onStartUrl,
@@ -490,6 +514,17 @@ export function BrowserWorkspace({
    */
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuAnchor, setMenuAnchor] = useState<Box>({ x: 0, y: 0, width: 0, height: 0 })
+  /*
+   * Profiles, which are now a button on the bar rather than a block inside ⋯.
+   *
+   * *"we can have these profiles over here as icon, so we can switch between
+   * profiles also if we want to."* `profileName` is held here only so the
+   * button's hover label can say which profile is on — the menu reads the state
+   * for itself when it opens, and this is refreshed whenever it closes, so the
+   * two cannot disagree for longer than one menu.
+   */
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [profileName, setProfileName] = useState('')
   const [flowOpen, setFlowOpen] = useState(false)
   const [trouble, setTrouble] = useState<SignInTrouble | null>(null)
   const [troubleFor, setTroubleFor] = useState('')
@@ -601,15 +636,29 @@ export function BrowserWorkspace({
   const stageRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   /**
-   * The toolbar's right-hand action group, which every popup in this panel is
-   * now placed against.
+   * The toolbar's right-hand action group, which the popups that belong to the
+   * group as a whole are placed against.
    *
-   * One anchor for all of them rather than one per button: `anchorPopup` slides
-   * a popup back inside the viewport, so anchoring to a cluster that already
-   * sits at the right edge lands every popup in the top right corner — which is
-   * where he asked for them — without each button having to carry a ref.
+   * `anchorPopup` slides a popup back inside the viewport, so anchoring to a
+   * cluster that already sits at the right edge lands it in the top right corner
+   * — which is where he asked for them — without each button carrying a ref.
    */
   const actionsRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * The two buttons whose menus have to open *at* them, and not at the group.
+   *
+   *   > *"if I am clicking on three dots, it's opening very far from the three
+   *   > dots. It should open just like here."*
+   *
+   * He was right and the arithmetic says why: `anchorPopup` left-aligns a popup
+   * with the box it is given, and the box was the whole action group. With the
+   * captions on, that group measured 554 pixels — so the menu opened flush with
+   * its *left* edge, most of a toolbar away from the ⋯ it came out of. A group
+   * is the correct anchor for a popup about the group and the wrong one for a
+   * menu that belongs to one button in it.
+   */
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null)
+  const profileButtonRef = useRef<HTMLButtonElement | null>(null)
   const seq = useRef(0)
   /** Serialises create/claim so "the newest unclaimed view" stays unambiguous. */
   const queue = useRef<Promise<void>>(Promise.resolve())
@@ -654,6 +703,52 @@ export function BrowserWorkspace({
   useEffect(() => {
     if (pageTitle) titleRef.current?.(pageTitle)
   }, [pageTitle])
+
+  /*
+   * Report this window to the main process: which page it is showing, where,
+   * and what it is called.
+   *
+   * The main process owns the session ↔ browser relation — `main/browser-binding.ts`
+   * says why — but it cannot see any of these three facts for itself. The shell
+   * tab id is minted in the renderer; the view id is the one `browser:navigate`
+   * takes, and it is what lets a URL from a session land in *this* window
+   * without a renderer round trip; and the url and title are what the hook
+   * answer prints, which is the reason they are only ever what the page said
+   * about itself rather than anything derived here.
+   *
+   * On every change rather than once at mount, because all three change: the
+   * page navigates, and the view id is replaced under a window that has not
+   * moved when the isolation switch closes and reopens it. A binding holding a
+   * stale view id is a URL that lands nowhere while the app answers that it
+   * landed in `B1`.
+   */
+  const boundUrl = active?.url ?? ''
+  const boundViewId = active?.id ?? null
+  /*
+   * Which machine is really behind this page — the fact the URL cannot carry.
+   *
+   * `servedBy` reads it back off the address against the tunnels this window
+   * opened, so it survives a link inside the site, Back and a reload. Sent
+   * upwards because a menu in the main process has to be able to group windows
+   * by where they are actually running, and because the agent's own context
+   * says it: a page on his PC wears a `localhost` address on **this** Mac, and
+   * an agent reading that URL alone would conclude the exact opposite of the
+   * truth. *"We always need a truth."*
+   */
+  const boundMachineId = servedBy(boundUrl, opened)?.machineId ?? ''
+  const boundMachineName = servedBy(boundUrl, opened)?.machineName ?? ''
+  useEffect(() => {
+    if (!tabId) return
+    window.deck?.browserWindowOpened?.({
+      tabId,
+      viewId: boundViewId,
+      url: boundUrl,
+      title: pageTitle,
+      machineId: boundMachineId,
+      machineName: boundMachineName,
+      visible,
+    })
+  }, [tabId, boundViewId, boundUrl, pageTitle, boundMachineId, boundMachineName, visible])
 
   /* -- the device rectangle, recomputed on every layout pass. */
   const deviceSize = useMemo((): Size | null => {
@@ -1187,10 +1282,15 @@ export function BrowserWorkspace({
    * should not be changing for local and remote devices."*
    */
   const openThere = useCallback(
-    async (machine: MachineChoice, port: number, typed: string): Promise<void> => {
+    async (machine: MachineChoice, port: number, typed: string): Promise<boolean> => {
       const answer = await reachPort(machine, port)
-      if (!answer) return
+      // `reachPort` has already said why in the notice bar. What the answer adds
+      // here is whether the caller may keep claiming the page moved — see
+      // `moveToMachine`, where a refusal has to put the picker back rather than
+      // leave it naming a machine the page is not on.
+      if (!answer) return false
       act((a, id) => a.browserNavigate(id, reachedAddress(typed, answer.url)))
+      return true
     },
     [reachPort, act],
   )
@@ -1527,22 +1627,50 @@ export function BrowserWorkspace({
   }, [])
 
   /**
-   * Measure the toolbar, then open whichever popup was asked for.
+   * Measure something on the toolbar, then open whichever popup was asked for.
    *
    * Measured at the moment of opening rather than kept in state and updated on
    * resize. The toolbar moves whenever the window is resized, the panel becomes
    * half of a split, or a band above it appears — and a stale anchor is a popup
    * pointing at where a button used to be, which is worse than one that is
    * placed a frame later.
+   *
+   * `node` is the element to point at; the action group stands in when a caller
+   * has nothing more specific, which is the case for the recorded flow — its
+   * button is in the middle of the group and a popup hanging off the middle of a
+   * toolbar reads as floating.
    */
-  const openAt = useCallback((open: () => void): void => {
-    const node = actionsRef.current
-    if (node) {
-      const box = node.getBoundingClientRect()
+  const openAt = useCallback((node: HTMLElement | null, open: () => void): void => {
+    const target = node ?? actionsRef.current
+    if (target) {
+      const box = target.getBoundingClientRect()
       setMenuAnchor({ x: box.x, y: box.y, width: box.width, height: box.height })
     }
     open()
   }, [])
+
+  /*
+   * Which profile is on, for the toolbar button's hover label.
+   *
+   * Read once when the panel mounts and again whenever the profile menu closes,
+   * which is the only place in the app a profile can be switched. Not
+   * subscribed: `browser-profile:*` are plain invokes with no push channel, and
+   * inventing a poll for a value that changes when a person clicks a menu is the
+   * *"they make the system heavier"* he has objected to by name.
+   */
+  const readProfileName = useCallback((): void => {
+    if (!accounts.browserProfiles) return
+    void accounts.browserProfiles().then((raw) => {
+      const state = readProfiles(raw)
+      if (!state) return
+      const active = state.profiles.find((entry) => entry.id === state.activeId)
+      setProfileName(active ? active.name : '')
+    })
+  }, [accounts])
+
+  useEffect(() => {
+    readProfileName()
+  }, [readProfileName])
 
   /*
    * When recording stops, show what was recorded.
@@ -1557,7 +1685,7 @@ export function BrowserWorkspace({
   const wasRecording = useRef(false)
   useEffect(() => {
     if (wasRecording.current && !recording.recording && recording.steps.length > 0) {
-      openAt(() => setFlowOpen(true))
+      openAt(null, () => setFlowOpen(true))
     }
     wasRecording.current = recording.recording
   }, [recording.recording, recording.steps.length, openAt])
@@ -1717,6 +1845,66 @@ export function BrowserWorkspace({
    */
   const machine = machines.find((one) => one.id === machineId) ?? null
   const served = servedBy(active?.url ?? '', opened)
+
+  /**
+   * Move the page that is open onto another machine — or fail where he can see
+   * it.
+   *
+   * Asad, with a page from his PC on screen and the picker switched back to the
+   * Mac:
+   *
+   * > *"if I move it to this machine, it's keeping on the same browser, same
+   * > machine. It's not moving to this machine. Same link should be again tried
+   * > on the new machine… or it should be unsuccessful here also, because we
+   * > always need a truth."*
+   *
+   * The picker used to be a *mode* and nothing else: it decided where the next
+   * thing he typed would go, and left the page already on screen exactly where
+   * it was. Read as a mode that is defensible; read as a control labelled with a
+   * machine name, sitting over a page, it says the page is on that machine, and
+   * it was not.
+   *
+   * So it moves the page, and the port it moves is the **origin** port — the one
+   * on the machine serving it, which is not the number in the address bar
+   * whenever the tunnel had to pick a different one. Path, query and fragment
+   * ride along through `reachedAddress`.
+   *
+   * Two things can make it impossible, and both put the picker back rather than
+   * leaving it naming a machine the page is not on:
+   *
+   *  - the page is not a machine's page at all (`https://stripe.com` belongs to
+   *    Stripe, not to a computer in this room), and
+   *  - the far machine refused, which `reachPort` has already said out loud.
+   */
+  const moveToMachine = (next: string): void => {
+    if (next === machineId) return
+    const current = active?.url ?? ''
+    const plan = moveFor(next, current, opened)
+    setMachineId(next)
+    if (plan.kind === 'already') return
+    if (plan.kind === 'refused') {
+      // Back to the machine the page is really on, and a line saying why. A
+      // picker left naming a machine the page never reached is the untruth this
+      // whole change is about.
+      setMachineId(plan.at)
+      setNotice('That page is not served by a machine, so it cannot be moved.')
+      return
+    }
+    if (plan.kind === 'here') {
+      act((a, id) => a.browserNavigate(id, plan.url))
+      return
+    }
+    const target = machines.find((one) => one.id === plan.machineId)
+    if (!target) {
+      setMachineId(plan.kind === 'there' ? (servedBy(current, opened)?.machineId ?? THIS_MACHINE) : next)
+      return
+    }
+    void openThere(target, plan.port, plan.url).then((moved) => {
+      // `reachPort` has already put the reason in the notice bar. What is left
+      // is the picker, which must not keep claiming a machine the page is not on.
+      if (!moved) setMachineId(servedBy(current, opened)?.machineId ?? THIS_MACHINE)
+    })
+  }
   /*
    * A server's list has a third state a device's cannot have.
    *
@@ -1769,10 +1957,29 @@ export function BrowserWorkspace({
    * strip, one address bar, with a word beside it saying which computer that
    * address is on.
    */
-  const picker =
+  /*
+   * Which machine, and which session — the two facts about this window, side by
+   * side.
+   *
+   * The session control is here rather than in the toolbar's own tree because
+   * this panel is what knows the shell tab id, and because the two questions are
+   * neighbours: *"from the browser directly, I cannot connect to any session. It
+   * should be either here or somewhere."* Handed down as one node so the
+   * toolbar's layout decides where the pair sits, exactly as it already did for
+   * the picker alone.
+   */
+  const connect = tabId ? <ConnectSessionButton browserTabId={tabId} /> : null
+  const machinePart =
     machines.length > 0 ? (
-      <MachinePicker machines={machines} selected={machineId} onSelect={setMachineId} />
-    ) : undefined
+      <MachinePicker machines={machines} selected={machineId} onSelect={moveToMachine} />
+    ) : null
+  const picker =
+    connect === null && machinePart === null ? undefined : (
+      <>
+        {connect}
+        {machinePart}
+      </>
+    )
 
   /*
    * Which still image stands in for the page while a popup is over it.
@@ -1837,8 +2044,29 @@ export function BrowserWorkspace({
         onToggleDevice={() => setDeviceOpen((open) => !open)}
         onToggleIsolation={isolationAvailable(iso) ? toggleIsolation : undefined}
         actionsRef={actionsRef}
+        menuRef={menuButtonRef}
+        profileRef={profileButtonRef}
         menuOpen={menuOpen}
-        onMenu={() => openAt(() => setMenuOpen((open) => !open))}
+        onMenu={() =>
+          openAt(menuButtonRef.current, () => {
+            // One menu at a time. They are adjacent buttons sharing one anchor
+            // rectangle, so leaving both open would stack two popups on the same
+            // pixels with the newer one silently on top of the older.
+            setProfileOpen(false)
+            setMenuOpen((open) => !open)
+          })
+        }
+        onProfiles={
+          profilesAvailable(accounts)
+            ? () =>
+                openAt(profileButtonRef.current, () => {
+                  setMenuOpen(false)
+                  setProfileOpen((open) => !open)
+                })
+            : undefined
+        }
+        profilesOpen={profileOpen}
+        profileName={profileName}
         steps={recording.steps.length}
         machinePicker={picker}
         servedBy={
@@ -2173,10 +2401,33 @@ export function BrowserWorkspace({
           url={active?.url ?? ''}
           startUrl={startUrl}
           onStartUrl={onStartUrl}
-          onCookies={() => setSessionOpen(true)}
-          onFlow={recording.steps.length > 0 ? () => openAt(() => setFlowOpen(true)) : undefined}
-          onReopen={reopenInActiveProfile}
+          onFlow={recording.steps.length > 0 ? () => openAt(null, () => setFlowOpen(true)) : undefined}
+          /* Only when there is no profile button to hold it — see `onCookies`
+             in `BrowserMenu`. Site data belongs to a profile, and a build that
+             cannot switch profiles still has to be able to clear its cookies. */
+          onCookies={profilesAvailable(accounts) ? undefined : () => setSessionOpen(true)}
           onClose={() => setMenuOpen(false)}
+        />
+      )}
+
+      {profileOpen && (
+        <ProfileMenu
+          api={accounts}
+          anchor={menuAnchor}
+          /* How many sites have data in the profile that is on. Only the active
+             partition can be enumerated at all — `guestSession()` resolves to
+             it — which is why the menu prints this against one row and not the
+             list. Absent when the bridge is not resolved and the panel is
+             already refusing to draw a page. */
+          countSites={
+            api ? async () => (await api.browserCookies()).length : undefined
+          }
+          onSiteData={() => setSessionOpen(true)}
+          onReopen={reopenInActiveProfile}
+          onClose={() => {
+            setProfileOpen(false)
+            readProfileName()
+          }}
         />
       )}
 

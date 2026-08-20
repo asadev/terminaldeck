@@ -9,6 +9,7 @@ import {
   type WebContents,
 } from 'electron'
 import { isNavigationAllowed } from './browser-url'
+import type { LinkTabRequest } from '../shared/types'
 
 /**
  * Where a link opens: a tab of this app's own browser, or the system browser.
@@ -164,6 +165,27 @@ export function routeGuestLink(url: unknown): LinkRoute {
  */
 export const LINK_TAB_CHANNEL = 'link:open-tab'
 
+/**
+ * What travels on {@link LINK_TAB_CHANNEL}, defined in `shared/types.ts`.
+ *
+ * It carried a bare URL string until 2026-08-19, and every caller of it — the
+ * GitHub panel, a guest page's `target="_blank"`, a paired phone's `openUrl`,
+ * the denied `window.open` — was answering the same unspoken question, "which
+ * window should this land in", with the same unspoken answer, "a new one, at the
+ * end". That was right while a browser window belonged to nobody. It stopped
+ * being right when a window could be attached to a session, because a URL from
+ * *that* session belongs in *that* window.
+ *
+ * One payload rather than a second channel: a second channel would be a second
+ * thing for the preload to fall out of step with, and this file's own test
+ * exists because that has already happened here once.
+ *
+ * The shape lives in `shared/types.ts` rather than here because all three sides
+ * — main, preload and the renderer — have to agree on it, and only that file is
+ * allowed to be imported by all three.
+ */
+export type { LinkTabRequest }
+
 /* ------------------------------------------------------------------ doing it -- */
 
 /**
@@ -185,10 +207,15 @@ export function openSystemUrl(url: unknown): boolean {
  * appear in, so a second window would open its own tab rather than pushing one
  * into somebody else's.
  */
-export function openAppLink(host: WebContents, url: unknown): LinkRoute {
+export function openAppLink(
+  host: WebContents,
+  url: unknown,
+  from: Omit<LinkTabRequest, 'url'> = {},
+): LinkRoute {
   const route = routeAppLink(url)
-  if (route === 'tab' && !host.isDestroyed()) host.send(LINK_TAB_CHANNEL, url)
-  else if (route === 'system') openSystemUrl(url)
+  if (route === 'tab' && !host.isDestroyed()) {
+    host.send(LINK_TAB_CHANNEL, { ...from, url: url as string } satisfies LinkTabRequest)
+  } else if (route === 'system') openSystemUrl(url)
   return route
 }
 
@@ -197,9 +224,15 @@ export function openAppLink(host: WebContents, url: unknown): LinkRoute {
  * should say so on the page — `browser-tab.ts` owns that sentence, because it
  * owns the banner it goes in.
  */
-export function openGuestLink(host: WebContents, url: unknown): LinkRoute {
+export function openGuestLink(
+  host: WebContents,
+  url: unknown,
+  from: Omit<LinkTabRequest, 'url'> = {},
+): LinkRoute {
   const route = routeGuestLink(url)
-  if (route === 'tab' && !host.isDestroyed()) host.send(LINK_TAB_CHANNEL, url)
+  if (route === 'tab' && !host.isDestroyed()) {
+    host.send(LINK_TAB_CHANNEL, { ...from, url: url as string } satisfies LinkTabRequest)
+  }
   return route
 }
 

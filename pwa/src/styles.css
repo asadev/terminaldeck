@@ -2223,6 +2223,24 @@ a.browse__go {
    read as a list that will grow — the wrong impression for the one step most
    people will never use. It wraps rather than scrolls, because a horizontal
    scroller inside a block on a phone is a control people do not find. */
+/* The switcher standing on its own, at the top of the copilot and the localhost
+   screens rather than inside the New-session block. Both of those pages are
+   edge-to-edge, so the gutters that came from `.start` have to come from here —
+   and the rule under it is the same divider `.start` draws, so the three screens
+   put the control in the same place with the same weight. That is the point of
+   it being one control: "same switch like the first time we had." */
+.start__switch {
+  padding: 2px 16px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Inside the New-session block it is already inside `.start`'s padding, so it
+   contributes none of its own and draws no second line. */
+.start .start__switch {
+  padding: 0;
+  border-bottom: none;
+}
+
 .start__machines {
   display: flex;
   flex-wrap: wrap;

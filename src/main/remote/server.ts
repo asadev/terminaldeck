@@ -87,11 +87,15 @@ import {
   serialize,
   type ClientMessage,
   type CopilotLinkWire,
+  type ControlName,
+  type ControlReadingWire,
+  type ControlsReadingWire,
   type DeviceDescriptor,
   type DevServerReport,
   type ProtocolErrorCode,
   type RemoteSession,
   type ServerMessage,
+  type UsageAnswerWire,
 } from './protocol'
 // The one comparison this app has for "are these two paths the same folder",
 // borrowed rather than restated. A second idea of folder equality here would be
@@ -246,12 +250,18 @@ export interface SessionAccess {
    * host with a session layer and no notion of who is asking (the demo box,
    * `scripts/remote-host.ts`) supplies neither and behaves as it always did.
    *
-   * Consulted at four doors in this file — the welcome frame, `list`, `attach`
-   * and every `input`/`resize` — rather than once at attach. That is not
-   * belt-and-braces, it is the difference between a folder being taken back now
-   * and being taken back at the next reconnection: a device holding a handle
+   * Consulted at every door in this file that names a session — the welcome
+   * frame, `list`, `attach`, every `input`/`resize`, `close`, both `controls`
+   * verbs, `usage.read` and `session.send` — rather than once at attach. That is
+   * not belt-and-braces, it is the difference between a folder being taken back
+   * now and being taken back at the next reconnection: a device holding a handle
    * would otherwise keep a keyboard on a session in a folder somebody had just
    * removed, and the person removing it would have no way to tell.
+   *
+   * It is also the *only* door two of those verbs have. `controls.apply` and
+   * `session.send` both write into a pty with no attach anywhere in their path,
+   * on purpose — see `sendServe` for the argument — so this rule is not a second
+   * check behind a handle for them, it is the check.
    */
   visible?(deviceId: string, sessionId: string): boolean
   /** Null when there is no such session. Callbacks fire until `detach`. */
@@ -319,6 +329,139 @@ export interface SessionAccess {
    * is on it.
    */
   folders?(deviceId: string): string[]
+  /**
+   * Read and set a session's model, effort and fast mode. **Optional, and its
+   * absence is the switch**, exactly as {@link create}'s and {@link close}'s are.
+   *
+   * A session layer that cannot read a screen simply does not have this, the
+   * `controls` capability is then never advertised, and a client talking to such
+   * a host draws the sentence it drew before this existed rather than a menu
+   * whose every press is refused. `scripts/remote-host.ts` and the public demo
+   * box are both in that position: they have terminals and no shadow emulator to
+   * read one off.
+   *
+   * One object rather than two methods, and that is the point of it. Reading and
+   * setting are useless apart — a menu that can write and not read shows
+   * "Unknown" for ever with no tick in it, and one that can read and not write is
+   * a label — so a host either has both or advertises neither, and there is no
+   * arrangement of flags that can produce half a feature.
+   *
+   * Both are asynchronous because both really are: reading waits for the
+   * emulator to finish parsing what the pty has written, and setting types a
+   * command and waits for the CLI to answer it, which is seconds.
+   */
+  controls?: RemoteControlsAccess
+  /**
+   * What this session's account has spent and how full its context window is.
+   * **Optional, and its absence is the switch**, exactly as {@link controls}'s
+   * is.
+   *
+   * A host with no usage layer — `scripts/remote-host.ts`, the public demo box —
+   * simply does not have this, the `usage` capability is never advertised, and
+   * the window on the far side keeps saying what it said before rather than
+   * drawing a bar that answers nothing. The same additive rule every capability
+   * on this wire follows.
+   *
+   * One object rather than three methods for the reason {@link controls} is one:
+   * the three readings are one feature, a bar that could read a context window
+   * and not a plan limit is half a bar, and there is no arrangement of flags
+   * that should be able to produce that.
+   */
+  usage?: RemoteUsageAccess
+}
+
+/**
+ * The far end of `usage.read`.
+ *
+ * A courier's interface like {@link RemoteControlsAccess}, and split into three
+ * methods for one reason: **they cost wildly different amounts and the split is
+ * what keeps the dear one out of the cheap one's code path.** A single
+ * `read(want)` would put all three behind one call site, and the first time
+ * somebody wired that call site to a mount the host would boot an agent CLI per
+ * tab.
+ *
+ * Every method answers with the record that host's *own* window is handed for
+ * the same session. Nothing is re-shaped for the wire — see `UsageAnswerWire` —
+ * so a machine one version ahead reports what its own build reports.
+ *
+ * None of them may throw for an ordinary absence. A session that is gone, an
+ * account with no limits, an agent that writes no token counts — all of those
+ * are readings with sentences in them, and `server.ts` turns a rejected promise
+ * into a bare `unavailable` that says nothing useful.
+ */
+export interface RemoteUsageAccess {
+  /**
+   * What this machine already knows about that session's subscription windows.
+   *
+   * **Free, and it has to stay free.** Memory, plus one file for a Codex login.
+   * This is what a bar mounting over a remote session asks for, so anything that
+   * made it spawn would put the expensive reading on the cheap one's schedule —
+   * which is the single constraint this whole capability was designed around.
+   */
+  plan(sessionId: string): Promise<Record<string, unknown>>
+  /**
+   * Go and find out — the reading that costs.
+   *
+   * Boots Claude Code on this machine: 725 MB peak, about three seconds,
+   * measured on 2026-08-19. Reached only because a person opened the panel on
+   * the far window or pressed the retry inside it, which is the same event that
+   * spends the same amount locally.
+   *
+   * `force` is that person overriding rather than this app looking: it reaches
+   * past the five-minute throttle the CLI keeps on its own figure and past a
+   * login already settled on "no subscription limits".
+   *
+   * Answers with the refresh outcome *and* the report it produced, in one
+   * record. The local path gets the second half over a push channel; there is no
+   * push on this wire, and a second round trip to collect a number this machine
+   * is already holding would be a second chance for the answer to go missing.
+   */
+  refresh(sessionId: string, force: boolean): Promise<Record<string, unknown>>
+  /**
+   * How full that session's context window is, read off the transcript.
+   *
+   * A bounded tail read of a file the agent is already writing — 2–17 ms — so it
+   * may be asked for on the same events the local figure is re-read on.
+   */
+  context(sessionId: string): Promise<Record<string, unknown>>
+}
+
+/**
+ * The far end of `controls.read` and `controls.apply`.
+ *
+ * Deliberately a courier's interface and not a controls implementation. It takes
+ * a session id, a control name and a value and hands back what
+ * `src/main/agent-controls.ts` said — the desktop that assembles this wires it
+ * straight to that module against its own PTY manager, which is the same call
+ * the window on that machine makes for its own bar. One mechanism, two callers.
+ *
+ * Neither method may throw for an ordinary refusal. A session that is gone, an
+ * account that may not have that model, a session mid-turn — all of those are
+ * answers with sentences in them, and `server.ts` turns a rejected promise into
+ * a bare `unavailable` that says nothing.
+ */
+export interface RemoteControlsAccess {
+  /**
+   * What that session's controls say right now. Passive: nothing is typed.
+   *
+   * `live: false` in the answer is how "there is no such session" arrives, so a
+   * caller never has to tell a missing session from a broken read.
+   */
+  read(sessionId: string): Promise<ControlsReadingWire>
+  /**
+   * Set one, and report what the CLI said about it.
+   *
+   * The value is a string that has already been through the parser's character
+   * class — see `controls.apply` — and it is still not trusted to be *a* value:
+   * the far end checks it against the CLI's own accepted list before typing
+   * anything, which is where a model name nobody has heard of is refused in the
+   * CLI's words rather than this app's.
+   */
+  apply(
+    sessionId: string,
+    control: ControlName,
+    value: string,
+  ): Promise<{ ok: boolean; message: string; reading: ControlReadingWire }>
 }
 
 /**
@@ -1362,6 +1505,42 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      * that could correct it later.
      */
     if (name === CAPABILITY.web) return typeof options.openUrl === 'function'
+    /*
+     * Same rule again, and here it decides more than a button: this is the
+     * capability a client reads to know whether to draw a *model menu* over a
+     * session on this machine at all. A host with no way to read a screen — the
+     * stub host, the demo box — advertises nothing and the far window keeps the
+     * sentence it has today, which is honest. Advertised on a boolean somebody
+     * had to remember to set, it would eventually be a menu that types nothing.
+     */
+    if (name === CAPABILITY.controls) return options.sessions.controls !== undefined
+    /*
+     * Same rule once more, and here the honest absence matters more than usual:
+     * a host that advertised this and could not answer would have the far bar
+     * ask on every mount and then draw nothing, which reads as a broken figure
+     * rather than as a host that has no figure. A stub host has terminals and no
+     * usage layer, and saying so is what makes the far window keep the sentence
+     * it already had.
+     */
+    if (name === CAPABILITY.usage) return options.sessions.usage !== undefined
+    /*
+     * `send` is deliberately not in the list above, and the absence is the
+     * decision rather than an omission.
+     *
+     * Every rule up there reads a capability off the object that makes it
+     * possible — `controls` and `usage` off an optional member of
+     * `SessionAccess`, `create` and `close` off optional methods — so the
+     * advertisement cannot outlive the thing it advertises. `SessionAccess.write`
+     * is a **required** member of that interface: there is no host, real or
+     * stubbed, that has a session layer and cannot write into one. A gate here
+     * would therefore be a condition that is true by construction, which is
+     * worse than none — it reads as a negotiation somebody could get wrong
+     * later.
+     *
+     * The one thing that can still take this away is `options.offer`, checked at
+     * the top, and that is a decision about a particular host rather than a
+     * capability it lacks. The public demo box uses it.
+     */
     return true
   })
 
@@ -2634,6 +2813,249 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * Serve one `controls.read` or `controls.apply`.
+   *
+   * ## Two doors, and the second one is the one that matters
+   *
+   * The capability decides whether this host speaks these frames at all;
+   * {@link mayTouch} decides whether *this device* may ask about *this session*,
+   * and it is asked here for the same reason it is asked on every `input`
+   * keystroke. A handle is proof of an attach that was allowed then, and folders
+   * are edited from the settings panel while a device is connected — so a
+   * connection that took a handle before a folder was removed must not keep a
+   * way to type `/model` into an agent running in it.
+   *
+   * `controls.apply` genuinely is typing: the far side of it writes characters
+   * and a return into a pty. So it is authorised exactly as `input` is, with the
+   * same sentence, and a device that may not type into a session may not reach
+   * this either. `controls.read` is authorised the same way and could argue for
+   * something weaker — it only looks — but "what is on that session's screen" is
+   * not a smaller question than "may I type at it", and two rules would be one
+   * more thing to keep in step.
+   *
+   * ## An unknown session is answered, not ignored
+   *
+   * Every path here ends in a frame. The asking side holds a promise per `rid`
+   * and a request that is silently dropped is a menu that spins until its own
+   * timeout, which reads as the feature being broken rather than as a refusal.
+   * The one thing that is *not* sent is a reading for a session this device may
+   * not see: that is a plain `error` with `unknown-session`, deliberately the
+   * same sentence an unauthorised `attach` gets, because a distinct one would
+   * confirm the id names something real.
+   */
+  async function controlsServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'controls.read' | 'controls.apply' }>,
+  ): Promise<void> {
+    const controls = options.sessions.controls
+    if (!controls || !advertised.includes(CAPABILITY.controls)) {
+      // Refused here as well as withheld from the advertisement, and the
+      // difference is the whole of it: `capabilitiesFor` decides what a client
+      // of ours draws, and this decides what *any* client gets. A build older
+      // than the rule, or one somebody wrote themselves, sends the frame without
+      // having read the welcome.
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} cannot read a session’s model or effort.`,
+      })
+      return
+    }
+    if (!mayTouch(deviceId, message.id)) {
+      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${message.id} is running.` })
+      return
+    }
+
+    if (message.t === 'controls.read') {
+      const reading = await controls.read(message.id)
+      // The device can be gone by now: a read waits for a terminal emulator to
+      // finish parsing, which is milliseconds but is not nothing.
+      if (!live.has(connection.id)) return
+      send(connection, { t: 'controls.reading', rid: message.rid, id: message.id, reading })
+      return
+    }
+
+    const answer = await controls.apply(message.id, message.control, message.value)
+    if (!live.has(connection.id)) return
+    send(connection, {
+      t: 'controls.applied',
+      rid: message.rid,
+      id: message.id,
+      ok: answer.ok,
+      // Passed through as written. This is the CLI's own words about a refusal
+      // — "Fast mode requires usage credits", "Mythos 5 isn’t available for your
+      // account yet" — and the far end has no way to write a better sentence
+      // about a machine it is not on.
+      message: answer.message,
+      reading: answer.reading,
+    })
+  }
+
+  /**
+   * Serve one `usage.read`.
+   *
+   * ## The same two doors, and the second one is still the one that matters
+   *
+   * The capability decides whether this host speaks the frame at all;
+   * {@link mayTouch} decides whether *this device* may ask about *this session*,
+   * and it is the same door `controls.read` and every `input` keystroke go
+   * through. Deliberately not a weaker one: "what has this session's account
+   * spent" is a fact about a subscription, and a device that may not attach to
+   * the session has no more business with that than it has with the screen.
+   * Two rules would be one more thing to keep in step, and folders are edited
+   * from the settings panel while a device is connected.
+   *
+   * ## Why the branch is here and not behind one method
+   *
+   * Because one of the three is dear. `refresh` starts an agent CLI on this
+   * machine — 725 MB, about three seconds — and `plan` and `context` read memory
+   * and a file. Keeping them three named methods on {@link RemoteUsageAccess}
+   * means the expensive one cannot be reached by a caller that meant one of the
+   * cheap ones, which is exactly how a bar mounting would come to cost 725 MB a
+   * tab.
+   *
+   * ## An unknown session is answered, not ignored
+   *
+   * Every path ends in a frame, for the reason `controlsServe` gives: the asking
+   * side holds a promise per `rid`, and a request silently dropped is a bar that
+   * spins until its own deadline and then reports "nobody answered" about a host
+   * that had in fact refused. The one thing not sent is a reading for a session
+   * this device may not see — that is a plain `error` with `unknown-session`,
+   * the same sentence an unauthorised `attach` gets, because a distinct one
+   * would confirm that the id names something real.
+   */
+  async function usageServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'usage.read' }>,
+  ): Promise<void> {
+    const usage = options.sessions.usage
+    if (!usage || !advertised.includes(CAPABILITY.usage)) {
+      // Refused here as well as withheld from the advertisement, and the
+      // difference is the whole of it: `capabilitiesFor` decides what a client
+      // of ours draws, and this decides what *any* client gets — including a
+      // build older than the rule, or one somebody wrote themselves, that sends
+      // the frame without having read the welcome.
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} cannot report a session’s usage.`,
+      })
+      return
+    }
+    if (!mayTouch(deviceId, message.id)) {
+      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${message.id} is running.` })
+      return
+    }
+
+    const reading =
+      message.want === 'refresh'
+        ? await usage.refresh(message.id, message.force)
+        : message.want === 'context'
+          ? await usage.context(message.id)
+          : await usage.plan(message.id)
+    // The device can be gone by now, and for `refresh` it can have been gone for
+    // seconds: the whole point of that branch is that it waits for a CLI.
+    if (!live.has(connection.id)) return
+    const answer: UsageAnswerWire = { reading }
+    send(connection, { t: 'usage.reading', rid: message.rid, id: message.id, want: message.want, answer })
+  }
+
+  /**
+   * Serve one `session.send`: type into a session this connection is not
+   * attached to.
+   *
+   * ## One door, and it is deliberately not the handle
+   *
+   * `input` is refused unless `connection.handles` holds the session, and the
+   * comment there says why in four words — *"Attachment is the authorisation"*.
+   * That is a true sentence about `input` and it was never the only door.
+   * {@link mayTouch} is the other one, and it is the one that actually decides
+   * who may touch what: it is asked on the welcome, on `list`, on every
+   * `attach`, and again on every `input` keystroke *after* the handle check,
+   * because a handle only proves an attach that was allowed **then** and folders
+   * are edited from the settings panel while a device is connected.
+   *
+   * So this verb asks `mayTouch` and nothing else, and that is the whole point
+   * of it rather than a relaxation. `controlsServe` above already takes exactly
+   * this position with exactly this door: `controls.apply` **writes characters
+   * and a return into a pty** — no handle anywhere in its path — and it is
+   * authorised by the reach alone. An attach is a subscription to a session's
+   * *output*; the reach is the permission to *touch* it. A caller with something
+   * to say and nothing to read should not have to buy the first to get the
+   * second, and until this existed it did: the browser's Send-to-session picker
+   * could name every session on every paired machine and could type into none of
+   * them, because the only way to earn a handle would have been to displace the
+   * one a terminal pane on this same connection already held — dropping that
+   * pane's subscription and replaying its whole scrollback at the person reading
+   * it. See `renderer/browser/agent-target.ts`, which states the problem and
+   * prescribes this verb.
+   *
+   * ## Every path ends in a frame
+   *
+   * Including the refusals, and including the ones `controls` answers with a
+   * plain `error`. The asking side holds a promise per `rid` and an `error`
+   * frame carries no `rid`, so a refusal sent that way is a request that is
+   * never settled and a panel that spins until its own deadline — over a machine
+   * that answered instantly. The only thing withheld is *which* refusal it was:
+   * a device that may not touch the session gets the same sentence an unknown id
+   * gets, because a distinct one would confirm that the id names something real,
+   * and these ids are recoverable from an alert, a transcript path or an older
+   * list.
+   */
+  function sendServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'session.send' }>,
+  ): void {
+    /*
+     * The capability first, and it is the *only* gate this host applies that is
+     * not about the device.
+     *
+     * Note what is not here: a check on the session layer. `controls` and
+     * `usage` are advertised off an optional object and refused here when it is
+     * absent, because a host can genuinely lack the thing behind them.
+     * `SessionAccess.write` is a **required** member of that interface — every
+     * host that exists can already do this — so the only way for the name to be
+     * missing from `advertised` is `options.offer`, which is a decision
+     * somebody took about a particular host rather than a capability it lacks.
+     * The public demo box is that host, and it is why this check exists at all:
+     * a client that never read the welcome still gets a sentence rather than
+     * silence.
+     */
+    if (!advertised.includes(CAPABILITY.send)) {
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} cannot be sent to without attaching first.`,
+      })
+      return
+    }
+    if (!mayTouch(deviceId, message.id)) {
+      send(connection, {
+        t: 'session.sent',
+        rid: message.rid,
+        id: message.id,
+        ok: false,
+        message: `No session ${message.id} is running.`,
+      })
+      return
+    }
+    // Byte for byte what `case 'input'` does, and that is the assertion rather
+    // than a coincidence: this frame is not a second way of writing to a pty,
+    // it is the same write with a different authorisation in front of it.
+    options.sessions.write(message.id, message.data)
+    send(connection, {
+      t: 'session.sent',
+      rid: message.rid,
+      id: message.id,
+      ok: true,
+      message: 'Sent.',
+    })
+  }
+
+  /**
    * How a dev server's session is opened for a device: through `create`, and
    * through nothing else.
    *
@@ -2988,6 +3410,46 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
             t: 'error',
             code: 'unavailable',
             message: 'That dev server could not be looked at.',
+          })
+        })
+        return
+      case 'controls.read':
+      case 'controls.apply':
+        // Not awaited, for the same reason `create` and `dev.status` are not:
+        // applying types a command into a pty and then waits seconds for the CLI
+        // to answer it, and the message loop is the socket's data handler. A
+        // window that stopped reading its socket for six seconds would freeze
+        // every other session on the connection while one menu was working.
+        void controlsServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] a controls request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'That session’s controls could not be reached.',
+          })
+        })
+        return
+      case 'session.send':
+        // Not awaited and not asynchronous: writing into a pty is a synchronous
+        // call this process already holds the handle for, exactly as `input` is
+        // two cases up. The neighbours below spawn processes and wait seconds
+        // for a CLI, which is why they are promises; nothing here does.
+        sendServe(connection, connection.deviceId, message)
+        return
+      case 'usage.read':
+        // Not awaited, for the reason the controls above are not — and here the
+        // reason is measured rather than argued: the `refresh` branch boots an
+        // agent CLI and waits about three seconds for it. A message loop that
+        // stopped reading its socket for three seconds would freeze every
+        // session on the connection while one bar was looking at a percentage.
+        void usageServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] a usage request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'That session’s usage could not be read.',
           })
         })
         return

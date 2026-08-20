@@ -213,6 +213,24 @@ export interface UpdaterDeps {
    * window it already tracks, say — can supply that instead.
    */
   onFocus?: FocusSource
+  /**
+   * Called immediately before this process is asked to go away for an install.
+   *
+   * It exists because quitting stopped meaning "exit" the day sessions were
+   * allowed to outlive the window: `before-quit` may now cancel the quit and
+   * keep the app running with no window, which for an ordinary quit is the whole
+   * feature and for an update is a wedge — the installer has already been handed
+   * the bundle and the app it is replacing refuses to leave.
+   *
+   * A hook rather than an event, because there is no event that covers both
+   * paths. Electron emits `before-quit-for-update` only for Squirrel; the NSIS
+   * path in electron-updater spawns its installer and calls `app.quit()` with no
+   * announcement at all, so the one place that knows an install is starting is
+   * this function.
+   *
+   * Optional, and absent everywhere except `src/main/index.ts`.
+   */
+  beforeInstall?: () => void
 }
 
 /* ---------------------------------------------------------------- support -- */
@@ -769,6 +787,9 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
     // except from a user who pressed a button on a staged update.
     const staged = read()
     if (staged.phase !== 'ready') return staged
+    // After the `ready` check and before either install path, so nothing is
+    // told to let go of the app over an install that was never going to happen.
+    deps.beforeInstall?.()
     if (manualInUse()) {
       // The swap quits this process itself, so a resolved failure is the only
       // thing that can come back here — a success never returns.

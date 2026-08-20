@@ -24,7 +24,8 @@ import {
 import { composeAgentContext, parseCapture, type ElementCapture } from './selector'
 import { disposeIsolatedSession, isolatedSession } from './browser-isolation'
 import { onWebContentsDestroyed } from './web-contents-teardown'
-import { openGuestLink, showLinkMenu } from './link-open'
+import { openGuestLink } from './link-open'
+import { showGuestContextMenu } from './browser-context-menu'
 import { cleanUserAgent } from './browser-user-agent'
 import { activeProfile, DEFAULT_PARTITION, sessionForPartition } from './browser-profiles'
 import {
@@ -918,19 +919,24 @@ function wireGuestEvents(tab: BrowserTab): void {
   })
 
   /*
-   * The way back out to the real browser, where a browser puts it.
+   * The right-click menu, built from what was actually under the pointer.
    *
-   * In-app is the default now, and some links want the browser the person is
-   * already signed into. A native menu rather than an HTML one because this
-   * view composites above the entire renderer — an HTML menu would be painted
-   * behind the website and could not be seen at all, which is the whole subject
-   * of `overlay-watch.ts`.
+   * This used to be `showLinkMenu` — the app shell's two-item link menu, which
+   * offers the system browser and a copied address and nothing else. Pointed at
+   * a whole web page it answered the wrong question, and that is the defect
+   * Asad recorded: *"only these two: copy link, not even select text."* The
+   * browser's own menu lives in `browser-context-menu.ts`, which composes Copy,
+   * Cut, Paste, Select All, the link and image items, Back/Forward/Reload and
+   * Inspect out of `params` — and draws none of them unless `params.editFlags`
+   * says the command can act.
    *
-   * `linkURL` is empty unless the click was on a link, in which case the page's
-   * own address is the useful thing to offer.
+   * `tab.host` goes with it because "Open Link in New Tab" is a renderer object:
+   * it travels the same `LINK_TAB_CHANNEL` a denied `window.open` does.
    */
   wc.on('context-menu', (_event, params) => {
-    showLinkMenu(tab.window, params.linkURL || (liveContents(tab)?.getURL() ?? ''))
+    const page = liveContents(tab)
+    if (!page) return
+    showGuestContextMenu({ page, host: tab.host, window: tab.window }, params)
   })
 
   // The backdrop follows the destination, one event before it paints. A

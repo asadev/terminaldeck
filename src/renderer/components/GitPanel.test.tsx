@@ -6,8 +6,11 @@ import {
   GROUP_STATE,
   noDiffReason,
   parseUnifiedDiff,
+  unavailableView,
   type GitChangeKind,
   type GitFile,
+  type GitNotRepo,
+  type GitStatusResult,
 } from './GitPanel'
 
 /**
@@ -179,5 +182,72 @@ describe('the diff a row opens', () => {
     expect(noDiffReason(file({ binary: true }))).toContain('binary')
     // A text file that did change has no reason — it gets a diff.
     expect(noDiffReason(file({}))).toBeNull()
+  })
+})
+
+/**
+ * The page Asad found empty.
+ *
+ *   > *"Source control shows nothing, so make sure it shows something whatever
+ *   > is necessary to show."*
+ *
+ * He was in `~/Templates` — a folder he had picked because it was empty — so
+ * "not a repository" was the truth. What was wrong was that the truth was the
+ * whole page: a title, a sentence repeating the title, and no way from there to
+ * a repository. The button is the fix, and these are the two ways it can go
+ * wrong once it exists.
+ */
+describe('what Source control shows when there is no repository', () => {
+  const notRepo = (over: Partial<GitNotRepo> = {}): GitStatusResult => ({
+    repo: false,
+    cwd: '/work/empty',
+    reason: 'not-a-repo',
+    message: 'This folder is not a git repository. Source control can create one.',
+    ...over,
+  })
+
+  it('offers the repository instead of a sentence about not having one', () => {
+    const view = unavailableView(notRepo({ canInit: true }), true)
+    expect(view.canInit).toBe(true)
+    expect(view.title).toBe('Not a repository')
+    // The one that matters: with a button there, the page does not also print
+    // the sentence. Two copies of one fact is the thing this round removed.
+    expect(view.message).toBeNull()
+  })
+
+  it('never offers to create one over a repository git is only refusing to read', () => {
+    /*
+     * Dubious ownership reports `not-a-repo` — it is the same discriminant —
+     * and `git init` there would create a second repository beside the one
+     * already on disk. `canInit` is what separates the two, and it is set in
+     * `main/git.ts` rather than guessed here.
+     */
+    const refused = notRepo({ message: 'git refuses this folder: dubious ownership.' })
+    const view = unavailableView(refused, true)
+    expect(view.canInit).toBe(false)
+    // And its message survives, because that one names a way out no title can.
+    expect(view.message).toContain('dubious ownership')
+  })
+
+  it('keeps the sentence when the window has no way to create one', () => {
+    // An older preload with no `gitInit`. The page loses the button and must
+    // not also lose the only line explaining itself.
+    const view = unavailableView(notRepo({ canInit: true }), false)
+    expect(view.canInit).toBe(false)
+    expect(view.message).toContain('not a git repository')
+  })
+
+  it('says something for every reason git.ts can report', () => {
+    for (const reason of ['not-a-repo', 'git-missing', 'no-such-folder', 'error'] as const) {
+      const view = unavailableView(notRepo({ reason, canInit: false }), true)
+      expect(view.title.length, reason).toBeGreaterThan(0)
+      expect(view.message, reason).not.toBeNull()
+    }
+  })
+
+  it('has a title for a status that never arrived at all', () => {
+    const view = unavailableView(null, true)
+    expect(view.title).toBe('git could not read this folder')
+    expect(view.canInit).toBe(false)
   })
 })

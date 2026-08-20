@@ -210,6 +210,25 @@
 }
 
 /*
+  The exception for the switch is deleted, along with the switch it was for.
+
+  It set `display: block` on `.session-controls .ac-toggle .ac-name`, and it
+  existed because the rule above hides a chip's name and a knob names nothing:
+  *"on or off **what**?"* Fast mode no longer has a chip. It is the last item in
+  the model menu now — *"move fast mode toggle inside the models dropdown at the
+  end"* — where it leads with its own name in `.ac-item-label`, which no rule
+  here hides, and where the menu it sits in is already open when it is read.
+
+  So the argument was won rather than abandoned: the control still says what it
+  is, in a place where saying so costs no bar width at all. The rule is removed
+  rather than left because `.ac-toggle` still exists inside this cluster — the
+  folded panel draws one — and a rule that matches something and does nothing is
+  worse than one that matches nothing: the panel's switch is given `name={null}`
+  by `ControlSection`, so this would have been a `display: block` on an element
+  that is never rendered, waiting to confuse whoever reinstates the name.
+*/
+
+/*
   Values are held shorter on a bar than in the composer.
 
   The composer allows 16ch, which is right there: the box is as wide as the pane

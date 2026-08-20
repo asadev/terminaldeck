@@ -123,6 +123,20 @@ export interface ShownTab {
  * is a hand-made arrangement and a tab that pushed into the middle of it would
  * move the tabs the user placed. A stale or unknown `activeId` adds nothing —
  * it is resolved against the live tab list, like everything else here.
+ *
+ * ## Every browser window, always, whether or not it was promoted
+ *
+ * Asad, 2026-08-20: *"Browser windows will not be on the side bar at all. They
+ * will be always only on the top bar."* The side panel used to be the other
+ * half of this pair — a page folded off the strip was still listed down there,
+ * which is what made "kept, or merely in view" a safe distinction to draw for
+ * both kinds. With the rail holding sessions only, a demoted browser window
+ * would be open, running, and drawn nowhere in the window: an owned thing with
+ * no way back to it, which is the one failure a tab strip must not have.
+ *
+ * So a browser window is not promotable — it is simply *present*. `promoted` is
+ * true for one because that is what the flag means to everything downstream (it
+ * stays whatever you are looking at), not because anybody dragged it here.
  */
 export function shownTabs(
   order: readonly string[],
@@ -130,7 +144,13 @@ export function shownTabs(
   activeId: string | null,
 ): ShownTab[] {
   const shown: ShownTab[] = stripTabs(order, tabs).map((tab) => ({ tab, promoted: true }))
-  if (activeId === null || shown.some((entry) => entry.tab.id === activeId)) return shown
+  const held = new Set(shown.map((entry) => entry.tab.id))
+  for (const tab of tabs) {
+    if (tab.kind !== 'browser' || held.has(tab.id)) continue
+    shown.push({ tab, promoted: true })
+    held.add(tab.id)
+  }
+  if (activeId === null || held.has(activeId)) return shown
   const active = tabs.find((tab) => tab.id === activeId)
   return active ? [...shown, { tab: active, promoted: false }] : shown
 }

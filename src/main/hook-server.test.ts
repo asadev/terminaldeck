@@ -624,3 +624,219 @@ describe('the endpoint', () => {
     expect(seen).toHaveLength(1)
   })
 })
+
+/**
+ * The two things this endpoint learned to say in 2026-08-19, and the far larger
+ * number of things it still refuses to say.
+ *
+ * Both exist so that an agent can be told which browser window belongs to its
+ * session — `B1`, `B2` — without a single character being typed into a terminal
+ * Asad is looking at, which he has objected to three times and which this app
+ * will not do.
+ */
+describe('POST /open', () => {
+  /** The status and the body, because this route's body is the whole answer. */
+  function ask(
+    endpoint: HookEndpoint,
+    body: string,
+    sessionId?: string,
+  ): Promise<{ status: number; text: string }> {
+    const headers: Record<string, string> = { 'content-type': 'text/plain' }
+    headers[TOKEN_HEADER] = endpoint.token
+    if (sessionId) headers[SESSION_HEADER] = sessionId
+    return new Promise((resolve, reject) => {
+      const req = request(
+        { socketPath: endpoint.socketPath, method: 'POST', path: '/open', headers },
+        (res: IncomingMessage) => {
+          let text = ''
+          res.on('data', (chunk: Buffer) => {
+            text += chunk.toString('utf8')
+          })
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, text }))
+        },
+      )
+      req.on('error', reject)
+      req.write(body)
+      req.end()
+    })
+  }
+
+  it('hands the URL and the session to whoever routes it, and answers two lines', async () => {
+    const seen: Array<{ url: string; sessionId: string | null }> = []
+    const endpoint = await startHookServer({
+      dir: scratch(),
+      onOpen: (request) => {
+        seen.push(request)
+        return { route: 'tab', line: 'Opened in B2 — Terminal Deck.' }
+      },
+    })
+    live = endpoint
+
+    const answered = await ask(endpoint, 'https://example.com/x', 'session-7')
+
+    expect(answered.status).toBe(200)
+    // First line the route, second the sentence. The client is a POSIX shell
+    // script that cannot assume `jq` exists — `open-shim.ts` reads exactly this
+    // with `head -n 1`.
+    expect(answered.text).toBe('tab\nOpened in B2 — Terminal Deck.\n')
+    expect(seen).toEqual([{ url: 'https://example.com/x', sessionId: 'session-7' }])
+  })
+
+  it('accepts the JSON form as well as the bare URL', async () => {
+    const seen: string[] = []
+    const endpoint = await startHookServer({
+      dir: scratch(),
+      onOpen: ({ url }) => {
+        seen.push(url)
+        return { route: 'system', line: 'nope' }
+      },
+    })
+    live = endpoint
+
+    await ask(endpoint, '{"url":"https://example.com/json"}')
+
+    expect(seen).toEqual(['https://example.com/json'])
+  })
+
+  it('never answers without a sentence, even with nothing to route it', async () => {
+    const endpoint = await startHookServer({ dir: scratch() })
+    live = endpoint
+
+    const answered = await ask(endpoint, 'https://example.com/')
+
+    // Exit 0 having opened nothing must never happen: the shim keys off the
+    // first line, and an empty answer would send it down the fallback with
+    // nothing to print.
+    expect(answered.text.startsWith('system\n')).toBe(true)
+    expect(answered.text.trim().split('\n')[1]).toContain('default browser')
+  })
+
+  it('falls back to the machine when the router throws', async () => {
+    const endpoint = await startHookServer({
+      dir: scratch(),
+      onOpen: () => {
+        throw new Error('boom')
+      },
+    })
+    live = endpoint
+
+    const answered = await ask(endpoint, 'https://example.com/')
+    expect(answered.text.startsWith('system\n')).toBe(true)
+  })
+})
+
+describe('the hook answer', () => {
+  function askHook(
+    endpoint: HookEndpoint,
+    path: string,
+    sessionId?: string,
+  ): Promise<{ status: number; text: string }> {
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    headers[TOKEN_HEADER] = endpoint.token
+    if (sessionId) headers[SESSION_HEADER] = sessionId
+    return new Promise((resolve, reject) => {
+      const req = request(
+        { socketPath: endpoint.socketPath, method: 'POST', path, headers },
+        (res: IncomingMessage) => {
+          let text = ''
+          res.on('data', (chunk: Buffer) => {
+            text += chunk.toString('utf8')
+          })
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, text }))
+        },
+      )
+      req.on('error', reject)
+      req.write('{}')
+      req.end()
+    })
+  }
+
+  it('carries context on UserPromptSubmit when there is context to carry', async () => {
+    const endpoint = await startHookServer({
+      dir: scratch(),
+      contextFor: ({ sessionId }) => (sessionId === 's1' ? 'B1 — a page' : null),
+    })
+    live = endpoint
+
+    const answered = await askHook(endpoint, '/hook/claude/UserPromptSubmit', 's1')
+
+    expect(answered.status).toBe(200)
+    expect(JSON.parse(answered.text)).toEqual({
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'B1 — a page' },
+    })
+  })
+
+  it('is the same empty 204 it always was for everything else', async () => {
+    const asked: string[] = []
+    const endpoint = await startHookServer({
+      dir: scratch(),
+      contextFor: ({ event }) => {
+        asked.push(event)
+        return event === 'PostToolUse' ? null : 'B1 — a page'
+      },
+    })
+    live = endpoint
+
+    // `Stop` keeps the observing-not-steering contract byte for byte: the answer
+    // is empty, and the question is not even asked.
+    expect((await askHook(endpoint, '/hook/claude/Stop', 's1')).status).toBe(204)
+    expect(asked).toEqual([])
+  })
+
+  it('asks on PostToolUse, and answers nothing when nothing has changed', async () => {
+    /*
+     * The mid-turn door, and the reason it is safe to have open.
+     *
+     * `PostToolUse` fires after every Read and every Bash, so it is asked far
+     * more often than the other two — and it answers only when a window has just
+     * been attached or detached. The ordinary tool call is the same empty 204 it
+     * always was, which is what keeps a channel that runs thousands of times a
+     * day free.
+     */
+    const asked: string[] = []
+    const endpoint = await startHookServer({
+      dir: scratch(),
+      contextFor: ({ event }) => {
+        asked.push(event)
+        return null
+      },
+    })
+    live = endpoint
+
+    expect((await askHook(endpoint, '/hook/claude/PostToolUse', 's1')).status).toBe(204)
+    expect(asked).toEqual(['PostToolUse'])
+  })
+
+  it('never hands the envelope to a CLI whose schema has not been watched', async () => {
+    // `hooks.ts` installs `SessionStart` for all three providers and
+    // `UserPromptSubmit` for two, so matching on the event name alone posted
+    // Claude's `hookSpecificOutput` shape at Codex and Gemini. What either does
+    // with it is unmeasured, and a CLI complaining about an unrecognised hook
+    // output would print into the terminal — the one thing this channel exists
+    // to avoid.
+    const asked: string[] = []
+    const endpoint = await startHookServer({
+      dir: scratch(),
+      contextFor: ({ provider }) => {
+        asked.push(provider)
+        return 'inside the app'
+      },
+    })
+    live = endpoint
+
+    expect((await askHook(endpoint, '/hook/gemini/SessionStart', 's1')).status).toBe(204)
+    expect((await askHook(endpoint, '/hook/codex/UserPromptSubmit', 's1')).status).toBe(204)
+    expect(asked).toEqual([])
+    expect((await askHook(endpoint, '/hook/claude/SessionStart', 's1')).status).toBe(200)
+    expect(asked).toEqual(['claude'])
+  })
+
+  it('says nothing for a session with nothing attached', async () => {
+    const endpoint = await startHookServer({ dir: scratch(), contextFor: () => null })
+    live = endpoint
+
+    const answered = await askHook(endpoint, '/hook/claude/SessionStart', 's1')
+    expect(answered.status).toBe(204)
+    expect(answered.text).toBe('')
+  })
+})

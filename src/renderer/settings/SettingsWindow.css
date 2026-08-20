@@ -1096,19 +1096,17 @@
   color: var(--text-primary);
 }
 
-.settings-profile-path {
-  font-family: var(--font-mono);
-  font-size: var(--t-caption);
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* `.settings-profile-path` was here — the account's config directory, set in
+   mono under its name. It is behind the row's ⓘ now (*"remove big descriptions
+   under each account… folder link"*), and the rule went with the element rather
+   than sitting here for something nothing renders, which is the same trade
+   `.cs-preview` made in `verbatim.css`. */
 
 /* The sign-in line: the one thing on this screen that was actually read from
-   the agent rather than from a directory listing. It sits between the name and
-   the path because that is the order the questions get asked — who is this,
-   can it start a session, where does it live. */
+   the agent rather than from a directory listing. It sits under the name
+   because that is the order the questions get asked — who is this, and can it
+   start a session. The ⓘ at the end of it carries the third, which is where it
+   lives. */
 .settings-account-state {
   display: flex;
   align-items: baseline;
@@ -1136,6 +1134,14 @@
 .settings-account-state[data-state='signed-out'] .settings-account-mark {
   background: var(--color-warning);
 }
+
+/* `.settings-account-history` was here, in three rules — where an account's
+   conversations are kept, and two warning-toned variants for a link somebody
+   made themselves and for folders a share could not merge. The sentence is
+   behind the row's ⓘ now and the share button that produced the third is off
+   this pane entirely. Deleted rather than kept: a selector for an element
+   nothing renders is what somebody reaches for when they want one more short
+   line under a row, which is exactly what this pass took away. */
 
 /* Why there is no Sign in button on this row.
    
@@ -1166,6 +1172,177 @@
   align-items: center;
   gap: var(--sp-3);
   margin-top: var(--sp-3);
+}
+
+/* ----------------------------------------------------- this machine / servers -- */
+
+/* Two buttons at the top of Coding AI, and one of them is on.
+
+   *"Two buttons at the top to switch between this machine and server
+   machines."* The selected one is the accent rather than a lighter grey, for the
+   reason the rail's selected row is: on a sheet where the rail, the pane and
+   every row are one colour, a raised pill is the last stacked grey in the window
+   — and a hue cannot go dark-on-dark or light-on-light however the greys around
+   it are retuned. There is no recessed track under these for the same reason;
+   the track is what makes a macOS segmented control read, and it reads by being
+   a second surface. */
+.settings-scope {
+  display: flex;
+  gap: var(--sp-05);
+  width: fit-content;
+  margin: 0 0 var(--sp-6);
+}
+
+.settings-scope button {
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  font-weight: var(--w-regular);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+/* Hover means "not here yet", so it does not apply to the button you are
+   already on — the same rule the rail follows, and for the same reason: a fill
+   under the selected one would be the grey pill back, intermittently. */
+.settings-scope button[aria-pressed='false']:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.settings-scope button[data-on] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: var(--w-semibold);
+}
+
+.settings-scope button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------- add an agent -- */
+
+/* The Add-agent menu: a disclosure, drawn as the button it behaves like.
+
+   *"Just give a button drop-down, add an agent, and there will be a list of
+   them."* A `<details>` rather than a floating menu because the list has to be
+   in the markup for a project whose only rendering is `renderToStaticMarkup`,
+   and because a disclosure needs no JavaScript to open, close or be reached from
+   a keyboard. The marker is removed and the summary borrows `.settings-btn`'s
+   shape so that what looks like a button is a button. */
+.settings-addmenu {
+  margin-top: var(--sp-6);
+}
+
+.settings-addmenu > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+  list-style: none;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* Safari draws its own triangle from a pseudo-element the standard property
+   does not reach. */
+.settings-addmenu > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The chevron, drawn rather than left to the marker so it can turn. */
+.settings-addmenu > summary::after {
+  content: '⌄';
+  margin-top: -3px;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+.settings-addmenu[open] > summary::after {
+  content: '⌃';
+  margin-top: 3px;
+}
+
+.settings-addmenu > summary:hover {
+  background: var(--fill-secondary);
+}
+
+.settings-addmenu > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-addmenu > ul {
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-addmenu > ul > li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--row-h);
+}
+
+.settings-addmenu-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+}
+
+/* Not an action, so not styled as one: this entry is the answer "you already
+   have it", and the row for it is a few pixels above. */
+.settings-addmenu-have {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------ accounts, by agent -- */
+
+/* One list per agent. Spaced like a group inside a group: further from the
+   list above it than two accounts stand from each other, and closer to its own
+   first row than to anything else — the same 24/20/8 rhythm the pane's own
+   headings use, one level down. */
+.settings-account-group {
+  margin-top: var(--sp-4);
+}
+
+.settings-account-group + .settings-account-group {
+  margin-top: var(--sp-6);
+}
+
+/* Deliberately *not* the same type as `.settings-group-title` above it.
+
+   "Accounts" and "Claude Code" are a heading and a sub-heading eight pixels
+   apart, and set identically they read as one label printed twice — which is
+   the fault this pane has had before, with the "Default" badge beside a row
+   called Default. So this one is the size body copy is and the weight a row's
+   own label is, in the ink between the two: a name for the list under it,
+   rather than a second name for the section. */
+.settings-account-group-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  letter-spacing: normal;
+  color: var(--text-secondary);
 }
 
 .settings-profile-actions,

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { generateStatic } from '../../../shared/sealed'
 import { hostIdFor } from '../../../shared/relay-wire'
 import { RemoteAuth } from '../device-auth'
+import { emptyUsageReading } from '../protocol'
 import { pairingDesk, type RemoteStatus } from '../server'
 import type { LocalhostMessage } from '../tunnel'
 import type { MachineLink, MachineLinkOptions, MachineLinkState } from './guest'
@@ -128,6 +129,7 @@ function rig(options: { online: boolean }): Rig {
         folders: null,
         capabilities: options.online ? ['localhost'] : [],
         ports: [],
+        copilot: null,
         hostPlatform: 'win32',
         retryAt: null,
       }
@@ -139,6 +141,8 @@ function rig(options: { online: boolean }): Rig {
         attach: () => true,
         detach: () => true,
         input: () => true,
+        sendFile: () => Promise.resolve({ ok: false as const, message: 'not in this fake' }),
+        cancelFile: () => {},
         resize: () => true,
         create: () => true,
         close: () => true,
@@ -148,7 +152,33 @@ function rig(options: { online: boolean }): Rig {
           sent.push(message)
           return true
         },
+        // A link that answers nothing about controls, which is what a machine
+        // whose build predates the `controls` capability really does. Null and
+        // the refusal sentence are the two shapes the renderer has to be right
+        // about, so the fake produces them rather than a working reading.
+        send: () => Promise.resolve({ ok: true, message: 'Sent.' }),
+        readControls: () => Promise.resolve(null),
+        setControl: () =>
+          Promise.resolve({
+            ok: false,
+            message: 'That machine is running a build that cannot set a model from here.',
+            reading: { value: null, label: null, source: null },
+          }),
         openThere: () => true,
+        // A machine that never offered this desktop a copilot, which is what
+        // `copilot: null` above says and what a link to a machine that paired
+        // this one as a guest really answers.
+        copilotAttach: () => ({ ok: false, message: 'That machine is not sharing a copilot with this desktop.' }),
+        copilotStart: () => ({ ok: false, message: 'That machine is not sharing a copilot with this desktop.' }),
+        copilotState: () => ({ ok: false, message: 'That machine is not sharing a copilot with this desktop.' }),
+        copilotSay: () => ({ ok: false, message: 'That machine is not sharing a copilot with this desktop.' }),
+        // Same again for usage, and here the shape is the interesting half: this
+        // link never answers null, because the bar it feeds has no previous
+        // figure to keep the way the control chips do. A machine that cannot
+        // report answers with an empty *reading* carrying the sentence, which is
+        // what puts the reason on screen before anybody presses anything.
+        readUsage: (_id: string, want: 'plan' | 'refresh' | 'context') =>
+          Promise.resolve(emptyUsageReading(want, 'That machine cannot report its usage from here.')),
       }
     },
   })

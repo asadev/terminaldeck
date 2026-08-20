@@ -66,6 +66,8 @@ export interface GitNotRepo {
   cwd: string
   reason: GitUnavailableReason
   message: string
+  /** Mirrors `GitNotRepo.canInit` in `src/main/git.ts` — see the note there. */
+  canInit?: boolean
 }
 
 export type GitStatusResult = GitRepoStatus | GitNotRepo
@@ -95,6 +97,15 @@ export interface GitBridge {
    * working one, rather than an empty "Source control is not available here".
    */
   gitDiff?(cwd: string, path: string, options?: { staged?: boolean; untracked?: boolean }): Promise<string>
+  /**
+   * `git init` in this folder, answering with the status that follows.
+   *
+   * Optional for the same reason `gitDiff` is: a window whose preload predates
+   * it keeps a working page, minus one button, rather than collapsing to "not
+   * available here". The button is only ever drawn when this is present, so
+   * there is no dead control in the older build.
+   */
+  gitInit?(cwd: string): Promise<GitStatusResult>
 }
 
 export interface GitPanelProps {
@@ -196,19 +207,61 @@ export function changeLabel(kind: GitChangeKind, code: string): string {
   return CHANGE_WORD[kind] || code.trim() || '?'
 }
 
-const UNAVAILABLE_COPY: Record<GitUnavailableReason, string> = {
-  'not-a-repo': 'This folder is not a git repository.',
-  'git-missing': 'git was not found on your PATH.',
-  'no-such-folder': 'This folder no longer exists.',
-  error: 'git could not read this folder.',
+/*
+ * What is wrong, in as few words as will carry it.
+ *
+ * These were a title *and* a sentence — "Nothing to track here" over "This
+ * folder is not a git repository." — which is the same fact said twice, and the
+ * second time in prose. Asad, this round: *"don't put any single statement in
+ * anywhere… we want simplicity."* So the sentence is gone and the title carries
+ * the whole fact, with the button under it carrying the way out.
+ *
+ * `git-missing` keeps its command because that is the one case where the way
+ * out is not a button this app can offer, and a name with no install line
+ * leaves somebody with nowhere to go.
+ */
+const UNAVAILABLE_TITLE: Record<GitUnavailableReason, string> = {
+  'not-a-repo': 'Not a repository',
+  'git-missing': 'git is not installed',
+  'no-such-folder': 'Folder is gone',
+  error: 'git could not read this folder',
 }
 
-/** The same four states as a heading: what is wrong, before why. */
-const UNAVAILABLE_TITLE: Record<GitUnavailableReason, string> = {
-  'not-a-repo': 'Nothing to track here',
-  'git-missing': 'git is not installed',
-  'no-such-folder': 'That folder is gone',
-  error: 'Source control is unavailable',
+/**
+ * What the page shows when there is no repository to show — decided once, in a
+ * pure function, because it is the half of this branch that can be wrong in a
+ * way nobody notices.
+ *
+ * Two things have to stay true together, and they are easy to break apart:
+ * the button is offered **only** where `git init` would actually help, and the
+ * sentence is printed **only** where the button is not there to carry the
+ * meaning. Getting the pair wrong in either direction is a real defect —
+ * offering "Create a repository" over a repository git is refusing on ownership
+ * grounds would make a second one beside the first, and dropping the sentence
+ * without a button would leave a title alone on an empty page.
+ */
+export interface UnavailableView {
+  title: string
+  /** Null when the button says it, so the page never states the same fact twice. */
+  message: string | null
+  canInit: boolean
+}
+
+export function unavailableView(
+  status: GitStatusResult | null,
+  hasInit: boolean,
+): UnavailableView {
+  const reason = status !== null && !status.repo ? status.reason : 'error'
+  const canInit = status !== null && !status.repo && status.canInit === true && hasInit
+  return {
+    title: UNAVAILABLE_TITLE[reason],
+    message: canInit
+      ? null
+      : status !== null && !status.repo
+        ? status.message
+        : 'git could not read this folder',
+    canInit,
+  }
 }
 
 interface Group {
@@ -487,6 +540,37 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
       })
   }, [api, cwd])
 
+  /** True while `git init` is in flight, so the button says so and cannot be double-pressed. */
+  const [initialising, setInitialising] = useState(false)
+
+  /**
+   * Make this folder a repository, and show what follows.
+   *
+   * The answer to `git:init` is the status read *after* the init, so the page
+   * goes straight from "Not a repository" to a working tree with the new
+   * repository's untracked files in it — there is no refresh to press and no
+   * moment where the page still claims the old state. A failure is put where
+   * every other failed read on this page goes.
+   */
+  const startRepo = useCallback(() => {
+    const call = api?.gitInit
+    if (!call || initialising) return
+    const asked = cwd
+    setInitialising(true)
+    setFailure(null)
+    void withDeadline(call(cwd), 'Creating this repository', WATCH_DEADLINE_MS)
+      .then((next) => {
+        remember(statusKey(asked), next)
+        if (shownCwd.current === asked) setStatus(next)
+      })
+      .catch((error: unknown) => {
+        if (shownCwd.current === asked) setFailure(readFailure(error))
+      })
+      .finally(() => {
+        if (shownCwd.current === asked) setInitialising(false)
+      })
+  }, [api, cwd, initialising])
+
   /**
    * Bring the asked-for group into view.
    *
@@ -605,10 +689,7 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
   if (!api) {
     return (
       <section className="git-panel" aria-label="Git status">
-        <PageEmpty icon={panelSpec('git').icon} title="Source control is not available here">
-          This window was opened without the git bridge, so there is nothing for this page to
-          read.
-        </PageEmpty>
+        <PageEmpty icon={panelSpec('git').icon} title="No git bridge in this window" />
       </section>
     )
   }
@@ -646,26 +727,39 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
   }
 
   if (!status || !status.repo) {
+    /*
+     * The way out, where there is one this app can take.
+     *
+     * `canInit` is set by `git.ts` only for a folder with no repository in it —
+     * never for a repository git refuses on ownership grounds, where `init`
+     * would make a second one beside the first. See the note on `GitNotRepo`.
+     */
+    const view = unavailableView(status, typeof api.gitInit === 'function')
     return (
       <section className="git-panel" aria-label="Git status">
-        <PageEmpty icon={panelSpec('git').icon} title={UNAVAILABLE_TITLE[status?.reason ?? 'error']}>
+        <PageEmpty
+          icon={panelSpec('git').icon}
+          title={view.title}
+          action={
+            view.canInit
+              ? { label: initialising ? 'Creating…' : 'Create a repository', onClick: startRepo, busy: initialising, primary: true }
+              : undefined
+          }
+        >
           {/*
-            `status.message` first, because it is now written prose rather than
-            git's stderr.
+            The sentence, only when nothing else on the page is carrying it.
 
-            `git.ts` used to hand back whatever git printed, so every surface
-            rendered things like "fatal: not a git repository (or any of the
-            parent directories): .git" at a person. That is fixed at the source,
-            and the message it now produces is more specific than the four
-            generic lines below: a repository refused for "dubious ownership"
-            lands in the `not-a-repo` bucket, where the generic sentence — "This
-            folder is not a git repository" — is simply false, and names no way
-            out. The written message names the `safe.directory` command and the
-            path.
+            With the button there, the title and the button already say "no
+            repository, and here is how to get one" — printing "This folder is
+            not a git repository" underneath is the third copy of one fact, and
+            it is the kind of standing prose this round removed everywhere.
 
-            The constants stay as the fallback for a status with no message.
+            Without the button the message is the only information on screen,
+            and it is worth its space: a repository refused for dubious
+            ownership reports the same `reason`, and its written message names
+            the `safe.directory` command and the path, which no title can.
           */}
-          {status ? (status.message ?? UNAVAILABLE_COPY[status.reason]) : UNAVAILABLE_COPY.error}
+          {view.message ?? undefined}
         </PageEmpty>
       </section>
     )
@@ -731,13 +825,11 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
         </button>
       </header>
 
-      {/* The branch is already named in the header above, so the blank does not
-          say it again — it says what "clean" covers, which the two-word version
-          left the reader to assume. */}
+      {/* Two words and no sentence under them. "Nothing staged, nothing changed,
+          nothing untracked" was here, spelling out what "clean" means to a
+          reader who is looking at a source-control page and already knows. */}
       {status.clean ? (
-        <PageEmpty icon={panelSpec('git').icon} title="Working tree clean">
-          Nothing staged, nothing changed, nothing untracked.
-        </PageEmpty>
+        <PageEmpty icon={panelSpec('git').icon} title="Working tree clean" />
       ) : (
         <div className="git-body" data-diff={canDiff || undefined}>
         <div className="git-groups">

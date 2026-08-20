@@ -11,6 +11,11 @@ import { newTab, type WorkspaceTab } from './tabs'
  * right anyway. The state it reports decides whether the tab can see the
  * cookies imported from Chrome, so a switch that renders the wrong word, or
  * renders nothing at all when it cannot work, is the whole bug.
+ *
+ * The word left the screen on 2026-08-20 — *"remove all of these titles. Just
+ * keep the logos"*, and "shade" in his list is this control. It did not leave
+ * the markup: `aria-label` is what a screen reader has instead of the colour
+ * and the changed drawing, so the assertions below are about that.
  */
 
 function render(
@@ -55,28 +60,32 @@ describe('the isolation toggle', () => {
   it('says Shared for an ordinary tab', () => {
     const markup = render(newTab('tab-1'), () => {})
     expect(markup).toContain('Session: Shared')
-    expect(markup).toContain('>Shared<')
+    expect(markup).toContain('title="Shared"')
     expect(markup).toContain('aria-pressed="false"')
   })
 
   it('says Isolated for an isolated tab, and says so where a reader can find it', () => {
     const markup = render(newTab('tab-1', '', true), () => {})
     expect(markup).toContain('Session: Isolated')
-    expect(markup).toContain('>Isolated<')
+    expect(markup).toContain('title="Isolated"')
     expect(markup).toContain('aria-pressed="true"')
   })
 
-  it('explains what switching costs, because it reopens the page', () => {
+  it('carries no sentence on the hover, like everything else on this bar', () => {
+    // *"I don't want any kind of long descriptions anywhere."* What switching
+    // costs — the page is reopened, because a WebContents' session is fixed when
+    // it is constructed — is documented in `browser-profiles.ts` and stated in
+    // Settings → Browser. It is not a paragraph that appears under a pointer.
     const markup = render(newTab('tab-1', '', true), () => {})
-    expect(markup).toMatch(/reopens the page/)
+    expect(markup).not.toMatch(/reopens the page/)
   })
 
   it('stays on screen and disabled when the preload has not wired it', () => {
     // Hiding it would read as "this app has no isolation", which is a different
-    // and worse claim than "this build cannot do it".
+    // and worse claim than "this build cannot do it". Disabled is that claim now
+    // that the sentence has gone.
     const markup = render(newTab('tab-1'))
     expect(markup).toContain('Session: Shared')
-    expect(markup).toContain('not available in this build')
     expect(markup).toContain('disabled')
   })
 
@@ -92,31 +101,31 @@ describe('the isolation toggle', () => {
  * toggle: present and explaining itself when it cannot work, rather than absent.
  */
 describe('the draw button', () => {
-  it('is a labelled button beside the rest of the page actions', () => {
+  it('is a named button beside the rest of the page actions', () => {
     const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {} })
-    expect(markup).toContain('Mark the page up and send it to a session')
-    expect(markup).toContain('>Draw<')
+    expect(markup).toContain('title="Draw"')
+    expect(markup).toContain('aria-label="Draw"')
   })
 
   it('reads as pressed while a canvas is over the page', () => {
     // The page is parked behind that canvas, so a button that did not look on
     // would leave the one visible explanation for a frozen website unstated.
     const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {}, drawing: true })
-    expect(markup).toMatch(/aria-label="Mark the page up[^"]*" aria-pressed="true"/)
+    expect(markup).toMatch(/aria-label="Draw" aria-pressed="true"/)
   })
 
   it('stays on screen and disabled when the preload has not wired it', () => {
     // Draw mode's two channels are deliberately outside `BRIDGE_METHODS` — see
     // `draw-bridge.ts` — so "this build cannot do it" is a state that really
-    // happens, and it has to say so rather than quietly disappear.
+    // happens. It shows as a disabled button rather than as a sentence on the
+    // hover, and rather than by quietly disappearing.
     const markup = render(newTab('tab-1'), () => {})
-    expect(markup).toContain('Marking up the page is not available in this build.')
-    expect(markup).toContain('>Draw<')
+    expect(markup).toMatch(/aria-label="Draw"[^>]*disabled/)
   })
 
   it('is disabled with no tab open', () => {
     const markup = render(null, () => {}, { onDraw: () => {} })
-    expect(markup).toMatch(/aria-label="Mark the page up[^"]*"[^>]*disabled/)
+    expect(markup).toMatch(/aria-label="Draw"[^>]*disabled/)
   })
 })
 
@@ -132,7 +141,23 @@ describe('the draw button', () => {
 describe('the top-right corner carries what the bottom used to', () => {
   it('has a menu for the things that are not actions on the page', () => {
     const markup = render(newTab('tab-1'), () => {})
-    expect(markup).toContain('Profiles, saved logins, cookies and the start page')
+    expect(markup).toContain('aria-label="More"')
+  })
+
+  it('draws the overflow glyph vertically, which is the one everybody knows', () => {
+    // *"unlike Chrome, three dots are like horizontal. Here it's not horizontal,
+    // it's vertical."* — he was pointing at Chrome's ⋮ and at our ⋯. Three
+    // circles down one x, rather than three across one y.
+    const markup = render(newTab('tab-1'), () => {})
+    expect(markup).toContain('<circle cx="12" cy="5" r="1.5"></circle>')
+    expect(markup).toContain('<circle cx="12" cy="19" r="1.5"></circle>')
+  })
+
+  it('has no profile button until the preload can actually switch profiles', () => {
+    // A profile icon that opens a menu that cannot switch is the half-feature
+    // this whole review is about. The panel passes `onProfiles` only when all
+    // five profile channels are wired; without it there is no button at all.
+    expect(render(newTab('tab-1'), () => {})).not.toContain('aria-label="Profile"')
   })
 
   it('counts the recorded steps on the Stop button, since nothing else shows them', () => {
@@ -165,7 +190,7 @@ describe('the top-right corner carries what the bottom used to', () => {
         steps={8}
       />,
     )
-    expect(markup).toContain('Stop (8)')
+    expect(markup).toContain('aria-label="Stop (8)"')
   })
 })
 
@@ -248,7 +273,7 @@ describe('the toolbar with another machine in play', () => {
     })
     expect(markup).toContain('office-pc')
     expect(markup).toContain('3000')
-    expect(markup).toContain('carried to this machine')
+    expect(markup).toContain('title="office-pc:3000"')
   })
 
   it('says why the numbers differ, on the one page where they do', () => {
@@ -259,6 +284,95 @@ describe('the toolbar with another machine in play', () => {
       sameNumber: false,
     })
     expect(markup).toContain('53412')
-    expect(markup).toContain('already in use on this machine')
+    expect(markup).toContain('title="office-pc:3000 → :53412"')
+  })
+})
+
+/**
+ * What the 2026-08-20 review took off this bar, held as absences.
+ *
+ * Absences are the only way to hold these: every one of them is a thing that was
+ * on screen and is not, and a test that asserted the replacement would pass just
+ * as happily with the old one still beside it.
+ */
+describe('icons, and the name on the hover', () => {
+  it('prints no caption beside any glyph', () => {
+    // *"on the top of the browser, remove all of these titles. Just keep the
+    // logos."* The names moved to `title`, which `Tooltips.tsx` draws in the
+    // app's own type — they did not simply disappear.
+    const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {} })
+    expect(markup).not.toContain('bw-icon-word')
+    for (const word of ['Inspect', 'Record', 'Shot', 'Draw', 'Size', 'Devtools', 'More']) {
+      expect(markup, `no hover name for ${word}`).toContain(`title="${word}"`)
+    }
+  })
+
+  it('says only the name on the hover, never the old sentence', () => {
+    const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {} })
+    expect(markup).not.toContain('Inspect an element in the page')
+    expect(markup).not.toContain('Open Chrome devtools for the page')
+    expect(markup).not.toContain('Show the page at a phone or tablet size')
+  })
+
+  it('leaves nothing but the address inside the address field', () => {
+    /*
+     * *"Since we already have here a selection, why do we show inside the link
+     * bar also local? … from inside the link bar, it should be only the link,
+     * not this thing."*
+     *
+     * The machine picker outside the field already prints `Local`. The padlock
+     * itself stays — it is a glyph with its name on hover, like the rest of the
+     * bar — and what has gone is the word beside it.
+     */
+    const markup = render(newTab('tab-1'), () => {})
+    expect(markup).not.toContain('bw-security-text')
+    expect(markup).toContain('class="bw-security" data-level="local" title="Local"')
+  })
+})
+
+/**
+ * The profile button, and the menu it has to open *at*.
+ *
+ * *"we should keep vertical with maybe profile icon like this. So we can have
+ * these profiles over here as icon, so we can switch between profiles also if we
+ * want to."*
+ */
+describe('the profile button', () => {
+  it('is on the bar, named after the profile that is on', () => {
+    const markup = renderToStaticMarkup(
+      <Toolbar
+        tab={newTab('tab-1')}
+        security="local"
+        progress={1}
+        resolution={{ kind: 'url', url: 'http://localhost:3000/', display: 'localhost:3000' }}
+        focusToken={0}
+        onDraft={() => {}}
+        onEditing={() => {}}
+        onSubmit={() => {}}
+        onBack={() => {}}
+        onForward={() => {}}
+        onReload={() => {}}
+        onStop={() => {}}
+        onHome={() => {}}
+        onInspect={() => {}}
+        onRecord={() => {}}
+        onScreenshot={() => {}}
+        onDevtools={() => {}}
+        devtoolsOpen={false}
+        recording={false}
+        drawing={false}
+        deviceOpen={false}
+        onToggleDevice={() => {}}
+        onMenu={() => {}}
+        menuOpen={false}
+        onProfiles={() => {}}
+        profilesOpen={false}
+        profileName="Work"
+        steps={0}
+      />,
+    )
+    // The name and not the word "Profile": which profile is on is the fact
+    // somebody opens this to check, so it is the fact the hover answers.
+    expect(markup).toContain('aria-label="Work"')
   })
 })

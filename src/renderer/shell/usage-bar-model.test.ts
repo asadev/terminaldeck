@@ -7,6 +7,7 @@ import {
   chipReset,
   formatResetInstant,
   primaryReading,
+  readContextReading,
   readUsageReport,
   shortWindowName,
   usageReadout,
@@ -62,18 +63,30 @@ describe('a bar is drawn only when both halves are real', () => {
     expect(readout.caveat).toBe('resets 4am')
   })
 
-  it('refuses one for a percentage with no renewal time, and says which half is missing', () => {
-    // Claude Code prints "You've used 85% of your weekly limit" with no reset
-    // clause. The number is real and is shown; the bar is not, because a bar is
-    // a claim about a period and no period was stated.
+  it('draws one for a percentage with no renewal time, and says nothing about the missing half', () => {
+    /*
+     * Claude Code prints "You've used 85% of your weekly limit" with no reset
+     * clause. This used to withhold the bar and print a sentence explaining the
+     * withholding, which is the line Asad read off the copilot page — *"current
+     * session 0% of 5 hours. This long description is not required."*
+     *
+     * The percentage is the proven half and the bar draws exactly it. What is
+     * absent is the renewal clause, and it is absent rather than accounted for.
+     */
     const readout = usageReadout(
       reading({ used: { state: 'reported', fraction: 0.85 }, resets: { state: 'not-reported' } }),
       NOW,
     )
     expect(readout.state).toBe('no-reset')
-    expect(readout.bar).toBe(false)
+    expect(readout.bar).toBe(true)
+    expect(readout.percent).toBe(85)
     expect(readout.value).toBe('85%')
     expect(readout.caveat).toBe('no reset time reported')
+    // The same facts, in the same order, as every other window — minus the
+    // renewal clause the source never gave, and minus any account of its
+    // absence. Spoken only: a row with a bar prints its facts line instead.
+    expect(readout.detail).toBe('85% used · read just now')
+    expect(readout.detail).not.toContain('no bar')
   })
 
   it('refuses one for a limit named without a figure, keeping the reset it did give', () => {
@@ -94,7 +107,7 @@ describe('a bar is drawn only when both halves are real', () => {
      */
     const readout = usageReadout(reading(), NOW)
     expect(readout.caveat).toBe('resets 4am')
-    expect(readout.detail).toContain('resetting 4am (Asia/Dubai)')
+    expect(readout.detail).toContain('renews 4am (Asia/Dubai)')
     expect(chipReset('Aug 14 at 2pm (Asia/Dubai)')).toBe('Aug 14 at 2pm')
     // Nothing but a trailing parenthetical is ever removed.
     expect(chipReset('Current week (all models) tomorrow')).toBe('Current week (all models) tomorrow')
@@ -168,12 +181,18 @@ describe('a window that has rolled over is not a reading', () => {
     expect(readout.caveat).toBe('window has reset')
   })
 
-  it('still says what was last seen, and when', () => {
-    // Dropping the number is not the same as pretending nothing was ever read.
+  it('still says what was last seen, and when, in facts rather than in a sentence', () => {
+    /*
+     * Dropping the number is not the same as pretending nothing was ever read.
+     * What went is the prose around it: the clause explaining that nothing has
+     * been reported since, and the source sentence naming Codex. Both were
+     * true; neither is something this panel prints any more.
+     */
     const readout = usageReadout(codex, NOW)
-    expect(readout.detail).toContain('Last reported 5%')
-    expect(readout.detail).toContain('nothing has been reported since')
-    expect(readout.detail).toContain('Codex')
+    expect(readout.detail).toContain('Last 5%')
+    expect(readout.detail).toContain('reset ')
+    expect(readout.detail).not.toContain('nothing has been reported since')
+    expect(readout.detail).not.toContain('Codex')
   })
 })
 
@@ -292,5 +311,91 @@ describe('the source this feature refuses to use', () => {
       expect(source).not.toMatch(/[.[]\s*['"]?cachedUsageUtilization/)
     }
     expect(files.some((source) => source.includes('cachedUsageUtilization'))).toBe(true)
+  })
+})
+
+/**
+ * The context reading, as it comes off the bridge.
+ *
+ * The renderer cannot import `src/main/context-window.ts` — `tsconfig.web.json`
+ * does not include `src/main`, which is the same wall every other shape in this
+ * module is mirrored across — so the payload is parsed defensively here and the
+ * refusals are the interesting part. A bar drawn from a half-read payload is
+ * worse than a bar with nothing on it, because only one of the two is honest
+ * about what it knows.
+ */
+describe('reading a context payload', () => {
+  const PAYLOAD = {
+    provider: 'claude',
+    state: 'ok',
+    tokens: 154_057,
+    window: 1_000_000,
+    percent: 15.4057,
+    windowBasis: 'model',
+    model: 'claude-opus-5',
+    modelLabel: 'Opus 5',
+    source: {
+      path: '/Users/apple/.claude/projects/-Users-apple-ClaudeAsad/92b0e6db.jsonl',
+      sessionId: '92b0e6db-0f92-4cbb-bae9-0aa67f9a6868',
+      chosen: 'inferred',
+      rivals: 2,
+    },
+    reportedAt: 1_000,
+    observedAt: 2_000,
+    detail: '154,057 of 1,000,000 tokens — 15% of the context window.',
+  }
+
+  it('flattens the source onto the reading, and keeps the path in the main process', () => {
+    const reading = readContextReading(PAYLOAD)
+    expect(reading).toMatchObject({
+      provider: 'claude',
+      state: 'ok',
+      tokens: 154_057,
+      window: 1_000_000,
+      sessionId: '92b0e6db-0f92-4cbb-bae9-0aa67f9a6868',
+      chosen: 'inferred',
+      rivals: 2,
+    })
+    // The file that was read is a debugging fact, not something to draw.
+    expect(JSON.stringify(reading)).not.toContain('/Users/apple/.claude')
+    // And the friendly name arrives beside the id rather than being derived a
+    // second time here: `labelModelId` is the main process's table and the model
+    // chip on the same bar reads through it, so there is one answer to what
+    // `claude-opus-5` is called.
+    expect(reading?.modelLabel).toBe('Opus 5')
+    // A build whose main process predates the field says nothing rather than
+    // guessing — the panel falls back to the id it does have.
+    const older = readContextReading({ ...PAYLOAD, modelLabel: undefined })
+    expect(older?.modelLabel).toBeNull()
+    expect(older?.model).toBe('claude-opus-5')
+  })
+
+  it('refuses a payload with no state, which is what an older build answers', () => {
+    expect(readContextReading(undefined)).toBeNull()
+    expect(readContextReading({})).toBeNull()
+    expect(readContextReading({ state: 'fine' })).toBeNull()
+  })
+
+  it('keeps null a null rather than turning it into zero', () => {
+    /*
+     * The distinction the whole feature rests on. `?? 0` here would draw an
+     * empty meter for an agent that has never written a token count down, and an
+     * empty meter and an absent one are opposite claims.
+     */
+    const blank = readContextReading({
+      provider: 'gemini',
+      state: 'not-reported',
+      tokens: null,
+      window: null,
+      percent: null,
+      detail: 'Gemini does not record how full its context window is.',
+    })
+    expect(blank).toMatchObject({ tokens: null, window: null, percent: null, sessionId: null })
+  })
+
+  it('dates an unstamped figure by the look that found it, not by “just now”', () => {
+    // The same conservative reading of an absence `readReading` takes above.
+    const reading = readContextReading({ ...PAYLOAD, reportedAt: 0 })
+    expect(reading?.reportedAt).toBe(2_000)
   })
 })

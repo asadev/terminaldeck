@@ -80,66 +80,28 @@
   flex-shrink: 0;
 }
 
+/*
+  Every button on this bar, at one size, with its name on the hover.
+
+  It was `--icon-btn` (26px) around a 15px glyph, and half the row also carried a
+  caption. Both went on 2026-08-20: *"remove all of these titles. Just keep the
+  logos … Let's make these icons smaller and make this maybe bigger"*, "this"
+  being the address field. 24 around 14 is the smaller; the captions are the
+  larger, and they are worth far more of it — see the measurements on
+  `.bw-address`.
+
+  Not a global token change: `--icon-btn` is the size of every icon button in the
+  app's chrome, and this bar is the one that has an address field competing with
+  it for the same row.
+*/
 .bw-icon {
   display: grid;
   place-items: center;
-  width: var(--icon-btn);
-  height: var(--icon-btn);
+  width: 24px;
+  height: 24px;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-/*
-  The labelled variant: glyph plus a word.
-
-  Six unlabelled glyphs sat on the right of this bar and he could not name one
-  of them on camera. Only the actions carry a word — Back, Forward, Reload and
-  Home stay bare, because those four glyphs have meant the same thing in every
-  browser for thirty years and captioning them would be noise on the same bar.
-
-  Sized to the content instead of the square `--icon-btn`, and `flex` rather
-  than `grid`, because the box now holds two things in a row.
-*/
-.bw-icon[data-labelled] {
-  display: flex;
-  gap: var(--sp-1);
-  width: auto;
-  padding: 0 var(--sp-2);
-}
-
-.bw-icon-word {
-  font-size: var(--t-footnote);
-  white-space: nowrap;
-}
-
-/*
-  On a narrow window the words go and the buttons fall back to squares.
-
-  A container query, not a media query: this panel can be half of a split, so
-  the window's width says nothing about how much room this bar has. The
-  addresses bar is the flexible element beside these, and it must not be
-  squeezed to nothing to keep six captions.
-
-  The number was 720 and is 940, and the rule above is exactly why. Measured on
-  this bar as it stands: at a panel width of 792 — a 1000px window with the
-  sidebar open — the captioned actions take 554 pixels, and what was left for
-  the address bar after the navigation and the machine picker was **38**. That is
-  the sentence above being broken by its own threshold; there are eight actions
-  on this bar now rather than six, and a machine picker beside the field. 940 is
-  where the address bar stops being squeezed to nothing, and the captions go
-  first because the tooltip and the `aria-label` still carry every one of them.
-*/
-@container (max-width: 940px) {
-  .bw-icon[data-labelled] {
-    display: grid;
-    width: var(--icon-btn);
-    padding: 0;
-  }
-
-  .bw-icon-word {
-    display: none;
-  }
 }
 
 .bw-icon svg {
@@ -168,46 +130,18 @@
 }
 
 /*
- * The Shared / Isolated switch.
+ * The Shared / Isolated switch, which is a `.bw-icon` now and needs one thing
+ * of its own: a gap.
  *
- * Wider than its neighbours because it carries a word, and tinted rather than
- * outlined so it reads as a state next to a row of actions without adding a
- * line to a bar that has none. Isolated is drawn in the app's one accent, which
- * is otherwise reserved for selection and focus — this is the exception the
- * accent is worth making, because it is the only control on the bar whose
- * setting changes what the page can see.
+ * It reports a *state* where its neighbours perform actions, and with the word
+ * gone the only thing separating the two kinds is this eight pixels. Everything
+ * else it needs it already has: `.bw-icon[data-on]` paints it in the app's one
+ * accent while the tab is Isolated, which is the exception the accent is worth
+ * making — it is the only control on the bar whose setting changes what the page
+ * can see.
  */
 .bw-isolation {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  flex-shrink: 0;
-  height: var(--icon-btn);
-  margin-right: var(--sp-1);
-  padding: 0 var(--sp-2);
-  border-radius: var(--radius-sm);
-  background: var(--fill-tertiary);
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--t-footnote);
-  white-space: nowrap;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.bw-isolation:hover:not(:disabled) {
-  background: var(--fill-secondary);
-  color: var(--text-primary);
-}
-
-.bw-isolation[data-on] {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.bw-isolation:disabled {
-  color: var(--text-muted);
-  opacity: 0.4;
-  cursor: default;
+  margin-right: var(--sp-2);
 }
 
 /* ============================================================================
@@ -273,23 +207,49 @@
 /*
   On a narrow panel the name goes and the glyph and caret stay.
 
-  The number is 940 and not the 720 the action captions use, and it was measured
-  rather than chosen: at a panel width of 792 — a 1000px window with the sidebar
-  open — this control's 144px pushed the whole action group 76 pixels off the
-  right-hand edge of the toolbar. The captions are still on at that size, so the
-  bar has nothing else left to give, and the picker is the newcomer. It goes
-  first.
+  The number was 940 and is 640, and it moved because the bar it shares changed
+  under it. 940 was measured when eight action buttons carried captions and took
+  554 pixels; with the captions gone that group is 238, and at a panel width of
+  792 the address field has 386 pixels whether this name is drawn or not. Keeping
+  the threshold where it was would have hidden a name for room that nothing is
+  asking for any more — see `.bw-icon` for where the width went.
 
-  The control is still there and still opens. What is lost is the name, and the
-  `aria-label` and the tooltip both still carry it.
+  640 is where the address field starts to lose out again. The control is still
+  there and still opens below it; what is lost is the name, and the `aria-label`
+  and the hover label both still carry it.
 */
-@container (max-width: 940px) {
+@container (max-width: 640px) {
   .bw-machine-name {
     display: none;
   }
 }
 
-/* One field, one radius, no border. */
+/*
+  One field, one radius, no border — and the element every pixel taken off the
+  rest of this bar ends up in.
+
+    > *"So we can have a bigger link bar, because when it is smaller then it
+    > becomes too small. So I want more space for link bar. Let's make these
+    > icons smaller and make this maybe bigger."*
+
+  It is `flex: 1` and nothing else on the bar is, so "make this bigger" is
+  entirely a question of what the fixed-width things beside it stop taking.
+  Measured in `.harness/toolbar.tsx` — the bar drawn at three panel widths with
+  the field reading its own rectangle back — before and after the captions came
+  off, the glyphs went 26→24, and the Shared/Isolated switch stopped being a
+  word:
+
+    panel 1180   address 394 → 716   actions 554 → 240
+    panel  792   address 323 → 328   actions 269 → 240
+    panel  560   address  91 → 128   actions 269 → 240
+
+  The middle row is the one worth reading twice. At 792 the old bar was already
+  hiding the captions to survive — that is what the container query at 940 was
+  for — so it kept nearly the same address field while going from eight captions
+  to none. The new bar simply never needs the query. And 560 is where `.bw-url`'s
+  8rem floor takes over, which is the point below which this field stops being an
+  address bar whatever is done to its neighbours.
+*/
 .bw-address {
   display: flex;
   align-items: center;
@@ -331,15 +291,6 @@
 
 .bw-security[data-level='insecure'] {
   color: var(--color-warning);
-}
-
-.bw-security-text {
-  font-size: var(--t-footnote);
-  font-weight: var(--w-medium);
-}
-
-.bw-security[data-level='none'] .bw-security-text {
-  display: none;
 }
 
 /*

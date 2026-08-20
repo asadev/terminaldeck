@@ -29,9 +29,11 @@ import type { CopilotStage, CopilotStateView } from './copilot-model'
  *     because the page had made its terminal *"a small box inside the copilot
  *     page"*, so what is pinned is that everything above the pane is
  *     conditional.
- *  5. **It can still be switched off.** A singleton with no row in the rail has
- *     no ✕ that ends it, so the Stop it used to have on that page must exist
- *     somewhere a person standing in front of it can press.
+ *  5. **It can be started over.** The bar's one extra control said Stop until
+ *     2026-08-20, and stopping took away the tab the button was drawn on —
+ *     *"I don't understand what is the purpose of stop button."* It says
+ *     Restart now, which is the act somebody standing in front of it wants,
+ *     and it leaves the window where it is.
  *
  * ## The harness
  *
@@ -52,7 +54,8 @@ vi.mock('react-dom', async (importOriginal) => {
 ;(globalThis as { document?: unknown }).document = { body: {} }
 
 const { CopilotEntry } = await import('./CopilotEntry')
-const { CopilotStop } = await import('./CopilotStop')
+const { CopilotRestart } = await import('./CopilotRestart')
+const { CopilotMachines } = await import('./CopilotMachines')
 const { CopilotView } = await import('./CopilotView')
 const { CopilotConsent } = await import('./CopilotConsent')
 
@@ -82,6 +85,7 @@ function copilot(stage: CopilotStage, over: Partial<Copilot> = {}): Copilot {
     loading: false,
     ensure: noop,
     stop: noop,
+    restart: noop,
     refresh: noop,
     ...over,
   }
@@ -226,37 +230,94 @@ describe('the running copilot', () => {
   })
 })
 
-describe('stopping it', () => {
-  it('is offered, since a singleton nobody can switch off is a fault', () => {
+describe('which machine’s copilot', () => {
+  const here = { id: '', name: 'this Mac', reach: 'ready' as const, open: true }
+  const pc = { id: 'm1', name: 'office-pc', reach: 'ready' as const, open: true }
+
+  it('draws nothing at all with one machine', () => {
+    // A switch with one position is a label, and a label saying the name of the
+    // computer you are sitting at is exactly the standing sentence this app has
+    // spent a week deleting. The New Session dialog draws no Where step for the
+    // same person for the same reason.
+    expect(renderToStaticMarkup(<CopilotMachines machines={[here]} chosen="" onChoose={noop} />)).toBe('')
+  })
+
+  it('draws a row each once there are two, and marks the one you are on', () => {
+    const html = renderToStaticMarkup(
+      <CopilotMachines machines={[here, pc]} chosen="m1" onChoose={noop} />,
+    )
+    expect(html).toContain('this Mac')
+    expect(html).toContain('office-pc')
+    expect(html).toContain('aria-checked="true"')
+  })
+
+  it('keeps a machine it cannot reach, disabled, with the remedy on hover', () => {
     /*
-     * The copilot has no row in the rail and therefore no ✕ that ends it — that
-     * is what being a singleton costs — and the ✕ on its pill takes the pill off
-     * the bar like every other pill's does. So this chip is the only place in
-     * the window a person can stop it, which is why it moved into the toolbar
-     * rather than leaving with the page.
+     * *"We always need a truth."* A machine that paired this computer as a guest
+     * is one he can see in the rail two inches away, and leaving it out would be
+     * the switch quietly showing a subset — the failure this project keeps
+     * finding. The reason is on hover rather than on the page, which is his
+     * standing rule about sentences explaining states most people never see.
      */
     const html = renderToStaticMarkup(
-      <CopilotStop
+      <CopilotMachines
+        machines={[here, { ...pc, reach: 'refused' as const }]}
+        chosen=""
+        onChoose={noop}
+      />,
+    )
+    expect(html).toContain('disabled')
+    expect(html).toContain('Pair it again as your own')
+    expect(html).not.toContain('guest devices do not')
+  })
+
+  it('says wait, not re-pair, about a machine that is merely offline', () => {
+    // Two different remedies. Telling somebody to pair a sleeping PC again would
+    // send them to the wrong keyboard for the wrong reason.
+    const html = renderToStaticMarkup(
+      <CopilotMachines
+        machines={[here, { ...pc, reach: 'unreachable' as const }]}
+        chosen=""
+        onChoose={noop}
+      />,
+    )
+    expect(html).toContain('is not connected')
+    expect(html).not.toContain('guest')
+  })
+})
+
+describe('starting it over', () => {
+  it('says Restart, not Stop', () => {
+    /*
+     * The word is the whole fix. Stop's only visible effect was this window
+     * going away — the copilot's tab is derived from its pty — so the control
+     * erased the thing it was drawn on and said nothing about the pinned row
+     * that brings it back. Restart is what a person in this bar is asking for.
+     */
+    const html = renderToStaticMarkup(
+      <CopilotRestart
         copilot={copilot('ready', {
           signIn: { state: 'signed-in', account: 'a@b.c', plan: 'Max' },
         })}
       />,
     )
-    expect(html).toContain('>Stop</button>')
-    // And it says it comes back. Every other ✕-shaped control in this app
-    // destroys something; this one has to say in as many words that it does not.
-    expect(html).toContain('starts it again')
+    expect(html).toContain('>Restart</button>')
+    expect(html).not.toContain('>Stop</button>')
+    // And what it costs, on the control itself: one conversation, and nothing
+    // on disk. A button whose obvious reading is "destroy" has to say which.
+    expect(html).toContain('starts a fresh one')
+    expect(html).toContain('untouched')
     // Naming the account, because "signed in" with no login is the half-fact
     // this app keeps taking back out.
     expect(html).toContain('a@b.c')
   })
 
   it('is absent rather than greyed while nothing is running', () => {
-    // There is no process to stop, and a disabled control would teach that the
-    // app could stop something if only something were different.
+    // There is nothing to restart, and a disabled control would teach that the
+    // app could do it if only something were different.
     expect(
       renderToStaticMarkup(
-        <CopilotStop copilot={copilot('stopped', { state: state({ status: 'stopped' }) })} />,
+        <CopilotRestart copilot={copilot('stopped', { state: state({ status: 'stopped' }) })} />,
       ),
     ).toBe('')
   })

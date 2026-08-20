@@ -419,6 +419,114 @@ describe('driving a session', () => {
   })
 })
 
+/**
+ * Saying something into a session over there without opening it here.
+ *
+ * The link already has `input`, and `input` is not this: the far end serves it
+ * only to a connection holding an attach handle, and taking one out in order to
+ * type would displace the handle a terminal pane on this very link already
+ * holds — dropping its subscription and replaying its whole scrollback at
+ * whoever is reading it. So the wire grew a verb that types without
+ * subscribing, and the two properties worth pinning on this side are that it
+ * never goes out to a machine that did not offer it, and that it never answers
+ * with silence.
+ */
+describe('sending to a session it is not attached to', () => {
+  it('refuses locally when that machine never advertised the verb', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['create'] }))
+
+    const answer = await link.send('s1', 'look at this')
+    expect(answer.ok).toBe(false)
+    expect(answer.message).toMatch(/update it/i)
+    // And nothing went out. A host that has never heard of a frame answers it by
+    // closing the channel, so a hopeful send is not a failed request — it is
+    // every terminal session on this link going down with one panel's button.
+    expect(rig.fakes[0].sent.some((text) => text.includes('session.send'))).toBe(false)
+    link.disconnect()
+  })
+
+  it('refuses before the machine is up, with a sentence that has a different remedy', async () => {
+    // A link that is down is waited out; a machine whose build has no `send` is
+    // updated. Telling somebody "that failed" for either sends them to the wrong
+    // screen — the same split `setControl` makes.
+    const { link } = build()
+    link.connect()
+    await settle()
+
+    expect(await link.send('s1', 'look at this')).toEqual({
+      ok: false,
+      message: 'This desktop is not connected to that machine right now.',
+    })
+    link.disconnect()
+  })
+
+  it('puts the frame on the wire and settles on the answer', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['send'] }))
+
+    const pending = link.send('s1', 'look at this button\r')
+    await settle()
+    const frame = JSON.parse(rig.fakes[0].sent.at(-1) as string) as {
+      t: string
+      rid: string
+      id: string
+      data: string
+    }
+    expect(frame).toMatchObject({ t: 'session.send', id: 's1', data: 'look at this button\r' })
+    expect(frame.rid).not.toBe('')
+    // The whole point of the verb, as an assertion: nothing subscribed. A link
+    // that quietly attached first would pass every other line here and take a
+    // pane's handle away in the real app.
+    expect(rig.fakes[0].sent.some((text) => text.includes('"attach"'))).toBe(false)
+
+    rig.fakes[0].say({ t: 'session.sent', rid: frame.rid, id: 's1', ok: true, message: 'Sent.' })
+    expect(await pending).toEqual({ ok: true, message: 'Sent.' })
+    link.disconnect()
+  })
+
+  it('carries the far machine’s refusal back in its own words', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['send'] }))
+
+    const pending = link.send('s1', 'ls')
+    await settle()
+    const rid = (JSON.parse(rig.fakes[0].sent.at(-1) as string) as { rid: string }).rid
+    rig.fakes[0].say({ t: 'session.sent', rid, id: 's1', ok: false, message: 'No session s1 is running.' })
+
+    expect(await pending).toEqual({ ok: false, message: 'No session s1 is running.' })
+    link.disconnect()
+  })
+
+  it('will not file an answer about another session under this one', async () => {
+    // An `rid` only proves this is the answer to *a* question this end asked.
+    // Two panels sending to two sessions on one machine is a thing this window
+    // does, and one comparison makes the mix-up impossible rather than unlikely
+    // — the sentence that comes back is the one that does not claim to know.
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['send'] }))
+
+    const pending = link.send('s1', 'ls')
+    await settle()
+    const rid = (JSON.parse(rig.fakes[0].sent.at(-1) as string) as { rid: string }).rid
+    rig.fakes[0].say({ t: 'session.sent', rid, id: 's2', ok: true, message: 'Sent.' })
+
+    expect(await pending).toEqual({
+      ok: false,
+      message: 'That machine did not answer, so it is not known whether the text arrived.',
+    })
+    link.disconnect()
+  })
+})
+
 describe('stopping', () => {
   it('stays stopped, and stops dialling', async () => {
     const { link, rig } = build()

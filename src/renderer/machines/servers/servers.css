@@ -141,6 +141,16 @@
   max-width: 34rem;
 }
 
+/* The way out, above the title — the same stack `servers-page-head` builds on a
+   server's own page, and deliberately the same rule rather than a second one
+   that has to be kept in step with it. */
+.servers-form-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
 .servers-form-title {
   margin: 0;
   font-size: var(--t-title2);
@@ -180,6 +190,21 @@
    somebody is answering from a piece of paper. */
 .servers-field .settings-input.wide {
   width: 100%;
+}
+
+/*
+ * The port, and the one field on this form that is deliberately not full width.
+ *
+ * Width is the whole of how it stays quiet. Five digits is the widest port
+ * there is, so a box sized for five says on sight that this is not another
+ * example.com-shaped answer — it reads as an extra beside the full-width boxes
+ * above and below it rather than as a fifth question. `min-width` is overridden
+ * because the shared control floors at 148px, which is sized for a settings row
+ * and would draw this the same width as the address.
+ */
+.servers-field .settings-input.servers-narrow {
+  width: 7rem;
+  min-width: 0;
 }
 
 .servers-choice {
@@ -337,6 +362,25 @@
   font-size: var(--t-callout);
   color: var(--text-secondary);
   overflow-wrap: anywhere;
+}
+
+/* The one thing to do with a connected server, directly under its name — see
+   `OpenTerminal` in `ServerPage.tsx` for why it is here rather than behind the
+   Advanced door. Its own stack, because both children carry top margins tuned
+   for sitting inside a card and the head around them is already a gapped
+   column: left alone, the three spacings compound and the primary action floats
+   a full line clear of the name it belongs to, which reads as a missing
+   element between them. */
+.servers-page-open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.servers-page-open > .servers-card-actions,
+.servers-page-open > .servers-card-why {
+  margin-top: 0;
 }
 
 /* ------------------------------------------------ zone one: is it OK -- */
@@ -668,4 +712,89 @@ a.settings-btn {
    told apart by a word rather than by where they happen to sit. */
 .machines-kind {
   margin-top: var(--sp-10);
+}
+
+/* ------------------------------------------------- setting an assistant up */
+
+/*
+ * Three rows under the calm zone, and the two presses that change any of them.
+ *
+ * Deliberately quieter than `.servers-health` above it — no filled panel, one
+ * hairline — because it is a property of the sign-in rather than one of the
+ * things a person came to check on, and a second filled block directly under
+ * the first reads as two headlines competing.
+ */
+.servers-setup {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-subtle);
+}
+
+/*
+ * The category, which is the only heading here.
+ *
+ * The three agents' names appear on their own rows and nowhere above them. A
+ * heading that named one of them would make the other two read as afterthoughts,
+ * which is the thing this section was rebuilt to stop.
+ */
+.servers-setup-heading {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/*
+ * One agent.
+ *
+ * Rows are separated by a hairline rather than by a gap, and every row is drawn
+ * the same way at the same weight — no ordering by preference, no emphasis on
+ * the first. A person who only uses the third one should find this screen no
+ * harder to read than a person who uses the first.
+ */
+.servers-setup-row + .servers-setup-row {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.servers-setup-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.servers-setup-say {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.servers-setup-ask {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.servers-setup-ask-first {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/*
+ * The terminal the install actually runs in.
+ *
+ * A fixed height rather than one that grows with the output: sixty seconds of
+ * an installer's progress lines would otherwise push everything below it —
+ * including the cards the person came to this page for — off the bottom of the
+ * screen, and then put it back when the install finished.
+ */
+.servers-setup-terminal {
+  position: relative;
+  height: 260px;
+  margin-top: var(--sp-3);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }

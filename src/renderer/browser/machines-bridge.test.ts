@@ -6,6 +6,7 @@ import {
   loopbackPort,
   lostMachine,
   machineChoices,
+  moveFor,
   reachedAddress,
   readReach,
   resolveMachinesApi,
@@ -53,6 +54,7 @@ function view(over: Partial<MachinesView['links'][number]> = {}): MachinesView {
           { port: 5173, process: 'node', guessed: false },
           { port: 8080, process: '', guessed: true },
         ],
+        copilot: null,
         hostPlatform: 'win32',
         retryAt: null,
         ...over,
@@ -359,5 +361,73 @@ describe('when the chosen machine goes', () => {
     expect(lostMachine([], 'mach-1')).toBe(
       'That machine is no longer paired with this one. Addresses now open on this machine.',
     )
+  })
+})
+
+/**
+ * Moving the page that is open, rather than only the next one typed.
+ *
+ * > *"if I move it to this machine, it's keeping on the same browser, same
+ * > machine. It's not moving to this machine. Same link should be again tried on
+ * > the new machine… or it should be unsuccessful here also, because we always
+ * > need a truth."*
+ *
+ * The refusal case is asserted as loudly as the success ones. A picker that
+ * silently keeps a machine's name over a page that never went there is the
+ * untruth this function exists to prevent, and it is the failure that would
+ * survive every render test.
+ */
+describe('moveFor — the page follows the picker, or the picker goes back', () => {
+  /** One tunnel: the PC's 3000 is reachable on this machine's 3001. */
+  const opened = [
+    {
+      machineId: 'm-desktop',
+      machineName: 'DESKTOP',
+      port: 3000,
+      localPort: 3001,
+      sameNumber: false,
+    },
+  ]
+
+  it('sends a tunnelled page home on its ORIGIN port, keeping the path', () => {
+    expect(moveFor(THIS_MACHINE, 'http://localhost:3001/orders?page=2', opened)).toEqual({
+      kind: 'here',
+      // 3000, not the 3001 in the address bar. The tunnel had to pick a
+      // different local number because this Mac was already using 3000 — asking
+      // this machine for 3001 would open a different service entirely.
+      url: 'http://localhost:3000/orders?page=2',
+    })
+  })
+
+  it('sends a local page to the far machine on the port it is really on', () => {
+    expect(moveFor('m-desktop', 'http://localhost:5173/app#top', [])).toEqual({
+      kind: 'there',
+      machineId: 'm-desktop',
+      port: 5173,
+      url: 'http://localhost:5173/app#top',
+    })
+  })
+
+  it('does nothing when the page is already there', () => {
+    expect(moveFor('m-desktop', 'http://localhost:3001/orders', opened)).toEqual({ kind: 'already' })
+    expect(moveFor(THIS_MACHINE, 'http://localhost:5173/', [])).toEqual({ kind: 'already' })
+  })
+
+  it('refuses a page that belongs to nobody in this room, and says where it is', () => {
+    // Stripe's website is not on a computer here. There is nothing to move, and
+    // the picker has to go back rather than claim it moved.
+    expect(moveFor('m-desktop', 'https://dashboard.stripe.com/payments', opened)).toEqual({
+      kind: 'refused',
+      at: THIS_MACHINE,
+    })
+    // Switching *back* to this computer is not a refusal, because a public page
+    // is already being fetched by this computer's own Chromium. There is nothing
+    // to move and nothing to correct, which is a different answer from "that
+    // cannot be done" and has to stay one.
+    expect(moveFor(THIS_MACHINE, 'https://example.com/', opened)).toEqual({ kind: 'already' })
+  })
+
+  it('refuses a start page rather than opening a machine at nothing', () => {
+    expect(moveFor('m-desktop', '', opened)).toEqual({ kind: 'refused', at: THIS_MACHINE })
   })
 })

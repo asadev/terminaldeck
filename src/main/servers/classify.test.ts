@@ -52,6 +52,8 @@ function facts(overrides: Partial<ServerFacts> = {}): ServerFacts {
     containers: factYes([], AT, 'asked what is running in containers'),
     listeners: factYes([], AT, 'asked what is accepting connections'),
     siteNames: factYes([], AT, 'read the web settings'),
+    agents: factYes([], AT, 'looked for a coding assistant'),
+    agentInstall: nothing,
     ...overrides,
   }
 }

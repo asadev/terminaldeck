@@ -122,11 +122,24 @@ describe('the sidebar with everything off', () => {
     expect(html).toContain('Settings')
   })
 
-  it('drops the heading over an empty run rather than leaving it hanging', () => {
-    // Every integration belongs to a feature, so with all of them off the
-    // heading would sit above a gap — which reads as a list that failed to
-    // load rather than one that is empty on purpose.
-    expect(html).not.toContain('Integrations')
+  it('keeps the Integrations heading, because the row left under it is core', () => {
+    /*
+     * This asserted the opposite until 2026-08-19, and both versions are about
+     * the same rule in `Sidebar.tsx`: a run with nothing in it loses its
+     * heading, because a word above a gap reads as a list that failed to load
+     * rather than one that is empty on purpose.
+     *
+     * What changed is which rows are in the run. GitHub, MCP servers, Session
+     * updates and AI readiness are the four panels a feature owns, and all four
+     * are here — so switching everything off used to empty it. Machines moved
+     * into this run on Asad's word and is not a feature anybody can uninstall:
+     * remote access is what the product is differentiated on, and
+     * `registry.test.ts` pins that it is in no feature's inventory. So the
+     * heading now always has at least this one row under it, and the rule above
+     * is exercised by `Sidebar.tsx`'s own guard rather than by this state.
+     */
+    expect(html).toContain('Integrations')
+    expect(html).toContain('>Machines</span>')
   })
 
   it('keeps the browser button, as an offer rather than as a control', () => {
@@ -223,16 +236,19 @@ describe('the offer that stands where a feature would have been', () => {
 })
 
 describe('split view, where it would have been', () => {
-  it('keeps the segment and marks it as an offer', () => {
+  it('keeps the button and marks it as an offer', () => {
     const html = renderToStaticMarkup(<ModeSwitch mode="terminal" onChange={noop} splitOffer />)
     expect(html).toContain('ms-offer')
-    expect(html).toContain('>Split<')
-    // It says what pressing it does. A segment that installs has to admit that
-    // before it is pressed, or a segmented control has grown a second meaning.
+    // The word `Split` is in the accessible name now rather than on the face:
+    // the control is two icons since 2026-08-19, so the name is the only place
+    // left that can carry it.
+    expect(html).toContain('aria-label="Split — two sessions side by side, not installed.')
+    // It says what pressing it does. A button that installs has to admit that
+    // before it is pressed, or the control has grown a second meaning.
     expect(html).toContain('not installed')
   })
 
-  it('is an ordinary segment once the feature is there', () => {
+  it('is an ordinary button once the feature is there', () => {
     const html = renderToStaticMarkup(<ModeSwitch mode="terminal" onChange={noop} />)
     expect(html).not.toContain('ms-offer')
     expect(html).not.toContain('not installed')

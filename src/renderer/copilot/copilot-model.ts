@@ -186,20 +186,39 @@ export function copilotStage(
 }
 
 /**
- * Which half of the copilot view a stage opens on.
+ * Which half of the copilot view it opens on. Always the terminal.
  *
- * The terminal for `first-run`, and that is the entire reason the copilot view
- * has a terminal at all: the login prints a URL and reads a code back, and a
- * conversation pane can do neither. Everything else opens on the conversation,
- * because talking to it is the point.
+ * ## It used to depend on the stage, and that was the defect
  *
- * A person can still switch, in both directions, at every stage. This decides
- * what is in front of them before they have asked for anything.
+ * It returned the terminal for `first-run` — a signed-out copilot, where the
+ * login prints a URL and reads a code back and a conversation pane can do
+ * neither — and the conversation for every other stage. Two answers to one
+ * question, decided by something the person cannot see, so the window opened on
+ * a different pane depending on a sign-in check that had not necessarily
+ * finished landing. Asad, 2026-08-20:
+ *
+ *   > *"And always terminal should be the default view."*
+ *
+ * That is one answer, and it is the right one for a reason beyond consistency:
+ * the terminal is the pane that can show *anything* the copilot's process does
+ * — a login prompt, a refusal, a crash on start, a CLI that is still printing
+ * its banner. The conversation pane can only show a transcript, and a transcript
+ * that does not exist yet renders as an empty box that looks like a broken
+ * window. Opening on the pane that is never empty is what stops a working
+ * copilot from looking like a dead one.
+ *
+ * A person can still switch, in both directions, from the window's own mode
+ * switch, and the moment they do, `App.tsx` stops seeding: this decides what is
+ * in front of them before they have asked for anything, and nothing after that.
+ *
+ * No argument any more, deliberately. A function that ignores its parameter is
+ * an invitation to pass something to it, and the thing that would be passed is
+ * the stage this rule was just taken away from.
  */
 export type CopilotPane = 'chat' | 'terminal'
 
-export function defaultPane(stage: CopilotStage): CopilotPane {
-  return stage === 'first-run' ? 'terminal' : 'chat'
+export function defaultPane(): CopilotPane {
+  return 'terminal'
 }
 
 /**

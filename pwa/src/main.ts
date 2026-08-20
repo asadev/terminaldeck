@@ -182,6 +182,17 @@ import { normaliseCode } from '../../src/shared/short-code'
 import { asCodeField } from './code-field'
 import { browserStores, purgeRetired, type Remember } from './remember'
 import { relaySocket } from './relay-socket'
+/*
+ * The desktop's own backfill, imported rather than reimplemented.
+ *
+ * `src/renderer/components/terminal-backfill.ts` is where the argument lives —
+ * xterm yields to the renderer every 12 ms while a large write drains, so every
+ * intermediate scroll position is painted — and it has no imports, no DOM types
+ * and no React in it precisely so that the other client can use it. Two copies
+ * of one policy is how the desktop ends up fixed and the phone does not, which
+ * is the whole shape of tonight's review.
+ */
+import { holdUntilFilled, QUIET_MS, type Backfill } from '../../src/renderer/components/terminal-backfill'
 import { lookupMachine } from './rendezvous'
 import { chunkInput, type DevServerReport, type RemoteSession, type ServerMessage } from './protocol-client'
 import {
@@ -547,6 +558,15 @@ class Deck {
   /** True once an `attach` has gone out for `attachedId` on this connection. */
   private attachSent = false
   private terminal: TerminalHandle | null = null
+  /**
+   * What keeps a session's replay off the screen until it is whole.
+   *
+   * Made with the terminal and torn down with it. Null between the two, and
+   * every write goes through {@link writeTerminal} rather than through the
+   * handle, so there is one door and it cannot be bypassed by the next thing
+   * that wants to print a line.
+   */
+  private backfill: Backfill | null = null
   private keybar: KeyBarHandle | null = null
   private terminalScreen: HTMLElement | null = null
   /** Set while a message needs saying on the sessions screen. */
@@ -1232,6 +1252,14 @@ class Deck {
       // under a fresh connection is the lie this whole client is built to avoid.
       if (this.attachedId !== null) {
         this.terminal?.reset()
+        // The re-attach replays the whole session again, so the screen is held
+        // again — otherwise a reconnect on a phone coming out of a pocket
+        // scrolls the afternoon past a second time. A fresh hold rather than the
+        // old one: its ceiling is not a budget for a second replay.
+        if (this.terminal !== null) {
+          this.backfill?.stop()
+          this.backfill = holdUntilFilled(this.terminal, this.terminal.element, { quiet: QUIET_MS })
+        }
         this.attach(this.attachedId)
       }
       this.connection?.send({ t: 'list' })
@@ -1726,7 +1754,16 @@ class Deck {
 
       case 'output':
         if (message.id !== this.attachedId) return
-        this.terminal?.write(message.data)
+        /*
+         * A frame that is **not** a replay ends the hold before it is written.
+         *
+         * It is the session printing now, so everything held is older than it
+         * and has to go on the screen first — and there is no end-of-replay
+         * marker on the wire, so this frame and the quiet timer are the only two
+         * things that can say the backlog is complete.
+         */
+        if (message.replay !== true) this.backfill?.release()
+        this.writeTerminal(message.data)
         // Replay is scrollback from before this client arrived, so it says
         // nothing about when the session last did something.
         if (message.replay !== true) this.activity.set(message.id, Date.now())
@@ -1745,7 +1782,7 @@ class Deck {
         if (session) session.exitCode = message.exitCode
         if (message.id === this.attachedId) {
           // Bracketed and dim, so it cannot be mistaken for program output.
-          this.terminal?.write(`\r\n\x1b[2m[session exited with code ${message.exitCode}]\x1b[0m\r\n`)
+          this.writeTerminal(`\r\n\x1b[2m[session exited with code ${message.exitCode}]\x1b[0m\r\n`)
         }
         if (this.screen === 'sessions') this.renderContent()
         return
@@ -1772,7 +1809,7 @@ class Deck {
         // to with one — arrives while the terminal is on screen, and a notice
         // parked on the sessions list behind it is a keystroke that vanished
         // with no explanation.
-        if (this.screen === 'terminal') this.terminal?.write(`\r\n\x1b[2m[${plain(message.message)}]\x1b[0m\r\n`)
+        if (this.screen === 'terminal') this.writeTerminal(`\r\n\x1b[2m[${plain(message.message)}]\x1b[0m\r\n`)
         else if (this.screen === 'sessions') this.renderContent()
         return
 
@@ -2649,10 +2686,16 @@ class Deck {
     const online = this.state.phase === 'online'
     const tunnels = localhostOffered(this.capabilities)
 
-    // The bar is the first thing, above the list and above Refresh, because it is
-    // now what this screen is *for*. The list answers "what is running"; the bar
-    // is how you get to it, and a way in that sits under nine collapsed groups is
-    // a way in nobody finds.
+    // Which machine's ports these are, first — the same control the sessions and
+    // the copilot carry, for the same reason, and drawn above the address bar
+    // because *where this goes* is decided by the machine and not by the URL.
+    const machines = this.machineSwitch()
+    if (machines !== null) screen.append(machines)
+
+    // The bar is the first thing after it, above the list and above Refresh,
+    // because it is now what this screen is *for*. The list answers "what is
+    // running"; the bar is how you get to it, and a way in that sits under nine
+    // collapsed groups is a way in nobody finds.
     screen.append(this.browseBar())
 
     // Refresh exists only while there is a socket to carry it — the standing rule
@@ -3876,6 +3919,17 @@ class Deck {
     const screen = element('div', 'screen')
     screen.style.padding = '0'
     /*
+     * Which machine's copilot, at the top, in his words above `machineSwitch`.
+     *
+     * It belongs here more than on any other screen: a copilot is *this
+     * machine's* agent holding *this machine's* shell, so a conversation read
+     * under the wrong machine's name is not a cosmetic error. Everything on this
+     * screen is replaced when the switch is pressed — `switchTo` clears the
+     * copilot with the machine, and the next welcome brings that machine's own.
+     */
+    const machines = this.machineSwitch()
+    if (machines !== null) screen.append(machines)
+    /*
      * One branch, where there used to be two.
      *
      * The other one drew a six-digit field under the heading "Connect the
@@ -4648,6 +4702,56 @@ class Deck {
    * of this app that showed one unexplained folder had nothing to say about
    * where the list came from either.
    */
+  /**
+   * Which machine this screen is about, and the other ones.
+   *
+   * One row of pills, and **one implementation of it**, because he asked for the
+   * same control in three places:
+   *
+   * > *"we have two paired machines, so the way inside the copilot page on the
+   * > top we have switch between machines — same switch like the first time we
+   * > had. So sessions also, on local also."*
+   *
+   * *The same switch* is the requirement, not merely *a* switch. Three copies of
+   * this loop would be three screens that answer "which machine am I on" in
+   * three slightly different ways, and the first one to drift is the one nobody
+   * is looking at. The header's own chevron is not that control: it opens the
+   * Machines screen, which is where a machine is renamed and forgotten, and a
+   * question asked on every screen should not need a screen of its own to
+   * answer.
+   *
+   * Null with fewer than two machines, which is the standing rule against a
+   * picker with a single item in it.
+   *
+   * `busy` is for the one caller that has a reason to freeze it: a `create` in
+   * flight is about to open a session on *this* machine, and switching under it
+   * would land the answer on a socket that is being torn down.
+   */
+  private machineSwitch(busy = false): HTMLElement | null {
+    if (this.book.machines.length < 2) return null
+    const block = element('div', 'start__switch')
+    block.append(element('p', 'start__caption', 'On'))
+    const row = element('div', 'start__machines')
+    for (const known of this.book.machines) {
+      const here = known.id === this.book.currentId
+      const pick = element(
+        'button',
+        here ? 'start__machine start__machine--here' : 'start__machine',
+        machineLabel(known, this.origin),
+      )
+      pick.type = 'button'
+      pick.setAttribute('aria-pressed', here ? 'true' : 'false')
+      // The current one is not a control. Pressing it would tear down a live
+      // socket and dial the machine it is already on, which is a press that
+      // costs a reconnection and changes nothing.
+      pick.disabled = here || busy
+      pick.addEventListener('click', () => this.switchTo(known.id))
+      row.append(pick)
+    }
+    block.append(row)
+    return block
+  }
+
   private startBlock(): HTMLElement | null {
     if (this.state.phase !== 'online' || !this.capabilities.includes('create')) return null
 
@@ -4674,27 +4778,8 @@ class Deck {
      * `switchTo`, which clears `folders` precisely so that nothing on screen is
      * ever the previous machine's.
      */
-    if (this.book.machines.length > 1) {
-      block.append(element('p', 'start__caption', 'On'))
-      const row = element('div', 'start__machines')
-      for (const known of this.book.machines) {
-        const here = known.id === this.book.currentId
-        const pick = element(
-          'button',
-          here ? 'start__machine start__machine--here' : 'start__machine',
-          machineLabel(known, this.origin),
-        )
-        pick.type = 'button'
-        pick.setAttribute('aria-pressed', here ? 'true' : 'false')
-        // The current one is not a control. Pressing it would tear down a live
-        // socket and dial the machine it is already on, which is a press that
-        // costs a reconnection and changes nothing.
-        pick.disabled = here || this.awaitingCreate
-        pick.addEventListener('click', () => this.switchTo(known.id))
-        row.append(pick)
-      }
-      block.append(row)
-    }
+    const machines = this.machineSwitch(this.awaitingCreate)
+    if (machines !== null) block.append(machines)
 
     // The platform decides how two spellings of one path are compared — NTFS
     // does not distinguish case and a POSIX filesystem does. See `samePath`.
@@ -4874,6 +4959,15 @@ class Deck {
     screen.append(terminal.element, dock)
 
     this.terminal = terminal
+    /*
+     * Held from the moment the surface exists, before a byte reaches it.
+     *
+     * `quiet` is passed because this client is always talking to another
+     * machine: the run of `replay` frames ends without saying so, so silence is
+     * what says the backlog is over. The ceiling inside `holdUntilFilled` is the
+     * promise that this can only ever delay a terminal and never hide one.
+     */
+    this.backfill = holdUntilFilled(terminal, terminal.element, { quiet: QUIET_MS })
     this.keybar = keybar
     this.keybarDock = dock
     this.terminalScreen = screen
@@ -4890,12 +4984,29 @@ class Deck {
   }
 
   private destroyTerminal(): void {
+    // First, and before the terminal it is holding is disposed: it owns two
+    // timers, and one of them firing into a disposed emulator is a throw out of
+    // a `setTimeout` that nothing catches.
+    this.backfill?.stop()
+    this.backfill = null
     this.keybar?.destroy()
     this.terminal?.dispose()
     this.keybar = null
     this.keybarDock = null
     this.terminal = null
     this.terminalScreen = null
+  }
+
+  /**
+   * Everything this client puts on the terminal, through one door.
+   *
+   * Output frames, the exit line and an in-session refusal all come through
+   * here, so a hold cannot be bypassed by whichever of them is added next. While
+   * nothing is held this is exactly `terminal.write`.
+   */
+  private writeTerminal(data: string): void {
+    if (this.backfill !== null) this.backfill.push(data)
+    else this.terminal?.write(data)
   }
 
   /**

@@ -34,9 +34,10 @@ import { SERVER_ICON } from '../machines/servers/glyph'
  * ## The two halves, which pull against each other
  *
  * The pill has to be **indistinguishable** from a local one — same glyph, same
- * dot — and its ✕ has to be **distinguishable in what it says and does**,
- * because on a local pill the ✕ takes the tab off the bar and leaves the session
- * running. That tension is why both halves need a test.
+ * dot, same ✕ taking the tab off the bar and leaving the shell running on the
+ * server — and that ✕ has to be **distinguishable from the browser window's**,
+ * which sits a centimetre away wearing the same glyph and really does destroy
+ * what it is on. That tension is why both halves need a test.
  */
 
 const SERVER = { id: '11111111-2222-3333-4444-555555555555', name: 'the shop' }
@@ -78,16 +79,18 @@ function promoting(ids: readonly string[]): Storage {
 
 function strip(
   tabs: readonly WorkspaceTab[],
-  props: { onEndRemote?: (id: string) => void; activeTabId?: string | null } = {},
+  props: { onCloseWindow?: (id: string) => void; activeTabId?: string | null } = {},
 ): string {
-  const { activeTabId = 's1', onEndRemote } = props
+  const { activeTabId = 's1', onCloseWindow } = props
   return renderToStaticMarkup(
     <WorkspaceTabStrip
       tabs={tabs}
       activeTabId={activeTabId}
       onSelect={() => {}}
+      // Wired on every mount here: it is what makes a session's ✕ appear at all,
+      // and without it the assertions below would pass against an empty pill.
       onShowInstead={() => {}}
-      {...(onEndRemote ? { onEndRemote } : {})}
+      {...(onCloseWindow ? { onCloseWindow } : {})}
       storage={promoting(tabs.map((tab) => tab.id))}
     />,
   )
@@ -136,37 +139,31 @@ describe('a terminal on a server is drawn as a tab', () => {
   })
 })
 
-describe('the ✕ on a server pill ends the terminal', () => {
-  it('says so, and says what it leaves alone', () => {
-    /*
-     * A local pill's ✕ means *remove from the top bar*, and that reading is only
-     * available because the rail still holds the row and the process is this
-     * app's. This one ends a shell. The two sentences have to differ, or the
-     * same glyph is doing opposite things a centimetre apart — and the second
-     * clause answers the question a person actually has, which is whether this
-     * stops their website.
-     */
-    const html = pill(strip([LOCAL, SHELL], { onEndRemote: () => {} }), SHELL_ID)
-    expect(html).toContain(`ends this terminal on ${SERVER.name}`)
-    expect(html).toContain('The server itself is left alone.')
-    expect(html).toContain('data-ends')
-    // And the local pill keeps the sentence it already had.
-    const local = pill(strip([LOCAL, SHELL], { onEndRemote: () => {} }), 's1')
-    expect(local).toContain('Remove from the top bar')
-    expect(local).not.toContain('data-ends')
+describe('a server pill’s ✕ takes it off the bar, like every other session', () => {
+  /*
+   * The same road the remote pill takes, for the same sentence: *"for the
+   * sessions it will just close from the top bar, but it will still stay in the
+   * side panel."* A shell on a server is a session, it has a row under its
+   * server's heading in the rail, and that row is where it is ended — with the
+   * confirmation, and with the clause about the server itself being left alone.
+   *
+   * What this pins is that the strip makes no exception of it in either
+   * direction: it is not denied the ✕ that every other session tab has, and the
+   * ✕ it has does not quietly reach across SSH.
+   */
+  it('has one, and it is the same harmless control the local pill has', () => {
+    const html = strip([LOCAL, SHELL], { onCloseWindow: () => {} })
+    for (const id of [SHELL_ID, 's1']) {
+      expect(pill(html, id)).toContain('strip-tab-close')
+      expect(pill(html, id)).toContain('title="Take off the bar"')
+      // The mark for a control that destroys something. A session never wears it.
+      expect(pill(html, id)).not.toContain('data-ends')
+    }
   })
 
-  it('is absent rather than inert when the host cannot end one', () => {
-    /*
-     * A strip mounted without `onEndRemote` — a test, the harness — draws no ✕
-     * on a server pill at all rather than one that swallows the press. The same
-     * rule the remote pill follows, and this product's rule generally.
-     */
-    const html = pill(strip([LOCAL, SHELL]), SHELL_ID)
-    expect(html).not.toContain('strip-tab-close')
-    // The local one still has its own, which is what makes this "absent here"
-    // rather than "absent in this render".
-    expect(pill(strip([LOCAL, SHELL]), 's1')).toContain('strip-tab-close')
+  it('leaves no sentence behind describing a button that is gone', () => {
+    const html = strip([LOCAL, SHELL], { onCloseWindow: () => {} })
+    expect(html).not.toContain('ends this terminal on')
   })
 })
 

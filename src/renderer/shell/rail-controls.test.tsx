@@ -52,13 +52,16 @@ const TABS: WorkspaceTab[] = [
 ]
 const PROJECTS: Project[] = [{ path: '/p', name: 'p' }]
 
-function railMarkup(props: { canResume?: boolean } = {}): string {
+function railMarkup(
+  props: { canResume?: boolean; tabs?: WorkspaceTab[]; projects?: Project[] } = {},
+): string {
+  const { tabs = TABS, projects = PROJECTS, ...rest } = props
   return renderToStaticMarkup(
     <Sidebar
-      {...props}
+      {...rest}
       width={280}
-      projects={PROJECTS}
-      tabs={TABS}
+      projects={projects}
+      tabs={tabs}
       activeTabId="s1"
       activePanel={null}
       panels={[]}
@@ -92,26 +95,44 @@ function railMarkup(props: { canResume?: boolean } = {}): string {
 }
 
 describe('every control inside a draggable row or tab is marked', () => {
-  it('marks the rail row’s ✕ — the control he reported', () => {
+  it('marks the rail row’s ⋯ — the one button the reported controls became', () => {
+    /*
+     * This assertion used to be made twice, once for the ✕ and once for the
+     * promote arrow, and both of those are entries in this button's menu now:
+     * *"instead of these two buttons, give … one three-dot button."* The defect
+     * it guards is unchanged and is the sharpest case of it — the row is
+     * draggable, so a press that slides four pixels becomes a drag and the
+     * click is cancelled, which is exactly what he reported happening to the ✕
+     * that now lives behind this menu.
+     */
     const html = railMarkup()
-    const close = /<button[^>]*class="sb-row-action sb-close"[^>]*>/.exec(html)?.[0] ?? ''
-    expect(close, 'the close button has changed shape').not.toBe('')
-    expect(close).toContain(NO_DRAG_ATTR)
+    const more = /<button[^>]*class="sb-row-action sb-more"[^>]*>/.exec(html)?.[0] ?? ''
+    expect(more, 'the row’s menu button has changed shape').not.toBe('')
+    expect(more).toContain(NO_DRAG_ATTR)
   })
 
-  it('marks the rail row’s promote toggle', () => {
-    // The sharpest case: this button exists so a window can be sent to the top
-    // *without* a drag, and a press on it was being eaten by the drag it was
-    // there to replace.
+  it('leaves no ✕ or promote arrow on the row to be swallowed', () => {
+    // The other half of the same change, asserted rather than assumed: a second
+    // control creeping back onto the row is how the name loses its pixels again.
     const html = railMarkup()
-    const promote = /<button[^>]*class="sb-row-action sb-promote"[^>]*>/.exec(html)?.[0] ?? ''
-    expect(promote, 'the promote button has changed shape').not.toBe('')
-    expect(promote).toContain(NO_DRAG_ATTR)
+    expect(html).not.toContain('sb-row-action sb-close')
+    expect(html).not.toContain('sb-row-action sb-promote')
   })
 
   it('marks the strip tab’s ✕, where a swallowed press reorders the bar', () => {
+    /* A browser tab, because that is the only tab the strip draws a ✕ on since
+       2026-08-20 — *"session can be only closed from the sidebar, not from the
+       top bar."* The defect being guarded is unchanged: the tab is draggable,
+       so an unmarked press that slides four pixels reorders the bar instead of
+       closing the window. */
     const html = renderToStaticMarkup(
-      <WorkspaceTabStrip tabs={TABS} activeTabId="s1" onSelect={() => {}} onShowInstead={() => {}} storage={null} />,
+      <WorkspaceTabStrip
+        tabs={[...TABS, { id: 'b1', kind: 'browser', label: 'New tab', closable: true }]}
+        activeTabId="s1"
+        onSelect={() => {}}
+        onCloseWindow={() => {}}
+        storage={null}
+      />,
     )
     const close = /<button[^>]*class="strip-tab-close"[^>]*>/.exec(html)?.[0] ?? ''
     expect(close, 'the strip close button has changed shape').not.toBe('')
@@ -215,5 +236,70 @@ describe('continue-last-session on a project heading', () => {
 
   it('defaults to not drawing it, so a host that never answers cannot lie', () => {
     expect(controls(railMarkup())).not.toContain('Continue the last session in p')
+  })
+})
+
+/* ------------------------------------------- which panel lists which window -- */
+
+/**
+ * *"Browser windows will not be on the side bar at all. They will be always
+ * only on the top bar. Side bar is only for the sessions. Browser can be on the
+ * top bar only, and session can be on both side bar and the top bar."*
+ * — 2026-08-20, after talking through both arrangements and settling on this.
+ *
+ * It is one sentence and it takes two components to keep, in opposite
+ * directions, which is exactly the kind of rule that half-rots: the rail stops
+ * drawing pages, and the strip starts drawing every one of them whether or not
+ * anybody promoted it. Half of that is a browser window listed twice; the other
+ * half is a browser window listed nowhere, open, and unreachable.
+ */
+describe('a browser window lives on the strip and nowhere else', () => {
+  const WITH_PAGE: WorkspaceTab[] = [
+    ...TABS,
+    { id: 'b1', kind: 'browser', label: 'localhost:5173', closable: true },
+  ]
+
+  it('draws no row for it in the rail, even though the rail is given it', () => {
+    // Given it deliberately: the session rows read the same list to wear their
+    // `B1`/`B2` chips. So this is the rail *filtering*, which is a thing a test
+    // can hold, rather than the window withholding, which would be a different
+    // bug wearing the same screenshot.
+    const html = railMarkup({ tabs: WITH_PAGE })
+    expect(html).not.toContain('localhost:5173')
+    // The sessions it was passed alongside are still there, so an accidental
+    // "draw nothing" would fail here rather than pass the assertion above.
+    expect(html).toContain('Session 1')
+  })
+
+  it('says the rail is empty when only pages are open, because for the rail it is', () => {
+    /*
+     * The line used to count browser windows, back when they had rows: printing
+     * "Nothing open yet." over four of them would have been the app
+     * contradicting itself in one glance. With the rows gone the count would be
+     * the contradiction — a rail with genuinely no rows, refusing to say so
+     * because of something drawn in another component.
+     */
+    const html = railMarkup({ tabs: [WITH_PAGE[2]!], projects: [] })
+    expect(html).toContain('Nothing open yet.')
+  })
+
+  it('keeps it in the strip with no promotion at all', () => {
+    /*
+     * The other direction, and the one that turns a layout preference into a
+     * lost window. `storage={null}` is a strip that has never been arranged —
+     * nothing promoted, nothing remembered — and the page still has to be
+     * drawn, because there is no second panel for it to fall back to.
+     */
+    const html = renderToStaticMarkup(
+      <WorkspaceTabStrip
+        tabs={WITH_PAGE}
+        activeTabId="s1"
+        onSelect={() => {}}
+        onCloseWindow={() => {}}
+        storage={null}
+      />,
+    )
+    expect(html).toContain('data-tab-id="b1"')
+    expect(html).toContain('localhost:5173')
   })
 })

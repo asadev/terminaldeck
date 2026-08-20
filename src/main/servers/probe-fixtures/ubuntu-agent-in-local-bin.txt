@@ -1,0 +1,32 @@
+schema=1
+os=Ubuntu 24.04.4 LTS
+kernel=Linux 6.8.0-79-generic
+arch=x86_64
+host=DESKTOP-ASAD
+user=asad
+root=sudo-nopasswd
+init=systemd
+containers=none
+packages=apt-get
+web=
+installer_fetch=curl
+mem_avail_kb=6412188
+home_free_kb=417238528
+cpus=8
+disk_used_kb=31118480
+disk_total_kb=527253168
+memory_total_kb=8117260
+memory_free_kb=6412188
+load1=0.08
+uptime_s=98213
+#services ok
+cron.service	active	running	Regular background program processing daemon
+ssh.service	active	running	OpenBSD Secure Shell server
+#containers none
+#listeners ok
+0.0.0.0	2222		
+#sites none
+#adminunits ok
+#agents ok
+claude	/home/asad/.local/bin/claude	2.1.235	yes	asad@example.com
+#end ok

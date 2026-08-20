@@ -31,7 +31,7 @@
  */
 
 import { createRemoteReach, type RemoteReach } from '../../localhost-reach'
-import { MAX_URL_LENGTH } from '../protocol'
+import { CONTROL_IDS, MAX_URL_LENGTH, USAGE_WANTS, emptyUsageReading } from '../protocol'
 import { DEFAULT_RELAY_URL } from '../../../shared/relay-wire'
 import type { InvokeRegistrar } from '../../ipc-seam'
 import type { PairingToken } from '../device-auth'
@@ -60,6 +60,38 @@ export type { InvokeRegistrar } from '../../ipc-seam'
 
 export const MACHINES_STATE_CHANNEL = 'machines:state'
 export const MACHINES_OUTPUT_CHANNEL = 'machines:output'
+
+/*
+ * The copilot on another machine, pushed rather than asked for.
+ *
+ * Two channels for the same reason `machines:output` is not `machines:state`:
+ * these are events nobody asked a question to get. `copilot.attach` subscribes
+ * once and the far machine then pushes a state whenever any of it changes and a
+ * chat frame whenever the conversation moves, so a surface that polled either
+ * would be asking a computer in another room a question it is already
+ * answering.
+ *
+ * They are not folded into `machines:state`, which the sidebar redraws from.
+ * A conversation changes on every token an agent produces; a machine list does
+ * not, and putting one inside the other would re-render every row of the
+ * Machines panel for each of them.
+ */
+export const MACHINES_COPILOT_STATE_CHANNEL = 'machines:copilot:state'
+export const MACHINES_COPILOT_CHAT_CHANNEL = 'machines:copilot:chat'
+
+/**
+ * A file on its way to another machine, slice by slice.
+ *
+ * Its own channel for the same reason `machines:output` is not
+ * `machines:state`: it changes on every acknowledged slice — hundreds of times
+ * while a video copies — and folding it into the view the sidebar redraws from
+ * would re-render every machine row for each one.
+ *
+ * The `machineId` rides with it, exactly as it does on the two copilot channels,
+ * because a window can have a transfer to one machine and a terminal open on
+ * another and the line belongs to a particular pane.
+ */
+export const MACHINES_UPLOAD_CHANNEL = 'machines:upload:progress'
 
 /** What one screen needs to draw every row, in one message. */
 export interface MachinesView {
@@ -147,6 +179,10 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
             // desktop can see. Not "unknown": the panel reads the state beside
             // it, so an empty list under `offline` already says the honest thing.
             ports: [],
+            // And nothing dialled has been offered nothing, which is the same
+            // answer for the same reason: whether that machine shares its
+            // copilot with this desktop is something only its `welcome` says.
+            copilot: null,
             hostPlatform: machine.platform,
             retryAt: null,
           },
@@ -207,6 +243,29 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
         deps.broadcast(MACHINES_OUTPUT_CHANNEL, { machineId: machine.id, sessionId, data, replay })
       },
       onLocalhost: (message) => reach.handle(message),
+      onUpload: (progress) => {
+        deps.broadcast(MACHINES_UPLOAD_CHANNEL, { machineId: machine.id, progress })
+      },
+      /*
+       * The machine id rides with both of these, and it is the whole point of
+       * them being one channel rather than one per link.
+       *
+       * The window may have two machines' copilots in play — that is what the
+       * switcher at the top of the copilot page is for — and a frame that did
+       * not say which machine it came from would be merged into whichever
+       * conversation happened to be on screen. The renderer keys on this the
+       * same way it keys terminal output.
+       */
+      onCopilotState: (state) => {
+        deps.broadcast(MACHINES_COPILOT_STATE_CHANNEL, { machineId: machine.id, state })
+      },
+      onCopilotChat: (chat) => {
+        // The whole frame, `run` and `reset` included. See `onCopilotChat` in
+        // `guest.ts`: the messages alone cannot be merged correctly, because
+        // neither "this belongs to a run that is over" nor "throw away what you
+        // are holding" can be recovered from them.
+        deps.broadcast(MACHINES_COPILOT_CHAT_CHANNEL, { machineId: machine.id, chat })
+      },
       onWelcome: (platform) => store.sawWelcome(machine.id, platform),
       now,
     })
@@ -494,6 +553,333 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
    * this handler owns is the shape — a string, non-empty, under the wire's cap —
    * because everything past it is an IPC argument from a renderer.
    */
+  /**
+   * The model, the effort and fast mode of one session on another machine.
+   *
+   * ## Why these are two channels and not one
+   *
+   * For the reason `agent-controls.ts` split its own: reading is passive and
+   * happens every time the session prints anything, while setting **types into
+   * somebody's terminal**. Folding them together would put a keystroke on a code
+   * path that fires on output, which is how an app comes to open a dialog in a
+   * session while somebody is working in it.
+   *
+   * ## What each answers with, and why they are different shapes
+   *
+   * `machines:controls:read` answers `null` when the question could not be asked
+   * at all, and the renderer treats that the way it treats a failed local read —
+   * it keeps the last values it genuinely had. Blanking the bar because one
+   * round trip went missing over a relay would be a regression in honesty rather
+   * than an improvement.
+   *
+   * `machines:controls:apply` always answers with a sentence, on every path,
+   * because somebody pressed something. A press that produces nothing is
+   * indistinguishable from a control that does not work, which is the defect
+   * this whole pass exists to remove.
+   */
+  ipcMain.handle(
+    'machines:controls:read',
+    async (_event, id: unknown, sessionId: unknown): Promise<unknown> => {
+      if (typeof id !== 'string' || typeof sessionId !== 'string') return null
+      return (await links.get(id)?.readControls(sessionId)) ?? null
+    },
+  )
+
+  /**
+   * What one session on another machine has spent, and how full its context
+   * window is.
+   *
+   * ## Why this is one channel where controls are two
+   *
+   * Because none of the three readings types anything. The controls pair is
+   * split because one half of it writes into somebody's terminal on a code path
+   * that fires on output; nothing here does, so the split would buy nothing.
+   *
+   * ## What the `want` costs, which is the thing to be careful about
+   *
+   * `plan` and `context` are free on the far machine — memory, and a bounded
+   * tail read of a file the agent is already writing. `refresh` boots a whole
+   * Claude Code over there: **725 MB peak, about three seconds**, measured on
+   * 2026-08-19. So `refresh` is only ever passed because a person opened the
+   * usage panel or pressed the retry inside it, and `usage-target.ts` in the
+   * renderer is the one place that decides which word this gets.
+   *
+   * Narrowed here rather than passed through, for the reason
+   * `machines:controls:apply` narrows its control name: an `ipcMain.handle`
+   * argument is whatever the renderer put in it however the type reads, and the
+   * expensive branch must not be reachable by a typo. The wire parser checks it
+   * again on the far end — that is the check that protects the machine — and
+   * this one exists so a renderer bug is an empty reading here instead of a
+   * closed socket there.
+   *
+   * Always answers with a record, never null, because the bar has no previous
+   * figure to fall back on the way the control chips do. A link that is down, a
+   * machine too old for the capability and a request that names nothing all come
+   * back as a reading carrying the sentence that says why — see
+   * `emptyUsageReading` in `../protocol.ts`.
+   */
+  ipcMain.handle(
+    'machines:usage:read',
+    async (_event, id: unknown, sessionId: unknown, want: unknown, force: unknown): Promise<unknown> => {
+      const named = USAGE_WANTS.find((known) => known === want)
+      if (named === undefined) return emptyUsageReading('plan', 'That is not a reading this build knows how to ask for.')
+      if (typeof id !== 'string' || typeof sessionId !== 'string') {
+        return emptyUsageReading(named, 'That is not a machine and a session.')
+      }
+      const link = links.get(id)
+      if (!link) return emptyUsageReading(named, 'This desktop is not connected to that machine.')
+      // `force === true` and nothing looser: it is the flag that reaches past
+      // the far machine's own throttle, so a stray truthy value must not be able
+      // to turn an ordinary look into a spawn on somebody else's computer.
+      return await link.readUsage(sessionId, named, force === true)
+    },
+  )
+
+  ipcMain.handle(
+    'machines:controls:apply',
+    async (_event, id: unknown, sessionId: unknown, control: unknown, value: unknown): Promise<unknown> => {
+      const unread = { value: null, label: null, source: null }
+      if (typeof id !== 'string' || typeof sessionId !== 'string') {
+        return { ok: false, message: 'That is not a machine and a session.', reading: unread }
+      }
+      /*
+       * Narrowed here rather than passed through, because everything past this
+       * line ends in a command typed at somebody's prompt and an `ipcMain.handle`
+       * argument is whatever the renderer put in it however the type says
+       * otherwise. The wire parser checks it again on the far end — that is the
+       * check that actually protects the machine — and this one exists so that a
+       * renderer bug is a sentence here instead of a closed socket there.
+       */
+      const named = CONTROL_IDS.find((name) => name === control)
+      if (named === undefined || typeof value !== 'string' || value === '') {
+        return { ok: false, message: 'That is not a control this app can set.', reading: unread }
+      }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.', reading: unread }
+      return link.setControl(sessionId, named, value)
+    },
+  )
+
+  /**
+   * Put text into a session on another machine, without opening it here.
+   *
+   * ## Why this is not `machines:input`
+   *
+   * The channel two hundred lines up carries a keystroke from a remote terminal
+   * pane, and the far end serves it only because that pane **attached** first —
+   * `input` is refused without a handle, and the handle is what the pane holds.
+   * This one has no pane behind it. Its callers are surfaces that have something
+   * to say and nothing to read: the browser handing an agent the element it just
+   * inspected, over a session running on the PC in the other room. Attaching in
+   * order to say it would displace the handle a terminal pane on that same link
+   * already holds and replay its whole scrollback at whoever is reading it, so
+   * the wire grew a verb that authorises typing without subscribing to output —
+   * `CAPABILITY.send`, authorised over there by the same per-device folder reach
+   * `input` is.
+   *
+   * ## Why it answers with a sentence rather than a boolean
+   *
+   * Because nothing on screen would show a failure. A lost keystroke in a
+   * terminal pane is visible in that terminal a moment later; a send from a
+   * panel with no terminal in it is invisible unless this says so. Every path
+   * answers `{ ok, message }` — bad arguments, a machine nobody paired with, a
+   * link that is down, a build over there too old for the verb, and the far
+   * end's own refusal — because the caller draws that sentence and has no other
+   * source for it. It never throws and never returns a bare boolean.
+   */
+  ipcMain.handle(
+    'machines:send',
+    async (_event, id: unknown, sessionId: unknown, data: unknown): Promise<{ ok: boolean; message: string }> => {
+      // Checked here as well as on the wire, for the reason
+      // `machines:controls:apply` narrows its control name: an `ipcMain.handle`
+      // argument is whatever the renderer put in it however the type reads, and
+      // everything past this line ends up in somebody's pty. The parser on the
+      // far end checks it again — that is the check that protects the machine —
+      // and this one exists so a renderer bug is a sentence here instead of a
+      // closed socket there.
+      if (typeof id !== 'string' || typeof sessionId !== 'string') {
+        return { ok: false, message: 'That is not a machine and a session.' }
+      }
+      if (typeof data !== 'string' || data === '') {
+        return { ok: false, message: 'There is nothing to send.' }
+      }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.' }
+      return link.send(sessionId, data)
+    },
+  )
+
+  /**
+   * A file dropped on a pane showing a session on another machine.
+   *
+   * ## Why the renderer hands over a path and not the bytes
+   *
+   * A drop in Chromium produces a `File`, and the obvious wiring reads it in the
+   * renderer and posts an ArrayBuffer down this channel. That copies a 200 MB
+   * video into the renderer's heap, then structured-clones it across the IPC
+   * boundary into the main process's heap, before a single byte has gone
+   * anywhere — two copies of a file, in the process that draws the window, to
+   * send it somewhere else. `webUtils.getPathForFile` gives the real path
+   * instead, and `upload-send.ts` streams it off disk under the far machine's
+   * own flow control, which is what keeps the memory cost of a 500 MB file at
+   * one 24 KiB slice.
+   *
+   * ## Why it answers with the path rather than a boolean
+   *
+   * Because the path *is* the feature. The file lands in the far machine's
+   * downloads folder under a name that machine chose — it may not be the name it
+   * left with, since a second copy of `photo.jpg` lands beside the first rather
+   * than over it — and what the pane then types at the prompt has to be the name
+   * it actually got. A boolean would leave the caller quoting a name that is not
+   * there.
+   *
+   * The refusals arrive as sentences for the same reason `machines:send`'s do,
+   * and there are five of them: not linked, an older build over there, a file
+   * that cannot be read, one over 512 MB, and one already going. Progress in
+   * between rides {@link MACHINES_UPLOAD_CHANNEL}.
+   */
+  ipcMain.handle(
+    'machines:upload',
+    async (_event, id: unknown, filePath: unknown): Promise<unknown> => {
+      if (typeof id !== 'string' || typeof filePath !== 'string' || filePath === '') {
+        return { ok: false, message: 'That is not a machine and a file.' }
+      }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.' }
+      return await link.sendFile(filePath)
+    },
+  )
+
+  /**
+   * Stop the transfer going to that machine.
+   *
+   * Its own channel rather than a flag, because it is the one control a person
+   * has over a transfer that has stalled, and because the far machine has to be
+   * told: a cancel is what makes it delete the half-written file rather than
+   * leaving it in somebody's downloads folder until the socket eventually times
+   * out. Safe to send when nothing is going — it answers `false` and does
+   * nothing at all.
+   */
+  ipcMain.handle('machines:upload:cancel', (_event, id: unknown): boolean => {
+    if (typeof id !== 'string') return false
+    const link = links.get(id)
+    if (!link) return false
+    link.cancelFile()
+    return true
+  })
+
+  /**
+   * The copilot on another machine, from this window.
+   *
+   * ## Why this is here at all
+   *
+   * His words on the 2026-08-20 review: he has two paired machines and *"the
+   * same switch we have for sessions"* belongs at the top of the copilot page,
+   * so one page can be pointed at either. Until now the copilot page could only
+   * ever be about this computer, and the wire it needed had been served by
+   * `server.ts` for weeks with nothing on this side sending a single frame down
+   * it — the failure this codebase keeps re-finding under a different name:
+   * **the mechanism written, the connection absent.**
+   *
+   * ## Why every one of them answers with a sentence
+   *
+   * Not a boolean, unlike `machines:attach` and its neighbours, and for the
+   * reason `machines:send` gives about itself: there is no terminal on screen
+   * to make a lost frame visible. A copilot press that produced nothing at all
+   * would be indistinguishable from a control that does not work.
+   *
+   * `ok` means the frame left this machine. It cannot mean more than that:
+   * there is no request id anywhere on the copilot wire, so nothing here can be
+   * correlated with an answer. What the far end thinks arrives on
+   * {@link MACHINES_COPILOT_STATE_CHANNEL} and
+   * {@link MACHINES_COPILOT_CHAT_CHANNEL}, and its refusals arrive as an
+   * ordinary `error`, which the link publishes as the row's `reason`.
+   *
+   * ## Why there is no `machines:copilot:hello`
+   *
+   * Because a caller must never have to remember one. `copilot.hello` is sent
+   * by the link on every `welcome` that carried a copilot, and it has to be:
+   * that machine refuses every copilot verb, read tier included, until *this
+   * socket* has said it, and the socket is new after every reconnect. A window
+   * that owned the opening would be a window that has to notice a laptop
+   * waking, which is a thing no window can be relied on to do.
+   */
+  ipcMain.handle(
+    'machines:copilot:attach',
+    (_event, id: unknown): { ok: boolean; message: string } => {
+      if (typeof id !== 'string') return { ok: false, message: 'That is not a machine.' }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.' }
+      return link.copilotAttach()
+    },
+  )
+
+  /**
+   * Start this desktop's **own run** on that machine.
+   *
+   * Deliberately its own channel and not a flag on the attach beside it, for
+   * the reason `copilot.start` is its own frame: attaching costs that machine
+   * one callback, and this spawns an agent process on somebody else's computer
+   * and spends money. Two acts that far apart sharing a channel is how a page
+   * opening comes to start a run nobody asked for.
+   *
+   * It is also what makes the composer able to work at all. A device's run is
+   * its own — never a second keyboard on the copilot at that desk — so
+   * `CopilotStateReport.run` is null over there until this has been sent, and
+   * `machines:copilot:say` has nothing to talk to.
+   */
+  ipcMain.handle(
+    'machines:copilot:start',
+    (_event, id: unknown): { ok: boolean; message: string } => {
+      if (typeof id !== 'string') return { ok: false, message: 'That is not a machine.' }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.' }
+      return link.copilotStart()
+    },
+  )
+
+  /**
+   * Ask that machine what its copilot is doing, again.
+   *
+   * `machines:copilot:refresh` rather than `…:state`, because the state's own
+   * name is taken by the channel it arrives on: this is a question and that is
+   * the answer, and one word for both would be two things somebody has to hold
+   * apart while reading either.
+   *
+   * A retry rather than a first read, and it is here for the same narrow reason
+   * `machines:ports` is: `machines:copilot:attach` already answers with a state
+   * and every later change is pushed, so a panel that has just opened is not
+   * waiting on this. What it covers is the round trip that went missing —
+   * without it the only way back to a live reading is to reconnect the machine.
+   */
+  ipcMain.handle(
+    'machines:copilot:refresh',
+    (_event, id: unknown): { ok: boolean; message: string } => {
+      if (typeof id !== 'string') return { ok: false, message: 'That is not a machine.' }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.' }
+      return link.copilotState()
+    },
+  )
+
+  ipcMain.handle(
+    'machines:copilot:say',
+    (_event, id: unknown, text: unknown): { ok: boolean; message: string } => {
+      if (typeof id !== 'string') return { ok: false, message: 'That is not a machine.' }
+      // Checked here as well as on the wire, for the reason
+      // `machines:controls:apply` narrows its control name: an `ipcMain.handle`
+      // argument is whatever the renderer put in it however the type reads, and
+      // everything past this line ends up in an agent's prompt on another
+      // computer. `MachineLink.copilotSay` runs the real wire parser over it,
+      // which is the check that protects the far machine and the one that stops
+      // an oversized paste closing the socket.
+      if (typeof text !== 'string' || text === '') return { ok: false, message: 'There is nothing to say.' }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.' }
+      return link.copilotSay(text)
+    },
+  )
+
   ipcMain.handle('machines:open', (_event, id: unknown, url: unknown): boolean => {
     if (typeof id !== 'string' || typeof url !== 'string' || url === '') return false
     if (url.length > MAX_URL_LENGTH) return false

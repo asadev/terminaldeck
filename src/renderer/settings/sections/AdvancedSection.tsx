@@ -31,9 +31,9 @@ import {
  * Every path this pane used to list failed that test:
  *
  *   - `settings.json` holds exactly the rows of this window;
- *   - `state.json` holds the theme (Appearance), the default assistant
- *     (Assistants), the project list (the sidebar) and the window size;
- *   - `profiles.json` holds the accounts, which the Assistants pane creates,
+ *   - `state.json` holds the theme (Appearance), the default coding tool
+ *     (Coding AI), the project list (the sidebar) and the window size;
+ *   - `profiles.json` holds the accounts, which the Coding AI pane creates,
  *     renames, deletes and picks a default from;
  *   - `settings.last-good.json` is a copy of the first of those.
  *
@@ -298,7 +298,7 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
         secret — it is hidden because it is an answer to "what would you like me
         to attach to this bug report", and it was standing where the answer to
         "how do I change this?" belongs. Every setting these files hold is
-        changed in this window, in Appearance, or in Assistants, and being sent
+        changed in this window, in Appearance, or in Coding AI, and being sent
         to a text editor instead is the thing he objected to.
       */}
       {debug && (

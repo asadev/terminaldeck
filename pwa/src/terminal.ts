@@ -38,7 +38,23 @@ export interface TerminalHandlers {
 
 export interface TerminalHandle {
   readonly element: HTMLElement
-  write(data: string): void
+  /**
+   * Bytes onto the screen.
+   *
+   * `done` is xterm's own callback and it is why this signature is not simply
+   * `(data: string) => void`: `write` returns as soon as the data is *queued*,
+   * and the one thing `terminal-backfill.ts` has to know is when a backlog has
+   * actually been parsed. See `holdUntilFilled`.
+   */
+  write(data: string, done?: () => void): void
+  /**
+   * Jump to the newest output.
+   *
+   * Only ever called by the backfill, on the frame it reveals a terminal that
+   * was filled in while hidden — a replay written to a hidden surface leaves the
+   * viewport wherever it started, which for a large scrollback is the top.
+   */
+  scrollToBottom(): void
   /** Drop everything on screen and in the scrollback. */
   reset(): void
   size(): TerminalSize
@@ -251,7 +267,8 @@ export function createTerminal(
 
   return {
     element,
-    write: (data) => term.write(data),
+    write: (data, done) => term.write(data, done),
+    scrollToBottom: () => term.scrollToBottom(),
     reset: () => term.reset(),
     size,
     fit(): void {

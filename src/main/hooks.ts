@@ -397,7 +397,59 @@ function shellQuote(value: string): string {
  * is installed on the Windows machine available here, so which shell they use
  * is unmeasured; what they get is the shell Claude was measured using, which is
  * a far better guess than the POSIX command that could not run at all.
+ *
+ * ## The one place the response is now allowed back in, and what it costs
+ *
+ * Everything above is written from the position that this command throws the
+ * response away — `-o /dev/null` — because the endpoint answered `204` with no
+ * body and there was nothing to read. That is still true of three of the five
+ * events, byte for byte.
+ *
+ * It is no longer true of `SessionStart` and `UserPromptSubmit`. Those two are
+ * the moments an agent's context is assembled, and they are the only channel by
+ * which an agent can be told which browser windows are attached to its session
+ * *without typing a character into the terminal Asad is looking at* — a thing he
+ * has objected to three times and this app will not do. So for those two events
+ * the command keeps the body, and `hook-server.ts` answers them with a small
+ * `additionalContext` JSON when, and only when, that session has a window
+ * attached. Every other case is the same empty 204 it always was.
+ *
+ * The price is real and is paid once, deliberately, with his agreement:
+ *
+ *  - `readStatus` compares the installed command against this one **per
+ *    (provider, event)**, so every provider reports "Needs reinstalling" until
+ *    it is reinstalled once. The other three events' commands are unchanged, so
+ *    only two entries per provider actually differ.
+ *  - Codex persists a `trusted_hash` per hook entry, so two of its ten entries
+ *    invalidate and are re-trusted on that reinstall.
+ *
+ * This re-enters, for one release and for two events, the state the paragraphs
+ * above worked to eliminate. That is different from drifting back into it: it is
+ * a one-time, visible reinstall in exchange for the agent knowing what `B2` is,
+ * and the staleness fix itself — a stable address and no secret in the command —
+ * is untouched.
  */
+
+/**
+ * The events whose answer the CLI must read rather than discard.
+ *
+ * Kept beside the command rather than imported from `hook-server.ts` because
+ * they are two different facts that happen to agree today: this set decides what
+ * the *command* does with the body, and the server's `CONTEXT_EVENTS` decides
+ * whether there is a body at all. A mismatch fails safely in both directions —
+ * a body nobody reads, or a reader with nothing to read — and `hooks.test.ts`
+ * pins the pair so it cannot go unnoticed.
+ */
+const EVENTS_THAT_KEEP_THE_BODY: ReadonlySet<string> = new Set([
+  'SessionStart',
+  'UserPromptSubmit',
+  // The mid-turn door. `hook-server.ts` says why at `CONTEXT_EVENTS`: these two
+  // fire at the top of a turn, and a browser window attached *during* one is
+  // otherwise not learned about until the next prompt. It answers with
+  // something only in the turn after an attach or a detach; the rest of the
+  // time it is the same empty 204 as before, thrown away by curl either way.
+  'PostToolUse',
+])
 export function hookCommand(
   provider: HookProviderId,
   event: string,
@@ -436,7 +488,11 @@ export function hookCommand(
   return [
     CURL,
     '-s',
-    '-o /dev/null',
+    // Kept for three of the five events and dropped for the two that carry an
+    // answer worth reading. See the section above for what that costs and why
+    // it is worth it; without this the body would be written to /dev/null and
+    // the agent would be told nothing about its own browser windows.
+    ...(EVENTS_THAT_KEEP_THE_BODY.has(event) ? [] : ['-o /dev/null']),
     '--connect-timeout 1',
     '--max-time 3',
     '-X POST',

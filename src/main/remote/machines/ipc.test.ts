@@ -6,12 +6,15 @@ import { generateStatic } from '../../../shared/sealed'
 import { hostIdFor } from '../../../shared/relay-wire'
 import { isCode } from '../../../shared/short-code'
 import { PAIRING_TTL_MS, RemoteAuth } from '../device-auth'
+import { emptyUsageReading } from '../protocol'
 import { pairingDesk, type RemoteStatus } from '../server'
 import type { MachineLink, MachineLinkState, MachineLinkOptions } from './guest'
 import type { PairResult } from './pair'
 import type { Beacon, BeaconOptions } from './rendezvous'
 import { MachineStore } from './store'
 import {
+  MACHINES_COPILOT_CHAT_CHANNEL,
+  MACHINES_COPILOT_STATE_CHANNEL,
   MACHINES_OUTPUT_CHANNEL,
   MACHINES_STATE_CHANNEL,
   registerMachinesIpc,
@@ -72,7 +75,16 @@ interface Rig {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
   channels: string[]
   broadcasts: Array<{ channel: string; payload: unknown }>
-  links: Array<{ options: MachineLinkOptions; connected: number; disconnected: number; woken: number }>
+  links: Array<{
+    options: MachineLinkOptions
+    connected: number
+    disconnected: number
+    woken: number
+    /** Everything `machines:send` handed the link, in order. Empty is the assertion. */
+    sends: Array<{ sessionId: string; data: string }>
+    /** And everything the four copilot channels handed it. Empty is the assertion again. */
+    copilot: { attached: number; started: number; refreshed: number; said: string[] }
+  }>
   beacons: Array<{ options: BeaconOptions; stopped: boolean }>
   store: MachineStore
   dir: string
@@ -125,7 +137,18 @@ function rig(
     status: options.status ?? connectedStatus,
     broadcast: (channel, payload) => broadcasts.push({ channel, payload }),
     createLink: (linkOptions): MachineLink => {
-      const record = { options: linkOptions, connected: 0, disconnected: 0, woken: 0 }
+      const record = {
+        options: linkOptions,
+        connected: 0,
+        disconnected: 0,
+        woken: 0,
+        sends: [] as Array<{ sessionId: string; data: string }>,
+        // What the copilot channels asked this link to do. Counted rather than
+        // answered `true`, because the property those channels have to have is
+        // that the press reaches the link at all — a handler that resolved a
+        // cheerful sentence and sent nothing would look identical from outside.
+        copilot: { attached: 0, started: 0, refreshed: 0, said: [] as string[] },
+      }
       links.push(record)
       const state: MachineLinkState = {
         id: linkOptions.id,
@@ -135,6 +158,7 @@ function rig(
         folders: null,
         capabilities: [],
         ports: [],
+        copilot: null,
         hostPlatform: '',
         retryAt: null,
       }
@@ -152,12 +176,58 @@ function rig(
         attach: () => true,
         detach: () => true,
         input: () => true,
+        // No file ever leaves this fake. The transfer path has its own end-to-end
+        // cover in `transfer-live.test.ts`, over a real relay and a real disk.
+        sendFile: () => Promise.resolve({ ok: false as const, message: 'not in this fake' }),
+        cancelFile: () => {},
         resize: () => true,
         create: () => true,
         close: () => true,
         ports: () => true,
         localhost: () => true,
+        copilotAttach: () => {
+          record.copilot.attached += 1
+          return { ok: true, message: 'Watching that machine’s copilot.' }
+        },
+        copilotStart: () => {
+          record.copilot.started += 1
+          return { ok: true, message: 'Asked that machine to start a copilot run.' }
+        },
+        copilotState: () => {
+          record.copilot.refreshed += 1
+          return { ok: true, message: 'Asked.' }
+        },
+        copilotSay: (text: string) => {
+          record.copilot.said.push(text)
+          return { ok: true, message: 'Sent.' }
+        },
+        // A link that answers nothing about controls, which is what a machine
+        // whose build predates the `controls` capability really does. Null and
+        // the refusal sentence are the two shapes the renderer has to be right
+        // about, so the fake produces them rather than a working reading.
+        readControls: () => Promise.resolve(null),
+        setControl: () =>
+          Promise.resolve({
+            ok: false,
+            message: 'That machine is running a build that cannot set a model from here.',
+            reading: { value: null, label: null, source: null },
+          }),
         openThere: () => true,
+        // Same again for usage, and here the shape is the interesting half: this
+        // link never answers null, because the bar it feeds has no previous
+        // figure to keep the way the control chips do. A machine that cannot
+        // report answers with an empty *reading* carrying the sentence, which is
+        // what puts the reason on screen before anybody presses anything.
+        readUsage: (_id: string, want: 'plan' | 'refresh' | 'context') =>
+          Promise.resolve(emptyUsageReading(want, 'That machine cannot report its usage from here.')),
+        // Typing into a session over there without attaching to it. Recorded
+        // rather than answered `true`, because the argument that has to survive
+        // this channel is the text: a handler that dropped it would look
+        // identical from the outside.
+        send: (sessionId: string, data: string) => {
+          record.sends.push({ sessionId, data })
+          return Promise.resolve({ ok: true, message: 'Sent.' })
+        },
       }
     },
     ...(options.pair ? { pair: options.pair } : {}),
@@ -226,6 +296,25 @@ describe('launching', () => {
         'machines:code',
         'machines:code:cancel',
         'machines:connect',
+        // The model, the effort and fast mode of a session over there. Two
+        // channels rather than one because reading is passive and happens every
+        // time the session prints anything, while applying **types into
+        // somebody's terminal** — folding them together would put a keystroke on
+        // a code path that fires on output. See `CAPABILITY.controls`.
+        'machines:controls:apply',
+        'machines:controls:read',
+        // The copilot on that machine, which is what the switcher at the top of
+        // the copilot page needs under it. Four channels rather than one
+        // because they cost that computer wildly different things: attaching is
+        // one callback, refreshing is a memory read, `start` spawns an agent
+        // process and spends money, and `say` puts words in its prompt. There
+        // is deliberately no `hello` — the link opens the stream on every
+        // welcome that carried a copilot, because a window that had to
+        // re-open it after every reconnect is a window that will forget.
+        'machines:copilot:attach',
+        'machines:copilot:refresh',
+        'machines:copilot:say',
+        'machines:copilot:start',
         'machines:create',
         'machines:detach',
         'machines:disconnect',
@@ -251,6 +340,32 @@ describe('launching', () => {
         'machines:reach',
         'machines:rename',
         'machines:resize',
+        // Typing into a session over there **without attaching to it** — which
+        // is what makes it its own channel rather than a flag on
+        // `machines:input`. That one is a remote terminal pane's keyboard and
+        // the far end serves it only because the pane attached first; this is
+        // for a surface with something to say and nothing to read, where taking
+        // out an attach would displace the handle that pane already holds. It
+        // answers `{ ok, message }` rather than a boolean because there is no
+        // terminal on screen to read the outcome off. See `CAPABILITY.send`.
+        'machines:send',
+        // A file dropped on a pane showing a session over there, and the one
+        // control a person has over it once it is going. Two channels rather
+        // than one because a cancel has to reach the far machine even when the
+        // transfer has stalled — it is what makes that end delete the
+        // half-written file rather than leaving it in somebody's downloads
+        // folder. The bytes never cross this seam: the renderer hands over a
+        // path and `upload-send.ts` streams it. See `MachineLink.sendFile`.
+        'machines:upload',
+        'machines:upload:cancel',
+        // The usage bar's two figures, for a session over there. One channel
+        // where the controls above are two, because none of the three readings
+        // types anything — the split up there exists to keep a keystroke off a
+        // path that fires on output, and there is no keystroke here. Which of
+        // the three is asked for is the `want` argument, and it is what decides
+        // the cost: two of them read memory and a file on that machine, and the
+        // third boots a whole agent CLI there. See `CAPABILITY.usage`.
+        'machines:usage:read',
       ].sort(),
     )
   })
@@ -414,6 +529,43 @@ describe('the rest of the list', () => {
     expect(await app.invoke('machines:attach', hostId, 's1', 'wide', 24)).toBe(false)
   })
 
+  it('sends to a session over there, and turns every refusal into a sentence', async () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+
+    expect(await app.invoke('machines:send', hostId, 's1', 'look at this button')).toEqual({
+      ok: true,
+      message: 'Sent.',
+    })
+    // The text reached the link, which is the argument this channel exists to
+    // carry and the one a handler can drop without anything looking wrong.
+    expect(app.links[0].sends).toEqual([{ sessionId: 's1', data: 'look at this button' }])
+
+    /*
+     * Every refusal is a sentence rather than a throw or a bare `false`, because
+     * the caller is a panel with no terminal on screen: a send that produced
+     * nothing would be indistinguishable from a feature that does not work.
+     */
+    for (const bad of [
+      [42, 's1', 'x'],
+      [hostId, 42, 'x'],
+      [hostId, 's1', 42],
+      // Nothing to send is not a send. It would otherwise reach a pty as a
+      // write of no bytes and be reported as having worked.
+      [hostId, 's1', ''],
+      // A machine nobody paired with.
+      ['nobody', 's1', 'x'],
+    ]) {
+      expect(await app.invoke('machines:send', ...bad), JSON.stringify(bad)).toMatchObject({
+        ok: false,
+        message: expect.stringMatching(/./),
+      })
+    }
+    // And not one of those reached the link.
+    expect(app.links[0].sends).toHaveLength(1)
+  })
+
   it('pushes a machine’s output at the window with the machine it came from', () => {
     const dir = tempDir()
     const hostId = paired(dir)
@@ -422,6 +574,98 @@ describe('the rest of the list', () => {
     expect(app.broadcasts).toContainEqual({
       channel: MACHINES_OUTPUT_CHANNEL,
       payload: { machineId: hostId, sessionId: 's1', data: 'hello', replay: false },
+    })
+  })
+
+  it('carries every copilot verb to the link, and refuses the rest with a sentence', async () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+
+    expect(await app.invoke('machines:copilot:attach', hostId)).toMatchObject({ ok: true })
+    expect(await app.invoke('machines:copilot:start', hostId)).toMatchObject({ ok: true })
+    expect(await app.invoke('machines:copilot:refresh', hostId)).toMatchObject({ ok: true })
+    expect(await app.invoke('machines:copilot:say', hostId, 'which session is stuck?')).toMatchObject({
+      ok: true,
+    })
+    // Reached the link, all four of them, and the text with the one that
+    // carries text. A handler that answered cheerfully and forwarded nothing is
+    // the failure this asserts against, and it is the one that looks correct
+    // from the window: the sentence arrives, and the far machine never hears.
+    expect(app.links[0].copilot).toEqual({ attached: 1, started: 1, refreshed: 1, said: ['which session is stuck?'] })
+
+    /*
+     * And every refusal is a sentence, on every path, for the reason
+     * `machines:send` above needs one: the copilot page has no terminal on it,
+     * so a press that produced nothing at all would be indistinguishable from a
+     * control that does not work.
+     */
+    for (const [channel, ...args] of [
+      ['machines:copilot:attach', 42],
+      ['machines:copilot:start', 42],
+      ['machines:copilot:refresh', 42],
+      ['machines:copilot:say', hostId, 42],
+      // Nothing to say is not a message. It would otherwise reach the wire
+      // parser as an empty `copilot.say` and be refused a layer further out,
+      // where the sentence is about a frame rather than about a composer.
+      ['machines:copilot:say', hostId, ''],
+      // A machine nobody paired with.
+      ['machines:copilot:attach', 'nobody'],
+      ['machines:copilot:say', 'nobody', 'hello'],
+    ] as Array<[string, ...unknown[]]>) {
+      expect(await app.invoke(channel, ...args), `${channel} ${JSON.stringify(args)}`).toMatchObject({
+        ok: false,
+        message: expect.stringMatching(/./),
+      })
+    }
+    // And not one of those reached the link either.
+    expect(app.links[0].copilot).toEqual({ attached: 1, started: 1, refreshed: 1, said: ['which session is stuck?'] })
+  })
+
+  it('pushes a machine’s copilot state and chat with the machine they came from', () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+
+    const state = {
+      desk: 'running' as const,
+      run: 'run-1',
+      profile: 'Personal',
+      signedIn: true,
+      tools: 14,
+      turnTokens: 2200,
+      pending: 0,
+      grant: { read: true, act: true, alter: true },
+      available: true,
+      reason: null,
+    }
+    app.links[0].options.onCopilotState?.(state)
+    expect(app.broadcasts).toContainEqual({
+      channel: MACHINES_COPILOT_STATE_CHANNEL,
+      payload: { machineId: hostId, state },
+    })
+
+    /*
+     * The chat goes up as the **whole frame**, and that is the assertion rather
+     * than a detail of the payload's shape.
+     *
+     * `run` is what lets a reader drop a frame belonging to a run that has
+     * ended instead of splicing it onto a live conversation, and `reset` is the
+     * instruction to throw away what is held. Neither can be recovered from the
+     * messages, so a push that carried the bubbles alone would force the window
+     * to guess — and the guess it would make is the one that shows somebody an
+     * answer to a question nobody asked in this run.
+     */
+    const chat = {
+      t: 'copilot.chat' as const,
+      run: 'run-1',
+      reset: true as const,
+      messages: [{ id: 'm1', role: 'agent' as const, text: 'Session 3 is waiting on you.', at: 1 }],
+    }
+    app.links[0].options.onCopilotChat?.(chat)
+    expect(app.broadcasts).toContainEqual({
+      channel: MACHINES_COPILOT_CHAT_CHANNEL,
+      payload: { machineId: hostId, chat },
     })
   })
 })
@@ -454,6 +698,7 @@ describe('waking', () => {
             folders: null,
             capabilities: [],
             ports: [],
+            copilot: null,
             hostPlatform: '',
             retryAt: null,
           }
@@ -466,13 +711,38 @@ describe('waking', () => {
             state: () => state,
             attach: () => true,
             detach: () => true,
+            sendFile: () => Promise.resolve({ ok: false as const, message: 'not in this fake' }),
+            cancelFile: () => {},
             input: () => true,
             resize: () => true,
             create: () => true,
             close: () => true,
             ports: () => true,
             localhost: () => true,
+            copilotAttach: () => ({ ok: true, message: 'Watching that machine’s copilot.' }),
+            copilotStart: () => ({ ok: true, message: 'Asked that machine to start a copilot run.' }),
+            copilotState: () => ({ ok: true, message: 'Asked.' }),
+            copilotSay: () => ({ ok: true, message: 'Sent.' }),
+            // A link that answers nothing about controls, which is what a machine
+            // whose build predates the `controls` capability really does. Null and
+            // the refusal sentence are the two shapes the renderer has to be right
+            // about, so the fake produces them rather than a working reading.
+            readControls: () => Promise.resolve(null),
+            setControl: () =>
+              Promise.resolve({
+                ok: false,
+                message: 'That machine is running a build that cannot set a model from here.',
+                reading: { value: null, label: null, source: null },
+              }),
             openThere: () => true,
+            // Same again for usage, and here the shape is the interesting half: this
+            // link never answers null, because the bar it feeds has no previous
+            // figure to keep the way the control chips do. A machine that cannot
+            // report answers with an empty *reading* carrying the sentence, which is
+            // what puts the reason on screen before anybody presses anything.
+            readUsage: (_id: string, want: 'plan' | 'refresh' | 'context') =>
+              Promise.resolve(emptyUsageReading(want, 'That machine cannot report its usage from here.')),
+            send: () => Promise.resolve({ ok: true, message: 'Sent.' }),
           }
         },
       },

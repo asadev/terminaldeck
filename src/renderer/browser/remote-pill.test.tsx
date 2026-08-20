@@ -24,19 +24,20 @@ import {
  * A remote session was deliberately left out of `WorkspaceTab` the night before,
  * on the argument that a ✕ on the pill would promise to end something this
  * window does not own. He asked for the pill directly, so that decision is
- * reversed — and the ✕ is answered rather than avoided: it means what Close on
- * the machine's heading means, which is *"It will just close all of the sessions
- * from that PC… it should not disconnect the remote account."*
+ * reversed — and the objection is answered by the ✕ meaning less rather than
+ * more: *"for the sessions it will just close from the top bar, but it will
+ * still stay in the side panel."* It takes the pill off the bar. It cannot
+ * reach the machine, and there is no longer any handler through which it could.
  *
  * ## What is pinned here, and why each one
  *
  * The pill has to be **indistinguishable** from a local one — same glyph, same
- * status dot — because "the shape of the application should not be changing for
- * local and remote devices" is the sentence he has now said three nights
- * running. And its ✕ has to be **distinguishable in what it says and does**,
- * because two controls a few pixels apart that do opposite things is the one
- * thing this bar has always been careful about. Those two pull against each
- * other, which is exactly why both halves need a test.
+ * status dot, same ✕ doing the same harmless thing — because "the shape of the
+ * application should not be changing for local and remote devices" is the
+ * sentence he has now said three nights running. And the ✕ has to be
+ * **distinguishable from the browser window's**, which really does destroy
+ * something and sits a centimetre away wearing the same glyph. Those are the
+ * two halves, and each needs its own test.
  */
 
 const MACHINE = { id: 'm-1', name: 'DESKTOP-DDGMNCV' }
@@ -86,16 +87,20 @@ function promoting(ids: readonly string[]): Storage {
 
 function strip(
   tabs: readonly WorkspaceTab[],
-  props: { onEndRemote?: (id: string) => void; activeTabId?: string | null } = {},
+  props: { onCloseWindow?: (id: string) => void; activeTabId?: string | null } = {},
 ): string {
-  const { activeTabId = 's1', onEndRemote } = props
+  const { activeTabId = 's1', onCloseWindow } = props
   return renderToStaticMarkup(
     <WorkspaceTabStrip
       tabs={tabs}
       activeTabId={activeTabId}
       onSelect={() => {}}
+      // Wired on every mount here, because it is what makes a session's ✕ appear
+      // at all — the strip draws no control it cannot finish. Leaving it out
+      // would make every assertion below about "the ✕ this pill carries" pass
+      // for the wrong reason.
       onShowInstead={() => {}}
-      {...(onEndRemote ? { onEndRemote } : {})}
+      {...(onCloseWindow ? { onCloseWindow } : {})}
       storage={promoting(tabs.map((tab) => tab.id))}
     />,
   )
@@ -133,7 +138,7 @@ describe('a remote session is drawn as a tab', () => {
         tabs={[LOCAL, REMOTE]}
         activeTabId={REMOTE_ID}
         onSelect={() => {}}
-        onShowInstead={() => {}}
+
         storage={null}
       />,
     )
@@ -183,47 +188,54 @@ describe('a remote session is drawn as a tab', () => {
   })
 })
 
-describe('the ✕ on a remote pill ends the session, and says so', () => {
-  it('is absent when the machine will not accept a close', () => {
-    // Absent rather than drawn and inert — a machine on an older build never
-    // advertised `close`, and a ✕ that sends a frame into silence is the fake
-    // control this whole pass is removing. The tab can still leave the strip by
-    // being dragged out or folded back from its row in the rail.
-    const html = strip([{ ...REMOTE, closable: false }], { onEndRemote: () => {} })
-    expect(pill(html, REMOTE_ID)).not.toContain('strip-tab-close')
+describe('a remote pill’s ✕ takes it off the bar and cannot end it — 2026-08-20', () => {
+  /*
+   * It used to carry one that ended the session where it was running, on his
+   * 2026-08-18 instruction. He reversed that after watching one of those presses
+   * take a visible moment and another do nothing he could name, and then said
+   * what the reversal meant: *"for the sessions it will just close from the top
+   * bar, but it will still stay in the side panel."*
+   *
+   * A remote session takes the same road as a local one, and deliberately so —
+   * the rail lists it under its machine's heading, and the whole point of the
+   * pill was that a remote session should look and behave like a local one up
+   * here. What used to make it special was the one thing it must not be: a ✕
+   * that reached across the network and killed something.
+   */
+  it('has one, and it is the harmless one', () => {
+    const html = strip([LOCAL, REMOTE], { onCloseWindow: () => {} })
+    for (const id of [REMOTE_ID, 's1']) {
+      expect(pill(html, id)).toContain('strip-tab-close')
+      // `[data-ends]` is the mark for a control that destroys something. Its
+      // absence here is the entire difference between this ✕ and the browser
+      // window's, and the only one visible in the running app.
+      expect(pill(html, id)).not.toContain('data-ends')
+      expect(pill(html, id)).toContain('title="Take off the bar"')
+    }
   })
 
-  it('is absent when the host gave the strip no way to end one', () => {
-    // A bare mount — a test, the harness — has no handler, so there is no ✕
-    // rather than one whose press goes nowhere.
-    expect(pill(strip([REMOTE]), REMOTE_ID)).not.toContain('strip-tab-close')
+  it('says nothing about ending anything, on either pill', () => {
+    // The sentence that used to sit on a remote ✕ is gone with the handler that
+    // made it true. A phrase left behind would describe a button that no longer
+    // does what it says.
+    const html = strip([LOCAL, REMOTE], { onCloseWindow: () => {} })
+    expect(html).not.toContain('ends the session on')
+    expect(html).not.toMatch(/aria-label="[^"]*[Cc]lose [^"]*Fix the parser/)
   })
 
-  it('does not describe itself the way a local ✕ does', () => {
-    /*
-     * The local one is harmless and its label says the whole sentence, because
-     * the obvious reading of a ✕ is wrong there: *"it should not delete the
-     * session… side panel will have everything inside."*
-     *
-     * The remote one is not harmless, so it must not borrow that sentence. Both
-     * halves are asserted, because the failure that matters is the two drifting
-     * into saying the same thing.
-     */
-    const html = strip([LOCAL, REMOTE], { onEndRemote: () => {} })
-    expect(pill(html, 's1')).toContain('Remove from the top bar')
-    const remote = pill(html, REMOTE_ID)
-    expect(remote).not.toContain('Remove from the top bar')
-    expect(remote).toContain('ends the session on DESKTOP-DDGMNCV')
-    expect(remote).toContain('stays connected')
-  })
-
-  it('wears the mark that separates tidying from destroying', () => {
-    // `[data-ends]` is what `WorkspaceTabStrip.css` paints `--color-critical` on
-    // hover, which is the same mark the rail's ✕ has always had for the same
-    // distinction. A local pill must not have it.
-    const html = strip([LOCAL, REMOTE], { onEndRemote: () => {} })
-    expect(pill(html, REMOTE_ID)).toContain('data-ends=""')
-    expect(pill(html, 's1')).not.toContain('data-ends')
+  it('is absent, not inert, where the host cannot move the selection', () => {
+    // Taking the tab you are *looking at* off the bar is the ordinary press, and
+    // without `onShowInstead` the strip redraws it as transient — a ✕ that
+    // visibly does nothing. So there is no ✕ rather than a broken one.
+    const html = renderToStaticMarkup(
+      <WorkspaceTabStrip
+        tabs={[LOCAL, REMOTE]}
+        activeTabId="s1"
+        onSelect={() => {}}
+        storage={promoting([LOCAL.id, REMOTE.id])}
+      />,
+    )
+    expect(html).not.toContain('strip-tab-close')
   })
 })
 

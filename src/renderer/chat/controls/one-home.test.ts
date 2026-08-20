@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { controlName, optionsFor, type ControlId } from './catalog'
 
 /**
- * Every control has exactly one place a person can reach it, and that place is
- * not the chat box.
+ * Every control has exactly one place a person can reach it, and this file knows
+ * which place, for each of them, and why.
  *
  * ## Why this file exists
  *
@@ -20,17 +20,38 @@ import { controlName, optionsFor, type ControlId } from './catalog'
  * Three of the four controls genuinely were duplicates — model, effort and fast
  * mode are all drawn by `shell/SessionControls.tsx` in the window's own bar.
  * **Permission mode was not.** It had a chip in the composer and nowhere else,
- * and the note in `SessionControls.tsx` says so in as many words ("it keeps its
- * chip in the composer"). Deleting the row without noticing that would have
- * deleted a working control, which is the same failure this project has already
- * had reported at it twice — *"you actually removed everything rather than
- * making it simple"* — arrived at from the opposite direction.
+ * so deleting the row without noticing would have deleted a working control,
+ * which is the same failure this project has already had reported at it twice —
+ * *"you actually removed everything rather than making it simple"* — arrived at
+ * from the opposite direction.
  *
- * So this asserts the invariant rather than the implementation: whatever the
- * lists say, every `ControlId` is drawn somewhere, and no `ControlId` is drawn
- * in the composer. Both halves have to hold at once. Either on its own is
- * satisfiable by a change nobody wants — delete the control (first passes),
- * or put it back in the box (second passes).
+ * ## And then permission mode left the bar too, which is not the same event
+ *
+ * On 2026-08-19 the permission chip came off `CHROME_CONTROLS`. Asad, looking at
+ * a chip reading `Bypass`:
+ *
+ *   > *"we don't need this part also at the end, now bypass read things because
+ *   > we have this here already inside."*
+ *
+ * That would trip every assertion this file originally made, and it *should*
+ * have to answer them rather than be exempted, so the answer is written as the
+ * test instead of as a deletion. Permission mode has a home. It is not in this
+ * app's chrome — it is the CLI's own indicator, which Claude Code redraws along
+ * the bottom of every session it runs:
+ *
+ *     ⏵⏵ bypass permissions on (shift+tab to cycle)
+ *
+ * That is a better home than the chip was, and the reason is not taste. The chip
+ * was a *second* reading of one fact, scraped off a frame this app happened to
+ * parse; the line below it is drawn by the process that owns the fact, so it
+ * cannot lag, and it names the gesture that changes it in the same breath. Two
+ * readings that can disagree is worse than one that cannot.
+ *
+ * So the invariant this file pins has become sharper rather than weaker: every
+ * control is reachable somewhere, no control is in the chat box, and the one
+ * control that is not in the chrome is the one whose absence is *argued in the
+ * source* — with the CLI's own line named. A silent deletion of any of the four
+ * still fails here, which is the whole job.
  *
  * ## Why it reads the source
  *
@@ -61,8 +82,27 @@ function listNamed(source: string, name: string): string[] {
   return [...match[1].matchAll(/'([^']+)'/g)].map((hit) => hit[1] as string)
 }
 
+/**
+ * The one control this app deliberately does not draw, and the line it defers to.
+ *
+ * `CLI_OWNED` is a list of one and it is meant to stay that way. Every entry is
+ * a control whose value the app still *reads* but never draws a switch for,
+ * because the agent underneath already draws it and cannot be stale about it.
+ * Adding to this list is how a control would leave the app quietly, so the
+ * checks below make each entry pay for its place: the source has to name the
+ * line it is deferring to, in the CLI's own characters.
+ */
+const CLI_OWNED: ReadonlyArray<{ control: ControlId; indicator: RegExp }> = [
+  // Captured verbatim off `claude 2.1.234` in `src/main/cli-screens.capture.json`
+  // and asserted from two other test files. `shift+tab` is in the pattern
+  // because a reader told a control has moved needs to be told where to.
+  { control: 'permission', indicator: /shift\+tab/ },
+]
+
 describe('every control has somewhere to be', () => {
-  const chrome = listNamed(read('renderer/shell/SessionControls.tsx'), 'CHROME_CONTROLS')
+  const source = read('renderer/shell/SessionControls.tsx')
+  const chrome = listNamed(source, 'CHROME_CONTROLS')
+  const owned = new Set(CLI_OWNED.map((row) => row.control))
 
   it('reads the window bar’s list at all', () => {
     // If this fails the rest of the file is vacuous, so it is asserted first
@@ -70,7 +110,7 @@ describe('every control has somewhere to be', () => {
     expect(chrome.length, 'CHROME_CONTROLS could not be parsed — check the literal').toBeGreaterThan(0)
   })
 
-  for (const control of CONTROLS) {
+  for (const control of CONTROLS.filter((id) => !owned.has(id))) {
     it(`draws ${controlName(control)} in the window bar`, () => {
       expect(
         chrome,
@@ -79,9 +119,33 @@ describe('every control has somewhere to be', () => {
     })
   }
 
+  for (const { control, indicator } of CLI_OWNED) {
+    it(`leaves ${controlName(control)} to the agent, and says so where it was removed`, () => {
+      /*
+       * Both halves, and neither is optional.
+       *
+       * Absent from the bar is the change. Argued in the source is what makes it
+       * a decision rather than a deletion — and the argument has to name the
+       * thing that took over the job, because "we removed it" and "something
+       * else does it better" look identical in a diff six months later.
+       */
+      expect(
+        chrome,
+        `${controlName(control)} is back on the bar — the CLI already draws it under every session, and two readings of one fact can disagree`,
+      ).not.toContain(control)
+      expect(
+        source,
+        `nothing in SessionControls.tsx says where ${controlName(control)} went`,
+      ).toMatch(indicator)
+    })
+  }
+
   it('offers real values for each of them, not an empty menu', () => {
     // A chip with nothing behind it is the "control that cannot act" the whole
-    // review is about, and it would satisfy every check above.
+    // review is about, and it would satisfy every check above. Asserted for the
+    // CLI-owned ones too: the reading still crosses the bridge and is still
+    // mirrored in `ControlsReading`, so an empty list here would mean the app
+    // had lost the vocabulary to describe a mode it still displays.
     for (const control of CONTROLS) {
       expect(optionsFor(control).length, controlName(control)).toBeGreaterThan(0)
     }

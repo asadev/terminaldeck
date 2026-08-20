@@ -131,19 +131,27 @@
   color: var(--text-secondary);
 }
 
+/* The step's own line, and the ⓘ that carries the rest of it.
+
+   Inline-flex on the paragraph rather than a wrapper span, because the only
+   thing that ever sits beside this text is the dot: the two notes that used to
+   follow it are behind that dot now, which is what put the Sign in button back
+   within sight of the step that names it. Baseline-aligned so the dot sits on
+   the line of type rather than centred on its box. */
 .add-account-ask {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
   margin: 0 0 var(--sp-2);
   font-size: var(--t-body);
   font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
-.add-account-note {
-  margin: 0;
-  font-size: var(--t-callout);
-  line-height: var(--lh-body);
-  color: var(--text-secondary);
-}
+/* `.add-account-note` was here — the two paragraphs under step three, which are
+   now the ⓘ's text. It is gone rather than left empty: a class with no element
+   is the thing somebody reaches for when they want "one more short line", which
+   is precisely what this popup is being kept clear of. */
 
 /* ---------------------------------------------------------------- notices -- */
 

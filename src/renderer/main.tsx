@@ -9,6 +9,34 @@ import { DriveHost } from './copilot/driving/DriveHost'
 const container = document.getElementById('root')
 if (!container) throw new Error('#root missing from index.html')
 
+/*
+ * A file dropped anywhere this window does not handle must do nothing.
+ *
+ * Chromium's default for a dropped file is to **navigate to it**, and in an
+ * Electron window that means the application is replaced by whatever was
+ * dropped — a picture of the photo, or a text file, with no way back except
+ * reload. It was reachable from every pixel of this app until 2026-08-20,
+ * because no surface in it had a drop handler at all.
+ *
+ * The panes that *do* mean something by a drop — a terminal, the chat composer —
+ * call `preventDefault` themselves and this never sees the event, because a
+ * handler on the document runs after the ones on the elements inside it and
+ * `dropEffect: 'none'` here is not consulted for an event already handled.
+ * What is left is every other pixel, and the honest answer there is nothing:
+ * silence, rather than a guess about which session a drop on the sidebar meant.
+ *
+ * Both events, and `dragover` is the load-bearing one: the navigation is
+ * committed by the default action of `dragover`, so a `drop` handler alone
+ * arrives too late.
+ */
+for (const kind of ['dragover', 'drop'] as const) {
+  window.addEventListener(kind, (event: DragEvent) => {
+    if (event.defaultPrevented) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
+  })
+}
+
 createRoot(container).render(
   <StrictMode>
     <App />

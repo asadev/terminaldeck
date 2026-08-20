@@ -124,6 +124,20 @@ function hue(colour: Rgb): number {
   return h * 60
 }
 
+/**
+ * HSV saturation. Unchanged by a scale toward black, which is the point.
+ *
+ * At module scope because two derivations in this file are the same
+ * derivation — the terminal's sixteen and the four binding colours are both a
+ * dark value walked down one factor — and a second copy is how the two would
+ * come to disagree about what "the same colour, darker" means.
+ */
+function saturation(colour: Rgb): number {
+  const [r, g, b] = colour.map((c) => c / 255)
+  const max = Math.max(r, g, b)
+  return max === 0 ? 0 : (max - Math.min(r, g, b)) / max
+}
+
 const get = (theme: Map<string, string>, name: string): string => {
   const value = theme.get(name)
   if (value === undefined) throw new Error(`${name} is missing from the sheet`)
@@ -307,6 +321,139 @@ describe('the status ramp clears WCAG AA on every surface of its theme', () => {
     // measured against surfaces it is never drawn on, and either fails for the
     // wrong reason or forces the real check out.
     expect(STATUS).not.toContain('--badge-fg')
+  })
+})
+
+/* ------------------------------------------------- the binding colours */
+
+/**
+ * The four colours a session's browser windows are marked with.
+ *
+ * They are new tokens rather than four the sheet already had, and the argument
+ * for that rests on a fact about this file's own contents — so the fact is
+ * asserted here rather than left in a comment. If somebody ever splits
+ * `--color-info` from `--status-working`, the sheet gains a hue, and whoever
+ * does it should be told that the paragraph in `tokens.css` justifying these
+ * four has stopped being true.
+ */
+describe('the binding colours are four the sheet did not already have', () => {
+  /** Pairs that are the *same hex under two names* in both theme blocks. */
+  const ALIASES = [
+    ['--color-info', '--status-working'],
+    ['--color-warning', '--status-waiting'],
+    ['--color-positive', '--status-completed'],
+  ] as const
+
+  for (const [name, theme] of THEMES) {
+    for (const [a, b] of ALIASES) {
+      it(`${name} ${a} is still the same colour as ${b}`, () => {
+        expect(get(theme, a).toLowerCase()).toBe(get(theme, b).toLowerCase())
+      })
+    }
+  }
+
+  const BINDS = ['--bind-1', '--bind-2', '--bind-3', '--bind-4'] as const
+
+  for (const [name, theme] of THEMES) {
+    for (const token of BINDS) {
+      it(`${name} ${token} clears AA on every surface of its theme`, () => {
+        // Every surface, like the status ramp above: a chip is drawn on the
+        // strip, on the rail and on a pane bar, which between them are three
+        // different grounds, and the token has to be legible as ink too.
+        for (const surface of SURFACES) {
+          expect({
+            token,
+            surface,
+            ratio: contrast(get(theme, token), get(theme, surface)) >= 4.5,
+          }).toEqual({ token, surface, ratio: true })
+        }
+      })
+    }
+
+    it(`${name} --bind-fg is readable on all four chips`, () => {
+      // `--badge-fg`'s rule, one shape along: a fill this bright takes the ink
+      // from the opposite end of the theme, and the direction flips between the
+      // two appearances. White on the dark chips measures about 2.4:1, which no
+      // two-character chip survives.
+      for (const token of BINDS) {
+        expect({
+          token,
+          ok: contrast(get(theme, '--bind-fg'), get(theme, token)) >= 4.5,
+        }).toEqual({ token, ok: true })
+      }
+    })
+
+    it(`${name} --bind-fg is ink for a bright fill, not a copy of the theme`, () => {
+      const chip = luminance(rgb(get(theme, '--bind-fg')))
+      const body = luminance(rgb(get(theme, '--text-primary')))
+      expect(name === 'light' ? chip > body : chip < body).toBe(true)
+    })
+
+    /**
+     * Two hue-steps clear of the two colours that mean something urgent.
+     *
+     * The same separation rule the sheet already applies between
+     * `--status-input` and `--status-waiting` — "a rust two hue-steps away…so
+     * the two dots stay tellable apart at 7px", which is 19° on those values.
+     * A binding is a benign fact about where a page opens; it must not be
+     * mistaken for the app's one "act now" colour or for its primary action.
+     */
+    for (const token of BINDS) {
+      for (const rival of ['--accent', '--status-input'] as const) {
+        it(`${name} ${token} is not ${rival}'s hue`, () => {
+          let apart = Math.abs(hue(rgb(get(theme, token))) - hue(rgb(get(theme, rival))))
+          if (apart > 180) apart = 360 - apart
+          expect({ token, rival, apart: apart >= 19 }).toEqual({ token, rival, apart: true })
+        })
+      }
+    }
+  }
+
+  /**
+   * The four are tellable apart from each other, which is the whole job.
+   *
+   * Four colours that each clear the checks above and sit 5° from one another
+   * would pass everything else in this file and be useless on screen.
+   */
+  it('keeps the four apart from each other in both themes', () => {
+    for (const [name, theme] of THEMES) {
+      const hues = BINDS.map((token) => hue(rgb(get(theme, token))))
+      for (let i = 0; i < hues.length; i += 1) {
+        for (let j = i + 1; j < hues.length; j += 1) {
+          let apart = Math.abs(hues[i] - hues[j])
+          if (apart > 180) apart = 360 - apart
+          expect({ theme: name, pair: [BINDS[i], BINDS[j]], ok: apart >= 40 }).toEqual({
+            theme: name,
+            pair: [BINDS[i], BINDS[j]],
+            ok: true,
+          })
+        }
+      }
+    }
+  })
+
+  /**
+   * The light four are the dark four walked down, not a second palette.
+   *
+   * The same derivation the terminal's sixteen are held to a few hundred lines
+   * below: one scale factor across all three channels, which preserves hue and
+   * HSV saturation and moves only lightness. A palette picked twice by eye would
+   * drift on one or the other, and drifting means the violet session is a
+   * different violet depending on the appearance.
+   */
+  it('walks each light binding colour down its own hue line', () => {
+    for (const token of BINDS) {
+      const l = rgb(get(LIGHT, token))
+      const d = rgb(get(DARK, token))
+      let drift = Math.abs(hue(l) - hue(d))
+      if (drift > 180) drift = 360 - drift
+      expect({ token, ok: drift < 2 }).toEqual({ token, ok: true })
+      expect({ token, ok: Math.abs(saturation(l) - saturation(d)) < 0.01 }).toEqual({
+        token,
+        ok: true,
+      })
+      expect({ token, ok: luminance(l) <= luminance(d) }).toEqual({ token, ok: true })
+    }
   })
 })
 
@@ -541,13 +688,6 @@ describe('the terminal renders sixteen colours this app chose', () => {
    */
   const WHITE = 7
   const BRIGHT_WHITE = 15
-
-  /** HSV saturation. Unchanged by a scale toward black, which is the point. */
-  const saturation = (colour: Rgb): number => {
-    const [r, g, b] = colour.map((c) => c / 255)
-    const max = Math.max(r, g, b)
-    return max === 0 ? 0 : (max - Math.min(r, g, b)) / max
-  }
 
   /** Straight-line distance in sRGB. A crude metric, and enough to catch two
    *  slots that have landed on the same colour. */

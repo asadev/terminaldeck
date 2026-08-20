@@ -17,16 +17,22 @@ import {
   NET_WINDOW_BYTES,
   SHA256_HEX_LENGTH,
   OUTPUT_CHUNK_BYTES,
+  CONTROL_IDS,
   PROTOCOL_ERROR_CODES,
   PROTOCOL_VERSION,
+  chunkInput,
   chunkOutput,
   parseClientMessage,
+  parseServerMessage,
   serialize,
   type ClientMessage,
   type ProtocolErrorCode,
   type RemoteSession,
   type ServerMessage,
 } from './protocol'
+// Type-only, so this test does not drag a terminal emulator into the protocol
+// suite. The pin below is what it is for.
+import type { ControlId } from '../agent-controls'
 
 /**
  * Two properties are worth testing here, and they pull in opposite directions.
@@ -91,6 +97,10 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'copilot.say': true,
   'copilot.cancel': true,
   'copilot.stop': true,
+  'controls.read': true,
+  'controls.apply': true,
+  'usage.read': true,
+  'session.send': true,
 }
 
 /** Same guard for the other direction. */
@@ -129,6 +139,10 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'copilot.grant': true,
   'copilot.ask': true,
   'copilot.settled': true,
+  'controls.reading': true,
+  'controls.applied': true,
+  'usage.reading': true,
+  'session.sent': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -203,6 +217,33 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'copilot.say', text: 'which of my sessions is stuck?' },
   { t: 'copilot.cancel' },
   { t: 'copilot.stop' },
+  // The controls a remote session's bar is drawn from. `rid` is the client's
+  // own request id and the host echoes it untouched, which is what lets two
+  // panes of a split ask about the same session without resolving each other's
+  // answers.
+  { t: 'controls.read', rid: 'ctl-1', id: SESSION_ID },
+  // Every control, because each one composes a different command on the far
+  // end. The values are the ones the CLI actually accepts — a model name with a
+  // dot and a hyphen in it is the awkward shape, and it has to survive.
+  { t: 'controls.apply', rid: 'ctl-2', id: SESSION_ID, control: 'model', value: 'opus-4-1' },
+  { t: 'controls.apply', rid: 'ctl-3', id: SESSION_ID, control: 'effort', value: 'xhigh' },
+  { t: 'controls.apply', rid: 'ctl-4', id: SESSION_ID, control: 'fast', value: 'on' },
+  { t: 'controls.apply', rid: 'ctl-5', id: SESSION_ID, control: 'permission', value: 'plan' },
+  // The usage bar's two figures, and all three `want`s, because the word is
+  // what decides the cost on the far machine: `plan` and `context` read memory
+  // and a file, and `refresh` boots a whole agent CLI there. `force` is a person
+  // pressing rather than this app looking, and it must survive both ways — a
+  // `force` that arrived as `false` when it was sent as `true` is a retry button
+  // that silently does nothing.
+  { t: 'usage.read', rid: 'use-1', id: SESSION_ID, want: 'plan', force: false },
+  { t: 'usage.read', rid: 'use-2', id: SESSION_ID, want: 'refresh', force: true },
+  { t: 'usage.read', rid: 'use-3', id: SESSION_ID, want: 'context', force: false },
+  // Typing into a session without attaching to it. The same bytes `input`
+  // carries — control characters included, because what this ends up doing is
+  // the same `SessionAccess.write` — with a `rid` on the front, because unlike
+  // `input` it is answered and two panels sending to two sessions on one
+  // machine must not resolve each other's answers.
+  { t: 'session.send', rid: 'snd-1', id: SESSION_ID, data: 'look at this button\r' },
 ]
 
 const SESSION: RemoteSession = {
@@ -239,6 +280,13 @@ const VALID_SERVER: ServerMessage[] = [
   { t: 'status', id: SESSION_ID, status: 'waiting' },
   { t: 'exit', id: SESSION_ID, exitCode: 130 },
   { t: 'error', code: 'unknown-session', message: 'That session is not open.' },
+  // The answer to one `session.send`, both ways round. The refusal is a frame
+  // rather than an `error` on purpose — an `error` carries no `rid`, so it
+  // could not be matched to the request that caused it, and the panel waiting
+  // on that promise would sit out its own deadline over a refusal the host had
+  // already decided.
+  { t: 'session.sent', rid: 'snd-1', id: SESSION_ID, ok: true, message: 'Sent.' },
+  { t: 'session.sent', rid: 'snd-2', id: SESSION_ID, ok: false, message: `No session ${SESSION_ID} is running.` },
   { t: 'pong' },
   { t: 'created', session: SESSION },
   { t: 'closed', id: SESSION_ID },
@@ -425,6 +473,87 @@ const VALID_SERVER: ServerMessage[] = [
     // the copilot by existing, and the client sends `copilot.hello` to open it.
     copilot: { linked: true, open: false, grant: { read: true, act: true, alter: true } },
   },
+  // The controls coming back. Every field of a reading has a "nothing was read"
+  // value and both shapes are on this wire at once: a session the far end could
+  // read four things off, and one it could read none off — which is what a plain
+  // shell honestly answers, and it must survive as nulls rather than as a
+  // confident guess.
+  {
+    t: 'controls.reading',
+    rid: 'ctl-1',
+    id: SESSION_ID,
+    reading: {
+      model: { value: 'Opus 5', label: 'Opus 5', source: 'screen' },
+      effort: { value: 'xhigh', label: 'Extra high', source: 'settings' },
+      fast: { value: 'off', label: 'Off', source: 'screen', unavailableReason: 'Fast mode requires usage credits' },
+      permission: { value: 'plan', label: 'Plan', source: 'screen' },
+      live: true,
+      agent: { running: true, saw: 'Claude Code v2.1.234' },
+      gate: { canType: true, reason: null },
+    },
+  },
+  {
+    t: 'controls.reading',
+    rid: 'ctl-2',
+    id: SESSION_ID,
+    reading: {
+      model: { value: null, label: null, source: null },
+      effort: { value: null, label: null, source: null },
+      fast: { value: null, label: null, source: null },
+      permission: { value: null, label: null, source: null },
+      live: true,
+      agent: { running: false, saw: null },
+      gate: { canType: false, reason: 'This session is mid-turn.' },
+    },
+  },
+  // And the answer to a change. Both outcomes, because the failing one is the
+  // frame that matters: it carries the far end's own sentence, which is the only
+  // thing that tells somebody what to do about a refusal.
+  {
+    t: 'controls.applied',
+    rid: 'ctl-3',
+    id: SESSION_ID,
+    ok: true,
+    message: 'Model is now Sonnet 5 — saved as your default for new sessions.',
+    reading: { value: 'Sonnet 5', label: 'Sonnet 5', source: 'screen' },
+  },
+  {
+    t: 'controls.applied',
+    rid: 'ctl-4',
+    id: SESSION_ID,
+    ok: false,
+    message: 'Mythos 5 isn’t available for your account yet.',
+    reading: { value: null, label: null, source: null },
+  },
+  // The usage readings coming back. Both shapes are on this wire at once: a
+  // machine that had something to report, and one that had nothing and said why
+  // — which is what an older host degrades to, and it must survive as a sentence
+  // rather than as an empty reading somebody would draw as a zero.
+  {
+    t: 'usage.reading',
+    rid: 'use-1',
+    id: SESSION_ID,
+    want: 'plan',
+    answer: {
+      reading: {
+        sessionId: SESSION_ID,
+        readings: [],
+        reason: 'Claude Code has not printed a plan-limit line in this session yet.',
+        account: null,
+        assembledAt: 1_755_000_000_000,
+      },
+    },
+  },
+  {
+    t: 'usage.reading',
+    rid: 'use-3',
+    id: SESSION_ID,
+    want: 'context',
+    answer: {
+      reading: null,
+      unavailableReason: 'That machine is running a build that cannot report a context window from here.',
+    },
+  },
 ]
 
 /**
@@ -455,6 +584,26 @@ const hello = (patch: Record<string, unknown>): Record<string, unknown> => ({
   token: TOKEN,
   device: { ...DEVICE },
   ...patch,
+})
+
+/**
+ * The wire's list of controls and the module that performs them name the same
+ * four things.
+ *
+ * Two copies exist on purpose — `agent-controls.ts` reaches Electron and the
+ * CLI's screen readers, and `protocol.ts` is bundled for a plain-Node host and
+ * for the PWA — so nothing but a test can stop them drifting. It fails two ways,
+ * which is the point: the record fails to *compile* if `ControlId` gains a name,
+ * and the comparison fails at *run time* if `CONTROL_IDS` does. A control added
+ * to one and not the other is a menu row the far end refuses with "unknown
+ * control", which reads as the feature being broken.
+ */
+const CONTROL_PIN: Record<ControlId, true> = { model: true, effort: true, fast: true, permission: true }
+
+describe('the controls capability', () => {
+  it('names the same four controls agent-controls.ts performs', () => {
+    expect(new Set<string>(CONTROL_IDS)).toEqual(new Set(Object.keys(CONTROL_PIN)))
+  })
 })
 
 describe('round-trip', () => {
@@ -929,6 +1078,107 @@ describe('refusals', () => {
   })
 })
 
+/**
+ * Typing into a session this connection is not attached to.
+ *
+ * Both frames are pinned here rather than only in the round trip above, because
+ * the interesting half of `session.send` is what it shares with `input` — the
+ * same bytes, the same cap, the same pty at the far end — and what it does not,
+ * which is the attach. The cap is the part a parser can get wrong quietly: this
+ * is the frame a browser panel sends, so the value on it is a page's text rather
+ * than a keystroke, and a paste-sized payload is the ordinary case rather than
+ * the hostile one.
+ */
+describe('sending to a session without attaching to it', () => {
+  it('parses the client frame with its request id and its bytes intact', () => {
+    const data = 'the login button on line 42\r'
+    expect(accepted(serialize({ t: 'session.send', rid: 'snd-9', id: SESSION_ID, data }))).toEqual({
+      t: 'session.send',
+      rid: 'snd-9',
+      id: SESSION_ID,
+      data,
+    })
+  })
+
+  it('refuses one with no request id, because the answer could not be routed', () => {
+    // Unlike `input`, this frame is answered, and the asking side holds a promise
+    // per `rid`. A send with nowhere to put its answer is a spinner.
+    expect(refused({ t: 'session.send', id: SESSION_ID, data: 'x' }).code).toBe('bad-message')
+    expect(refused({ t: 'session.send', rid: 'snd-9', data: 'x' }).code).toBe('bad-message')
+  })
+
+  it('refuses data that is not a string', () => {
+    for (const data of [undefined, null, 42, true, {}, ['x'], { toString: 'x' }]) {
+      expect(
+        refused({ t: 'session.send', rid: 'snd-9', id: SESSION_ID, data }, JSON.stringify(data)).code,
+      ).toBe('bad-message')
+    }
+  })
+
+  it('caps the payload by bytes at the same limit `input` gets', () => {
+    // The same cap and not a second one: this ends in the same
+    // `SessionAccess.write`, so a bigger allowance here would be a way to paste
+    // past `input`'s limit by choosing the other verb.
+    const under = 'a'.repeat(MAX_INPUT_BYTES)
+    const over = 'a'.repeat(MAX_INPUT_BYTES + 1)
+    expect(Buffer.byteLength(under)).toBe(MAX_INPUT_BYTES)
+    expect(accepted({ t: 'session.send', rid: 'snd-9', id: SESSION_ID, data: under })).toBeTruthy()
+    expect(refused({ t: 'session.send', rid: 'snd-9', id: SESSION_ID, data: over }).code).toBe('too-large')
+    // And in bytes rather than units, which is the check a length test waves
+    // through: these emoji are half the cap as UTF-16 and over it on the wire.
+    const emoji = '😀'.repeat(MAX_INPUT_BYTES / 4 + 1)
+    expect(emoji.length).toBeLessThan(MAX_INPUT_BYTES)
+    expect(refused({ t: 'session.send', rid: 'snd-9', id: SESSION_ID, data: emoji }).code).toBe('too-large')
+  })
+
+  it('does not forward a payload other than the one it measured', () => {
+    // The object path, where a property can be a getter. The same defect
+    // `input.data` had, on the frame that reaches the same pty.
+    const huge = 'A'.repeat(MAX_INPUT_BYTES * 10)
+    let reads = 0
+    const answers = ['ok', 'ok', huge]
+    const frame = {
+      t: 'session.send',
+      rid: 'snd-9',
+      id: SESSION_ID,
+      get data(): string {
+        return answers[Math.min(reads++, answers.length - 1)]
+      },
+    }
+    const result = parseClientMessage(frame)
+    if (result.ok) {
+      expect(Buffer.byteLength((result.message as { data: string }).data)).toBeLessThanOrEqual(MAX_INPUT_BYTES)
+    }
+  })
+
+  it('reads the answer back, and reads only a literal true as success', () => {
+    const sent = parseServerMessage(
+      serialize({ t: 'session.sent', rid: 'snd-9', id: SESSION_ID, ok: true, message: 'Sent.' }),
+    )
+    expect(sent.ok && sent.message).toEqual({
+      t: 'session.sent',
+      rid: 'snd-9',
+      id: SESSION_ID,
+      ok: true,
+      message: 'Sent.',
+    })
+
+    // A garbled frame must not read as text that landed in somebody's agent.
+    const garbled = parseServerMessage(JSON.stringify({ t: 'session.sent', rid: 'snd-9', id: SESSION_ID }))
+    expect(garbled.ok && garbled.message).toMatchObject({ ok: false, message: '' })
+  })
+
+  it('refuses an answer that could not be matched to a request', () => {
+    for (const frame of [
+      { t: 'session.sent', id: SESSION_ID, ok: true, message: 'Sent.' },
+      { t: 'session.sent', rid: 'snd-9', ok: true, message: 'Sent.' },
+    ]) {
+      const result = parseServerMessage(JSON.stringify(frame))
+      expect(result.ok).toBe(false)
+    }
+  })
+})
+
 describe('chunkOutput', () => {
   const bytesOf = (chunks: string[]): number[] => chunks.map((c) => Buffer.byteLength(c))
 
@@ -1341,5 +1591,310 @@ describe('upload', () => {
       },
     }
     expect(accepted(frame)).toMatchObject({ name: 'photo.jpg' })
+  })
+})
+
+/**
+ * The copilot, coming *back*, which this parser used to drop on the floor.
+ *
+ * ## The defect, stated once
+ *
+ * `parseServerFrame` rebuilds a `welcome` field by name — protocol, device,
+ * token, sessions, capabilities, then the optional platform and folders — and
+ * it never copied `copilot`. Its `default` then refused every `copilot.*`
+ * server frame as "unknown message type". So the shared reader, which advertises
+ * itself as the one door inbound frames come through, was blind to a capability
+ * `server.ts` has served for weeks.
+ *
+ * `pwa/src/protocol-client.ts` survived it by carrying a private shim that
+ * re-attached the key after calling this function, and its own comment says the
+ * cost of not reading it is *total* rather than cosmetic: the presence of the
+ * key **is** whether there is a copilot, so losing it draws a machine with a
+ * copilot and a device entitled to it as though neither existed. Every other
+ * consumer had no shim — including `machines/guest.ts`, this desktop acting as
+ * another desktop's client, which is the surface this pass exists for.
+ *
+ * ## What is asserted, and why the malformed cases are half of it
+ *
+ * Reading the key is only half a fix. Dropping a malformed one is the other
+ * half and it is the half with teeth: a client that invented a link out of an
+ * unreadable object would send `copilot.hello` to a machine that never offered
+ * one and then draw a surface whose every frame comes back refused. Absent is
+ * the answer a guest is supposed to get, so absent is what an unreadable key
+ * has to become.
+ */
+describe('the copilot on the way back', () => {
+  const WELCOME = {
+    t: 'welcome',
+    protocol: PROTOCOL_VERSION,
+    deviceId: 'dev-1',
+    deviceName: 'Studio PC',
+    token: null,
+    sessions: [],
+    capabilities: ['copilot'],
+  }
+
+  function welcomeWith(copilot: unknown): Extract<ServerMessage, { t: 'welcome' }> {
+    const parsed = parseServerMessage(serialize({ ...WELCOME, copilot } as unknown as ServerMessage))
+    if (!parsed.ok) throw new Error(`welcome refused: ${parsed.reason}`)
+    if (parsed.message.t !== 'welcome') throw new Error(`parsed as ${parsed.message.t}`)
+    return parsed.message
+  }
+
+  it('carries the link through a welcome instead of silently removing it', () => {
+    const link = { linked: true, open: false, grant: { read: true, act: true, alter: true } }
+    expect(welcomeWith(link).copilot).toEqual(link)
+  })
+
+  it('leaves it absent for a machine that sent none, which is what a guest gets', () => {
+    // Not false, not an empty object — **absent**. `copilot-access.ts` withholds
+    // the key from a guest rather than sending one that says no, because an
+    // advertised thing a device may not use invites the ask and the answer to
+    // the ask is always no. A reader that manufactured a link here would put
+    // that refusal back on the screen.
+    const parsed = parseServerMessage(serialize(WELCOME as unknown as ServerMessage))
+    if (!parsed.ok || parsed.message.t !== 'welcome') throw new Error('welcome refused')
+    expect(parsed.message.copilot).toBeUndefined()
+    expect('copilot' in parsed.message).toBe(false)
+  })
+
+  it('drops a malformed link rather than trusting it, in every shape it can arrive', () => {
+    for (const bad of [
+      // Not an object at all.
+      null,
+      'yes',
+      42,
+      true,
+      [],
+      // A grant that is missing, partial, or made of the wrong types. `no
+      // access` must have exactly one spelling: a grant read as `{read: true}`
+      // with the other two missing would draw a surface for a device that may
+      // have been given everything, or nothing.
+      { linked: true, open: false },
+      { linked: true, open: false, grant: null },
+      { linked: true, open: false, grant: { read: true } },
+      { linked: true, open: false, grant: { read: true, act: true } },
+      { linked: true, open: false, grant: { read: 'yes', act: true, alter: true } },
+      { linked: true, open: false, grant: { read: 1, act: 1, alter: 1 } },
+      // The two booleans that say whether there is a copilot and whether this
+      // socket has opened it. Neither may be inferred from a missing field.
+      { open: false, grant: { read: true, act: true, alter: true } },
+      { linked: true, grant: { read: true, act: true, alter: true } },
+      { linked: 'true', open: false, grant: { read: true, act: true, alter: true } },
+    ]) {
+      const welcome = welcomeWith(bad)
+      expect(welcome.copilot, `copilot ${JSON.stringify(bad)}`).toBeUndefined()
+      // And the *rest* of the welcome survives: one unreadable optional key must
+      // not cost a device its session list, the way a bad row costs a list one
+      // row rather than costing the frame.
+      expect(welcome.deviceId, `copilot ${JSON.stringify(bad)}`).toBe('dev-1')
+    }
+  })
+
+  /**
+   * And the frames themselves, which the `default` branch used to refuse.
+   *
+   * Every frame a watching connection can be pushed is read — the state and the
+   * chat this desktop draws, and the four it does not yet. That last part is
+   * deliberate rather than thorough: a frame this parser refuses is reported by
+   * `machines/guest.ts` as *"sent something unreadable"*, which is the sentence
+   * reserved for a captive portal answering with HTML, and an ordinary tool
+   * call on the far machine must not produce it.
+   */
+  it('reads every copilot frame the far machine pushes a watching connection', () => {
+    const pushed = VALID_SERVER.filter((message) => message.t.startsWith('copilot.') && message.t !== 'copilot.log')
+    // Named rather than counted, and asserted rather than derived: a filter is
+    // the kind of thing that passes vacuously when it matches nothing, which is
+    // exactly how this parser's blindness survived a suite this size.
+    expect(new Set(pushed.map((message) => message.t))).toEqual(
+      new Set([
+        'copilot.state',
+        'copilot.chat',
+        'copilot.tool',
+        'copilot.sessions',
+        'copilot.pending',
+        'copilot.grant',
+        'copilot.ask',
+        'copilot.settled',
+      ]),
+    )
+    for (const message of pushed) {
+      const parsed = parseServerMessage(serialize(message))
+      if (!parsed.ok) throw new Error(`${message.t}: ${parsed.reason}`)
+      expect(parsed.message, message.t).toEqual(message)
+    }
+  })
+
+  it('refuses a copilot frame whose one fact is incomplete, rather than half-reading it', () => {
+    for (const [label, frame] of [
+      // A state with no `desk` would be drawn as "stopped", which is the one
+      // claim on that surface somebody acts on — by pressing Start against
+      // something that is already running.
+      ['state without a desk', { t: 'copilot.state', state: { grant: { read: true, act: true, alter: true } } }],
+      ['state without a grant', { t: 'copilot.state', state: { desk: 'running' } }],
+      // Without a run id a client that reconnected after the grace window would
+      // splice the end of a dead conversation onto the start of a live one.
+      ['chat without a run', { t: 'copilot.chat', messages: [] }],
+      ['chat without messages', { t: 'copilot.chat', run: 'run-1' }],
+      ['grant without a link', { t: 'copilot.grant', link: { linked: true, open: true } }],
+      // A consent prompt missing its arguments is the reflex Yes the whole
+      // question type exists to prevent.
+      ['ask without args', { t: 'copilot.ask', question: { id: 'q-1', tool: 'settings.write' } }],
+      ['settled without a row', { t: 'copilot.settled', settled: {} }],
+      ['tool without a row', { t: 'copilot.tool', row: { id: 'r-1', tool: 'settings.write' } }],
+      ['sessions without a list', { t: 'copilot.sessions' }],
+      ['pending without a list', { t: 'copilot.pending', questions: {} }],
+    ] as Array<[string, unknown]>) {
+      const parsed = parseServerMessage(JSON.stringify(frame))
+      expect(parsed.ok, label).toBe(false)
+    }
+  })
+
+  it('drops an unreadable row from a list rather than the list carrying it', () => {
+    // The other half of the split, and the reason it is a split: a surface
+    // showing four of five bubbles is useful, and one showing none because the
+    // fifth had a null role is not.
+    const parsed = parseServerMessage(
+      JSON.stringify({
+        t: 'copilot.chat',
+        run: 'run-1',
+        messages: [
+          { id: 'm1', role: 'you', text: 'anything stuck?', at: 1 },
+          { id: '', role: 'agent', text: 'no id, so no way to replace it later' },
+          { role: 'agent', text: 'nor this one' },
+          { id: 'm2', role: 'narrator', text: 'not a role this protocol has' },
+          { id: 'm3', role: 'agent', text: 'session 3 is waiting', at: 2, truncated: true },
+        ],
+      }),
+    )
+    if (!parsed.ok || parsed.message.t !== 'copilot.chat') throw new Error('chat refused')
+    expect(parsed.message.messages).toEqual([
+      { id: 'm1', role: 'you', text: 'anything stuck?', at: 1 },
+      { id: 'm3', role: 'agent', text: 'session 3 is waiting', at: 2, truncated: true },
+    ])
+  })
+})
+
+/**
+ * A paste, split so it survives the wire.
+ *
+ * The defect these cover was measured end to end, not reasoned about: a
+ * 49,160-character paste into a session on a paired machine typed **zero bytes**
+ * and dropped the link, because the far end answers an oversized frame by
+ * closing the socket. `chunkInput`'s own note carries the states that were
+ * recorded. What is asserted here is the property that stops it: every piece
+ * fits, and putting the pieces back together gives the paste.
+ */
+describe('chunkInput', () => {
+  const rejoin = (data: string, size?: number): string => chunkInput(data, size).join('')
+  const framed = (piece: string): number =>
+    Buffer.byteLength(serialize({ t: 'input', id: SESSION_ID, data: piece }), 'utf8')
+
+  it('leaves a paste that already fits in one piece', () => {
+    expect(chunkInput('')).toEqual([])
+    expect(chunkInput('echo hello\r')).toEqual(['echo hello\r'])
+    const atCap = 'a'.repeat(MAX_INPUT_BYTES)
+    expect(chunkInput(atCap)).toEqual([atCap])
+  })
+
+  it('splits a paste over the cap into frames the parser accepts, and loses nothing', () => {
+    const paste = `START${'x'.repeat(MAX_INPUT_BYTES * 3)}END`
+    const pieces = chunkInput(paste)
+    expect(pieces.length).toBeGreaterThan(3)
+    expect(pieces.join('')).toBe(paste)
+    for (const piece of pieces) {
+      const parsed = parseClientMessage(serialize({ t: 'input', id: SESSION_ID, data: piece }))
+      expect(parsed.ok).toBe(true)
+      expect(framed(piece)).toBeLessThan(MAX_MESSAGE_BYTES)
+    }
+  })
+
+  it('never cuts between the halves of a surrogate pair', () => {
+    // Every character is four bytes, so a chunker counting UTF-16 units would
+    // land mid-character and deliver two replacement characters instead.
+    const paste = '😀'.repeat(MAX_INPUT_BYTES)
+    const pieces = chunkInput(paste)
+    expect(pieces.join('')).toBe(paste)
+    for (const piece of pieces) {
+      expect(piece).not.toMatch(/[\uD800-\uDBFF]$/)
+      expect(piece).not.toMatch(/^[\uDC00-\uDFFF]/)
+    }
+  })
+
+  it('spends the frame budget in JSON bytes, not in text bytes', () => {
+    /*
+     * The case a cap counted in raw UTF-8 alone gets wrong. An escape is one
+     * byte of text and six of JSON — `\u001b` — so 16 KiB of escape sequences
+     * is under the payload cap by that measure and three times over the *frame*
+     * cap once serialised, which the far end answers by closing the socket.
+     */
+    const ansi = '\u001b[1;32m'.repeat(4000)
+    expect(Buffer.byteLength(ansi, 'utf8')).toBeGreaterThan(MAX_INPUT_BYTES)
+    const pieces = chunkInput(ansi)
+    expect(pieces.join('')).toBe(ansi)
+    for (const piece of pieces) expect(framed(piece)).toBeLessThan(MAX_MESSAGE_BYTES)
+  })
+
+  it('keeps a bracketed paste in order, markers included', () => {
+    // A pty reads a split paste identically because frames arrive in order —
+    // what must not happen is the wrapper being reordered or dropped.
+    const paste = `\u001b[200~${'y'.repeat(MAX_INPUT_BYTES * 2)}\u001b[201~`
+    expect(rejoin(paste)).toBe(paste)
+    const pieces = chunkInput(paste)
+    expect(pieces[0].startsWith('\u001b[200~')).toBe(true)
+    expect(pieces[pieces.length - 1].endsWith('\u001b[201~')).toBe(true)
+  })
+})
+
+/**
+ * The four answers a host gives an upload, read by the machine that is sending
+ * one.
+ *
+ * They were missing from `parseServerFrame` for as long as the only client that
+ * uploaded was a phone — and a frame this parser does not know is refused, so a
+ * desktop dropping a file on another desktop would have announced it and then
+ * heard nothing at all.
+ */
+describe('upload answers, on the client side of the wire', () => {
+  const read = (frame: unknown): ReturnType<typeof parseServerMessage> =>
+    parseServerMessage(JSON.stringify(frame))
+
+  it('reads the path, the acknowledgements, the completion and the refusal', () => {
+    const ready = read({ t: 'upload.ready', id: 'up-1', path: '/Users/a/Downloads/x.jpg' })
+    expect(ready.ok && ready.message).toEqual({
+      t: 'upload.ready',
+      id: 'up-1',
+      path: '/Users/a/Downloads/x.jpg',
+    })
+
+    const ack = read({ t: 'upload.ack', id: 'up-1', bytes: 24576 })
+    expect(ack.ok && ack.message).toEqual({ t: 'upload.ack', id: 'up-1', bytes: 24576 })
+
+    const done = read({ t: 'upload.done', id: 'up-1', path: '/p/x.jpg', bytes: 9, sha256: 'ab' })
+    expect(done.ok && done.message).toEqual({
+      t: 'upload.done',
+      id: 'up-1',
+      path: '/p/x.jpg',
+      bytes: 9,
+      sha256: 'ab',
+    })
+
+    const failed = read({ t: 'upload.failed', id: 'up-1', message: 'Nothing was saved.' })
+    expect(failed.ok && failed.message).toEqual({
+      t: 'upload.failed',
+      id: 'up-1',
+      message: 'Nothing was saved.',
+    })
+  })
+
+  it('keeps a refusal that carries no words, because the transfer is still over', () => {
+    const failed = read({ t: 'upload.failed', id: 'up-1' })
+    expect(failed.ok && failed.message).toEqual({ t: 'upload.failed', id: 'up-1', message: '' })
+  })
+
+  it('refuses an acknowledgement that would run the window backwards', () => {
+    expect(read({ t: 'upload.ack', id: 'up-1', bytes: -1 }).ok).toBe(false)
+    expect(read({ t: 'upload.ack', id: 'up-1', bytes: 1.5 }).ok).toBe(false)
+    expect(read({ t: 'upload.ack', id: '', bytes: 1 }).ok).toBe(false)
   })
 })

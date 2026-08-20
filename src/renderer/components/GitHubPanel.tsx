@@ -3,6 +3,7 @@ import { useWhenActive } from '../schedule'
 import { linkProps, openLinkExternally } from '../link'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty, PageNote } from './PageEmpty'
+import { toSetupSnapshot, TOOL_STATE_LABEL, type SetupTool } from '../settings/setup-status'
 import './GitHubPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -199,6 +200,15 @@ export interface GitHubBridge {
   githubAwaitConnect(cwd?: string): Promise<GitHubAuthState>
   githubCancelConnect(cwd?: string): Promise<GitHubAuthState>
   githubDisconnect(cwd?: string): Promise<GitHubAuthState>
+  /**
+   * The machine probe, read here for exactly one row: GitHub Copilot.
+   *
+   * Optional, and read off `window.deck` rather than required by
+   * `resolveBridge`, because a window whose preload predates it must keep a
+   * working GitHub page rather than collapsing to "not available here" over one
+   * status line. When it is absent the row is simply not drawn.
+   */
+  setupStatus?(): Promise<unknown>
 }
 
 export interface GitHubPanelProps {
@@ -392,6 +402,31 @@ export function isFailure<T extends { ok: boolean }>(value: T): value is T & Git
  * makes on the same value before it returns one. Passing it to `isFailure`
  * compiles nowhere and would read as a near-miss if it did.
  */
+/** Last segment of a path, in either separator. The bar names the folder. */
+export function folderName(path: string): string {
+  const parts = path.split(/[\\/]/).filter((part) => part !== '')
+  return parts[parts.length - 1] ?? path
+}
+
+/**
+ * The failure that belongs to the page rather than to one list.
+ *
+ * Pure and exported because it is the whole of a complaint Asad has made three
+ * times, and because the shape of the bug was that a `kind` argument existed
+ * and was ignored — which a rendering test cannot see and this can.
+ *
+ * `repo` first: a folder that is not a GitHub repository is a stronger fact
+ * than a list read that failed, and when both are true the repository is the
+ * one worth naming, because fixing it is what makes the other one possible.
+ */
+export function pageFailureOf(
+  repo: RepoRef | GitHubFailure | null,
+  overviewFailure: GitHubFailure | null,
+): GitHubFailure | null {
+  if (repo !== null && repoFailed(repo)) return repo
+  return overviewFailure
+}
+
 export function repoFailed(repo: RepoRef | GitHubFailure): repo is GitHubFailure {
   return 'ok' in repo
 }
@@ -1253,12 +1288,60 @@ export function IssueRow({ issue, now }: { issue: Issue; now: number }) {
 
 /* -------------------------------------------------------------- component -- */
 
+/**
+ * GitHub Copilot, on the GitHub page — where Asad moved it.
+ *
+ *   > *"we will move this GitHub Copilot from here to the main page of GitHub,
+ *   > because we have already a page specifically for GitHub, so don't need to
+ *   > keep it inside the settings."*
+ *
+ * It was a row in Settings → Agents → Setup, under "Other coding tools", beside
+ * git and the GitHub CLI. It sat oddly there for a reason that is easy to state:
+ * everything else on that pane is something this app *uses*, and Copilot is
+ * something it merely *finds* — nothing in this build starts a Copilot session
+ * or writes a Copilot hook. A fact about GitHub, with no setting attached,
+ * belongs on the page about GitHub.
+ *
+ * ## What did not come with it
+ *
+ * The Settings row carried four lines under the name: the tool's purpose, a
+ * caveat, a remedy, and the literal shell probe. All four are gone rather than
+ * relocated. *"Don't put any single statement in anywhere… we want simplicity."*
+ * What is left is the mark, the name, the state in two words, and — only when
+ * it is missing — the link that fixes that. The probe still exists on the
+ * payload for anybody debugging; it is not printed at a person who opened this
+ * page to look at pull requests.
+ */
+function CopilotRow({ tool }: { tool: SetupTool }) {
+  return (
+    <div className="gh-copilot" data-state={tool.state}>
+      <span className="gh-copilot-mark" aria-hidden="true">
+        {tool.state === 'ready' ? '✓' : tool.state === 'missing' ? '✕' : '!'}
+      </span>
+      <span className="gh-copilot-name">{tool.label}</span>
+      <span className="gh-copilot-state">{TOOL_STATE_LABEL[tool.state]}</span>
+      {tool.state === 'missing' && tool.url && (
+        <a className="gh-copilot-link" {...linkProps(tool.url)}>
+          Install
+        </a>
+      )}
+    </div>
+  )
+}
+
 export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPanelProps) {
   const api = useMemo(() => bridge ?? resolveBridge(), [bridge])
   const [result, setResult] = useState<GitHubResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<Tab>(initialTab)
+  /**
+   * GitHub Copilot's install state, or null when it has not been read or the
+   * window has no setup probe. One read on mount: what is installed on this
+   * machine does not change while a page is open, so this deliberately does not
+   * join the refresh the button drives.
+   */
+  const [copilot, setCopilot] = useState<SetupTool | null>(null)
   /**
    * The sign-in, which is now read *before* anything else and gates the rest.
    *
@@ -1337,6 +1420,33 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
       if (shown.current === asked) setAuthLoading(false)
     }
   }, [api, cwd])
+
+  /*
+   * One read of the machine probe, for the Copilot row and nothing else.
+   *
+   * Separate from every other effect on this page because it answers a
+   * different question: the lists are about a folder and a remote and are
+   * re-read whenever either changes, while "is Copilot on this computer" is
+   * true of the machine and is read once. Failures are swallowed on purpose —
+   * a probe that does not answer means the row is not drawn, which is the
+   * honest outcome and is not worth an error block on a page about pull
+   * requests.
+   */
+  useEffect(() => {
+    const probe = api?.setupStatus
+    if (!probe) return
+    let live = true
+    void probe().then(
+      (raw) => {
+        if (!live) return
+        setCopilot(toSetupSnapshot(raw)?.tools.find((tool) => tool.id === 'copilot') ?? null)
+      },
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [api])
 
   useEffect(() => {
     if (!api) {
@@ -1625,22 +1735,42 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
   const repoCount = access && access.ok ? (access.truncated ? `${access.atLeast}+` : String(access.repos.length)) : null
 
   /**
-   * What a list tab shows when the folder has no repository behind it.
+   * The failure that belongs to the **page** rather than to one list — and the
+   * whole of the complaint Asad has now made three times.
    *
-   * The sentence comes from the repository resolution — "this folder is not a
-   * git repository", "none of this repository's remotes point at GitHub" — so
-   * the three causes stay three different screens, which is what the whole
-   * failure vocabulary in `github.ts` exists for.
+   *   > *"issue and pull request pages are like identical showing the same
+   *   > stuff, same error, same buttons."* (2026-08-16)
+   *   > *"in the issues and pull requests, this is still like the same old
+   *   > thing that we discussed before many times."* (2026-08-20)
+   *
+   * He is describing exactly what the code did. `listBody` took a `kind` and
+   * then ignored it in five of its six branches: a folder that is not a GitHub
+   * repository, a `gh` that is not installed, a rate limit, an outage — every
+   * one of those rendered a byte-identical title, message, Details disclosure
+   * and Retry button under *both* tabs. Two tabs, one screen, printed twice.
+   *
+   * The mistake was treating a page-level fact as a per-list one. Both lists
+   * come from a single `gh` call against a single repository: if the repository
+   * did not resolve, or that call failed outright, there are not two answers to
+   * show — there is one, and there is no list for either tab to be a tab *of*.
+   *
+   * So it is hoisted. When this is set the two list tabs are not drawn at all,
+   * the reason is stated once above the strip, and Repositories — which reads
+   * the credential rather than the folder, and therefore still has something in
+   * it — is what remains. `listBody` keeps only the branches that genuinely
+   * differ between a pull request and an issue.
    */
+  const pageFailure = pageFailureOf(state.repo, overviewFailure)
+
+  /** Whose retry it is: the repository resolution's, or the list read's. */
+  const retryPageFailure =
+    state.repo !== null && repoFailed(state.repo) ? () => void loadAuth() : refresh
+
   const listBody = (
     kind: 'pulls' | 'issues',
     section: Section<PullRequest[]> | Section<Issue[]> | null,
   ) => {
-    if (state.repo !== null && repoFailed(state.repo)) {
-      return <FailureBlock failure={state.repo} onRetry={() => void loadAuth()} />
-    }
     if (loading && !section) return <PageNote busy>Reading GitHub…</PageNote>
-    if (overviewFailure) return <FailureBlock failure={overviewFailure} onRetry={refresh} />
     if (!section) return <PageNote busy>Reading GitHub…</PageNote>
     if (isFailure(section)) return <FailureBlock failure={section} onRetry={refresh} />
     if (section.value.length === 0) {
@@ -1662,6 +1792,11 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
   return (
     <section className="gh-panel" aria-label="GitHub">
       {connection}
+
+      {/* Moved here from Settings — see `CopilotRow`. Under the account and
+          above the folder, because it is a fact about this machine rather than
+          about this repository. */}
+      {copilot && <CopilotRow tool={copilot} />}
 
       <header className="gh-head">
         <svg
@@ -1696,16 +1831,38 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
             {folder}
           </button>
         ) : (
-          <p className="gh-repo-none">{folder ?? 'No folder open'}</p>
+          /*
+            The folder's own name when there is no repository, rather than the
+            resolution's sentence.
+            
+            `folderLine` returns the failure's message when the folder does not
+            resolve, and the block a few lines below is now drawing that same
+            message — so this line printed "This folder is not a git repository."
+            directly above a heading and a paragraph saying it again. What the
+            bar is for is naming what the page is looking at, and that is the
+            folder, which is true in every state.
+          */
+          <p className="gh-repo-none" title={cwd}>
+            {pageFailure ? folderName(cwd) : (folder ?? 'No folder open')}
+          </p>
         )}
 
         <span className="gh-head-spacer" />
 
+        {/*
+          The button turns while it is working. *"If I click on refresh, I don't
+          know if the refresh is working because we don't feel anything getting
+          refreshed"* — and he was right: the only feedback was `disabled`, which
+          on a 13px glyph is a barely-visible change in opacity for as long as
+          the call takes. `data-busy` spins the same glyph, which says it without
+          a word of copy.
+        */}
         <button
           type="button"
           className="gh-refresh"
           onClick={refresh}
           disabled={busy}
+          data-busy={busy || undefined}
           title="Refresh"
           aria-label="Refresh GitHub data"
         >
@@ -1716,31 +1873,47 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
         </button>
       </header>
 
+      {/*
+        Said once, above the strip, instead of once under each tab. See
+        `pageFailure` for the argument; this JSX is the visible half of it.
+      */}
+      {pageFailure && <FailureBlock failure={pageFailure} onRetry={retryPageFailure} />}
+
       <div className="gh-tabs" role="tablist" aria-label="GitHub lists">
-        <button
-          type="button"
-          role="tab"
-          id="gh-tab-pulls"
-          aria-selected={tab === 'pulls'}
-          aria-controls="gh-panel-pulls"
-          className="gh-tab"
-          onClick={() => setTab('pulls')}
-        >
-          Pull requests
-          {pullCount !== null && <span className="gh-tab-count">{pullCount}</span>}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="gh-tab-issues"
-          aria-selected={tab === 'issues'}
-          aria-controls="gh-panel-issues"
-          className="gh-tab"
-          onClick={() => setTab('issues')}
-        >
-          Issues
-          {issueCount !== null && <span className="gh-tab-count">{issueCount}</span>}
-        </button>
+        {/*
+          The two list tabs exist only while there is a repository behind them.
+          A tab that can only ever repeat the block directly above it is the
+          duplicate he kept finding, and hiding it is what stops the page having
+          two names for one screen.
+        */}
+        {!pageFailure && (
+          <>
+            <button
+              type="button"
+              role="tab"
+              id="gh-tab-pulls"
+              aria-selected={tab === 'pulls'}
+              aria-controls="gh-panel-pulls"
+              className="gh-tab"
+              onClick={() => setTab('pulls')}
+            >
+              Pull requests
+              {pullCount !== null && <span className="gh-tab-count">{pullCount}</span>}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="gh-tab-issues"
+              aria-selected={tab === 'issues'}
+              aria-controls="gh-panel-issues"
+              className="gh-tab"
+              onClick={() => setTab('issues')}
+            >
+              Issues
+              {issueCount !== null && <span className="gh-tab-count">{issueCount}</span>}
+            </button>
+          </>
+        )}
         {/*
           The third tab, and the one that answers "I connected and saw nothing".
           It reads the credential rather than the folder, so it has something to
@@ -1750,7 +1923,10 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
           type="button"
           role="tab"
           id="gh-tab-repos"
-          aria-selected={tab === 'repos'}
+          /* The only tab left when the page has one failure, so it is the
+             selected one whatever `tab` still remembers from a folder that had
+             a repository in it. */
+          aria-selected={tab === 'repos' || pageFailure !== null}
           aria-controls="gh-panel-repos"
           className="gh-tab"
           onClick={() => setTab('repos')}
@@ -1760,17 +1936,19 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
         </button>
       </div>
 
-      {tab === 'pulls' && (
+      {/* `!pageFailure` on both, so a tab left selected from a folder that had a
+          repository cannot draw an empty list under the block above. */}
+      {!pageFailure && tab === 'pulls' && (
         <div className="gh-list-wrap" role="tabpanel" id="gh-panel-pulls" aria-labelledby="gh-tab-pulls">
           {listBody('pulls', pulls)}
         </div>
       )}
-      {tab === 'issues' && (
+      {!pageFailure && tab === 'issues' && (
         <div className="gh-list-wrap" role="tabpanel" id="gh-panel-issues" aria-labelledby="gh-tab-issues">
           {listBody('issues', issues)}
         </div>
       )}
-      {tab === 'repos' && (
+      {(pageFailure !== null || tab === 'repos') && (
         <div className="gh-list-wrap" role="tabpanel" id="gh-panel-repos" aria-labelledby="gh-tab-repos">
           <RepositoryList
             access={access}

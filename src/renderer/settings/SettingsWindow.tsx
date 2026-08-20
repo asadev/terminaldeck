@@ -124,9 +124,10 @@ const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   general: GeneralSection,
   appearance: AppearanceSection,
   notifications: NotificationsSection,
-  // The rail calls it "Assistants"; the id and the file are still `agents`, for
-  // the reason the schema gives beside that entry. Accounts and Setup are
-  // assembled into it — see the note in `AgentsSection.tsx`.
+  // The rail calls it "Coding AI" — it was "Agents", then "Assistants", both
+  // rejected on review; the id and the file have not moved once through either
+  // rename, for the reason the schema gives beside that entry. Accounts and
+  // Setup are assembled into it — see the note in `AgentsSection.tsx`.
   agents: AgentsSection,
   // The id is `features` and the label is "Tools": `App.tsx` names this id and
   // is a file no agent may edit while others are working here.

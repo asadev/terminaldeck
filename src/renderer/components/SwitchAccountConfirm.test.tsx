@@ -61,27 +61,55 @@ describe('what the sheet says before anything is stopped', () => {
   it('names both accounts — the one it is on and the one it would move to', () => {
     const html = sheet()
     expect(html).toContain(`Run this session as ${names.to}?`)
-    expect(html).toContain(`This session is running as ${names.from}.`)
+    expect(html).toContain(`${names.from} → ${names.to}`)
   })
 
-  it('says what survives and what does not, in that order', () => {
+  /*
+   * The sheet used to open with two paragraphs: what a switch keeps, then what
+   * becomes of the conversation. He read them in the recording and asked for
+   * the first to go, and for the rule to be general:
+   *
+   *   > *"here you have a very long description… Remove this full shit. I don't
+   *   > want any kind of long descriptions anywhere. Just if somewhere it's
+   *   > very required, give the i icon like other ones, information icon in the
+   *   > settings, same way."*
+   *
+   * So it is behind the dot, which is the affordance he named — `HoverNote`,
+   * the same component the Settings rows use. Asserted as "not in the body
+   * text" rather than "absent", because deleting the fact outright would leave
+   * a control that stops a running agent with nothing anywhere saying so.
+   */
+  it('keeps the description behind the information dot rather than on the sheet', () => {
     const html = sheet()
-    const keeps = html.indexOf('Same tab, same folder')
-    const conversation = html.indexOf('This conversation stays with')
-    expect(keeps).toBeGreaterThan(-1)
-    expect(conversation).toBeGreaterThan(keeps)
+    expect(html).toContain('hovernote-dot')
+    const body = html.slice(html.indexOf('switch-confirm'), html.indexOf('modal-footer'))
+    const shown = body.replace(/<span id="[^"]*" class="hovernote-text">[\s\S]*?<\/span>/g, '')
+    expect(shown, 'the long description is back on the sheet').not.toContain('Same tab, same folder')
+    expect(shown).not.toContain('has not written to disk')
   })
 
-  it('warns that the agent is stopped part-way through', () => {
-    // The one irreversible thing about a switch, and the one a person picking an
-    // account from a menu has no way to guess.
-    expect(sheet()).toContain('has not written to disk')
+  /*
+   * The half that is not a description. A conversation that is *not* coming
+   * with him is a loss, and a loss nobody was warned about is the fault this
+   * sheet exists for — so it stays, and it stays only in that case. Both halves
+   * are asserted together, because the way this rots is one of them being
+   * relaxed on its own: silence about a loss, or a reassurance nobody needs.
+   */
+  it('warns only when the conversation is not coming with him', () => {
+    expect(sheet({ plan: plan({ conversation: 'theirs' }) })).toContain(
+      'not the one on screen now',
+    )
+    expect(sheet({ plan: plan({ conversation: 'taken' }) })).toContain('another tab is already')
+
+    const follows = sheet({ plan: plan({ conversation: 'follows' }) })
+    expect(follows, 'a reassurance he did not ask for').not.toContain('This conversation')
+    expect(follows).not.toContain('stays with')
   })
 })
 
 describe('the button that does it', () => {
   it('is offered once there is a plan and nothing objects', () => {
-    expect(sheet()).toContain('Switch account')
+    expect(sheet()).toContain('Switch now')
   })
 
   /**
@@ -93,7 +121,7 @@ describe('the button that does it', () => {
    */
   it('is withheld while the plan is still being worked out', () => {
     const html = sheet({ plan: null, busy: true })
-    expect(html).not.toContain('Switch account')
+    expect(html).not.toContain('Switch now')
     expect(html).toContain('Working out what this would do')
   })
 
@@ -101,7 +129,7 @@ describe('the button that does it', () => {
     const html = sheet({
       plan: plan({ refusal: 'A plain shell has no account to sign in to.' }),
     })
-    expect(html).not.toContain('Switch account')
+    expect(html).not.toContain('Switch now')
     expect(html).toContain('A plain shell has no account to sign in to.')
   })
 
@@ -127,6 +155,6 @@ describe('a switch that could not start', () => {
   })
 
   it('stops offering to try, so the sheet is a report rather than a retry', () => {
-    expect(sheet({ problem: 'no' })).not.toContain('Switch account')
+    expect(sheet({ problem: 'no' })).not.toContain('Switch now')
   })
 })

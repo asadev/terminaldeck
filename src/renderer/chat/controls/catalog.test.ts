@@ -6,14 +6,14 @@ import {
   unreadLabel,
   unreadNote,
   EFFORT_OPTIONS,
+  FAST_OPTIONS,
   isCurrent,
-  MENU_CONTROLS,
   MODEL_OPTIONS,
   modelOptions,
   optionsFor,
   PERMISSION_OPTIONS,
-  PRIMARY_CONTROLS,
   reachOf,
+  shortModelLabel,
   sourceNote,
   type ControlId,
   type ControlReading,
@@ -83,56 +83,77 @@ describe('what the row is allowed to offer', () => {
     expect(optionsFor('effort')).toBe(EFFORT_OPTIONS)
     expect(optionsFor('permission')).toBe(PERMISSION_OPTIONS)
   })
+
+  /*
+   * Fast mode is a switch, and both halves of that sentence are pinned here.
+   *
+   * `SessionControls.tsx` decides which shape to draw by asking whether a
+   * control has exactly two options — deliberately, so that this file stays the
+   * one place that knows which control is two-state. That makes the *length* of
+   * this list load-bearing rather than incidental: a third row added here would
+   * silently turn the switch back into a picker, which is the shape Asad asked
+   * to be rid of.
+   */
+  it('gives fast mode exactly two states, in the order a switch reads them', () => {
+    expect(FAST_OPTIONS.map((option) => option.id)).toEqual(['off', 'on'])
+  })
+
+  it('makes no claim about what fast mode costs, because none was ever measured', () => {
+    /*
+     * The `On` row used to carry `Draws from your usage credits at a higher
+     * rate`, and Asad disputed it watching the app: *"I don't know why it is
+     * saying it is extra chargeable since it is not."*
+     *
+     * He was right that nothing here established it. The comparative was not
+     * measured, quoted or cited anywhere in this repository. What the repo does
+     * hold — `↯ Fast mode ON · $10/$50 per Mtok` in `cli-screens.capture.json`,
+     * and the CLI's own `Fast mode requires usage credits` refusal — is the
+     * CLI's, arrives from the CLI at the moment it applies, and is not restated
+     * here.
+     *
+     * Asserted as a property of every string this control shows rather than as
+     * "that one sentence is gone", because the failure is a *kind* of sentence:
+     * an app-authored guess about somebody's bill. A reworded one would pass a
+     * check written the other way.
+     */
+    const said = [describeControl('fast'), ...FAST_OPTIONS.map((option) => option.hint ?? '')].join(' ')
+    expect(said).not.toMatch(/higher rate|higher draw|extra charge|costs more/i)
+    expect(said).not.toMatch(/\$\d|per Mtok/i)
+  })
+
+  it('does not name a vendor’s model in a sentence drawn over any agent', () => {
+    /*
+     * *"you should not mention in any settings or any pop-up a specific tool or
+     * LLM, because they can use some other also."* This description is printed
+     * on a bar that is also drawn — drawn back, carrying a refusal, but drawn —
+     * over Codex and Gemini sessions, so it is a shared screen by that rule.
+     * It used to open with the word `Opus`.
+     */
+    expect(describeControl('fast')).not.toMatch(/opus|claude|sonnet|haiku|gpt|gemini|codex/i)
+  })
 })
 
-describe('what the panel holds and what gets a chip', () => {
-  it('keeps the two a session reaches for on the box itself', () => {
-    // Model changes per task, permission per phase of the work. Effort is set
-    // once if ever, and fast mode usually cannot even be read.
-    expect(PRIMARY_CONTROLS).toEqual(['model', 'permission'])
-  })
+/*
+ * `PRIMARY_CONTROLS` and `MENU_CONTROLS` were asserted here and they are gone.
+ *
+ * Four checks: that the row held model and permission, that the two lists
+ * partitioned the four controls, that neither repeated the other, and that the
+ * panel held more than one thing. All four described the *composer's* control
+ * row, which no longer exists — every control that survives is drawn by
+ * `shell/SessionControls.tsx` from `CHROME_CONTROLS`, in the window's own bar.
+ *
+ * The half of it that was load-bearing is the partition, and specifically one
+ * direction of the partition: that nothing ends up in *neither* list, which is
+ * how a control leaves the app while all of its own tests keep passing. That
+ * check has not been dropped. It lives in `one-home.test.ts`, which reads
+ * `CHROME_CONTROLS` out of the source — the list that is actually rendered —
+ * rather than out of a pair of exports that had stopped describing any surface.
+ * Asserting a partition of two dead lists would have gone on passing while the
+ * bar drew whatever it liked, which is precisely the failure the original
+ * assertion was written to catch.
+ */
 
-  it('gives every control exactly one home, and leaves none homeless', () => {
-    /*
-     * The rule, and it replaces an assertion that said the opposite — so the
-     * reversal is written down here rather than in a commit message.
-     *
-     * What was pinned before: the panel lists *every* control, chip or no chip.
-     * That was the answer to "all the options you have actually removed", where
-     * two controls sat behind a button called "More" and nothing on screen
-     * named what "More" held.
-     *
-     * What was then reported, watching the app: "options is having all of the
-     * things that we already have here and there. So let's keep everything
-     * separate rather than having everything on one page like on options." With
-     * the panel open, Model and Permission were on screen twice at once — a
-     * chip and a section, the same value, the same keystrokes.
-     *
-     * The rule that answers both is a partition: every control is in exactly
-     * one of the two lists. Nothing is said twice, and — the half the old
-     * assertion was really protecting — nothing is in neither list, which is
-     * how a control leaves the app while all of its own tests keep passing.
-     */
-    expect([...PRIMARY_CONTROLS, ...MENU_CONTROLS].sort()).toEqual([...ALL].sort())
-    expect(new Set([...PRIMARY_CONTROLS, ...MENU_CONTROLS]).size).toBe(ALL.length)
-  })
-
-  it('does not repeat a chip inside the panel that opens beside it', () => {
-    // Stated separately from the partition above because this is the complaint
-    // itself, and a partition could be satisfied by moving a chip into the
-    // panel rather than by not duplicating it.
-    for (const control of PRIMARY_CONTROLS) {
-      expect(MENU_CONTROLS, `${control} is on the row and in the panel`).not.toContain(control)
-    }
-  })
-
-  it('keeps the panel worth opening — more than one thing is behind it', () => {
-    // A menu holding a single entry is a menu that should have been that entry.
-    // If this ever drops to one, fold it out onto the row and delete the panel
-    // rather than leaving a button that opens onto one section.
-    expect(MENU_CONTROLS.length).toBeGreaterThan(1)
-  })
-
+describe('what the controls are named and described as', () => {
   it('names and describes every control, so none is a bare icon', () => {
     for (const control of ALL) {
       expect(controlName(control), control).not.toBe('')
@@ -168,8 +189,15 @@ describe('how far a change reaches', () => {
    * until the scope was measured instead of reasoned about. Fast mode was
    * turned on, the `claude` process was killed, and a brand-new one booted with
    * the `↯` still in its status rule. It survives the session, so there is a
-   * scope to state and it is worth stating: leaving a higher credit draw
-   * switched on by accident is exactly what a missing sentence here costs.
+   * scope to state and it is worth stating: "on until I turn it off" and "on
+   * for this session" are very different things to leave switched on by
+   * accident, whatever they cost.
+   *
+   * That last clause used to read "leaving a higher credit draw switched on by
+   * accident", which was the same unmeasured cost claim `FAST_OPTIONS` carried
+   * on its `On` row and which Asad disputed — *"I don't know why it is saying it
+   * is extra chargeable since it is not."* The scope is measured; the rate never
+   * was.
    */
   it('says that fast mode outlives the session, because it was watched doing so', () => {
     expect(reachOf('fast')).toMatch(/until you turn it off/i)
@@ -280,6 +308,35 @@ describe('which option gets the tick', () => {
     }
     expect(isCurrent(reading('Opus 5', 'Opus 5'), plain)).toBe(true)
     expect(isCurrent(reading('Opus 5', 'Opus 5'), long)).toBe(false)
+  })
+
+  /*
+   * *"only showing Opus 5 is enough — they can see it inside the dropdown, they
+   * don't need to see this long thing with three dots."* The chip is fourteen
+   * characters and `Opus 5 with 1M context` is twenty-two, so it was landing as
+   * `Opus 5 with 1M…`.
+   */
+  it('shortens a model name to the chip without losing which window it is', () => {
+    // Every spelling this app reads a model under, from the four sources listed
+    // on `modelKey`, plus the picker's own policy row.
+    expect(shortModelLabel('Opus 5 with 1M context')).toBe('Opus 5 1M')
+    expect(shortModelLabel('Opus 5 (1M context)')).toBe('Opus 5 1M')
+    expect(shortModelLabel('Opus 5 (1M context) (default)')).toBe('Opus 5 1M')
+    expect(shortModelLabel('Opus 5 · 1M')).toBe('Opus 5 1M')
+    expect(shortModelLabel('Opus 5')).toBe('Opus 5')
+    expect(shortModelLabel('Sonnet 5')).toBe('Sonnet 5')
+    expect(shortModelLabel('Haiku 4.5')).toBe('Haiku 4.5')
+    expect(shortModelLabel('Opus in plan mode, else Sonnet')).toBe('Opus Plan')
+
+    /*
+     * The rule the whole thing turns on: two selections the picker offers
+     * separately must not print the same words on the bar. Shortening
+     * `Opus 5 with 1M context` all the way to `Opus 5` would leave a reader with
+     * no way to tell which of two genuinely different windows they were on.
+     */
+    expect(shortModelLabel('Opus 5 with 1M context')).not.toBe(shortModelLabel('Opus 5'))
+    // And nothing this produces needs an ellipsis: the chip is 14ch.
+    for (const row of MODEL_OPTIONS) expect(shortModelLabel(row.label).length).toBeLessThanOrEqual(14)
   })
 })
 

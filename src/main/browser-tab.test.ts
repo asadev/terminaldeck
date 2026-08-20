@@ -638,8 +638,12 @@ describe('a link that asks for a new window', () => {
     host.sent.length = 0
 
     expect(openWindow(guest, 'https://example.com/docs')).toEqual({ action: 'deny' })
+    // An object rather than a bare string since 2026-08-19: the same channel now
+    // also carries which session asked, so a URL out of a session can land in
+    // the browser window attached to it. A guest page belongs to no session and
+    // says so by omission.
     expect(host.sent).toEqual([
-      { channel: 'link:open-tab', args: ['https://example.com/docs'] },
+      { channel: 'link:open-tab', args: [{ url: 'https://example.com/docs' }] },
     ])
     // And no banner: nothing was refused, so there is nothing to apologise for.
     expect(host.sent.filter((m) => m.channel === 'browser:state-changed')).toEqual([])

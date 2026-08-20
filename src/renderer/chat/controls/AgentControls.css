@@ -88,6 +88,94 @@
   font-weight: var(--w-regular);
 }
 
+/* -------------------------------------------------------------- toggle -- */
+
+/*
+  A two-state control, drawn as a switch inside the chip its neighbours wear.
+
+  *"then here also now think we don't need, just one to select is enough."*
+  Fast mode used to be a picker over `Off` and `On`; the whole argument for
+  collapsing it is in `ControlToggle.tsx`.
+
+  It keeps `.ac-picker`'s positioning because it still opens a popover in the
+  two states where it has no position to draw, and it keeps `.cc-chip` because
+  the row is one family and a bespoke shape here would read as a control that
+  came from somewhere else.
+
+  The caret follows the chip rather than the control, which is the distinction
+  this comment used to get wrong. It said flatly "there is no caret: this one
+  does not open, it flips" — true of the switch and untrue of the other two,
+  which have always opened a popover and, since the repair in
+  `ControlToggle.tsx`, open one with the two settings in it. So: no caret on the
+  switch, where drawing one would promise a menu that is not there; a caret on
+  the refusal and on the unread chip, where withholding it hid a popover that
+  is. Both directions are the same false affordance, and the second one cost
+  more — an unread fast mode looked like a dead chip and was treated as one.
+*/
+.ac-toggle {
+  flex: 0 0 auto;
+}
+
+/* Slightly tighter than a picker's gap because the track that follows the name
+   is a fixed 26px object rather than a word that can be as long as
+   `Opus 5 (1M context)`. At the picker's own `--sp-1` the pair read as two
+   unrelated things sharing a border. */
+.ac-toggle-chip {
+  gap: var(--sp-15);
+}
+
+/*
+  The track *is* the value, so it is sized like a word rather than like a
+  form control: 26 × 14 sits inside the chip's cap height, which is what keeps
+  the chip the same height as the Model and Effort chips beside it. A settings
+  switch is half as tall again and would have made this one chip on the row
+  taller than the others — the kind of difference nobody can name and everybody
+  sees.
+*/
+.ac-toggle-track {
+  position: relative;
+  flex-shrink: 0;
+  width: 26px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* Selection is the one thing the accent is for in this app — the same sentence
+   `.ac-item-current` is written under, and the same token, so a switch that is
+   on and a menu row that is ticked are visibly the same claim. */
+.ac-toggle-track[data-on] {
+  background: var(--accent);
+}
+
+.ac-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  /* Not `--text-primary`: the knob has to read against `--accent` on one side
+     and `--fill-secondary` on the other, and only the accent's own foreground
+     token is guaranteed against the first. */
+  background: var(--accent-fg);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.ac-toggle-track[data-on] .ac-toggle-knob {
+  transform: translateX(12px);
+}
+
+/* Off, the knob would vanish into the track: both are un-inked surfaces. It
+   borrows the same ink the value beside it uses so that "off" is legible as a
+   *position* rather than as an empty track. */
+.ac-toggle-track:not([data-on]) .ac-toggle-knob {
+  background: var(--text-secondary);
+  box-shadow: none;
+}
+
 .ac-caret {
   flex-shrink: 0;
   align-self: center;
@@ -145,6 +233,28 @@
   box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
 }
 
+/*
+  Hung from the chip's *right* edge, for a chip near the window's right edge.
+
+  *"see this window is going out of the frame. This one also going out of the
+  frame."* — 2026-08-20, on the session bar, where Model, Effort and the
+  permission toggle all sit within 300px of the glass. `left: 0` against a chip
+  there opens a 304px panel with a third of it outside the window.
+
+  A flip rather than a nudge: the panel keeps one edge on one edge of the chip
+  that opened it, which is the relationship that says the two belong together.
+  `right: 0` and `left: auto` in that order, because `left: 0` is still on the
+  base rule above and one of the two has to be given back.
+
+  Which chips get this is decided in `menu-side.ts` and applied by the two
+  components that draw this panel — the class is only ever added when the
+  measurement says the menu would otherwise leave the window.
+*/
+.ac-menu-right {
+  left: auto;
+  right: 0;
+}
+
 .ac-menu-above {
   bottom: calc(100% + var(--sp-15));
 }
@@ -172,8 +282,23 @@
   transition: background var(--dur-fast) var(--ease);
 }
 
-.ac-item:hover {
+/* `:not(:disabled)` because one of these menus now has rows that can be locked:
+   the unread two-state popover disables its pair while a change is settling, so
+   that a second `/fast` cannot race the first into the same pty. A row that
+   cannot act must not light up under the pointer — that is the dead affordance
+   this repository is audited for, and `.ac-option:hover` further down in this
+   file is already written this way. Nothing else changes: the
+   picker's rows are never disabled, so the guard is a no-op there. */
+.ac-item:hover:not(:disabled) {
   background: var(--bg-hover);
+}
+
+/* Locked, not refused: this is a row waiting for a command that is already on
+   its way, so it is drawn back rather than marked wrong. The same treatment
+   `.ac-option:disabled` gives the panel's rows, for the same few hundred
+   milliseconds. */
+.ac-item:disabled {
+  color: var(--text-muted);
 }
 
 .ac-item:focus-visible {
@@ -236,6 +361,68 @@
   font-size: var(--t-callout);
   line-height: var(--lh-body);
   color: var(--text-secondary);
+}
+
+/* The sentence a two-state control shows when it has not read a position yet.
+
+   Same box as `.ac-blocked` above and a different colour, because it is a
+   different kind of claim and the two were briefly indistinguishable — see the
+   long note in `ControlToggle.tsx`. A refusal is the answer: the control cannot
+   act and this is why, so it is set in the same ink as the rows a menu would
+   otherwise be showing. This one is not the answer, it is the *caption over* the
+   answer — the two rows sit directly beneath it and are the thing to press — so
+   it takes `--text-muted`, which is the ink this cluster already uses for "we
+   could not find out" (`.ac-value-unknown`, `.ac-item-hint`, `.ac-reach`).
+   Colour is not used for either: nothing is wrong in either state. */
+.ac-unread-note {
+  margin: 0;
+  padding: var(--sp-15) var(--sp-2);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* Another control living at the end of a menu — today the fast-mode switch under
+   the model rows, and nothing else anywhere.
+
+   A rule, and not merely space, which is this file breaking its own habit on
+   purpose. The window separates with space first, then a tint, then a line, and
+   `.ac-option-group` above is the tint — but what that caption introduces is a
+   *weaker claim about the same question* ("Earlier models", still models). What
+   sits under this line is a different question with a different kind of answer,
+   and a switch that reads as a twelfth model is exactly the confusion the move
+   into this menu could have caused. A line is what says "the list ended here".
+
+   `--material-hairline` rather than `--border-subtle`: this is a line drawn on
+   glass, inside a surface whose own edge is that token, and the opaque border
+   reads as a seam between two panels rather than as a division within one. */
+.ac-menu-nested {
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--material-hairline);
+}
+
+/* The caption inside it already has the rule for separation, so it gives back
+   the space `.ac-option-group` reserves for standing alone on nothing but air. */
+.ac-menu-nested .ac-option-group {
+  margin-top: 0;
+}
+
+/* A switch row: the name leads, the track trails, and there is no tick gutter at
+   all.
+
+   Every row above it opens with `.ac-tick`'s empty column, so a row whose first
+   character is a word does not line up with them — deliberately, and only here.
+   Elsewhere in this cluster a broken column would be a bug; this is the one row
+   that has to be told apart from its neighbours at a glance, and the eye finds a
+   ragged left edge before it finds anything else. `space-between` puts the
+   position on the trailing edge, where a switch belongs and where no selection
+   in this menu has ever been drawn. */
+.ac-item-switch {
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
 }
 
 /* --------------------------------------------------------------- panel -- */
@@ -320,6 +507,21 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+/*
+  Where a two-state control sits in a section instead of a radiogroup.
+
+  Indented to `--ac-label` — the same offset every word in this panel starts at,
+  and the reason that variable exists at all: a switch flush against the panel's
+  padding would sit 18px to the left of the description above it and the source
+  note below it, which is what "Effort" was doing over "Auto" before the
+  variable was introduced. A control is a word for this purpose.
+*/
+.ac-section-toggle {
+  display: flex;
+  align-items: center;
+  padding: var(--sp-1) var(--sp-2) 0 var(--ac-label);
 }
 
 .ac-option {

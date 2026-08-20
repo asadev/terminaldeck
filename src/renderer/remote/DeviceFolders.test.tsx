@@ -183,6 +183,88 @@ describe('the sentence at the top', () => {
     expect(said).toContain('still reaches the internet')
   })
 
+  it('says what the section is for in its heading and its first line', () => {
+    /*
+     * *"the folder section is there but I don't know what is this for"* — and,
+     * twice in the same review, *"we don't need big descriptions as I discussed
+     * before"*. The second complaint is length; the first is worse, because a
+     * reader who cannot tell what a block is for cannot skip it either.
+     *
+     * So the heading names the thing and the first line carries the purpose.
+     * Pinned on both platforms, because the purpose is the half of this panel
+     * that does *not* differ.
+     */
+    for (const platform of ['mac', 'windows'] as const) {
+      const said = text(view({ platform }))
+      expect(said).toContain('Folders a guest may open')
+      expect(said).toMatch(/Pick (which folders each guest can use|where each guest can start a session)/)
+    }
+  })
+
+  it('leaves the standing explanation behind the dot instead of on the page', () => {
+    /*
+     * Four paragraphs of `settings-prose` stood between the heading and the
+     * first control. What is drawn now is one, and everything else is in the
+     * span `HoverNote` keeps in the document — which is why the assertions
+     * above still find every sentence: nothing was cut, it moved.
+     *
+     * Counted rather than matched, because the failure this catches is a
+     * paragraph creeping back rather than a specific sentence returning.
+     */
+    // Every device already has folders chosen, so the one *other* paragraph
+    // this panel can draw — the one telling somebody a device paired before
+    // folder approval can open nothing — is not in play. It is conditional,
+    // actionable and short, and it is not part of what he was complaining
+    // about; this test is about the standing explanation, which is not.
+    const held = view({
+      platform: 'mac',
+      grants: new Map([
+        ['dev-phone', ['/Users/asad/Projects/terminaldeck']],
+        ['dev-tablet', ['/Users/asad/site']],
+      ]),
+    })
+    expect(held).toContain('class="hovernote-dot"')
+    // One visible paragraph before the list: the purpose and the verdict.
+    expect(held.match(/class="settings-prose"/g) ?? []).toHaveLength(1)
+
+    // And the detail really is behind the dot rather than beside it.
+    const behind = /<span id="[^"]*" class="hovernote-text">([^<]*)</.exec(held)?.[1] ?? ''
+    expect(behind).toContain('read and write those folders and nothing else')
+    expect(behind).toContain('still runs node, git and the agent tools')
+    expect(behind).toContain('including ones you started')
+  })
+
+  it('never puts the verdict about holding behind the dot, on any platform', () => {
+    /*
+     * The line this rewrite was not allowed to cross, and the reason it is its
+     * own test rather than a comment.
+     *
+     * Somebody decides who to hand a device to on the strength of the clause
+     * that says whether a session is *held*, and the two mistakes are not
+     * symmetrical: reading "held inside them" on a machine where nothing holds
+     * it is how a stranger ends up with a shell, and "they should have hovered"
+     * is not an answer for that. So the clause stays in the visible paragraph
+     * on every platform — the confined one, the one that can be granted, and
+     * the one where nothing holds anything.
+     */
+    const visible = (markup: string): string => {
+      // Everything except the span HoverNote hides its paragraph in.
+      return text(markup.replace(/<span id="[^"]*" class="hovernote-text">[^<]*<\/span>/g, ' '))
+    }
+
+    expect(visible(view({ platform: 'mac' }))).toContain('held inside them')
+    expect(visible(view({ platform: 'windows' }))).toContain('not for keeping anyone out')
+    expect(
+      visible(
+        view({
+          platform: 'windows',
+          confine: { confining: false, canGrant: true, folders: [], note: '' },
+          onGrantConfinement: () => {},
+        }),
+      ),
+    ).toContain('runs unconfined')
+  })
+
   it('never sends one sentence to both platforms', () => {
     // The instruction, as a test. The two answers are different facts and a
     // shared sentence could only be true of one of them.

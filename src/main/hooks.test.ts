@@ -246,6 +246,40 @@ describe('ownership', () => {
   })
 
   /**
+   * Two events read the answer; the other three still throw it away.
+   *
+   * This is the whole price of the browser-binding feature, and it is paid
+   * here: dropping `-o /dev/null` changes the command, so `readStatus` reports
+   * those two entries stale until they are reinstalled once, and Codex's
+   * persisted `trusted_hash` for them invalidates. Keeping the other three
+   * byte-identical is what holds that to two entries per provider instead of
+   * five, and it is also what leaves the observing-not-steering contract intact
+   * for every event that carries a tool payload.
+   */
+  it('keeps the response only for the three events that carry context', () => {
+    /*
+     * `PostToolUse` joined the two on 2026-08-20 and it is the mid-turn one.
+     *
+     * `SessionStart` and `UserPromptSubmit` both fire at the *top* of a turn, so
+     * a browser window attached while an agent was working was not learned about
+     * until his next prompt — which is exactly the gap Asad found: *"whenever I
+     * just connect, it should get a context."* A tool call is the only other
+     * moment the agent knocks, so it is the only door into a turn already
+     * running.
+     */
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse']) {
+      // `-o /dev/null` specifically. `2>/dev/null` stays on every event: curl's
+      // config-file errors are written before `-s` can suppress them, and a
+      // missing config file is the ordinary state of a closed app.
+      expect(hookCommand('claude', event, ENDPOINT, 'darwin'), event).not.toContain('-o /dev/null')
+      expect(hookCommand('claude', event, ENDPOINT, 'darwin'), event).toContain('2>/dev/null')
+    }
+    for (const event of ['Stop', 'PreToolUse', 'Notification']) {
+      expect(hookCommand('claude', event, ENDPOINT, 'darwin'), event).toContain('-o /dev/null')
+    }
+  })
+
+  /**
    * The staleness fix, pinned as a property of the string itself.
    *
    * Every launch used to mint a new port and a new token and write both into

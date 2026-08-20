@@ -69,15 +69,26 @@
 }
 
 .artifacts-scope,
+/*
+  One rule, not two.
+
+  There were two `.artifacts-sessions` blocks here, one under the other, the
+  second adding `flex-wrap` to the first — the kind of split that survives
+  because both halves are correct and neither is findable from the other.
+
+  `max-height` is what makes showing *every* session safe: the row wraps, and
+  past about three lines of chips it scrolls instead of pushing the artifact
+  list off the bottom of the window. Before this the row was capped at five
+  chips in the component, which kept the layout tidy by hiding sessions.
+*/
 .artifacts-sessions {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
   flex-shrink: 0;
-}
-
-.artifacts-sessions {
   flex-wrap: wrap;
+  max-height: 6.5rem;
+  overflow-y: auto;
   padding-bottom: var(--sp-1);
 }
 

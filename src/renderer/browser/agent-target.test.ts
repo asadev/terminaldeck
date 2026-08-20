@@ -13,10 +13,14 @@ import { readSessions, resolveAgentSessions, resolveTarget, whyDisabled } from '
  *   - the choice sticks until he changes it;
  *   - a session that has died is not a target.
  *
- * And the fifth thing, which is not a rule of his but a fact about the wire:
- * a session on another machine is *listed* and cannot be typed into. The block
- * of cases at the bottom is that one. See the header of `agent-target.ts` for
- * why the far machine refuses it and what would let it stop.
+ * And two things from the 2026-08-20 recording, both of which had been refused
+ * or missing rather than wrong:
+ *
+ *   - a session on another machine is a target like any other — *"if they are
+ *     visible here, they should be working too"* — since `session.send` gave
+ *     the wire a verb that types without attaching;
+ *   - a session somebody has named says its name, not `Session 1` under the
+ *     name of the folder it happens to live in.
  */
 
 const LIVE = [
@@ -51,6 +55,55 @@ describe('readSessions', () => {
       'terminaldeck · Session 1',
       'terminaldeck · Session 2',
       'science-locus · Session 1',
+    ])
+  })
+
+  it('says the name somebody typed, where the number would have been', () => {
+    /*
+     * Asad, 2026-08-20, looking at the copilot in this dropdown: *"Let's say
+     * copilot session one — and it should call commander also, because I name it
+     * as commander, but it is showing copilot."*
+     *
+     * `copilot · Session 1` was computed entirely from the folder. The map is
+     * how the window's own names — a rail rename, and the copilot's name out of
+     * its instruction file — reach a list that has never carried either.
+     */
+    const named = new Map([['b', 'commander']])
+    expect(readSessions(LIVE, named).map((session) => session.label)).toEqual([
+      'terminaldeck · Session 1',
+      'terminaldeck · commander',
+      'science-locus · Session 1',
+    ])
+  })
+
+  it('keeps numbering the rows it did not name', () => {
+    // The number is a position in a folder, so naming the first session must not
+    // renumber the second — it would be a row that changed its name because
+    // somebody typed into a different one.
+    const named = new Map([['a', 'commander']])
+    expect(readSessions(LIVE, named)[1].label).toBe('terminaldeck · Session 2')
+  })
+
+  it('takes a title the far machine sent, but not one that is only its folder', () => {
+    /*
+     * Both arrive in the same field. The main process seeds every session's
+     * title with `basename(cwd)` at spawn and the far machine sends that seed
+     * back, so a title equal to the folder is the *absence* of a name — printing
+     * it gives `terminaldeck · terminaldeck`.
+     */
+    const links = [
+      {
+        ...MACHINES.links[0],
+        sessions: [
+          { ...MACHINES.links[0].sessions[0], title: 'deploy the relay' },
+          { ...MACHINES.links[0].sessions[1], title: 'terminaldeck' },
+        ],
+      },
+    ]
+    const rows = readSessions({ here: [], elsewhere: { ...MACHINES, links } })
+    expect(rows.map((session) => session.label)).toEqual([
+      'Studio PC · terminaldeck · deploy the relay',
+      'Studio PC · terminaldeck · Session 2',
     ])
   })
 
@@ -141,12 +194,33 @@ describe('resolveTarget', () => {
     expect(resolveTarget('a', dead)).toBeNull()
   })
 
-  it('is nothing when the chosen session is on another machine', () => {
-    // Not a rule about what he may do — a refusal to report a send that the far
-    // machine will drop. `input` is refused there unless this desktop is
-    // attached (`src/main/remote/server.ts:2867-2878`) and the refusal comes
-    // back on a frame no popup is listening for, so the button would say Sent.
+  it('is the chosen session even when it is on another machine', () => {
+    /*
+     * This case asserted `toBeNull()` for a day, and the day it did was the day
+     * he found it: *"I cannot send from my local browser to remote one, remote
+     * session… If they are visible here, they should be working too."*
+     *
+     * The refusal was never about permission. `input` is refused on the far side
+     * unless this desktop is attached, and attaching to send would have replayed
+     * a whole scrollback into a pane he was reading. `session.send` types with
+     * no attach, so the row resolves and `useAgentTarget` routes on `machineId`.
+     */
     const rows = readSessions({ here: LIVE, elsewhere: MACHINES })
+    const target = resolveTarget('r1', rows)
+    expect(target?.machineId).toBe('m1')
+    expect(target?.machineName).toBe('Studio PC')
+  })
+
+  it('is still nothing when a remote session has exited', () => {
+    // Being reachable and being alive are different questions, and the second
+    // one is answered the same way wherever the process was running.
+    const rows = readSessions({
+      here: [],
+      elsewhere: {
+        ...MACHINES,
+        links: [{ ...MACHINES.links[0], sessions: [{ ...MACHINES.links[0].sessions[0], exitCode: 0 }] }],
+      },
+    })
     expect(resolveTarget('r1', rows)).toBeNull()
   })
 })
@@ -170,19 +244,23 @@ describe('whyDisabled', () => {
     expect(whyDisabled('a', sessions, true)).toBe('')
   })
 
-  it('names the machine a chosen remote session is on', () => {
+  it('says nothing at all about a chosen remote session', () => {
+    // It used to say "this browser sends only to sessions on this machine", and
+    // the sentence went when the limitation did. A refusal that is no longer
+    // true is worse than no sentence: it is the app teaching somebody not to try
+    // something that works.
     const rows = readSessions({ here: LIVE, elsewhere: MACHINES })
-    const reason = whyDisabled('r1', rows, true)
-    expect(reason).toContain('Studio PC')
-    expect(reason).toContain('this machine')
+    expect(whyDisabled('r1', rows, true)).toBe('')
   })
 
-  it('says the whole list is elsewhere before he picks a row that cannot work', () => {
-    // The case that made this worth building: nothing running on this Mac, the
-    // PC's page on screen, three of its sessions in the dropdown.
+  it('says nothing extra when the whole list is elsewhere', () => {
+    // Nothing running on this Mac, the PC's page on screen, three of its
+    // sessions in the dropdown — the case that made the remote rows worth
+    // listing, and now the case that works.
     const rows = readSessions({ here: [], elsewhere: MACHINES })
     expect(rows).toHaveLength(3)
-    expect(whyDisabled('', rows, true)).toMatch(/on another machine/)
+    expect(whyDisabled('', rows, true)).toMatch(/Choose a session/)
+    expect(whyDisabled('r1', rows, true)).toBe('')
   })
 
   it('says nothing about machines when there are none', () => {

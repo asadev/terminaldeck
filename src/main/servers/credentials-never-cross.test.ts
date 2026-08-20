@@ -188,6 +188,13 @@ describe('the shape the window is given', () => {
           'lastConnectedAt',
           'name',
           'port',
+          // The folder a session on this server starts in. A path, chosen in a
+          // folder browser and shown on two screens — the same class of thing
+          // as the name and the address, and nothing a sign-in could be typed
+          // into. It is listed here because this assertion exists to make a
+          // person look at every field that joins the shape, which is what
+          // happened.
+          'startIn',
           'username',
         ].sort(),
       )

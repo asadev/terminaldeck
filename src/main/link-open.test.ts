@@ -93,8 +93,12 @@ describe('a link from the app’s own renderer', () => {
   it('pushes an https link at the renderer instead of launching a browser', () => {
     const host = fakeHost()
     expect(openAppLink(host.contents as never, 'https://github.com/cli/cli')).toBe('tab')
+    // An object rather than a bare string since 2026-08-19: the same channel now
+    // also carries which session a URL came from, so that a link out of a
+    // session can land in the browser window attached to it. A link from the
+    // GitHub panel belongs to no session and says so by omission.
     expect(host.sent).toEqual([
-      { channel: LINK_TAB_CHANNEL, args: ['https://github.com/cli/cli'] },
+      { channel: LINK_TAB_CHANNEL, args: [{ url: 'https://github.com/cli/cli' }] },
     ])
     expect(opened, 'an https link must not reach the system browser').toEqual([])
   })
@@ -148,7 +152,9 @@ describe('a link from an untrusted guest page', () => {
   it('opens http and https as a tab of this app', () => {
     const host = fakeHost()
     expect(openGuestLink(host.contents as never, 'https://example.com/x')).toBe('tab')
-    expect(host.sent).toEqual([{ channel: LINK_TAB_CHANNEL, args: ['https://example.com/x'] }])
+    expect(host.sent).toEqual([
+      { channel: LINK_TAB_CHANNEL, args: [{ url: 'https://example.com/x' }] },
+    ])
   })
 
   /**

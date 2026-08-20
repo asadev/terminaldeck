@@ -436,7 +436,19 @@ describe('who the session is running as, rather than which record', () => {
      * of the control.
      */
     const source = readFileSync(join(__dirname, 'AccountChip.tsx'), 'utf8')
-    expect(source).toContain('useAccountIdentity(currentId)')
+    /*
+     * `identityId`, not `currentId`, since the chip can be about an account this
+     * app has no record of — a `CLAUDE_CONFIG_DIR` exported in somebody's shell
+     * profile, established by reading the agent's own environment. `identityId`
+     * is `currentId` for every account that *is* a record and null for that one,
+     * because `profileSignIn` is keyed on a profile id and asking it about a
+     * bare path spends a process to be told nothing. Its address has already
+     * been read off the file the CLI wrote.
+     */
+    expect(source).toContain('useAccountIdentity(identityId)')
+    expect(source).toContain(
+      'const identityId = known !== null && known.profileId === null ? null : currentId',
+    )
     // List always, probes only while open.
     expect(source).toContain('useAccounts(true, menu.open)')
   })
@@ -679,17 +691,44 @@ describe('running this session as somebody else', () => {
     expect(source).toContain("{MENU_HEAD[switching ? 'switch' : 'start']}")
   })
 
-  it('promises the description that has to come first', () => {
+  it('says nothing at all about a switch, because there is nothing left to warn about', () => {
     /*
-     * The foot is what makes the press safe to make. Something stops, and the
-     * conversation does not travel — neither is guessable from a menu of
-     * account names — so the sentence has to say that a description comes before
-     * anything is stopped, and the app has to keep that promise.
+     * This assertion is the reverse of the one it replaces, and the reversal is
+     * his.
+     *
+     *   > *"Every single time you bring some card, you put something new… I
+     *   > said to you, don't put any single statement in anywhere. Everywhere
+     *   > you are putting a lot of statements. We don't need to give the
+     *   > statements. We want simplicity. Let the smart people use it. Smart
+     *   > people knows how it works."*
+     *
+     * What stood here was a paragraph promising that the tab and the folder
+     * survive, that the agent stops and starts again, that it can happen now or
+     * at his next message, and that whether the conversation comes depends on
+     * whether the two accounts share a history. Every clause was true when it
+     * was written and every clause was pinned by a test.
+     *
+     * Two things then changed. The last clause stopped being true in the only
+     * direction that mattered: `adoptSharedHistory` puts both accounts on one
+     * conversation history before the sheet is ever drawn, so the conversation
+     * comes with him and a sentence hedging about it is a sentence about a
+     * problem he no longer has. And he asked for the explanations to be removed
+     * rather than reworded — which is the rule this now pins, because the
+     * failure mode of a rule like that is a helpful sentence growing back one
+     * review at a time.
+     *
+     * The refusal stays. `blocked` is a sentence with something to do about it
+     * in it, and a menu that cannot be used with no account of why reads as a
+     * broken one.
      */
     const foot = source.slice(source.indexOf('className="account-menu-foot"'))
-    expect(foot.slice(0, 700)).toContain('Stops the agent in this session')
-    expect(foot.slice(0, 700)).toContain('in this same tab')
-    expect(foot.slice(0, 700)).toContain('before anything stops')
+    const said = foot.slice(0, 600)
+    expect(said, 'a description of switching has grown back on the menu').not.toMatch(
+      /this tab and this folder|stops and starts again|share a history|before anything stops/,
+    )
+    // Drawn only when it is not a switch, so the switch case has no foot at all.
+    expect(source).toMatch(/\{!switching && \(\s*<p className="account-menu-foot">/)
+    expect(said).toContain('Change the default coding tool in Settings')
   })
 
   it('drops the notice about the *next* session while it is talking about this one', () => {

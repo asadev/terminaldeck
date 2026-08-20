@@ -54,13 +54,25 @@ describe('the window hands the rail and the strip what they need', () => {
     expect(tag).toContain('onCloseMachine')
   })
 
-  it('gives the strip a way to end a remote session', () => {
-    // Without it a remote pill has no ✕ at all — the strip refuses to draw one
-    // it cannot act on — so the pill would be the one window in the bar that
-    // could not be closed from the bar.
+  it('gives the strip no way to end a remote session — 2026-08-20', () => {
+    /*
+     * The reverse of what this asserted two days earlier, and the reversal is
+     * his: *"session can be only closed from the sidebar, not from the top
+     * bar."* A remote session is a session, so its pill lost its ✕ with every
+     * other session's; the row under its machine's heading in the rail is where
+     * it is ended, with the confirmation and the clause about keeping the
+     * machine paired.
+     *
+     * Asserted as the absence of the prop, which is the strongest form: with no
+     * handler wired there is no path from this bar to `closeMachineSession` for
+     * a later edit to re-open by accident.
+     */
     const tag = openingTag(APP, 'WorkspaceTabStrip') ?? ''
     expect(tag, 'no <WorkspaceTabStrip> in App.tsx').not.toBe('')
-    expect(tag).toContain('onEndRemote')
+    expect(tag).not.toContain('onEndRemote')
+    // The rail is still handed it, which is what makes this "moved" rather than
+    // "removed".
+    expect(openingTag(APP, 'Sidebar') ?? '').toContain('onCloseTab')
   })
 
   it('gives the strip every open window, not just this machine’s', () => {

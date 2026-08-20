@@ -164,22 +164,34 @@ describe('which account a reading belongs to', () => {
   })
 
   /*
-   * A plain shell spawns with no `CLAUDE_CONFIG_DIR` — `sessionEnv` returns
-   * nothing for a provider it cannot redirect — so a `/usage` panel printed
-   * inside one really is describing the machine's own install. Attributing it
-   * to the shell's resolved profile would be a claim about isolation that is
-   * not true.
+   * This used to answer the machine's own install, and the argument for it was
+   * written into the module header: a plain shell spawns with no
+   * `CLAUDE_CONFIG_DIR` — `sessionEnv` returns nothing for a provider it cannot
+   * redirect — so a `/usage` panel printed inside one must be describing the
+   * default login.
+   *
+   * That is a fact about the spawn and a guess about the session. Whoever is at
+   * the keyboard can export the variable before typing `claude`, and the app was
+   * then drawing one login's plan figures under another login's name — reported
+   * twice, the second time against a local session. `session-account.ts` reads
+   * the agent process's own environment to settle it; until it has, there is no
+   * account, and a ref with no directory is what every reader downstream turns
+   * into "nothing was read" with a sentence.
    */
-  it("uses the machine's own install for a session running a different agent", () => {
+  it("withholds the account of a session whose login it has not established", () => {
     const profile = createProfile('Work', { provider: 'claude' })
     const account = accountFor('claude', session({ provider: 'shell', profileId: profile.id }))
-    expect(account.configDir).toBe(systemProfileFor('claude').configDir)
+    expect(account.configDir).toBeNull()
+    expect(account.name).toBeNull()
   })
 
   it('refuses a profile of the wrong agent, however the state file got that way', () => {
     const codex = createProfile('Side', { provider: 'codex' })
     const account = accountFor('claude', session({ profileId: codex.id }))
-    expect(account.configDir).toBe(systemProfileFor('claude').configDir)
+    // Not the machine's own install either. A record that points a Claude
+    // session at a Codex account says nothing true about which Claude login is
+    // in use, and substituting the default would answer a question nobody asked.
+    expect(account.configDir).toBeNull()
   })
 
   it('attributes to the machine when nothing describes the session', () => {
@@ -251,8 +263,11 @@ describe('watching a session', () => {
 
   /*
    * The screen is a terminal and Claude Code prints a limit line whether or not
-   * the session was started as a Claude session. A shell session's reading is
-   * still real; it just belongs to the machine's own login.
+   * the session was started as a Claude session, so a shell session's reading is
+   * real and is kept. What it is *not* is attributed: the figure was read off
+   * this session's own screen, and which login it belongs to is a separate
+   * question that nothing in this test has answered. The account carries no
+   * directory and no name rather than the machine's own — see `accountFor`.
    */
   it('reads a Claude panel printed inside a shell session', async () => {
     const meta = session({ id: 'sess-shell', provider: 'shell' })
@@ -264,8 +279,10 @@ describe('watching a session', () => {
     await settle()
 
     const first = seen.at(-1)?.report.readings[0]
+    expect(first?.used).toEqual({ state: 'reported', fraction: 0.05 })
     expect(first?.account.provider).toBe('claude')
-    expect(first?.account.configDir).toBe(systemProfileFor('claude').configDir)
+    expect(first?.account.configDir).toBeNull()
+    expect(first?.account.name).toBeNull()
 
     dropUsageSession('sess-shell')
     dropPlanSession('sess-shell')
@@ -586,6 +603,46 @@ describe('refreshing the figure without touching a session', () => {
     dropPlanSession('disk-1')
   })
 
+  it('goes and asks once the CLI would fetch again, not once a week has drifted', async () => {
+    /*
+     * The twelve-minute bug, pinned.
+     *
+     * Asad opened the panel and every row read `read 12m ago`, on a design whose
+     * whole premise is that opening the panel is the fetch. The gate above used
+     * to ask `isDrawable` of every reading in the pool, and `isDrawable` retires
+     * a reading after a twelfth of *its own* window — twenty-five minutes for
+     * five hours, **fourteen hours for a week**. Every reading out of one CLI
+     * fetch carries the same `fetchedAtMs`, so the weekly row alone kept the
+     * login looking current and no probe was ever started.
+     *
+     * Twelve minutes is inside the old five-hour threshold as well as the weekly
+     * one, so this fixture fails under either version of the old rule and passes
+     * only when the question is the CLI's own five-minute write throttle.
+     */
+    const profile = createProfile('Work', { provider: 'claude' })
+    writeFileSync(
+      join(profile.configDir, '.claude.json'),
+      JSON.stringify({
+        cachedUsageUtilization: { fetchedAtMs: Date.now() - 12 * 60_000, utilization: utilization(7, 21) },
+      }),
+    )
+    const probe = fakeProbe(ANSWERS)
+    const { invoke } = wire((id) => session({ id, profileId: profile.id }), { probe: probe.probe })
+
+    invoke('usage:watch', fakeContents(), 'twelve-1')
+    const result = (await invoke('usage:refresh', fakeContents(), 'twelve-1')) as UsageRefreshResult
+    expect(result.ok).toBe(true)
+    // Which of the two calls won the race is not the claim — that something went
+    // and asked at all is. See the note in the stale test below.
+    expect(probe.calls()).toBe(1)
+
+    const report = invoke('usage:watch', fakeContents(), 'twelve-1') as UsageReport
+    expect(report.readings.map((entry) => entry.used)).toContainEqual({ state: 'reported', fraction: 0.12 })
+
+    dropUsageSession('twelve-1')
+    dropPlanSession('twelve-1')
+  })
+
   it('goes and asks when what is on disk has gone stale', async () => {
     /*
      * The other half of the same rule. A block the CLI fetched two hours ago
@@ -770,5 +827,149 @@ describe('refreshing the figure without touching a session', () => {
     const result = (await invoke('usage:refresh', fakeContents(), 'codex-1')) as UsageRefreshResult
     expect(result).toMatchObject({ ok: false, outcome: 'unwatched', spawned: false })
     expect(probe.calls()).toBe(0)
+  })
+})
+
+/**
+ * The context window, which is the other half of the bar and a different animal.
+ *
+ * Asad settled the split on 2026-08-19 — *"no lets keep it in the dropdown and
+ * keep context outside"* — and the reason it is a separate channel rather than a
+ * field on `UsageReport` is cost. A plan figure boots a whole Claude Code to ask
+ * one question, measured at 725 MB peak RSS and about three seconds. A context
+ * figure is a bounded tail read of a file the agent is already writing, measured
+ * at 2–17 ms across three real project folders on this machine. Folding the
+ * cheap one into the expensive one's report would tie its freshness to the
+ * expensive one's schedule, which is the whole of what he objected to.
+ */
+describe('usage:context', () => {
+  it('reads the session’s own folder, and echoes the agent back', async () => {
+    const project = join(USER_DATA, 'ctx-project')
+    mkdirSync(project, { recursive: true })
+    const { invoke } = wire((id) => session({ id, cwd: project }))
+    const reading = (await invoke('usage:context', fakeContents(), 'sess-1')) as {
+      provider: string | null
+      state: string
+      detail: string
+    }
+    // No transcript for a folder nothing has ever run in, which is a state with
+    // its own sentence rather than a blank.
+    expect(reading.provider).toBe('claude')
+    expect(reading.state).toBe('nothing-yet')
+    expect(reading.detail.length).toBeGreaterThan(0)
+  })
+
+  it('answers about the folder rather than the account when the session is unknown', async () => {
+    /*
+     * A different miss from the one `usage:read` reports. That one is about a
+     * login — there is no account to hang a plan figure on. This one is about a
+     * *folder*: the context window is read out of the transcript the agent
+     * writes in its working directory, and an unknown session has no working
+     * directory. Saying "no account" about it would send a reader looking in the
+     * wrong place, and attributing an empty reading to whichever agent the
+     * window happened to be drawing would be worse — so the provider is null.
+     */
+    const { invoke } = wire(() => null)
+    const reading = (await invoke('usage:context', fakeContents(), 'ghost')) as {
+      provider: string | null
+      state: string
+      detail: string
+    }
+    expect(reading.provider).toBeNull()
+    expect(reading.state).toBe('not-reported')
+    expect(reading.detail).toContain('cannot find the transcript')
+  })
+
+  it('never says a Gemini session is empty, only that Gemini does not write one', async () => {
+    // Verified on this machine: nine session files under `~/.gemini/tmp/*` and
+    // no token counts of any kind in them. A zero would claim the context is
+    // empty, which this app does not know.
+    const { invoke } = wire((id) => session({ id, provider: 'gemini' }))
+    const reading = (await invoke('usage:context', fakeContents(), 'gem-1')) as {
+      state: string
+      tokens: number | null
+      detail: string
+    }
+    expect(reading.state).toBe('not-reported')
+    expect(reading.tokens).toBeNull()
+    expect(reading.detail).toContain('Gemini')
+  })
+
+  it('starts nothing and remembers nothing — it is a file read and no more', () => {
+    /*
+     * The whole justification for this figure being permanently on the bar. If
+     * it ever grows a watcher, a cache or a probe, it becomes the thing the plan
+     * figure already is and belongs behind the dropdown with it.
+     */
+    const source = readFileSync(join(__dirname, 'usage-ipc.ts'), 'utf8')
+    const handler = source.slice(source.indexOf("ipcMain.handle(\n    'usage:context'"))
+    const body = handler.slice(0, handler.indexOf('ipcMain.on('))
+    for (const forbidden of ['probeUsage', 'setInterval', 'setTimeout', 'watch', 'ensureEntry']) {
+      expect(body, `usage:context has grown a ${forbidden}`).not.toContain(forbidden)
+    }
+  })
+})
+
+/**
+ * Whose subscription the bar over a session is a reading of.
+ *
+ * Asad, recording his screen on 2026-08-19 with two accounts in play:
+ *
+ *   > *"it is giving me 50% and 64 which is correct according to the account …
+ *   > but here it is showing actually the wrong account — app.imza… is not the
+ *   > correct account which is connected to this session"*
+ *
+ * He has five logins in one folder. A figure that is true of one of them, drawn
+ * above a session running as another, is worse than no figure: it is unfalsifiable
+ * from inside the app, and he could only catch it because he happened to have the
+ * other account open elsewhere at the time.
+ */
+describe('two accounts, two figures, at the same time', () => {
+  it('reads each session’s plan limits from the directory that session runs under', async () => {
+    const one = createProfile('Account one', { provider: 'claude' })
+    const two = createProfile('Account two', { provider: 'claude' })
+    writeFileSync(
+      join(one.configDir, '.claude.json'),
+      JSON.stringify({ cachedUsageUtilization: { fetchedAtMs: Date.now(), utilization: utilization(53, 63) } }),
+    )
+    writeFileSync(
+      join(two.configDir, '.claude.json'),
+      JSON.stringify({ cachedUsageUtilization: { fetchedAtMs: Date.now(), utilization: utilization(16, 25) } }),
+    )
+
+    // Two live sessions in one folder, one per account — his own arrangement.
+    const metas: Record<string, SessionMeta> = {
+      'acct-one': session({ id: 'acct-one', profileId: one.id, profileName: one.name }),
+      'acct-two': session({ id: 'acct-two', profileId: two.id, profileName: two.name }),
+    }
+    const probe = fakeProbe(ANSWERS)
+    const { invoke } = wire((id) => metas[id] ?? null, { probe: probe.probe })
+
+    invoke('usage:watch', fakeContents(), 'acct-one')
+    invoke('usage:watch', fakeContents(), 'acct-two')
+    await invoke('usage:refresh', fakeContents(), 'acct-one')
+    await invoke('usage:refresh', fakeContents(), 'acct-two')
+
+    const first = invoke('usage:watch', fakeContents(), 'acct-one') as UsageReport
+    const second = invoke('usage:watch', fakeContents(), 'acct-two') as UsageReport
+
+    // The figures differ, which is the claim, and neither report carries the
+    // other's numbers — a pool that leaked would show four rows here, not two.
+    expect(first.readings.map((entry) => entry.used)).toContainEqual({ state: 'reported', fraction: 0.53 })
+    expect(second.readings.map((entry) => entry.used)).toContainEqual({ state: 'reported', fraction: 0.16 })
+    expect(first.readings.map((entry) => entry.used)).not.toContainEqual({ state: 'reported', fraction: 0.16 })
+    expect(second.readings.map((entry) => entry.used)).not.toContainEqual({ state: 'reported', fraction: 0.53 })
+
+    // And each names its own login, so the number and the name cannot come apart.
+    expect(first.readings.every((entry) => entry.account.configDir === one.configDir)).toBe(true)
+    expect(second.readings.every((entry) => entry.account.configDir === two.configDir)).toBe(true)
+
+    // Nothing was spawned for either: both answers came off disk.
+    expect(probe.calls()).toBe(0)
+
+    dropUsageSession('acct-one')
+    dropUsageSession('acct-two')
+    dropPlanSession('acct-one')
+    dropPlanSession('acct-two')
   })
 })

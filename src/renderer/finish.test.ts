@@ -262,12 +262,14 @@ describe('the menu under the session’s name can actually be used', () => {
 /**
  * A tab strip that compresses before it scrolls, which for a while it did not.
  *
- * `.strip-tab` has carried `flex: 0 1 auto` with a 144px floor and a 280px cap
- * since the pills were widened, and the note above it says the row "compresses
- * to the floor before the rail starts scrolling". It did not. `.strip-list` — the
- * flex *parent* — was left at the default `min-width: auto`, which is a flex
- * item's content-based minimum and not zero, so the list could never be squeezed
- * below its max-content width and the shrink factor on the tabs was dead code.
+ * `.strip-tab` carried a floor and a cap with a shrink factor between them, and
+ * the note above it said the row "compresses to the floor before the rail starts
+ * scrolling". It did not. `.strip-list` — the flex *parent* — was left at the
+ * default `min-width: auto`, which is a flex item's content-based minimum and
+ * not zero, so the list could never be squeezed below its max-content width and
+ * the shrink factor on the tabs was dead code. It matters more since the tab
+ * became one fixed width: without it every tab sits at 180px and the rail
+ * scrolls at four of them.
  *
  * Measured in Chrome against the real stylesheet, ten tabs each with a project
  * qualifier. Before: 255px per tab at 1600px, at 820px and at 620px — the
@@ -295,13 +297,24 @@ describe('the tab strip gives its tabs up before it makes you scroll', () => {
   it('keeps the floor, the cap and the shrink factor that do the compressing', () => {
     const tab = rule(strip, '.strip-tab')
     expect(tab, '.strip-tab has no rule any more').toBeTruthy()
-    // `flex-shrink` of 1 is the middle number; `0 0 auto` would freeze the row
-    // at its natural width again and the rail would go back to scrolling early.
-    expect(tab).toMatch(/flex:\s*0\s+1\s+auto/)
-    expect(tab, 'the floor is the width the pills were widened back to').toMatch(
-      /min-width:\s*var\(--strip-tab-w\)/,
+    /*
+     * The basis moved off `auto` on 2026-08-20, and that is the half of this
+     * rule the earlier version could not state: *"they should be all at the
+     * same size."* A content-based basis makes two tabs different widths no
+     * matter what floor and cap surround it, because flexbox distributes what
+     * is left over in proportion to the basis. One basis, therefore one width.
+     */
+    expect(tab, 'every tab must start from the same basis or they cannot be equal').toMatch(
+      /flex:\s*0\s+1\s+var\(--strip-tab-w\)/,
     )
-    expect(tab, 'without a cap a single long title takes the whole bar').toMatch(/max-width:/)
+    // `flex-shrink` of 1 is the middle number; `1 0 …` would freeze the row and
+    // the rail would go back to scrolling at six tabs.
+    expect(tab, 'the floor is where they stop giving and the rail starts scrolling').toMatch(
+      /min-width:\s*var\(--strip-tab-min\)/,
+    )
+    expect(tab, 'without a cap four tabs stretch across a 1600px window').toMatch(
+      /max-width:\s*var\(--strip-tab-w\)/,
+    )
   })
 
   it('still scrolls once the floor is reached, rather than squeezing past it', () => {
@@ -377,16 +390,14 @@ describe('a page heading fits the sentence it was given', () => {
   const shell = read('renderer/shell/shell.css')
 
   /**
-   * The measure, in characters, and the number the CSS is set to.
+   * The number the CSS is set to.
    *
-   * 75 is the top of the classic 45–75 range for a readable line. The `ch`
-   * figure is the same measure converted at the size this line is actually set
-   * at, measured on the rendered bar rather than assumed: at `--t-caption` the
-   * shipped copy averages 4.91px per character while `1ch` is 6.61px, so 75
-   * characters is 56ch. Both numbers are here so that changing one without the
-   * other fails rather than quietly re-opening the bug.
+   * It was a pair — 75 characters of copy, and the 56ch that holds them at
+   * `--t-caption` — so that changing one without the other failed. There is no
+   * panel copy to measure any more (the blurbs are deleted; see below), but the
+   * cap still governs the one thing that still lands in this slot: the machine
+   * name over a session running somewhere else.
    */
-  const MEASURE_CHARS = 75
   const MEASURE_CH = 56
 
   it('caps the line at a reading measure, not at a leftover number', () => {
@@ -406,19 +417,23 @@ describe('a page heading fits the sentence it was given', () => {
   })
 
   /**
-   * The copy, against the measure it has to live in.
+   * The copy that had to fit the measure, and no longer exists.
    *
-   * Every panel's blurb, read from `panels.ts` itself rather than from a list
-   * copied into this test — a list that has to be kept in step is a list that
-   * stops matching the app and then passes forever. The one that failed was 68
-   * characters against a cap that held about 62.
+   * This used to read every panel's `blurb` out of `panels.ts` and check it
+   * against `MEASURE_CHARS`, because the bar had truncated one. There is no
+   * blurb to measure now: all nine were deleted on 2026-08-20 — *"don't put any
+   * single statement in anywhere"* — and the field went with them so the next
+   * panel cannot be given one. See the note where it used to be declared.
+   *
+   * The assertion is inverted rather than dropped. A test that simply vanished
+   * would let a sentence per page come back with nothing red, which is exactly
+   * how nine of them accumulated.
    */
-  it.each(PANELS.map((panel) => [panel.label, panel.blurb] as const))(
-    '%s says it in one line',
-    (_label, blurb) => {
-      expect(blurb.length).toBeLessThanOrEqual(MEASURE_CHARS)
-    },
-  )
+  it('gives a view no line of prose to print under its title', () => {
+    for (const panel of PANELS) {
+      expect(panel, `${panel.label} has copy under its title again`).not.toHaveProperty('blurb')
+    }
+  })
 })
 
 /* ------------------------------------------------------- nothing is warm -- */
@@ -558,10 +573,22 @@ describe('a shell session is not described as an agent', () => {
    */
   it('does not name an account on a chip that cannot be given one', () => {
     const chip = read('renderer/shell/AccountChip.tsx')
-    expect(chip).toContain('const names = current !== null || blocked === null')
+    /*
+     * Two subjects still, and now stated as two. Over a session the question is
+     * whether *that session's* account was established — `namedAccount`, which
+     * is the main process's answer and never the folder's default. With no
+     * session it is the older question, unchanged, about the agent a new one
+     * here would run.
+     */
+    expect(chip).toContain(
+      'session !== null ? namedAccount !== null : current !== null || blocked === null',
+    )
     // The label, the mark and the dot all follow that one decision. Each of the
     // three was an independent claim before, which is how they came to disagree.
-    expect(chip).toContain("names ? identity.label : 'No login'")
+    // `unnamed` carries the three sentences for the three ways there can be no
+    // name — not established, not answered yet, and no login to have.
+    expect(chip).toContain('names ? identity.label : unnamed.label')
+    expect(chip).toContain("label: 'Account not known'")
     expect(chip).toMatch(/const mark = names \?/)
     expect(chip).toMatch(/style=\{names && listed \?/)
     // And the notice is the whole tooltip only in that state; over a session

@@ -148,6 +148,16 @@ declare module 'ssh2' {
       dstPort: number,
       callback: (err: (Error & { reason?: number }) | undefined, channel: Channel) => void,
     ): this
+    /**
+     * Open the SFTP subsystem on this connection.
+     *
+     * **Throws synchronously when the socket has already gone**, the same trap
+     * `forwardOut` above documents, so every call sits inside a `try`. A server
+     * that does not run the subsystem at all answers through the callback
+     * instead — which is a real configuration, not a broken one, and is why the
+     * folder picker has a typed path for it rather than a crash.
+     */
+    sftp(callback: (err: Error | undefined, sftp: SFTPWrapper) => void): boolean
     end(): this
     destroy(): void
     on(event: 'ready', listener: () => void): this
@@ -169,6 +179,66 @@ declare module 'ssh2' {
     once(event: 'error', listener: (err: Error & { level?: string }) => void): this
     once(event: 'close', listener: () => void): this
     removeAllListeners(event?: string): this
+  }
+
+  /**
+   * What `readdir` reports about one entry, and it is a `lstat`, not a `stat`.
+   *
+   * That distinction is the reason `isSymbolicLink` is declared alongside
+   * `isDirectory` rather than left off as noise. A link pointing at a folder
+   * answers `false` to `isDirectory` here, so a picker that only trusted that
+   * one would drop `/var/www` on every server where it is a link — which is
+   * most of them — and the folder somebody was looking for would simply not be
+   * on the list, with nothing on screen saying it had been filtered out.
+   *
+   * `mode` is the raw POSIX mode word the class derives all of these from. It
+   * is declared because it is the only field that survives a server whose SFTP
+   * implementation sends attributes this library cannot type — and reading it
+   * is never necessary, which is why nothing in this app does.
+   */
+  export interface Stats {
+    mode: number
+    size: number
+    mtime: number
+    isDirectory(): boolean
+    isFile(): boolean
+    isSymbolicLink(): boolean
+  }
+
+  /** One name in a directory, as the far end listed it. */
+  export interface FileEntry {
+    filename: string
+    /** The `ls -l`-shaped line some servers send. Never parsed here — see below. */
+    longname: string
+    attrs: Stats
+  }
+
+  /**
+   * The subsystem, opened over a connection that is already up.
+   *
+   * Declared as narrowly as everything else in this file: three calls, which is
+   * every call a folder picker makes. `readdir` and `realpath` answer the two
+   * questions — *what is in here* and *what is `~` actually called* — and `end`
+   * closes the channel, which is not the connection: the pool below still owns
+   * that and still decides when the socket goes.
+   *
+   * The errors carry a numeric `code` from RFC 4251 §7 (`3` is permission
+   * denied, `2` is no such file), and that number is the only thing that
+   * separates *"you may not read that folder"* from *"that folder is not
+   * there"*. Both are ordinary answers on somebody else's server rather than
+   * failures of this app, so the number is typed and `connection.ts` turns it
+   * into a sentence.
+   */
+  export interface SFTPWrapper {
+    readdir(
+      path: string,
+      callback: (err: (Error & { code?: number }) | undefined, list: FileEntry[]) => void,
+    ): void
+    realpath(
+      path: string,
+      callback: (err: (Error & { code?: number }) | undefined, absolute: string) => void,
+    ): void
+    end(): void
   }
 
   /** A parsed private key, or the reason it could not be parsed. */

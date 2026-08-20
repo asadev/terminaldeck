@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
-import type { CreateSessionInput, SessionMeta } from '../shared/types'
+import type { CreateSessionInput, LinkRoute, LinkTabRequest, SessionMeta } from '../shared/types'
 
 /**
  * The renderer's only route to the main process. Everything is an explicit
@@ -178,6 +178,64 @@ const api = {
   switchSessionAccount: (sessionId: string, profileId: string): Promise<SessionMeta> =>
     ipcRenderer.invoke('session:switch-account', sessionId, profileId),
 
+  /*
+   * The same switch, at his next message instead of now.
+   *
+   * A third call rather than a flag on the second, because the two produce
+   * different things and a caller has to handle them differently: the immediate
+   * one answers with the replacement session, and this one answers with nothing
+   * but an acknowledgement — the replacement does not exist yet and will not
+   * until he types. The window learns about it through `onSessionSwitched`.
+   *
+   * `armedSessionSwitches` exists so a chip can redraw the hint from the main
+   * process's register rather than from its own memory of having pressed a
+   * button, which would go on promising a switch that had already fired.
+   */
+  switchSessionAccountLater: (sessionId: string, profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('session:switch-later', sessionId, profileId),
+  cancelSessionSwitch: (sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('session:switch-cancel', sessionId),
+  armedSessionSwitches: (): Promise<unknown> => ipcRenderer.invoke('session:switch-armed'),
+
+  /** A deferred switch fired: this session became that one. */
+  onSessionSwitched: (
+    cb: (previousId: string, meta: SessionMeta, note: string) => void,
+  ): (() => void) => {
+    const handler = (_e: IpcRendererEvent, previousId: string, meta: SessionMeta, note: string) =>
+      cb(previousId, meta, note)
+    ipcRenderer.on('session:switched', handler)
+    return () => ipcRenderer.off('session:switched', handler)
+  },
+
+  /**
+   * A deferred switch was tried and did not take.
+   *
+   * The session is still running as it was, which is what the sentence says —
+   * so this must never be drawn as a switch that half happened.
+   */
+  onSessionSwitchFailed: (
+    cb: (sessionId: string, profileId: string, why: string) => void,
+  ): (() => void) => {
+    const handler = (_e: IpcRendererEvent, sessionId: string, profileId: string, why: string) =>
+      cb(sessionId, profileId, why)
+    ipcRenderer.on('session:switch-failed', handler)
+    return () => ipcRenderer.off('session:switch-failed', handler)
+  },
+
+  /* ------------------------------------- one history across two accounts -- */
+  /*
+   * Whether an account's conversations live in the shared history, and the two
+   * acts that change it. The state is read back off the disk every time it is
+   * asked for — see `main/shared-projects.ts` — so a screen never draws
+   * "shared" from the fact that a button was pressed.
+   */
+  accountHistoryState: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('accounts:history-state', id),
+  shareAccountHistory: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('accounts:history-share', id),
+  unshareAccountHistory: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('accounts:history-unshare', id),
+
   /**
    * A session started somewhere other than this window — today, from a phone.
    *
@@ -355,6 +413,25 @@ const api = {
     ipcRenderer.invoke('machines:detach', id, sessionId),
   writeToMachineSession: (id: string, sessionId: string, data: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:input', id, sessionId, data),
+  /*
+   * Typing into a session over there **without opening it here**, which is the
+   * line above with its authorisation swapped out.
+   *
+   * `writeToMachineSession` is a remote terminal pane's keyboard and the far end
+   * serves it only because that pane attached first. This is for a surface that
+   * has something to say and nothing to read — the browser handing an agent the
+   * element it just inspected, over a session on the PC in the other room — and
+   * attaching in order to say it would take the handle away from whatever pane
+   * on that link already held it and replay its scrollback at the person reading
+   * it. The wire's `send` capability is the verb that types without subscribing.
+   *
+   * Answers `{ ok, message }` rather than a boolean, and that is the whole
+   * difference in shape: a lost keystroke in a terminal pane is visible in that
+   * terminal a moment later, and a send from a panel with no terminal in it is
+   * invisible unless the sentence comes back with it.
+   */
+  sendToMachineSession: (id: string, sessionId: string, data: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:send', id, sessionId, data),
   resizeMachineSession: (id: string, sessionId: string, cols: number, rows: number): Promise<unknown> =>
     ipcRenderer.invoke('machines:resize', id, sessionId, cols, rows),
   createMachineSession: (id: string, cwd?: string, provider?: string): Promise<unknown> =>
@@ -394,6 +471,131 @@ const api = {
    */
   reachOnMachine: (id: string, port: number): Promise<unknown> =>
     ipcRenderer.invoke('machines:reach', id, port),
+  /*
+   * The model, the effort and fast mode of a session on one of his own machines.
+   *
+   * The same pair as `readAgentControls`/`applyAgentControl` further down, with a
+   * machine in front of the session id — and that is the whole difference. The
+   * far end is running this app, so it has its own `agent-controls.ts` and its
+   * own pty; these two carry the question there and the answer back over
+   * `CAPABILITY.controls`.
+   *
+   * Two channels rather than one, for the reason the local pair is two: reading
+   * is passive and happens every time the session prints something, while
+   * applying **types into somebody's terminal**. A single channel with a flag
+   * would put a keystroke on a code path that fires on output.
+   *
+   * The read answers `null` when the question could not be asked at all — the
+   * machine is offline, or its build predates the capability — which the bar
+   * treats the way it treats a failed local read: it keeps the last values it
+   * genuinely had. The apply always answers with a sentence, because somebody
+   * pressed something.
+   */
+  readMachineControls: (id: string, sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:controls:read', id, sessionId),
+  applyMachineControl: (id: string, sessionId: string, control: string, value: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:controls:apply', id, sessionId, control, value),
+  /*
+   * The plan limits and the context window of a session on one of his own
+   * machines — the two figures on the usage bar, which until now were read from
+   * *this* computer whatever session the bar was drawn over.
+   *
+   * One channel where the controls beside it are two, because none of the three
+   * readings types anything: the controls pair is split so that a keystroke
+   * cannot end up on a path that fires on output, and there is no keystroke
+   * here.
+   *
+   * `want` is which reading, and it is the whole of the cost model rather than a
+   * detail of the shape. `plan` and `context` are free on the far machine —
+   * memory, and a bounded tail read of the transcript the agent is already
+   * writing — so they may be asked for whenever the local bar re-reads its own.
+   * `refresh` boots a whole Claude Code over there, **725 MB peak and about
+   * three seconds**, so it may only be asked for because a person opened the
+   * usage panel or pressed the retry inside it. `usage-target.ts` is the one
+   * place in the renderer that chooses the word, and that is deliberate: three
+   * call sites choosing it would be three chances for one of them to put the
+   * dear one on a mount.
+   *
+   * `force` is that person overriding rather than this app looking, and it
+   * reaches past the far machine's own five-minute throttle. Meaningful only to
+   * `refresh`.
+   *
+   * Always answers with a reading, never null — unlike `readMachineControls`
+   * beside it. The control chips can keep the last values they genuinely had
+   * when a round trip goes missing; this bar has no previous figure to keep, so
+   * an absence has to arrive carrying the sentence that says why it is absent.
+   */
+  readMachineUsage: (id: string, sessionId: string, want: string, force: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('machines:usage:read', id, sessionId, want, force),
+  /*
+   * The copilot on one of his other machines.
+   *
+   * The pipe under *"the same switch we have for sessions"* at the top of the
+   * copilot page: two paired machines, one page, either copilot. The far end
+   * has served this wire for weeks and nothing on this side had ever sent a
+   * frame down it — see `machines/ipc.ts` for the whole of that.
+   *
+   * There is no `openMachineCopilot` here on purpose. That machine refuses
+   * every copilot verb, the read-tier ones included, until *this socket* has
+   * said `copilot.hello`, and the socket is new after every reconnect — so the
+   * link sends it on every welcome that carried a copilot, and a window is
+   * never asked to notice a laptop waking up.
+   *
+   * All three answer `{ ok, message }` rather than a boolean, unlike the
+   * session verbs above, and for the reason `sendToMachineSession` does: there
+   * is no terminal on screen to make a lost frame visible, so a press that
+   * produced nothing would look exactly like a control that does not work.
+   * `ok` means the frame left this machine — there is no request id anywhere on
+   * the copilot wire, so it cannot honestly mean more — and what the far end
+   * made of it arrives on the two channels below.
+   */
+  attachMachineCopilot: (machineId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:copilot:attach', machineId),
+  /*
+   * Start a run **of this desktop's own** over there, which is not the copilot
+   * sitting at that machine's desk.
+   *
+   * Its own method rather than something `attachMachineCopilot` does on the way
+   * in, because attaching costs that machine one callback and this spawns an
+   * agent process on it and spends money. Until it has been called that
+   * machine's state for this desktop carries `run: null`, and
+   * `sayToMachineCopilot` has nothing to talk to.
+   */
+  startMachineCopilot: (machineId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:copilot:start', machineId),
+  sayToMachineCopilot: (machineId: string, text: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:copilot:say', machineId, text),
+  /** Ask that machine for its copilot state again. The answer arrives on the push channel. */
+  refreshMachineCopilot: (machineId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:copilot:refresh', machineId),
+  /*
+   * The machine id is split out of the payload here rather than sent as its own
+   * IPC argument, and that is the one thing in this block worth a note.
+   *
+   * `registerMachinesIpc` is given a `broadcast(channel, payload)` that carries
+   * exactly one value — the same seam `machines:state` and `machines:output`
+   * go through — so main sends one object and this splits it into the two
+   * arguments the window asked for. Read defensively rather than cast: a
+   * malformed push must reach a callback as an empty id it can drop, not as a
+   * throw inside an `ipcRenderer.on` handler, which lands nowhere anybody is
+   * looking.
+   */
+  onMachineCopilotState: (cb: (machineId: string, state: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, payload: unknown): void => {
+      const row: { machineId?: unknown; state?: unknown } = typeof payload === 'object' && payload !== null ? payload : {}
+      cb(typeof row.machineId === 'string' ? row.machineId : '', row.state)
+    }
+    ipcRenderer.on('machines:copilot:state', handler)
+    return () => ipcRenderer.off('machines:copilot:state', handler)
+  },
+  onMachineCopilotChat: (cb: (machineId: string, bubble: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, payload: unknown): void => {
+      const row: { machineId?: unknown; chat?: unknown } = typeof payload === 'object' && payload !== null ? payload : {}
+      cb(typeof row.machineId === 'string' ? row.machineId : '', row.chat)
+    }
+    ipcRenderer.on('machines:copilot:chat', handler)
+    return () => ipcRenderer.off('machines:copilot:chat', handler)
+  },
   onMachinesState: (cb: (view: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, view: unknown) => cb(view)
     ipcRenderer.on('machines:state', handler)
@@ -403,6 +605,26 @@ const api = {
     const handler = (_e: IpcRendererEvent, chunk: unknown) => cb(chunk)
     ipcRenderer.on('machines:output', handler)
     return () => ipcRenderer.off('machines:output', handler)
+  },
+
+  /*
+   * Dropping a file on a session that is running on another machine.
+   *
+   * A **path**, not the bytes. `pathForDroppedFile` above already gives the
+   * renderer the real path behind a dropped `File`, and handing that over
+   * instead of an ArrayBuffer keeps a 200 MB video out of two heaps on its way
+   * to a third computer — `machines:upload` in `machines/ipc.ts` carries the
+   * whole argument, along with why the answer is the path it landed at rather
+   * than a boolean.
+   */
+  uploadToMachine: (id: string, filePath: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:upload', id, filePath),
+  cancelMachineUpload: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:upload:cancel', id),
+  onMachineUpload: (cb: (progress: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, progress: unknown) => cb(progress)
+    ipcRenderer.on('machines:upload:progress', handler)
+    return () => ipcRenderer.off('machines:upload:progress', handler)
   },
 
   /* ---------------------------------------------------------- servers -- */
@@ -481,8 +703,32 @@ const api = {
    * and `setWindow(rows, cols, …)`; that reversal is handled once, in the main
    * process, and must not be allowed to leak out here.
    */
-  openServerShell: (id: string, cols: number, rows: number): Promise<unknown> =>
-    ipcRenderer.invoke('servers:shell:open', id, cols, rows),
+  openServerShell: (id: string, cols: number, rows: number, startIn?: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:shell:open', id, cols, rows, startIn),
+  /*
+   * What is inside one folder on that server, so somebody can choose where a
+   * session starts rather than taking whatever SSH drops them in.
+   *
+   * Keyed on the server rather than on a shell because it is asked *before*
+   * there is one, and answered over SFTP on whatever connection is already
+   * open. An empty path means the account's own login directory; the answer
+   * carries the absolute path the server resolved, which is what the next call
+   * is made with — no path is ever assembled on this side.
+   */
+  listServerFolder: (id: string, path: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:folder', id, path),
+  /*
+   * The folder this server starts a session in when nothing names one, and the
+   * call that changes it.
+   *
+   * Read is a stored preference rather than a question for the far end, so it
+   * costs nothing and dials nothing — which is what lets the picker print
+   * *"Default"* beside a path before anybody has opened the browser. Null
+   * clears it, and clearing means going back to wherever the sign-in lands.
+   */
+  serverStartIn: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:start-in', id),
+  setServerStartIn: (id: string, path: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('servers:start-in:set', id, path),
   writeToServerShell: (shellId: string, data: string): Promise<unknown> =>
     ipcRenderer.invoke('servers:shell:write', shellId, data),
   resizeServerShell: (shellId: string, cols: number, rows: number): Promise<unknown> =>
@@ -498,6 +744,37 @@ const api = {
     const handler = (_e: IpcRendererEvent, chunk: unknown) => cb(chunk)
     ipcRenderer.on('servers:shell:closed', handler)
     return () => ipcRenderer.off('servers:shell:closed', handler)
+  },
+
+  /*
+   * Putting a coding assistant on a server, in two presses.
+   *
+   * Every sentence these answer with is written in `servers/setup.ts`, beside
+   * the code that does the work — §4.3 — so nothing here composes copy and the
+   * panel that draws them writes none either. `installOnServer` and
+   * `signInOnServer` are keyed on a *shell* as well as a server because both run
+   * in the terminal the person is already watching, which is the whole of what
+   * makes a sixty-second install honest rather than a spinner.
+   *
+   * They are keyed on an **agent** as well, since 2026-08-20: the pane offers
+   * Claude Code, Codex and Gemini as three equal rows, and every call has to say
+   * which of them it means. `serverSetup` answers all three in one round trip.
+   */
+  serverSetup: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:setup:look', id),
+  serverSetupState: (id: string, agentId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:setup:state', id, agentId),
+  installOnServer: (id: string, agentId: string, shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:setup:install', id, agentId, shellId),
+  signInOnServer: (id: string, agentId: string, shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:setup:signin', id, agentId, shellId),
+  cancelServerSetup: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:setup:cancel', id),
+  removeServerSetup: (id: string, agentId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:setup:remove', id, agentId),
+  onServerSetup: (cb: (state: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, state: unknown) => cb(state)
+    ipcRenderer.on('servers:setup:changed', handler)
+    return () => ipcRenderer.off('servers:setup:changed', handler)
   },
 
   tailnetStatus: (force?: boolean): Promise<unknown> =>
@@ -540,6 +817,14 @@ const api = {
   // pressing; see `refreshUsage` in `src/main/usage-ipc.ts`.
   refreshUsage: (sessionId: string, force = false): Promise<unknown> =>
     ipcRenderer.invoke('usage:refresh', sessionId, force),
+  // How full the model's context window is, read straight off the transcript the
+  // agent writes as it goes. Nothing is spawned and nothing is watched, so this
+  // is asked whenever the answer could have moved rather than on a schedule —
+  // which is what lets the figure sit on the bar permanently while the plan
+  // limits sit behind a dropdown. `readContextWindow` in
+  // `src/main/context-window.ts` has the measurements that settled the split.
+  contextWindow: (sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('usage:context', sessionId),
   unwatchUsage: (sessionId: string): void => ipcRenderer.send('usage:unwatch', sessionId),
   onUsage: (cb: (sessionId: string, payload: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, sessionId: string, payload: unknown) =>
@@ -551,6 +836,9 @@ const api = {
   /* ------------------------------------------------------------- git -- */
 
   gitStatus: (cwd: string): Promise<unknown> => ipcRenderer.invoke('git:status', cwd),
+  // The only git call that writes. Main refuses it on anything that is already
+  // a repository, so this cannot nest one inside another — see `initRepository`.
+  gitInit: (cwd: string): Promise<unknown> => ipcRenderer.invoke('git:init', cwd),
   gitDiff: (cwd: string, path: string, options?: { staged?: boolean; untracked?: boolean }): Promise<string> =>
     ipcRenderer.invoke('git:diff', cwd, path, options ?? {}),
   watchGit: (cwd: string): Promise<unknown> => ipcRenderer.invoke('git:watch', cwd),
@@ -780,6 +1068,19 @@ const api = {
    */
   profileSignIn: (id: string, options?: { refresh?: boolean }): Promise<unknown> =>
     ipcRenderer.invoke('profiles:signin', id, options),
+  /**
+   * Which login one *session* is actually running under.
+   *
+   * Not the same question as `profileSignIn`, and the difference is the whole
+   * reason this exists. That one asks "who is signed into this account", which
+   * is a fact about a directory. This asks "which account is the agent in this
+   * session using", which is a fact about a process — and for a session this app
+   * did not start it can only be answered by reading that process's own
+   * environment. The reply is either an account or a sentence saying why there
+   * is none; see `main/session-account.ts`.
+   */
+  sessionAccount: (sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('session:account', sessionId),
 
   /* --------------------------------------------------------- copilot -- */
 
@@ -1064,18 +1365,25 @@ const api = {
   removeHooks: (provider: string): Promise<unknown> => ipcRenderer.invoke('hooks:remove', provider),
   syncHooks: (): Promise<unknown> => ipcRenderer.invoke('hooks:sync'),
 
-  /* ------------------------------------------------------------- mcp -- */
-
-  mcpList: (): Promise<unknown> => ipcRenderer.invoke('mcp:list'),
-  mcpConnect: (serverId: string): Promise<unknown> => ipcRenderer.invoke('mcp:connect', serverId),
-  mcpDisconnect: (serverId: string): Promise<void> =>
-    ipcRenderer.invoke('mcp:disconnect', serverId),
-  mcpCall: (serverId: string, tool: string, args: unknown): Promise<unknown> =>
-    ipcRenderer.invoke('mcp:call', serverId, tool, args),
-  mcpReadResource: (serverId: string, uri: string): Promise<unknown> =>
-    ipcRenderer.invoke('mcp:read-resource', serverId, uri),
-  mcpGetPrompt: (serverId: string, name: string, args?: unknown): Promise<unknown> =>
-    ipcRenderer.invoke('mcp:get-prompt', serverId, name, args),
+  /*
+   * There was a second MCP surface here — `mcpList`, `mcpConnect`,
+   * `mcpDisconnect`, `mcpCall`, `mcpReadResource`, `mcpGetPrompt` — six methods
+   * onto the same six channels as the block further down this file, and not one
+   * of them was called from anywhere in `src/` or `pwa/`.
+   *
+   * They are deleted rather than left as harmless dead code, because of what
+   * made them dead *wrong*: none of them passed a project path. Three of the
+   * MCP scopes are addressed by the open folder, so this surface could only
+   * ever resolve `user`-scope servers — it is a working copy of the exact bug
+   * the block below was just fixed for. The next person to reach for an MCP
+   * call from the preload would have found these first, and they are the
+   * shorter names.
+   *
+   * The handlers stay. `mcp:read-resource` and `mcp:get-prompt` have no caller
+   * in the renderer today, and that is a gap in `McpInspector`'s bridge rather
+   * than a reason to remove the two channels the panel will need to show a
+   * server's resources and prompts.
+   */
 
   /* --------------------------------------------------------- browser -- */
 
@@ -1124,8 +1432,8 @@ const api = {
    * `send` to a channel nobody listens on is a silent no-op, which is exactly
    * how the browser's progress bar was dead for a week.
    */
-  onOpenLinkTab: (cb: (url: string) => void): (() => void) => {
-    const handler = (_e: IpcRendererEvent, url: string) => cb(url)
+  onOpenLinkTab: (cb: (request: LinkTabRequest) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, request: LinkTabRequest) => cb(request)
     ipcRenderer.on('link:open-tab', handler)
     return () => ipcRenderer.off('link:open-tab', handler)
   },
@@ -1133,6 +1441,86 @@ const api = {
   openLinkExternally: (url: string): Promise<boolean> => ipcRenderer.invoke('link:system', url),
   /** Right-click on anything that opens a link — a native menu at the pointer. */
   showLinkMenu: (url: string): Promise<boolean> => ipcRenderer.invoke('link:menu', url),
+
+  /* -------------------------------------------- session ↔ browser binding -- */
+
+  /*
+   * A session and a browser window, related.
+   *
+   * The relation itself lives in the main process — `main/browser-binding.ts`
+   * says why at length, and the short version is that the two things that read
+   * it, a shim's HTTP request and a hook response an agent's turn is blocked
+   * on, both arrive there and neither can wait for a renderer. So everything
+   * here is either a fact this window is reporting upwards or a view coming
+   * back down; nothing below is a second copy of the map.
+   */
+
+  /** A link from inside a session — routed to that session's own window. */
+  openLink: (request: {
+    url: string
+    sessionId?: string
+    machineId?: string
+  }): Promise<LinkRoute> => ipcRenderer.invoke('link:open', request),
+  browserWindowOpened: (window: {
+    tabId: string
+    viewId?: string | null
+    url?: string
+    title?: string
+    machineId?: string
+    machineName?: string
+    visible?: boolean
+  }): void => {
+    ipcRenderer.send('browser:window-opened', window)
+  },
+  browserWindowClosed: (tabId: string): void => {
+    ipcRenderer.send('browser:window-closed', tabId)
+  },
+  browserBind: (request: { tabId: string; sessionId: string; machineId?: string }): void => {
+    ipcRenderer.send('browser:bind', request)
+  },
+  browserUnbind: (tabId: string): void => {
+    ipcRenderer.send('browser:unbind', tabId)
+  },
+  // A `send`, not an `invoke`, for the same reason `browserDriveOpened` is one:
+  // the request came *from* main, so this is a message keyed by the request id
+  // rather than the return value of anything the renderer called.
+  browserLinkOpened: (reply: { requestId: string; tabId?: string; refused?: string }): void => {
+    ipcRenderer.send('link:opened', reply)
+  },
+  onBrowserBindings: (cb: (view: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, view: unknown) => cb(view)
+    ipcRenderer.on('browser:bindings', handler)
+    return () => ipcRenderer.off('browser:bindings', handler)
+  },
+  browserBindings: (): Promise<unknown> => ipcRenderer.invoke('browser:bindings'),
+  showBrowserBindMenu: (request: { sessionId: string; machineId?: string }): Promise<boolean> =>
+    ipcRenderer.invoke('browser:bind-menu', request),
+  // The other direction. One relation, one map; see `showBrowserConnectMenu` in
+  // `shared/types.ts` for why the session names travel in the request.
+  showBrowserConnectMenu: (request: {
+    tabId: string
+    sessions: { sessionId: string; machineId?: string; name: string; machineName?: string }[]
+  }): Promise<boolean> => ipcRenderer.invoke('browser:connect-menu', request),
+
+  /*
+   * The sidebar row's ⋯ menu — one round trip, and the answer is what was
+   * chosen.
+   *
+   * An `invoke` rather than a `send` plus a push, because a menu is a question:
+   * the row that asked is the row that acts, and threading the answer back
+   * through a broadcast channel would mean every row in the rail hearing about
+   * a choice made on one of them.
+   */
+  showSessionRowMenu: (request: {
+    sessionId: string
+    machineId?: string
+    name: string
+    promoted: boolean
+    promoteBlocked?: string | null
+    close?: string | null
+    copilotTurn?: boolean
+    browser?: boolean
+  }): Promise<string | null> => ipcRenderer.invoke('session:row-menu', request),
 
   /* ------------------------------------------------- browser driving -- */
   /*
@@ -1337,11 +1725,34 @@ const api = {
   // because two of the three MCP scopes are addressed by the working directory
   // the CLI runs in — so it is part of what is being asked for, not context.
   addMcpServer: (request: unknown): Promise<unknown> => ipcRenderer.invoke('mcp:add', request),
-  connectMcpServer: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:connect', id),
+  /*
+   * These three carry the project path, and for a while they did not.
+   *
+   * Three of the MCP scopes are addressed differently: `user` servers come out
+   * of `~/.claude.json`'s root, while `project` and `local` are keyed on the
+   * open folder. `mcp:list` was passed the path and so listed all three — but
+   * `connect`, `inventory` and `call` dropped it on the floor, so main resolved
+   * them with `findServer(id, null)`, which re-reads *only* the user scope and
+   * cannot see the row the panel had just drawn. Expanding any project- or
+   * local-scope server therefore threw `mcp: no configured server with id
+   * local:<name>`, every time, on a page whose expand gesture is also its
+   * connect gesture. Asad: *"On MCP servers did nothing."*
+   *
+   * The main handlers have always accepted the argument (`mcp-client.ts`) and
+   * the panel's own bridge type has always declared it — this file was the one
+   * link in the chain that did not pass it on.
+   */
+  connectMcpServer: (id: string, projectPath?: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:connect', id, projectPath),
   disconnectMcpServer: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:disconnect', id),
-  mcpInventory: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:inventory', id),
-  callMcpTool: (id: string, tool: string, args: unknown): Promise<unknown> =>
-    ipcRenderer.invoke('mcp:call', id, tool, args),
+  mcpInventory: (id: string, projectPath?: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:inventory', id, projectPath),
+  callMcpTool: (
+    id: string,
+    tool: string,
+    args: unknown,
+    projectPath?: string | null,
+  ): Promise<unknown> => ipcRenderer.invoke('mcp:call', id, tool, args, projectPath),
   onMcpState: (cb: (status: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, status: unknown) => cb(status)
     ipcRenderer.on('mcp:state', handler)
@@ -1463,6 +1874,25 @@ const api = {
     value: string
     provider?: string
   }): Promise<unknown> => ipcRenderer.invoke('agent:controls:apply', request),
+
+  /*
+   * And the same two for a terminal on a server, which is neither of the above.
+   *
+   * A server does not run this app, so there is no `controls` capability to
+   * negotiate and no copy of `agent-controls.ts` over there. What there is, is a
+   * real pty — `client.shell({ term: 'xterm-256color' })` — whose bytes arrive in
+   * this main process, so the same reader that finds Claude Code's banner on a
+   * local screen finds it on that one and the same writer types at it. See
+   * `src/main/servers/ipc.ts`, where the emulator is attached and where the two
+   * refusals that keep `/model` out of a plain `sh` are spelled out.
+   *
+   * The shell id and nothing else: no `cwd` and no `provider`. Both would be
+   * facts about *this* machine, and a session on somebody's server has neither.
+   */
+  readServerControls: (shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:controls:read', shellId),
+  applyServerControl: (shellId: string, control: string, value: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:controls:apply', shellId, control, value),
 
   listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),
   scanBrowserTabs: (browserId?: string): Promise<unknown> =>

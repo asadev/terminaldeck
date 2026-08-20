@@ -928,17 +928,72 @@ Named plainly, so nobody builds them by accident, and each with the reason.
 |---|---|
 | **Deleting anything** — a site, an app, a database, a file | §4.1: v1 ships no action without a way back, and these have none. |
 | **Installing operating system updates** | Cannot be undone. v1 shows the count in zone three. |
-| **Installing software** — a web server, a database, a runtime | This is *provisioning*, not control. It is a different product with a different failure mode: a half-installed server has no way back. |
+| **Installing software** — a web server, a database, a runtime | This is *provisioning*, not control. It is a different product with a different failure mode: a half-installed server has no way back. **One narrow exception now ships — see §7.1.** |
 | **Editing files on the server** | An editor implies save, which implies overwrite. There is a terminal in zone three for people who want this and know what it means. |
 | **Following logs live** | §4.2: a stream that stays open is the polling-shaped thing rule 5 bans. Bounded fetch plus **Load more** in v1. |
 | **Uploading and downloading arbitrary files** | `sftp` is available and this is genuinely useful, but it is a file manager, and a file manager is its own surface with its own confirmation model. Backup (§4.2) is the one file transfer v1 has, because it only reads and goes one way. |
-| **Port forwarding / tunnelling to a private service** | `forwardOut` is available and it is the right eventual answer for "Open" on a database. It needs a lifecycle (when does the tunnel close?) that zone one's calm surface should not have to explain. |
+| ~~**Port forwarding / tunnelling to a private service**~~ — **shipped** | This was written before `forward.ts` and `reach.ts` existed. It has an answer to its own question now: a tunnel's lifetime is the page that opened it, and it closes when the connection does. Left in the table struck through rather than deleted, because the row's reasoning is still the reason the lifecycle is written down where it is. |
 | **Reading `~/.ssh/config` as a source of servers** | §2.1: read it as a *convenience* if somebody has one, never as a requirement — and importing it wholesale would put a list of somebody's employer's servers in this app without them asking. Offer it as an explicit import in v2. |
 | **Jump hosts / bastions / `ProxyJump`** | Real and common, and it multiplies every connection path by two. v2, once one path is solid. |
 | **Cloud provider APIs** — resizing, snapshots, billing | Every one is a different vendor with different credentials. The whole premise here is that a server is reached the same way whoever it is rented from. |
 | **Windows servers** | `ssh2` connects to them; nothing in §3.2 works there, so every card would be the third state. Being honest about that is fine; shipping it as if it were supported is not. |
 | **`servers.run` for the copilot** | §6.1. |
 | **Container-aware resource figures** (reading cgroup limits) | §3.4. v1 says `cannot` rather than showing the host's numbers. |
+
+---
+
+### 7.1 · The one exception: putting a coding assistant on a server
+
+**Installing software** stays a non-goal and the row above stays true. This is
+the single, named exception to it, and it is written down here rather than left
+to be discovered in the code — a design document that quietly stops describing
+the code is worse than one that never covered it.
+
+What ships:
+
+> **One named program — Claude Code — into the account's own home folder, with
+> no administrator access, with a way back, and only when a person presses a
+> button for it.**
+
+It is not general provisioning, and each clause is what keeps it from becoming
+that:
+
+- **One named program.** There is no name field, no version field and no
+  registry. The command is a constant in `servers/setup.ts` and nothing reads
+  the program's name from anywhere else. Codex and Gemini are *detected* in the
+  same probe — that costs nothing — and neither is offered an install button,
+  because their sign-in flows have not been measured and a wizard that strands
+  somebody halfway is worse than no wizard.
+- **Into the account's own home.** Measured: the installer is a native binary
+  that needs no Node, writes only under `$HOME`, and **refuses to run as the
+  administrator**. So none of this app's privilege handling is involved, and
+  nothing outside one person's own home folder changes.
+- **With a way back.** §4.1 is not suspended. The app records that *it* did the
+  installing and offers to remove exactly what it added — the program and its
+  versions folder, never `~/.claude`, which is somebody's own transcripts and
+  settings and may well predate this app. An install this app did not do is
+  reported and offered nothing.
+- **Driven by a person.** There is no tool for it in `tools.ts` and there must
+  not be. §6.1 is unchanged: the copilot gets the named actions and nothing
+  else, and `no-run-tool.test.ts` pins its tool list at three names.
+
+The reason the exception is worth making is that the alternative is not
+*"nothing gets installed"* — it is a person being told their server is ready and
+then discovering, in a terminal, that the thing they came for is missing. The
+half-installed-server failure the row above is about does not arise here: this
+writes one file tree under one home folder, and the button that undoes it is on
+the same screen as the button that did it.
+
+**The sign-in is part of the same exception and is subject to a stricter rule.**
+`ACCOUNT-MODEL.md` binds — *"this app never holds the credential"* — and this
+flow does not break it. Claude Code on the server runs **its own** sign-in, with
+its own client id, and writes **its own** credential; the app contributes a
+browser window on this computer and a socket that carries the redirect back down
+to the server's own waiting listener. The authorization code is bytes on that
+socket and is never read, stored, logged or typed by this app. The app must
+never read a code out of a browser and type it into a shell — `DRIVABLE-BROWSER.md`
+§7 forbids exactly that — and where a server will not carry the socket, a person
+finishes the sign-in themselves at the prompt that is already on their screen.
 
 ---
 

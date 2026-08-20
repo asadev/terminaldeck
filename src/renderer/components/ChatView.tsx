@@ -231,6 +231,77 @@ export function formatTime(at: number): string {
   return at > 0 ? TIME.format(at) : ''
 }
 
+/**
+ * The machine-readable half of the time, for `<time dateTime>`.
+ *
+ * The printed time is `14:32` and carries no date at all — the day headings
+ * above the run carry that — so on its own it is ambiguous to anything that is
+ * not a person looking at the column. Empty for a message with no timestamp,
+ * which is a real state: the attribute is then absent rather than claiming the
+ * epoch.
+ */
+export function isoAt(at: number): string | undefined {
+  return at > 0 ? new Date(at).toISOString() : undefined
+}
+
+/** How long the copy button says "Copied" before going back to saying what it does. */
+const COPIED_MS = 1600
+
+/**
+ * Copy, and the tick it turns into.
+ *
+ * Two overlapping sheets rather than a clipboard-with-a-clip, at 13px on the
+ * app's 24-unit grid: the clip is three strokes inside four pixels and turns to
+ * mush, which is the same measurement `ModeSwitch` records for its own glyphs.
+ * The tick replaces it outright rather than sitting beside it, so the control
+ * does not change width at the moment it is pressed.
+ */
+function CopyGlyph({ done }: { done: boolean }) {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {done ? (
+        <path d="M5 12.5l4.5 4.5L19 7" />
+      ) : (
+        <>
+          <rect x="9" y="9" width="11" height="11" rx="2.2" />
+          <path d="M5.5 15H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v.5" />
+        </>
+      )}
+    </svg>
+  )
+}
+
+/**
+ * Whatever this window can write to, or null.
+ *
+ * Read at call time rather than at module load, because the harness and the
+ * static-markup tests import this file with no `navigator` at all. Null is a
+ * real answer and the caller draws no button for it — the rule `GitHubPanel`
+ * follows for the same reason: a copy control that cannot copy is worse than
+ * none, because the failure is silent and looks like the clipboard's fault.
+ */
+export function clipboardWriter(): ((text: string) => void) | null {
+  const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+  if (!clipboard?.writeText) return null
+  return (text: string) => {
+    // Nothing to report and nowhere to report it: a rejected write here means
+    // the document lost focus mid-press, and the button has already said
+    // "Copied". Swallowed rather than thrown, so one refusal cannot take the
+    // conversation down with it.
+    void clipboard.writeText(text).catch(() => {})
+  }
+}
+
 /** The day heading a message needs, or null when it shares the previous one. */
 export function dayBreak(at: number, previousAt: number): string | null {
   if (at <= 0) return null
@@ -258,11 +329,65 @@ const REATTRIBUTE_MS = 3000
 
 /* ---------------------------------------------------------------- one bubble */
 
-export function ChatBubble({ message, heading }: { message: ChatMessage; heading: string | null }) {
+/**
+ * One turn: the words, then the time, then the copy — and no name at all.
+ *
+ * ## Which side it is on, and why there is no label — 2026-08-20
+ *
+ * *"my message should start from the right, should be on the other side, like
+ * this one, just like Claude. See, mine is right side. … The left side will be
+ * the agent … So no need to give a name actually on both sides. Not even you,
+ * for me also not you. Just start it from the right side, give the time and all
+ * that. Just the text only and time only will be good enough."*
+ *
+ * Side replaces name, which is the whole trade and is why removing the labels
+ * is not a loss of information: in a two-party conversation the alignment
+ * already says who is talking, and it says it without a word to read on every
+ * turn. The column used to open each turn with "You" or "Agent" in semibold —
+ * two labels on every message in a view whose entire job is to show the talking.
+ *
+ * The tint stays on his side and stays off the agent's, unchanged: it is what
+ * lets you scan back for where an instruction started, and it is now doing the
+ * same work as the alignment rather than instead of it.
+ *
+ * ## Time and copy, at the end
+ *
+ * *"give the copy button wherever it's possible at the end of maybe messages."*
+ * So the metadata moved from a header above the words to a footer below them,
+ * which is also where the eye is when a turn finishes. The footer holds the
+ * time and, when the host can reach a clipboard, one copy control.
+ */
+export function ChatBubble({
+  message,
+  heading,
+  onCopy,
+}: {
+  message: ChatMessage
+  heading: string | null
+  /**
+   * Put this turn's text on the clipboard. Absent where there is no clipboard
+   * to reach — the panel decides that once and hands it down, the same
+   * arrangement `GitHubPanel` uses for its device code. A copy button that
+   * cannot copy is the dead control this app is audited for.
+   */
+  onCopy?: (text: string) => void
+}) {
   const html = useMemo(
     () => (message.role === 'agent' ? renderMarkdown(message.text) : null),
     [message.role, message.text],
   )
+  /*
+   * Said, then unsaid a moment later. A copy leaves nothing on screen to show
+   * it worked, so the button says so itself — and reverts, because a control
+   * stuck reading "Copied" is a control that has stopped describing what
+   * pressing it does.
+   */
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), COPIED_MS)
+    return () => clearTimeout(timer)
+  }, [copied])
 
   return (
     <>
@@ -288,10 +413,6 @@ export function ChatBubble({ message, heading }: { message: ChatMessage; heading
          */
         data-drive-anchor={`message:${message.id}`}
       >
-        <header className="cv-meta">
-          <span className="cv-who">{message.role === 'you' ? 'You' : 'Agent'}</span>
-          <time className="cv-time">{formatTime(message.at)}</time>
-        </header>
         {html === null ? (
           // Either a prompt — shown verbatim, because a person's typing is not
           // markup — or an environment with no sanitiser, where raw text is the
@@ -300,6 +421,36 @@ export function ChatBubble({ message, heading }: { message: ChatMessage; heading
         ) : (
           <div className="cv-body cv-rich" dangerouslySetInnerHTML={{ __html: html }} />
         )}
+        {/*
+          Under the words rather than over them, and it holds no name.
+
+          `<footer>` and not a second `<header>`: it is metadata about the turn
+          it follows, which is what the element means, and a screen reader
+          reaching it has already been read the message it describes.
+        */}
+        <footer className="cv-foot">
+          <time className="cv-time" dateTime={isoAt(message.at)}>
+            {formatTime(message.at)}
+          </time>
+          {onCopy && (
+            <button
+              type="button"
+              className="cv-copy"
+              /* The whole turn's source text, not what is on screen: the agent's
+                 half is rendered markdown with its code folded into `<details>`,
+                 and copying the rendering would hand back a paragraph with the
+                 diff missing. `message.text` is what the transcript holds. */
+              onClick={() => {
+                onCopy(message.text)
+                setCopied(true)
+              }}
+              aria-label={copied ? 'Copied' : 'Copy this message'}
+              title={copied ? 'Copied' : 'Copy this message'}
+            >
+              <CopyGlyph done={copied} />
+            </button>
+          )}
+        </footer>
       </article>
     </>
   )
@@ -324,7 +475,14 @@ export function ChatBubble({ message, heading }: { message: ChatMessage; heading
  * a state where the conversation is not what the reader is looking at; the empty
  * states above already say the same thing at the moment it is useful.
  */
-export function ChatColumn({ messages }: { messages: readonly ChatMessage[] }) {
+export function ChatColumn({
+  messages,
+  onCopy,
+}: {
+  messages: readonly ChatMessage[]
+  /** Threaded straight through to every turn. See {@link ChatBubble}. */
+  onCopy?: (text: string) => void
+}) {
   return (
     <div className="cv-column">
       {messages.map((message, i) => (
@@ -332,6 +490,7 @@ export function ChatColumn({ messages }: { messages: readonly ChatMessage[] }) {
           key={message.id}
           message={message}
           heading={dayBreak(message.at, i > 0 ? messages[i - 1].at : 0)}
+          {...(onCopy ? { onCopy } : {})}
         />
       ))}
     </div>
@@ -803,6 +962,9 @@ export function ChatView({
    */
   useEvery(!watched && resolved && key !== '' && refreshMs > 0 ? refreshMs : null, tail)
 
+  /** Absent in a window with no clipboard, which draws no copy buttons at all. */
+  const copy = useMemo(() => clipboardWriter(), [])
+
   const jump = useCallback(() => {
     const host = scrollRef.current
     if (!host) return
@@ -895,7 +1057,16 @@ export function ChatView({
           floating over the last message, just above the box. */}
       <div className="cv-stage">
         <div className="cv-scroll" ref={scrollRef} onScroll={onScroll}>
-          {state ? <ChatEmpty state={state} /> : <ChatColumn messages={messages} />}
+          {state ? (
+            <ChatEmpty state={state} />
+          ) : (
+            /* Resolved once, here, rather than per message: reaching for
+               `navigator.clipboard` in every bubble would ask the same question
+               a hundred times down a long conversation, and a column where some
+               turns had a copy button and some did not would be worse than one
+               where none did. */
+            <ChatColumn messages={messages} {...(copy ? { onCopy: copy } : {})} />
+          )}
         </div>
         {behind ? (
           <button type="button" className="cv-jump" onClick={jump}>

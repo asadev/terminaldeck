@@ -8,6 +8,7 @@ import {
   mergeSettings,
   getSetting,
   resolveSection,
+  sectionMeta,
   sectionsFor,
   settingsIn,
   type LiveSectionId,
@@ -158,10 +159,11 @@ describe('every section id still resolves to a pane', () => {
      * copilot was built as a real session rather than a bespoke backend, since
      * a session is the only shape that has those things to show.
      *
-     * Folding it into Assistants was considered and is wrong on this table's own
-     * rule that a section is a *subject*: Assistants answers "which AI runs, as
-     * which login, with what installed", and six blocks of audit surface for
-     * one specific agent under that heading is where somebody stops finding it.
+     * Folding it into Coding AI (Assistants, when this was written) was
+     * considered and is wrong on this table's own rule that a section is a
+     * *subject*: that pane answers "which one runs, as which login, with what
+     * installed", and six blocks of audit surface for one specific agent under
+     * that heading is where somebody stops finding it.
      *
      * **Help arrived without moving the number**, which is the part worth
      * reading. He asked for it in as many words — *"we should have a help page
@@ -174,6 +176,108 @@ describe('every section id still resolves to a pane', () => {
      */
     expect(sectionsFor('mac').length).toBeLessThanOrEqual(10)
     expect(sectionsFor('windows').length).toBeLessThanOrEqual(11)
+  })
+})
+
+/**
+ * One screen, one name for it.
+ *
+ * This entry has been renamed twice on review — "Agents" out on 2026-08-17,
+ * "Assistants" out on 2026-08-19 — and a rename is the change that rots quietly.
+ * Nothing breaks when the rail says one word and a paragraph two panes away
+ * still says the previous one: the window renders, every test passes, and the
+ * product is simply using two names for one screen until somebody notices. The
+ * second rename happened *because* somebody noticed.
+ *
+ * So the three things a rename has to get right are asserted from the outside,
+ * against rendered markup rather than against the table that produced it:
+ *
+ *  1. the rail entry is the name the schema declares, and it is not one of the
+ *     two that were rejected;
+ *  2. no retired name survives anywhere in the markup these panes render — not
+ *     in a heading, not in a cross-reference inside another pane's prose;
+ *  3. no label is a word inside another label, which is the rule that keeps
+ *     ruling out "Coding tools" while **Tools** is the rail entry immediately
+ *     below this one. That one is not hypothetical: it is the reason round one
+ *     gave for rejecting both "Coding tools" and "AI tools", and it is the
+ *     constraint the next person renaming this entry will forget.
+ *
+ * ## What (2) actually reaches, measured, because it is easy to overrate
+ *
+ * The rail is part of every pane's markup — `SettingsPanel` draws the whole
+ * column beside whichever section is open — so a sweep that finds a name in one
+ * pane has not thereby proved it can see into pane *bodies*. That has to be
+ * shown separately, and it was, by mutation on 2026-08-19: adding `'Theme'` and
+ * `'Default'` to `RETIRED` fails with `appearance still says "Theme"`, and
+ * neither word is a rail label. So the assertion does read pane prose, not only
+ * the column. Mutating with a rail label proves nothing here and should not be
+ * quoted as if it did.
+ *
+ * What it cannot reach is anything behind an unwired bridge. These renders pass
+ * `bridge = {}`, and the Copilot pane answers that with one sentence — *"This
+ * build has no copilot channels wired into its preload"* — so the two places
+ * that pane uses the word "assistant" (`CopilotSection.tsx:932`, `:1680`) are
+ * never in the markup this loop sees. A retired name that only appears in a
+ * bridge-fed branch will walk straight past. Stated rather than fixed: giving
+ * every pane a plausible fake bridge is a real piece of work, and a sweep that
+ * quietly covers less than its name suggests is the thing worth writing down.
+ *
+ * Case-sensitive on purpose. The id `agents` is all over this markup —
+ * `data-section="agents"`, `aria-controls="…-panel-agents"` — and it is supposed
+ * to be: ids are storage and routing, and neither rename moved one. What may not
+ * appear is a capitalised **A**gents or **A**ssistants, which is a word being
+ * read by a person.
+ */
+describe('the pane has one name and the window uses it', () => {
+  /** The names this entry has carried and lost. Add to it; never edit it. */
+  const RETIRED = ['Agents', 'Assistants'] as const
+
+  it('calls the rail entry what the schema declares', () => {
+    expect(sectionMeta('agents').label).toBe('Coding AI')
+    for (const name of RETIRED) {
+      expect(sectionMeta('agents').label, name).not.toBe(name)
+    }
+  })
+
+  it('leaves no retired name anywhere in the window', () => {
+    for (const section of sectionsFor('windows')) {
+      const html = render(section.id)
+      for (const name of RETIRED) {
+        // Word boundary rather than a bare search: `AgentsSection` is a
+        // component name and could legitimately reach a `data-*` hook one day.
+        // `Agents` standing on its own is a person reading the old name.
+        expect(html, `${section.id} still says "${name}"`).not.toMatch(
+          new RegExp(`\\b${name}\\b`),
+        )
+      }
+    }
+  })
+
+  it('gives no label every word of another label', () => {
+    /*
+     * The failure this catches is a rail somebody has to disambiguate by
+     * reading: "Coding tools" beside "Tools", where neither entry can be
+     * identified by scanning and the voice pane and the coding-tool pane are one
+     * misread apart. Asad named the Tools pane himself — *"features or maybe
+     * tools, let's actually call it tools"* — so a collision resolves against
+     * whatever is being renamed, every time.
+     *
+     * Compared as lower-cased whole words rather than by `includes`, which would
+     * also fire on "Advanced" inside nothing and miss nothing useful. "Tools" is
+     * a hit inside "Coding tools", and that is the case worth failing on.
+     */
+    const labels = sectionsFor('windows').map((section) => section.label)
+    const words = (label: string): string[] => label.toLowerCase().split(/\s+/)
+    for (const label of labels) {
+      const mine = new Set(words(label))
+      for (const other of labels) {
+        if (label === other) continue
+        expect(
+          words(other).every((word) => mine.has(word)),
+          `"${label}" contains every word of "${other}"`,
+        ).toBe(false)
+      }
+    }
   })
 })
 

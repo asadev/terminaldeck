@@ -478,6 +478,10 @@ final class HostLink: Identifiable {
 
     func detach(_ id: String) {
         wanted.remove(id)
+        // Before the guard: the screen is being left whether or not this phone
+        // was attached, and a hold left in flight belongs to a terminal nobody
+        // is looking at.
+        bridges[id]?.endBacklogHold()
         guard attached.contains(id) else { return }
         attached.remove(id)
         transport?.send(.detach(id: id))
@@ -544,22 +548,20 @@ final class HostLink: Identifiable {
     }
 
     /**
-     * The session this phone was last looking at **on this machine**, if it is
-     * still running.
+     * Where this phone was last, on this machine.
      *
-     * Per host and stored per host, which is the difference between a Resume row
-     * that means something and one that offers the wrong machine's work: with two
-     * machines paired, a single remembered id would follow the user across the
-     * switcher and point at a session the host in front of them has never heard
-     * of.
+     * There was a `resumable` here and a card at the top of the session list
+     * drawn from it; both are gone — see the note in `SessionListView.list`. The
+     * *key* stays, and the reason is `agentTarget` below: inspect mode has to
+     * decide which session an element description is sent to, and the session
+     * this phone last opened here is the honest default. That is a use nobody
+     * has to look at.
+     *
+     * Per host, which is the difference between remembering something and
+     * remembering the wrong machine's work: with two machines paired, a single
+     * id would follow the user across the switcher and name a session the host
+     * in front of them has never heard of.
      */
-    var resumable: RemoteSession? {
-        guard let id = UserDefaults.standard.string(forKey: lastOpenedKey),
-              let session = sessions.first(where: { $0.id == id }),
-              session.status != "exited" else { return nil }
-        return session
-    }
-
     private var lastOpenedKey: String { "terminaldeck.lastSession.v2.\(id)" }
 
     private func rememberLastOpened(_ sessionId: String) {
@@ -1091,6 +1093,10 @@ final class HostLink: Identifiable {
             attached.insert(id)
             wanted.insert(id)
             bridges[id]?.clear()
+            // Everything after this frame is the session's history arriving in
+            // pieces, so the screen is held until it has all landed and shown
+            // once, at the bottom. `TerminalBackfill` carries the argument.
+            bridges[id]?.holdForBacklog()
             if let size = bridges[id]?.size {
                 transport?.send(.resize(id: id, cols: size.cols, rows: size.rows))
             }
@@ -1102,8 +1108,8 @@ final class HostLink: Identifiable {
         case let .detached(id):
             attached.remove(id)
 
-        case let .output(id, data, _):
-            bridges[id]?.feed(data)
+        case let .output(id, data, replay):
+            bridges[id]?.feed(data, replay: replay)
 
         case let .status(id, status):
             guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }

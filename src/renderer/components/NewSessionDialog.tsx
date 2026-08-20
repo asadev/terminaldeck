@@ -24,6 +24,8 @@ import { folderName, shortSessionId } from '../session-title'
 import { detectPlatform, thisMachine } from '../platform'
 import { MACHINE_ICON } from '../shell/workspace-tabs'
 import { Modal } from './Modal'
+import { ServerFolderPicker } from '../machines/servers/ServerFolderPicker'
+import type { ServersBridge } from '../machines/servers/types'
 import { normalizePreferences } from '../preferences'
 import { useOptionalStore } from '../state/store'
 import {
@@ -179,6 +181,14 @@ export function writeStartMemory(
 export type AddAgentOutcomeView =
   | { ok: true; id: CustomProviderId }
   | { ok: false; problems: CustomAgentProblems }
+
+/**
+ * One frozen empty array, so `offered` above is the same value on every render
+ * when there is nothing to offer. A fresh `[]` each time is a new dependency
+ * for anything that ever memoises on it — the shape of bug that is invisible
+ * until somebody adds the `useMemo` that finally reads it.
+ */
+const EMPTY_SERVERS: readonly StartServer[] = []
 
 const REFUSED: CustomAgentProblems = {
   command: 'That agent could not be added. Check the command and try again.',
@@ -709,6 +719,25 @@ export interface StartMachine {
   folders: readonly string[]
 }
 
+/**
+ * One server this window can start a terminal on, as the dialog needs it.
+ *
+ * Two fields, and no folder list, which is the whole difference from
+ * {@link StartMachine} above. A paired device advertises the folders it is
+ * willing to share and the far end refuses anything else, so that list is a
+ * contract; a server shares nothing and refuses nothing — it is a machine with
+ * an account on it, and what that account can reach is answered by asking it.
+ * `ServerFolderPicker` does the asking.
+ *
+ * The name travels beside the id for the reason `session-context.ts` gives: the
+ * window has no route to the servers list, which lives inside a panel that is
+ * usually not on screen, and four surfaces print the name.
+ */
+export interface StartServer {
+  id: string
+  name: string
+}
+
 interface Props {
   open: boolean
   /** Preselected folder — normally whichever project is in front. */
@@ -728,6 +757,34 @@ interface Props {
    * flow.
    */
   machineId?: string | null
+  /**
+   * Servers this window can start a terminal on. Empty draws no server rows,
+   * and — with no paired devices either — no Where section at all.
+   *
+   * ## Why every stored server is offered rather than only a connected one
+   *
+   * Because there is no such thing as a connected server at the moment this
+   * dialog is open. `useServers` holds a connection *for exactly as long as
+   * that server's page is on screen* and hangs up when you leave it — his own
+   * events-not-polling rule, stated at the top of that file — so filtering this
+   * list on a live socket would show a row only while somebody was already
+   * looking at the server elsewhere, which is the one moment they are not in
+   * this dialog. The control would be empty on every launch and read as broken.
+   *
+   * Nothing is claimed about reachability by offering one. Starting the session
+   * dials, exactly as `openServerShell` has always dialled, and a server that
+   * is asleep or unreachable says so in the terminal it opens — which is where
+   * that answer already goes and where the person is already looking. The
+   * folder picker below dials first and reports it sooner.
+   */
+  servers?: readonly StartServer[]
+  /**
+   * The servers bridge, for the folder picker. Null in a build whose preload
+   * carries no server channels, and in the render tests — the picker then
+   * offers no list and the path is typed, which is a smaller control rather
+   * than a broken one.
+   */
+  serversBridge?: ServersBridge | null
   onClose(): void
   /**
    * Hand off the decided launch. The dialog does not spawn anything itself:
@@ -743,6 +800,24 @@ interface Props {
    * argument.
    */
   onStart(request: SpawnRequest, machineId: string | null): void | Promise<void>
+  /**
+   * Start a terminal on a server instead, in `path` — or wherever the sign-in
+   * lands when that is null.
+   *
+   * A separate callback rather than a third argument on `onStart`, because a
+   * `SpawnRequest` is what `session-start.ts` resolves out of *this* machine's
+   * agents, logins and defaults, and none of those exist over there. There is
+   * no provider to name, no profile, no `resume`; what a server gets is a login
+   * shell. Handing one of these along a request shaped for a local spawn would
+   * be inviting the resolver to reason about a machine it has never probed —
+   * the same argument the note on `machineId` above makes, one machine kind
+   * further out.
+   *
+   * The window routes it to the identical `openServerShell` the server's own
+   * page calls, so there is one code path that mints a terminal on a server and
+   * both doors reach it.
+   */
+  onStartOnServer?(serverId: string, serverName: string, path: string | null): void | Promise<void>
 }
 
 export function NewSessionDialog({
@@ -750,8 +825,11 @@ export function NewSessionDialog({
   projectPath,
   machines = [],
   machineId = null,
+  servers = [],
+  serversBridge = null,
   onClose,
   onStart,
+  onStartOnServer,
 }: Props) {
   const [selectedPath, setSelectedPath] = useState<string | null>(projectPath ?? null)
   /**
@@ -759,6 +837,18 @@ export function NewSessionDialog({
    * overwhelmingly common answer.
    */
   const [selectedMachine, setSelectedMachine] = useState<string | null>(machineId)
+  /**
+   * Which server the session runs on, or null for anywhere else.
+   *
+   * A second field rather than one tagged union with {@link selectedMachine},
+   * because the two are read by different halves of this file and a union would
+   * put a `kind` check in front of every one of them. The invariant that at
+   * most one is set is held by the three radio handlers, which are the only
+   * writers.
+   */
+  const [selectedServer, setSelectedServer] = useState<string | null>(null)
+  /** Where on that server, or null for wherever its sign-in lands. */
+  const [serverPath, setServerPath] = useState<string | null>(null)
   const [chosenProvider, setChosenProvider] = useState<ProviderId | null>(null)
   const [chosenProfileId, setChosenProfileId] = useState<string | null>(null)
   const [remember, setRemember] = useState(true)
@@ -810,6 +900,17 @@ export function NewSessionDialog({
   const [agentDraft, setAgentDraft] = useState<CustomAgentDraft>(EMPTY_DRAFT)
   const [agentProblems, setAgentProblems] = useState<CustomAgentProblems>({})
   const [agentBusy, setAgentBusy] = useState(false)
+
+  /**
+   * The servers this dialog may actually offer.
+   *
+   * Empty when the caller gave no `onStartOnServer`, because a row that is
+   * selectable and cannot be started is precisely the dead control this product
+   * is removing everywhere — the press would land on a Start that quietly did
+   * nothing. A caller that hands over servers without a way to open one on them
+   * gets the dialog exactly as it was.
+   */
+  const offered = onStartOnServer ? servers : EMPTY_SERVERS
 
   const profiles = snapshot.profiles
   /**
@@ -894,6 +995,11 @@ export function NewSessionDialog({
     // Whatever the press said, every time. A machine chosen on the last visit
     // and left here would make the ordinary ⌘T open on somebody else's computer.
     setSelectedMachine(machineId ?? null)
+    // And never a server. ⌘T means *here* unless this opening says otherwise,
+    // and a server left selected from the last visit would start somebody's
+    // next ordinary session on a box in another country.
+    setSelectedServer(null)
+    setServerPath(null)
     setChosenProvider(null)
     setChosenProfileId(null)
     setRemember(true)
@@ -1206,7 +1312,32 @@ export function NewSessionDialog({
   const submit = useCallback(
     async (event: FormEvent) => {
       event.preventDefault()
-      if (!resolution.ok || starting) return
+      if (starting) return
+
+      /*
+       * A terminal on a server, and none of the bookkeeping below it.
+       *
+       * Every line under this branch is about a local spawn: `rememberStart`
+       * keys what it remembers by folder path and is read back the next time a
+       * *local* session opens in that folder, and `resolution.request` is a
+       * provider, a profile and a `cwd` on this computer. A server has none of
+       * those, which is why the sections that ask for them are not on screen
+       * when one is chosen.
+       */
+      if (selectedServer !== null) {
+        const row = servers.find((one) => one.id === selectedServer)
+        if (row === undefined || !onStartOnServer) return
+        setStarting(true)
+        try {
+          await onStartOnServer(row.id, row.name, serverPath)
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : 'Could not open a terminal there.')
+          setStarting(false)
+        }
+        return
+      }
+
+      if (!resolution.ok) return
       setStarting(true)
 
       if (remember) {
@@ -1222,7 +1353,18 @@ export function NewSessionDialog({
         setStarting(false)
       }
     },
-    [memory, onStart, remember, resolution, selectedMachine, starting],
+    [
+      memory,
+      onStart,
+      onStartOnServer,
+      remember,
+      resolution,
+      selectedMachine,
+      selectedServer,
+      serverPath,
+      servers,
+      starting,
+    ],
   )
 
   /*
@@ -1247,6 +1389,30 @@ export function NewSessionDialog({
   const machine = selectedMachine === null
     ? null
     : machines.find((row) => row.id === selectedMachine) ?? null
+
+  /*
+   * The server the session will run on, resolved to its row, or null.
+   *
+   * Resolved rather than trusted, for the same reason the machine above is: the
+   * window re-reads the servers list when this dialog opens, and one forgotten
+   * on another screen while this was up would otherwise leave a selection
+   * pointing at a row that is not on the list. Falling back to null makes the
+   * dialog a local one again, with *this* machine drawn as selected, rather
+   * than leaving a Start that names a server nobody has.
+   */
+  const server = selectedServer === null
+    ? null
+    : offered.find((row) => row.id === selectedServer) ?? null
+
+  /**
+   * True when the session will run on this computer, which is what every
+   * section below except Where is written about.
+   *
+   * One name for the condition rather than `machine === null` repeated with a
+   * second clause bolted on at each site — that shape is how the Login row ends
+   * up hidden for a paired device and left standing for a server.
+   */
+  const here = machine === null && server === null
 
   /*
    * The folder list, from whichever machine the session will run on.
@@ -1344,9 +1510,14 @@ export function NewSessionDialog({
               type="submit"
               form={formId}
               className="modal-btn primary"
-              disabled={!resolution.ok || starting}
+              // `resolution` answers a question about *this* machine — which
+              // agent, which login, which folder of its own — and a terminal on
+              // a server asks none of it. Leaving that gate in would disable
+              // Start for a server whenever this Mac had no agent detected,
+              // which is a refusal about the wrong computer.
+              disabled={starting || (server === null && !resolution.ok)}
             >
-              {starting ? 'Starting…' : 'Start session'}
+              {starting ? 'Starting…' : server === null ? 'Start session' : 'Open a terminal'}
             </button>
           </>
         )
@@ -1393,9 +1564,13 @@ export function NewSessionDialog({
           primary button and, to see why, a scroll nobody has a reason to make.
           A form says what is wrong where a form says things, which is the top.
         */}
-        {!resolution.ok && <p className="ns-problem">{resolution.problem.message}</p>}
+        {/* Both of these are the local resolver talking — "no agent was found",
+            "the remembered one is gone" — so they are withheld for a server,
+            where nothing on this Mac is being resolved and the sentence would
+            be about a computer the session is not going to run on. */}
+        {server === null && !resolution.ok && <p className="ns-problem">{resolution.problem.message}</p>}
 
-        {resolution.notices.length > 0 && (
+        {server === null && resolution.notices.length > 0 && (
           <ul className="ns-notices">
             {resolution.notices.map((notice) => (
               <li key={notice.code} className="ns-notice">
@@ -1420,7 +1595,7 @@ export function NewSessionDialog({
           make it too complicated for them as non-technical" rule applied to the
           only step here that most people will never need.
         */}
-        {machines.length > 0 && (
+        {(machines.length > 0 || offered.length > 0) && (
           <section className="ns-section">
             <h3 className="ns-section-title" id={`${ids}-where`}>
               Where
@@ -1428,13 +1603,14 @@ export function NewSessionDialog({
             {/* The same card, mark and `data-selected` the Agent rows use, so
                 the two questions on this panel are asked in one shape. */}
             <div className="ns-where" role="radiogroup" aria-labelledby={`${ids}-where`}>
-              <label className="ns-choice ns-where-row" data-selected={machine === null}>
+              <label className="ns-choice ns-where-row" data-selected={here}>
                 <input
                   type="radio"
                   name={`${formId}-where`}
-                  checked={machine === null}
+                  checked={here}
                   onChange={() => {
                     setSelectedMachine(null)
+                    setSelectedServer(null)
                     // The folder goes with it. A path from the far machine would
                     // be checked against this one's list and refused, and the
                     // refusal would arrive after Start with nothing on screen
@@ -1457,6 +1633,7 @@ export function NewSessionDialog({
                     checked={machine?.id === row.id}
                     onChange={() => {
                       setSelectedMachine(row.id)
+                      setSelectedServer(null)
                       // Its first offered folder, so the ordinary case is one
                       // press. Null when it is offering none, which is a real
                       // state — a guest with nothing chosen for it — and the
@@ -1482,12 +1659,106 @@ export function NewSessionDialog({
                   <span className="ns-where-name">{row.name}</span>
                 </label>
               ))}
+              {/*
+                The servers, under the same radios and in the same shape.
+
+                His words, of the button at the top of the rail: *"its giving
+                new session option inside the server page not with the main
+                button."* There were two doors to *start a session* and only the
+                one on a server's own page knew servers existed — so the app
+                disagreed with itself about what a new session could be. A
+                server is a machine you can run something on, so it belongs in
+                the list of machines you can run something on.
+
+                No glyph beside the name. The device rows carry the laptop icon
+                that names them as *your own computer*, which is the one thing a
+                server is not; drawing the same picture on both would say they
+                are the same kind of thing.
+              */}
+              {offered.map((row) => (
+                <label
+                  className="ns-choice ns-where-row"
+                  key={row.id}
+                  data-selected={server?.id === row.id}
+                >
+                  <input
+                    type="radio"
+                    name={`${formId}-where`}
+                    checked={server?.id === row.id}
+                    onChange={() => {
+                      setSelectedServer(row.id)
+                      setSelectedMachine(null)
+                      // Nothing chosen yet. The picker below asks the server
+                      // where its own sign-in lands and reports that back, so
+                      // this is null for only as long as the round trip takes —
+                      // and a folder guessed here would be a path this side
+                      // invented for a disk it has never seen.
+                      setServerPath(null)
+                    }}
+                  />
+                  <span className="ns-mark" aria-hidden="true" />
+                  <span className="ns-where-name">{row.name}</span>
+                </label>
+              ))}
             </div>
+            {/*
+              Said once, here, rather than left to be inferred from three
+              sections quietly going away.
+
+              Agent, Login and Remember are all about programs and config
+              directories on *this* Mac — nothing in this app has asked the
+              server what it has installed, and a session there is a login
+              shell. An empty Agent list or a Login pop-up that could not act
+              would each be the "control that cannot act" this product is
+              removing everywhere; a sentence saying why they are absent is the
+              honest version.
+            */}
+            {server !== null && (
+              <p className="ns-empty">
+                A terminal on {server.name}. An agent and a login are programs on this Mac, so
+                neither is asked for here.
+              </p>
+            )}
           </section>
         )}
 
         {/* ------------------------------------------------------- project -- */}
 
+        {server !== null ? (
+          /*
+             Where on the server, which is the other half of what he asked for:
+             *"it should give me a window to choose the path from server to
+             start a session."* A local session has had *"choose a project
+             folder to run the session in"* since this dialog was written, and a
+             session on a server took whatever directory SSH dropped it in with
+             nothing on screen even naming it.
+
+             The picker is its own component in `machines/servers/` rather than
+             a block here, because the server's own page draws the identical
+             control beside its *Open a terminal* — one question, asked the same
+             way from both doors, which is the whole point of this pass.
+
+             It draws one line and a **Browse…**, matching the local half of
+             this same dialog a few lines down, and Browse opens a window over
+             this one. That is not decoration: the first version put the folder
+             list inline behind a *Choose a folder* toggle and he could not find
+             it — *"there should be a window open where we can drive the
+             folders."* Two folder questions in one dialog have to look like the
+             same kind of control, or the unfamiliar one reads as something else.
+          */
+          <section className="ns-section">
+            <div className="ns-section-head">
+              <h3 className="ns-section-title">Folder on {server.name}</h3>
+            </div>
+            <ServerFolderPicker
+              serverId={server.id}
+              serverName={server.name}
+              bridge={serversBridge}
+              path={serverPath}
+              onChoose={setServerPath}
+            />
+          </section>
+        ) : (
         <section className="ns-section">
           <div className="ns-section-head">
             <h3 className="ns-section-title" id={`${ids}-project`}>
@@ -1560,9 +1831,25 @@ export function NewSessionDialog({
             </p>
           )}
         </section>
+        )}
 
         {/* -------------------------------------------------------- agent -- */}
 
+        {/*
+          Absent on a server, and it is the one section whose absence needed
+          thinking about rather than following the Login row's precedent.
+
+          Every card in it is a command this app found on *this* computer's
+          login PATH — `buildProviderRows` reads a detection of this machine, and
+          the ＋ adds a command resolved on this machine. Nothing has asked the
+          server what it has. Leaving the cards up would offer a choice between
+          four agents that may none of them be installed over there, and Start
+          would then hand `openServerShell` a provider it has no field for and
+          silently open a plain shell — the app claiming a session runs Claude
+          Code when it runs `sh`. A shell is what a server session honestly is,
+          so that is what it opens, and the sentence in Where says so.
+        */}
+        {server === null && (
         <section className="ns-section">
           <h3 className="ns-section-title" id={`${ids}-agent`}>
             Agent
@@ -1576,16 +1863,21 @@ export function NewSessionDialog({
             onSelect={setChosenProvider}
             // Absent on another machine — see `AgentChoicesProps.onAdd`. An
             // agent added here is a command on this computer.
-            {...(machine === null ? { onAdd: () => setAddingAgent(true) } : {})}
+            {...(here ? { onAdd: () => setAddingAgent(true) } : {})}
             onRemove={(id) => void removeAgent(id)}
           />
         </section>
+        )}
 
         {/* ------------------------------------------------------ profile -- */}
 
         {/*
           Absent on another machine, in his words: *"hide the account dropdown
-          once a remote machine is chosen — it is not relevant there."*
+          once a remote machine is chosen — it is not relevant there."* And
+          absent on a server for a harder version of the same reason: there is
+          no profile field anywhere on the path a server session takes, because
+          a server session is a login shell under the account this app signed in
+          with — the one named in the sign-in, which is not on this list at all.
 
           And it genuinely is not, mechanically rather than as a matter of taste.
           Every profile in this list is a config directory on *this* computer,
@@ -1596,7 +1888,7 @@ export function NewSessionDialog({
           somewhere else would be a claim about which account is signed in that
           this window has no way to make true.
         */}
-        {machine === null && (
+        {here && (
         <section className="ns-section">
           <div className="ns-row">
             <div className="ns-row-text">
@@ -1734,16 +2026,19 @@ export function NewSessionDialog({
         */}
 
         {/*
-          Absent on another machine, for the same reason the Login row is.
+          Absent on another machine and on a server, for the same reason the
+          Login row is.
 
           `writeStartMemory` keys what it remembers by folder path, and it is
           read the next time this dialog opens a *local* session — so a remote
           folder recorded here would pre-fill the agent and login for a path
           that does not exist on this computer, and the pre-fill would be
           invisible until somebody wondered why a new local session had picked an
-          agent nobody chose.
+          agent nobody chose. A server makes that collision likelier rather than
+          rarer: `/srv/app` and `/home/asad` are paths this Mac may well also
+          have.
         */}
-        {machine === null && (
+        {here && (
         <label className="ns-remember">
           <input
             type="checkbox"

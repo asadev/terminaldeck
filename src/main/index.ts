@@ -8,6 +8,7 @@ import {
   nativeTheme,
   powerMonitor,
   session,
+  shell,
 } from 'electron'
 import { BRAND } from '../shared/brand'
 import type { CreateSessionInput, SessionMeta } from '../shared/types'
@@ -16,6 +17,20 @@ import { detectProviders } from './providers'
 import { lookupCommand, registerCustomAgentsIpc } from './custom-agents'
 import { currentPlatform } from './platform/host'
 import { electronPaths, installPaths } from './platform/paths'
+/*
+ * Quitting no longer means "kill everything", and this module is where that
+ * decision and its honesty live. See its header for the rule the feature
+ * follows: a session belongs to the machine it runs on, not to the app window.
+ */
+import {
+  ProcessKeepAlive,
+  QUIT_BUTTONS,
+  ResidentPresence,
+  needsTrayToBeVisible,
+  plannedQuit,
+  quitAnswer,
+  quitQuestion,
+} from './resident'
 /*
  * The held list travels on a channel named in the module that owns it — see
  * `SESSIONS_HELD_CHANNEL` there for why it is exported rather than declared
@@ -26,6 +41,7 @@ import { savedFrom, SESSIONS_HELD_CHANNEL } from './session-held'
 import {
   conversationOnDisk,
   conversationScope,
+  conversationStore,
   folderExists,
   personalSessions,
   planRestore,
@@ -79,6 +95,7 @@ import {
   registerPlanLimitIpc,
 } from './plan-limit'
 import { dropUsageSession, registerUsageIpc } from './usage-ipc'
+import { dropSessionAccount, registerSessionAccountIpc } from './session-account'
 import { storedAccountLimits } from './account-limits'
 import { registerGitHubIpc } from './github'
 import { registerReadinessIpc } from './readiness'
@@ -107,6 +124,31 @@ import {
   switchRefusal,
   type SwitchPlan,
 } from './session-switch'
+/*
+ * The same switch, deferred to the next message he sends. Kept in its own
+ * module because the part that is hard is not the switch — that is the one
+ * above — it is carrying the half-typed line across the restart.
+ */
+import {
+  armedNote,
+  PendingSwitches,
+  replayWrites,
+  REPLAY_SETTLE_MS,
+  REPLAY_SUBMIT_GAP_MS,
+  SESSION_SWITCH_ARMED_CHANNEL,
+  SESSION_SWITCH_CANCEL_CHANNEL,
+  SESSION_SWITCH_FAILED_CHANNEL,
+  SESSION_SWITCH_LATER_CHANNEL,
+  SESSION_SWITCHED_CHANNEL,
+  switchedNote,
+  type ArmedSwitch,
+} from './switch-later'
+import {
+  adoptSharedHistory,
+  canJoinSharedHistory,
+  joinSharedHistory,
+  registerSharedProjectsIpc,
+} from './shared-projects'
 import { registerSignInIpc } from './profiles-signin'
 import { copilotState, registerCopilotIpc } from './copilot-session'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
@@ -115,10 +157,20 @@ import { registerCopilotInspectIpc } from './copilot-inspect'
 import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
 import { registerDeckignoreIpc } from './deckignore'
 import { defaultContext, registerHooksIpc, syncInstalledHooks } from './hooks'
-import { registerHookServer, stopHookServer } from './hook-server'
+import { hookConfigPath, registerHookServer, stopHookServer } from './hook-server'
 import { registerMcpIpc } from './mcp-client'
 import { registerBrowserIpc } from './browser-tab'
 import { openAppLink, registerLinkIpc } from './link-open'
+import { registerBrowserBindingIpc, openForSession, forgetKnownWindows } from './browser-binding-ipc'
+import { registerSessionRowMenuIpc } from './session-row-menu'
+import {
+  hookContext,
+  hostReset,
+  sessionExited,
+  sessionRemoved,
+  takeAnnouncement,
+} from './browser-binding'
+import { currentOpenShim, removeOpenShim, writeOpenShim } from './open-shim'
 import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
 import { browserTools } from './deck-control/browser-tools'
 import { registerChromeImportIpc } from './chrome-import'
@@ -289,6 +341,34 @@ function send(channel: string, ...args: unknown[]): boolean {
 }
 
 /**
+ * The two Electron things the session ↔ browser binding needs, and no more.
+ *
+ * Handed in rather than imported over there so that `browser-binding-ipc.ts`
+ * has one window to push to and one window to pop a menu over, chosen here
+ * where the window actually lives. `send` already refuses while quitting and
+ * while the renderer is between documents, which is exactly the state in which
+ * a push about browser windows would be a push about windows that no longer
+ * exist.
+ */
+const bindingDeps = {
+  send: (channel: string, payload: unknown): void => {
+    send(channel, payload)
+  },
+  window: (): BrowserWindow | null => mainWindow,
+  /*
+   * A session this app started, exited ones included.
+   *
+   * `ptys.list()` rather than a live-only check: a session whose process has
+   * ended keeps its tab, its scrollback and its browser windows, and a URL can
+   * still arrive from something it left running. What this excludes is the case
+   * that matters — an id from a shell this app never started, whose hook fires
+   * anyway because the hook is installed for the whole machine.
+   */
+  knowsSession: (sessionId: string): boolean =>
+    ptys.list().some((meta) => meta.id === sessionId),
+}
+
+/**
  * Latest status per live session. PtyManager only pushes status through its
  * callback, so anything that needs to *ask* (the alerts scanner) has nowhere
  * to read it from without this.
@@ -427,6 +507,10 @@ const core = createHostCore({
     // aggregator holds a Codex watcher and a plan subscription of its own, and
     // a dead session must stop costing an fs watch.
     dropUsageSession(id)
+    // And the account established for it, which was read out of a process that
+    // has just stopped existing. A remembered answer here would outlive its
+    // evidence, which is precisely what this app was doing wrong.
+    dropSessionAccount(id)
     // A dev server *is* a session, so its death is this event and nothing else.
     // Without this the row keeps a `url` for a server that is gone — the one
     // genuinely wrong thing this feature can put on screen.
@@ -435,6 +519,15 @@ const core = createHostCore({
     // exit and `session-failed` is anything else. Told here rather than from a
     // watcher of its own — the engine subscribes, it does not poll.
     routines.engine.noteSessionExit(id, exitCode)
+    // Any browser window attached to this session is *kept*, and marked. The
+    // page it left open is part of what it printed, and a window that can say
+    // "this session has exited, and this is what it was looking at" is worth
+    // more than one that goes quietly blank.
+    sessionExited(id)
+    // The menu-bar list is only correct if it is told, and this is one of the
+    // three moments the set of running sessions changes. It is a no-op unless
+    // the app is in the background, which is the only time anybody can see it.
+    presence.refresh()
     send('session:exit', id, exitCode)
   },
   onStatus: (id, status) => {
@@ -465,6 +558,10 @@ const core = createHostCore({
    */
   onSessionRemoved: (id, reason) => {
     if (reason === 'replaced') return
+    // The other half of the pair above: this is the app letting go of the
+    // session entirely, so its rows go and its binding colour is free again.
+    sessionRemoved(id)
+    presence.refresh()
     send(SESSION_REMOVED_CHANNEL, id)
   },
   /*
@@ -476,6 +573,7 @@ const core = createHostCore({
    */
   onSessionStarted: (meta) => {
     routines.engine.noteSessionStarted(meta)
+    presence.refresh()
   },
   // The window has to be told, or a session a phone started is running on this
   // Mac and only the phone knows about it.
@@ -632,7 +730,52 @@ function syncTitleBarOverlay(): void {
   mainWindow.setTitleBarOverlay(overlay)
 }
 
+/**
+ * Tell Chromium which appearance the *app* has chosen, not just which one the OS
+ * is in.
+ *
+ * From the recorded review of 2026-08-20, of the attach menu that drops out of a
+ * session row:
+ *
+ *   > *"this window should be exactly same color as the application, white. It
+ *   > is white. It should be also white from the background. If it is dark, it
+ *   > should be dark."*
+ *
+ * That menu is a **native** one — `Menu.popup()` in `session-row-menu.ts` and
+ * `browser-binding-ipc.ts`, and deliberately so: a browser page here is a
+ * `WebContentsView` composited above the entire renderer, so an HTML menu would
+ * open *behind* the page in exactly the situation the menu exists for. A native
+ * menu is drawn by the OS and takes the OS appearance, so with the app on Light
+ * and macOS on Dark it arrives dark over a white window. Nothing was wrong with
+ * the menu; nothing had ever told the OS what the app had decided.
+ *
+ * `themeSource` is that missing line. It is Electron's one switch for "this
+ * process is in dark/light mode", and it moves every native surface with it —
+ * menus, message boxes, native scrollbars and `prefers-color-scheme` inside the
+ * pages we host. The preference's three values are exactly the three the API
+ * takes, so `'system'` hands the decision straight back to the OS, which is what
+ * it means.
+ *
+ * Set here rather than in the renderer because there is no renderer API for it
+ * and no second opinion to reconcile: this reads the same stored preference the
+ * renderer resolves `data-theme` from, so the app's own chrome and the OS's
+ * cannot disagree.
+ */
+function syncNativeAppearance(): void {
+  nativeTheme.themeSource = store().getPreferences().theme
+}
+
 function createWindow(): void {
+  /*
+   * A window is back, so the background presence is not the app any more.
+   *
+   * The tray exists to answer "what is running, and how do I stop it" for
+   * somebody who has no window. Beside a visible window it answers nothing and
+   * is a second icon for one app, so it goes — and the keep-alive handle goes
+   * with it, because from here on the window is what holds the process open and
+   * `window-all-closed` is free to mean what it has always meant.
+   */
+  leaveBackground()
   const saved = store().getState().windowBounds
   mainWindow = new BrowserWindow({
     width: saved?.width ?? 1440,
@@ -697,6 +840,11 @@ function createWindow(): void {
     watchingAppearance = true
     nativeTheme.on('updated', syncTitleBarOverlay)
   }
+
+  // The stored preference, applied to Chromium's own appearance at launch.
+  // Without this the first window of a session gets native menus in whatever
+  // appearance the OS is in, until the theme is touched in Settings.
+  syncNativeAppearance()
 
   // Liveness, from the events rather than by asking. `render-process-gone` is
   // the one that matters when the renderer dies under the app; `close` is the
@@ -771,6 +919,30 @@ function createWindow(): void {
     if (mainWindow) openAppLink(mainWindow.webContents, url)
     return { action: 'deny' }
   })
+
+  /*
+   * Every browser window in this window is gone, and the binding map has to
+   * hear about it.
+   *
+   * ⌘R, a dev rebuild and a recovered crash all replace the document without
+   * destroying the WebContents, so nothing else notices — which is precisely the
+   * shape of bug `browser-tab.ts` documents at `watchHost`, and it destroys the
+   * views on the same signal. The tab list is plain React state, so after a
+   * reload there genuinely are no browser windows; keeping the bindings would
+   * leave the next hook answer telling an agent to look at `B2`, which is a
+   * window that no longer exists.
+   *
+   * Dropping them is the honest answer, and it is the one place where a naive
+   * "persist it across reloads" would be actively wrong.
+   */
+  mainWindow.webContents.on(
+    'did-start-navigation',
+    (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+      if (!details.isMainFrame || details.isSameDocument) return
+      forgetKnownWindows()
+      hostReset()
+    },
+  )
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -1147,6 +1319,10 @@ function registerIpc(): void {
      * already wearing costs nothing.
      */
     syncTitleBarOverlay()
+    // And the OS's own surfaces, which are the other half of the same switch —
+    // see `syncNativeAppearance`. A native menu had no way to know the app had
+    // gone light.
+    syncNativeAppearance()
     return preferences
   })
 
@@ -1225,11 +1401,36 @@ function registerIpc(): void {
   // modules keeping two copies of it is how one of them starts spending four
   // seconds of CPU every half hour re-establishing what the other wrote down.
   registerUsageIpc(ipcMain, { describeSession, accounts: storedAccountLimits() })
+  /*
+   * Which login each session is *actually* on, established rather than assumed.
+   *
+   * Registered beside the usage window because they are two halves of one claim:
+   * the account chip names the login and the bar draws that login's plan
+   * figures, and the two must never be able to disagree about whose they are.
+   * `pidOf` is the whole of what this needs from the session layer — a root to
+   * walk down from — and `describeSession` is the same accessor the usage
+   * registry is handed, so neither module holds a second, drifting copy of what
+   * a session is.
+   */
+  registerSessionAccountIpc(ipcMain, { pidOf: (id) => ptys.pidOf(id), describeSession })
   // Checks on a delay after launch and then occasionally; never installs on its
   // own. An unsigned build reports that it cannot self-update rather than
   // checking forever — see updates/updater.ts.
   updates = registerUpdateIpc(ipcMain, {
     updater: autoUpdater,
+    /*
+     * An update is the one quit that cannot be talked out of leaving.
+     *
+     * The installer has been handed this bundle by the time the app is asked to
+     * go, so `before-quit` must not cancel it and keep the app running with no
+     * window — the swap would be happening underneath a live process. Sessions
+     * do die here, and that is honest: the binary running them is being
+     * replaced. `restoreSessions` puts them back on the other side.
+     */
+    beforeInstall: () => {
+      stopping = true
+      leaveBackground()
+    },
     // Squirrel refuses an unsigned bundle, which is this build. The manual
     // path does the same job without it: read the public feed, verify the
     // archive's sha512, swap the bundle. Supplied on macOS only.
@@ -1598,12 +1799,24 @@ function registerIpc(): void {
     facts: (serverId) => serverConnections.probe(serverId),
     run: (serverId, argv) => serverConnections.run(serverId, argv),
     runScript: (serverId, script) => serverConnections.runScript(serverId, script),
-    openShell: (serverId, size) => serverConnections.shell(serverId, size),
+    openShell: (serverId, size, startIn) => serverConnections.shell(serverId, size, startIn),
+    // The folder picker's one question. It rides whatever connection is already
+    // open and dials only if none is, which is the same bargain every other
+    // verb here makes — there is still no timer and nothing connected to a
+    // server nobody is looking at.
+    listFolder: (serverId, path) => serverConnections.listDirectory(serverId, path),
     // §5.4 in one pair of lines: the page holds the connection while it is open
     // and lets go when it closes. There is no timer here and no keep-alive, and
     // a server nobody is looking at is not dialled at all.
     acquire: (serverId) => serverConnections.acquire(serverId),
     release: (serverId) => serverConnections.release(serverId),
+    // The two the agent setup needs: one channel on the live connection to
+    // carry a sign-in's redirect back to the server's own listener, and the
+    // person's own browser to approve it in. Deliberately their browser rather
+    // than this app's — the navigation that finishes a sign-in carries a
+    // one-time code, and the bound browser records every navigation.
+    withConnection: (serverId, fn) => serverConnections.withConnection(serverId, fn),
+    openInBrowser: (url) => shell.openExternal(url),
     broadcast: (channel, payload) => send(channel, payload),
     /*
      * The panel for a key that is not in `~/.ssh` — a `.pem` a hosting company
@@ -1680,6 +1893,32 @@ function registerIpc(): void {
   // The one profile question that cannot be answered by reading a directory:
   // whether an account is signed in. See `profiles-signin.ts`.
   registerSignInIpc(ipcMain)
+  // One conversation history across several accounts — Option C. Three
+  // channels rather than a toggle, because the state is read back off the disk
+  // and never inferred from the fact that a button was pressed.
+  registerSharedProjectsIpc(ipcMain)
+  /*
+   * And the accounts that predate it are brought onto it here, once, on the way
+   * up.
+   *
+   * Option C was built, measured and then left switched off behind a control in
+   * Settings, which meant every account anybody already had kept its own
+   * conversation store and every switch lost the conversation — the exact
+   * complaint the feature was built to answer, reported again with the fix
+   * sitting unused in the same build. `adoptSharedHistory` is idempotent and
+   * never throws, so this costs one `lstat` per account on every subsequent
+   * launch and cannot stop the app coming up.
+   */
+  {
+    const adopted = adoptSharedHistory(profilesState().profiles)
+    if (adopted.joined.length > 0 || adopted.failed.length > 0) {
+      logger.info('accounts', 'shared conversation history', {
+        joined: adopted.joined,
+        left: adopted.left,
+        failed: adopted.failed,
+      })
+    }
+  }
   /*
    * The copilot: one session, in a folder of its own, run as the person.
    *
@@ -1864,6 +2103,27 @@ function registerIpc(): void {
   // channels are the explicit way *out* — `link:system` and the context menu —
   // which only exists because in-app became the default.
   registerLinkIpc(ipcMain)
+  /*
+   * Which browser window belongs to which session.
+   *
+   * Beside the link channels because it is the same subject seen one level up:
+   * `registerLinkIpc` decides whether a URL opens inside the app at all, and
+   * this decides *which* of the app's windows it lands in when it came from a
+   * session. Both are needed for the two halves of what Asad reported on
+   * 2026-08-19 — a clicked link leaving for the system browser, and an agent's
+   * page opening somewhere he was not looking.
+   */
+  registerBrowserBindingIpc(ipcMain, bindingDeps)
+  /*
+   * The sidebar row's ⋯ menu, on the same dependencies.
+   *
+   * Here rather than inside `registerBrowserBindingIpc` because it is not a
+   * binding channel — it happens to *contain* one. Hanging it off the same
+   * `bindingDeps` is what makes its Connect browser submenu the same list the
+   * pane bar's button pops, over the same window, rather than a second one built
+   * from a second set of handles.
+   */
+  registerSessionRowMenuIpc(ipcMain, bindingDeps)
   /*
    * The copilot's hands on the browser.
    *
@@ -2118,9 +2378,68 @@ function registerIpc(): void {
        * can ask only them.
        */
       return {
-        plan: planSwitch({ sessionId: id, meta, saved, target, decision: null, occupied: false }),
+        plan: planSwitch({
+          sessionId: id,
+          meta,
+          saved,
+          target,
+          decision: null,
+          occupied: false,
+          // Nothing was decided, so nothing is being said about a conversation.
+          sharedStore: false,
+        }),
         saved,
         resume: false,
+      }
+    }
+
+    /*
+     * The two accounts are put on one conversation history before anything is
+     * asked about it, and that ordering is the whole of the D1 fix.
+     *
+     *   > *"It's not keeping the conversation history… It should at least keep
+     *   > the conversation there, history there, memory there when I switch
+     *   > between the accounts."*
+     *
+     * `adoptSharedHistory` runs at boot and covers every account that exists
+     * then; this covers the one added since, and it costs an `lstat` per side
+     * when there is nothing to do. It is deliberately *before* `planSaved`,
+     * because `planSaved` reads the target account's conversation store to
+     * decide whether there is anything to continue — and the answer to that
+     * question is different on either side of the link. Asking first and
+     * linking afterwards is how the sheet would say "starts a new one" about a
+     * switch that then continued the conversation on screen, which is the same
+     * failure as the original one with the sign reversed.
+     *
+     * A write on the path a *plan* takes, and that is intended: the plan is the
+     * only route to the switch, both sides are refused unless the link is
+     * additive, and the alternative is describing a state the app is about to
+     * leave. An account the app must not restructure — another agent's, or a
+     * directory somebody pointed at themselves — is left alone and the sheet
+     * goes on saying what really happens to it.
+     */
+    const source = resolveProfile(profilesState(), {
+      sessionProfileId: saved.profileId ?? undefined,
+      projectPath: saved.cwd,
+    })
+    if (canJoinSharedHistory(source) && canJoinSharedHistory(target)) {
+      try {
+        joinSharedHistory(source)
+        joinSharedHistory(target)
+      } catch (cause) {
+        /*
+         * A link that could not be made is not a switch that cannot happen.
+         * Everything below reads the disk for itself, so failing here leaves
+         * the plan describing two separate stores — which is the truth, and is
+         * the case the sheet still carries a warning for. Throwing instead
+         * would turn "your conversation stays behind" into "the account could
+         * not be switched", which is a worse answer to a working switch.
+         */
+        logger.warn('accounts', 'could not join the shared conversation history', {
+          from: source.id,
+          to: target.id,
+          reason: cause instanceof Error ? cause.message : String(cause),
+        })
       }
     }
 
@@ -2160,7 +2479,31 @@ function registerIpc(): void {
             ) === mine,
         )
 
-    const plan = planSwitch({ sessionId: id, meta, saved, target, decision: decision ?? null, occupied })
+    /*
+     * Do the two accounts read one conversation history?
+     *
+     * `conversationStore` is the same realpath-and-memo the occupancy check
+     * above rests on, asked of both sides rather than of one: an account whose
+     * `projects/` has been linked into the shared location by
+     * `shared-projects.ts` resolves to the same store as the account it was
+     * linked to, and two that have not resolve to two. It decides nothing about
+     * what the switch *does* — the continue flag is handed over either way — and
+     * everything about what the sheet is allowed to claim, because with one
+     * store the conversation the replacement picks up is the conversation on
+     * screen, and with two it is a different one that lives in the same folder.
+     */
+    const sharedStore =
+      configDir !== null && conversationStore(configDir) === conversationStore(source.configDir)
+
+    const plan = planSwitch({
+      sessionId: id,
+      meta,
+      saved,
+      target,
+      decision: decision ?? null,
+      occupied,
+      sharedStore,
+    })
     return { plan, saved, resume: plan.resume }
   }
 
@@ -2207,7 +2550,7 @@ function registerIpc(): void {
    * `AgentUnavailableError`'s own message is what the window prints, unchanged,
    * because it is already written for the person who is reading it.
    */
-  ipcMain.handle(SESSION_SWITCH_CHANNEL, async (_e, sessionId: unknown, profileId: unknown) => {
+  const performSwitch = async (sessionId: unknown, profileId: unknown): Promise<SessionMeta> => {
     const { plan, saved } = await switchSubject(sessionId, profileId)
     if (plan.refusal !== null || saved === null || plan.to === null) {
       throw new Error(plan.refusal ?? 'This session cannot be switched.')
@@ -2274,7 +2617,117 @@ function registerIpc(): void {
       continued: plan.resume,
     })
     return meta
+  }
+
+  ipcMain.handle(SESSION_SWITCH_CHANNEL, (_e, sessionId: unknown, profileId: unknown) =>
+    performSwitch(sessionId, profileId),
+  )
+
+  /* ------------------------------- the same switch, at his next message -- */
+
+  /**
+   * Switches waiting for the session they are on to be spoken to again.
+   *
+   * The default Asad described, and the one difference from the channel above
+   * is *when*: the running agent is left alone to finish, and the restart
+   * happens in the gap before his next message is delivered. `switch-later.ts`
+   * carries the whole argument, including why the typed line has to be carried
+   * across and what happens when this app cannot be sure it read it correctly.
+   */
+  const pending = new PendingSwitches()
+
+  /**
+   * Arm one. The plan is computed now, and shown now, for the reason the
+   * immediate switch computes one: a person agrees to something they have read,
+   * and nothing here may be the first they hear of a consequence.
+   *
+   * It is re-planned at the moment it fires, and this stored copy is never
+   * acted on — the account could be removed, or another tab could take the
+   * conversation, in between arming and sending. `performSwitch` asks again.
+   */
+  ipcMain.handle(SESSION_SWITCH_LATER_CHANNEL, async (_e, sessionId: unknown, profileId: unknown) => {
+    const { plan } = await switchSubject(sessionId, profileId)
+    if (plan.refusal !== null || plan.to === null) {
+      throw new Error(plan.refusal ?? 'This session cannot be switched.')
+    }
+    const armed = pending.arm({
+      sessionId: plan.sessionId,
+      profileId: plan.to.id,
+      accountName: plan.to.name,
+      plan,
+    })
+    return { sessionId: armed.sessionId, profileId: armed.profileId, note: armedNote(armed) }
   })
+
+  /** Changed his mind. Nothing was stopped, so nothing has to be put back. */
+  ipcMain.handle(SESSION_SWITCH_CANCEL_CHANNEL, (_e, sessionId: unknown) =>
+    typeof sessionId === 'string' && pending.cancel(sessionId),
+  )
+
+  /**
+   * What is armed right now, so a chip can say so after a reload.
+   *
+   * Read from the register rather than remembered by the window: a switch that
+   * fired while a settings window was open is gone, and a chip drawing from its
+   * own memory would still be promising it.
+   */
+  ipcMain.handle(SESSION_SWITCH_ARMED_CHANNEL, () =>
+    pending.list().map((armed) => ({
+      sessionId: armed.sessionId,
+      profileId: armed.profileId,
+      accountName: armed.accountName,
+      note: armedNote(armed),
+    })),
+  )
+
+  /**
+   * Run an armed switch, then deliver the message it was waiting for.
+   *
+   * The order is what makes it safe. `performSwitch` starts the replacement,
+   * proves it is alive and only then stops the old session — so a switch that
+   * fails leaves the old session running with the typed line still in its
+   * prompt, exactly where the person left it, and the window is told why.
+   *
+   * The Enter is replayed only when `switch-later.ts` is certain its copy of
+   * the line is the line. Where it is not, the text is placed in the prompt and
+   * left there: sending a message on somebody's behalf that is not the message
+   * they typed is worse than making them press Enter.
+   */
+  const fireSwitch = async (armed: ArmedSwitch, line: string, submit: boolean): Promise<void> => {
+    let meta: SessionMeta
+    try {
+      meta = await performSwitch(armed.sessionId, armed.profileId)
+    } catch (cause) {
+      const why = cause instanceof Error ? cause.message : String(cause)
+      // The account id travels with the reason so the window can reopen the
+      // sheet naming the account that was not reached. A sentence on its own
+      // would leave it saying "an account" about a switch he chose by name.
+      send(SESSION_SWITCH_FAILED_CHANNEL, armed.sessionId, armed.profileId, why)
+      return
+    }
+    send(
+      SESSION_SWITCHED_CHANNEL,
+      armed.sessionId,
+      meta,
+      switchedNote(armed.accountName, submit, line),
+    )
+    if (line === '') return
+    // A short settle, then the line. `REPLAY_SETTLE_MS` says why this is not
+    // zero and why it is not longer.
+    await new Promise((done) => setTimeout(done, REPLAY_SETTLE_MS))
+    /*
+     * Two writes, never one. `replayWrites` carries the measurement: a single
+     * chunk of about 64 bytes or more is read by the CLI as pasted text, where
+     * the carriage return is a newline rather than submit — so `${line}\r`
+     * silently fails to send for almost every real prompt, and `switchedNote`
+     * would say it had been delivered.
+     */
+    const [typed, enter] = replayWrites(line, submit)
+    ptys.write(meta.id, typed)
+    if (!submit) return
+    await new Promise((done) => setTimeout(done, REPLAY_SUBMIT_GAP_MS))
+    ptys.write(meta.id, enter)
+  }
 
   ipcMain.on('session:write', (_e, id: string, data: string) => {
     // Typing into a session is the only honest "you were using this one"
@@ -2288,6 +2741,30 @@ function registerIpc(): void {
     // freshened value reaches the file on the next open or close, and on
     // `before-quit` — which is where a clean shutdown makes it exact.
     ledger.touch(id)
+
+    /*
+     * The one place a deferred account switch can fire.
+     *
+     * Everything a person sends an agent arrives here, so this is where "his
+     * next message" is a fact rather than a guess. Ordinary typing is passed
+     * straight through and is only *copied* on the way past — `observe` answers
+     * `pass` for every session with nothing armed, which is all of them almost
+     * always.
+     *
+     * The Enter is the byte that is not passed on. Delivering it would submit
+     * the message to the account he has already asked to leave, which is the
+     * whole thing this feature exists to prevent; `fireSwitch` replays it into
+     * the replacement instead.
+     */
+    const action = pending.observe(id, data)
+    if (action.kind === 'switch') {
+      // What he typed before the Enter still goes to the old session, so the
+      // screen he is looking at does not lose characters in the moment before
+      // it is replaced.
+      if (action.before !== '') ptys.write(id, action.before)
+      void fireSwitch(action.armed, action.line, action.submit)
+      return
+    }
     ptys.write(id, data)
   })
   ipcMain.on('session:resize', (_e, id: string, cols: number, rows: number) => {
@@ -2302,6 +2779,10 @@ function registerIpc(): void {
     // stay in the remembered list for that gap, and a crash inside it would
     // reopen a session the user had just closed.
     ledger.forget(id)
+    // A switch armed on a session that is being closed has nothing left to fire
+    // on, and leaving it in the register would list a promise about a tab that
+    // is gone.
+    pending.cancel(id)
     return ptys.kill(id)
   })
   ipcMain.handle('session:list', () => ptys.list())
@@ -2342,7 +2823,18 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
     // Somebody tried to launch it again — almost always because they forgot it
     // was running. Show them the window they already have.
-    if (mainWindow === null) return
+    //
+    // And when there is no window, build one, which is the whole point of the
+    // background mode: launching the app after quitting it is exactly how a
+    // person comes back to sessions that kept running, and this is the line
+    // that path arrives on. It used to `return` — so on Windows and Linux,
+    // where a relaunch is a second process meeting the single-instance lock,
+    // double-clicking the icon did nothing at all and the running agents were
+    // unreachable from the machine they were running on.
+    if (mainWindow === null) {
+      createWindow()
+      return
+    }
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus()
   })
@@ -2389,7 +2881,82 @@ app.whenReady().then(() => {
    * failure and the panel still shows the real state, so a config we could not
    * rewrite cannot stop the app starting.
    */
-  void registerHookServer(ipcMain, { dir: app.getPath('userData') })
+  /*
+   * The `open` a session finds first, written before anything can start a
+   * session.
+   *
+   * Not inside the `then` below, and that ordering is the whole of it: sessions
+   * are restored at launch and a session started before the shim exists would
+   * spend its life with the machine's own opener on its PATH — a session that
+   * silently does not have the feature, in a way nobody would think to check.
+   * The endpoint's config path is a pure function of the data directory, so it
+   * can be known now; what is on the far side of it is written a few
+   * milliseconds later, and a shim whose config is not there yet simply falls
+   * through to the real opener, which is the same thing it does when the app is
+   * closed.
+   */
+  writeOpenShim(
+    app.getPath('userData'),
+    hookConfigPath(app.getPath('userData')),
+    currentPlatform(),
+  )
+  void registerHookServer(ipcMain, {
+    dir: app.getPath('userData'),
+    /*
+     * A URL an agent opened inside a session, arriving from the shim.
+     *
+     * Answered here rather than in the renderer because this is where it lands
+     * and because the answer has to come back on the same connection the
+     * agent's `curl` is holding open. `openForSession` is the same call a click
+     * on a link in a terminal makes, which is what stops the two entrances
+     * drifting apart.
+     */
+    onOpen: ({ url, sessionId }) => openForSession(bindingDeps, { url, sessionId }),
+    /*
+     * What the agent is told at the start of its turn, so that it knows where it
+     * is running and what "look at B2" means, without a byte being typed into
+     * his terminal.
+     *
+     * Synchronous, and the two facts this file is the only place that can answer
+     * are both handed in rather than looked up over there:
+     *
+     *  - `known` is `ptys.list()`, so a `claude` he ran in his own terminal —
+     *    whose hook fires anyway, because the hook is installed for the whole
+     *    machine — is never told it is inside this app. That is the same test
+     *    `onOpen` above already applies to a URL, deliberately.
+     *  - `opensInApp` is whether this run actually wrote the `open` shim, which
+     *    it does not do on Windows and cannot do without a real opener to fall
+     *    back to. Without it the sentence about where a URL lands would be a
+     *    confident falsehood.
+     *
+     * Null for a session this app did not start is the same empty 204 this
+     * endpoint has always answered, so nothing outside the app changes.
+     */
+    /*
+     * Two answers, and which one depends on when the agent knocked.
+     *
+     * `SessionStart` and `UserPromptSubmit` are the top of a turn, so they get
+     * the standing description: where it is running, which windows are its own,
+     * where a URL goes.
+     *
+     * `PostToolUse` is the middle of one, and it gets the *change* and nothing
+     * else. That is the whole of Asad's *"whenever I just connect, it should get
+     * a context"* — a window attached while the agent is working lands at its
+     * very next tool call rather than waiting for his next prompt.
+     * `takeAnnouncement` drains, so it is said once and then the standing answer
+     * carries it from there; a session with nothing new gets `null`, which is
+     * the empty 204 this endpoint has always answered.
+     */
+    contextFor: ({ event, sessionId }) =>
+      event === 'PostToolUse'
+        ? sessionId === null
+          ? null
+          : takeAnnouncement(sessionId)
+        : hookContext(sessionId, '', {
+            known: sessionId !== null && bindingDeps.knowsSession(sessionId),
+            opensInApp: currentOpenShim() !== null,
+          }),
+  })
     .then(() => syncInstalledHooks(defaultContext()))
     .catch((err) =>
       console.error('[hook-server] failed to start, hook callbacks disabled:', err),
@@ -2538,11 +3105,243 @@ app.whenReady().then(() => {
   })
 })
 
+/* ------------------------------------------------- quitting, or not quite -- */
+
+/**
+ * True while this process is running with no window and live sessions in it.
+ *
+ * The state the whole feature turns on, and the reason it is a flag rather than
+ * "are there zero windows": an app between windows on macOS has zero windows for
+ * a fraction of a second, and an app whose renderer crashed has zero windows and
+ * is not doing this deliberately. This is set exactly once, by {@link goBackground},
+ * and it means *the app chose this*.
+ */
+let inBackground = false
+
+/**
+ * True once a quit is really a quit, so nothing asks a second time.
+ *
+ * Three things set it: the person answering "Stop Everything", the tray's own
+ * quit item, and an update about to replace this bundle. Without it, the
+ * `app.quit()` those paths call would come straight back into the question they
+ * were the answer to.
+ */
+let stopping = false
+
+/** Nothing runs on it; it exists to say the process is deliberately still here. */
+const keepAlive = new ProcessKeepAlive()
+
+/**
+ * The menu-bar icon, built once and shown only while there is no window.
+ *
+ * Constructed at module scope rather than when it is first needed because the
+ * session callbacks on the core refresh it, and those are wired before this line
+ * runs. Constructing a `ResidentPresence` creates no `Tray` — `show()` does —
+ * so this costs nothing on a launch that never goes to the background.
+ */
+const presence = new ResidentPresence({
+  sessions: () => ptys.list(),
+  open: () => {
+    if (mainWindow !== null && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+      return
+    }
+    createWindow()
+  },
+  stop: (id) => {
+    ptys.kill(id)
+  },
+  quitAll: () => {
+    stopping = true
+    app.quit()
+  },
+})
+
+/** Every session that still has a process. Exited tabs keep their row and are not this. */
+function liveSessions(): SessionMeta[] {
+  return ptys.list().filter((meta) => meta.exitCode === null)
+}
+
+/**
+ * Put the window away and keep the machine working.
+ *
+ * The sessions are not moved, re-parented or handed anywhere: they are already
+ * ptys owned by this process, and this function's entire job is to make sure
+ * this process is still here in a minute. Which is why it is four lines and no
+ * teardown at all — the relay stays dialled so the phone keeps working, the hook
+ * server stays up so the agents' hooks keep landing, and the routines keep
+ * firing, because every one of those is something the machine does rather than
+ * something the window does.
+ *
+ * `ledger.flush()` and *not* `ledger.freeze()`, which is the difference between
+ * this and a real quit. The remembered list has to stay live: a session that
+ * exits while the app is in the background must leave the list, or the next
+ * launch tries to restore something the person watched finish.
+ */
+function goBackground(): void {
+  inBackground = true
+  ledger.flush()
+  keepAlive.hold()
+  presence.show()
+  if (!presence.visible && needsTrayToBeVisible(process.platform)) {
+    /*
+     * No tray, no window, no Dock icon — that is an invisible process, and this
+     * app will not leave one behind. A Linux session with no notification area
+     * is the real case; the honest answer there is to stop rather than to keep
+     * agents running where nobody can find them.
+     */
+    logger.warn('resident', 'no tray could be created, so quitting rather than hiding')
+    inBackground = false
+    keepAlive.release()
+    stopping = true
+    app.quit()
+    return
+  }
+  /*
+   * Server shells are the one thing that genuinely cannot outlive the window,
+   * so they are closed here rather than left holding a socket nobody can see.
+   *
+   * A session on this machine is a pty this process owns, and a session on a
+   * paired machine runs inside *that* machine's host — both survive a window
+   * going away because something that is not the window is holding them. A
+   * server shell is neither: it is a channel on an ssh2 connection this app
+   * holds, and the roster of them lives in the renderer, which is what
+   * `machines/servers/server-sessions.ts` means by "the window is the owner".
+   * Keeping them open past the window would leave authenticated connections to
+   * somebody else's computer running with nothing on any screen able to list or
+   * close them, which is precisely the orphan this feature must not create.
+   *
+   * They are closed the same way quitting closes them — see the `before-quit`
+   * teardown — so nothing new is being invented for this path.
+   */
+  servers?.stop()
+  serverReach?.stop()
+  for (const window of BrowserWindow.getAllWindows()) window.close()
+}
+
+/** Undo {@link goBackground}. Called by `createWindow` and by every real quit. */
+function leaveBackground(): void {
+  inBackground = false
+  keepAlive.release()
+  presence.hide()
+}
+
+/** Guards the dialog, so a second quit while it is open does not open a second one. */
+let asking = false
+
+/**
+ * Ask, once, what quitting should mean — and act on the answer.
+ *
+ * Asynchronous, and therefore after `event.preventDefault()`: `showMessageBox`
+ * is the only version of this dialog that reports its checkbox, and a checkbox
+ * is the only way "and stop asking" can be offered at the moment the question is
+ * actually in front of somebody. The synchronous variant returns a button index
+ * and nothing else.
+ */
+async function askWhatQuittingMeans(): Promise<void> {
+  if (asking) return
+  asking = true
+  try {
+    const running = liveSessions()
+    const { message, detail } = quitQuestion(running)
+    const answer = await dialog.showMessageBox({
+      type: 'question',
+      buttons: [...QUIT_BUTTONS],
+      defaultId: 0,
+      cancelId: 2,
+      title: `Quit ${BRAND.name}`,
+      message,
+      detail,
+      checkboxLabel: 'Do this from now on, and stop asking',
+      checkboxChecked: false,
+    })
+    const choice = quitAnswer(answer.response)
+    if (choice === 'cancel') {
+      /*
+       * Cancelling means "do not quit", and off macOS this question is reached
+       * *after* the last window has already gone — closing it is what asked for
+       * the quit in the first place. Returning here would leave a running app
+       * with no window, no tray and no way back to it, which is the exact
+       * invisible process this feature is not allowed to create. So the window
+       * comes back, which is also what the person just asked for.
+       */
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      return
+    }
+    // Remembered only for the answer actually given, and only when asked for.
+    if (answer.checkboxChecked) store().setQuitBehavior(choice)
+    if (choice === 'keep') {
+      goBackground()
+      return
+    }
+    stopping = true
+    app.quit()
+  } finally {
+    asking = false
+  }
+}
+
 app.on('window-all-closed', () => {
+  /*
+   * The last window closing is not a reason to end somebody's work.
+   *
+   * Off macOS this line has always meant "no window, no app", and with sessions
+   * that outlive the window that is now a lie by one word: no window, no
+   * *window*. When the app has deliberately gone to the background there is a
+   * tray icon saying what is running and offering to stop it, so the process
+   * staying is visible and undoable, which is the whole bar this feature has to
+   * clear. Every other case is unchanged.
+   */
+  if (inBackground) return
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  /*
+   * The one decision this whole feature is: does quitting end the machine's
+   * work, or only put the window away?
+   *
+   * It is asked here rather than on the menu item because there are four ways to
+   * reach a quit — the menu, the accelerator, the last window closing off macOS,
+   * and `app.quit()` from inside this file — and a question wired to one of them
+   * is a question that three paths walk straight past.
+   *
+   * Three outcomes, and the second one is the new behaviour:
+   *
+   *  - **stop** — nothing is running, or the person has said this is what quit
+   *    means. Falls through to the teardown below, which is what quitting has
+   *    always done.
+   *  - **keep** — the sessions stay, the window goes, a tray icon appears saying
+   *    what is running. The quit is cancelled outright; `goBackground` is the
+   *    whole of it.
+   *  - **ask** — the default, and only ever reached with something to lose. The
+   *    quit is cancelled while the question is on screen and re-issued by the
+   *    answer, because a dialog that reports its checkbox cannot be synchronous.
+   *
+   * `keep` is refused while the app is *already* in the background, and that is
+   * deliberate rather than an oversight. At that point there is no window, so a
+   * quit can only have come from the app menu, its accelerator or the Dock — a
+   * person deliberately quitting something they can see is running. Honouring
+   * "keep" there would make Quit do nothing, over and over, with no way out
+   * except the tray. An app that cannot be quit is worse than one that asks.
+   */
+  if (!stopping) {
+    const plan = plannedQuit(liveSessions().length, store().getQuitBehavior())
+    if (plan === 'ask') {
+      event.preventDefault()
+      void askWhatQuittingMeans()
+      return
+    }
+    if (plan === 'keep' && !inBackground) {
+      event.preventDefault()
+      goBackground()
+      return
+    }
+    stopping = true
+  }
+  leaveBackground()
+
   // Before `quitting`, deliberately. Every session is still live at this
   // instant, which makes this the most accurate the remembered list ever gets —
   // and one line further down `ledger.freeze()` closes the list for the rest of
@@ -2598,6 +3397,11 @@ app.on('before-quit', () => {
   updates?.stop()
   lidAwake?.stop()
   void stopHookServer()
+  // The shim goes with the endpoint it talks to. A script left behind is not
+  // dangerous — with no socket answering it falls through to the real opener —
+  // but it is a file this app put on somebody's PATH and no longer owns, and an
+  // upgrade that leaves one behind ends up with two.
+  removeOpenShim(app.getPath('userData'))
   // Nothing of anybody's account is written down, so there is nothing here to
   // clean up — this only closes the loopback listener and answers anything a git
   // is still waiting on, rather than leaving it to time out against an app that

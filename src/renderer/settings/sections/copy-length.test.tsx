@@ -232,9 +232,15 @@ describe('what the cut was not allowed to take with it', () => {
       setupStatus: async () => null,
       listProfiles: async () => ({ profiles: [], defaultProfileId: null }),
     })
-    // Agents' own two questions.
+    // Agents' own two questions, and the menu that answers "I want another
+    // agent". "What is installed" was the heading over the third; it is gone
+    // with "New sessions", because two headings over four rows is most of what
+    // made one pane read as three — *"it's too messy and too difficult to
+    // understand"*. The rows they were over are still here, which is the whole
+    // claim this test makes.
     expect(html).toContain('Default coding tool')
-    expect(html).toContain('What is installed')
+    expect(html).toContain('Primary account')
+    expect(html).toContain('Add agent')
     // Accounts — its own heading, and the button that adds one. The group that
     // used to carry the whole add form here is now a popup: *"'Add' and 'Sign
     // in' should be one thing, called Add account. It must open a small popup
@@ -243,8 +249,11 @@ describe('what the cut was not allowed to take with it', () => {
     // the panel itself.
     expect(html).toContain('>Accounts<')
     expect(html).toContain('Add account')
-    // Setup.
-    expect(html).toContain('Other coding tools')
+    // Setup. "Other coding tools" was the heading until GitHub Copilot moved to
+    // the GitHub page — what is left under it is git and the GitHub CLI, which
+    // are tools this app uses rather than coding tools. See `MOVED_TOOL_IDS`.
+    expect(html).toContain('Other tools')
+    expect(html).not.toContain('GitHub Copilot')
   })
 
   /**

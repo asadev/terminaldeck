@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
@@ -7,6 +9,7 @@ import {
   ChatView,
   dayBreak,
   formatTime,
+  isoAt,
   markdown,
   mergeMessages,
   renderMarkdown,
@@ -129,6 +132,114 @@ describe('timestamps', () => {
     expect(dayBreak(NOW, 0)).not.toBeNull()
     expect(dayBreak(later, NOW)).toBeNull()
     expect(dayBreak(tomorrow, NOW)).not.toBeNull()
+  })
+})
+
+/* ------------------------------------------------- who said it, and where -- */
+
+/**
+ * *"my message should start from the right, should be on the other side, like
+ * this one, just like Claude. See, mine is right side. … The left side will be
+ * the agent … So no need to give a name actually on both sides. Not even you,
+ * for me also not you. Just start it from the right side, give the time and all
+ * that."* — 2026-08-20.
+ *
+ * The two halves are one decision and have to be tested as one: the labels are
+ * safe to delete **because** the alignment says who is talking. Half of it —
+ * names removed, both turns still left-aligned — is a conversation in which
+ * nothing at all says who said what, which is worse than what was there before.
+ */
+describe('a turn is placed rather than labelled', () => {
+  const you = renderToStaticMarkup(
+    <ChatBubble message={message({ id: 'p', role: 'you', text: 'fix the parser' })} heading={null} />,
+  )
+  const agent = renderToStaticMarkup(
+    <ChatBubble message={message({ id: 'a', role: 'agent', text: 'Done.' })} heading={null} />,
+  )
+
+  it('names neither speaker, on either side', () => {
+    // Both spellings, because the markup used to print one of each and a
+    // half-removal is the likely regression.
+    expect(you).not.toContain('cv-who')
+    expect(agent).not.toContain('cv-who')
+    expect(you).not.toMatch(/>You</)
+    expect(agent).not.toMatch(/>Agent</)
+  })
+
+  it('marks the side, which is what replaced the names', () => {
+    // The class is what `ChatView.css` hangs `align-items: flex-end` and the
+    // tint off. Without it the markup is two identical blocks and the removal
+    // above has taken away the only thing distinguishing them.
+    expect(you).toContain('cv-message cv-you')
+    expect(agent).toContain('cv-message cv-agent')
+  })
+
+  it('puts the time at the end of the turn, not over it', () => {
+    // *"give the copy button wherever it's possible at the end of maybe
+    // messages"* — the metadata moved with it, from a header above the words to
+    // a footer below them.
+    expect(you).toContain('cv-foot')
+    expect(you.indexOf('cv-body')).toBeLessThan(you.indexOf('cv-foot'))
+    expect(you).toContain(formatTime(NOW))
+  })
+
+  it('gives the time a machine-readable date, since the printed one has none', () => {
+    // `14:32` on its own is ambiguous to everything that is not a person
+    // reading the column under a day heading.
+    expect(isoAt(NOW)).toBe(new Date(NOW).toISOString())
+    expect(isoAt(0)).toBeUndefined()
+    expect(you).toContain(`dateTime="${new Date(NOW).toISOString()}"`)
+  })
+})
+
+/* -------------------------------------------------------- the copy control -- */
+
+describe('copying a message', () => {
+  it('draws one control per turn when the host can reach a clipboard', () => {
+    const html = renderToStaticMarkup(
+      <ChatColumn
+        messages={[
+          message({ id: 'a', role: 'you', text: 'fix the parser' }),
+          message({ id: 'b', role: 'agent', text: 'Done.' }),
+        ]}
+        onCopy={() => {}}
+      />,
+    )
+    expect(html.match(/class="cv-copy"/g)).toHaveLength(2)
+    expect(html).toContain('aria-label="Copy this message"')
+  })
+
+  it('draws none at all where there is no clipboard to reach', () => {
+    /*
+     * Absent, not inert — the rule `GitHubPanel` follows for its device code.
+     * A copy button that silently does nothing looks like the clipboard failing
+     * rather than like the app never having had one, so the person retries.
+     */
+    const html = renderToStaticMarkup(
+      <ChatColumn messages={[message({ id: 'a', role: 'you', text: 'hi' })]} />,
+    )
+    expect(html).not.toContain('cv-copy')
+    // And the footer is still there with the time on it, so "no clipboard"
+    // costs the copy control and nothing else.
+    expect(html).toContain('cv-foot')
+  })
+
+  it('hands over the transcript text, not the rendering', () => {
+    /*
+     * The agent's half is rendered markdown with fenced code folded into a
+     * closed `<details>`. Copying what is on screen would hand back a reply
+     * with the diff missing, which is the one thing somebody copying an agent's
+     * answer is most likely to be after.
+     *
+     * Read as source rather than pressed, because there is no DOM in this suite
+     * and no press to make: `renderToStaticMarkup` drops handlers, and calling
+     * the component as a function trips its hooks. The distinction being
+     * guarded is one identifier wide — `message.text` against the rendered
+     * `html` — so the source is where it is visible either way.
+     */
+    const source = readFileSync(join(__dirname, 'ChatView.tsx'), 'utf8')
+    expect(source).toContain('onCopy(message.text)')
+    expect(source).not.toMatch(/onCopy\((html|renderMarkdown)/)
   })
 })
 

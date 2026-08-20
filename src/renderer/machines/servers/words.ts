@@ -279,7 +279,7 @@ export const GROUP_HEADING = {
  * door further in, which is why this sentence points at it.
  */
 export const NOTHING_FOUND =
-  "We couldn't find anything this server is set up to keep running. You can still open a terminal in Advanced below."
+  "We couldn't find anything this server is set up to keep running. You can still open a terminal on this server."
 
 /** Both halves of the sentence a card gets when its name is all we have. */
 export const NO_DETAIL = 'We could not tell what this is.'

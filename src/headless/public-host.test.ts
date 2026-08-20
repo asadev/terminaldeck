@@ -394,6 +394,66 @@ describe('what a public host offers', () => {
        * — it has no window at all.
        */
       CAPABILITY.web,
+      /*
+       * `controls` is withheld, and it is the one on this list that is closest
+       * to being harmless — which is exactly why the reason has to be written
+       * down rather than assumed.
+       *
+       * It reads a session's model and effort off that session's screen, and
+       * `controls.apply` **types a slash command into the pty**. On a box handed
+       * to a stranger for an App Store review, the first half is a way to read
+       * the owner's account configuration off a screen a guest was never shown,
+       * and the second is a keystroke into a session — bounded by the same
+       * `visible` rule `input` is, but bounded by nothing else. The demo needs a
+       * terminal that works; it does not need a model picker.
+       *
+       * Withheld by the offer list alone here, not twice over: the demo assembly
+       * builds its session layer from the same `SessionFanout` a desktop does,
+       * so the object behind this capability genuinely exists on that box. That
+       * makes this line load-bearing rather than belt-and-braces, and it is the
+       * whole reason `options.offer` is checked first in `server.ts`.
+       */
+      CAPABILITY.controls,
+      /*
+       * `usage` is withheld for the same reason as `controls`, and it is a
+       * sharper version of it: what it reports is not a session's configuration
+       * but **the owner's own subscription**.
+       *
+       * Two of its three readings are what that machine has spent against its
+       * plan and how full a conversation's context window is; the third boots
+       * the owner's agent CLI on that box to go and fetch a fresh figure. On a
+       * machine handed to a stranger for an App Store review, the first is
+       * somebody's account statement and the third is a stranger causing a 725
+       * MB process to start on hardware they do not own. The demo needs a
+       * terminal that works; it does not need to say what the owner's plan has
+       * left in it.
+       *
+       * Load-bearing rather than belt-and-braces, exactly like `controls` above
+       * and for the same mechanical reason: the demo builds its session layer
+       * through `createHostCore`, so the object behind this capability genuinely
+       * exists on that box and it is this list that stops it being advertised.
+       */
+      CAPABILITY.usage,
+      /*
+       * `send` is withheld, and it is the one on this list whose absence needs
+       * the least argument and the most explicitness.
+       *
+       * It types into a session **without attaching to it** — the verb exists so
+       * that a surface with something to say and nothing to read does not have
+       * to take a handle away from a terminal pane that is using it. On a box
+       * handed to a stranger for an App Store review there is no such surface:
+       * the visitor has a phone client, which attaches to the session it is
+       * looking at and types with `input`. What the capability would add there
+       * is a way to write into a session with no subscription to it, which is
+       * the one property that makes it *harder* to notice from the far end, for
+       * a caller that does not exist on that box.
+       *
+       * Withheld by the offer list alone, like `controls` and `usage`: the demo
+       * builds a real session layer, so `SessionAccess.write` is genuinely there
+       * — it is a required member of that interface and `server.ts` therefore
+       * applies no gate of its own. This line is the whole of the decision.
+       */
+      CAPABILITY.send,
     ])
   })
 })

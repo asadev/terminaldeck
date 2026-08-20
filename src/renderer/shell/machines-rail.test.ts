@@ -30,13 +30,17 @@ describe('Machines in the rail', () => {
     expect(spec.id).toBe('remote')
   })
 
-  it('names both kinds in the line under it, because it leads to both', () => {
-    // A blurb naming only one of them sends half the people looking for the
-    // other one somewhere else. This is also the empty state's subtitle and the
-    // toolbar's second line, so it is read more often than the label.
-    const blurb = panelSpec('remote').blurb.toLowerCase()
-    expect(blurb).toContain('server')
-    expect(blurb).toMatch(/computers|devices|phones/)
+  it('names both kinds with one word, because it leads to both', () => {
+    /*
+     * There was a line under this row naming servers *and* the owner's own
+     * computers, and this test checked that both were in it. The line is gone
+     * with every other panel blurb — see `shell/panels.ts` — so what is left to
+     * check is that the label itself is the umbrella word rather than one of
+     * the two kinds under it. "Remote" or "Servers" here would send half the
+     * people looking for the other one somewhere else, which is the same
+     * failure the deleted sentence existed to prevent.
+     */
+    expect(panelSpec('remote').label).toBe('Machines')
   })
 
   it('adds no row to the rail', () => {
@@ -60,10 +64,27 @@ describe('Machines in the rail', () => {
     ])
   })
 
-  it('stays in the quiet strip at the bottom, not among the project views', () => {
-    // The machines you can reach do not change when you open a different
-    // folder, which is the whole argument for the foot rather than for the
-    // labelled runs above it. Servers do not change it either.
-    expect(panelSpec('remote').group).toBe('foot')
+  it('sits under Integrations, with the rest of what this app reaches out to', () => {
+    /*
+     * Asad, reading the rail back: *"also move machines in the integrations
+     * section in the side panel."* It was in the foot before — the quiet strip
+     * with the update notice and Settings.
+     *
+     * Pinned because the argument for the foot is still quotable and somebody
+     * will quote it: the machines you can reach do not change when you open a
+     * different folder. True, and not what this run sorts on — an MCP server
+     * can be `user` scope too. Every row here is a connection out of this app
+     * to something that is not this app, and a rented server or a paired phone
+     * is exactly that.
+     */
+    expect(panelSpec('remote').group).toBe('integrations')
+  })
+
+  it('does not appear a second time anywhere else in the rail', () => {
+    // Two rows reaching one page is worse than either placement on its own,
+    // and the move is the moment that becomes possible to ship. `PANELS` is
+    // the whole inventory, so counting it here catches a copy left behind.
+    expect(PANELS.filter((panel) => panel.id === 'remote')).toHaveLength(1)
+    expect(PANELS.filter((panel) => panel.label === 'Machines')).toHaveLength(1)
   })
 })

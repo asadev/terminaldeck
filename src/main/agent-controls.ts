@@ -272,6 +272,16 @@ export interface ApplyRequest {
    * whatever the sender put in it however the type says otherwise.
    */
   provider?: string
+  /**
+   * Whether this session is on this computer. See {@link ControlScope}.
+   *
+   * It matters here for the *failure* readings only — the value reported when a
+   * change could not be confirmed — but it matters just as much there: an effort
+   * change that timed out on a server shell would otherwise come back reporting
+   * this laptop's `settings.json`, which is a wrong answer wearing the shape of
+   * a right one.
+   */
+  scope?: ControlScope
 }
 
 export interface ApplyResult {
@@ -1431,12 +1441,55 @@ export function modelFromSettings(settings: Record<string, unknown>): ControlRea
 
 const UNKNOWN: ControlReading = { value: null, label: null, source: null }
 
+/**
+ * Whether this computer's own files and environment describe this session.
+ *
+ * ## The lie this exists to stop
+ *
+ * Four of the sources this module reads are **local disk and local
+ * environment**: `~/.claude/settings.json` for effort and fast mode,
+ * `permissions.defaultMode` in the same file, the Claude transcripts under this
+ * machine's config directory, and `CLAUDE_CODE_EFFORT_LEVEL` in this process.
+ * Every one of them is correct for a pty this app spawned and every one of them
+ * is a fabrication for a shell running on a server somebody signed into over
+ * SSH — that machine has its own `~/.claude`, its own transcripts and its own
+ * environment, and none of them are here.
+ *
+ * A screen is the one source that travels, because the bytes are the same bytes
+ * whatever produced them. So a session that is not on this computer is read from
+ * its screen and from nothing else, and what the screen cannot answer comes back
+ * `null`, which the bar draws as "Unknown" — the true answer, rather than this
+ * machine's answer to a question about another one.
+ *
+ * The remote-machine case does **not** use this and must not: a session on a
+ * paired desktop is read by *that* desktop's copy of this module, against its
+ * own disk, which is exactly right. See `CAPABILITY.controls`.
+ */
+export interface ControlScope {
+  /**
+   * False when the session is running somewhere else — an SSH shell on a server.
+   * Absent means this machine, which is what every existing caller means.
+   */
+  onThisMachine?: boolean
+}
+
+/** True unless a caller has said the session is on another computer. */
+function local(scope: ControlScope | undefined): boolean {
+  return scope?.onThisMachine !== false
+}
+
 export async function readControls(
   access: SessionAccess,
   sessionId: string | undefined,
   cwd: string | undefined,
   provider?: string,
+  scope?: ControlScope,
 ): Promise<ControlsReading> {
+  // Read once into a local so that every fallback below asks the same question
+  // — the three of them are the whole of what this flag turns off, and a fourth
+  // added later that forgets to ask is the bug it exists to prevent. See
+  // {@link ControlScope}.
+  const onThisMachine = local(scope)
   const screen = sessionId ? await access.screen(sessionId) : null
 
   const saw = screen === null ? null : readAgentFromScreen(screen)
@@ -1487,11 +1540,15 @@ export async function readControls(
     }
     // And then the settings the CLI itself started the session from. Without
     // this the control was `Unknown` for the whole life of any session nobody
-    // had pressed shift+tab in — see `readPermissionDefault`.
-    return readPermissionDefault(cwd)
+    // had pressed shift+tab in — see `readPermissionDefault`. Skipped entirely
+    // for a session on another computer: that file is this machine's.
+    return onThisMachine ? readPermissionDefault(cwd) : UNKNOWN
   })()
 
-  const settings = await readClaudeSettings()
+  // Empty rather than read for a session that is not on this computer, so every
+  // `…FromSettings` fallback below answers "nothing was read" instead of
+  // answering with this machine's configuration.
+  const settings = onThisMachine ? await readClaudeSettings() : {}
 
   /*
    * Four sources, newest evidence first, and the fourth is what ends `Unknown`.
@@ -1511,7 +1568,7 @@ export async function readControls(
   const model = await (async (): Promise<ControlReading> => {
     const confirmed = screen === null ? null : readModelFromScreen(screen)
     if (confirmed) return { value: confirmed, label: confirmed, source: 'screen' }
-    const raw = cwd ? await readModelFromTranscript(cwd) : null
+    const raw = cwd && onThisMachine ? await readModelFromTranscript(cwd) : null
     if (raw) return { value: raw, label: labelModelId(raw), source: 'transcript' }
     const welcomed = screen === null ? null : readModelFromWelcome(screen)
     if (welcomed) return { value: welcomed, label: welcomed, source: 'screen' }
@@ -1519,7 +1576,9 @@ export async function readControls(
   })()
 
   const effort = ((): ControlReading => {
-    const override = process.env.CLAUDE_CODE_EFFORT_LEVEL?.trim().toLowerCase()
+    // This process's environment, which is this machine's. A session on a server
+    // inherited whatever *that* login exported and nothing here can see it.
+    const override = onThisMachine ? process.env.CLAUDE_CODE_EFFORT_LEVEL?.trim().toLowerCase() : undefined
     if (override) {
       const known = EFFORT_LEVELS.find((entry) => entry.id === override)
       return { value: override, label: known ? known.label : override, source: 'env' }
@@ -1893,7 +1952,10 @@ export async function applyControl(
   request: ApplyRequest,
   timings: ApplyTimings = SHIPPED_TIMINGS,
 ): Promise<ApplyResult> {
-  const { sessionId, cwd, control, value, provider } = request
+  const { sessionId, cwd, control, value, provider, scope } = request
+  // The same read-once as in `readControls`, and for the same reason: every
+  // fallback below has to be asking one question rather than three.
+  const onThisMachine = local(scope)
 
   const opening = await access.screen(sessionId)
   if (opening === null) {
@@ -1967,10 +2029,10 @@ export async function applyControl(
       return now ? { ok: true as const, text: now.name, scope: now.scope } : null
     })
     if (!outcome.ok) {
-      return { ok: false, message: outcome.message, reading: await currentModel(access, sessionId, cwd) }
+      return { ok: false, message: outcome.message, reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined) }
     }
     const answer = outcome.answer
-    if (!answer.ok) return { ok: false, message: answer.text, reading: await currentModel(access, sessionId, cwd) }
+    if (!answer.ok) return { ok: false, message: answer.text, reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined) }
     return {
       ok: true,
       // The scope is quoted from the CLI, not asserted: it decides per call
@@ -2004,10 +2066,10 @@ export async function applyControl(
       return now && now.level === value ? { ok: true as const, text: now.level, scope: now.scope } : null
     })
     if (!outcome.ok) {
-      return { ok: false, message: outcome.message, reading: effortFromSettings(await readClaudeSettings()) }
+      return { ok: false, message: outcome.message, reading: effortFromSettings(onThisMachine ? await readClaudeSettings() : {}) }
     }
     const answer = outcome.answer
-    if (!answer.ok) return { ok: false, message: answer.text, reading: effortFromSettings(await readClaudeSettings()) }
+    if (!answer.ok) return { ok: false, message: answer.text, reading: effortFromSettings(onThisMachine ? await readClaudeSettings() : {}) }
     return {
       ok: true,
       // Not "and saved as your default" — the CLI prints one of two scopes and
@@ -2025,7 +2087,7 @@ export async function applyControl(
 
     const typed = await typeCommand(access, sessionId, `/fast ${value}`, timings)
     if (!typed.ok) {
-      return { ok: false, message: typed.message, reading: fastFromSettings(await readClaudeSettings()) }
+      return { ok: false, message: typed.message, reading: fastFromSettings(onThisMachine ? await readClaudeSettings() : {}) }
     }
 
     /*
@@ -2047,7 +2109,7 @@ export async function applyControl(
       return {
         ok: false,
         message: `Typed /fast ${value} but the session has not shown it taking effect — it is most likely mid-turn, so the command is sitting in its input queue.`,
-        reading: fastFromSettings(await readClaudeSettings()),
+        reading: fastFromSettings(onThisMachine ? await readClaudeSettings() : {}),
       }
     }
     if (answer.unavailableReason) return { ok: false, message: answer.unavailableReason, reading: answer }
@@ -2155,11 +2217,13 @@ export interface ReadRequest {
   cwd?: string
   /** See {@link ApplyRequest.provider}. Absent readers get the old behaviour. */
   provider?: string
+  /** See {@link ControlScope}. Absent means a session on this computer. */
+  scope?: ControlScope
 }
 
 export function registerAgentControlsIpc(ipcMain: IpcMain, access: SessionAccess): void {
   ipcMain.handle('agent:controls:read', (_event, request: ReadRequest) =>
-    readControls(access, request?.sessionId, request?.cwd, request?.provider),
+    readControls(access, request?.sessionId, request?.cwd, request?.provider, request?.scope),
   )
   ipcMain.handle('agent:controls:apply', (_event, request: ApplyRequest) => applyControl(access, request))
   /*

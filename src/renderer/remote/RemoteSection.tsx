@@ -13,7 +13,6 @@ import {
   machineActions,
   type MachinesHalf,
 } from '../machines/MachineLinks'
-import { useMachineSessionOpener } from '../machines/new-session-context'
 import { asView, resolveBridge, type MachinesBridge, type MachinesView } from '../machines/types'
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
 import {
@@ -41,8 +40,19 @@ import './RemoteSection.css'
  * one roster, one code, one countdown, and one place that says what a paired
  * device may do here. What the machines page had that this did not is the
  * *other* direction — reaching out to a machine and opening a session on it —
- * and that is kept whole, at the bottom, in `machines/MachineLinks.tsx`. It is
- * a different capability rather than a different screen.
+ * and that is kept whole in `machines/MachineLinks.tsx`. It is a different
+ * capability rather than a different screen.
+ *
+ * It used to say "kept whole, **at the bottom**", and that stopped being true on
+ * 2026-08-19. This section is now the body of *"Your own devices"* on the
+ * Machines page, and a heading with a description under it promises rows. His
+ * own PC was in this file's last block, four screens below that promise: *"so I
+ * connected one but here I cannot see anything. This is connected as my device
+ * but it's not here."* The rosters — attached now, the devices let in, the
+ * machines this one reaches — are the first things under the switch now, and
+ * the mechanics follow them. The full argument, including what the old order
+ * got right and why it survives for a first-time reader, is in `RemoteView`
+ * beside the blocks it orders.
  *
  * ## The code is six digits, and nothing else
  *
@@ -1394,6 +1404,329 @@ export function RemoteView({
         </Group>
       )}
 
+      {/*
+        The order of everything below, and why it is not the order it was.
+
+        It used to run: this machine, then what may reach it, then how to pair
+        another, then what it can reach. That argument was written when this was
+        the **Remote** page and it was a good one — it moves outward from the
+        reader, and the switch that governs the whole first half is the first
+        thing under it.
+
+        It stopped being the whole argument when this section became the body of
+        *"Your own devices"* on the Machines page. A heading with a description
+        under it is a promise about what comes next, and what came next was a
+        switch, a relay card and a pairing block — three explanations before a
+        single row. Asad, 2026-08-19, looking at his own PC listed at the bottom
+        of it: *"so I connected one but here I cannot see anything. This is
+        connected as my device but it's not here."* It **was** there, four
+        screens down, under a heading that says nothing about being his.
+
+        So the rosters come first: what is attached right now, what has been let
+        in, and what this machine can reach. The mechanics — how a device gets
+        here, and how to add one — follow them.
+
+        The old order is not lost, it is what remains: with nothing paired,
+        every block between here and "How a device gets here" is withheld on its
+        own condition, so somebody opening this for the first time still gets
+        the switch and then the way to pair, in that order and with nothing in
+        between. The reordering is only visible to somebody who has devices,
+        which is precisely the person who came here to look at them.
+      */}
+      {/*
+        Only when something is attached.
+
+        An empty "Attached now — Nothing is attached." group is a heading and a
+        sentence saying the heading has nothing under it, on a page whose whole
+        complaint was that it says too much before anything has happened. The
+        list appears when there is a list.
+      */}
+      {running && connections.length > 0 && (
+        <Group title={`Attached now — ${connections.length}`}>
+          {(
+            <ul className="remote-list">
+              {connections.map((connection) => (
+                <li className="remote-row remote-row-live" key={connection.id}>
+                  <span className="remote-live" role="status">
+                    <span className="remote-live-dot" aria-hidden="true" />
+                    Attached
+                  </span>
+                  <span className="remote-row-text">
+                    <span className="remote-row-name">{connection.deviceName}</span>
+                    <span className="remote-row-note">{connectionNote(connection, now)}</span>
+                  </span>
+                  <Button
+                    tone="danger"
+                    onClick={() => actions.disconnect(connection)}
+                    disabled={busy !== null}
+                  >
+                    {busy === `connection:${connection.id}` ? 'Closing…' : 'Disconnect'}
+                  </Button>
+
+                  {/* Only when there is one. Most phones never tap a port, and
+                      a "no pages open" line under every row would be noise
+                      about the ordinary case. */}
+                  {connection.tunnels.length > 0 && (
+                    <ul className="remote-tunnels">
+                      {connection.tunnels.map((tunnel) => (
+                        <li className="remote-tunnel" key={tunnel.id}>
+                          <span className="remote-tunnel-text">
+                            <span className="remote-tunnel-name">
+                              <code className="remote-tunnel-port">localhost:{tunnel.port}</code>
+                              <span className="remote-tunnel-what">
+                                open in a browser on this phone
+                              </span>
+                            </span>
+                            <span className="remote-row-note">{tunnelNote(tunnel, now)}</span>
+                          </span>
+                          <Button
+                            onClick={() => actions.stopTunnel(connection, tunnel)}
+                            disabled={busy !== null}
+                          >
+                            {busy === `tunnel:${tunnel.id}` ? 'Stopping…' : 'Stop'}
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {connections.some((connection) => connection.tunnels.length > 0) && (
+            // Said once, under the list, rather than on every row. The thing
+            // worth knowing is that Stop is cheap — a person who has to guess
+            // whether "Stop" kills their session will leave a page open on this
+            // Mac rather than risk it — and that fits on one line.
+            <p className="settings-prose">
+              <span className="settings-label-line">
+                <strong>Stop closes the page, and nothing else.</strong>
+                <Note label="open ports">
+                  {`A port listed above is being served from ${machine} to that phone’s browser, over the same connection. Stopping it leaves the session running and the device approved, and the phone can tap the port again.`}
+                </Note>
+              </span>
+            </p>
+          )}
+        </Group>
+      )}
+
+      {/*
+        Only once there is a device.
+
+        Two gates, and they answer two different objections. The first is the
+        old one: before the first answer lands, "no device has been paired" is a
+        claim nothing supports. The second is his — *"until there is nothing
+        activated or something or no device is connected… this only text doesn't
+        make any sense"* — and it is about a page that opened with four headings
+        and five paragraphs describing devices that did not exist. An empty
+        roster under a heading is not information; the way to get one is the
+        pairing block, which is where somebody with no devices should be
+        looking — and which is now the thing they land on, because with this
+        block and the two beside it all withheld, "Pair a device" is what
+        follows the switch. It used to sit *above* this roster and that was the
+        same argument from the other side; see the order note.
+      */}
+      {state !== null && devices.length > 0 && (
+        <Group title="Devices">
+          {pending.length > 0 && (
+            <p className="settings-prose">
+              {pending.length === 1 ? 'A device is' : `${pending.length} devices are`} waiting to be
+              let in. Approve only the one you are holding —{' '}
+              {pending.some((device) => device.fingerprint !== null)
+                ? `the phone shows its own fingerprint, and the row below shows what ${machine} received.`
+                : 'this one paired without a key, so there is no fingerprint to compare.'}
+            </p>
+          )}
+
+          {/*
+            The flow, above the roster and not in a dialog.
+
+            A modal would cover the list somebody is comparing against, and the
+            list is where the *other* pending device is — which is exactly the
+            moment they need to see both. It sits directly under the sentence
+            that says a device is waiting, so the words and the choice they are
+            about arrive together.
+          */}
+          {approving !== null && (
+            <DeviceApproval
+              device={approving.device}
+              platform={platform}
+              folders={approving.folders}
+              step={approving.step}
+              kind={approving.kind}
+              busy={busy !== null}
+              problem={problem}
+              onStep={actions.approvalStep}
+              onKind={actions.approvalKind}
+              onAddFolder={actions.approvalAddFolder}
+              onRemoveFolder={actions.approvalRemoveFolder}
+              onApprove={() =>
+                actions.approve(approving.device, approving.kind ?? 'guest', approving.folders)
+              }
+              onCancel={actions.cancelApproval}
+            />
+          )}
+
+          {(
+            <ul className="remote-list">
+              {devices.map((device) => (
+                <li className={`remote-row remote-row-${device.state}`} key={device.id}>
+                  <span className="remote-state">{STATE_LABEL[device.state]}</span>
+                  <span className="remote-row-text">
+                    <span className="remote-row-name">{device.name}</span>
+                    <span className="remote-row-note">
+                      Last seen {whenSeen(device.lastSeenAt, now)}
+                      {device.addedAt === null ? '' : ` · paired ${whenSeen(device.addedAt, now)}`}
+                    </span>
+                    {/*
+                      What this device is, stated on the row and not editable
+                      there.
+
+                      Three states and not two: `mine`, `guest`, and a device
+                      approved by a build older than the choice — which is read
+                      as a guest with no folders, and deserves a sentence saying
+                      why a phone that worked yesterday does not today. There is
+                      deliberately no control here; changing a kind means
+                      revoking and pairing again. See `device-kind.ts`.
+
+                      The copilot is named on both of the first two, and that is
+                      the entire remaining user interface for it. It used to be
+                      a panel below the folders with a Connect button, a code
+                      and three checkboxes; the kind decides it now, so the only
+                      honest thing left to draw is what the kind already means.
+                      Saying it on both rows rather than only the guest's is
+                      deliberate: "full access" is a phrase somebody reads past,
+                      and the question they actually arrived with is whether the
+                      phone in their hand can reach the copilot. Neither line is
+                      a control and neither can be clicked.
+                    */}
+                    {device.state === 'approved' && kinds !== null && (
+                      <span className="remote-row-note">
+                        {kinds.get(device.id) === 'mine' ? (
+                          <>Your device — full access, the copilot included.</>
+                        ) : kinds.get(device.id) === 'guest' ? (
+                          <>Guest — only the folders you chose. Never the copilot.</>
+                        ) : (
+                          <>
+                            Paired before folder approval existed, so it is treated as a guest and
+                            can open nothing. Revoke it and pair it again to choose.
+                          </>
+                        )}
+                      </span>
+                    )}
+                    {device.state !== 'revoked' &&
+                      (device.fingerprint === null ? (
+                        // Not a cosmetic gap. No key means no sealed channel,
+                        // so this device cannot come in through the relay at
+                        // all — said here rather than discovered the first time
+                        // it is tried from a hotel.
+                        <span className="remote-row-note">
+                          No key stored — this one paired before there were keys, so it cannot come
+                          in through the relay. Pair it again to fix that.
+                        </span>
+                      ) : (
+                        <span className="remote-row-note">
+                          <code className="remote-fingerprint">{device.fingerprint}</code>
+                        </span>
+                      ))}
+                  </span>
+                  <span className="settings-chips">
+                    {device.state === 'pending' && (
+                      <>
+                        {/*
+                          "Let it in…" rather than "Approve", and the ellipsis is
+                          doing work: this opens the flow that asks whose device
+                          it is and what it may open, and the old one-word button
+                          is exactly what made people believe the decision had
+                          been made when it had not.
+                        */}
+                        <Button
+                          tone="primary"
+                          onClick={() => actions.beginApproval(device)}
+                          disabled={busy !== null || approving?.device.id === device.id}
+                        >
+                          Let it in…
+                        </Button>
+                        <Button onClick={() => actions.deny(device)} disabled={busy !== null}>
+                          Deny
+                        </Button>
+                      </>
+                    )}
+                    {device.state === 'approved' && (
+                      <Button
+                        tone="danger"
+                        onClick={() => actions.revoke(device)}
+                        disabled={busy !== null}
+                      >
+                        {busy === `device:${device.id}` ? 'Revoking…' : 'Revoke'}
+                      </Button>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <p className="settings-prose">
+            <span className="settings-label-line">
+              <strong>Revoking is immediate.</strong>
+              <Note label="revoking">
+                {`The device is dropped where it stands — mid command, mid session — not at its next connection. Disconnecting is the gentler one: it only closes what is open now, and an approved device can attach again straight away.`}
+              </Note>
+            </span>
+          </p>
+        </Group>
+      )}
+
+      {/*
+        Folders, only once there is a device to choose them for.
+
+        It rendered on every visit, three paragraphs of it, ending in "No device
+        has been approved yet, so there is nothing to choose for." — an
+        explanation of a decision the reader cannot make yet, on a page they
+        opened to pair their first phone. `grantableDevices` already filters to
+        approved devices; the caller now withholds the whole block on the same
+        condition, so the words arrive with the choice they are about.
+      */}
+      {approved.length > 0 && folders}
+
+      {/*
+        The outward half — last among the rosters, and no longer last on the
+        screen.
+
+        Its old note read "the outward half, **last**", and the reason given was
+        that everything above it is about something arriving here and governed
+        by the switch at the top, while these machines are dialled out to and
+        keep working with that switch off. Every word of that is still true and
+        it is still why they come *after* the devices rather than being mixed
+        into that roster: the two lists answer different questions and merging
+        them would have to invent an answer for the machines that have no device
+        record and the devices that are not machines.
+
+        What was wrong was the conclusion that "after the devices" meant "after
+        everything". This is the block that had his own PC in it while the
+        section headed *"Your own devices"* opened with a switch and two
+        explanations — so it moved up with the roster it belongs beside, and the
+        mechanics moved down. See the order note above.
+
+        With no machine paired this was a heading, two lines of prose about
+        pairing going both ways, and a sentence saying the list was empty —
+        three more paragraphs on a page that already had too many, describing a
+        capability whose entry point ("Add another computer") is in the pairing
+        block, which is now below this rather than above it. It is drawn once
+        there is a machine to draw, while the read that would find one is still
+        running or has failed, and — always — when the build cannot reach the
+        machine channels at all, because that is a broken build rather than an
+        empty list and has to be said.
+      */}
+      {(!machines.wired ||
+        machines.reading ||
+        machines.error != null ||
+        machines.view.machines.length > 0) && (
+        <MachineLinks half={machines} platform={platform} />
+      )}
+
       {running && (
         /*
          * How a device gets here — one row, because there is one way in.
@@ -1496,12 +1829,22 @@ export function RemoteView({
             that lasts a minute.
           */}
           {/* One line, with the rest behind the eye. Three paragraphs stood
-              between the heading and the button that mints the code. */}
+              between the heading and the button that mints the code.
+
+              The note behind it used to say "you still approve the device
+              **below**", which was true while the roster followed this block
+              and stopped being true when the rosters moved above it. A
+              positional word in copy is a claim about layout, and it is the
+              kind that goes stale silently. The clause is simply gone rather
+              than re-pointed: naming the roster's heading instead would be a
+              second layout claim, and it would name a heading that is not on
+              screen at all for the reader most likely to be reading this —
+              somebody with no devices yet, for whom that roster is withheld. */}
           <p className="settings-prose">
             <span className="settings-label-line">
               A code is good for one device and lasts {PAIRING_WINDOW_SECONDS} seconds.
               <Note label="pairing codes">
-                {`Typing the code asks to be let in; it lets nothing in on its own — you still approve the device below, by hand, on this screen. Pairing has two ends and you are standing at both: one screen shows a code and the other is typed into, which is why both halves are here rather than on two screens.`}
+                {`Typing the code asks to be let in; it lets nothing in on its own — you still approve the device by hand, on this screen. Pairing has two ends and you are standing at both: one screen shows a code and the other is typed into, which is why both halves are here rather than on two screens.`}
               </Note>
             </span>
           </p>
@@ -1718,294 +2061,12 @@ export function RemoteView({
       )}
 
       {/*
-        Only when something is attached.
-
-        An empty "Attached now — Nothing is attached." group is a heading and a
-        sentence saying the heading has nothing under it, on a page whose whole
-        complaint was that it says too much before anything has happened. The
-        list appears when there is a list.
-      */}
-      {running && connections.length > 0 && (
-        <Group title={`Attached now — ${connections.length}`}>
-          {(
-            <ul className="remote-list">
-              {connections.map((connection) => (
-                <li className="remote-row remote-row-live" key={connection.id}>
-                  <span className="remote-live" role="status">
-                    <span className="remote-live-dot" aria-hidden="true" />
-                    Attached
-                  </span>
-                  <span className="remote-row-text">
-                    <span className="remote-row-name">{connection.deviceName}</span>
-                    <span className="remote-row-note">{connectionNote(connection, now)}</span>
-                  </span>
-                  <Button
-                    tone="danger"
-                    onClick={() => actions.disconnect(connection)}
-                    disabled={busy !== null}
-                  >
-                    {busy === `connection:${connection.id}` ? 'Closing…' : 'Disconnect'}
-                  </Button>
-
-                  {/* Only when there is one. Most phones never tap a port, and
-                      a "no pages open" line under every row would be noise
-                      about the ordinary case. */}
-                  {connection.tunnels.length > 0 && (
-                    <ul className="remote-tunnels">
-                      {connection.tunnels.map((tunnel) => (
-                        <li className="remote-tunnel" key={tunnel.id}>
-                          <span className="remote-tunnel-text">
-                            <span className="remote-tunnel-name">
-                              <code className="remote-tunnel-port">localhost:{tunnel.port}</code>
-                              <span className="remote-tunnel-what">
-                                open in a browser on this phone
-                              </span>
-                            </span>
-                            <span className="remote-row-note">{tunnelNote(tunnel, now)}</span>
-                          </span>
-                          <Button
-                            onClick={() => actions.stopTunnel(connection, tunnel)}
-                            disabled={busy !== null}
-                          >
-                            {busy === `tunnel:${tunnel.id}` ? 'Stopping…' : 'Stop'}
-                          </Button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {connections.some((connection) => connection.tunnels.length > 0) && (
-            // Said once, under the list, rather than on every row. The thing
-            // worth knowing is that Stop is cheap — a person who has to guess
-            // whether "Stop" kills their session will leave a page open on this
-            // Mac rather than risk it — and that fits on one line.
-            <p className="settings-prose">
-              <span className="settings-label-line">
-                <strong>Stop closes the page, and nothing else.</strong>
-                <Note label="open ports">
-                  {`A port listed above is being served from ${machine} to that phone’s browser, over the same connection. Stopping it leaves the session running and the device approved, and the phone can tap the port again.`}
-                </Note>
-              </span>
-            </p>
-          )}
-        </Group>
-      )}
-
-      {/*
-        Only once there is a device.
-
-        Two gates, and they answer two different objections. The first is the
-        old one: before the first answer lands, "no device has been paired" is a
-        claim nothing supports. The second is his — *"until there is nothing
-        activated or something or no device is connected… this only text doesn't
-        make any sense"* — and it is about a page that opened with four headings
-        and five paragraphs describing devices that did not exist. An empty
-        roster under a heading is not information; the way to get one is the
-        pairing block above, which is where somebody with no devices should be
-        looking.
-      */}
-      {state !== null && devices.length > 0 && (
-        <Group title="Devices">
-          {pending.length > 0 && (
-            <p className="settings-prose">
-              {pending.length === 1 ? 'A device is' : `${pending.length} devices are`} waiting to be
-              let in. Approve only the one you are holding —{' '}
-              {pending.some((device) => device.fingerprint !== null)
-                ? `the phone shows its own fingerprint, and the row below shows what ${machine} received.`
-                : 'this one paired without a key, so there is no fingerprint to compare.'}
-            </p>
-          )}
-
-          {/*
-            The flow, above the roster and not in a dialog.
-
-            A modal would cover the list somebody is comparing against, and the
-            list is where the *other* pending device is — which is exactly the
-            moment they need to see both. It sits directly under the sentence
-            that says a device is waiting, so the words and the choice they are
-            about arrive together.
-          */}
-          {approving !== null && (
-            <DeviceApproval
-              device={approving.device}
-              platform={platform}
-              folders={approving.folders}
-              step={approving.step}
-              kind={approving.kind}
-              busy={busy !== null}
-              problem={problem}
-              onStep={actions.approvalStep}
-              onKind={actions.approvalKind}
-              onAddFolder={actions.approvalAddFolder}
-              onRemoveFolder={actions.approvalRemoveFolder}
-              onApprove={() =>
-                actions.approve(approving.device, approving.kind ?? 'guest', approving.folders)
-              }
-              onCancel={actions.cancelApproval}
-            />
-          )}
-
-          {(
-            <ul className="remote-list">
-              {devices.map((device) => (
-                <li className={`remote-row remote-row-${device.state}`} key={device.id}>
-                  <span className="remote-state">{STATE_LABEL[device.state]}</span>
-                  <span className="remote-row-text">
-                    <span className="remote-row-name">{device.name}</span>
-                    <span className="remote-row-note">
-                      Last seen {whenSeen(device.lastSeenAt, now)}
-                      {device.addedAt === null ? '' : ` · paired ${whenSeen(device.addedAt, now)}`}
-                    </span>
-                    {/*
-                      What this device is, stated on the row and not editable
-                      there.
-
-                      Three states and not two: `mine`, `guest`, and a device
-                      approved by a build older than the choice — which is read
-                      as a guest with no folders, and deserves a sentence saying
-                      why a phone that worked yesterday does not today. There is
-                      deliberately no control here; changing a kind means
-                      revoking and pairing again. See `device-kind.ts`.
-
-                      The copilot is named on both of the first two, and that is
-                      the entire remaining user interface for it. It used to be
-                      a panel below the folders with a Connect button, a code
-                      and three checkboxes; the kind decides it now, so the only
-                      honest thing left to draw is what the kind already means.
-                      Saying it on both rows rather than only the guest's is
-                      deliberate: "full access" is a phrase somebody reads past,
-                      and the question they actually arrived with is whether the
-                      phone in their hand can reach the copilot. Neither line is
-                      a control and neither can be clicked.
-                    */}
-                    {device.state === 'approved' && kinds !== null && (
-                      <span className="remote-row-note">
-                        {kinds.get(device.id) === 'mine' ? (
-                          <>Your device — full access, the copilot included.</>
-                        ) : kinds.get(device.id) === 'guest' ? (
-                          <>Guest — only the folders you chose. Never the copilot.</>
-                        ) : (
-                          <>
-                            Paired before folder approval existed, so it is treated as a guest and
-                            can open nothing. Revoke it and pair it again to choose.
-                          </>
-                        )}
-                      </span>
-                    )}
-                    {device.state !== 'revoked' &&
-                      (device.fingerprint === null ? (
-                        // Not a cosmetic gap. No key means no sealed channel,
-                        // so this device cannot come in through the relay at
-                        // all — said here rather than discovered the first time
-                        // it is tried from a hotel.
-                        <span className="remote-row-note">
-                          No key stored — this one paired before there were keys, so it cannot come
-                          in through the relay. Pair it again to fix that.
-                        </span>
-                      ) : (
-                        <span className="remote-row-note">
-                          <code className="remote-fingerprint">{device.fingerprint}</code>
-                        </span>
-                      ))}
-                  </span>
-                  <span className="settings-chips">
-                    {device.state === 'pending' && (
-                      <>
-                        {/*
-                          "Let it in…" rather than "Approve", and the ellipsis is
-                          doing work: this opens the flow that asks whose device
-                          it is and what it may open, and the old one-word button
-                          is exactly what made people believe the decision had
-                          been made when it had not.
-                        */}
-                        <Button
-                          tone="primary"
-                          onClick={() => actions.beginApproval(device)}
-                          disabled={busy !== null || approving?.device.id === device.id}
-                        >
-                          Let it in…
-                        </Button>
-                        <Button onClick={() => actions.deny(device)} disabled={busy !== null}>
-                          Deny
-                        </Button>
-                      </>
-                    )}
-                    {device.state === 'approved' && (
-                      <Button
-                        tone="danger"
-                        onClick={() => actions.revoke(device)}
-                        disabled={busy !== null}
-                      >
-                        {busy === `device:${device.id}` ? 'Revoking…' : 'Revoke'}
-                      </Button>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <p className="settings-prose">
-            <span className="settings-label-line">
-              <strong>Revoking is immediate.</strong>
-              <Note label="revoking">
-                {`The device is dropped where it stands — mid command, mid session — not at its next connection. Disconnecting is the gentler one: it only closes what is open now, and an approved device can attach again straight away.`}
-              </Note>
-            </span>
-          </p>
-        </Group>
-      )}
-
-      {/*
-        Folders, only once there is a device to choose them for.
-
-        It rendered on every visit, three paragraphs of it, ending in "No device
-        has been approved yet, so there is nothing to choose for." — an
-        explanation of a decision the reader cannot make yet, on a page they
-        opened to pair their first phone. `grantableDevices` already filters to
-        approved devices; the caller now withholds the whole block on the same
-        condition, so the words arrive with the choice they are about.
-      */}
-      {approved.length > 0 && folders}
-
-      {/*
         The copilot panel stood here, directly under the folders, and it is gone
         rather than moved. See `RemoteViewProps` above for his sentence: pairing
         a device as your own **is** the copilot's authorisation, so there was no
         longer a second question for this block to ask. What it used to say is
         now one clause on each approved device's row.
       */}
-
-      {/*
-        The outward half, last — and only when there is one.
-
-        The order is the argument the section makes, and it runs one way:
-        this machine, then what may reach it, then how to pair another, then
-        what it can reach. Everything above this line is about something
-        arriving here and is governed by the switch at the top; the machines
-        below are dialled out to and keep working with that switch off, which
-        is exactly why they come after rather than being mixed into the device
-        roster.
-
-        With no machine paired this was a heading, two lines of prose about
-        pairing going both ways, and a sentence saying the list was empty —
-        three more paragraphs on a page that already had too many, describing a
-        capability whose entry point ("Add another computer") is in the pairing
-        block above. It is drawn once there is a machine to draw, while the read
-        that would find one is still running or has failed, and — always — when
-        the build cannot reach the machine channels at all, because that is a
-        broken build rather than an empty list and has to be said.
-      */}
-      {(!machines.wired ||
-        machines.reading ||
-        machines.error != null ||
-        machines.view.machines.length > 0) && (
-        <MachineLinks half={machines} platform={platform} />
-      )}
     </>
   )
 }
@@ -2407,25 +2468,36 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
 
   /* ------------------------------------------------- the machines half -- */
 
-  /**
-   * The window's route to the new-session dialog, or null when this section is
-   * drawn outside one — the harness, a test, `renderToStaticMarkup`.
+  /*
+   * `useMachineSessionOpener()` was read here — the window's route to the
+   * new-session dialog, threaded into `machineActions` so a machine's card
+   * could draw a **New session** button.
    *
-   * Read here rather than passed down from `MachinesPanel`, and for the same
-   * reason `ServerAdvanced` reads its own opener rather than taking it through
-   * `ServerPage`: the only route from the window to this component is
-   * `PanelView`, which draws all ten views from a `PanelId` and takes no
-   * per-view props, so a prop would have to be widened onto that file and then
-   * carried through two components that have no use for it. Nothing between the
-   * window and this line has to know the opener exists.
+   * The card no longer draws it: *"we don't need this new session thing here.
+   * Just disconnect and forget thing is good enough for us."* The press lives
+   * on the rail's machine heading, which reaches the same
+   * `openNewSessionDialog(null, machineId)` — by a plain prop from `App.tsx`,
+   * `onNewMachineSession={(machineId) => openNewSessionDialog(null, machineId)}`,
+   * not through this context, which never fed the rail.
    *
-   * It goes into `machineActions` below rather than into `MachineLinks`
-   * directly, because the presses are the thing that has to be pinned: there is
-   * no DOM in this repository's test environment, so a handler left inside a
-   * component's closure is reachable by nothing but a person clicking it in a
-   * packaged build. See `new-session-context.ts` for what this replaced.
+   * A first draft of this note ended "the context and its provider are
+   * untouched — this section is simply no longer *one of* its readers", and
+   * that was a guess dressed as a fact. It was the **only** reader: after this
+   * line went, `grep -rn useMachineSessionOpener src/renderer` finds no call
+   * site at all — the hook's own definition, and notes like this one recording
+   * that it went. `MachineSessions.Provider` is still mounted in `App.tsx`,
+   * around a tree in which nobody consumes it.
+   * Removing the context, the hook and that provider is owed to whoever owns
+   * `App.tsx`; it cannot be done from this side, because deleting the module
+   * would break the import that mounts the provider.
+   *
+   * Worth one caution to whoever picks that up: this hole was cut for a reason
+   * that has not gone away. Anything on this page that ever needs the *window*
+   * again — not the machines bridge, the window — will need the same shape
+   * back, because `PanelView` draws all ten views off a `PanelId` and threads
+   * no per-view props. `new-session-context.ts` still carries that whole
+   * argument, and it is the part worth reading before deleting the file.
    */
-  const newSessionOpener = useMachineSessionOpener()
 
   const [machineView, setMachineView] = useState<MachinesView>({
     machines: [],
@@ -2688,16 +2760,6 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       setError: setPairError,
       setOpen: setOpenSession,
       isAlive: () => alive.current,
-      /*
-        Null travels rather than being turned into a no-op, so that "there is no
-        window around this page" reaches the row that has to decide whether to
-        draw a button at all. Wrapped in an arrow rather than passed as
-        `newSessionOpener.open`, because an unbound method would work only for as
-        long as the window's opener stays a closure over its own state — and the
-        day it stops being one, this line would break somewhere else.
-      */
-      openNewSession:
-        newSessionOpener === null ? null : (machineId: string) => newSessionOpener.open(machineId),
     }),
   }
 

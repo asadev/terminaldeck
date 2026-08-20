@@ -4,12 +4,13 @@ import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 /**
- * No shared screen names a specific AI tool, model or editor.
+ * No shared screen uses an outside product as an illustration, and no screen
+ * offers one agent where a choice exists.
  *
- * ## The rule, in his words
+ * ## The rule, in his words, in two passes
  *
- * From the recorded review of 2026-08-17, said while looking at the copilot's
- * folder step but stated as a rule for the whole product:
+ * The first pass, from the recorded review of 2026-08-17, said while looking at
+ * the copilot's folder step but stated as a rule for the whole product:
  *
  *   > *"We are everywhere mentioning CLAUDE.md… if we mention Claude everywhere
  *   > then it will be specific to Claude, even the previous sections. You should
@@ -18,18 +19,77 @@ import { describe, expect, it } from 'vitest'
  *   > Claude. Maybe we can use some other keyword — we can give `.md` files or
  *   > MD files only or something else, whatever is the best word."*
  *
- * And again on the phone, about the sessions list:
+ * This file read that as *"no user-facing string names a specific AI tool"*, and
+ * that reading was too strict. On 2026-08-19 he **refined** it — and refined is
+ * the word, because nothing above is withdrawn; what changes is which half of it
+ * was doing the work:
  *
- *   > *"running in terminal or VS Code — we don't need to mention VS Code
- *   > because it's another one… but VS will be a specific thing."*
+ *   > *"I didn't mean that you cannot use the Claude name — you must use the
+ *   > Claude name where it actually makes sense, and if you are not prioritizing
+ *   > Claude only. The only thing is I just did not want to use the name of
+ *   > third-party applications — as an example, where we say, you name in one
+ *   > field VS Code as an example just to give people an example in the
+ *   > description, 'this is similar to that' or something like that. So in your
+ *   > examples, when you are describing something and you are giving examples of
+ *   > anything, don't give the examples of the other tools. And the second thing
+ *   > — where we can have an option between Claude, Codex, Gemini, in those
+ *   > places don't name only Claude. Give all the options, so they don't feel
+ *   > like it is all about Claude. Maybe some users are only using Codex, they
+ *   > never use Claude. You can use the name of Claude, Codex and all of these
+ *   > names wherever it is needed — just don't give only one single option
+ *   > everywhere."*
  *
- * So: **user-facing copy describes the category, not the vendor.** "Your
- * instructions file", not `CLAUDE.md`. "Your own terminal or editor", not
- * "Terminal or VS Code". This is the same class of rule as `BRAND.name` living
- * in one file — a name that leaks into prose is a name that has to be found
- * again in fifty places the next time it changes.
+ * So the rule has three parts, and only two of them are things a string scan can
+ * be trusted with.
  *
- * ## Why it needs a test and not just a careful afternoon
+ *  1. **Naming an agent is fine when the text is about that agent.** *"Claude
+ *     Code 2.1.235, signed in"* on a server that has Claude Code on it is
+ *     correct and stays. So does `claude mcp add` in a `<code>` span, so does
+ *     `~/.gemini/settings.json`, and so does every row in the catalogue. This is
+ *     not an exemption any more — it is the rule. **Not checked here**, because
+ *     there is nothing left to check: it is the permitted case.
+ *  2. **Never an outside product as an illustration.** *"similar to VS Code"*,
+ *     *"like Codex does"*, *"think of it as X"*. This is the part he actually
+ *     objected to, and it is checked below, twice over: editor and IDE names are
+ *     refused outright, and any outside product is refused when it follows a
+ *     comparison lead-in.
+ *  3. **Never one agent where a choice should exist.** A screen that could carry
+ *     Claude Code, Codex and Gemini offers all three. **This is a product rule,
+ *     not a lint, and this file does not pretend to check it.** Whether a screen
+ *     *could* support three agents is a question about what the code behind it
+ *     can do, and no scan over string literals can answer it — a Claude-only
+ *     wizard whose every sentence says "an agent" would pass every assertion in
+ *     this file while being exactly the thing he complained about. It is checked
+ *     by the screens' own tests, where the question is answerable: server setup
+ *     offers all three (`setup.test.ts`), and the copilot's picker does
+ *     (`copilot-setup.test.tsx`).
+ *
+ * The two filenames survive part 3 rather than part 2, and that is why they are
+ * still refused below: a settings pane that tells everybody to go and edit their
+ * CLAUDE.md is naming one agent's file on a screen where three agents' files
+ * would do, which is *"don't give only one single option everywhere"* in its
+ * most literal form.
+ *
+ * ## What was deleted when the rule was refined, and why that is not a weakening
+ *
+ * Until today this file carried `ABOUT_A_NAMED_AGENT`: twenty-three modules,
+ * each with a paragraph arguing that its subject genuinely was one named agent,
+ * and a list of the exact strings the argument covered. Every one of those
+ * arguments is now simply **part 1**, which is allowed outright, so the list was
+ * a licence for something that no longer needs licensing. Keeping it would mean
+ * this suite went on enforcing the reading he corrected — and it would have
+ * blocked the work that corrected it, since server setup now has to say the
+ * words "Codex CLI" and "Gemini CLI" on the same screen as "Claude Code".
+ *
+ * What replaces it needs no exemptions at all, which is the stronger shape: two
+ * universal rules that no module can buy its way out of. Nothing in this app is
+ * legitimately *about* a third-party editor, and nothing in it legitimately
+ * makes a comparison to somebody else's product, so neither rule has a case to
+ * carve out. The only escape hatch left is {@link DISCLOSED_FILENAMES}, which is
+ * two strings long and each one discloses a file about to appear on somebody's
+ * disk.
+ *
+ * ## Why any of it needs a test and not just a careful afternoon
  *
  * The sweep that produced this file found thirty-odd strings, and three of them
  * were not merely branded but **wrong**: a settings editor whose `aria-label`
@@ -37,43 +97,23 @@ import { describe, expect, it } from 'vitest'
  * confirmation offering to keep a backup "as CLAUDE.md.bak" when the backup
  * written is `instructions.md.bak`, and a paragraph telling somebody a rule was
  * "written in its CLAUDE.md" when it is written into the layer file two blocks
- * above. Every one of those was defensible on the day it was typed and none of
- * them was caught by a compiler, a review or nine thousand tests, because a
- * string that is merely *untrue* type-checks perfectly.
+ * above. Every one was defensible on the day it was typed and none was caught by
+ * a compiler, a review or nine thousand tests, because a string that is merely
+ * *untrue* type-checks perfectly.
  *
- * A vendor name in copy is therefore not only a style question. It is a claim
- * about a specific product's behaviour, made on a screen that may be showing a
- * different product entirely, and the way it decays is by being right when it
- * was written.
- *
- * ## This is not a ban on the word
- *
- * Three cases keep the name, and all three are the same case: **naming a thing
- * the person actually chose.**
- *
- *  1. **A row that *is* that agent.** The session card that says `Claude Code`
- *     under a Claude Code session, the catalogue entry for the Gemini CLI, the
- *     hooks row that writes `~/.gemini/settings.json`. Neutralising these would
- *     delete the only information on the row.
- *  2. **A quotation of a specific CLI.** `claude mcp add` in a `<code>` span, an
- *     error saying which binary could not be found, a paragraph about a feature
- *     that is one CLI's feature. Renaming a command makes it stop working.
- *  3. **A path.** `~/.claude/settings.json` is where a file is. A person told
- *     only that "some settings file" governs their prompts cannot go and change
- *     it, and renaming the directory in prose would send them to a place that
- *     does not exist.
- *
- * Code, identifiers, comments, ids and filenames are untouched. This is about
- * what a person reads.
+ * That argument survives the refinement intact, and it is worth being clear that
+ * it now cuts the other way as often as not: the repair for those three was to
+ * make the sentence true, and under part 1 the true sentence is sometimes the
+ * one with the name in it.
  *
  * ## What counts as user-facing, mechanically
  *
  * Comments never appear — this walks the TypeScript AST, where a comment is not
  * a node — so the long explanations above every string in this codebase are free
- * to name whatever they need to. What is collected is:
+ * to name whatever they need to, including this one. What is collected is:
  *
- *   - JSX text, unless it sits inside `<code>`, `<pre>` or `<kbd>`, which is
- *     case 2 above rendered as itself;
+ *   - JSX text, unless it sits inside `<code>`, `<pre>` or `<kbd>`, which is a
+ *     quotation rendered as itself;
  *   - JSX attributes a person hears or reads: `title`, `placeholder`,
  *     `aria-label`, `alt`, and the copy props this codebase passes around;
  *   - object properties with those names, which is how the settings schema, the
@@ -85,77 +125,45 @@ import { describe, expect, it } from 'vitest'
  * The middle two are read *through whatever they are built out of* and at any
  * length — a call, an array, a ternary, an object — because a copy key is a
  * declaration that its value is words on a screen, and a label is a label at one
- * word. See {@link copyLiteralsIn}, and hole 4 below for the two strings that
- * cost us.
+ * word. See {@link copyLiteralsIn}.
  *
  * Before matching, four shapes are cut out of the text, because they are not
  * prose even when they sit in the middle of it: URLs, paths, `SCREAMING_SNAKE`
- * environment variables, and spans inside backticks — which is how every
- * command in this codebase's prose is written.
+ * environment variables, and spans inside backticks — which is how every command
+ * in this codebase's prose is written.
  *
- * ## Three holes, closed on 2026-08-18
+ * ## Four holes in the collector, closed on 2026-08-18 and 2026-08-19
  *
- * A completeness audit of the 0.4.0 build found four vendor strings still live
- * on the two surfaces the review names — settings and pop-ups — with this file
- * green. Every one of them was a hole in the collector rather than a judgement
- * anybody had made, and all three holes were the same mistake in different
- * clothes: **the guard was reading something other than what a person reads.**
+ * These are about **where the collector was willing to look**, and they outlive
+ * the change of rule entirely — a scanner that cannot see a string cannot apply
+ * any rule to it. All four were the same mistake in different clothes: *the
+ * guard was reading something other than what a person reads.*
  *
  *  1. **Backticks sheltered anything at all.** `prosePartOf` deleted every
- *     backticked span before matching, so `` `CLAUDE.md` `` in the middle of a
- *     sentence was invisible. That was aimed at commands — case 2 — and it hit
- *     names as well. A span is now sheltered only when it holds no capitalised
- *     word, which is what tells `brew upgrade gemini-cli` (a thing you type)
- *     from `Claude Code` (a thing you say). See {@link shelters}.
- *
- *  2. **Nothing sheltered the two names he pointed at.** The stricter rule ran
- *     on the same stripped text as the loose one, so backticks and `<code>`
- *     hid `CLAUDE.md` from it too. It now reads the text with backticks
+ *     backticked span before matching. A span is now sheltered only when it
+ *     holds no capitalised word, which is what tells `brew upgrade gemini-cli`
+ *     (a thing you type) from `Claude Code` (a thing you say). See
+ *     {@link shelters}.
+ *  2. **Nothing sheltered the two filenames.** The strict rule ran on the same
+ *     stripped text as the loose one. It now reads the text with backticks
  *     *unwrapped* and reads the inside of `<code>` as well — paths still
- *     excepted, because `.vscode/*` in a `.gitignore` template is a location
- *     and not a sentence.
+ *     excepted, because `.vscode/*` in a `.gitignore` template is a location and
+ *     not a sentence.
+ *  3. **A name composed at runtime was never a string.** Template literals are
+ *     now resolved: an interpolation of a string constant declared in the same
+ *     file is substituted with its value, and one that cannot be resolved
+ *     contributes the *property names* chosen off it — never the root
+ *     identifier, so ordinary variables cannot trip it.
+ *  4. **A copy key was only read when its value was a bare string literal.**
+ *     `label={baseName(folderFile?.path ?? 'CLAUDE.md')}` and
+ *     `touches: ['CLAUDE.md']` both reached a shipped screen with this file
+ *     green. The repair is positional rather than lexical, and
+ *     {@link readsLikeASentence} argues why counting one word as a sentence
+ *     would have been the wrong fix.
  *
- *  3. **A name composed at runtime was never a string.** `` `The copilot runs
- *     on ${PROVIDERS.claude.label}` `` holds no vendor name anywhere in the
- *     source. Template literals are now resolved: an interpolation of a string
- *     constant declared in the same file is substituted with its value, and one
- *     that cannot be resolved contributes the *property names* chosen off it —
- *     `claude` and `label` above — but never the root identifier, so ordinary
- *     variables cannot trip it.
- *
- * ## The fourth hole, closed on 2026-08-19
- *
- * A second audit — this one against the recorded reviews rather than against the
- * code — found two more live strings with this file still green, and both were
- * the same hole: **a copy key was only read when its value was a bare string
- * literal.** Anything else in that position was not examined at all.
- *
- *  - `label={baseName(folderFile?.path ?? 'CLAUDE.md')}` in Settings → Copilot.
- *    `label` is a copy key, and `FileEditor` puts it straight onto the
- *    textarea's `aria-label`, so a screen-reader user editing a box captioned
- *    "The folder's own instructions" heard a vendor's filename instead. It was
- *    not even a fallback: the folder row is emitted whether or not the file
- *    exists, so the path was always that path and the `??` never ran.
- *  - `touches: ['CLAUDE.md']` on the readiness fix, printed under "Changes" on
- *    the always-visible half of the card, on any repository with any agent in
- *    it. A one-word string inside an array: too short for the catch-all and the
- *    wrong shape for the property branch.
- *
- * The repair is positional rather than lexical, and {@link readsLikeASentence}
- * argues why counting one word as a sentence would have been the wrong fix.
- * `touches` joined {@link COPY_KEYS} at the same time, and — since a clean tree
- * is also what a collector with a hole in it reports — the last `describe` in
- * this file now hands the collector those two lines of source and asks what it
- * saw, rather than inferring its reach from today's sources being tidy.
- *
- * A fifth string the first audit found is the one that proves where the line is,
- * and it is deliberately still invisible here: `Your own Claude Code install`
- * is composed from `AGENT_CATALOG[account.provider].label`, keyed by a value
- * only known at runtime. No scanner can see that, and none should — reading a
- * name out of the catalogue is the *correct* way to name an agent, and it is
- * what `AccountChip`'s Run button was changed to do on the same day. Where a
- * name is chosen at runtime, the neutrality of the screen is pinned by that
- * screen's own render test; `copilot-setup.test.tsx` carries that one.
+ * Since a clean tree is also what a collector with a hole in it reports, the last
+ * `describe` in this file hands the collector a few lines of source and asks what
+ * it saw, rather than inferring its reach from today's sources being tidy.
  */
 
 const ROOT = resolve(__dirname, '..')
@@ -190,41 +198,144 @@ const SURFACES = [
  * that is never rendered and never read, and the honest way to hold it to a copy
  * rule is not to hold it to one.
  *
- * This is a list of one on purpose. A module skipped here is a module where a
- * bad string cannot be caught at all, which is a much larger hole than an
- * exemption in {@link ABOUT_A_NAMED_AGENT} — those still fail on anything the
- * scanner has not seen before.
+ * This is a list of one on purpose, and since the module exemptions were deleted
+ * it is the only place in this file where a string is not looked at. A module
+ * skipped here is a module where a bad string cannot be caught at all, which is
+ * a much larger hole than {@link DISCLOSED_FILENAMES} — those are two exact
+ * strings, and anything else in the same sentence still fails.
  */
 const NOT_COPY_AT_ALL = new Set(['src/main/copilot-instructions-history.ts'])
 
 /**
- * The names, and the ones deliberately left out.
+ * Somebody else's editor, banned outright and with nowhere to appeal.
+ *
+ * These are the *"third-party applications"* of the correction, and they get the
+ * absolute rule because this app has no honest use for their names. It is a
+ * terminal workspace: it does not integrate with any of them, cannot launch one,
+ * and reports nothing about one. The only reason a name from this list has ever
+ * reached this tree's copy is the reason he gave — as an example — so banning the
+ * word and banning the illustration come to the same thing, and a rule where
+ * those two coincide is the only kind worth automating.
+ *
+ * `Cursor` is deliberately absent, and it is the one that proves the list is
+ * chosen rather than copied off a search: the editor shares its name with the
+ * caret, and the only occurrences in this tree are *"an unusable cursor"* and
+ * *"the server repeated a cursor"*. A rule that fires on those teaches people to
+ * add exemptions, and a guard answered with exemptions has stopped guarding.
+ *
+ * `Emacs` and `Eclipse` are out for the same reason in different clothes — one
+ * names a keybinding mode a terminal may legitimately offer, the other is an
+ * ordinary English word.
+ *
+ * `Xcode` and `Android Studio` came off this list the first time it was run, and
+ * they are the entries worth reading twice. The tree answered with
+ * `confine/seatbelt.ts`, which writes *"The Xcode tool shim's cache, and nothing
+ * else in that shared directory"* into a generated macOS sandbox profile beside
+ * the rule that grants that one path. That is part 1 in a place nobody would
+ * think to look for it: the directory really is Xcode's, and a comment naming
+ * its owner is the only thing that makes the rule below it reviewable. A
+ * toolchain whose files this app has to name on disk cannot carry an *absolute*
+ * ban, or the ban starts collecting exemptions — which is precisely how the
+ * previous version of this file lost its teeth. They remain covered by
+ * {@link comparisons}, which is the rule that was actually being asked for.
+ *
+ * `JetBrains` is in, but `JetBrains Mono` is cut out first by {@link prosePartOf}:
+ * it is the monospace font three terminals ask for by name, and a font family is
+ * not an IDE.
+ */
+const EDITORS =
+  /\b(vs ?code|vscode|visual studio|jetbrains|intellij|pycharm|webstorm|goland|rubymine|sublime text|textmate|windsurf|notepad\+\+)\b/i
+
+/**
+ * Every outside product whose name must not be used to illustrate something.
+ *
+ * Wider than {@link EDITORS} on purpose, and the agents are on it: part 2 of the
+ * rule is about *examples*, and *"works like Claude Code does"* in the
+ * description of an unrelated feature is the same move as *"similar to VS
+ * Code"*. Naming Claude Code while describing Claude Code is part 1 and is not
+ * matched here, because {@link comparisons} only looks at what follows a
+ * comparison.
  *
  * `Copilot` is absent because it is **this product's own word** for its
  * assistant — the review uses it on every page — and it is a common noun here,
  * not GitHub's product.
  *
- * `Cursor` is absent for the opposite reason: the editor shares its name with
- * the caret, and the only occurrences in this tree are "an unusable cursor" and
- * "the server repeated a cursor". A rule that fires on those teaches people to
- * add exemptions, which is how a guard stops guarding.
- *
- * `JetBrains` is present, but `JetBrains Mono` is cut out first — it is the
- * monospace font three terminals ask for by name, and a font family is not an
- * IDE.
+ * `Chrome`, `Edge` and `Cursor` are absent for a sharper version of the same
+ * reason: this codebase already uses all three words for its own things — the
+ * window chrome and `--chrome-solid*`, the edge of a pane, the text caret. A
+ * lead-in immediately before one of them would be a real comparison, but so
+ * would *"sits at the edge, like Edge"*, and the rate at which those two are
+ * confused is not worth the exemptions it would buy. `Docker Desktop` and
+ * `Warp Terminal` are spelled in full for the same reason: plain `docker` is a
+ * fact this app reports about a server, and a plain `warp` is a thing a cursor
+ * does.
  */
-const VENDORS =
-  /\b(claude|anthropic|gemini|codex|openai|chatgpt|vs ?code|vscode|visual studio|jetbrains|intellij)\b/i
+const OUTSIDE_PRODUCTS = new RegExp(
+  `${EDITORS.source}|\\b(claude|anthropic|gemini|codex|openai|chatgpt|github|slack|notion|xcode|android studio|docker desktop|iterm|warp terminal|tmux)\\b`,
+  'i',
+)
 
 /**
- * The two he named out loud, banned everywhere with no module exemption.
+ * The lead-ins that turn a name into an illustration.
  *
- * These are the exact strings the review pointed at, so they get the stricter
- * rule: a module being "about Claude Code" is not a licence to tell somebody to
- * go and edit their CLAUDE.md, because the whole complaint was that the phrase
- * had spread into copy where any agent could be meant. The only way past this
- * one is {@link DISCLOSED_FILENAMES}, which is three strings long and each of
- * them is disclosing a file that is about to appear on somebody's disk.
+ * This is the mechanical half of part 2, and it is deliberately the **narrow**
+ * half. The rule as he stated it is *"when you are describing something and you
+ * are giving examples of anything, don't give the examples of the other tools"*
+ * — which is about any outside product, whoever makes it, and no list can hold
+ * all of those. The general version was tried and it does not work: a check for
+ * *any* capitalised word after `such as` fires on this app's own vocabulary —
+ * "alerts like Alerts", "a pane such as Servers" — and the exemptions it would
+ * collect are exactly what killed the previous version of this file.
+ *
+ * So the automatic check is confined to {@link OUTSIDE_PRODUCTS}, a list of
+ * names somebody has to have typed on purpose, and **the general rule is written
+ * down here for a person to apply**: if you are reaching for another company's
+ * product to explain what one of ours does, delete it and describe the thing
+ * itself. A reader who needs the comparison to understand the sentence is a
+ * reader the sentence has already failed.
+ *
+ * `the way` earns its place on the list because it is the form this codebase
+ * actually reaches for — `the way Finder does`, `the way Windows does` — and it
+ * is only a comparison when a proper name follows it, which is what the pattern
+ * requires. `the way this app looks for an assistant` is prose and matches
+ * nothing.
+ */
+const COMPARISON_LEAD_IN =
+  /\b(?:like|similar to|similarly to|such as|e\.?g\.?|for example|for instance|just like|much like|the way|analogous to|akin to|the same as|compared to|compare with|think of it as|in the style of|as in)\s+(?:the\s+|a\s+|an\s+)?["'“‘(]*$/i
+
+/**
+ * Where one of those names is being used as an illustration rather than named.
+ *
+ * The text is walked once per occurrence of an outside product's name, and what
+ * decides it is **what comes before the name, not the name itself** — which is
+ * the whole distinction the correction draws. `Claude Code 2.1.235, signed in`
+ * has a sentence start before it and passes. `works similar to Claude Code` has
+ * a comparison before it and fails.
+ */
+function comparisons(text: string): string[] {
+  const found: string[] = []
+  const scan = new RegExp(OUTSIDE_PRODUCTS.source, 'gi')
+  for (const hit of text.matchAll(scan)) {
+    const before = text.slice(0, hit.index)
+    if (COMPARISON_LEAD_IN.test(before)) found.push(`${before.trimStart().slice(-40)}${hit[0]}`)
+  }
+  return found
+}
+
+/**
+ * The filenames that pick one agent for a reader who may be running another.
+ *
+ * Still banned everywhere with no module exemption, and now for part 3's reason
+ * rather than part 1's: a settings pane or a pop-up that says *"edit your
+ * CLAUDE.md"* has silently chosen one of three agents on a screen where all
+ * three are possible, which is the *"don't give only one single option"* half of
+ * the correction. `VS Code` is here as well as in {@link EDITORS} because it is
+ * the string he pointed at by name, on the phone, about the sessions list:
+ *
+ *   > *"running in terminal or VS Code — we don't need to mention VS Code
+ *   > because it's another one… but VS will be a specific thing."*
+ *
+ * The only way past this one is {@link DISCLOSED_FILENAMES}.
  */
 const NAMED_IN_THE_REVIEW = /\bCLAUDE\.md\b|\bGEMINI\.md\b|\bVS ?Code\b|\bVisual Studio Code\b/i
 
@@ -234,6 +345,11 @@ const NAMED_IN_THE_REVIEW = /\bCLAUDE\.md\b|\bGEMINI\.md\b|\bVS ?Code\b|\bVisual
  * Exact strings rather than files: an exemption that covered `readiness.ts`
  * would let the *next* sentence in it name a filename too, and the point of the
  * hard rule is that nothing new gets in.
+ *
+ * This is now the only exemption list in the file. Both entries survive the
+ * 2026-08-19 correction unchanged, because neither is choosing an agent for
+ * anybody — they are both disclosing what is about to be written where, after
+ * the choice has already been made.
  */
 const DISCLOSED_FILENAMES: ReadonlyArray<{ text: string; because: string }> = [
   {
@@ -249,312 +365,6 @@ const DISCLOSED_FILENAMES: ReadonlyArray<{ text: string; because: string }> = [
       'The first line of the file that fix writes, not a line of this app. A Markdown document titling ' +
       'itself with its own filename is the convention every one of these files follows, and it is read in ' +
       'an editor rather than in this app.',
-  },
-]
-
-/**
- * Modules whose subject genuinely is one named agent.
- *
- * Every entry says which of the three allowed cases it is and why the sentence
- * would be worse without the name. A module goes on this list only when
- * neutralising it would delete information or make a claim untrue — never
- * because the rewrite was awkward.
- *
- * The list is asserted to be exactly used, in both directions: an entry that
- * stops matching anything fails the suite rather than sitting here forever
- * describing a string somebody deleted two releases ago, and — since
- * 2026-08-18 — a *new* vendor name in an exempted module fails too.
- *
- * That second half is the whole of hole 2. `because` is one sentence about a
- * module; `allows` is the copy that sentence was written about, exactly as the
- * collector reads it. Before this existed, "this module is about Codex" was a
- * standing licence for anything anybody added to it afterwards, and twenty-three
- * modules held one. Now the licence covers the strings it was granted for and
- * nothing else, so a new leak in the most-exempted file in the tree still fails
- * this suite — which is the property the guard is supposed to have.
- *
- * Keeping `allows` up to date is meant to be a small, deliberate act: run the
- * suite, read the string it prints, and either neutralise it or paste it in.
- */
-const ABOUT_A_NAMED_AGENT: ReadonlyArray<{
-  file: string
-  because: string
-  /** The exact strings in that file the exemption covers, trimmed as collected. */
-  allows: readonly string[]
-}> = [
-  {
-    file: 'src/shared/agent-catalog.ts',
-    because:
-      'The catalogue itself. Every string is one agent’s row — its label, its one-line description, its ' +
-      'install command, and the `verified` note recording what was run on a real machine and what it ' +
-      'answered. This is case 1 in its purest form: the row is the agent.',
-    allows: [
-      'Claude Code',
-      'Anthropic\'s agentic CLI. Writes transcripts, so token and context tracking work.',
-      'Codex CLI',
-      'OpenAI\'s coding agent. Sign in with a ChatGPT account.',
-      '`~/.codex/plugins/.plugin-appserver/codex --version` → codex-cli 0.146.0-alpha.3.1, and `login status` → "Logged in using ChatGPT" while a fresh CODEX_HOME answers "Not logged in". The npm launcher on PATH exits 1 with a spawn ENOENT for its own vendored binary, which is why `alternateBins` is not empty.',
-      'Gemini CLI',
-      'Gemini keeps one login per machine, in a keychain entry that is the same for every configuration directory — so a second Gemini account here would replace the first rather than sit beside it. The one login below is the machine’s, and signing in from it signs Gemini in everywhere.',
-    ],
-  },
-  {
-    file: 'src/main/prerequisites.ts',
-    because: 'Setup rows derived from the catalogue, one per agent. "Run Codex sessions" is that agent’s row.',
-    allows: [
-      'Run Claude Code sessions',
-      'Run OpenAI Codex sessions',
-      'Run Gemini CLI sessions',
-    ],
-  },
-  {
-    file: 'src/main/hooks.ts',
-    because:
-      '`HOOK_PROVIDERS`: one entry per agent, each naming its own settings file, its own event names and — ' +
-      'for Codex — the config key that has to be set before it runs hooks at all. Neutralising the ' +
-      'requirement line would leave a row that silently does nothing.',
-    allows: [
-      'Claude Code',
-      'Codex CLI',
-      'Codex only runs hooks with `codex_hooks = true` under [features] in ~/.codex/config.toml.',
-      'Gemini CLI',
-    ],
-  },
-  {
-    file: 'src/renderer/settings/settings-schema.ts',
-    because: 'Per-agent option labels in the settings schema, the same three names the catalogue declares.',
-    allows: [
-      'Claude Code',
-      'Codex CLI',
-      'Gemini CLI',
-    ],
-  },
-  {
-    file: 'src/main/gemini-signin.ts',
-    because:
-      'The Gemini sign-in flow. It exists because that CLI has no login subcommand and has to be driven ' +
-      'through a session; every sentence in it is about that one CLI’s behaviour.',
-    allows: [
-      'Gemini API key',
-      'Not signed in. Press Sign in and Gemini opens in a session, where it asks which Google account to use.',
-    ],
-  },
-  {
-    file: 'src/main/codex-usage.ts',
-    because:
-      'Reads the rollout files one named CLI writes, and nothing else. Its diagnostic prefix names that ' +
-      'reader so a line in the console can be traced to the module that produced it.',
-    allows: [
-      '[codex-usage] could not read rollouts:',
-    ],
-  },
-  {
-    file: 'src/main/plan-limit.ts',
-    because:
-      'Parses the plan-limit line one CLI prints. The message says which CLI has not printed one yet, ' +
-      'which is the difference between "nothing to show" and "something is broken".',
-    allows: [
-      'Claude Code has not printed a plan-limit line in this session yet — it only does so near a limit, or when /usage is run.',
-    ],
-  },
-  {
-    file: 'src/main/usage-ipc.ts',
-    because:
-      'Answers "why is there no usage for this session" per agent, because the two agents record it at ' +
-      'different moments — one near a limit, one when a turn completes — and, since 2026-08-18, reports ' +
-      'how a refresh went. The refresh drives one named CLI in a process of this app’s own, so the ' +
-      'sentences say which CLI was asked and what it said about its own billing.',
-    allows: [
-      'No usage has been reported for this session yet. Claude Code prints its limits only near one, or when /usage is run; Codex records them when a turn completes.',
-      'Codex has not recorded a rate limit under this account yet — it writes one into its rollout when a turn completes.',
-      'This session runs a different agent, so it has no Claude limits to read.',
-      'Read from what Claude Code had already written down — nothing was started.',
-      // Names the billing arrangement rather than the CLI, and has to: it is
-      // reporting the words that CLI printed on its own banner — `· Claude API ·`
-      // where a subscription would have said `· Claude Max ·` — and a sentence
-      // that neutralised the name would be describing somebody's billing without
-      // saying which billing it means.
-      'This login is billed through the Claude API, which has no subscription limits to read.',
-    ],
-  },
-  {
-    file: 'src/main/usage-probe.ts',
-    because:
-      'Drives one named CLI over its own control protocol to ask it for its own plan limits. Every ' +
-      'sentence here is a report about that one process: whether it started, whether it answered, and ' +
-      'what it said. A neutral wording would be describing something that did not happen, since no other ' +
-      'agent is asked anything by this module.',
-    allows: [
-      'Claude Code could not be started here, so its usage could not be read.',
-      'Claude Code did not answer within  …  seconds, so its usage is unread.',
-      'Claude Code was asked for its usage and answered something this build could not read.',
-      'Claude Code could not report its usage:  …',
-      'That account is not signed in to Claude Code, so it has no plan limits to report.',
-      'This login has no subscription limits — Claude Code reports none for it.',
-      'Claude Code reports no plan limits for this login.',
-      'Read from Claude Code, in this app’s own process — no session was touched.',
-    ],
-  },
-  {
-    file: 'src/renderer/shell/usage-bar-model.ts',
-    because:
-      'Captions naming which source a number came from — one CLI’s /usage panel, its limit warning, or ' +
-      'the other’s rollout. The caption is the provenance.',
-    allows: [
-      'Read from Claude Code’s own /usage panel.',
-      'Read from a limit warning Claude Code printed in this session.',
-      // The provenance of the source that replaced the panel on 2026-08-18. The
-      // name is the whole content of it: what a reader of this line wants to
-      // know is that the figure was fetched by that CLI in this app's own
-      // process rather than by typing into the session in front of them.
-      'Fetched by Claude Code itself, in this app’s own process — no session is typed into.',
-      'Read from the rollout Codex writes as it works — no need to ask it.',
-    ],
-  },
-  {
-    file: 'src/renderer/shell/UsageBar.tsx',
-    because:
-      'Describes an automation that asks one named CLI for its own plan limits. It is that CLI’s ' +
-      'subscription and that CLI’s process, and the sentence exists to tell the reader which — and, ' +
-      'since 2026-08-18, that it is not their session.',
-    allows: [
-      'Fetched by Claude Code itself, in this app’s own process — no session is typed into. This happens by itself whenever the session goes quiet, so there is nothing to press.',
-    ],
-  },
-  {
-    file: 'src/renderer/chat/usage/usage-model.ts',
-    because:
-      'The renderer’s fallback wording for the same automation, used when the main process sends a ' +
-      'result with no sentence of its own. It names the one CLI that is asked, for the same reason ' +
-      '`usage-probe.ts` does: no other agent is asked anything.',
-    allows: [
-      'Read from Claude Code, in this app’s own process — no session was touched.',
-      'Read from what Claude Code had already written down — nothing was started.',
-      'That account is not signed in to Claude Code, so it has no plan limits to report.',
-      'Claude Code could not be started here, so its usage could not be read.',
-      'This session runs a different agent, so it has no Claude limits to read.',
-      'Claude Code’s usage could not be read just now.',
-    ],
-  },
-  {
-    file: 'src/renderer/chat/controls/catalog.ts',
-    because:
-      'The model, effort, fast and permission controls type one CLI’s slash commands into the pty, and ' +
-      'these strings describe that CLI’s own behaviour on a row that is only ever drawn for it. The ' +
-      'sentence that named a *different* agent — `unsupportedProviderNote` — was deleted on 2026-08-19 ' +
-      'and its replacement in `SessionControls.tsx` names the category instead.',
-    allows: [
-      'Claude judges each call and blocks risky ones',
-      'from Claude settings',
-      'Claude prints the permission mode only when it changes, and no default is set in your Claude settings — so this session has not said which one it is in. Pick one and it will.',
-    ],
-  },
-  {
-    file: 'src/main/agent-controls.ts',
-    because:
-      'The authoritative refusal behind those controls. It quotes the slash commands it would have typed ' +
-      'and says nothing on the session’s screen showed that CLI is the one running in it — a refusal that ' +
-      'named no CLI would be indistinguishable from a bug.',
-    allows: [
-      'Nothing on this session’s screen says Claude Code is running in it, and these controls are Claude Code’s commands.',
-      'These type Claude Code’s own commands into the session. How  …  changes this at runtime has not been established, so nothing is sent rather than something being guessed at.',
-    ],
-  },
-  {
-    file: 'src/main/mcp-add.ts',
-    because:
-      'Shells out to `claude mcp add` rather than writing another application’s live 70 KB config itself — ' +
-      'the file header carries the argument. An error saying which binary is missing is case 2.',
-    allows: [
-      'Claude Code’s command line tool could not be found, and it is what writes this configuration. Install it, then try again.',
-    ],
-  },
-  {
-    file: 'src/main/mcp-client.ts',
-    because:
-      'Reads that same configuration and reports what it found in it — including the servers one CLI dials ' +
-      'itself, which this panel cannot inspect, and the ones a project has declined. Both facts are about ' +
-      'that CLI’s behaviour and mean nothing without its name.',
-    allows: [
-      'Claude Code dials  …  servers itself, so this panel cannot inspect it.',
-      'Rejected for this project in Claude Code.',
-    ],
-  },
-  {
-    file: 'src/renderer/components/McpAddForm.tsx',
-    because:
-      'The form over that command. "Stays inactive until Claude Code asks you to approve it" is measured ' +
-      'behaviour of the tool that owns the file; without it a working safeguard reads as a failed add.',
-    allows: [
-      'Stays inactive until Claude Code asks you to approve it.',
-      'Where Claude Code connects.',
-    ],
-  },
-  {
-    file: 'src/renderer/components/McpInspector.tsx',
-    because:
-      'Shows that configuration on screen and says whose it is, because removing a server genuinely cannot ' +
-      'be done from this window and a panel that stays quiet about what it cannot do reads as broken ' +
-      'rather than as limited.',
-    allows: [
-      'From your Claude Code configuration. To remove one, run',
-    ],
-  },
-  {
-    file: 'src/renderer/components/HelpPanel.tsx',
-    because:
-      'The help page whose subject is installing and signing into the agent CLIs. Its first topic is called ' +
-      '"Install an agent CLI" — the category — and it then names all three and gives the real commands, ' +
-      'because a help page that will not say which thing to install is not help.',
-    allows: [
-      '{app} does not talk to any model API itself. It runs the agent CLI you already use — Claude Code, Codex or Gemini CLI — inside a real terminal, and puts a workspace around it. So the first step is having at least one of them installed and working in your own shell.',
-      'which claude && claude --version',
-      'Agent CLIs almost never live in that minimal set. Claude Code’s own installer puts it in `~/.local/bin`, Homebrew uses `/opt/homebrew/bin`, and an npm install through nvm puts it under `~/.nvm`. All three are invisible to a GUI app by default.',
-      'In a terminal, run `which claude` (or codex, or gemini). If that fails too, it is genuinely not installed.',
-      'There is no reliable, free way to ask an agent CLI whether it is signed in, so the app only claims that state where it can check something cheap. For Claude Code that is the credentials file or the login keychain entry:',
-    ],
-  },
-  {
-    file: 'src/renderer/settings/sections/AccountsSection.tsx',
-    because:
-      'States which agents can hold more than one login and which cannot. That is a per-agent fact, it was ' +
-      'measured, and it is the reason a row is or is not offered.',
-    allows: [
-      'Claude and Codex can hold several; Gemini keeps one per machine.',
-    ],
-  },
-  {
-    file: 'src/renderer/settings/sections/AgentsSection.tsx',
-    because:
-      'Says a setting applies to one agent and that the others ignore it. Naming the limit is the honest ' +
-      'form; the alternative is a control that quietly does nothing for two thirds of people.',
-    allows: [
-      'Claude Code only. Other agents ignore this and use whichever login they already have on this machine.',
-    ],
-  },
-  {
-    file: 'src/main/voice.ts',
-    because:
-      'Three transcription providers, each a row the person picks between, and each row genuinely is that ' +
-      'company — the label sits beside that provider’s own endpoint, its own auth header and the URL where ' +
-      'they fetch its key. Neutralising the labels would leave three unnamed rows asking for a key that only ' +
-      'one of three companies will accept, which is not vendor-neutrality, it is a guessing game. The rule ' +
-      'bans naming a vendor while describing a mechanism any vendor could serve; naming the vendor you are ' +
-      'choosing is the opposite of that.',
-    allows: [
-      'OpenAI',
-    ],
-  },
-  {
-    file: 'src/main/copilot-session.ts',
-    because:
-      'Refuses to start the copilot when the CLI it runs on is absent, and names it. This is case 2: the ' +
-      'refusal is actionable only if it says which thing to install, and a message that would not name it ' +
-      'is indistinguishable from the app being broken. Invisible here until template literals were ' +
-      'resolved, because the name arrives through the catalogue at runtime.',
-    allows: [
-      'The copilot runs on  claude label , which is not installed on this machine.',
-    ],
   },
 ]
 
@@ -1023,28 +833,13 @@ function userFacingStrings(): Found[] {
 
 const STRINGS = userFacingStrings()
 const show = (item: Found): string => `${item.file}:${item.line}  ${item.text.trim().slice(0, 160)}`
-
 /**
- * Every collected string that still names a vendor once the quotations, the
- * paths and the three disclosures are out of it.
- *
- * One function rather than the same filter written four times, because the four
- * assertions below are four questions about *this* list and they must not be
- * able to disagree about what is on it.
- */
-function vendorStrings(): Found[] {
-  return STRINGS.filter(
-    (item) => !item.quoted && VENDORS.test(prosePartOf(withoutDisclosures(item.text))),
-  )
-}
-
-/**
- * A string carrying one of the three disclosures, and nothing else vendorish.
+ * A string carrying one of the disclosures, and nothing else that offends.
  *
  * The disclosure is *cut out* before matching rather than the whole string being
  * waved through, which is the difference that matters: the readiness fail detail
- * may list the three filenames it accepts, and it still cannot go on to mention
- * Claude Code in the next clause.
+ * may name the file it accepts, and it still cannot go on to say "similar to VS
+ * Code" in the next clause.
  */
 function withoutDisclosures(text: string): string {
   let rest = text
@@ -1052,7 +847,7 @@ function withoutDisclosures(text: string): string {
   return rest
 }
 
-describe('no shared UI names a specific AI tool, model or editor', () => {
+describe('no shared screen holds up somebody else’s product as an example', () => {
   it('finds the copy at all, so a broken collector cannot pass by scanning nothing', () => {
     // Every number here is far below what the tree actually holds. They exist so
     // that a refactor which moves a directory, or a parser change that stops
@@ -1064,14 +859,35 @@ describe('no shared UI names a specific AI tool, model or editor', () => {
     expect(STRINGS.filter((s) => s.file.startsWith('pwa/')).length).toBeGreaterThan(10)
   })
 
-  it('the two names the review called out are gone from every surface', () => {
+  it('never names an outside product to illustrate what one of ours does', () => {
     /*
-     * `unwrap`, and quoted text included, which is hole 2. He asked not to see
-     * these names; a name does not stop being on screen because it is inside a
-     * `<code>` tag or a pair of backticks, and the sweep's own note that a
-     * quotation "keeps the name" was about *commands*, which these are not.
-     * Paths are still cut, so the `.gitignore` template this app writes keeps
-     * its `.vscode/*` line.
+     * Part 2, and the assertion this file now exists for. Quotations are read as
+     * well as prose: `<code>claude mcp add</code>` is a command and stays, but a
+     * `<code>` tag is not a place to park a comparison, and nothing that follows
+     * "similar to" is a command anybody types.
+     */
+    const offenders = STRINGS.filter(
+      (item) => comparisons(prosePartOf(withoutDisclosures(item.text), 'unwrap')).length > 0,
+    )
+    expect(offenders.map(show)).toEqual([])
+  })
+
+  it('never names an editor at all, which it has no occasion to do', () => {
+    // The absolute half of part 2. No exemption list, because there is no screen
+    // in this app whose subject is somebody else's editor — see `EDITORS`.
+    const offenders = STRINGS.filter((item) =>
+      EDITORS.test(prosePartOf(withoutDisclosures(item.text), 'unwrap')),
+    )
+    expect(offenders.map(show)).toEqual([])
+  })
+
+  it('the filenames that would pick one agent for a reader are gone from every surface', () => {
+    /*
+     * `unwrap`, and quoted text included. He asked not to see these names; a name
+     * does not stop choosing an agent for somebody because it is inside a
+     * `<code>` tag or a pair of backticks. Paths are still cut, so the
+     * `.gitignore` template this app writes keeps its `.vscode/*` line — that is
+     * a location on a disk, not a sentence recommending an editor.
      */
     const offenders = STRINGS.filter((item) =>
       NAMED_IN_THE_REVIEW.test(prosePartOf(withoutDisclosures(item.text), 'unwrap')),
@@ -1080,6 +896,7 @@ describe('no shared UI names a specific AI tool, model or editor', () => {
   })
 
   it('every disclosed filename is still somewhere, so the list cannot go stale', () => {
+    // A list that only grows is a list that stops describing the code.
     for (const entry of DISCLOSED_FILENAMES) {
       expect(
         STRINGS.some((item) => item.text.includes(entry.text)),
@@ -1088,60 +905,65 @@ describe('no shared UI names a specific AI tool, model or editor', () => {
     }
   })
 
-  it('every vendor name left is in a module whose subject is that vendor', () => {
-    const exempt = new Set(ABOUT_A_NAMED_AGENT.map((entry) => entry.file))
-    const offenders = vendorStrings().filter((item) => !exempt.has(item.file))
-    expect(offenders.map(show)).toEqual([])
-  })
-
-  it('and is one of the strings that module was exempted for', () => {
-    /*
-     * Hole 2. Until today an entry in `ABOUT_A_NAMED_AGENT` waved through the
-     * *whole file*, for ever, on the strength of a sentence written about the
-     * strings that were in it at the time. Twenty-three files were exempt, and
-     * a new vendor name added to any of them — a new error message in
-     * `mcp-client.ts`, a fourth line of help in `HelpPanel.tsx` — was seen by
-     * nothing.
-     *
-     * So the exemption is now the strings, not the module. `allows` is the
-     * exact copy each entry was written for, and anything else naming a vendor
-     * in the same file fails here with the string printed, which is a two-line
-     * decision for whoever caused it: neutralise the sentence, or add it and
-     * say in the entry why it earns the name.
-     */
-    const allowed = new Map(ABOUT_A_NAMED_AGENT.map((entry) => [entry.file, new Set(entry.allows)]))
-    const offenders = vendorStrings().filter((item) => {
-      const allows = allowed.get(item.file)
-      return allows !== undefined && !allows.has(item.text.trim())
-    })
-    expect(offenders.map(show)).toEqual([])
-  })
-
-  it('no module, and no string in one, is exempted that no longer needs it', () => {
-    // The other direction, and the reason both are needed: a list that only
-    // grows is a list that stops describing the code. An `allows` entry that
-    // matches nothing is copy somebody deleted or rewrote, and the exemption
-    // for it has to go with it.
-    const named = vendorStrings()
-    const stale: string[] = []
-    for (const entry of ABOUT_A_NAMED_AGENT) {
-      const mine = named.filter((item) => item.file === entry.file)
-      if (mine.length === 0) stale.push(entry.file)
-      for (const allowed of entry.allows) {
-        if (!mine.some((item) => item.text.trim() === allowed)) {
-          stale.push(`${entry.file}  ${allowed.slice(0, 80)}`)
-        }
-      }
-    }
-    expect(stale).toEqual([])
-  })
-
   it('every exemption carries a reason somebody can argue with', () => {
-    for (const entry of [...ABOUT_A_NAMED_AGENT, ...DISCLOSED_FILENAMES]) {
+    for (const entry of DISCLOSED_FILENAMES) {
       // A one-line "legacy" or "needed" is how these lists rot. Nothing shorter
       // than a sentence explains why removing a name would make a screen worse.
       expect(entry.because.split(/\s+/).length).toBeGreaterThan(12)
     }
+  })
+})
+
+/**
+ * The two rules, asked directly — because a clean tree is also what a rule that
+ * matches nothing at all reports.
+ *
+ * Both of these went green the moment they were written, which is exactly the
+ * condition under which a guard is worth nothing and looks perfect. So each one
+ * is handed the sentence it was written to catch, and the sentence it must not
+ * catch, side by side.
+ */
+describe('the rule bites, and only where it should', () => {
+  const offends = (text: string): boolean =>
+    comparisons(prosePartOf(text, 'unwrap')).length > 0 || EDITORS.test(prosePartOf(text, 'unwrap'))
+
+  it('catches the illustration he objected to, in the words he used', () => {
+    expect(offends('A workspace for your agents, similar to VS Code.')).toBe(true)
+    expect(offends('Pin a session, like Notion does with pages.')).toBe(true)
+    expect(offends('Runs your agent in a real terminal, such as Codex or Gemini.')).toBe(true)
+    expect(offends('Hooks fire on events, e.g. Claude Code’s PreToolUse.')).toBe(true)
+    // The one from `confine/seatbelt.ts`, which is why `Xcode` is not banned
+    // outright — as an illustration it still fails, which is the whole point of
+    // splitting the absolute rule from the comparison rule.
+    expect(offends('Sandboxes each session, much like Xcode does.')).toBe(true)
+    expect(offends('The Xcode tool shim’s cache, and nothing else in that shared directory.')).toBe(
+      false,
+    )
+  })
+
+  it('leaves an agent named as the subject of its own sentence alone', () => {
+    // Part 1, which is the permission this file was rewritten to grant. Every
+    // one of these is a real line from this tree, or the shape of one.
+    expect(offends('Claude Code 2.1.235, signed in.')).toBe(false)
+    expect(offends('Codex CLI 0.148.0 — not signed in.')).toBe(false)
+    expect(offends('Gemini does not record how full its context window is.')).toBe(false)
+    expect(offends('Claude Code’s command line tool could not be found.')).toBe(false)
+    expect(offends('Read from the rollout Codex writes as it works — no need to ask it.')).toBe(false)
+  })
+
+  it('leaves this codebase’s own comparisons to non-products alone', () => {
+    // `the way` is on the lead-in list, so these are the sentences that decide
+    // whether it was safe to put it there. None of them names a product.
+    expect(offends('It moves the way this app already moves elsewhere.')).toBe(false)
+    expect(offends('Sorted the way Finder sorts, newest first.')).toBe(false)
+    expect(offends('Press a key such as Escape to go back.')).toBe(false)
+  })
+
+  it('does not fire on a command a person types, or on a path', () => {
+    // The two shapes `prosePartOf` exists to protect. Renaming either makes it
+    // stop working, which is the one place the rule would force a lie.
+    expect(offends('Run `npm install -g @google/gemini-cli@latest` first.')).toBe(false)
+    expect(offends('Its settings live in ~/.codex/config.toml on that machine.')).toBe(false)
   })
 })
 

@@ -409,6 +409,68 @@ export function servedBy(url: string, opened: readonly ReachedPort[]): ReachedPo
 }
 
 /**
+ * What choosing a different machine should do to the page already open.
+ *
+ * ## Why this is a decision and not a setter
+ *
+ * The picker used to be a *mode*: it decided where the next thing typed would
+ * go and left the page on screen exactly where it was. Asad, with a page from
+ * his PC in front of him and the picker switched back to the Mac:
+ *
+ * > *"if I move it to this machine, it's keeping on the same browser, same
+ * > machine. It's not moving to this machine. Same link should be again tried on
+ * > the new machine… or it should be unsuccessful here also, because we always
+ * > need a truth."*
+ *
+ * Read as a mode that behaviour is defensible. Read as a control wearing a
+ * machine's name, sitting above a page, it *claims* the page is on that machine
+ * — and it was not. So the page moves, or the control goes back.
+ *
+ * ## Why the port is the origin's and not the address bar's
+ *
+ * The tunnel walks a ladder to keep the number and takes an arbitrary local one
+ * when both loopbacks are busy — the case this whole feature is for, the same
+ * project running on two computers. `localhost:3001` on this Mac can be
+ * `localhost:3000` on the PC, so re-opening the number in the address bar would
+ * quietly ask the far machine for a different service.
+ *
+ * ## `refused` is a real outcome and has to stay one
+ *
+ * `https://stripe.com` belongs to Stripe, not to a computer in this room. There
+ * is nothing to move, and a picker that silently kept the new name would be
+ * stating something false about the page underneath it. Pure so it can be
+ * tested: an effect inside a panel is the one place this project's test run
+ * cannot look, and `destinationFor` two functions up exists for the same reason.
+ */
+export type MachineMove =
+  /** It is already there. Re-opening it would only lose its scroll position. */
+  | { kind: 'already' }
+  /** Open this address on this computer. */
+  | { kind: 'here'; url: string }
+  /** Open this port on that machine, carrying the path. */
+  | { kind: 'there'; machineId: string; port: number; url: string }
+  /** Nothing to move. `at` is the machine the page is really on, for putting the picker back. */
+  | { kind: 'refused'; at: string }
+
+export function moveFor(
+  next: string,
+  url: string,
+  opened: readonly ReachedPort[],
+): MachineMove {
+  const here = servedBy(url, opened)
+  const at = here?.machineId ?? THIS_MACHINE
+  if (next === at) return { kind: 'already' }
+  // The port on whichever machine is serving it — see the note above on why
+  // this is not the number in the address bar.
+  const port = here ? here.port : loopbackPort(url)
+  if (port === null) return { kind: 'refused', at }
+  if (next === THIS_MACHINE) {
+    return { kind: 'here', url: reachedAddress(url, `http://localhost:${port}/`) }
+  }
+  return { kind: 'there', machineId: next, port, url }
+}
+
+/**
  * The caveat, when the port numbers could not be kept the same.
  *
  * Empty when they match, which is the ordinary case. `localhost-reach.ts` walks

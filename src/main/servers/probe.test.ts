@@ -236,3 +236,116 @@ describe('init systems this machine has never run', () => {
     expect(facts.services.known).toBe('cannot')
   })
 })
+
+/**
+ * The blind spot that would have made this feature offer to install over
+ * somebody's working install.
+ *
+ * Measured, twice, on a real box before any of this was written. The PATH a
+ * non-interactive `sh -s` inherits there is
+ * `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:…` — and
+ * `~/.local/bin` is not in it. `~/.local/bin/claude` is exactly where the
+ * official installer puts it, so a bare `command -v claude` answers "not found"
+ * about a machine carrying a working, signed-in 2.1.235.
+ *
+ * The other half is why the obvious repair does not work either: the Ubuntu
+ * default `.bashrc` — the one on his own box — opens with
+ * `case $- in *i*) ;; *) return;; esac`, which returns before any version
+ * manager's block runs, so `$SHELL -lc` cannot see an nvm install. Neither
+ * strategy is sufficient alone; the script takes the union of both.
+ *
+ * This is pinned here rather than left to a comment because the widened PATH
+ * list looks like superstition to anybody who has not seen it fail, and the
+ * tidying that deletes it produces a wizard that installs 320 MB over a working
+ * install and calls it setup.
+ */
+describe('an agent installed where the exec PATH cannot see it', () => {
+  const facts = read(fixture('ubuntu-agent-in-local-bin'))
+
+  it('finds it, with the absolute path that is carried onwards', () => {
+    const agents = valueOf(facts.agents) ?? []
+    expect(agents.map((one) => one.id)).toEqual(['claude'])
+    expect(agents[0]?.path).toBe('/home/asad/.local/bin/claude')
+    expect(agents[0]?.version).toBe('2.1.235')
+  })
+
+  it('never relies on PATH afterwards, because PATH is what could not find it', () => {
+    // The installer says so itself, in as many words: "Native installation
+    // exists but ~/.local/bin is not in your PATH." Everything downstream runs
+    // the absolute path or it runs nothing.
+    expect(PROBE_SCRIPT).toContain('$HOME/.local/bin')
+    expect(PROBE_SCRIPT).toContain('.nvm')
+  })
+
+  it('takes the union of a widened PATH and the login shell, not one of them', () => {
+    expect(PROBE_SCRIPT).toContain('command -v claude; command -v codex; command -v gemini')
+    expect(PROBE_SCRIPT).toMatch(/PATH="\$AW" command -v/)
+  })
+
+  it('reads whether it is signed in, and who as', () => {
+    const agents = valueOf(facts.agents) ?? []
+    expect(agents[0]?.signedIn).toBe('yes')
+    expect(agents[0]?.account).toBe('asad@example.com')
+  })
+
+  it('says what an install would need, so nothing is offered on a guess', () => {
+    const room = valueOf(facts.agentInstall)
+    expect(room?.downloader).toBe('curl')
+    expect(room?.memoryAvailableKb).toBe(6_412_188)
+    expect(room?.homeFreeKb).toBe(417_238_528)
+  })
+})
+
+describe('a server with no agent on it at all', () => {
+  const facts = read(fixture('ubuntu-nothing-installed'))
+
+  it('says so as an answer, rather than as a failure to look', () => {
+    // An empty list here is a measurement: every place an installer puts one
+    // was looked in, and the login shell was asked as well. That is `yes` with
+    // nothing in it, and it is what lets the page offer a first install.
+    expect(facts.agents.known).toBe('yes')
+    expect(valueOf(facts.agents)).toEqual([])
+  })
+
+  it('names the two reasons this particular server could not be set up', () => {
+    const room = valueOf(facts.agentInstall)
+    // Neither downloader, which is the one case where the honest thing is to
+    // stop: installing a downloader in order to install an agent is the general
+    // provisioning this feature deliberately is not.
+    expect(room?.downloader).toBe('')
+    // And not enough memory — the installer is killed by the kernel at around
+    // this figure, and saying so beforehand costs nothing.
+    expect(room?.memoryAvailableKb).toBeLessThan(512 * 1024)
+  })
+})
+
+describe('an agent that is there and will not run', () => {
+  it('is a different answer from an agent that is not there', () => {
+    // A root-owned npm global whose node was removed, and a dangling symlink,
+    // both satisfy `command -v` and both fail to start. The row arrives with no
+    // version, and the offer a person needs then is to install it again — not
+    // to install it for the first time, and not nothing at all.
+    const facts = read(
+      ['#agents ok', 'claude\t/usr/bin/claude\t\tunknown\t', '#end ok'].join('\n'),
+    )
+    const agents = valueOf(facts.agents) ?? []
+    expect(agents).toHaveLength(1)
+    expect(agents[0]?.version).toBe('')
+    expect(agents[0]?.signedIn).toBe('unknown')
+    expect(agents[0]?.account).toBeNull()
+  })
+
+  it('drops a row for something it was not looking for', () => {
+    const facts = read(['#agents ok', 'copilot\t/usr/bin/copilot\t1.0\tunknown\t', '#end ok'].join('\n'))
+    expect(valueOf(facts.agents)).toEqual([])
+  })
+
+  it('is cannot, never an empty list, when the section never arrived', () => {
+    // The failure this whole third state exists for: a probe that was cut off
+    // must not produce a page offering to install over an install nobody looked
+    // for.
+    const facts = read('os=Ubuntu\n#services ok\n')
+    expect(facts.agents.known).toBe('cannot')
+    expect(facts.agentInstall.known).toBe('cannot')
+  })
+})

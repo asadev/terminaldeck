@@ -34,15 +34,36 @@ interface Props {
 export function SendToAgent({ agent, compose, placeholder, action, onSent }: Props) {
   const [instruction, setInstruction] = useState('')
   const [sent, setSent] = useState(false)
+  const [sending, setSending] = useState(false)
 
   const blocked = agent.target === null
 
+  /*
+   * Awaited, since a target can be on another computer.
+   *
+   * A send to this machine is a write into a pty and answers on the same tick; a
+   * send to a paired machine is a round trip that the far end can refuse. So the
+   * field is cleared and the button says "Sent" only once the answer is in, and
+   * the press is held closed in between — a second press mid-flight would put
+   * the same line on the wire twice, and the first one to come back would clear
+   * a field that had already been retyped.
+   *
+   * A refusal leaves what was typed exactly where it is. There is no worse
+   * moment to lose somebody's sentence than the moment they have been told it
+   * did not arrive.
+   */
   const send = (): void => {
-    if (blocked) return
-    if (!agent.send(compose(instruction))) return
-    setInstruction('')
-    setSent(true)
-    onSent?.()
+    if (blocked || sending) return
+    setSending(true)
+    void agent
+      .send(compose(instruction))
+      .then((landed) => {
+        if (!landed) return
+        setInstruction('')
+        setSent(true)
+        onSent?.()
+      })
+      .finally(() => setSending(false))
   }
 
   return (
@@ -90,18 +111,28 @@ export function SendToAgent({ agent, compose, placeholder, action, onSent }: Pro
       <button
         type="button"
         className="bw-primary"
-        disabled={blocked}
+        disabled={blocked || sending}
         // The reason, on the control that is refusing. A greyed button with no
         // explanation is what this whole change is against.
         title={blocked ? agent.reason : `Send to ${agent.target?.label ?? ''}`}
         onClick={send}
       >
-        {sent ? 'Sent' : action}
+        {sending ? 'Sending…' : sent ? 'Sent' : action}
       </button>
 
-      {blocked && (
+      {/*
+        One line under the field, and only ever one of the two.
+
+        `agent.reason` is about the *choice* and is known before anything is
+        pressed; `agent.problem` is the far machine's own words about an attempt
+        that failed. A blocked picker cannot have attempted anything, so they
+        cannot both be true — but they are written as one element rather than two
+        so that a future case where they could be does not stack two sentences
+        under a 26rem popup.
+      */}
+      {(blocked || agent.problem !== '') && (
         <p className="bw-send-reason" role="status">
-          {agent.reason}
+          {blocked ? agent.reason : agent.problem}
         </p>
       )}
     </div>

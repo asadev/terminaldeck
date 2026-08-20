@@ -132,7 +132,38 @@ export type DownloadFromServer = (
  */
 export type { ServerShell, TerminalSize }
 
-export type OpenServerShell = (serverId: string, size: TerminalSize) => Promise<ServerShell>
+/**
+ * `startIn` is the folder the terminal should open in, or nothing at all for
+ * wherever the account's own sign-in lands — which is what every terminal this
+ * app opened before the folder picker existed did, and still the default.
+ * `connection.ts` decides how a shell is made to start somewhere, and says
+ * there why it types the `cd` rather than execing a login shell.
+ */
+export type OpenServerShell = (
+  serverId: string,
+  size: TerminalSize,
+  startIn?: string,
+) => Promise<ServerShell>
+
+/**
+ * List one folder on a server, so somebody can choose where a session starts.
+ *
+ * The counterpart of {@link DownloadFromServer}'s note above: `ssh2` provides
+ * `sftp`, whether `connection.ts` exposes it was left open, and this is the
+ * first thing that needed it. It **is** exposed now, and the argument for
+ * asking the subsystem rather than running `ls` lives beside the
+ * implementation — the short version being that `ls` answers with a picture of
+ * a listing, and a folder called `my project` comes back as two rows.
+ *
+ * `''` means the account's login directory. The answer carries the absolute
+ * path the *server* resolved, never one assembled here, because assembling
+ * `/home/<username>` is wrong for `root`, wrong on macOS, and wrong on any
+ * account whose home has been moved.
+ */
+export type ListServerFolder = (
+  serverId: string,
+  path: string,
+) => Promise<{ path: string; entries: readonly { name: string; kind: 'folder' | 'link' | 'file' }[] }>
 
 /* ------------------------------------------------------------------- facts -- */
 

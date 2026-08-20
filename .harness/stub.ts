@@ -39,6 +39,22 @@ const sessions = [
   { id: 's2', cwd: '/Users/apple/Projects/terminaldeck', title: 'terminaldeck', provider: 'claude', exitCode: null, createdAt: launchedAt, profileId: 'work', profileName: 'Work' },
   { id: '7f3c9a21-6d40-4a1e-9d2b-1a5f0c3e7b81', cwd: '/Users/apple/Projects/terminaldeck', title: 'Update Claude Code terminal to new API', provider: 'claude', exitCode: null, createdAt: launchedAt, profileId: 'system', profileName: 'Default' },
   { id: 'b4e1d508-2c77-4f93-8a10-9e6b2d4c5a03', cwd: '/Users/apple/Projects/terminaldeck', title: 'Update Claude Code terminal to new API', provider: 'claude', exitCode: null, createdAt: launchedAt, profileId: 'system', profileName: 'Default' },
+  /*
+   * The copilot's own session, because `copilotState` below says one is running.
+   *
+   * It was missing, and the stub was therefore describing a machine that cannot
+   * exist: a copilot with `sessionId: 'copilot-1'` and no session by that id.
+   * `App.tsx` builds the copilot's tab by finding its session in this list, so
+   * the harness's copilot row opened nothing at all — a whole window that could
+   * not be looked at, for the exact reason CLAUDE.md gives about this file: *"a
+   * stub that disagrees with the preload invents bugs that do not exist and
+   * hides ones that do."*
+   *
+   * Its `cwd` is the copilot's root, field for field with the `paths.root`
+   * `copilotState` answers, since that is how every consumer recognises which
+   * row is the copilot's.
+   */
+  { id: 'copilot-1', cwd: '/Users/apple/Library/Application Support/terminaldeck/copilot', title: 'copilot', provider: 'claude', exitCode: null, createdAt: launchedAt, profileId: 'system', profileName: 'Default' },
 ]
 let sessionCounter = 0
 /**
@@ -263,7 +279,19 @@ const machinesView = {
       // one of the owner's own. A guest would get the identical list with `web`
       // missing, and the Open there button simply absent — which is the state
       // worth being able to reproduce here, by deleting one string.
-      capabilities: ['create', 'localhost', 'web', 'close'],
+      capabilities: ['create', 'localhost', 'web', 'close', 'send'],
+      /*
+       * That machine's copilot, offered to this one — which is what puts a
+       * second row in the switch at the top of the copilot page.
+       *
+       * `open: true` because the link says `copilot.hello` on every welcome and
+       * this view is what a settled connection looks like. Delete this key to
+       * reproduce the other state worth looking at: a machine this desktop was
+       * paired to as a *guest*, whose row is drawn and disabled and says on
+       * hover what to do about it. Those are the only two, and the far end
+       * deliberately does not distinguish "no copilot here" from "not for you".
+       */
+      copilot: { linked: true, open: true, grant: { read: true, act: true, alter: true } },
       /*
        * What that machine is serving, so the remote-localhost block has
        * something to draw.
@@ -285,6 +313,9 @@ const machinesView = {
 }
 
 const machineListeners = new Set<(view: unknown) => void>()
+const machineCopilotState = new Set<(machineId: string, state: unknown) => void>()
+const machineCopilotChat = new Set<(machineId: string, frame: unknown) => void>()
+let machineCopilotTurn = 0
 const machineOutputListeners = new Set<(chunk: unknown) => void>()
 
 /*
@@ -1836,7 +1867,67 @@ const api: Record<string, unknown> = new Proxy(
     attachMachineSession: async () => true,
     detachMachineSession: async () => true,
     writeToMachineSession: async () => true,
+    /*
+     * The verb behind the browser's send-to-a-remote-session, answered the way
+     * the real one does: an outcome, never a bare boolean.
+     *
+     * It matters that this is here at all. `useAgentTarget` feature-detects the
+     * method and falls back to a sentence when it is missing, so a stub without
+     * it would make every remote row in the send picker report "this build
+     * cannot type into a session on that machine" — a refusal the shipped app
+     * does not have, invented entirely by the harness.
+     */
+    sendToMachineSession: async (id: string, sessionId: string, data: string) => {
+      console.info(`[harness] ${id} was asked to type into ${sessionId}: ${data}`)
+      return { ok: true, message: '' }
+    },
     resizeMachineSession: async () => true,
+    /*
+     * The copilot on the other machine, as much of it as a browser tab can be.
+     *
+     * Each of the three answers `{ ok, message }` — *the frame left this
+     * machine* — because that is all the real ones can honestly mean: there is
+     * no request id on the copilot wire, and what the far end made of it comes
+     * back on the two subscriptions below.
+     *
+     * `startMachineCopilot` pushes a state with a run in it, and `say` pushes
+     * the line back as a bubble followed by an answer, because a stub that
+     * resolved `ok` and pushed nothing would leave the pane on "Reaching…"
+     * forever and make a working screen look broken.
+     */
+    attachMachineCopilot: async (id: string) => {
+      setTimeout(() => {
+        for (const listener of [...machineCopilotState]) listener(id, { desk: 'running', run: null, profile: 'app.imatch.ae@gmail.com' })
+      }, 150)
+      return { ok: true, message: '' }
+    },
+    startMachineCopilot: async (id: string) => {
+      setTimeout(() => {
+        for (const listener of [...machineCopilotState]) listener(id, { desk: 'running', run: 'run-1', profile: 'app.imatch.ae@gmail.com' })
+      }, 200)
+      return { ok: true, message: '' }
+    },
+    sayToMachineCopilot: async (id: string, text: string) => {
+      let n = (machineCopilotTurn += 1)
+      for (const listener of [...machineCopilotChat]) {
+        listener(id, { run: 'run-1', messages: [{ id: `you-${n}`, role: 'you', text, at: Date.now() }] })
+      }
+      setTimeout(() => {
+        for (const listener of [...machineCopilotChat]) {
+          listener(id, { run: 'run-1', messages: [{ id: `agent-${n}`, role: 'agent', text: `Looking at that on this machine.`, at: Date.now() }] })
+        }
+      }, 400)
+      return { ok: true, message: '' }
+    },
+    refreshMachineCopilot: async () => ({ ok: true, message: '' }),
+    onMachineCopilotState: (cb: (machineId: string, state: unknown) => void) => {
+      machineCopilotState.add(cb)
+      return () => machineCopilotState.delete(cb)
+    },
+    onMachineCopilotChat: (cb: (machineId: string, frame: unknown) => void) => {
+      machineCopilotChat.add(cb)
+      return () => machineCopilotChat.delete(cb)
+    },
     onMachineOutput: (cb: (chunk: unknown) => void) => {
       machineOutputListeners.add(cb)
       return () => machineOutputListeners.delete(cb)
@@ -1888,6 +1979,20 @@ const api: Record<string, unknown> = new Proxy(
     }),
     forgetServer: async () => ({ forgotten: false }),
     renameServer: async () => ({ renamed: false }),
+    /*
+     * Setting an assistant up needs a real machine on the other end, so the
+     * harness answers a refusal rather than nothing at all. The distinction
+     * matters: a missing method makes the panel draw itself as absent, which is
+     * a screen this app also has, and the harness would then be showing the
+     * wrong one of the two.
+     */
+    serverSetup: async () => ({ ok: false, sentence: 'The harness has no server to set up.' }),
+    serverSetupState: async () => null,
+    installOnServer: async () => ({ ok: false, sentence: 'The harness cannot install anything.' }),
+    signInOnServer: async () => ({ ok: false, sentence: 'The harness cannot sign anything in.' }),
+    cancelServerSetup: async () => ({ cancelled: false }),
+    removeServerSetup: async () => ({ ok: false, sentence: 'There is nothing here to remove.' }),
+    onServerSetup: () => () => {},
   },
   {
     // Mirror the real preload's shape: on* methods are subscriptions that

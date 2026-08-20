@@ -189,7 +189,11 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
        * ask again. A null after this is the honest "there is no browser here"
        * the tool reports — see the header for why that state is still real.
        */
-      deps.send(LINK_TAB_CHANNEL, BLANK_URL)
+      // A bare blank page, belonging to nobody: the copilot is asking for a
+      // browser to exist, not for one attached to a session. The channel carries
+      // an object since `link-open.ts` widened it, and an unattributed request
+      // is the same request it always was.
+      deps.send(LINK_TAB_CHANNEL, { url: BLANK_URL })
       return askForTab(input, {
         waitMs: INSTALL_BROWSER_TIMEOUT_MS,
         repeatMs: INSTALL_REPUSH_MS,

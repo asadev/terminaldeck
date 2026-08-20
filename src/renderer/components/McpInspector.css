@@ -39,17 +39,31 @@
   color: var(--text-muted);
 }
 
+/* The ⓘ dot that replaced the paragraph. It is a dot on a line of its own, so
+   it only has to sit where the paragraph's first line sat. */
 .mcp-subheading {
-  margin: 0;
-  max-width: 64ch;
-  font-size: var(--t-body);
-  line-height: var(--lh-body);
-  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  min-height: var(--sp-5);
 }
 
 .mcp-head > div {
   flex: 1;
   min-width: 0;
+}
+
+/*
+  The buttons hug the right, which they did not.
+  
+  `.mcp-head > div` above matches the actions as well as the text beside them,
+  so the header split itself in half and put "Add server" and "Reload" in the
+  middle of the window with 460px of nothing after them. It went unnoticed while
+  a paragraph filled the left half; with that paragraph now behind a ⓘ dot the
+  two buttons were floating in the centre of an empty bar.
+*/
+.mcp-head-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .mcp-refresh,
@@ -194,6 +208,15 @@
   font-size: var(--t-body);
   color: var(--text-secondary);
   text-align: left;
+  cursor: pointer;
+}
+
+/* An HTTP or SSE server has nothing to open — see the note in `McpInspector`
+   where the row is drawn. No pointer, no hover, full contrast: this is not a
+   control somebody is being denied, it is a row that was never one. */
+.mcp-server-toggle:disabled {
+  cursor: default;
+  color: var(--text-secondary);
 }
 
 .mcp-server-name {

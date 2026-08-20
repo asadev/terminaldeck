@@ -462,23 +462,22 @@ describe('the tab strip is the top band, with everything that implies', () => {
     expect(STRIP).toContain('mask-image: radial-gradient(')
   })
 
-  it('colours the ✕ that ends a session differently from the ✕ that does not', () => {
+  it('leaves one ✕ in this window, so there is no pair to confuse', () => {
     /*
-     * The most dangerous thing in this window as of 2026-08-17: two identical
-     * ✕ glyphs, 260 pixels apart, one of which kills a pty and one of which
-     * only takes a tab off this bar. Asad asked for the second — *"it should
-     * not delete the session"* — and the moment they diverged, looking the same
-     * became a trap.
+     * The most dangerous thing in this window as of 2026-08-17: two identical ✕
+     * glyphs, 260 pixels apart, one of which kills a pty and one of which only
+     * takes a tab off this bar. Asad asked for the second — *"it should not
+     * delete the session"* — and the moment they diverged, looking the same
+     * became a trap. The rail's ✕ answered it with `--color-critical` on hover,
+     * which was the only layer of the difference visible before the click.
      *
-     * Three layers stand between a person and the wrong one: the words in the
-     * two tooltips, which `workspace-strip.test.tsx` pins; the confirmation
-     * behind the destructive one, which `CloseSessionConfirm` owns; and this,
-     * the only one that is visible before the click. It is checked here because
-     * a hover colour cannot be seen from the markup — the sidebar's ✕ has no
-     * distinguishing attribute at rest, and a screenshot of the two side by side
-     * shows nothing until a pointer is on one of them.
+     * On 2026-08-20 the rail's ✕ stopped existing: it is an entry in the row's ⋯
+     * menu now, reading the whole consequence out loud. So the colour rule is
+     * gone with the glyph, and what is asserted is the state that made it
+     * unnecessary — the strip's ✕ is the only one left, and it is grey, because
+     * it is the harmless one.
      */
-    expect(requireRule(SHELL, '.sb-close:hover')).toContain('color: var(--color-critical)')
+    expect(SHELL).not.toContain('.sb-close:hover {')
     expect(requireRule(STRIP, '.strip-tab-close:hover')).not.toContain('--color-critical')
     expect(requireRule(STRIP, '.strip-tab-close:hover')).toContain('color: var(--text-primary)')
   })

@@ -47,6 +47,36 @@ export interface RemotePort {
   guessed: boolean
 }
 
+/** What a machine's copilot may do for this desktop. Three booleans, always all three. */
+export interface MachineCopilotGrant {
+  read: boolean
+  act: boolean
+  alter: boolean
+}
+
+/**
+ * That machine's copilot, as offered to **this** desktop.
+ *
+ * Three facts rather than one, because a surface has three different things to
+ * draw and folding them together makes one of them wrong:
+ *
+ *  - `linked` — this desktop reaches that copilot at all. It is the far
+ *    machine's own word for it, and it is worth carrying past the mere presence
+ *    of this object for the one case nothing else reports: a push saying
+ *    `false`, which takes the copilot away without a reconnect.
+ *  - `open` — the link has said `copilot.hello` on the current socket. False
+ *    on every fresh connection, true a round trip later, and false again the
+ *    moment a laptop sleeps. Every copilot verb needs it, the read-only ones
+ *    included.
+ *  - `grant` — what it may do once open. Sent even while closed, so a page can
+ *    show what it would get rather than discovering it a frame later.
+ */
+export interface MachineCopilotLink {
+  linked: boolean
+  open: boolean
+  grant: MachineCopilotGrant
+}
+
 export interface MachineLinkState {
   id: string
   state: MachineState
@@ -54,6 +84,25 @@ export interface MachineLinkState {
   sessions: RemoteSession[]
   folders: string[] | null
   capabilities: string[]
+  /**
+   * That machine's copilot, or **null for "there is none here for us"**.
+   *
+   * This is what the switcher at the top of the copilot page reads to decide
+   * whether a machine belongs in it. Null is not "not connected" — a machine
+   * that is offline has null here and `state: 'offline'` beside it, and the
+   * panel already reads the state — it is the far machine having offered no
+   * copilot at all, which it does in exactly two cases and deliberately does
+   * not distinguish between them: it has none, or it paired this desktop as a
+   * guest. `remote/copilot-access.ts` on the far side is why they look the
+   * same; the short form is that a guest is sent no key rather than one saying
+   * no, because an advertised thing a device may not use invites the ask.
+   *
+   * So the absence has to survive all the way here rather than being folded
+   * into `capabilities`. A machine list drawn off the capability would be
+   * reading *what that machine can do* as *what this desktop may do there*,
+   * which is a control that is always refused.
+   */
+  copilot: MachineCopilotLink | null
   /**
    * What is listening on that machine, as it last answered.
    *
@@ -105,14 +154,56 @@ export interface MachinesBridge {
   attachMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
   detachMachineSession(id: string, sessionId: string): Promise<unknown>
   writeToMachineSession(id: string, sessionId: string, data: string): Promise<unknown>
+  /**
+   * Type into a session over there without attaching to it. Refused unless that
+   * machine advertised `send`, and the refusal arrives as a sentence.
+   */
+  sendToMachineSession(machineId: string, sessionId: string, data: string): Promise<unknown>
   resizeMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
   createMachineSession(id: string, cwd?: string, provider?: string): Promise<unknown>
   /** End one session over there. Refused unless that machine advertised `close`. */
   closeMachineSession(id: string, sessionId: string): Promise<unknown>
   refreshMachinePorts(id: string): Promise<unknown>
   openOnMachine(id: string, url: string): Promise<unknown>
+  /**
+   * The copilot on that machine — the pipe under the switcher at the top of the
+   * copilot page.
+   *
+   * Nothing here opens the connection: the link sends `copilot.hello` on every
+   * welcome that carried a copilot, because that machine refuses every copilot
+   * verb until this socket has said it and the socket is new after every
+   * reconnect. Each of the four resolves `{ ok, message }`, where `ok` is *the
+   * frame left this machine* — there is no request id on the copilot wire, so
+   * it cannot honestly mean more. What the far end made of it arrives on the
+   * two subscriptions.
+   */
+  attachMachineCopilot(machineId: string): Promise<unknown>
+  startMachineCopilot(machineId: string): Promise<unknown>
+  sayToMachineCopilot(machineId: string, text: string): Promise<unknown>
+  refreshMachineCopilot(machineId: string): Promise<unknown>
+  onMachineCopilotState(cb: (machineId: string, state: unknown) => void): () => void
+  onMachineCopilotChat(cb: (machineId: string, bubble: unknown) => void): () => void
   onMachinesState(cb: (view: unknown) => void): () => void
   onMachineOutput(cb: (chunk: unknown) => void): () => void
+  /**
+   * Send a file from this machine into a session running on that one.
+   *
+   * The verb behind dropping a photo on a remote session's pane. A **path**, not
+   * the bytes — `pathForDroppedFile` has already turned the dropped `File` into
+   * one, and streaming it in the main process is what keeps a 200 MB video out
+   * of this window's heap.
+   *
+   * Resolves `{ ok: true, path }` with the path the file landed at over there,
+   * which is what the pane then types at the prompt. It may not be the name the
+   * file left with: a second `photo.jpg` lands beside the first rather than over
+   * it. Every failure resolves `{ ok: false, message }` instead — a sentence, and
+   * never silence.
+   */
+  uploadToMachine(machineId: string, filePath: string): Promise<unknown>
+  /** Stop the transfer to that machine. The far end deletes its half-written file. */
+  cancelMachineUpload(machineId: string): Promise<unknown>
+  /** Slice-by-slice progress, so a pane can draw one line about a file in flight. */
+  onMachineUpload(cb: (progress: unknown) => void): () => void
 }
 
 const BRIDGE_METHODS = [
@@ -127,13 +218,23 @@ const BRIDGE_METHODS = [
   'attachMachineSession',
   'detachMachineSession',
   'writeToMachineSession',
+  'sendToMachineSession',
   'resizeMachineSession',
   'createMachineSession',
   'closeMachineSession',
   'refreshMachinePorts',
   'openOnMachine',
+  'attachMachineCopilot',
+  'startMachineCopilot',
+  'sayToMachineCopilot',
+  'refreshMachineCopilot',
+  'onMachineCopilotState',
+  'onMachineCopilotChat',
   'onMachinesState',
   'onMachineOutput',
+  'uploadToMachine',
+  'cancelMachineUpload',
+  'onMachineUpload',
 ] as const
 
 /**
@@ -224,8 +325,34 @@ function asLink(value: unknown): MachineLinkState | null {
     ports: Array.isArray(value.ports)
       ? value.ports.map(asPort).filter((port): port is RemotePort => port !== null)
       : [],
+    copilot: asCopilotLink(value.copilot),
     hostPlatform: text(value.hostPlatform),
     retryAt: whole(value.retryAt),
+  }
+}
+
+/**
+ * The copilot link, or null, and **null is the safe direction**.
+ *
+ * Refused whole when any of it is unreadable rather than filled in with
+ * plausible defaults, because both halves of a half-read one are wrong in the
+ * same direction: a link invented out of a malformed frame draws a copilot
+ * surface for a machine that never offered one, and every press on it comes
+ * back refused with a sentence about guests. The same rule the wire parser
+ * applies to this object one layer down.
+ */
+function asCopilotLink(value: unknown): MachineCopilotLink | null {
+  if (!isRecord(value)) return null
+  const grant = value.grant
+  if (!isRecord(grant)) return null
+  if (typeof grant.read !== 'boolean' || typeof grant.act !== 'boolean' || typeof grant.alter !== 'boolean') {
+    return null
+  }
+  if (typeof value.linked !== 'boolean' || typeof value.open !== 'boolean') return null
+  return {
+    linked: value.linked,
+    open: value.open,
+    grant: { read: grant.read, act: grant.act, alter: grant.alter },
   }
 }
 

@@ -105,7 +105,7 @@ describe('opening a browser page for a copilot that has none', () => {
     expect(install).toBeDefined()
     // `about:blank` and not the target, or the link channel opens the page
     // itself and the drive then opens a second tab at the same address.
-    expect(install?.args[0]).toBe(BLANK_URL)
+    expect(install?.args[0]).toEqual({ url: BLANK_URL })
 
     // React mounts a `BrowserWorkspace`, which subscribes and hears a repeat.
     await vi.advanceTimersByTimeAsync(INSTALL_REPUSH_MS * 2)

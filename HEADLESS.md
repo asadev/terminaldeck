@@ -62,6 +62,20 @@ The core reaches for Electron in places that need a non-Electron answer:
 - `Notification` — a headless host has nobody to notify locally. It should
   forward to the paired devices instead, which is more useful anyway.
 - `BrowserWindow`, menus, the browser pane — GUI only, excluded from the build.
+- **`deck-control`, which is why a server has no copilot.** The one item on this
+  list still outstanding, and the only one a *user* meets. `deck-control` is the
+  copilot's whole tool surface, and `CopilotRuns` refuses a run without it rather
+  than starting a Claude CLI with no tools — so a headless host passes no copilot
+  layer at all, and a device approved as *my device* gets no Copilot on a server.
+  Two real value imports are in the way: `deck-control/index.ts` pulls
+  `browserDrive` from `browser-drive-ipc`, which loads `browser-tab` and
+  `browser-driver` (`BrowserWindow`, `WebContentsView`, `nativeImage`) at module
+  scope, and its `live-surface.ts` pulls `settings-extra`, which loads `app`,
+  `session` and `shell`. Both want the same treatment `app.getPath` got.
+  Until then the limit is *stated* rather than silent — `terminaldeck pair` and
+  `terminaldeck status` both say it — because on the wire "this host has no
+  copilot" and "you were approved as a guest" arrive as the same absence, and a
+  person cannot otherwise tell which happened.
 
 **The crypto needs no change and this is worth stating.** `src/shared/sealed.ts`
 uses `@noble/ciphers` with deliberately no "native when available" path, because

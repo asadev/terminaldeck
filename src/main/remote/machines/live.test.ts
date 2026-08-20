@@ -33,6 +33,7 @@ import { loadHostIdentity } from '../host-identity'
 import { createRelayClient } from '../relay-client'
 import { FolderGrants } from '../folder-grants'
 import { DeviceKinds } from '../device-kind'
+import { CopilotAccess } from '../copilot-access'
 import {
   authenticatorFor,
   createRemoteEndpoint,
@@ -43,7 +44,8 @@ import {
   type SessionAccess,
   type SessionHandle,
 } from '../server'
-import type { RemoteSession } from '../protocol'
+import type { CopilotRemote, CopilotSink } from '../copilot-remote'
+import type { CopilotStateReport, RemoteSession, ServerMessage } from '../protocol'
 import { createMachineLink, type MachineLinkState } from './guest'
 import { pairWithCode, lookupMachine } from './pair'
 import { offerFrom, rendezvousIdentity, startBeacon, type MachineOffer } from './rendezvous'
@@ -84,6 +86,15 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 8000
 interface Sessions extends SessionAccess {
   typed: string[]
   started: string[]
+  /**
+   * Every session this layer was asked to subscribe to, in order.
+   *
+   * Recorded so that a test can assert an attach did *not* happen. That is the
+   * whole property behind `CAPABILITY.send`: a fix that worked by quietly
+   * attaching first would deliver the same bytes and would take a terminal
+   * pane's handle away in the real app.
+   */
+  attaches: string[]
   /** Which folders each device may use, keyed the way the real store is. */
   grants: Map<string, string[]>
 }
@@ -97,6 +108,7 @@ interface Sessions extends SessionAccess {
 function fakeSessions(): Sessions {
   const typed: string[] = []
   const started: string[] = []
+  const attaches: string[] = []
   const grants = new Map<string, string[]>()
   const session: RemoteSession = {
     id: SESSION_ID,
@@ -109,9 +121,11 @@ function fakeSessions(): Sessions {
   return {
     typed,
     started,
+    attaches,
     grants,
     list: () => [session],
     attach(id): SessionHandle | null {
+      attaches.push(id)
       return id === SESSION_ID ? { sessionId: id, replay: SCROLLBACK } : null
     },
     write(_id, data): void {
@@ -131,6 +145,101 @@ function fakeSessions(): Sessions {
     // that folder grants apply to it something the test can check rather than
     // something the design says.
     folders: (deviceId) => grants.get(deviceId) ?? [],
+  }
+}
+
+/**
+ * The far machine's copilot, real everywhere the test is about it.
+ *
+ * `CopilotAccess` is the genuine article rather than a stub, and that is the
+ * point of the fixture: the question this whole feature turns on — *does this
+ * device reach the copilot* — is answered by the module that answers it in the
+ * app, reading the same `DeviceKinds` file a person writes by pressing **My
+ * device** or **Guest** on the approval screen. A fake that returned `true`
+ * would prove the wire and nothing about the rule the wire exists to carry.
+ *
+ * What is faked is the part that spawns an agent: `start` mints a run id
+ * instead of a process, and `say` records the words and pushes a bubble back
+ * through the subscription the way a real turn does. That asymmetry is
+ * deliberate — this file already says it stands up the real relay and the real
+ * pairing because *"every bug the relay path has had lived in a seam a mock
+ * replaces"*, and no bug in that class has ever lived inside a Claude CLI.
+ */
+interface FakeCopilot extends CopilotRemote {
+  /** Devices whose `copilot.hello` was served. Empty is "nothing ever opened it". */
+  opened: string[]
+  started: string[]
+  said: Array<{ deviceId: string; text: string }>
+}
+
+function fakeCopilot(kinds: DeviceKinds): FakeCopilot {
+  const access = new CopilotAccess({ isMine: (deviceId) => kinds.kindOf(deviceId) === 'mine' })
+  const opened: string[] = []
+  const started: string[] = []
+  const said: Array<{ deviceId: string; text: string }> = []
+  const sinks = new Map<string, CopilotSink>()
+  const runs = new Map<string, string>()
+
+  const report = (deviceId: string): CopilotStateReport => ({
+    // The copilot at that desk, which is a different thing from this device's
+    // own run and is reported separately for that reason. `stopped` is honest
+    // here: nobody is sitting at the fixture.
+    desk: 'stopped',
+    run: runs.get(deviceId) ?? null,
+    profile: 'Personal',
+    signedIn: true,
+    tools: 14,
+    turnTokens: 2200,
+    pending: 0,
+    grant: access.granted(deviceId),
+    available: true,
+    reason: null,
+  })
+
+  return {
+    opened,
+    started,
+    said,
+    granted: (deviceId) => access.granted(deviceId),
+    linked: (deviceId) => access.linked(deviceId),
+    open: (deviceId) => {
+      opened.push(deviceId)
+      return Promise.resolve({ ok: true })
+    },
+    closed: () => {},
+    state: report,
+    sessions: () => [],
+    log: () => ({ rows: [], more: false }),
+    pending: () => [],
+    answer: () => false,
+    watch: (deviceId, sink) => {
+      sinks.set(deviceId, sink)
+      return () => sinks.delete(deviceId)
+    },
+    start: (deviceId) => {
+      started.push(deviceId)
+      runs.set(deviceId, `run-${started.length}`)
+      return Promise.resolve({ ok: true })
+    },
+    say: (deviceId, text) => {
+      said.push({ deviceId, text })
+      /*
+       * Answered on the subscription, not as a reply to the frame, because that
+       * is the shape of the real one and the shape the client has to survive.
+       * There is no request id anywhere on the copilot wire: `copilot.say`
+       * returns nothing at all, and what a person sees comes back as a pushed
+       * `copilot.chat`. A fixture that resolved with the answer would let a
+       * client that never subscribed pass.
+       */
+      sinks
+        .get(deviceId)
+        ?.chat(runs.get(deviceId) ?? 'run-0', [{ id: `m${said.length}`, role: 'you', text, at: 1 }], false)
+      return Promise.resolve({ ok: true })
+    },
+    cancel: () => ({ ok: true }),
+    stop: () => ({ ok: true }),
+    revoked: () => {},
+    stopAll: () => {},
   }
 }
 
@@ -166,14 +275,30 @@ async function loopbackRelay(): Promise<string> {
   return `ws://127.0.0.1:${await listen(relay.server)}`
 }
 
-/** The machine on the other side of the room: a relay, and a host dialled into it. */
-async function farMachine(): Promise<{
+/**
+ * The machine on the other side of the room: a relay, and a host dialled into it.
+ *
+ * `copilot: true` gives it the copilot layer **and** the eligibility rule that
+ * decides who is told about it, and the two travel together on purpose: without
+ * the rule every device is eligible, which is the default a host written before
+ * device kinds existed still gets, and a test that switched one on without the
+ * other would be measuring a machine nobody ships.
+ *
+ * It is opt-in rather than always on because the rule is not only about the
+ * copilot. `capabilitiesFor` withholds `web` and `localhost` from an ineligible
+ * device too — one eligibility question behind all three, so a device cannot be
+ * a guest for one and an owner for another — and switching it on for every test
+ * in this file would silently narrow what the older ones are talking to.
+ */
+async function farMachine(options: { copilot?: boolean } = {}): Promise<{
   relayUrl: string
   auth: RemoteAuth
   desk: ReturnType<typeof pairingDesk>
   sessions: Sessions
   endpoint: RemoteEndpoint
   offer: MachineOffer
+  kinds: DeviceKinds
+  copilot: FakeCopilot
 }> {
   const relayUrl = await loopbackRelay()
 
@@ -181,11 +306,16 @@ async function farMachine(): Promise<{
   const auth = new RemoteAuth(dir)
   const desk = pairingDesk(auth)
   const sessions = fakeSessions()
+  const kinds = new DeviceKinds(tempDir())
+  const copilot = fakeCopilot(kinds)
   const endpoint = createRemoteEndpoint({
     sessions,
     auth: authenticatorFor(auth, desk),
     webRoot: join(dir, 'nowhere'),
     pingIntervalMs: 0,
+    ...(options.copilot
+      ? { copilot, copilotEligible: (deviceId: string): boolean => kinds.kindOf(deviceId) === 'mine' }
+      : {}),
   })
   const identity = loadHostIdentity(dir)
 
@@ -209,6 +339,8 @@ async function farMachine(): Promise<{
     desk,
     sessions,
     endpoint,
+    kinds,
+    copilot,
     offer: {
       relayUrl,
       hostId: identity.hostId,
@@ -560,6 +692,79 @@ describe('pairing, and then being a guest', () => {
     expect(link.state().state).toBe('offline')
   }, 30_000)
 
+  it('types into a session on the other machine without ever attaching to it', async () => {
+    /*
+     * The cross-machine proof of `CAPABILITY.send`, with the same relay, the
+     * same pairing and the same two endpoints as the test above it — and with
+     * the one thing that test does deliberately left out.
+     *
+     * His words on the 2026-08-20 review: *"if the browser is local, it should
+     * be able to send to the remote session too. Not just local sessions. If
+     * they are visible here, they should be working too."* The browser's picker
+     * has listed the far machine's sessions since 2026-08-18 and could type into
+     * none of them, because the only verb that wrote into a session was `input`
+     * and the host refuses one without an attach — and attaching in order to
+     * type would take the handle away from whatever terminal pane on this link
+     * already held it and replay its whole scrollback at the person reading it.
+     *
+     * So the assertions that matter here are the negative ones. `attaches` is
+     * empty and `output` is empty: nothing subscribed, nothing was replayed,
+     * and the text still arrived at the far machine's pty.
+     */
+    const far = await farMachine()
+    const code = far.desk.create()
+    const beacon = startBeacon({ code: code.token, offer: far.offer, relayUrl: far.relayUrl })
+    closers.push(() => beacon?.stop())
+    expect(await beacon?.ready()).toBe(true)
+
+    const paired = await pairWithCode({ code: code.token, relayUrl: far.relayUrl })
+    if (!paired.ok) throw new Error(`pairing failed: ${paired.message}`)
+    beacon?.stop()
+
+    const output: string[] = []
+    const link = createMachineLink({
+      id: paired.offer.hostId,
+      secrets: {
+        hostId: paired.offer.hostId,
+        hostPublicKey: Buffer.from(paired.offer.publicKey, 'base64'),
+        relayUrl: paired.offer.relayUrl,
+        credential: paired.credential,
+        guestKeys: paired.guestKeys,
+      },
+      onState: () => {},
+      onOutput: (_sessionId, data) => output.push(data),
+      onWelcome: () => {},
+      baseBackoffMs: 20,
+      maxBackoffMs: 60,
+    })
+    closers.push(() => link.disconnect())
+    link.connect()
+
+    await waitFor(() => link.state().state === 'awaiting-approval', 'the pending refusal')
+    const deviceId = far.auth.listDevices()[0].id
+    far.sessions.grants.set(deviceId, ['/tmp/project'])
+    far.auth.approveDevice(deviceId)
+    await waitFor(() => link.state().state === 'online', 'the link to come up after approval')
+
+    // Advertised by that machine without anybody arranging it: `SessionAccess.write`
+    // is a required member of the interface, so every host serves this.
+    expect(link.state().capabilities).toContain('send')
+
+    const answer = await link.send(SESSION_ID, 'look at this button\r')
+    expect(answer).toEqual({ ok: true, message: 'Sent.' })
+    // It reached the other machine's pty, through the relay, over the sealed
+    // channel, into the same `write` an ordinary keystroke goes to.
+    expect(far.sessions.typed.join('')).toContain('look at this button')
+
+    // And nothing subscribed on the way. No handle was taken from the far end,
+    // so no pane lost one — and no scrollback came back to be printed at
+    // somebody a second time.
+    expect(far.sessions.attaches, 'the send attached to the far session').toEqual([])
+    expect(output, 'the send replayed the far session at this machine').toEqual([])
+
+    link.disconnect()
+  }, 30_000)
+
   it('refuses a code that has already been spent', async () => {
     const far = await farMachine()
     const code = far.desk.create()
@@ -577,6 +782,247 @@ describe('pairing, and then being a guest', () => {
       pairTimeoutMs: 1500,
     })
     expect(second.ok).toBe(false)
+  }, 30_000)
+})
+
+/**
+ * This desktop reaching the copilot on **the other machine**, over the real wire.
+ *
+ * ## What it is for
+ *
+ * His words on the 2026-08-20 review, about two paired machines and one copilot
+ * page: *"the same switch we have for sessions"* at the top of it, so the
+ * copilot can be used against either. The host half of that has existed for
+ * weeks — `server.ts` advertises the capability, answers `copilot.hello`,
+ * serves `copilot.attach` and pushes state and chat — and until now **nothing
+ * on this side had ever sent one of those frames**. That is the failure this
+ * repository keeps re-finding under different names: the mechanism written, the
+ * connection absent.
+ *
+ * ## Where it actually broke, which is one line in the shared parser
+ *
+ * `parseServerFrame` rebuilt a `welcome` field by name and never copied
+ * `copilot`. A desktop guest therefore received every welcome with the copilot
+ * key silently removed, so the only per-device fact that says *this machine
+ * shares its copilot with you* could not reach this side at all. The PWA
+ * survived it by re-attaching the key in a private shim after calling the
+ * shared parser; nothing else had one. The first assertion below is that
+ * amputation, as a positive statement.
+ *
+ * ## The two cases, and why the second one is the load-bearing one
+ *
+ * `mine` proves the pipe. `guest` proves the rule the pipe exists to carry, and
+ * it is the one that has to hold: the absence of a copilot key is the whole of
+ * *"the copilot is never shared"* — not a capability advertised and refused, an
+ * absence — and a client that manufactured a link out of that absence would put
+ * a copilot on screen for a machine that never offered one and refuse every
+ * press on it.
+ */
+describe('reaching the other machine’s copilot', () => {
+  /**
+   * Pair to that machine, be approved as `kind`, and come up online.
+   *
+   * The kind is written before the device is let in, which is the order the
+   * approval screen uses and not an incidental one:
+   * `remote:device:approve` claims the kind first and abandons the whole
+   * approval if the claim does not take, because a device admitted with no kind
+   * reads as a guest with no folders and looks to its owner like a device that
+   * paired and then broke. It also cannot be changed afterwards —
+   * `DeviceKinds.claim` writes once and there is deliberately no method that
+   * overwrites one — so this is the only moment in either test where the answer
+   * is still open.
+   */
+  async function pairAs(
+    far: Awaited<ReturnType<typeof farMachine>>,
+    kind: 'mine' | 'guest',
+    watchers: {
+      onCopilotState?: (state: CopilotStateReport) => void
+      onCopilotChat?: (chat: Extract<ServerMessage, { t: 'copilot.chat' }>) => void
+    } = {},
+  ): Promise<{
+    link: ReturnType<typeof createMachineLink>
+    deviceId: string
+    states: MachineLinkState[]
+  }> {
+    const code = far.desk.create()
+    const beacon = startBeacon({ code: code.token, offer: far.offer, relayUrl: far.relayUrl })
+    closers.push(() => beacon?.stop())
+    expect(await beacon?.ready()).toBe(true)
+
+    const paired = await pairWithCode({ code: code.token, relayUrl: far.relayUrl })
+    if (!paired.ok) throw new Error(`pairing failed: ${paired.message}`)
+    beacon?.stop()
+
+    const states: MachineLinkState[] = []
+    const link = createMachineLink({
+      id: paired.offer.hostId,
+      secrets: {
+        hostId: paired.offer.hostId,
+        hostPublicKey: Buffer.from(paired.offer.publicKey, 'base64'),
+        relayUrl: paired.offer.relayUrl,
+        credential: paired.credential,
+        guestKeys: paired.guestKeys,
+      },
+      onState: (state) => states.push(state),
+      onOutput: () => {},
+      onWelcome: () => {},
+      ...watchers,
+      baseBackoffMs: 20,
+      maxBackoffMs: 60,
+    })
+    closers.push(() => link.disconnect())
+    link.connect()
+
+    await waitFor(() => link.state().state === 'awaiting-approval', 'the pending refusal')
+    const deviceId = far.auth.listDevices()[0].id
+    expect(far.kinds.claim(deviceId, kind)).toBe(true)
+    far.sessions.grants.set(deviceId, ['/tmp/project'])
+    far.auth.approveDevice(deviceId)
+    await waitFor(() => link.state().state === 'online', 'the link to come up after approval')
+    return { link, deviceId, states }
+  }
+
+  it('opens, attaches, starts a run and says something, all from the other desktop', async () => {
+    const far = await farMachine({ copilot: true })
+    const reports: CopilotStateReport[] = []
+    const chats: Array<Extract<ServerMessage, { t: 'copilot.chat' }>> = []
+    const { link, deviceId, states } = await pairAs(far, 'mine', {
+      onCopilotState: (state) => reports.push(state),
+      onCopilotChat: (chat) => chats.push(chat),
+    })
+
+    /* ------------------------------------ the welcome carried the copilot -- */
+
+    /*
+     * Read off the *first* online state rather than off the link now, because
+     * that snapshot is the welcome itself — `open` false, before this socket
+     * had said hello — and it is the one the shared parser used to drop the key
+     * out of. Asserting on the current state a moment later would pass against
+     * a build that learned about the copilot from the `copilot.grant` push and
+     * knew nothing at the welcome, which is a different feature.
+     */
+    const welcomed = states.find((state) => state.state === 'online')
+    expect(welcomed?.capabilities).toContain('copilot')
+    expect(welcomed?.copilot).toEqual({
+      linked: true,
+      open: false,
+      grant: { read: true, act: true, alter: true },
+    })
+
+    /* ------------------------------------------- and the stream is opened -- */
+
+    /*
+     * Sent by the link on the welcome, not by anything a person pressed. Every
+     * copilot verb — the read-tier ones included — is refused by that machine
+     * until this socket has said hello, and the socket is new after every
+     * reconnect, so an opening that lived in a window would be an opening that
+     * a sleeping laptop silently loses.
+     */
+    await waitFor(() => link.state().copilot?.open === true, 'the copilot stream to open')
+    expect(far.copilot.opened).toEqual([deviceId])
+
+    /* ------------------------------------------------- watching, and state -- */
+
+    expect(link.copilotAttach()).toEqual({ ok: true, message: 'Watching that machine’s copilot.' })
+    await waitFor(() => reports.length > 0, 'the copilot state to arrive')
+    // `desk` and `run` are two different things and the frame keeps them apart:
+    // the copilot at that machine's own keyboard is stopped, and this desktop
+    // has no run of its own yet. A surface that read the first as the second
+    // would offer to start something that is already running, or refuse to
+    // because something unrelated is.
+    expect(reports[0]).toMatchObject({ desk: 'stopped', run: null, profile: 'Personal' })
+    expect(reports[0].grant).toEqual({ read: true, act: true, alter: true })
+
+    /* ------------------------------------------------- a run, and a message -- */
+
+    expect(link.copilotStart().ok).toBe(true)
+    await waitFor(() => far.copilot.started.length === 1, 'the run to start over there')
+    // The run id comes back on the same subscription, which is what turns a
+    // composer from a control that cannot work into one that can: `say` has
+    // nothing to talk to while `run` is null.
+    await waitFor(() => reports.some((state) => state.run !== null), 'the run id to come back')
+
+    expect(link.copilotSay('which of my sessions is stuck?')).toEqual({ ok: true, message: 'Sent.' })
+    await waitFor(() => far.copilot.said.length === 1, 'the message to reach the copilot')
+    // It arrived over there attributed to *this* device, which is what makes a
+    // run its own rather than a second keyboard on somebody else's.
+    expect(far.copilot.said).toEqual([{ deviceId, text: 'which of my sessions is stuck?' }])
+
+    // And came back as a pushed bubble rather than as a reply to the frame,
+    // carrying the run it belongs to — the field that lets a client drop a
+    // frame from a run that has ended instead of splicing it onto a live one.
+    await waitFor(() => chats.length > 0, 'the chat frame to come back')
+    expect(chats[0].run).toBe('run-1')
+    expect(chats[0].messages).toEqual([
+      { id: 'm1', role: 'you', text: 'which of my sessions is stuck?', at: 1 },
+    ])
+
+    link.disconnect()
+  }, 30_000)
+
+  it('shares nothing at all with a desktop paired as a guest, and refuses every verb', async () => {
+    const far = await farMachine({ copilot: true })
+    const reports: CopilotStateReport[] = []
+    const chats: unknown[] = []
+    const { link } = await pairAs(far, 'guest', {
+      onCopilotState: (state) => reports.push(state),
+      onCopilotChat: (chat) => chats.push(chat),
+    })
+
+    /*
+     * **Absent, not false**, and the difference is the whole design. A guest is
+     * sent no `copilot` key and is not told the capability exists, because a
+     * client that is told draws the surface and a surface that refuses on every
+     * press is a worse answer than one that was never there. So there is no
+     * frame this desktop can send that measures whether that machine has a
+     * copilot at all — which is why the two reasons it might see nothing get
+     * one sentence between them.
+     */
+    expect(link.state().copilot).toBeNull()
+    expect(link.state().capabilities).not.toContain('copilot')
+    // `web` and `localhost` go with it. One eligibility question behind all
+    // three, so a device cannot be a guest for one and an owner for another.
+    expect(link.state().capabilities).not.toContain('web')
+    expect(link.state().capabilities).not.toContain('localhost')
+
+    // Nothing said hello, because nothing had a copilot key to say it about.
+    expect(far.copilot.opened).toEqual([])
+
+    for (const outcome of [
+      link.copilotAttach(),
+      link.copilotStart(),
+      link.copilotState(),
+      link.copilotSay('what are you working on?'),
+    ]) {
+      expect(outcome.ok).toBe(false)
+      // The sentence names the remedy, and the remedy is pairing again rather
+      // than a setting, because there is no setting: a device's kind is decided
+      // once and there is deliberately no control that overwrites it.
+      expect(outcome.message).toMatch(/guest/i)
+    }
+
+    /*
+     * Refused **here**, without a frame leaving this machine, which is the
+     * property that matters rather than the wording.
+     *
+     * A host that has never heard of a frame answers it by closing the channel,
+     * so a hopeful send is not a failed request — it is a disconnection that
+     * takes every terminal session on this link with it. The link is still up
+     * and the far copilot was never touched.
+     */
+    expect(link.state().state).toBe('online')
+    expect(far.copilot.opened).toEqual([])
+    expect(far.copilot.started).toEqual([])
+    expect(far.copilot.said).toEqual([])
+    expect(reports).toEqual([])
+    expect(chats).toEqual([])
+
+    // And the guest is a perfectly good guest. Nothing about the copilot
+    // refusal touches the sessions it was granted, which is the whole point of
+    // the kind being about the copilot rather than about being let in.
+    expect(link.state().sessions.map((session) => session.id)).toEqual([SESSION_ID])
+
+    link.disconnect()
   }, 30_000)
 })
 

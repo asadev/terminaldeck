@@ -413,6 +413,49 @@ describe('isTranscriptPath', () => {
     expect(isTranscriptPath(path, { configDir: CFG, deviceHomes: null })).toBe(true)
   })
 
+  /*
+   * The trap `ACCOUNT-MODEL.md` names third of the three things sharing has to
+   * be built with, pinned against a real link rather than a described one.
+   *
+   * Accounts share one conversation history by each having `projects/` linked
+   * into `~/.claude/projects` (`shared-projects.ts`). `resolve()` does not
+   * follow a link, so the guard used to accept the path the app builds and
+   * refuse the *identical file* named by its realpath — measured, in that
+   * document, as `true` for one spelling and `false` for the other. It worked
+   * only because nothing downstream happened to canonicalise; the first caller
+   * that did — an fs watcher reporting canonical paths, a `realpathSync` added
+   * for tidiness — would have taken down `chat:load` and `cost:session` behind
+   * a guard that still read as correct.
+   */
+  it.skipIf(ON_WINDOWS)('accepts both names for one file once the store is a link', () => {
+    // Canonicalised up front: `mkdtemp` hands back `/var/…` on macOS and the
+    // real directory is `/private/var/…`, which would make this test pass for
+    // the wrong reason.
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'terminaldeck-shared-')))
+    const shared = join(root, 'own-install', 'projects')
+    const config = join(root, 'account')
+    mkdirSync(join(shared, 'enc'), { recursive: true })
+    mkdirSync(config, { recursive: true })
+    // The direction the document insists on: the account's `projects/` is the
+    // link, and the user's own store is what it points at.
+    symlinkSync(shared, join(config, 'projects'), 'dir')
+    appendFileSync(join(shared, 'enc', 'sess.jsonl'), '{}\n')
+
+    const asBuilt = join(config, 'projects', 'enc', 'sess.jsonl')
+    expect(isTranscriptPath(asBuilt, { configDir: config, deviceHomes: null })).toBe(true)
+    // The same file, through the link. This is the one that was refused.
+    expect(
+      isTranscriptPath(realpathSync.native(asBuilt), { configDir: config, deviceHomes: null }),
+    ).toBe(true)
+
+    // And nothing was widened on the way: a file beside the shared store, whose
+    // realpath shares its prefix but not its directory, is still outside.
+    mkdirSync(join(root, 'own-install', 'projects-elsewhere'), { recursive: true })
+    const sibling = join(root, 'own-install', 'projects-elsewhere', 'sess.jsonl')
+    appendFileSync(sibling, '{}\n')
+    expect(isTranscriptPath(sibling, { configDir: config, deviceHomes: null })).toBe(false)
+  })
+
   it('refuses everything outside the stores, however it is spelled', () => {
     const cases = [
       ['', 'empty'],

@@ -33,7 +33,7 @@
  */
 import { createRoot } from 'react-dom/client'
 import { UsageBarView } from '../src/renderer/shell/UsageBar'
-import type { UsageReport, UsageWindowReading } from '../src/renderer/shell/usage-bar-model'
+import type { ContextReading, UsageReport, UsageWindowReading } from '../src/renderer/shell/usage-bar-model'
 import '../src/renderer/styles/tokens.css'
 // The app's own reset, and it is not optional. Without it every `<button>` in
 // here is drawn as an operating-system button — a grey `buttonface` fill and a
@@ -139,12 +139,71 @@ const BOTH: Case = {
   },
 }
 
+/**
+ * The context reading Asad photographed on 2026-08-19, as the app returned it.
+ *
+ * Not invented: the folder is `~/ClaudeAsad`, the transcript the app picked was
+ * `d4601913-…`, whose file had been touched ten minutes earlier and whose last
+ * assistant turn was written on 12 August — 6.88 days before the look. Every
+ * number here was measured off that machine while the complaint was being
+ * diagnosed, which is why this case exists at all: it is the one state where
+ * the panel was confidently wrong.
+ */
+const STALE_CONTEXT: ContextReading = {
+  provider: 'claude',
+  state: 'ok',
+  tokens: 192_200,
+  window: 1_000_000,
+  percent: 19.22,
+  windowBasis: 'observed',
+  model: 'claude-opus-5',
+  modelLabel: 'Opus 5',
+  sessionId: 'd4601913-2422-4a30-8707-34649fb29af6',
+  chosen: 'inferred',
+  rivals: 1,
+  reportedAt: NOW - Math.round(6.88 * 24 * 60) * MINUTE,
+  observedAt: NOW,
+  detail: 'Read from the most recently updated transcript in this folder.',
+}
+
+/** The same panel when the transcript really is the live one — a fresh turn. */
+const LIVE_CONTEXT: ContextReading = {
+  ...STALE_CONTEXT,
+  tokens: 227_642,
+  percent: 22.76,
+  sessionId: '92b0e6db-0f92-4cbb-bae9-0aa67f9a6868',
+  reportedAt: NOW - MINUTE,
+  rivals: 2,
+}
+
 const CASES: Case[] = [
+  {
+    title: 'Context panel — the stale reading he photographed',
+    note: 'A transcript whose file was touched ten minutes ago and whose last turn is 6.88 days old.',
+    props: {
+      report: report([claude(), week], null),
+      provider: 'claude',
+      accountLabel: 'app.imatch.ae@gmail.com',
+      context: STALE_CONTEXT,
+      now: NOW,
+    },
+  },
+  {
+    title: 'Context panel — a live reading',
+    note: 'The transcript an agent is writing into right now.',
+    props: {
+      report: report([claude(), week], null),
+      provider: 'claude',
+      accountLabel: 'app.imatch.ae@gmail.com',
+      context: LIVE_CONTEXT,
+      now: NOW,
+    },
+  },
   BOTH,
   {
-    title: 'Both measured, dense — the room is short',
+    title: 'Both measured, tight — the room is short',
     note: 'Under 210 pixels. The renewal clause goes and the meters narrow. Both readings stay: hidden, a reading is indistinguishable from one that was never reported.',
-    props: { ...BOTH.props, fit: 'dense' as const },
+    props: { ...BOTH.props, fit: 'tight' as const },
   },
   {
     title: 'Both measured, tight — the narrowest window this app permits',
@@ -387,7 +446,7 @@ function Board({ theme }: { theme: 'dark' | 'light' }) {
           <Strip key={width} width={width} props={BOTH.props} />
         ))}
         {WIDTHS.map((width) => (
-          <Strip key={`dense-${width}`} width={width} props={{ ...BOTH.props, fit: 'dense' as const }} />
+          <Strip key={`tight-${width}`} width={width} props={{ ...BOTH.props, fit: 'tight' as const }} />
         ))}
         {WIDTHS.map((width) => (
           <Strip key={`tight-${width}`} width={width} props={{ ...BOTH.props, fit: 'tight' as const }} />

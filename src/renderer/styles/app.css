@@ -242,6 +242,194 @@ kbd {
   background: var(--text-muted);
 }
 
+/*
+  The mark that says a browser window is attached to a session — `B1`, `B2`.
+
+  A chip with a glyph in it, never a dot, and that is the whole reason it is
+  allowed to exist at all. Two dot vocabularies already share these rows:
+  `.status-dot` above owns six run states, and the account dot round-robins six
+  tokens whose colour "means nothing on its own". `WorkspaceTabStrip` refused a
+  browser dot on the stated grounds that a mark meaning nothing is worse than no
+  mark. A chip reading `B2` means something with the colour ignored — the number
+  is the fact, the colour only says which session's numbering it belongs to —
+  and at 15px tall with two characters in it, it cannot be misread as a 7px dot.
+
+  Filled rather than tinted, because a tint of a colour that has to survive on
+  four surfaces is a different colour on each of them, and this chip is drawn on
+  the strip, on the rail and on a pane bar. `--bind-fg` is the ink for the fill
+  and flips end for end between the themes; `tokens.css` has the measurements.
+
+  Tabular figures so `B1` and `B2` are the same width, which is what stops a row
+  reflowing by a pixel when a second window attaches.
+*/
+.bind-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.bind-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 15px;
+  padding: 0 4px;
+  /* A literal, and the only one in this rule. `--radius-sm` is 6px, which on a
+     15px-tall chip is most of the way to a pill — and a pill is the account
+     chip's shape two centimetres away. A squarer corner is what keeps the two
+     marks distinguishable at a glance on the same row. */
+  border-radius: 4px;
+  background: var(--bind-1);
+  color: var(--bind-fg);
+  font-size: 10px;
+  font-weight: var(--w-semibold);
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+  /* The chip states a fact; it is not the thing you press. The control that
+     attaches and detaches is the button on the pane bar, and a chip that took
+     the pointer would be a fifth thing on a row that is already dense. */
+  cursor: inherit;
+  user-select: none;
+}
+
+.bind-chip[data-bind='2'] {
+  background: var(--bind-2);
+}
+.bind-chip[data-bind='3'] {
+  background: var(--bind-3);
+}
+.bind-chip[data-bind='4'] {
+  background: var(--bind-4);
+}
+
+/*
+  `+3`, when there are more windows than there is room for.
+
+  Hollow rather than filled: it is a count of chips and not a chip, and drawing
+  it identically would read as a window called `+3`. It keeps the session's
+  colour on its outline so the group still reads as one session's.
+*/
+.bind-chip[data-more] {
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: inset 0 0 0 1px var(--bind-1);
+  min-width: 0;
+}
+.bind-chip[data-more][data-bind='2'] {
+  box-shadow: inset 0 0 0 1px var(--bind-2);
+}
+.bind-chip[data-more][data-bind='3'] {
+  box-shadow: inset 0 0 0 1px var(--bind-3);
+}
+.bind-chip[data-more][data-bind='4'] {
+  box-shadow: inset 0 0 0 1px var(--bind-4);
+}
+
+/*
+  The control that attaches a browser window to a session, and detaches one.
+
+  In this sheet rather than in `shell.css` for the same reason `.status-dot`
+  four rules up is: it is a small shared mark with a fixed shape, drawn by
+  whichever chrome happens to need it, and a copy per stylesheet is how two
+  surfaces come to draw the same fact at two different sizes. Today its one
+  caller is a guest pane's bar; nothing about the rule is a pane bar's.
+
+  It carries the session's own binding colour on its outline when something is
+  attached and stays neutral when nothing is, so the button and the chips on the
+  strip read as the same session's without the button ever becoming a fifth
+  filled thing on a crowded line.
+*/
+.bind-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 4px 0 5px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  line-height: 1;
+  white-space: nowrap;
+  /*
+    It gives way, and it used to refuse to — 2026-08-20.
+
+    Asad, on the chips: *"see up there now B2 and B1 is mixing… B1, B2 over the
+    cross button."* This rule said `flex-shrink: 0`, on a button whose label
+    grows by five characters for every browser window attached, sitting in a bar
+    that has a close control at the end of it. Two items that both refuse to
+    shrink in a row narrower than their sum is not a squeeze, it is an overflow:
+    the row keeps its full width and the last thing in it is drawn past the edge
+    somebody can see, or on top of the thing next to it.
+
+    A flex item's automatic minimum size is its content, so the permission has to
+    be spelled twice — the `min-width: 0` here and the `overflow: hidden` on the
+    label below — or the chips hold the width anyway and nothing about this line
+    has changed.
+
+    Which of the two gives is the rule the bar already states over
+    `.pane-cell-slot`: *a control gives way last*. The ✕ keeps its 20px at every
+    width and this label is what shortens, because `B1 B2 B3` truncated still
+    says a browser is attached and its whole sentence is one hover away, whereas
+    a ✕ that is half drawn is a control you cannot press.
+  */
+  flex-shrink: 1;
+  min-width: 0;
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.bind-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.bind-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.bind-button-label {
+  font-variant-numeric: tabular-nums;
+  /* The half of "it may shrink" that lives on the child. Without somewhere for
+     the overflow to go, a shrunk button clips its own text against its border
+     radius instead of ending in an ellipsis, which reads as a rendering fault
+     rather than as a label that ran out of room. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Attached: the session's colour on the rim, and the label a shade firmer.
+
+   Deliberately *not* the mono face, and `verbatim.test.ts` is why — it caught
+   this on the first run. Every mono surface in this app has to be listed in
+   `verbatim.css` so ligatures are turned off on it, because JetBrains Mono
+   redraws `=>` and `!=` in machine text. `B1 B2` contains nothing a ligature
+   could touch, but the inventory is an inventory: the right answer is not to
+   claim an exemption for a two-character label, it is not to be a mono surface.
+   `tabular-nums` on the label below is what the mono face was wanted for. */
+.bind-button[data-attached] {
+  color: var(--text-primary);
+  font-size: 10px;
+  box-shadow: inset 0 0 0 1px var(--bind-1);
+}
+.bind-button[data-attached][data-bind='2'] {
+  box-shadow: inset 0 0 0 1px var(--bind-2);
+}
+.bind-button[data-attached][data-bind='3'] {
+  box-shadow: inset 0 0 0 1px var(--bind-3);
+}
+.bind-button[data-attached][data-bind='4'] {
+  box-shadow: inset 0 0 0 1px var(--bind-4);
+}
+
 @keyframes pulse {
   0%,
   100% {

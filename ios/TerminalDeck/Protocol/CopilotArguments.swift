@@ -425,9 +425,26 @@ indirect enum OrderedJSON: Equatable {
         private mutating func number() -> OrderedJSON? {
             let start = at
             if at < scalars.count, scalars[at] == "-" { at += 1 }
-            var digits = 0
-            while at < scalars.count, scalars[at].isASCIIDigit { at += 1; digits += 1 }
-            guard digits > 0 else { return nil }
+            guard at < scalars.count, scalars[at].isASCIIDigit else { return nil }
+            /*
+             * A leading zero is not a number, and this loop used to accept one.
+             *
+             * JSON's grammar is `0` **or** a digit 1-9 followed by any digits;
+             * `01` is two tokens, not one, and a parser that swallows both reads
+             * a malformed frame as a valid one. `testMalformedInputIsRefusedRatherThanGuessedAt`
+             * has always asserted this and was red against the old loop, which
+             * counted digits and asked no more.
+             *
+             * Refusing the second digit rather than the whole token is what
+             * makes it visible: `0` parses, `1` is left over, and the top-level
+             * `parse` refuses trailing input — so the answer is nil, arrived at
+             * by the same route as `{"a":1} {"b":2}`.
+             */
+            if scalars[at] == "0" {
+                at += 1
+            } else {
+                while at < scalars.count, scalars[at].isASCIIDigit { at += 1 }
+            }
             if at < scalars.count, scalars[at] == "." {
                 at += 1
                 var fraction = 0

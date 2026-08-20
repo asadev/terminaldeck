@@ -1,5 +1,4 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { panelSpec } from '../shell/panels'
 import { sectionMeta } from '../settings/settings-schema'
 import { describe, expect, it } from 'vitest'
 import {
@@ -221,10 +220,12 @@ describe('what this page says about itself', () => {
     }
     const html = renderToStaticMarkup(<HooksPanel bridge={bridge} />)
     const sub = /<p class="hooks-sub">([^<]*)<\/p>/.exec(html)?.[1] ?? ''
-    // What it buys is the toolbar's job — `panelSpec('hooks').blurb`, asserted
-    // just below, so the page does not say one thing twice.
-    expect(panelSpec('hooks').blurb).toMatch(/working, waiting or done/)
-    // This line says the other half: what the page is *not*. It is the fix for
+    // The toolbar used to carry "what it buys" as a second line under the
+    // title; that blurb and its eight siblings were deleted on 2026-08-20, so
+    // there is nothing above this page saying it any more.
+    //
+    // This line says the half that was always this page's own: what the page is
+    // *not*. It is the fix for
     // *"do you think hooks and CLIs are the same thing?"* and is the assertion
     // somebody has to delete to lose it.
     expect(sub).toContain('Settings')

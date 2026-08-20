@@ -5,11 +5,14 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
   type RefObject,
 } from 'react'
 import type { ProviderId } from '@shared/types'
 import { ControlPicker } from '../chat/controls/ControlPicker'
 import { ControlSection } from '../chat/controls/ControlSection'
+import { ControlToggleItem } from '../chat/controls/ControlToggle'
+import { menuSide, type MenuSide } from '../chat/controls/menu-side'
 import {
   controlName,
   displayValue,
@@ -17,10 +20,12 @@ import {
   optionsFor,
   previousModelOptions,
   reachOf,
+  shortModelLabel,
   type ControlId,
   type ControlOption,
 } from '../chat/controls/catalog'
 import { runningProvider, useAgentPresence } from './agent-presence'
+import type { ControlsTarget } from './controls-target'
 import {
   chooseLayout,
   clampWidth,
@@ -99,11 +104,12 @@ import './SessionControls.css'
  *
  * ## What is deliberately not in this cluster
  *
- * **Permission mode** used to be listed here, and is not any more — it joined
- * the cluster when the composer's control row was removed and it turned out to
- * be the one control that had no twin up here. The argument for leaving it out
- * is still worth reading and is now at `CHROME_CONTROLS`, next to the fact that
- * overruled it.
+ * **Permission mode.** It was left out, then put in when the composer's control
+ * row was removed and it turned out to be the one control with no twin up here,
+ * and it is out again — because the CLI prints `⏵⏵ bypass permissions on
+ * (shift+tab to cycle)` along the bottom of every session it runs, and a second
+ * place to read one fact is a second place that can disagree. All three turns of
+ * that argument are at `CHROME_CONTROLS`, in order.
  *
  * **Slash commands.** *"Maybe slash commands also somehow — maybe not now,
  * maybe later."* Not now. Nothing here enumerates them and nothing pretends to.
@@ -163,6 +169,30 @@ export interface SessionControlsProps {
    * is drawn back and says so rather than disappearing.
    */
   onOpenConnectors: (() => void) | null
+  /**
+   * Which computer the session is on. **Absent means this one**, which is what
+   * every mount of this cluster meant before the prop existed.
+   *
+   * ## Why one prop and not a different component
+   *
+   * Asad, three times, the last on 2026-08-18: *"I don't see it in server
+   * sessions and in the remote sessions both."* The reason he could not was
+   * never that these controls are a local idea — it was that both hooks behind
+   * them called an IPC channel that reaches this machine's `PtyManager` by this
+   * machine's session id, so over a session on a paired PC they asked about a
+   * session that does not exist here. `controls-target.ts` is the router that
+   * fixes the address; this prop is the address.
+   *
+   * Everything else about the cluster is deliberately unchanged. His words were
+   * *"the same identical options for the remote sessions too"*, and identical
+   * means the same component, the same chips, the same fold, the same menus —
+   * not a second cluster that looks similar and drifts.
+   *
+   * The one thing that *does* change with it is the connectors chip. See
+   * {@link hasConnectors} below: MCP servers are resolved from a folder on this
+   * computer, and a session on another one has none here to resolve.
+   */
+  target?: ControlsTarget
 }
 
 /**
@@ -172,48 +202,178 @@ export interface SessionControlsProps {
  * first. Fast mode last because it is the one that most often has nothing to
  * report — see `unreadLabel` in `catalog.ts`.
  *
- * ## Permission mode, which was deliberately not here and now is
+ * ## Permission mode was here, and is not any more
  *
- * The note further up this file argues it out of this cluster, and every clause
- * of that argument still holds: it was not asked for, it is the one control with
- * a gesture in the terminal underneath this bar (shift+tab), and it is the most
- * expensive thing here to widen. It ended with "it keeps its chip in the
- * composer", and that is the clause that stopped being true:
+ * It arrived because the composer's control row was deleted and it was the one
+ * control on that row with no twin up here — *"Options is showing the same
+ * options that we already have here… remove them from the chat box side
+ * completely"* — so leaving it out then would have deleted a working control as
+ * a side effect of removing duplicates of other ones. That was the right call
+ * with the information of the day. What it produced on screen was a chip
+ * reading `Bypass`, and Asad, looking at it:
  *
- *   > *"Options is showing the same options that we already have here… let's
- *   > not keep them here — remove them from the chat box side completely, only
- *   > keep the maybe add files or something."*
+ *   > *"we don't need this part also at the end, now bypass read things because
+ *   > we have this here already inside."*
  *
- * The composer's row is gone. Every other control on it had a twin up here;
- * permission mode did not, so leaving it out would not have been "one home per
- * control", it would have been none — a working control deleted as a side
- * effect of removing duplicates of other controls. It is last but one so that
- * the fold sheds it before Model or Effort in a narrow bar, and
- * `chat/controls/one-home.test.ts` fails if it ever falls off this list without
- * gaining a home somewhere else.
+ * "Here already inside" is the terminal directly underneath this bar, and it is
+ * not an approximation of the fact — it *is* the fact. Claude Code draws its own
+ * permission mode along the bottom of every session for as long as the session
+ * is running:
+ *
+ *     ⏵⏵ bypass permissions on (shift+tab to cycle)
+ *
+ * captured verbatim in `src/main/cli-screens.capture.json` and asserted in
+ * `AccountChip.test.tsx` and `SessionControls.presence.test.tsx`. That line is
+ * the CLI's, it is always current because the CLI redraws it, and it names the
+ * gesture that changes it in the same breath.
+ *
+ * So what this chip was is a **second place to read one fact** — and the second
+ * place is the one that can be wrong. Everything else in this cluster is scraped
+ * off the same screen, which means this chip could only ever be as fresh as the
+ * last frame this app parsed, while the line two inches below it is redrawn by
+ * the process itself. Two readings of one thing that can disagree is worse than
+ * one reading, and the one to keep is obviously the CLI's.
+ *
+ * It is a removal from the *chrome*, not from the app: the mode is still read
+ * (`readings.permission` is still parsed off the wire and still mirrored in
+ * `ControlsReading`), it is still displayed by the CLI, and it is still
+ * changeable — with shift+tab, in the terminal, which is where every other
+ * keystroke this cluster sends ends up anyway. `chat/controls/one-home.test.ts`
+ * carries the whole of that argument as an assertion, so a future reader who
+ * thinks this was an oversight finds out otherwise from a failing test rather
+ * than from a comment they did not open.
  */
-const CHROME_CONTROLS: readonly ControlId[] = ['model', 'effort', 'permission', 'fast']
+const CHROME_CONTROLS: readonly ControlId[] = ['model', 'effort', 'fast']
+
+/**
+ * Which controls do not get a chip of their own, and whose menu they end.
+ *
+ * Asad, on the bar: *"move fast mode toggle inside the models dropdown at the
+ * end."*
+ *
+ * The pairing is not arbitrary and the map is written host-first so that it
+ * reads as the sentence it is: the model menu ends with fast mode. They are
+ * coupled in the CLI itself — its model picker prints *"Switching to other
+ * models turns off fast mode"* under its own rows — so a switch that lives
+ * anywhere else puts the consequence at one end of a toolbar and the cause at
+ * the other. What it looks like, and the four things that stop it reading as a
+ * twelfth model, are argued at `ControlToggleItem` in
+ * `chat/controls/ControlToggle.tsx`.
+ *
+ * This is a fact about *placement*, so it lives here beside the list of what is
+ * on the bar at all, and not in `catalog.ts` — which held two such lists once,
+ * `PRIMARY_CONTROLS` and `MENU_CONTROLS`, and is the better for having lost
+ * them. The tombstone in that file explains why: a catalogue that also lays out
+ * a toolbar goes stale about a surface it cannot see.
+ *
+ * A nested control is still `CHROME_CONTROLS`'s. It is this cluster's to draw,
+ * it is named in the folded chip's hover label by `contentsSentence`, and it
+ * keeps its own full section in the folded panel — where there is room for a
+ * heading and a description, and where nesting it inside another section would
+ * buy nothing. `chat/controls/one-home.test.ts` asks only that every control be
+ * reachable somewhere, which is what moving it one level deeper preserves.
+ */
+const NESTED_CONTROLS: Partial<Record<ControlId, ControlId>> = { model: 'fast' }
+
+/**
+ * The controls that get a chip on the open bar: everything in the cluster that
+ * is not drawn inside something else.
+ *
+ * Derived rather than typed out a second time. Two hand-written lists that have
+ * to agree is how a control gets drawn twice — or, once somebody edits the
+ * shorter one, not at all — and this cluster has already been reported for both
+ * failures, from opposite directions.
+ */
+const NESTED = new Set<ControlId>(Object.values(NESTED_CONTROLS))
+const ROW_CONTROLS: readonly ControlId[] = CHROME_CONTROLS.filter((id) => !NESTED.has(id))
 
 /**
  * What to believe about the row's own width until it has been measured once.
  *
- * Both figures are read off the running app, and both were re-read on
- * 2026-08-18 after two changes moved them a long way. Dropping the names from
- * the chips — *"just Opus 5 with drop down is good enough"* — took roughly 40
- * pixels off each of the four; the usage reading gained about 40 by becoming
- * two lines and a wider grid. Measured with a live session reading `Opus 5`,
- * `Extra high`, `Bypass`, `Off` and two connectors: the full row is **551**
- * (of which the usage element is 178) and the folded row is **247** (usage
- * 107).
+ * ## Where these two numbers come from
  *
- * They are a starting point and nothing more: `naturalWidth` replaces each with
- * the real thing on the first paint that draws it, because the true width moves
- * with its own contents. `Opus 5` and `Opus 5 (1M context)` are not the same
- * chip, and a constant that pretends otherwise is a constant that was right on
- * the day it was written. What a stale guess actually costs is one frame — an
- * unnecessary fold, or an unnecessary unfold, before the first measurement
- * lands — which is why these are worth keeping honest and not worth agonising
- * over.
+ * Both were read off a rendered row on 2026-08-19, in Chrome, through
+ * `.harness/controls.html` — the page written for this, which mounts this
+ * component inside `WindowToolbar`'s own skeleton and reports `naturalWidth`
+ * (the very function that overwrites these) against a bar whose width the
+ * measurement sweeps. The session it draws is the ordinary working one: `Opus
+ * 5`, `Extra high`, fast mode `Off`, the usage element carrying a context figure
+ * of `154.1k` — the live reading this app took off its own transcript that day —
+ * and the connectors chip.
+ *
+ * Re-measured twice more the same day — once after the usage element was split
+ * into a context figure and a plan icon, and once after the fast-mode chip left
+ * the bar for the end of the model menu. What the latest sweep printed, per bar
+ * width:
+ *
+ * | bar | clamp | layout | fit | row |
+ * |---|---|---|---|---|
+ * | 1400 | 760 | full | full | **318.5** |
+ * | 1200 | 560 | full | full | **318.5** |
+ * | 900 | 260 | folded | full | **206.8** |
+ * | 800 | 160 | folded | full | **140.6** |
+ * | 760 | 120 | folded | tight | **104.4** |
+ * | 720 | 106 | folded | tight | **104.4** |
+ *
+ * ## What that says about the numbers this replaces
+ *
+ * They were `{ full: 363, folded: 207 }`, and only the first has moved.
+ *
+ * `full` lost the fast-mode chip: *"move fast mode toggle inside the models
+ * dropdown at the end."* The sweep behind the previous number broke the open
+ * row into its chips — `69.3 + 85.0 + 42.0 + 91.7` for model, effort, fast mode
+ * and connectors — so the chip that left was 42.0 wide, and with the row's 2px
+ * gap that is 44.0. 362.5 − 44.0 is 318.5, and the measurement says 318.5.
+ * Written down because the agreement is the check and not the source:
+ * arithmetic on a measurement is not a measurement, and only the sweep can say
+ * what the row actually wants.
+ *
+ * `folded` does not move at all, and that is the expected answer rather than a
+ * suspicious one. The folded chip never drew fast mode — the note beside it
+ * says so in as many words, *"what folds away entirely is fast mode"* — so
+ * there was nothing there for this change to take away. A `folded` that had
+ * shifted would have meant the fold was drawing something it says it does not.
+ *
+ * The generation before that was `{ full: 473, folded: 318 }`, against a usage
+ * element that drew two named windows, two percentages, two meters and a
+ * renewal clause — 177.6 pixels of it, against 64.6 now.
+ *
+ * `folded` is written as the **widest** of the folded tiers rather than the
+ * narrowest. The folded arrangement does not have one width — the summary chip
+ * gives up its second value, then its words — so a single constant can only be a
+ * bound, and the bound worth holding is the high one, for `naturalWidth`'s own
+ * stated reason: an under-measured row is the one that unfolds into a bar it
+ * overflows.
+ *
+ * It also, today, changes nothing: `chooseLayout` reads `needs.full` and never
+ * `needs.folded`, and the only caller of `drawnWidth` — the function that does
+ * read it — is `control-room.test.ts`, with its own fixture. Said plainly rather
+ * than left for a reader to discover, because a constant that looks load-bearing
+ * and is not is how a wrong number survives review.
+ *
+ * ## The mode switch shrank on the same day, and these did not move
+ *
+ * It became two icon buttons instead of three words — about 50px where there
+ * were about 180 — and the sweep was run again for it, through the same page,
+ * printing 318.5 at 1400 and 104.4 at 720. Byte for byte the numbers above.
+ *
+ * That is the expected answer rather than a suspicious one, and the reason is
+ * worth writing down because the temptation is to "correct" these by 130: the
+ * mode switch is not *in* the cluster. It is a sibling on the same bar, and
+ * `roomFor` charges it live off the DOM — so what its slimming actually buys is
+ * 130 more pixels of `room`, which moves the width at which this row folds
+ * without moving what the row itself wants. Adjusting these by hand for it would
+ * have been arithmetic on the wrong box.
+ *
+ * ## And they are still only a starting point
+ *
+ * `naturalWidth` replaces each with the real thing on the first paint that draws
+ * it, because the true width moves with its own contents. `Opus 5` and `Opus 5
+ * (1M context)` are not the same chip, and a constant that pretends otherwise is
+ * a constant that was right on the day it was written. What a stale guess
+ * actually costs is one frame — an unnecessary fold, or an unnecessary unfold,
+ * before the first measurement lands — which is why these are worth keeping
+ * honest and not worth agonising over.
  *
  * This is the whole of what remains of `FOLD_BELOW_PX`, the single 900px
  * threshold this replaced. That number compared the wrong box — see
@@ -221,7 +381,38 @@ const CHROME_CONTROLS: readonly ControlId[] = ['model', 'effort', 'permission', 
  * have described both a 1176px window toolbar carrying a mode switch and a
  * 124px guest-pane bar carrying a close button.
  */
-const FIRST_GUESS: LayoutNeeds = { full: 551, folded: 247 }
+const FIRST_GUESS: LayoutNeeds = { full: 319, folded: 207 }
+
+/**
+ * Below this much room, the usage element folds its icon into its figure.
+ *
+ * The one width decision that element still has, and it replaces the two
+ * thresholds — 380 and 120 — that the old three-tier reading needed. Those were
+ * about a renewal clause and a pair of meters, and both are inside the dropdown
+ * since Asad's *"no lets keep it in the dropdown and keep context outside"*.
+ * What is left on the bar is a figure and a 21-pixel icon, and the only question
+ * a width can still decide is whether both of them fit.
+ *
+ * 145 is measured through `.harness/controls.html` on 2026-08-19, by sweeping
+ * the bar a pixel at a time across the boundary and reading the row's overflow:
+ *
+ * | clamp | fit | usage | **row wants** | overflows |
+ * |---|---|---|---|---|
+ * | 150 | full | 64.6 | **140.6** | no |
+ * | 145 | full | 64.6 | **140.6** | no |
+ * | 144 | tight | 30.4 | **104.4** | no |
+ * | 106 | tight | 30.4 | **104.4** | no |
+ *
+ * So the folded row with both elements on it wants 140.6, and 145 is that with
+ * a little over four pixels to spare. Below it the icon folds into the figure
+ * and the row drops to 104.4, which fits inside the 106 that the app's own
+ * 720-pixel minimum window leaves this cluster.
+ *
+ * The wrong version of this number is not a rounding error: at the previous
+ * threshold the 720px window drew a row 27 pixels past its own edge, measured,
+ * with the folded controls chip clipped by exactly that much.
+ */
+const TIGHT_BELOW_PX = 145
 
 /**
  * Which arrangement of this cluster fits the bar it is in, kept current.
@@ -439,8 +630,11 @@ export function summaryDetail(clamp: number | null): SummaryDetail {
  * Exported so the tests can assert that the folded chip advertises every
  * control behind it. Hand-typing that sentence is how a hover label comes to
  * name a control that was deleted six months earlier, and this app has already
- * lost controls behind an unnamed button once — see `MENU_CONTROLS` in
- * `catalog.ts` for the whole account.
+ * lost controls behind an unnamed button once — the whole account is in
+ * `catalog.ts`, in the block that stands where `PRIMARY_CONTROLS` and
+ * `MENU_CONTROLS` used to be. Named as a tombstone rather than as a symbol
+ * because that is what it is now: the lists are deleted and the argument they
+ * carried is what was kept.
  */
 export function contentsSentence(withConnectors: boolean): string {
   const names = [...CHROME_CONTROLS.map(controlName), ...(withConnectors ? ['Connectors'] : [])]
@@ -525,6 +719,17 @@ export function ConnectorsPicker({
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const shut = useCallback(() => setOpen(false), [])
+  /*
+   * Which edge this panel hangs from. It is the third `.ac-menu` in the window
+   * and the only one that was not measuring itself — so on a bar where the two
+   * pickers beside it had learned to flip, this one still opened off the
+   * right-hand edge of the glass. Found by sweeping every chip on the cluster
+   * against the viewport after the other two were fixed, which is the only way
+   * a third instance of a shared class gets found at all.
+   *
+   * `menu-side.ts` holds the arithmetic and the sentence that prompted it.
+   */
+  const [side, setSide] = useState<MenuSide>('left')
   // The window's one-menu-at-a-time rule, the same as every other picker on
   // this bar. Without it, opening this over the model menu leaves two panels
   // overlapping on a bar one row tall — see `one-menu.ts`.
@@ -546,6 +751,14 @@ export function ConnectorsPicker({
     }
   }, [open])
 
+  // Measured on open, before the panel is painted for the first time — the same
+  // moment the two pickers on this bar measure themselves.
+  useLayoutEffect(() => {
+    if (!open) return
+    const box = root.current?.getBoundingClientRect()
+    if (box) setSide(menuSide(box, window.innerWidth))
+  }, [open])
+
   return (
     <div className="ac-picker sc-connectors" ref={root}>
       <button
@@ -553,7 +766,10 @@ export function ConnectorsPicker({
         className="cc-chip"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={`Connectors — ${spec.blurb}`}
+        /* The chip's own word, and nothing after it. It used to append the MCP
+           view's blurb — a sentence in a tooltip, on a chip whose label is
+           already the noun. Those blurbs are gone; see `shell/panels.ts`. */
+        title="Connectors"
         onClick={() => setOpen((was) => !was)}
       >
         <span className="ac-name">Connectors</span>
@@ -563,7 +779,11 @@ export function ConnectorsPicker({
       </button>
 
       {open ? (
-        <div className="ac-menu sc-connectors-menu" role="group" aria-label="Connectors">
+        <div
+          className={`ac-menu sc-connectors-menu${side === 'right' ? ' ac-menu-right' : ''}`}
+          role="group"
+          aria-label="Connectors"
+        >
           {rows.map((row) => (
             <p key={row.id} className="sc-connector" data-off={row.enabled ? undefined : ''}>
               <span className="sc-connector-name">{row.name}</span>
@@ -582,7 +802,7 @@ export function ConnectorsPicker({
               title={
                 onOpen === null
                   ? 'The MCP servers view is not installed in this build, so there is nowhere for this to open.'
-                  : spec.blurb
+                  : `Open ${spec.label}`
               }
               onClick={() => {
                 setOpen(false)
@@ -662,6 +882,7 @@ export function SessionControls({
   provider,
   exited,
   onOpenConnectors,
+  target,
 }: SessionControlsProps) {
   const host = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
@@ -696,7 +917,7 @@ export function SessionControls({
    * `ChatView` does it: presence reads `UNKNOWN_PRESENCE` from a null, and an
    * unknown provider is left alone below rather than being resolved into one.
    */
-  const agent = useAgentPresence(sessionId && provider ? { id: sessionId, provider, exited } : null)
+  const agent = useAgentPresence(sessionId && provider ? { id: sessionId, provider, exited } : null, target)
   /**
    * What to *treat* the session as, which is the only thing below this line
    * that should be consulted.
@@ -732,35 +953,87 @@ export function SessionControls({
    * of this app's own in the user's home directory — and from that day the
    * refusal it describes was the bug rather than the caution, because
    * `undefined` is exactly what a shell with `claude` running in it arrives as.
-   * `mayFetchFor` in `auto-usage.ts` now lets it through, matching
-   * `mayShareClaude` in `src/main/usage-ipc.ts`, which had been letting it
-   * through the whole time. What is unchanged is the half that was never about
-   * cost: nothing is typed anywhere, and `notePlanOutput` still reads the plan
-   * lines off the session's own output for every session regardless of
-   * provider, so a reading arrives on that bar by two routes rather than none.
+   *
+   * `auto-usage.ts` and the gate that lived in it were deleted on 2026-08-19,
+   * when Asad settled the whole question — *"no lets keep it in the dropdown
+   * and keep context outside"* — so nothing decides on this value's behalf any
+   * more: a plan figure is fetched when somebody opens the panel to read it,
+   * and the main process's own `mayShareClaude` in `src/main/usage-ipc.ts` is
+   * the one gate left. What `undefined` still costs here is nothing, and what
+   * is unchanged is the half that was never about cost: nothing is typed
+   * anywhere, and `notePlanOutput` still reads the plan lines off the session's
+   * own output for every session regardless of provider.
    */
   const running = runningProvider(provider, agent.running)
-  const { readings, busy, notice, dismissNotice, wired, pick, models, discoverModels } = useSessionControls(
+  const { readings, busy, notice, dismissNotice, wired, pick } = useSessionControls(
     sessionId,
     cwd,
     running,
+    target,
   )
   /*
-   * The model rows come from the session; every other control's come from the
-   * catalogue.
+   * Every control's rows come from the catalogue, and **opening a menu types
+   * nothing**.
    *
-   * `modelOptions` folds the CLI's `Default` row into the model it points at and
-   * labels every row with the model it resolves to — the two things Asad asked
-   * for by name. `previousModelOptions` adds the ones the picker deliberately
-   * hides but `/model` still accepts, which is where "Sonnet 4.6" and "Opus 4.x"
-   * live. Before a session has been asked, `models` is null and the captured
-   * picker stands in; the moment the menu is opened, `discoverModels` replaces
-   * it with that session's own.
+   * ## What this replaces
+   *
+   * Until 2026-08-19 the model menu called `discoverModels` on the way open,
+   * which typed `/model` into the live session, read the picker the CLI drew and
+   * pressed Esc. It was written as a considered trade — the list would be the
+   * *account's* own, which a table in this repo can never guarantee — and the
+   * cost was known and written down in that function: cancelling the picker
+   * makes the CLI print `Kept model as …`, so every look left a line in the
+   * conversation.
+   *
+   * Watching it, Asad:
+   *
+   *   > *"if I click on Opus, it will run a command just to view, just to view
+   *   > it is running a command. I'm not even clicking on the next one which I
+   *   > want to choose but just by drop down, as soon as drop down comes down it
+   *   > runs the command automatically. At least when I click on something then
+   *   > it should run."*
+   *
+   * His recording shows **five** `/model` blocks stacked in a working
+   * conversation. That is not a tuning problem. A menu is a thing you open to
+   * find out what is behind it, frequently by accident, and the one place this
+   * app must never write is somebody's session — which is the rule the rest of
+   * this file is built on: *"a control here is honest exactly when a person
+   * could have done the same thing at the keyboard"*, and nobody types a slash
+   * command in order to look at a list.
+   *
+   * ## What the catalogue costs, argued rather than waved at
+   *
+   * It can be stale. `shared/model-catalog.ts` holds `FALLBACK_MODELS`, captured
+   * verbatim off `claude 2.1.234` on this machine, plus `PREVIOUS_MODELS` — the
+   * names the picker hides and `/model` still accepts. A model released after
+   * this build is not in either, and an account restricted by its organisation
+   * may be offered a row it cannot actually use.
+   *
+   * Both of those fail *safely*, and that is the whole of the trade. A missing
+   * row costs one `/model <name>` typed by hand, in a terminal that is right
+   * there. A row the account is barred from is answered by the CLI in its own
+   * words — `Mythos 5 isn't available for your account yet`, captured live — and
+   * `applyControl` shows that verbatim on the notice strip below this bar. The
+   * live read's failure mode is not comparable: it writes into somebody's work
+   * to render a menu, whether or not they choose anything, every single time.
+   *
+   * The keystroke has not been moved earlier or made cheaper. It happens when a
+   * value is picked and at no other moment, which is what he asked for in the
+   * last sentence of the quotation.
+   *
+   * ## What is left of the old path
+   *
+   * Nothing on this side. `discoverAgentModels` still exists in the main process
+   * and on the bridge; this cluster simply never calls it, and neither does
+   * anything else in the renderer. Removing the far end is a change to
+   * `src/main/agent-controls.ts` and its own tests, which is not this file's to
+   * make — but it is dead from here, and this paragraph is the note that says so
+   * for whoever finds it.
    */
   const optionsForRow = useCallback(
     (id: ControlId): ControlOption[] =>
-      id === 'model' ? [...modelOptions(models ?? undefined), ...previousModelOptions()] : optionsFor(id),
-    [models],
+      id === 'model' ? [...modelOptions(), ...previousModelOptions()] : optionsFor(id),
+    [],
   )
   /*
    * What connectors this session's directory actually resolves to.
@@ -770,8 +1043,24 @@ export function SessionControls({
    * the one that fetches the fact — it would have to render once to find out.
    * See `use-connectors.ts`.
    */
-  const connectors = useConnectors(cwd)
-  const hasConnectors = connectors.loaded && connectors.rows.length > 0
+  const connectors = useConnectors(target === undefined ? cwd : null)
+  /*
+   * And never for a session on another computer, which is not a layout decision.
+   *
+   * `listMcpServers` resolves the connectors of a folder **on this machine** —
+   * its `.mcp.json`, this app's own registry, this user's globals. A session on
+   * a paired desktop or on a server has its own, over there, and nothing on
+   * either wire carries them; a chip fed from this machine's list would name
+   * servers that session cannot reach and open a view that manages the wrong
+   * computer's. So the chip is absent and the bar says where they really live —
+   * see `RemoteControlsNote`, which is now down to exactly the two things that
+   * genuinely cannot travel.
+   *
+   * `null` rather than `cwd` on the hook above for the same reason and one more:
+   * a remote path that happens to exist on this machine too would otherwise
+   * resolve *this* machine's project connectors under somebody else's session.
+   */
+  const hasConnectors = target === undefined && connectors.loaded && connectors.rows.length > 0
   /*
    * What the row needs changes with what it is saying, and nothing about that
    * resizes the bar — so the widths that decide the fold are re-read whenever
@@ -808,35 +1097,18 @@ export function SessionControls({
    * new…" the controls folded at a **1440pt window**, because `control-room.ts`
    * protects the session name's share of the bar before it gives anything to the
    * chips; and the reading dutifully dropped `resets 4:40am` with 645 pixels of
-   * room going spare. That is one of the two things he asked for on the
-   * five-hour line — *"it will show the percentage and it will show the time of
-   * reset"* — withheld because a neighbour was short of space and this one was
-   * not.
+   * room going spare.
    *
-   * ## The three tiers, and where each number comes from
+   * ## Two tiers now, where there were three
    *
-   * - **380 and up — `full`.** The renewal clause is either whole or absent;
-   *   there is no third option, because *"resets 4:40am"* drawn as `res…` is an
-   *   ellipsis where a fact should be. 380 is measured rather than reasoned:
-   *   with the reading at its natural 194 and the folded controls chip at its
-   *   natural 137, the clause came out whole at 365 of room and was cut at 325.
-   *   Both of those naturals move with their contents — a longer reset string,
-   *   a longer model name — and the ceilings are `18ch` for the clause and
-   *   `14ch` for each value, which puts the worst case near 370. 380 covers it.
-   *
-   *   The first attempt at this number was 210, from the reading's natural width
-   *   plus the controls chip's *floor*, and it was wrong for a reason worth
-   *   keeping: flex does not hold the neighbour at its floor and hand the rest
-   *   over, it shares the shortfall out proportionally. At 254 of room the
-   *   reading got 158 of the 194 it wanted, and the tail column — the only part
-   *   allowed to give — ate all 36 of the difference.
-   * - **120 to 379 — `dense`.** The clause goes and the meters narrow to 26.
-   *   A renewal time is a caption; the figures are not.
-   * - **Under 120 — `tight`.** The figures alone. At the app's own minimum
-   *   window width — 720, pinned in `src/main/index.ts` — this cluster gets 67
-   *   pixels and flex handed the reading 22.9 of them, which drew the word `5h`
-   *   and no number at all. Stripped, it measures 35, which with the controls
-   *   chip's 30 and the 2-pixel gap is exactly the 67 there are.
+   * The middle one existed to drop the renewal clause and narrow the meters,
+   * and both of those are inside the dropdown since 2026-08-19. What is left on
+   * the bar is a context figure and a plan icon, and neither of them may be
+   * given up: a *reading* that is hidden is indistinguishable from one that was
+   * never reported, and a control that is hidden cannot be reached at all. So
+   * the narrow tier folds the icon into the figure rather than dropping either —
+   * the figure takes the press — and {@link TIGHT_BELOW_PX} holds the one
+   * measured threshold that is left.
    *
    * Read off `clamp` rather than off a window width, for the same reason the
    * fold is: a split pane can be narrow inside a wide window, and it is the bar
@@ -844,7 +1116,7 @@ export function SessionControls({
    * is `full`, because the unclamped row is what the first paint should draw
    * and what this component's own tests render.
    */
-  const fit: UsageFit = clamp === null || clamp >= 380 ? 'full' : clamp >= 120 ? 'dense' : 'tight'
+  const fit: UsageFit = clamp === null || clamp >= TIGHT_BELOW_PX ? 'full' : 'tight'
 
   const shut = useCallback(() => setOpen(false), [])
   // The window's one-menu-at-a-time rule. This panel and the pickers beside it
@@ -949,12 +1221,53 @@ export function SessionControls({
     return null
   }
 
+  /**
+   * The control drawn at the end of another control's menu, or nothing.
+   *
+   * Every prop is the same expression the host's own chip uses, read against the
+   * *nested* id — `busy === inner`, not `busy === outer`. That is the whole of
+   * what this function has to get right, and getting it wrong is silent: a
+   * nested control wired to its host's `busy` would grey itself out whenever a
+   * model was being applied, and a nested control wired to its host's `blocked`
+   * would refuse whenever the account could not have the model, with a sentence
+   * about models printed under a switch that works perfectly well. Two controls,
+   * two answers, one menu.
+   *
+   * Which control goes where is {@link NESTED_CONTROLS} and not a name written
+   * out here, so the row and the map cannot come to disagree.
+   */
+  const nestedIn = (outer: ControlId): ReactNode => {
+    const inner = NESTED_CONTROLS[outer]
+    if (inner === undefined) return null
+    return (
+      <ControlToggleItem
+        control={inner}
+        reading={readings?.[inner]}
+        options={optionsForRow(inner)}
+        reach={reachOf(inner)}
+        busy={busy === inner}
+        disabled={busy !== null && busy !== inner}
+        blocked={blockedFor(inner)}
+        onPick={(value) => pick(inner, value)}
+      />
+    )
+  }
+
   const connectorsBlocked =
     onOpenConnectors === null
       ? 'The MCP servers view is not installed in this build, so there is nowhere for this to open.'
       : null
 
   const modelValue = displayValue(readings?.model, 'model')
+  /*
+   * The same shortening the model chip does, for the summary that replaces it
+   * when the bar folds. `Opus 5 with 1M context` has even less room here than on
+   * the chip — this box shares fourteen characters with the effort value — and a
+   * summary is the one place an ellipsis is least readable, because there is no
+   * menu under it printing the full name. The `title` and the accessible name
+   * below still carry the value as it was read.
+   */
+  const modelShown = shortModelLabel(modelValue)
   const effortValue = displayValue(readings?.effort, 'effort')
 
   /**
@@ -1026,7 +1339,21 @@ export function SessionControls({
         costs it the window name, both meters and the caret, leaving the two
         percentages, which are the reading. See `UsageBar.css`.
       */}
-      <UsageBar sessionId={sessionId} provider={running} fit={fit} />
+      {/*
+        And it is handed the same `target` the pickers above it are routed by,
+        for the opposite purpose.
+
+        The pickers take it to send the question to the machine the session is
+        on. This takes it to stop asking a question of the wrong one: both
+        figures on that bar are read *here* — the plan limits from the login
+        signed in on this computer, the context window from a transcript on this
+        disk — so a bar left unaware of the target reported this Mac's account
+        under a session running on his PC and a blank where a context figure
+        should be, drawn identically to a local one. `usage-reach.ts` holds what
+        it does with it, and what a version that could genuinely ask the far
+        machine would cost.
+      */}
+      <UsageBar sessionId={sessionId} provider={running} fit={fit} target={target} />
 
       {folded ? (
         <>
@@ -1075,15 +1402,13 @@ export function SessionControls({
             aria-expanded={open}
             aria-label={`Session controls: ${summaryLabel(modelValue, effortValue, hasConnectors)}`}
             title={summaryLabel(modelValue, effortValue, hasConnectors)}
-            onClick={() =>
-              setOpen((was) => {
-                // The folded sheet draws every control at once, so opening it
-                // is the same moment the model menu's own button would be — see
-                // `onOpen` on `ControlPicker` below.
-                if (!was) discoverModels()
-                return !was
-              })
-            }
+            /* Opening this asks the session nothing. It used to — the sheet
+               draws every control at once, so it called the same discovery the
+               model menu did — and nothing is typed here now for the reason set
+               out beside `optionsForRow`: a person opening a panel to look at it
+               is not a person asking for a slash command to be run in their
+               conversation. */
+            onClick={() => setOpen((was) => !was)}
           >
             {/*
               What the chip says, in the three sizes it comes in.
@@ -1132,7 +1457,7 @@ export function SessionControls({
             ) : (
               <span className="sc-summary-text">
                 {readings?.model.label ? null : <span className="ac-name">{controlName('model')}</span>}
-                <span className={readings?.model.label ? 'ac-value' : 'ac-value ac-value-unknown'}>{modelValue}</span>
+                <span className={readings?.model.label ? 'ac-value' : 'ac-value ac-value-unknown'}>{modelShown}</span>
                 {detail === 'both' ? (
                   <>
                     <span className="sc-summary-sep" aria-hidden="true" />
@@ -1168,6 +1493,11 @@ export function SessionControls({
                   busy={busy === id}
                   disabled={busy !== null && busy !== id}
                   blocked={blockedFor(id)}
+                  /* Same test as the open row above, for the same reason: a
+                     control with two states is a switch in both places, and the
+                     panel must not disagree with the bar about what shape a
+                     control is. */
+                  toggle={optionsForRow(id).length === 2}
                   onPick={(value) => pick(id, value)}
                 />
               ))}
@@ -1179,7 +1509,9 @@ export function SessionControls({
               {hasConnectors ? (
                 <section className="ac-section">
                   <h4 className="ac-section-name">Connectors</h4>
-                  <p className="ac-section-desc">{panelSpec('mcp').blurb}</p>
+                  {/* The heading, and then the control. The sentence that used
+                      to sit between them was the MCP view's blurb, and those are
+                      deleted app-wide this round — see `shell/panels.ts`. */}
                   <div className="sc-sheet-actions">
                     <ConnectorsPicker
                       rows={connectors.rows}
@@ -1197,22 +1529,38 @@ export function SessionControls({
         </>
       ) : (
         <>
-          {CHROME_CONTROLS.map((id) => (
+          {/*
+            One chip per control that has one, and fast mode no longer does.
+
+            The row used to branch here on `optionsForRow(id).length === 2` and
+            draw a `ControlToggle` chip for the two-state control. That branch is
+            gone from the *bar* — *"move fast mode toggle inside the models
+            dropdown at the end"* — and it is not gone from the app: the panel
+            below still makes the same test, because a folded panel has room for
+            a section per control and nests nothing. The shape test survives
+            where a shape is still being chosen.
+
+            Every prop is spelled out rather than gathered into an object and
+            spread. A spread would be shorter and it is forbidden here for a
+            reason this repository has already paid for: `renderer/wiring.test.ts`
+            watches this exact seam by reading the opening tag, and a spread is
+            invisible to it — its own comment says so twice. That guard exists
+            because `ControlPicker` has shipped mounted with props missing, and
+            `reading` in particular is the prop that makes a picker a picker
+            rather than a label.
+          */}
+          {ROW_CONTROLS.map((id) => (
             <ControlPicker
               key={id}
               control={id}
               name={controlName(id)}
               reading={readings?.[id]}
               options={optionsForRow(id)}
-              reach={reachOf(id)}
               busy={busy === id}
               disabled={busy !== null && busy !== id}
               blocked={blockedFor(id)}
+              nested={nestedIn(id)}
               onPick={(value) => pick(id, value)}
-              // Opening the model menu is what asks the session for its real
-              // list. Every other control's options are facts about the CLI's
-              // grammar and need no round trip.
-              onOpen={id === 'model' ? discoverModels : undefined}
             />
           ))}
           {/* Only when there are some. *"A dropdown only when connectors exist.

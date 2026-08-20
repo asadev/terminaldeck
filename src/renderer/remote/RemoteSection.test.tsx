@@ -86,7 +86,6 @@ const NO_MACHINE_ACTIONS: MachineActions = {
   connect: () => {},
   disconnect: () => {},
   forget: () => {},
-  newSession: () => {},
   open: () => {},
   close: () => {},
   openPort: () => {},
@@ -121,6 +120,7 @@ const STUDIO_LINK: MachineLinkState = {
   folders: ['/Users/a/projects/deck'],
   capabilities: ['create'],
   ports: [],
+  copilot: null,
   hostPlatform: 'win32',
   retryAt: null,
 }
@@ -990,7 +990,20 @@ describe('the merge', () => {
   })
 
   it('keeps every control the machines page had on a machine row', () => {
-    expect(both).toContain('>New session</button>')
+    /*
+     * Every control **it still has**. A `>New session</button>` was asserted
+     * here until 2026-08-19 — *"we don't need this new session thing here. Just
+     * disconnect and forget thing is good enough for us."* The capability did
+     * not go with it: the rail draws a machine group whose ＋ makes the same
+     * call, pinned in `shell/machine-group.test.tsx`, and that was checked
+     * before this button was removed rather than after.
+     *
+     * The absence is asserted rather than merely dropped, because "the merged
+     * section keeps what the old page had" is the invariant this whole block
+     * exists for, and a control that comes back by accident would otherwise
+     * pass it.
+     */
+    expect(both).not.toContain('>New session</button>')
     expect(both).toContain('>Disconnect</button>')
     expect(both).toContain('>Forget</button>')
     // Its state, its kind, and the key a person compares with the other screen.
@@ -1078,9 +1091,78 @@ describe('the merge', () => {
     expect(failed).not.toContain('No other machine yet')
   })
 
+  it('leads with his devices rather than with three explanations', () => {
+    /*
+     * The order defect, pinned as an order.
+     *
+     * This section is the body of *"Your own devices"* on the Machines page —
+     * a heading with a description under it, which is a promise about what
+     * comes next. What came next was the switch, the relay card and the pairing
+     * block; his own PC was in the last block on the screen. Asad, 2026-08-19:
+     * *"so I connected one but here I cannot see anything. This is connected as
+     * my device but it's not here."*
+     *
+     * So with something paired, every roster comes before every explanation.
+     * Asserted as index comparisons rather than as "contains", because the
+     * regression this catches is a block moving, not a block vanishing.
+     */
+    const ordered = render({
+      state: {
+        ...RUNNING,
+        devices: [{ ...PHONE, state: 'approved' }],
+        connections: [ATTACHED],
+      },
+      machines: machinesHalf({ view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null } }),
+    })
+
+    const attached = ordered.indexOf('Attached now')
+    const devices = ordered.indexOf('>Devices<')
+    const reach = ordered.indexOf('Machines you can reach')
+    const relay = ordered.indexOf('How a device gets here')
+    const pair = ordered.indexOf('Pair a device')
+
+    for (const [what, at] of [
+      ['Attached now', attached],
+      ['Devices', devices],
+      ['Machines you can reach', reach],
+      ['How a device gets here', relay],
+      ['Pair a device', pair],
+    ] as const) {
+      expect(at, `${what} is not on the screen at all`).toBeGreaterThan(-1)
+    }
+
+    // The three rosters, in the order of how immediate they are.
+    expect(attached).toBeLessThan(devices)
+    expect(devices).toBeLessThan(reach)
+    // Then the mechanics, which are what somebody reads once rather than what
+    // they came to look at.
+    expect(reach).toBeLessThan(relay)
+    expect(relay).toBeLessThan(pair)
+  })
+
+  it('still opens on the way to pair one when there is nothing paired', () => {
+    /*
+     * The half of the reordering that is easy to break and impossible to see:
+     * the old order is what remains for a first-time reader. Every roster is
+     * withheld on its own condition, so with nothing paired the screen is the
+     * switch and then "Pair a device" — which is exactly what it was before,
+     * and the reason the change is invisible to the person it would hurt.
+     */
+    const empty = render({ state: RUNNING })
+    expect(empty).not.toContain('Attached now')
+    expect(empty).not.toContain('>Devices<')
+    expect(empty).not.toContain('Machines you can reach')
+    expect(empty.indexOf('How a device gets here')).toBeLessThan(empty.indexOf('Pair a device'))
+  })
+
   it('puts the folder chooser between the devices and the machines', () => {
-    // The order is the argument the section makes: pair a device, approve it,
-    // choose what it may open, and then the machines this one dials out to.
+    // Unchanged by the reordering above, and worth saying why. The rosters
+    // moved as a group; *within* that group the folders still sit against the
+    // devices they are chosen for and before the machines, which is the
+    // relationship this test was written for. What is no longer true is the
+    // sentence that used to be here — "pair a device, approve it, choose what
+    // it may open, and then the machines" — because pairing is now below all
+    // three rather than above them.
     const ordered = render({
       state: { ...RUNNING, devices: [{ ...PHONE, state: 'approved' }] },
       folders: <div className="folders-stand-in" />,

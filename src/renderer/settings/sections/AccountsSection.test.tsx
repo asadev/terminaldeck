@@ -5,15 +5,19 @@ import {
   agentCanStart,
   agentProblem,
   canHaveMore,
+  accountNote,
+  accountStateLine,
   createAccount,
   createdAccountId,
+  groupAccountsByProvider,
+  historyLine,
   signInRequest,
   signInToNewAccount,
   type AccountsViewProps,
 } from './AccountsSection'
 import { AddAccountSteps } from './AddAccountDialog'
 import { buildAccountProviderRows, type AccountProviderRow } from '../../components/ProviderPicker'
-import type { AccountsSnapshot, SignInView } from '../../accounts'
+import { parseAccountHistory, type AccountHistoryView, type AccountsSnapshot, type SignInView } from '../../accounts'
 
 /**
  * The screen a person opens to answer "which of my accounts can I use".
@@ -127,7 +131,6 @@ function render(over: Partial<AccountsViewProps> = {}): string {
       busy={false}
       providerRows={PROVIDERS}
       onSignIn={noop}
-      onCheck={noop}
       onSignInNew={noop}
       onRename={noop}
       onRemove={noop}
@@ -138,15 +141,22 @@ function render(over: Partial<AccountsViewProps> = {}): string {
 }
 
 describe('AccountsView', () => {
-  it('lists every account with the directory that makes it separate', () => {
+  it('lists every account, and keeps the directory that makes it separate', () => {
     const html = render()
     // Named by its login, not by the key it is filed under — see below.
     expect(html).toContain('me@example.com')
     expect(html).toContain('Work')
-    // Two names can look alike; two config directories cannot. The path is what
-    // proves the accounts are actually separate logins.
+    /*
+     * Two names can look alike; two config directories cannot, which is why the
+     * path is the one thing on this screen that proves the accounts are really
+     * separate logins. It stopped being a *line* on 2026-08-19 — *"remove big
+     * descriptions under each account (private, temporary, folder link…)"* — and
+     * it is behind the row's ⓘ, whose text is in the document either way so that
+     * this assertion means what it always meant.
+     */
     expect(html).toContain('/Users/me/.claude')
     expect(html).toContain('profiles/work')
+    expect(html).not.toContain('class="settings-profile-path"')
   })
 
   it('shows the address the agent named, for the account it named it for', () => {
@@ -191,10 +201,14 @@ describe('AccountsView', () => {
     expect(html).toContain('me@example.com')
     expect(html).toContain('Your own Codex CLI install')
     expect(html).not.toContain('Default (Codex CLI)')
-    // The name is the text right after the row's provider mark. The badge that
-    // still says "Default" is a different element and a different claim.
-    expect(html).not.toContain('</svg>Default')
-    expect(html).toContain('</svg>me@example.com')
+    /*
+     * The generated key is nowhere in the markup at all, which is the stronger
+     * form of the original assertion. It used to be phrased as "the text right
+     * after the row's provider mark", because the mark was on every row; the
+     * mark is on the group heading now, so the row's first text *is* the name.
+     */
+    expect(html).not.toContain('>Default (')
+    expect(html).toContain('me@example.com')
   })
 
   it('does not print "your own install" twice on one line', () => {
@@ -283,10 +297,74 @@ describe('AccountsView', () => {
 describe('the Add-account popup', () => {
   it('says where signing in actually happens', () => {
     // It happens in the agent's own terminal, and a screen that does not say so
-    // leaves a person hunting for a password field that does not exist.
+    // leaves a person hunting for a password field that does not exist. The
+    // step is the line; the paragraph that used to follow it is behind the ⓘ,
+    // whose text is in the document either way.
     const html = dialog()
     expect(html).toContain('Sign in, in the terminal that opens.')
     expect(html).toContain('never sees your password')
+    expect(html).not.toContain('add-account-note')
+  })
+
+  /**
+   * The five minutes of the 2026-08-19 recording this whole file exists to stop
+   * repeating.
+   *
+   *   > "at the place of the name, it should actually ask the link email, but it
+   *   > is calling it as name. So that's why I was confused."
+   *
+   * He typed a name, could not find the sign-in, removed the account and tried
+   * again three times. The field is the address now — there is no separate name
+   * — which is also what every account already in his `profiles.json` looks
+   * like, and the sign-in is the next thing under it.
+   */
+  it('asks for an email address, and calls it one everywhere', () => {
+    const html = dialog()
+    expect(html).toContain('Which email address?')
+    expect(html).toContain('placeholder="you@example.com"')
+    expect(html).toContain('aria-label="Email address for the new account"')
+    // The word that caused the confusion is not on the field in any form.
+    expect(html).not.toContain('Give it a name')
+    expect(html).not.toContain('Name for the new account')
+    expect(html).not.toMatch(/placeholder="Name this/)
+  })
+
+  it('puts the sign-in button where the step that names it can be seen', () => {
+    /*
+     * Position, asserted the only way static markup can: what is *between* the
+     * step and the button. Two paragraphs used to be, which is why he could not
+     * find it — the button is the last thing in the form and the step was three
+     * scroll-lines above it.
+     */
+    const html = dialog()
+    const step = html.indexOf('Sign in, in the terminal that opens.')
+    const button = html.indexOf('class="add-account-go"')
+    expect(step).toBeGreaterThan(-1)
+    expect(button).toBeGreaterThan(step)
+    expect(html.slice(step, button)).not.toContain('<p class="add-account-note"')
+    expect(html).toContain('>Sign in</button>')
+  })
+
+  it('says that a new account shares conversation history, before it is made', () => {
+    /*
+     * A new account starts out sharing, which is what makes a conversation
+     * survive changing account and is the whole reason a second account is
+     * worth having. It is also a real change to where conversations are
+     * written, and `ACCOUNT-MODEL.md` says in as many words that it is a
+     * sentence the screen has to say rather than something to be discovered.
+     *
+     * Said without naming a product, and not only for house style: the sharing
+     * is arranged for one agent's history layout and does not happen for the
+     * others, so a vendor name here would promise a behaviour some of these
+     * accounts will not have.
+     */
+    const html = dialog()
+    expect(html).toContain('continued under another')
+    expect(html).not.toContain('Claude Code install')
+    // Behind the ⓘ rather than standing under the step. The clause about
+    // stopping the sharing went with the control it named — see the Accounts
+    // pane, where that button is no longer offered.
+    expect(html).toContain('class="hovernote-text"')
   })
 
   it('asks which agent an account is for, before asking its name', () => {
@@ -344,15 +422,22 @@ describe('the Add-account popup', () => {
     expect(html).not.toContain('Codex and Gemini sign in')
   })
 
-  it('says which agent each account is a login of', () => {
+  it('says which agent each account is a login of, once per agent', () => {
     /*
      * The name cannot: "Work" is a word somebody typed, and the main process
      * only refuses a duplicate name *within* one agent — so two rows reading
      * "Work" for two different CLIs is a legal state of this list.
+     *
+     * It is answered by the heading over each group now rather than by a mark
+     * on each row, which is *"group accounts by provider"* — and the mark went
+     * up to the heading with the words, because saying it once per group is the
+     * whole point of having groups.
      */
     const html = render()
     expect(html).toContain('data-provider="claude"')
     expect(html).toContain('data-provider="codex"')
+    expect(html).toContain('>Claude Code</h5>')
+    expect(html).toContain('>Codex CLI</h5>')
   })
 
   it('says so, and refuses Sign in, on a machine with no agent installed', () => {
@@ -369,15 +454,19 @@ describe('the Add-account popup', () => {
     expect(html).toContain('<button type="submit" class="add-account-go" disabled')
   })
 
-  it('binds the name field to the agent that was chosen', () => {
+  it('binds the form to the agent that was chosen', () => {
     /*
      * The one visible proof, in a project with no DOM to click in, that the
      * list above the field is wired to the form below it rather than sitting
      * beside it. A choice that changes nothing on screen is how somebody types
-     * a name, presses the button and gets a Claude account anyway — which is
-     * the report this pass came from.
+     * an address, presses the button and gets a Claude account anyway — which
+     * is the report the provider question came from.
+     *
+     * The field itself stopped carrying the proof when it stopped naming the
+     * agent: an address field that said "Name this Claude Code account" would
+     * be the confusion back in a new place. The checked row is the binding.
      */
-    expect(dialog()).toContain('Name this Claude Code account')
+    expect(dialog()).toMatch(/<input[^>]*checked[^>]*value="claude"/)
   })
 
   it('picks the agent up from the rows, not from an effect', () => {
@@ -391,7 +480,7 @@ describe('the Add-account popup', () => {
     const codexOnly = buildAccountProviderRows({ claude: false, codex: true, gemini: true, shell: true })
     const html = dialog({ providerRows: codexOnly })
     expect(html).toMatch(/<input[^>]*checked[^>]*value="codex"/)
-    expect(html).toContain('Name this Codex CLI account')
+    expect(html).not.toMatch(/<input[^>]*checked[^>]*value="claude"/)
   })
 })
 
@@ -539,7 +628,6 @@ describe('an agent that will not start', () => {
         busy={false}
         providerRows={CODEX_BROKEN}
         onSignIn={noop}
-        onCheck={noop}
         onSignInNew={noop}
         onRename={noop}
         onRemove={noop}
@@ -565,7 +653,6 @@ describe('an agent that will not start', () => {
         busy={false}
         providerRows={ALL_RUNNABLE}
         onSignIn={noop}
-        onCheck={noop}
         onSignInNew={noop}
         onRename={noop}
         onRemove={noop}
@@ -629,6 +716,55 @@ describe('signing in to a new account', () => {
     expect(createProfile).not.toHaveBeenCalled()
   })
 
+  it('shares the new account’s history before the session that signs it in', async () => {
+    /*
+     * The reason a second account exists is that the first one ran out, which
+     * means it is reached in the middle of a piece of work — and an account
+     * with a history of its own loses that work at exactly that moment. So
+     * sharing is the state a new account arrives in, not a switch to be found
+     * afterwards.
+     *
+     * The order is the assertion. Sharing relinks `projects/`, so a session
+     * opened first would write its first conversation into the directory that
+     * is about to stop being read.
+     */
+    const order: string[] = []
+    const createProfile = vi.fn(async () => ({ id: 'work-2' }))
+    const shareAccountHistory = vi.fn(async () => {
+      order.push('share')
+    })
+    const start = vi.fn(() => {
+      order.push('start')
+    })
+
+    const result = await signInToNewAccount({ createProfile, shareAccountHistory }, start, 'Work', 'claude')
+
+    expect(result.ok).toBe(true)
+    expect(shareAccountHistory).toHaveBeenCalledWith('work-2')
+    expect(order).toEqual(['share', 'start'])
+  })
+
+  it('adds the account anyway when its history cannot be shared', async () => {
+    /*
+     * `shareProjects` throws for an account this app may not relink — a login
+     * of an agent whose history has another shape, or a directory somebody
+     * pointed at themselves. Those are perfectly good accounts that keep their
+     * own conversations, and refusing to add one over a preference would be the
+     * app declining to do the thing it was asked to do.
+     */
+    const createProfile = vi.fn(async () => ({ id: 'work-2' }))
+    const shareAccountHistory = vi.fn(async () => {
+      throw new Error('only an account this app created can share history')
+    })
+    const start = vi.fn(() => undefined)
+
+    const result = await signInToNewAccount({ createProfile, shareAccountHistory }, start, 'Work', 'codex')
+
+    expect(result.ok).toBe(true)
+    expect(result.error).toBeNull()
+    expect(start).toHaveBeenCalledWith({ profileId: 'work-2', provider: 'codex' })
+  })
+
   it('reads the created id, and refuses an answer it cannot read', () => {
     expect(createdAccountId({ id: 'work-2' })).toBe('work-2')
     expect(createdAccountId({ id: '' })).toBeNull()
@@ -661,5 +797,221 @@ describe('an agent with exactly one login', () => {
   it('offers no "use by default" where there is only one to choose from', () => {
     expect(canHaveMore(ROWS, 'gemini')).toBe(false)
     expect(canHaveMore(ROWS, 'claude')).toBe(true)
+  })
+})
+
+/**
+ * One conversation history across two accounts — what the row is allowed to say
+ * about it.
+ *
+ * Option C in `ACCOUNT-MODEL.md`: each managed account's `projects/` is a link
+ * into `~/.claude/projects`, so a conversation survives switching account. The
+ * feature is small; the way it can lie is not. Everything below is one rule —
+ * **the screen reports the disk** — pinned from four directions, because the
+ * three sentences and the count come from `main/shared-projects.ts` reading
+ * `lstat`, and anything this file composed itself would be a claim about
+ * somebody's conversation history made by a component that has never seen it.
+ */
+const HISTORY: Readonly<Record<string, AccountHistoryView>> = {
+  system: {
+    link: 'separate',
+    root: '/Users/me/.claude/projects',
+    target: null,
+    ownProjects: 0,
+    share: 'share sentence for the system account',
+    unshare: 'unshare sentence for the system account',
+    remove: 'remove sentence for the system account',
+  },
+  work: {
+    link: 'shared',
+    root: '/Users/me/.claude/projects',
+    target: '/Users/me/.claude/projects',
+    ownProjects: 0,
+    share: 'share sentence for Work',
+    unshare: 'unshare sentence for Work',
+    remove: 'remove sentence for Work',
+  },
+}
+
+function withHistory(over: Partial<Record<string, AccountHistoryView>>): Readonly<Record<string, AccountHistoryView>> {
+  return { ...HISTORY, ...over } as Readonly<Record<string, AccountHistoryView>>
+}
+
+describe('shared conversation history', () => {
+  /**
+   * The control is gone from the row and the *fact* is not.
+   *
+   *   > "Stop sharing history — this is nonsense."
+   *
+   * A button that relinks a conversation directory, on a row somebody is
+   * scanning for their own address, behind a confirmation they will not read.
+   * It is off this pane; `shared-projects` in the main process is untouched and
+   * a new account is still put through `shareAccountHistory` on the way in. So
+   * what this block pins now is the honesty half: where the conversations are is
+   * still on the screen, once, behind the row's ⓘ — a person can never be
+   * surprised by it — and nothing offers to move them from here.
+   */
+  it('says where a sharing account keeps its conversations, and offers no button', () => {
+    const html = render({ history: HISTORY })
+    expect(html).toContain('/Users/me/.claude/projects')
+    expect(html).toContain('shared with your own install')
+    expect(html).not.toContain('Stop sharing history')
+    expect(html).not.toContain('Share history')
+  })
+
+  it('still names the folder that makes an account separate, with no answer about history', () => {
+    // The state channel is one `lstat` per account and it can be unavailable —
+    // an older preload, a window with no bridge. A row with no answer says
+    // nothing about history, rather than defaulting to a claim in either
+    // direction, and still says which directory it is.
+    const html = render({ history: {} })
+    expect(html).toContain('/Users/me/.claude')
+    expect(html).not.toContain('shared with your own install')
+    expect(html).not.toContain('Keeps its own conversations')
+  })
+
+  it('reports a link somebody else made rather than glossing it', () => {
+    const html = render({
+      history: withHistory({
+        work: { ...HISTORY.work, link: 'elsewhere', target: '/Volumes/big/claude-projects' },
+      }),
+    })
+    expect(html).toContain('/Volumes/big/claude-projects')
+    expect(html).toContain('set up outside this app')
+  })
+
+  it('says nothing at all about an account it may not relink', () => {
+    const html = render({
+      history: withHistory({ work: { ...HISTORY.work, link: 'unmanaged' } }),
+    })
+    // `unmanaged` is filtered out of the row's note entirely: `shareState`
+    // answers it without looking inside the directory, so any sentence built
+    // from it would be a claim nothing measured.
+    expect(html).not.toContain('shared with your own install')
+    // The folder is still named — that much is read off the account itself.
+    expect(html).toContain('profiles/work')
+  })
+
+  it('counts nothing itself — the number in the line is the one it was given', () => {
+    const line = historyLine({ ...HISTORY.system, ownProjects: 3 })
+    expect(line).toContain('3 folders')
+    expect(historyLine({ ...HISTORY.system, ownProjects: 1 })).toContain('1 folder')
+  })
+
+  it('puts the folder and the history in one note, in that order', () => {
+    // The ⓘ is one string, so the order is the whole of its design: what this
+    // account *is* first, what it does with conversations second.
+    const account = ACCOUNTS.accounts[1]
+    expect(accountNote(account, null)).toBe(`Its own folder is ${account.configDir}.`)
+    const both = accountNote(account, HISTORY.work)
+    expect(both.startsWith(`Its own folder is ${account.configDir}.`)).toBe(true)
+    expect(both).toContain('shared with your own install')
+  })
+
+  it('never turns an unreadable answer into a claim that history is shared', () => {
+    // `parseAccountHistory` is the renderer's one narrowing of this reply, in
+    // `accounts.ts`, because the account chip parses the same one. An
+    // unrecognised link resolves to `unmanaged` — which claims nothing and
+    // offers nothing — and never to `shared`, which would tell somebody a
+    // conversation survives changing account.
+    const parsed = parseAccountHistory({
+      state: { link: 'nonsense', root: '/r', target: null, ownProjects: 0 },
+      share: 'a',
+      unshare: 'b',
+      remove: 'c',
+    })
+    expect(parsed?.link).toBe('unmanaged')
+    expect(parseAccountHistory(null)).toBeNull()
+  })
+})
+
+/**
+ * The pane he read out loud, on 2026-08-19, as *"too messy and too difficult to
+ * understand"*.
+ *
+ * Four of the notes in that recording are one instruction wearing four coats —
+ * take the statements off the screen and let the controls speak — and each of
+ * them is easy to half-do, because every sentence being removed is defensible
+ * on its own. So each is pinned as a property of the rendered pane rather than
+ * left to the diff.
+ */
+describe('the account list after the 2026-08-19 review', () => {
+  it('gathers the accounts under the agent each one is a login of', () => {
+    /*
+     * *"All Claude accounts together, then Codex, then Gemini."* Catalogue
+     * order, not the order they happen to be filed in — the New-session picker,
+     * the Add-account popup and the installed list all use that one, and a
+     * fourth arrangement of three agents on one screen is three arrangements
+     * too many.
+     */
+    const mixed = groupAccountsByProvider([
+      { ...ACCOUNTS.accounts[1], id: 'a', provider: 'gemini' },
+      { ...ACCOUNTS.accounts[1], id: 'b', provider: 'codex' },
+      { ...ACCOUNTS.accounts[0], id: 'c', provider: 'claude' },
+      { ...ACCOUNTS.accounts[1], id: 'd', provider: 'codex' },
+    ])
+    expect(mixed.map((group) => group.label)).toEqual(['Claude Code', 'Codex CLI', 'Gemini CLI'])
+    expect(mixed[1].accounts.map((account) => account.id)).toEqual(['b', 'd'])
+  })
+
+  it('gives no heading to an agent with no accounts', () => {
+    // A heading over nothing is the "control over nothing" fault one step up,
+    // and on a fresh machine it would be two of them.
+    const html = render()
+    expect(html).toContain('>Claude Code</h5>')
+    expect(html).toContain('>Codex CLI</h5>')
+    expect(html).not.toContain('>Gemini CLI</h5>')
+  })
+
+  it('keeps an account whose agent this build cannot name', () => {
+    // The regroup may not lose a row. An account the main process did not name
+    // an agent for lands under one heading of its own, after everything the
+    // catalogue knows about.
+    const groups = groupAccountsByProvider([
+      { ...ACCOUNTS.accounts[1], id: 'nameless', provider: null },
+      ACCOUNTS.accounts[0],
+    ])
+    expect(groups.map((group) => group.label)).toEqual(['Claude Code', 'Other agents'])
+  })
+
+  it('leaves exactly one control at the foot of the list', () => {
+    /*
+     * "Check again" re-ran a probe that runs when the pane opens, beside a line
+     * of help describing that probe, beside the one button anybody came here to
+     * press. *"Don't put any single statement in anywhere."*
+     */
+    const html = render()
+    expect(html).toContain('>Add account<')
+    expect(html).not.toContain('Check again')
+    expect(html).not.toContain('Asks the agent, once per account')
+  })
+
+  it('says a row’s state in a word where the name above it has said the rest', () => {
+    expect(accountStateLine(signedIn)).toBe('Signed in')
+    expect(accountStateLine(signedOut)).toBe('Not signed in')
+    expect(accountStateLine(undefined)).toBe('Checking with the agent…')
+    // And verbatim in the one case a word would be a lie: the agent could not
+    // be asked, and "not signed in" would send somebody to redo a good login.
+    const unknown: SignInView = {
+      state: 'unknown',
+      account: null,
+      plan: null,
+      detail: 'Could not read this account’s sign-in state.',
+      command: 'claude auth status --json',
+    }
+    expect(accountStateLine(unknown)).toBe(unknown.detail)
+  })
+
+  it('draws no standing prose under any row', () => {
+    /*
+     * The shape of the complaint, asserted as a shape. A row is a name, a state
+     * and an ⓘ — the two elements that carried the folder and the conversation
+     * location are gone, and the sentences they carried are in the ⓘ's text,
+     * which is why the paths above still assert.
+     */
+    const html = render({ history: HISTORY })
+    expect(html).not.toContain('class="settings-profile-path"')
+    expect(html).not.toContain('class="settings-account-history"')
+    expect(html).toContain('class="hovernote-text"')
   })
 })

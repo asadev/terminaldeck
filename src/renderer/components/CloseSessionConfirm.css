@@ -70,18 +70,33 @@
 /* Lives here rather than in Modal.css because no other dialog needs it yet —
    it should move up the moment a second one does. `--color-critical` is the
    only meaning-bearing colour in the palette that fits: this button destroys
-   work in progress. */
+   work in progress.
+
+   Red *text* at rest, red *fill* under the pointer, and Asad specified both
+   halves: *"when I hover on the delete it will have the white text and red
+   color… and when it's not hover, it will have red text only. So it should be
+   like clear delete button."*
+
+   It used to be filled red in both states. That is the louder button, and the
+   loudness was the problem: a solid red block is the first thing the eye lands
+   on in a dialog whose safe answer is the other button, so the destructive
+   choice was also the most inviting one. At rest it now reads as the word
+   `Delete` in the colour of the thing it does, and it only fills when the
+   pointer is actually on it — which is the moment the fill is worth something,
+   because that is the press about to happen. */
 .modal-btn.danger {
-  background: var(--color-critical);
-  color: var(--text-onaccent);
-  box-shadow: var(--shadow-sm);
+  background: transparent;
+  color: var(--color-critical);
+  box-shadow: none;
 }
 
-.modal-btn.danger:hover:not(:disabled) {
-  /* No darker critical token exists, so the hover is a shade rather than a
-     second hue — noted for tokens.css. */
-  filter: brightness(0.92);
+.modal-btn.danger:hover:not(:disabled),
+/* Keyboard included. Tabbing to this button has to reach the same state the
+   pointer does, or the one control on this screen that destroys something is
+   the one control that never says so to somebody not using a mouse. */
+.modal-btn.danger:focus-visible:not(:disabled) {
   background: var(--color-critical);
+  color: var(--text-onaccent);
 }
 
 .modal-btn.danger:disabled {

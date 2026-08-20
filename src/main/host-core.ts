@@ -35,10 +35,20 @@
  * socket, or nothing at all.
  */
 
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { BRAND } from '../shared/brand'
 import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../shared/types'
+import { argsForSpawn } from './one-conversation'
 import { PtyManager, type RemovalReason } from './pty-manager'
+// The controls a session's bar is drawn from, imported here so that a *remote*
+// window reaches the same two functions this machine's own window does. See the
+// `controls` seam on the `SessionFanout` below.
+import { applyControl, readControls } from './agent-controls'
+// And the three usage readings that bar is drawn from, for the same reason and
+// through the same seam. See the `usage` entry on the `SessionFanout` below.
+import { createUsageServe } from './remote/usage-serve'
+import { storedAccountLimits } from './account-limits'
 import {
   PROVIDERS,
   customProviderSpec,
@@ -66,6 +76,7 @@ import {
   type DeviceConfinement,
 } from './confine'
 import { forgetBoundary, noteBoundary } from './session-boundary'
+import { currentOpenShim, prependShim } from './open-shim'
 import { installDeviceHomes, installHomeScopes } from './transcript'
 import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-session'
 import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
@@ -611,7 +622,6 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     fence?: SpawnFence,
     extraArgs?: readonly string[],
   ): Promise<SessionMeta> {
-    const path = await loginPath()
     /*
      * Which side of the WSL boundary this session lives on, decided by its
      * folder and by nothing else.
@@ -622,6 +632,28 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * that reason; see its comment.
      */
     const target = wslTargetFor(input.cwd)
+    /*
+     * The login shell's PATH, with this app's `open` in front of it.
+     *
+     * Here, on this one local, rather than in `PtyManager.environmentFor`, and
+     * that placement is the whole of it: this string feeds `planFor({ … path … })`
+     * below *and* `ptys.create(…, { path, … })` after it. Prepending after the
+     * plan was built would hand a confined session a PATH entry its seatbelt
+     * profile has no rule for, and the exec would be refused — a session that
+     * simply does not start, for a feature it never asked about. Put here, the
+     * directory becomes a read+exec root in the plan for free, because
+     * `confine/plan.ts`'s `toolRoots()` turns PATH entries into exactly that,
+     * so a confined session gets the shim with no change to confinement at all.
+     *
+     * Not inside WSL. `TERMINALDECK_SESSION_ID` crosses that boundary, but a
+     * Linux process inside the distribution cannot open a Windows named pipe,
+     * so the shim there would be a script that always falls through — and one
+     * that always falls through is one more thing on a PATH doing nothing. A
+     * WSL session keeps the PATH it has always had. `open-shim.ts` answers null
+     * on Windows anyway, so this is the guard for a Windows host reaching in.
+     */
+    const shim = target === null ? currentOpenShim() : null
+    const path = prependShim(await loginPath(), shim?.dir ?? null)
     // Asked of the side the session will actually run on. Asking Windows whether
     // `claude` exists, on a machine where it is installed inside Ubuntu, is the
     // bug this whole path exists to fix: every agent reported missing, and every
@@ -824,6 +856,17 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       ...sessionEnv(profile, provider),
       ...(guest?.set ?? {}),
       ...(confined && confine ? confinedHomeEnv(confine.home, platform) : {}),
+      /*
+       * `$BROWSER` as well as the PATH shim, not instead of it.
+       *
+       * The two catch different agents and neither is redundant. Claude Code
+       * reads `$BROWSER` before any platform branch, so this is the direct and
+       * explicit route for it. Gemini CLI 0.46.0 ignores `$BROWSER` entirely and
+       * spawns a bare `open`, so the PATH entry is the only thing that catches
+       * it. Setting one and not the other would leave one of the two agents he
+       * actually runs opening pages in a browser somewhere else on the machine.
+       */
+      ...(shim?.browser ? { BROWSER: shim.browser } : {}),
     }
     /*
      * The guest's git variables have to cross the WSL boundary too, and they are
@@ -864,8 +907,74 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     // the launchable form in `spawn` the whole time, unread. Inside WSL they
     // diverge further still: `spawn` is a whole `wsl.exe` invocation and `bin`
     // is the CLI's own name, which is what the far side looks up.
+    /*
+     * `--continue` names no conversation — it means *the most recent one in
+     * this folder*, resolved by the CLI at spawn — so two sessions started in
+     * one folder resolve to the same transcript and both append to it, from the
+     * same parent message, with no error and no warning. `one-conversation.ts`
+     * carries the measured fork and the rule Asad settled: a second session in
+     * a folder that already has a live one starts fresh instead of resuming.
+     */
+    const chosen = argsForSpawn({
+      resume: input.resume === true,
+      resumeArgs: spec.spawn.resumeArgs,
+      args: spec.spawn.args,
+      live: ptys.list(),
+      cwd: input.cwd,
+      // `provider`, the same value handed to `ptys.create` below and therefore
+      // the same one `SessionMeta.provider` carries — so the comparison is
+      // like for like. The *requested* provider is not: an agent that is not
+      // installed falls back, and a fallback session in this folder holds the
+      // transcript under the name it actually runs as.
+      provider,
+    })
+
+    /*
+     * Name the conversation, so its transcript can be found rather than guessed.
+     *
+     * `claude --session-id <uuid>` makes the CLI file this session at
+     * `<configDir>/projects/<encoded cwd>/<uuid>.jsonl` instead of at a name only
+     * it knows. Verified against Claude Code 2.1.235 on this machine: a run with
+     * a generated id produced exactly that one file and no other. Everything
+     * downstream — `context-window.ts` above all — then reads *this* session's
+     * transcript rather than the folder's most recent one, which is the whole of
+     * the "every session shows the same context window" defect.
+     *
+     * ## Only on the fresh path, and that is the CLI's rule rather than caution
+     *
+     *     $ claude --continue --session-id <uuid> -p '…'
+     *     Error: --session-id can only be used with --continue or --resume if
+     *            --fork-session is also specified.
+     *
+     * Forking is not a workaround for it. `--fork-session` copies the
+     * conversation into a *new* id, which would leave two transcripts holding
+     * one conversation every time somebody continued a session — a real change
+     * to a person's history, made to make a number on a bar easier to read. So a
+     * resumed session keeps no id and keeps the inference, which is exactly the
+     * case the inference is honest about: it is continuing a conversation this
+     * app did not name.
+     *
+     * ## Why the flag goes through `withLaunchArgs`
+     *
+     * Because `spec.spawn.args` is not always the agent's own argument list —
+     * inside WSL it is a `wsl.exe` invocation whose last element is a quoted
+     * command *line*, and appending there hands the flag to the login shell as a
+     * positional parameter where the CLI never sees it. That trap is argued in
+     * full where `withLaunchArgs` is declared; this calls it rather than
+     * repeating the mistake it exists to prevent.
+     */
+    const namesConversation = provider === 'claude' && chosen !== spec.spawn.resumeArgs
+    const agentSessionId = namesConversation ? randomUUID() : null
     const wanted =
-      input.resume && spec.spawn.resumeArgs.length > 0 ? spec.spawn.resumeArgs : spec.spawn.args
+      agentSessionId === null
+        ? chosen
+        : withLaunchArgs(
+            table,
+            [...(extraArgs ?? []), '--session-id', agentSessionId],
+            platform,
+            process.env,
+            target,
+          ).spawn.args
 
     /*
      * The last thing between deciding what to run and running it.
@@ -943,6 +1052,16 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       path,
       env,
       ...(guest ? { removeEnv: guest.remove } : {}),
+      /*
+       * The conversation id handed to the CLI a moment ago, kept so that
+       * everything which later wants *this session's* transcript can name it.
+       *
+       * Spread conditionally, like `profile` below and for the same reason: a
+       * session with no id must carry no key, because `agentSessionId:
+       * undefined` and "this app did not name this conversation" have to be the
+       * same thing to every reader, and only one of the two survives JSON.
+       */
+      ...(agentSessionId !== null ? { agentSessionId } : {}),
       /*
        * The account this session runs as, recorded on the session itself.
        *
@@ -1079,6 +1198,80 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     write: (id, data) => ptys.write(id, data),
     resize: (id, cols, rows) => ptys.resize(id, cols, rows),
     scrollback: (id) => ptys.scrollback(id),
+    /*
+     * The model, the effort and fast mode, for a window on another machine.
+     *
+     * Asad, three times, the last on 2026-08-18: *"why it is all the options are
+     * not available with the connected ones from other devices. We should have
+     * all the options up on the same identical options for the remote sessions
+     * too."* The reason they were not is that `agent-controls.ts` speaks to a
+     * *local* pty by *local* session id — it sets a model by typing `/model` at
+     * the session and reading the reply off that session's screen — and nothing
+     * on the wire named any of it. `CAPABILITY.controls` is the frame pair that
+     * carries the question there and the answer back.
+     *
+     * Note what is delegated and what is not: this is the same `readControls`
+     * and the same `applyControl` the window at this desk calls for its own bar,
+     * against the same `PtyManager`. There is no second implementation and no
+     * remote dialect — the far end asks, and this machine answers exactly as it
+     * would have answered itself. That is also why a machine one version ahead
+     * behaves like its own build rather than like the asking one's memory of it.
+     *
+     * Here at assembly, for the reason `hidden` below is: the headless build
+     * serves the same remote protocol from the same fanout, and a capability a
+     * shell had to remember to install is one the other shell forgets.
+     *
+     * `cwd` and `provider` are looked up per call rather than captured, because
+     * both are properties of a session that may not have existed when this was
+     * built. `provider` is what this app *launched*, which is the right input:
+     * `refuseByProvider` treats `shell` as a refusal and `undefined` as "ask the
+     * screen", and a session started as a shell with an agent typed into it is
+     * exactly the case the screen has to settle.
+     */
+    controls: {
+      read: (id) => {
+        const row = ptys.list().find((session) => session.id === id)
+        return readControls(ptys, id, row?.cwd, row?.provider)
+      },
+      apply: (id, control, value) => {
+        const row = ptys.list().find((session) => session.id === id)
+        return applyControl(ptys, { sessionId: id, cwd: row?.cwd, control, value, provider: row?.provider })
+      },
+    },
+    /*
+     * The plan limits and the context window, for a bar on another machine.
+     *
+     * The same defect `controls` above closes, one element to the left. Both
+     * figures on that bar were read *here* — the plan limits are the
+     * subscription of the login signed in on this computer, and the context
+     * window is a transcript on this disk found by an id this machine's own
+     * agent wrote — so over a session running on a paired PC the first was a
+     * different account's spending and the second was a lookup for a
+     * conversation this disk has never seen. `usage-reach.ts` withheld both
+     * rather than show them; `CAPABILITY.usage` is what makes them true.
+     *
+     * Delegated exactly as `controls` is: `createUsageServe` reaches the same
+     * `readUsage`, `refreshUsage` and `readContextWindow` the window at this
+     * desk reaches for its own bar. There is no remote dialect and no second
+     * implementation, so a machine one version ahead reports what its own build
+     * reports.
+     *
+     * `describeSession` is the same lookup `registerUsageIpc` is given in
+     * `index.ts` — deliberately the same question asked the same way, because
+     * "whose login is this session on" having two answers on one machine is how
+     * one account's figure lands on another account's bar. `accounts` is the
+     * shared "this login has no subscription limits" memory, so a remote open
+     * declines to spawn for exactly the logins a local open declines for.
+     *
+     * Here at assembly, for the reason the `controls` seam above is: the
+     * headless build serves the same remote protocol from the same fanout, and
+     * a capability a shell had to remember to install is one the other shell
+     * forgets.
+     */
+    usage: createUsageServe({
+      describeSession: (id) => ptys.list().find((session) => session.id === id) ?? null,
+      accounts: storedAccountLimits(),
+    }),
     /*
      * Ending a session from a device, which until tonight nothing could do.
      *

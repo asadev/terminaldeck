@@ -153,47 +153,56 @@ describe('renaming a session from the rail', () => {
     expect(html).toContain('double-click or F2 to rename')
   })
 
-  it('does not offer one on a browser tab', () => {
+  it('does not draw a browser tab in the rail at all — 2026-08-20', () => {
     /*
-     * A browser tab is named by the page it is showing, and the next navigation
-     * would overwrite anything typed here. Offering a rename that the app
-     * intends to undo is worse than not offering one — it is the same failure
-     * as the auto-titler eating a session's name, just with the app's own
-     * behaviour as the culprit rather than a missing flag.
+     * This used to assert that a browser row was drawn *without* a rename,
+     * because a page is named by what it is showing and the next navigation
+     * would overwrite anything typed. The stronger version of that is now true:
+     * *"Browser windows will not be on the side bar at all. They will be always
+     * only on the top bar. Side bar is only for the sessions."*
+     *
+     * `tabs` still holds the page — the strip and the rail are given the same
+     * list, and the rail's session rows read the binding to wear their `B1`/`B2`
+     * chips — so this is the rail filtering, not the window forgetting.
      */
-    expect(html).toContain('aria-label="Close localhost:3000"')
-    const browserRow = /title="localhost:3000[^"]*"/.exec(html)?.[0] ?? ''
-    expect(browserRow).not.toContain('rename')
+    expect(html).not.toContain('localhost:3000')
   })
 })
 
-describe('what took the pencil’s place', () => {
+describe('what took the pencil’s place, and then took the rest', () => {
   const html = render(true)
 
-  it('moves the keep-at-the-top control into the slot the pencil was in', () => {
+  it('leaves one trailing control on the row, not three', () => {
     /*
-     * *"This button should come maybe here where the edit button is."* It does,
-     * and it does so by subtraction rather than by a rule: the row's trailing
-     * controls are laid out in order, so removing the middle one slides the
-     * first into its place. What this pins is the resulting order — the
-     * promote control, then the close, with nothing between them.
+     * The pencil went first — *"I don't want this edit button here"* — and the
+     * promote arrow slid into its slot. Then the arrow and the ✕ went the same
+     * way, into a menu: *"instead of these two buttons, give … one three-dot
+     * button. So from three-dot button we can also have a drop-down to connect
+     * the session."*
+     *
+     * What this pins is the count, because the count is the complaint. Three
+     * controls on a 264px row is what put the name underneath them —
+     * *"even the cross button is getting hidden"* — and any of them coming back
+     * puts it there again.
      */
-    expect(html.indexOf('sb-promote')).toBeGreaterThan(0)
-    expect(html.indexOf('sb-promote')).toBeLessThan(html.indexOf('sb-close'))
-    const between = html.slice(html.indexOf('sb-promote'), html.indexOf('sb-close'))
-    expect(between).not.toContain('sb-row-action sb-')
+    const buttons = html.match(/class="sb-row-action[^"]*"/g) ?? []
+    const onRows = buttons.filter((cls) => cls.includes('sb-more'))
+    expect(onRows.length).toBeGreaterThan(0)
+    expect(html).not.toContain('sb-row-action sb-promote')
+    expect(html).not.toContain('sb-row-action sb-close')
   })
 
-  it('draws the arrow he asked for and not the one he objected to', () => {
+  it('draws three dots rather than an ellipsis in the font', () => {
     /*
-     * *"It should be some arrow like to the corner to maybe right top corner,
-     * not straight to up and without this line above there."* The old glyph was
-     * `M5 4.5h14M12 20V9M8 13l4-4 4 4` — a horizontal bar across the top and a
-     * shaft rising straight into it, which is both of the things he named. The
-     * new one is a diagonal with a corner bracket at its head and no bar at all.
+     * The arrow's own glyph and the copilot's question mark are both gone with
+     * the buttons that wore them; what replaces them has to be a mark on the
+     * same 24×24 grid as everything else in this rail, at the same stroke
+     * weight, or the one control the row has left is the one drawn differently
+     * from every other. A text `…` would be exactly that.
      */
-    expect(SOURCE).not.toContain('M5 4.5h14')
-    expect(SOURCE).toContain("const TO_STRIP = 'M7.5 16.5 16.5 7.5M10.5 7.5H16.5V13.5'")
+    expect(SOURCE).not.toContain('const TO_STRIP')
+    expect(SOURCE).toContain('const MORE')
+    expect(SOURCE).not.toContain(">…<")
   })
 })
 
@@ -206,7 +215,7 @@ describe('outside a session list', () => {
      * does nothing, so the affordance is absent instead — see `useSessionRename`.
      */
     const alone = render(false)
-    expect(alone).toContain('aria-label="Close Fix the parser"')
+    expect(alone).toContain('aria-label="More for Fix the parser"')
     expect(alone).not.toContain('double-click or F2 to rename')
   })
 })

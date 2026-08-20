@@ -65,6 +65,21 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
      */
     lazy var container = TerminalContainerView(terminal: view)
 
+    /**
+     * What keeps a replay off the screen until it is whole.
+     *
+     * `lazy` because it closes over `view`, and `self` is not available in a
+     * property initialiser. Everything it does is three closures deep: write,
+     * scroll, show — so the policy can be driven in a test with no UIKit.
+     */
+    private lazy var backfill = TerminalBackfill(
+        write: { [weak self] text in self?.view.feed(text: text) },
+        // `scrollTo` clamps to the last scrollback row, so `Int.max` is "the
+        // bottom" without this file having to reach for the buffer's geometry.
+        scrollToBottom: { [weak self] in self?.view.scrollTo(row: Int.max) },
+        setVisible: { [weak self] visible in self?.view.alpha = visible ? 1 : 0 },
+    )
+
     /// Bytes the user typed, already UTF-8 decoded. The caller chunks and sends.
     var onInput: ((String) -> Void)?
     /// The terminal measured itself. Fires on every layout, including the first.
@@ -497,18 +512,60 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
         return lines.joined(separator: "\n")
     }
 
-    func feed(_ text: String) {
-        view.feed(text: text)
+    /**
+     * Bytes from the wire.
+     *
+     * `replay` is the frame's own flag and it is not a hint: while a backlog is
+     * being written this holds the screen rather than painting each chunk, which
+     * is the whole of the *"it scrolls everything and then it loads"* defect.
+     * See `TerminalBackfill`, which owns the policy; this is the one line that
+     * routes bytes through it.
+     */
+    func feed(_ text: String, replay: Bool = false) {
+        backfill.feed(text, replay: replay)
+    }
+
+    /**
+     * A backlog is coming: hold the screen until it has landed.
+     *
+     * Called from the attach, beside `clear()`, because those two are one event
+     * — the reset is what makes room for the replay, and the replay is what this
+     * hides. Not folded *into* `clear()`, because `clear` is also the honest
+     * thing to call when a session is being wiped for another reason, and a
+     * terminal that went blank for two seconds every time would be this fix
+     * causing the complaint it was written for.
+     */
+    func holdForBacklog() {
+        backfill.begin()
+    }
+
+    /**
+     * The screen is going away: drop any hold, and put the surface back.
+     *
+     * The bridge outlives the screen — it is what makes the scrollback survive a
+     * trip to the session list — so a hold left in flight would be a terminal
+     * that comes back invisible. The ceiling would rescue it within two seconds
+     * anyway; this is the version that does not need rescuing.
+     */
+    func endBacklogHold() {
+        backfill.stop()
     }
 
     /// RIS. See the header for why this is a reset and not a clear.
     func clear() {
+        // Straight to the view rather than through `feed`: a reset is this app's
+        // own byte, not the session's, and it has to land whether or not a
+        // backlog is being held — the whole point of it is to make room for one.
         view.feed(text: "\u{1b}c")
     }
 
     /// Show a line the desktop did not send — a connection banner, an error.
     /// Dim and bracketed so it cannot be mistaken for program output.
     func note(_ text: String) {
+        // Direct, like `clear`. A note is this app speaking — *reconnected*,
+        // *that keystroke was not sent* — and it is written at the moment it is
+        // true; queueing it behind a backlog would put it under output that
+        // arrived after it.
         view.feed(text: "\r\n\u{1b}[2m[\(text)]\u{1b}[0m\r\n")
     }
 

@@ -335,6 +335,59 @@
      to have to excuse. */
   --badge-fg: #ffffff;
 
+  /* The four session ↔ browser binding colours.
+
+     A browser window can be attached to a session, and when it is, it wears a
+     small chip reading `B1` or `B2` — the number is a fact about that session,
+     and the colour says whose numbering it is. So four colours, assigned to
+     sessions that hold at least one window, and repeating after the fourth:
+     past four the number and the tooltip carry it, which they have to anyway
+     because a chip is read, not matched.
+
+     ## Why these are new rather than four tokens the sheet already has
+
+     Because the sheet has fewer hues than it looks like it has, and that was
+     checked rather than assumed. In *both* theme blocks `--color-info` IS
+     `--status-working`, `--color-warning` IS `--status-waiting`, and
+     `--color-positive` IS `--status-completed` — the same hex, written twice
+     under two names — and `--accent` is one shade off `--status-working`. What
+     that leaves is four chromatic values, of which `--status-input` is this
+     app's single "act now" colour and `--color-critical` means danger. Spending
+     either of those on a binding, which is a benign fact about where a page
+     opens, would make a window that is merely attached look like a window that
+     needs something. Eight lines of CSS is the cheaper mistake.
+
+     ## Where they sit
+
+     Violet, teal, magenta and moss, each at least two hue-steps from `--accent`
+     (213°) and from `--status-input` (18°) — the same separation rule this sheet
+     already applies between `--status-input` and `--status-waiting` "so the two
+     dots stay tellable apart at 7px". Measured on these values: the closest any
+     of them comes to either is the teal, 35.1° from the accent on paper and
+     33.6° from it in the dark. The obvious
+     fourth was a slate, and it is not here for a measured reason rather than a
+     taste one — a cool slate dark enough to clear AA on this paper lands around
+     210°, three degrees from the accent, which is the one thing the rule
+     forbids. Moss sits in the wide free region between the ambers and the
+     greens instead.
+
+     Derived the way the terminal's sixteen are: the dark value is chosen, then
+     every channel is scaled toward black by one factor, which preserves hue and
+     HSV saturation exactly and moves only lightness. Each clears 4.5:1 on all
+     four surfaces of its own theme, so a chip is visible on any of them and the
+     token is usable as ink if anything ever needs it that way. */
+  --bind-1: #725d9d;
+  --bind-2: #327270;
+  --bind-3: #955183;
+  --bind-4: #626e2e;
+  /* Ink for a chip, and the same trade `--badge-fg` makes one paragraph up: the
+     fills above are dark on paper, so white reads on all four (5.5:1 at worst).
+     The dark theme takes the opposite end for the opposite reason. Its own
+     token rather than a reuse of `--badge-fg`, because the badge follows
+     `--color-critical` and these follow the four above — one value serving two
+     unrelated fills is one value that cannot move when either does. */
+  --bind-fg: #ffffff;
+
   /* The scrim the copilot's focus overlay lays over everything outside the box
      it is pointing at, and the glow just outside that box.
 
@@ -539,6 +592,21 @@
   /* Dark ink, not white — see the light theme's note. `--color-critical` is a
      light coral here, so this is the same trade `--accent-fg` makes. */
   --badge-fg: #0f1114;
+
+  /* The four binding colours — see the light theme's note for why they are new
+     tokens and where their hues sit. These are the declared values and the light
+     ones above are these walked down toward black by a single factor, which is
+     the same derivation the terminal's sixteen use. All four clear 4.5:1 on
+     every surface of this theme; the tightest is the violet at 5.5:1 on
+     `--bg-tertiary`. */
+  --bind-1: #a98ae8;
+  --bind-2: #4fb3b0;
+  --bind-3: #e07ac4;
+  --bind-4: #9fb24a;
+  /* Near-black on a bright fill, exactly as the badge above does it and for the
+     same measured reason: white on these four runs 2.4–2.8:1, which no chip
+     survives. 6.7:1 at worst this way. */
+  --bind-fg: #0f1114;
 
   /* The focus overlay's scrim and ring glow — see the light theme's note for
      the budget, and for why this is the same alpha rather than the heavier one

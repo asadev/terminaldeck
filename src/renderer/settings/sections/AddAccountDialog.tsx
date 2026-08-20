@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { ProviderId } from '@shared/types'
+import { HoverNote } from '../../components/HoverNote'
 import {
   AccountProviderList,
   chosenAccountProvider,
@@ -53,8 +54,33 @@ import './AddAccountDialog.css'
  * this before can follow, and this app's audience is *"mostly non-technical vibe
  * coders"*. The third step is not a control: it says what will happen when the
  * button is pressed, which is that a terminal opens and the agent asks for the
- * login itself. Nobody should be hunting this screen for a password field that
- * cannot exist — this app never sees a credential.
+ * login itself.
+ *
+ * ## The field asks for the email, because the email is what an account is
+ *
+ * Step two used to read *"Give it a name."* over a field placeheld with "Name
+ * this Claude Code account", and it cost five minutes of the recorded review of
+ * 2026-08-19: he typed a name, could not find where the sign-in was, deleted the
+ * account and tried again three times.
+ *
+ *   > "at the place of the name, it should actually ask the link email, but it
+ *   > is calling it as name. So that's why I was confused… So correct your
+ *   > naming, please."
+ *
+ * He is right, and the evidence was already on his disk: every account in
+ * `profiles.json` is called `imzapremium@gmail.com` or
+ * `asadiqbalonline@gmail.com`, because the address is the only thing that tells
+ * two logins of one agent apart. So there is no separate name any more. The
+ * field asks for the address, and the address *is* the profile name — one field,
+ * one meaning, and the row that appears afterwards reads the way the rows above
+ * it already do.
+ *
+ * The prose that used to sit under step three went with it. Two paragraphs
+ * explaining the terminal and the shared history stood between the last step and
+ * the button, which is a large part of why the button could not be found:
+ * *"Remove this full shit. I don't want any kind of long descriptions
+ * anywhere."* Both facts are still here, behind the ⓘ beside the step, which is
+ * the one affordance this window uses for the long half of anything.
  */
 
 export interface AddAccountDialogProps {
@@ -66,11 +92,17 @@ export interface AddAccountDialogProps {
   /**
    * Make the account and start its sign-in, as one action.
    *
+   * The first argument is the address typed into step two, and it is passed
+   * straight through as the profile *name* — see the header. That is not a
+   * shortcut around a missing field: an account with a nickname and an address
+   * is two things to keep in step, and the address is the half that identifies
+   * the login to the person and to the agent.
+   *
    * Null when this window cannot open a session, in which case the dialog says
    * so and refuses rather than creating an account that has no way to be signed
    * into.
    */
-  onSignIn: ((name: string, provider: ProviderId) => void) | null
+  onSignIn: ((email: string, provider: ProviderId) => void) | null
   onClose(): void
 }
 
@@ -118,7 +150,7 @@ export function AddAccountSteps({
   const [clicked, setClicked] = useState<ProviderId | null>(null)
   const formId = useId()
   const panelRef = useRef<HTMLDivElement>(null)
-  const nameRef = useRef<HTMLInputElement>(null)
+  const emailRef = useRef<HTMLInputElement>(null)
 
   // Read through a ref so the key listener is installed once and still calls
   // the current handler; a re-created closure would re-bind on every render.
@@ -138,11 +170,11 @@ export function AddAccountSteps({
   }, [open])
 
   /*
-   * A fresh dialog every time, and focus in the name field.
+   * A fresh dialog every time, and focus in the address field.
    *
    * Not the panel: this one is short enough that its heading is read from the
    * title anyway, and the field is the only thing anybody has to type. Clearing
-   * the draft matters more than it looks — a name left over from an attempt
+   * the draft matters more than it looks — an address left over from an attempt
    * that failed would be re-submitted by somebody who opened the dialog to try
    * a different agent.
    */
@@ -150,7 +182,7 @@ export function AddAccountSteps({
     if (!open) return
     setDraft('')
     setClicked(null)
-    nameRef.current?.focus()
+    emailRef.current?.focus()
   }, [open])
 
   const chosen = chosenAccountProvider(providerRows, clicked)
@@ -159,16 +191,16 @@ export function AddAccountSteps({
   const submit = useCallback(
     (event: FormEvent) => {
       event.preventDefault()
-      const name = draft.trim()
+      const email = draft.trim()
       // No agent means no account: a login has to be a login *of* something, and
       // `createProfile` in the main process refuses a provider it cannot isolate
       // rather than quietly making one for the default agent.
-      if (name === '' || !chosen || !onSignIn) return
+      if (email === '' || !chosen || !onSignIn) return
       // And no account at all for an agent that cannot start. Creating one here
       // and letting the session die is how the 2026-08-16 recording ended with
       // five orphan rows in the sidebar and nothing cleaned up.
       if (problem) return
-      onSignIn(name, chosen.id)
+      onSignIn(email, chosen.id)
     },
     [chosen, draft, onSignIn, problem],
   )
@@ -208,28 +240,59 @@ export function AddAccountSteps({
           </li>
 
           <li className="add-account-step">
-            <p className="add-account-ask">Give it a name.</p>
+            <p className="add-account-ask">Which email address?</p>
             <input
-              ref={nameRef}
+              ref={emailRef}
               className="settings-input wide"
               value={draft}
-              /* Not a plausible word like "Work": a single word sitting in an
-                 empty field reads as a value somebody already typed, and a
-                 person who leaves it alone expecting an account called Work
-                 gets nothing. It does name the chosen agent, which is the
-                 cheapest possible confirmation that the row above was taken. */
-              placeholder={chosen ? `Name this ${chosen.label} account` : 'Name this account'}
+              type="text"
+              /* `type="text"` with an email keyboard, deliberately. `type=email`
+                 hands the browser a constraint it enforces on submit with its
+                 own bubble, and an address this app never parses is not
+                 something to refuse a person over — the string is stored, shown
+                 back, and compared to nothing. What the hint changes is the
+                 keyboard on a touch screen and the autofill list on a desktop,
+                 which is the whole of the help worth having here. */
+              inputMode="email"
+              autoComplete="email"
+              spellCheck={false}
+              /* The shape of the answer, not an instruction. Every account in
+                 `profiles.json` on the machine this was written on is already an
+                 address, so the placeholder is showing the format the list
+                 upstairs is in rather than proposing a value. */
+              placeholder="you@example.com"
               maxLength={MAX_ACCOUNT_NAME_LENGTH}
-              aria-label="Name for the new account"
+              aria-label="Email address for the new account"
               onChange={(event) => setDraft(event.target.value)}
             />
           </li>
 
           <li className="add-account-step">
-            <p className="add-account-ask">Sign in, in the terminal that opens.</p>
-            <p className="add-account-note">
-              A session starts on that agent and it asks you to log in, exactly as it would in your
-              own terminal. This app never sees your password or your token.
+            {/*
+              The step, and then the button under it — nothing in between.
+
+              Two paragraphs used to sit here: what happens in the terminal, and
+              the one side effect of adding an account that is not visible in the
+              act of adding one. Both are true and `ACCOUNT-MODEL.md` says in as
+              many words that the sharing is a sentence the screen has to say
+              rather than something to be discovered. Neither survives as prose —
+              they are what stood between the last step and the button he could
+              not find — so both are behind the ⓘ, which is where this window
+              puts the long half of everything else.
+
+              No vendor is named in it, and that is not only house style: the
+              sharing is arranged for one agent's history layout and does not
+              happen for the others, so a product name would promise a behaviour
+              some of these accounts will not have.
+            */}
+            <p className="add-account-ask">
+              Sign in, in the terminal that opens.
+              <HoverNote label="Signing in">
+                A session starts on that agent and it asks you to log in, exactly as it would in
+                your own terminal — this app never sees your password or your token. Its
+                conversations are kept with your own install where the agent allows it, so one
+                started under this account can be continued under another.
+              </HoverNote>
             </p>
           </li>
         </ol>
@@ -267,8 +330,7 @@ export function AddAccountSteps({
             for somebody to infer from a button that never lights. */}
         {providerRows.length > 0 && !chosen && (
           <p className="add-account-warn" role="status">
-            No agent on this machine can hold a second login. Install one from the list above and it
-            will offer it here.
+            No agent on this machine can hold a second login.
           </p>
         )}
 

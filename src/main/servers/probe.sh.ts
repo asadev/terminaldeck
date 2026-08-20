@@ -50,6 +50,25 @@
  * two cheap ways instead: a unit whose own file sits in `/etc/systemd/system`
  * (somebody added it here), and a unit that owns a listening port.
  *
+ * **`command -v` alone cannot see the place agents are actually installed.**
+ * This one was measured twice before it was believed. The PATH a non-interactive
+ * `sh -s` inherits on his own Ubuntu box does not contain `~/.local/bin`, and
+ * `~/.local/bin/claude` is exactly where the official installer puts it — so a
+ * bare `command -v claude` answers "not found" on a machine with a working,
+ * signed-in install, and the app would cheerfully offer to install over it.
+ * Asking the *login* shell instead is not the answer either: the Ubuntu default
+ * `.bashrc` opens with `case $- in *i*) ;; *) return;; esac`, which returns
+ * before the nvm block runs, so a login shell cannot see an nvm install. So the
+ * `#agents` section takes the **union** of a widened PATH and one login-shell
+ * spawn, which between them cover every layout that was tried. Costs measured:
+ * 0 ms bare, 1 ms widened, 4 ms for the one spawn that covers all three agents.
+ *
+ * And presence is still not usability. A root-owned npm global whose `node` was
+ * removed, and a dangling symlink, both satisfy `command -v` and both fail to
+ * run — so the version is read from the binary itself (77 ms) and a row with no
+ * version means *found and will not start*, which is a different offer from
+ * *not installed*.
+ *
  * **The owner of a listening port is worth a section of its own.** Knowing that
  * something called `node` is on port 8787 is close to useless; knowing that the
  * process on port 8787 belongs to a *named service* is what lets a card say
@@ -78,6 +97,9 @@ import {
   factNo,
   factYes,
   CONTAINER_NUMBERS_WHY,
+  type AgentFact,
+  type AgentId,
+  type AgentInstallRoom,
   type ContainerFact,
   type ContainerRuntime,
   type DiskFact,
@@ -136,6 +158,24 @@ p packages "$PKG"
 WEB=
 for w in nginx apache2 httpd caddy lighttpd; do have "$w" && { WEB=$w; break; }; done
 p web "$WEB"
+
+AW="$PATH"
+for d in "$HOME/.local/bin" "$HOME/bin" "$HOME/.claude/local" "$HOME/.npm-global/bin" \\
+         "$HOME/.volta/bin" "$HOME/.bun/bin" "$HOME/.asdf/shims" \\
+         "$HOME/.local/share/mise/shims" /usr/local/bin /opt/homebrew/bin /snap/bin; do
+  [ -d "$d" ] && AW="$AW:$d"
+done
+for d in "\${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin \\
+         "$HOME"/.local/share/fnm/node-versions/*/installation/bin; do
+  [ -d "$d" ] && AW="$AW:$d"
+done
+
+FETCH=
+for f in curl wget; do have "$f" && { FETCH=$f; break; }; done
+p installer_fetch "$FETCH"
+p installer_npm "$(PATH="$AW" command -v npm 2>/dev/null)"
+p mem_avail_kb "$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null)"
+p home_free_kb "$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2{print $4}')"
 
 p cpus "$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null)"
 p disk_used_kb  "$(df -Pk / 2>/dev/null | awk 'NR==2{print $3}')"
@@ -239,6 +279,26 @@ if [ "$INIT" = systemd ] && [ -d /etc/systemd/system ]; then
 else
   sec adminunits cannot "we can only tell which programs were added by hand on a server that keeps them this way"
 fi
+
+ALOGIN=$("\${SHELL:-/bin/sh}" -lc 'command -v claude; command -v codex; command -v gemini' 2>/dev/null)
+sec agents ok
+for a in claude codex gemini; do
+  ab=$(PATH="$AW" command -v "$a" 2>/dev/null)
+  [ -n "$ab" ] || ab=$(printf '%s\\n' "$ALOGIN" | grep "/$a$" 2>/dev/null | head -n 1)
+  [ -n "$ab" ] || continue
+  av=$("$ab" --version 2>/dev/null | head -n 1 | awk '{print $1}')
+  ai=unknown
+  ae=
+  if [ "$a" = claude ] && [ -n "$av" ]; then
+    as=$("$ab" auth status --json 2>/dev/null | tr -d ' \\t\\n\\r')
+    case "$as" in
+      *'"loggedIn":true'*)  ai=yes ;;
+      *'"loggedIn":false'*) ai=no ;;
+    esac
+    ae=$(printf '%s' "$as" | sed -n 's/.*"email":"\\([^"]*\\)".*/\\1/p')
+  fi
+  printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$a" "$ab" "$av" "$ai" "$ae"
+done
 printf '#end ok\\n'
 
 `
@@ -257,6 +317,8 @@ const HOW = {
   services: 'asked what it is set up to keep running',
   listeners: 'asked what is listening',
   sites: "read the web server's own settings",
+  agents: 'looked for a coding assistant this sign-in can run',
+  agentInstall: 'checked what it would take to put one here',
 } as const
 
 /**
@@ -558,6 +620,53 @@ export function parseProbe(stdout: string, serverId: string, measuredAt: number)
     rows.map((row) => row.trim()).filter((row) => row !== ''),
   )
 
+  const agents = section<AgentFact[]>(parsed, 'agents', at, HOW.agents, (rows) => {
+    const out: AgentFact[] = []
+    for (const row of rows) {
+      const [id, path, version, signedIn, account] = columns(row, 5)
+      if (!AGENT_IDS.includes(id as AgentId) || path === '') continue
+      out.push({
+        id: id as AgentId,
+        path,
+        version,
+        // Anything the script did not say plainly is `unknown`. A row that
+        // arrived with a blank here is a row where the question was not put,
+        // and a screen that read that as "not signed in" would offer somebody
+        // a sign-in they have already done.
+        signedIn: signedIn === 'yes' ? 'yes' : signedIn === 'no' ? 'no' : 'unknown',
+        account: account === '' ? null : account,
+      })
+    }
+    return out
+  })
+
+  /*
+   * Present-and-empty against absent-entirely again, and for the same reason as
+   * `web` above. The script prints `installer_fetch` unconditionally, so an
+   * empty value means it looked and this server has neither downloader — which
+   * is an answer about the machine. A missing line means the script never got
+   * that far, and offering an install on the strength of that would be offering
+   * something we have no grounds to believe would work.
+   */
+  const fetchRaw = parsed.scalars.get('installer_fetch')
+  const agentInstall: Fact<AgentInstallRoom> =
+    fetchRaw === undefined
+      ? factCannot(at, parsed.finished ? NEVER_ASKED : CUT_OFF)
+      : factYes(
+          {
+            downloader: fetchRaw.trim(),
+            // Empty when this server has no npm, which is a fact about the
+            // machine and the reason two of the three agents cannot be offered
+            // on it — measured, not assumed: both ship as npm packages and
+            // neither has a standalone installer the way Claude Code does.
+            npm: (parsed.scalars.get('installer_npm') ?? '').trim(),
+            memoryAvailableKb: kilobytes(parsed, 'mem_avail_kb'),
+            homeFreeKb: kilobytes(parsed, 'home_free_kb'),
+          },
+          at,
+          HOW.agentInstall,
+        )
+
   // The four numbers a container reports about somebody else's computer. This
   // is the one place the rule is applied, so that no card can opt out of it by
   // reading the scalar itself — the scalars are not exported.
@@ -623,7 +732,27 @@ export function parseProbe(stdout: string, serverId: string, measuredAt: number)
     containers,
     listeners,
     siteNames,
+    agents,
+    agentInstall,
   }
+}
+
+/** The three the `#agents` section looks for. Anything else in that section is dropped. */
+const AGENT_IDS: readonly AgentId[] = ['claude', 'codex', 'gemini']
+
+/**
+ * A kilobyte figure, or null when this server would not say.
+ *
+ * Null rather than zero, and the difference is the same one the whole module is
+ * about at a smaller scale: zero free kilobytes is a reason to refuse an
+ * install, and "this server does not publish the number" is a reason to say
+ * nothing about it and let the installer answer for itself.
+ */
+function kilobytes(parsed: Parsed, key: string): number | null {
+  const raw = parsed.scalars.get(key)
+  if (raw === undefined || raw.trim() === '') return null
+  const value = Number(raw.trim())
+  return Number.isFinite(value) ? value : null
 }
 
 const DISK_WHY = 'This server did not say how much room it has.'

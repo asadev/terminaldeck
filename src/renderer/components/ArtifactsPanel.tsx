@@ -146,6 +146,14 @@ export type ArtifactsChangesResponse = ({ ok: true } & ArtifactHistory) | Failur
  */
 export interface ArtifactsBridge {
   listArtifacts(request: { cwd: string; scope?: ArtifactScope }): Promise<ArtifactsListResponse>
+  /**
+   * The window's own sessions, read for one purpose: to put a name on a chip.
+   *
+   * Optional, and never required by `resolveBridge`, so a build without it
+   * shows the same chips it always did with a time on them instead of a name.
+   * Nothing on this page depends on the answer arriving.
+   */
+  listSessions?(): Promise<unknown>
   artifactChanges(request: {
     cwd: string
     relPath: string
@@ -815,6 +823,45 @@ export function ArtifactsPanel({
    */
   const [listAttempt, setListAttempt] = useState(0)
 
+  /**
+   * Conversation id → the name this window shows that session by.
+   *
+   * The chips in the session row were a timestamp and a file count — "3h ago ·
+   * 4 files" — which identifies a session only to somebody who already knows
+   * when they ran it. The app does know the names: `SessionMeta.agentSessionId`
+   * is the conversation id this app handed the CLI at spawn, and it is the same
+   * id `main/artifacts.ts` reads off the transcript. So the two lists join, and
+   * a chip can say which session it is.
+   *
+   * Read once, and its failure is silent: this is a nicety on a page about
+   * files, and a session with no name — one this app did not start, one running
+   * another agent — keeps the time it always had.
+   */
+  const [sessionNames, setSessionNames] = useState<ReadonlyMap<string, string>>(new Map())
+
+  useEffect(() => {
+    const list = host?.listSessions
+    if (!list) return
+    let live = true
+    void list().then(
+      (raw) => {
+        if (!live || !Array.isArray(raw)) return
+        const named = new Map<string, string>()
+        for (const row of raw) {
+          if (!isRecord(row)) continue
+          const id = typeof row.agentSessionId === 'string' ? row.agentSessionId : ''
+          const title = typeof row.title === 'string' ? row.title : ''
+          if (id !== '' && title !== '') named.set(id, title)
+        }
+        setSessionNames(named)
+      },
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [host])
+
   useEffect(() => {
     if (!host) {
       setList({
@@ -958,7 +1005,22 @@ export function ArtifactsPanel({
 
   const onSelect = useCallback((relPath: string) => setSelected(relPath), [])
 
-  const sessions = (list.list?.sessions ?? []).slice(0, 5)
+  /*
+   * Every session, not the first five.
+   *
+   * Asad, looking at this row: *"on the sessions here, would be better if you
+   * show the other ones also, not the local only."* The cap was arbitrary — a
+   * project with nine sessions drew five chips and silently dropped four, with
+   * nothing on screen saying that a session was missing, so the row read as the
+   * whole list while being a fifth of it. `main/artifacts.ts` already caps what
+   * it scans; capping the *display* of what it found a second time is how a
+   * filter ends up hiding the row somebody went looking for.
+   *
+   * The row scrolls sideways instead — see `.artifacts-sessions` — which costs
+   * nothing on a project with two sessions and keeps every one of them
+   * reachable on a project with forty.
+   */
+  const sessions = list.list?.sessions ?? []
 
   return (
     <section className="artifacts" aria-label="Artifacts">
@@ -1063,7 +1125,12 @@ export function ArtifactsPanel({
                 title={entry.sessionId}
                 onClick={() => setSession(session === entry.sessionId ? null : entry.sessionId)}
               >
-                {relativeTime(entry.at, clock)} · {entry.files} file{entry.files === 1 ? '' : 's'}
+                {/* The session's name where this window knows it, and the time
+                    where it does not — see `sessionNames`. The file count stays
+                    either way, because it is what makes one chip worth pressing
+                    over another. */}
+                {sessionNames.get(entry.sessionId) ?? relativeTime(entry.at, clock)} ·{' '}
+                {entry.files} file{entry.files === 1 ? '' : 's'}
               </button>
             ))}
           </>

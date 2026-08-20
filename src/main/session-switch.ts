@@ -141,6 +141,9 @@ export const SESSION_SWITCH_CHANNEL = 'session:switch-account'
  * decided there: this process knows what is on disk, and the window owns every
  * decision about what to call an account.
  *
+ *  - `follows`    the two accounts share one conversation history, so the
+ *                 conversation on screen is the conversation the replacement
+ *                 continues. Option C, and the whole point of it.
  *  - `stays`      the other account has no conversation in this folder, so it
  *                 starts a new one. The conversation on screen stays where it is.
  *  - `theirs`     the other account has its own conversation here, and the
@@ -155,7 +158,7 @@ export const SESSION_SWITCH_CHANNEL = 'session:switch-account'
  *  - `none`       this agent has no way to continue anything. Nothing is lost
  *                 that was ever recoverable.
  */
-export type SwitchConversation = 'stays' | 'theirs' | 'taken' | 'unreadable' | 'none'
+export type SwitchConversation = 'follows' | 'stays' | 'theirs' | 'taken' | 'unreadable' | 'none'
 
 /** An account, as much of one as the window needs to name it. */
 export interface SwitchAccount {
@@ -390,8 +393,35 @@ export function planSwitch(input: {
   decision: RestoreDecision | null
   /** Is another live tab already continuing the conversation this would? */
   occupied: boolean
+  /**
+   * Do the two accounts read the same conversation history?
+   *
+   * True when `shared-projects.ts` has linked both accounts' `projects/` into
+   * one location, which is Option C from `ACCOUNT-MODEL.md`. It was off until
+   * somebody turned it on per account, and that is exactly why the feature was
+   * reported broken a second time: the accounts anybody already had were not
+   * sharing, so every switch really did leave the conversation behind and the
+   * fix sat unused in the same build. `adoptSharedHistory` now runs on the way
+   * up and the switch itself asks again, so on a Claude account this app
+   * created the answer here is ordinarily yes. It changes nothing about what
+   * happens —
+   * the replacement `--continue`s whatever the target store holds either way —
+   * and it changes everything about what may honestly be *said* about it. With
+   * separate stores the conversation the new account picks up is a different
+   * conversation that merely lives in the same folder; with one store it is
+   * this conversation, the one on screen, which is the thing the whole feature
+   * was built to buy:
+   *
+   *     user: remember the word PLATYPUS | sid dbebd1aa      ← ACCOUNT-ONE
+   *     user: what word                  | sid dbebd1aa      ← ACCOUNT-TWO
+   *
+   * Without this the sheet tells somebody who has turned sharing on that the
+   * conversation on screen stays behind and another one takes its place, which
+   * is exactly false and is the sentence they would be deciding on.
+   */
+  sharedStore: boolean
 }): SwitchPlan {
-  const { sessionId, meta, saved, target, decision, occupied } = input
+  const { sessionId, meta, saved, target, decision, occupied, sharedStore } = input
 
   const from: SwitchAccount | null =
     meta?.profileId !== undefined && meta.profileName !== undefined
@@ -467,7 +497,18 @@ export function planSwitch(input: {
     refusal: null,
     from,
     to,
-    conversation: decision.conversation === 'unknown' ? 'unreadable' : 'theirs',
+    /*
+     * `follows` outranks `theirs`, and only one of the two can be true. They
+     * describe the same mechanical act — the replacement is handed the continue
+     * flag and attaches to whatever the target store holds for this folder — and
+     * differ entirely in what that store *is*. Shared, it is this conversation;
+     * separate, it is one belonging to the other account that happens to be in
+     * the same directory. `unreadable` still wins over both, because it means
+     * the app could not see the store at all and has no business claiming
+     * anything about what is in it.
+     */
+    conversation:
+      decision.conversation === 'unknown' ? 'unreadable' : sharedStore ? 'follows' : 'theirs',
     resume: true,
   }
 }

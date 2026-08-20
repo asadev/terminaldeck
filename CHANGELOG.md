@@ -10,6 +10,245 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **A file dropped on a session goes into that session** — including one running
+  on another machine. Nothing in this app had a drop handler before, so a photo
+  dragged from Finder onto a terminal reached Chromium's default and *navigated
+  the window to it*: the application replaced by a picture of the photo. A drop
+  on a local session now types the path at the prompt, quoted, the way every
+  terminal on this platform does; a drop on a remote one sends the file first —
+  the same `upload.*` verbs the phone has used since uploads shipped — and types
+  the path the far machine answers with, which is where it actually is. Files
+  land in that machine's `Downloads/Terminal Deck`, one at a time, 512 MB each at
+  most, checksummed, and a transfer that is interrupted leaves nothing behind but
+  a line saying so.
+
+- **A program in a session can put something on this machine's clipboard.** OSC
+  52 — how `tmux`, `vim`, `gh` and every agent CLI copy their own output — is not
+  implemented by xterm.js, so the sequence was parsed, matched nothing and was
+  dropped in silence, on local sessions and remote ones alike. It works now on
+  both. The *read* form of the same sequence, which asks a terminal to send the
+  clipboard back down the pty, is refused and never answered: on a remote pane
+  that would be this machine's clipboard travelling to somebody else's computer
+  because a program over there asked for it.
+
+- **Source control can create the repository it is telling you about.** A folder
+  with no repository in it produced a page whose whole content was a title, the
+  same fact repeated as a sentence, and the suggestion to go and type `git init`
+  somewhere else — *"Source control shows nothing, so make sure it shows
+  something whatever is necessary to show."* It offers the button now, refuses
+  it on a repository git is merely declining to read, and shows the working tree
+  that follows with no refresh to press.
+
+- **Files can show what `.gitignore` hides.** `FileTree` has taken a
+  `showIgnored` prop since it was written and nothing had ever passed it, so a
+  folder whose contents are all ignored said the same "Nothing to show." as a
+  folder that is genuinely empty. The empty page now offers the one press that
+  tells the two apart, and a chip beside the tree turns it back off.
+
+- **GitHub Copilot is on the GitHub page**, where it was asked for, instead of
+  in Settings → Agents → Setup beside git and the GitHub CLI. Nothing was left
+  behind, and none of the four lines of explanation under it came along.
+
+- **Two accounts can now hand each other a conversation.** Switching a session's
+  account had one job — keep the conversation — and it did not do it, because the
+  sharing it depends on was never switched on. His three accounts each kept their
+  own `projects/` directory, so the account he switched to opened the folder and
+  found nothing in it: *"it is not going to keep it… it's not keeping the
+  conversation history."* The store that makes them one history had exactly one
+  caller, a button in Settings that nobody pressed. Accounts now join it at
+  startup and again on the way through a switch. Nothing is rewritten: folders
+  move in, a name that already exists is set aside rather than merged, and an
+  account deliberately kept to itself is left alone.
+
+- **A session can be told to change account at your next message.** The switch
+  waits, holding nothing up, and happens between you pressing return and the
+  agent seeing the line — same tab, same conversation, new limit.
+
+- **Attach a browser window from either end.** The browser has a control for
+  choosing a session, the session has one for choosing windows, and they are one
+  list seen from two sides rather than two lists that can disagree.
+
+- **A session learns about a window the moment it is attached**, not at its next
+  prompt. Proven against a live agent: a window attached a second and a half into
+  a running turn was named correctly at the agent's very next step.
+
+- **Sessions carry the fact that they are running inside this app.** Two lines,
+  delivered on the channel that already exists, never typed into the terminal —
+  so asking one to open a page lands it in a window here instead of the machine's
+  browser, without saying where.
+
+- **A machine switch on the copilot page**, drawn only when there is more than one
+  machine to switch to.
+
+### Fixed
+
+- **`terminaldeck pair` approves the device it says it approved.** It sent no
+  kind, and `remote:device:approve` treats a missing kind as *nothing was
+  decided* — so it returned the device roster untouched, the command printed
+  "Approved." from the fact that a reply arrived rather than from the reply, and
+  no phone could ever be admitted to a server from the command line. The command
+  now asks which the device is, in the words the desktop's approval screen uses,
+  or takes `--kind mine|guest` for a machine with nobody at the keyboard. There
+  is no default and an unrecognised answer approves nothing: one default strands
+  the owner's own phone with no folders, the other hands a stranger's phone the
+  copilot and every port on the machine. The outcome is then read back from the
+  host and the printed line says what actually happened, guests included — they
+  start with an empty folder list, not with "the folders this host has open".
+
+- **`terminaldeck status` says what each device is.** The desktop draws the kind
+  beside every device in Settings and a server had nowhere at all, so after the
+  moment of approving one, the difference between a phone that can reach every
+  port on this machine and one that can reach a single folder was invisible —
+  including to somebody auditing a box they inherited. A device paired before
+  device kinds existed is shown as undecided rather than as a guest, because only
+  one of those two has a remedy.
+
+- **A host with no window says so about the copilot.** A device approved as *my
+  device* gets the copilot on a desktop and does not on a server, and the wire
+  makes "this host has no copilot" and "you are a guest" the same absence on
+  purpose — which left the owner's own phone unable to tell the two apart. The
+  copilot is still not offered on a headless host: its tool server cannot run
+  there yet, and a Copilot tab whose every Start button refuses would be worse
+  than none. But `pair` and `status` now both say so, in a sentence, instead of
+  leaving it to be discovered.
+
+- **Pasting into a session on another machine works, at any size.** Measured end
+  to end over a real relay: a 49,160-character paste typed **zero bytes** and
+  took the link down with it — `online → error → connecting → online` — because
+  the far machine answers a frame over 16 KiB by closing the socket, and every
+  remote pane on that link lost its subscription with it. From the keyboard that
+  is indistinguishable from the paste being ignored, which is how it was
+  reported. A paste is split into frames the far end accepts and arrives whole
+  and in order, surrogate pairs and bracketed-paste markers included. Above 1 MB
+  — the same ceiling the phone has always had — it is refused with one line over
+  the terminal rather than nothing at all.
+
+- **Issues and Pull requests are no longer the same screen twice.** Reported
+  three times — *"issue and pull request pages are like identical showing the
+  same stuff, same error, same buttons"* — and the code said so: the function
+  drawing a list took a `kind` and ignored it in five of its six branches. Both
+  lists come from one call against one repository, so a folder that is not a
+  GitHub repository, a missing `gh`, a rate limit or an outage is one answer,
+  not two. It is drawn once now, with the two list tabs withdrawn and
+  Repositories — which reads the credential rather than the folder — left in
+  their place.
+
+- **MCP servers could not open anything outside the user scope.** The preload
+  dropped the project path on `mcp:connect`, `mcp:inventory` and `mcp:call`, so
+  the main process re-resolved them against `~/.claude.json`'s root alone and
+  threw `no configured server with id local:<name>` — on a page whose expand
+  gesture is its connect gesture. Both ends had always agreed on the argument;
+  this was the one link that did not pass it. A second, project-blind copy of
+  the same six methods, called from nowhere, is deleted with it.
+
+- **An HTTP or SSE server is no longer a row that does nothing when pressed.**
+  Only stdio servers can be inspected, and the rest expanded to an empty body.
+
+- **The refresh on the GitHub page says it is working** — *"I don't know if the
+  refresh is working because we don't feel anything getting refreshed."*
+
+- **A deferred account switch could put something in the composer that you never
+  typed.** Pressing the up-arrow before the switch left `fix the bug[A` in the
+  line — the escape sequence appended as text. There is a real line model behind
+  it now, and a two-thousand-round fuzz test over torn escape sequences, which
+  found a second leak the first fix missed. Either your exact line is sent, or
+  your exact text waits unsent. Never a fragment.
+
+- **Opening a session no longer replays it in front of you.** A remote pane was
+  destroyed whenever another view took the frame, so returning to it pulled the
+  whole scrollback back across from the other computer and painted every
+  intermediate scroll position on the way — *"it will start from the beginning
+  again."* The pane is kept now, and a backlog is written behind a held surface
+  and revealed once, already at the bottom. Local sessions had the same fault and
+  the same fix, along with an ordering bug it exposed: output that arrived while
+  the history was still loading was written before the history it came after.
+
+- **The account beside a session is the session's own.** A session started outside
+  this app was labelled with the app's default account — the folder's account
+  rendered with a session's worth of confidence. It reads the truth where it can
+  now, and says the account is not known where it cannot, rather than naming the
+  wrong person.
+
+- **The context figure was missing on exactly the sessions he uses.** A session
+  that a person starts an agent inside is recorded as a plain shell for life, and
+  the reader refused to measure one. Same record, two halves, and only one of
+  them had been told.
+
+- **Menus stay inside the window.** Three of them opened past the right edge; the
+  third was found by sweeping every menu in the app against the viewport rather
+  than by looking.
+
+- **The B1/B2 marks no longer paint over a tab's close button.** The tab could
+  shrink but never clip, and the marks are set never to shrink — so once the name
+  ran out of room they simply carried on past it.
+
+- **A session's name is a name.** A login shell writes `user@host: ~/path` into
+  its own title, and that string went straight onto the row. It falls back to
+  `Session N`, and a real title containing a colon is left alone.
+
+- **The copilot could not be reached from a phone by anything but the web client.**
+  The frame parser rebuilt the welcome message field by field and never copied
+  the copilot across, then refused all eight copilot frames.
+
+- **Pairing from a server's command line approved nothing** while printing
+  "Approved." The approval carried no device kind, and an approval with no kind
+  falls into the branch that decides nothing.
+
+### Changed
+
+- **Every view lost the sentence under its title.** Nine of them — "Browse the
+  project and read any file in it." over a page called Files — and the field
+  that held them is gone from `PanelSpec`, so there is nowhere to put a new one.
+  *"Don't put any single statement in anywhere… we want simplicity."* The same
+  cut ran through these pages' empty states, and where an explanation genuinely
+  earns its place it is behind the ⓘ dot, as on MCP servers.
+
+- **Artifacts lists every session it found**, not the first five, and names each
+  one where this window knows the name instead of showing only a timestamp.
+
+
+- **The usage mark is a ring** and its arc is the real figure — his choice, after
+  a gauge, three bars and a battery. Drawn for thirteen pixels rather than scaled
+  down to them, which is what made the previous ring a dot.
+
+- **The context figure is a bar**, not a number.
+
+- **Statements are gone from the panels.** *"Every single time you bring some
+  card, you put something new… we want simplicity. Let the smart people use it."*
+  The field that held them has been removed from the panel definition, so there
+  is nowhere left to write one.
+
+- **Your messages sit on the right, the agent's on the left, and neither is
+  labelled** — the side does that job. Each carries its time and a copy button,
+  and the copy takes the transcript text rather than the rendering.
+
+- **The mode button shows where pressing it takes you**, not where you are.
+
+- **Browser windows live on the top bar only; sessions live in both places.**
+  A session's ✕ on the bar takes it off the bar and nothing more — it keeps
+  running, and it is still in the sidebar. A browser window's ✕ closes it. The
+  destructive one is the only one that turns red.
+
+- **Every tab is the same width** — measured off his own screen recording rather
+  than chosen.
+
+- **The browser's toolbar is icons**, with names on hover, and the address bar
+  grew from 394 to 716 pixels at a full window.
+
+- **Profiles say what they are.** Each one is a genuinely separate set of cookies
+  and logins; the menu now shows how many, instead of a bare name.
+
+- **Native menus follow the app's theme.** The app read whether dark mode was on
+  but never told the system what it had chosen, so a menu could be dark over a
+  light window.
+
+- **Stop became Restart on the copilot.** Stop's only visible effect was the
+  window disappearing, because the window is drawn from the thing Stop ended.
+
+- **Sending to a session works between machines**, in both directions.
+
 ## [0.6.1] — 2026-08-19
 
 ### Added

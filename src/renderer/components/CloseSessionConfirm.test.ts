@@ -108,7 +108,10 @@ describe('closeWarning', () => {
 
   it('describes a calm session as an ending rather than an interruption', () => {
     for (const status of ['idle', 'waiting', 'completed'] as SessionStatus[]) {
-      expect(closeWarning(status).headline).toBe('This ends the session.')
+      // The word the menu entry and the button both use. *"It should call only
+      // delete. It should give the warning also, warning should also use the
+      // word delete."* — three surfaces, one verb.
+      expect(closeWarning(status).headline).toBe('Deleting this session ends it.')
     }
   })
 })

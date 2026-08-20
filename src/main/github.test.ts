@@ -990,7 +990,17 @@ describe('resolveRepo', () => {
     try {
       const result = (await resolveRepo(dir)) as GitHubFailure
       expect(result.kind).toBe('not-a-repo')
-      expect(result.action).toBe('git init')
+      /*
+       * No `action`, and that is the change rather than a regression.
+       *
+       * It used to be `git init`, which the panel renders as "Run `git init` in
+       * a terminal, then refresh." — advice to leave the app, printed under a
+       * heading already saying "Not a git repository". Source control has a
+       * button that does it since 2026-08-20, so the message names that page
+       * and there is no command to quote.
+       */
+      expect(result.action).toBeNull()
+      expect(result.message).toContain('Source control')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

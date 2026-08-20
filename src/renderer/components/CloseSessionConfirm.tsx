@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ProviderId, SessionStatus } from '@shared/types'
+import { useSessionBinding } from '../browser/binding-view'
 import { Modal } from './Modal'
 import { PROVIDER_OPTIONS } from './ProviderPicker'
 import './CloseSessionConfirm.css'
@@ -275,10 +276,31 @@ export function closeWarning(
     }
   }
   return {
-    headline: 'This ends the session.',
+    // The word the button uses, in the sentence that says what it costs.
+    headline: 'Deleting this session ends it.',
     detail:
       'The agent stops and the terminal goes, with its scrollback and anything half-typed in it. It cannot be reopened where it left off.',
   }
+}
+
+/**
+ * `B1 and B2 stay open, detached.` — or nothing at all.
+ *
+ * Its own component so the hook is only called when there is a session id to
+ * call it with, and so the dialog's body stays a list of lines rather than a
+ * list of lines with a conditional hook in the middle of it.
+ */
+function AttachedWindowsLine({ sessionId, machineId }: { sessionId?: string; machineId: string }) {
+  const binding = useSessionBinding(sessionId ?? '', machineId)
+  if (!sessionId || !binding || binding.windows.length === 0) return null
+  const slots = binding.windows.map((window) => `B${window.n}`)
+  const named =
+    slots.length === 1 ? slots[0] : `${slots.slice(0, -1).join(', ')} and ${slots[slots.length - 1]}`
+  return (
+    <p className="close-confirm-detail">
+      {named} {slots.length === 1 ? 'stays' : 'stay'} open, detached.
+    </p>
+  )
 }
 
 /** Can this agent be picked up again afterwards? Mirrors the resume catalogue. */
@@ -310,6 +332,23 @@ interface Props {
   subject?: CloseSubject
   /** Used only to say honestly whether the conversation can be resumed. */
   provider?: ProviderId
+  /**
+   * The session being deleted, so the dialog can name the windows it lets go of.
+   *
+   * Asad pressed ✕ on a session that had browser windows attached and nothing
+   * happened that he could see: *"it shows no message until we detach the
+   * browser… but otherwise we will not even know that it is the reason."* An
+   * attached window is not a reason to refuse — it never was, and nothing in
+   * this app refuses on it — but a person who thinks it might be needs the
+   * answer where the press happens rather than afterwards.
+   *
+   * So the dialog says what becomes of them, in one line, and then the delete
+   * goes through. Absent for a project, a machine or a server, where the sentence
+   * would be about a set rather than about a session.
+   */
+  sessionId?: string
+  /** Empty for a session on this computer. */
+  sessionMachineId?: string
   onCancel(): void
   onConfirm(): void | Promise<void>
   /** Fired when "don't ask again" was ticked, so a cached flag can follow it. */
@@ -323,6 +362,8 @@ export function CloseSessionConfirm({
   count = 1,
   subject = 'project',
   provider,
+  sessionId,
+  sessionMachineId = '',
   onCancel,
   onConfirm,
   onConfirmSettingChange,
@@ -402,7 +443,24 @@ export function CloseSessionConfirm({
   return (
     <Modal
       open={open}
-      title={group ? groupTitle : 'Close this session?'}
+      /*
+       * One verb, said the same way in three places.
+       *
+       * The rail's ⋯ menu says `Delete`, this asks `Delete this session?` and
+       * the button below says `Delete`. Before this pass the menu entry read
+       * `Close Session 1 — ends the session` and the dialog said `Close this
+       * session?`, which Asad read off the screen as the same thing written
+       * twice: *"Close session one and end session, both are the same thing,
+       * two times. So only give the delete button here. It should call only
+       * delete. It should give the warning also, warning should also use the
+       * word delete."*
+       *
+       * The group titles keep the word `Close`, and deliberately: closing a
+       * project or a machine takes its sessions with it but leaves the project
+       * and the machine exactly where they were, so `Delete this machine?` would
+       * be a sentence about something that does not happen.
+       */
+      title={group ? groupTitle : 'Delete this session?'}
       description={title}
       onClose={onCancel}
       footer={
@@ -417,12 +475,12 @@ export function CloseSessionConfirm({
             onClick={() => void confirm()}
           >
             {busy
-              ? 'Closing…'
+              ? 'Deleting…'
               : group
                 ? subject === 'server'
                   ? 'Close terminals'
                   : `Close ${noun}`
-                : 'Close session'}
+                : 'Delete'}
           </button>
         </>
       }
@@ -430,6 +488,17 @@ export function CloseSessionConfirm({
       <div className="close-confirm">
         <p className="close-confirm-headline">{warning.headline}</p>
         <p className="close-confirm-detail">{warning.detail}</p>
+
+        {/*
+          The windows this lets go of, and what happens to them.
+
+          One line, not a paragraph — *"don't put any single statement in
+          anywhere… smart people knows how it works"* — and it is here only when
+          there is something to say. `B1, B2` is the vocabulary he already uses
+          out loud and the one the agent was given, so the sentence needs no
+          explanation of what a `B` is.
+        */}
+        <AttachedWindowsLine sessionId={sessionId} machineId={sessionMachineId} />
 
         {canResumeProvider(provider) && (
           <p className="close-confirm-detail">

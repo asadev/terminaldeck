@@ -17,14 +17,20 @@
  * request that started it usually said null, meaning "whatever this project's
  * default is", and re-running that resolution now could land somewhere else.
  *
- * For a session running an agent other than the one a reading came from, the
- * account is the machine's own install of that agent, and that is not a
- * fallback — it is what is actually true. A plain shell spawns with no
- * `CLAUDE_CONFIG_DIR` (see `sessionEnv`, which returns nothing for the system
- * profile and nothing for a provider that cannot be redirected), so a `/usage`
- * panel printed inside one is describing the default install's subscription. It
- * would be wrong to attribute it to the session's own profile and equally wrong
- * to leave it unattributed.
+ * A session with no such profile — a plain shell with an agent typed into it,
+ * or an agent this app cannot redirect — used to be attributed to the machine's
+ * own install, and that paragraph argued it was a statement of fact rather than
+ * a fallback: a shell spawns with no `CLAUDE_CONFIG_DIR` (see `sessionEnv`), so
+ * a `/usage` panel printed inside one must be describing the default install.
+ *
+ * It is a fact about the *spawn* and a guess about the *session*. The person at
+ * the keyboard can export the variable before starting the agent, and then the
+ * app was drawing one login's plan figures under another login's name — which
+ * Asad caught twice, the second time pointing at a local session reading an
+ * address that belongs to a terminal he was not looking at. So that rung is gone
+ * and `session-account.ts` replaces it: the account of a session this app did
+ * not start is *read* out of the agent process's own environment, and where it
+ * cannot be read the reading is left unattributed and the bar says why.
  *
  * ## Which readers run for which session
  *
@@ -42,12 +48,18 @@ import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron'
 import type { ProviderId, SessionMeta } from '../shared/types'
 import { forgetfulAccountLimits, type AccountLimitMemory } from './account-limits'
 import { CodexUsageWatcher, readCodexUsage } from './codex-usage'
+import { blankContextReading, readContextWindow, type ContextWindowReading } from './context-window'
 import { planBilling, planUsageReadings, watchPlanSnapshots, type PlanLimitSnapshot } from './plan-limit'
 import { findProfile, getState, listProfilesForProvider, systemProfileFor } from './profiles'
-import { probeUsage, readCachedUsage, type UsageProbeOptions } from './usage-probe'
+import { establishedAccount, sessionAccount } from './session-account'
+import {
+  CLI_CACHE_WRITE_THROTTLE_MS,
+  probeUsage,
+  readCachedUsage,
+  type UsageProbeOptions,
+} from './usage-probe'
 import { onWebContentsDestroyed } from './web-contents-teardown'
 import {
-  isDrawable,
   USAGE_CHANNEL,
   usageReport,
   type UsageAccountRef,
@@ -63,11 +75,29 @@ import {
  * The account a reading from `provider` belongs to, given the session it was
  * read in.
  *
- * The session's own profile when the session runs that agent, the machine's own
- * install otherwise — see the module header for why the second is a statement
- * of fact rather than a guess. The provider check on the found profile is not
- * redundant: `profiles.json` is a file on disk, and a hand-edited one can point
- * a Claude session at a Codex account.
+ * Three answers, and the third one is the whole of the 2026-08-19 change:
+ *
+ *  1. **The session's own profile**, when the session runs that agent and this
+ *     app started it. The provider check on the found profile is not redundant:
+ *     `profiles.json` is a file on disk, and a hand-edited one can point a
+ *     Claude session at a Codex account.
+ *  2. **The machine's own install**, when there is no session at all. That is
+ *     the folder case and the machine-wide case, where the question really is
+ *     "which login would this app use", and the answer really is the default.
+ *  3. **Nothing**, for a session whose account this app has not established —
+ *     which `session-account.ts` establishes by reading the agent process's own
+ *     environment, and answers `null` for until it has.
+ *
+ * The third used to be the second, and the module header above defended it: a
+ * plain shell spawns with no `CLAUDE_CONFIG_DIR`, so an agent typed into one
+ * must be on the default install. That is true of the spawn and false of the
+ * session — the person at the keyboard can export the variable — and the cost of
+ * it being false is a plan figure drawn under the wrong person's name. A ref
+ * with no `configDir` is already handled everywhere downstream as "unattributed,
+ * read nothing, say why": `profileFor` in `usage-probe.ts` returns null for it,
+ * `combine` pools nothing under it, and `refreshUsage` declines with
+ * {@link UNKNOWN_SESSION} rather than starting a `claude` under a login that has
+ * nothing to do with the session on screen.
  */
 export function accountFor(provider: ProviderId, session: SessionMeta | null): UsageAccountRef {
   const state = getState()
@@ -77,8 +107,26 @@ export function accountFor(provider: ProviderId, session: SessionMeta | null): U
       return { provider, id: profile.id, name: profile.name, configDir: profile.configDir }
     }
   }
-  const system = systemProfileFor(provider, state)
-  return { provider, id: system.id, name: system.name, configDir: system.configDir }
+  if (session === null) {
+    const system = systemProfileFor(provider, state)
+    return { provider, id: system.id, name: system.name, configDir: system.configDir }
+  }
+  /*
+   * Read, not guessed. `establishedAccount` answers from what the agent's own
+   * environment said, or `null` while nothing has said anything — and kicks off
+   * the one bounded `ps` that will answer it, so the next push carries a name
+   * where this one carried a refusal.
+   */
+  const established = establishedAccount(session.id)
+  if (established !== null && established.provider === provider) {
+    return {
+      provider,
+      id: established.profileId,
+      name: established.profileName,
+      configDir: established.configDir,
+    }
+  }
+  return { provider, id: null, name: null, configDir: null }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -98,6 +146,17 @@ const CODEX_SILENT =
   'Codex has not recorded a rate limit under this account yet — it writes one into its rollout when a turn completes.'
 const UNKNOWN_SESSION =
   'That session is not running here, so there is no screen to read and no account to attribute a reading to.'
+/**
+ * The same "not running here" for the context window, which is a different miss.
+ *
+ * {@link UNKNOWN_SESSION} is about an account: there is no login to hang a plan
+ * figure on. The context window is not read off an account at all — it is read
+ * out of the transcript the agent writes in its own working directory — so what
+ * is missing here is the folder, not the login, and saying "no account" about it
+ * would send a reader looking in the wrong place.
+ */
+const UNKNOWN_SESSION_CONTEXT =
+  'That session is not running here, so this app does not know its folder and cannot find the transcript the figure is read from.'
 
 /* -------------------------------------------------------------------------- */
 /* Assembly                                                                    */
@@ -215,6 +274,55 @@ export function resetSharedUsage(): void {
  */
 function mayShareClaude(session: SessionMeta | null): boolean {
   return session === null || session.provider === 'claude' || session.provider === 'shell'
+}
+
+/**
+ * Which agent's transcript store to read a context window out of — the one that
+ * is *running*, not the one this app launched.
+ *
+ * ## The bug this exists to end, measured 2026-08-20
+ *
+ * The context figure vanished off the bar and this line is why. `usage:context`
+ * handed `readContextWindow` the session record's own `provider`, and for a
+ * shell that somebody has since started Claude in that word is `shell` — so the
+ * read short-circuited on *"This tab is a plain shell, so there is no model and
+ * no context window to measure"* and the bar drew nothing at all. Simulated
+ * against his own disk with a real `~/ClaudeAsad` session: as `claude` it reads
+ * 361,058 of 1,000,000; as `shell`, byte-identical folder, it reads
+ * `not-reported` and `contextFigure` returns null.
+ *
+ * And a shell is what he has. *"Starting a session gives you a plain shell"* —
+ * the header of `agent-presence.ts` — so every session where the agent was
+ * started by pressing Run Claude or by typing `claude` at the prompt carries
+ * `provider: 'shell'` forever, including the one he filmed. The figure was only
+ * ever going to appear over sessions this app spawned the CLI into directly.
+ *
+ * ## Why the shell is answered rather than refused
+ *
+ * Because {@link mayShareClaude} decided this exact question one file-half ago
+ * and decided it the other way: a shell prompt with `claude` typed at it *is* a
+ * Claude session for reading purposes, and the plan half of this bar has been
+ * treating it as one all along. One record, two halves, two answers is the
+ * disagreement — not the shell.
+ *
+ * The renderer closes the same gap from its own side and is why this cannot
+ * invent a figure over a bare terminal: `runningProvider` in
+ * `SessionControls.tsx` returns `'shell'` until the session's *screen* says an
+ * agent is there, and the whole controls cluster — this bar included — returns
+ * null on that value. So a shell with nothing in it has no bar to draw a number
+ * on, and by the time there is one, an agent has been seen.
+ *
+ * The residual case is a shell someone typed a *different* agent into, in a
+ * folder Claude has also worked in. That reads Claude's newest conversation
+ * there, `chosen: 'inferred'` with its rival count stated in the panel, which is
+ * the same inference this app already makes for every session it did not start.
+ * Narrowing it would mean asking the screen which CLI is on it, and this handler
+ * has no screen — `readAgentFromScreen` lives behind `agent:controls:read`. The
+ * honest fallback is already in place either way: a folder with no Claude
+ * transcript answers `nothing-yet`, and nothing-yet draws nothing.
+ */
+function contextProvider(session: SessionMeta): ProviderId {
+  return session.provider === 'shell' ? 'claude' : session.provider
 }
 
 function combine(sessionId: string | null, sources: Sources, session: SessionMeta | null): UsageReport {
@@ -355,7 +463,47 @@ function ensureEntry(sessionId: string, options: UsageOptions): Entry {
    * arrives as a push a few milliseconds later. A bar that waits on a disk is a
    * bar that flashes empty first.
    */
+  /*
+   * Establish whose account this is *before* reading a figure off its disk.
+   *
+   * The order is the point. `accountFor` answers "not established" until the
+   * `ps` in `session-account.ts` has landed, and seeding against an
+   * unestablished account reads nothing at all — correctly, but then nothing
+   * would come back to try again. So the probe is awaited and the seed is what
+   * happens next, both still fire-and-forget as far as `usage:watch` is
+   * concerned: it answers immediately with whatever is already pooled and both
+   * of these arrive as a push a few milliseconds later.
+   *
+   * The `push` in between is not incidental. A session whose account has just
+   * been established has a name to put on a bar that a moment ago had a sentence
+   * saying it had none.
+   */
   if (mayShareClaude(session)) void seedFromDisk(accountFor('claude', session))
+
+  /*
+   * And, for a session whose account is not this app's own spawn record,
+   * establish whose it is and then do the same read again.
+   *
+   * Two seeds rather than one reordered seed, and that is deliberate. The line
+   * above is unchanged and still runs first, so a session this app started is
+   * seeded on exactly the schedule it always was — the probe below cannot delay
+   * it. For a session this app did not start, that first seed is a no-op
+   * (`accountFor` answers "not established", `profileFor` reads nothing), and
+   * this is what fills the bar in once the agent's own environment has said
+   * which login it is on.
+   *
+   * The `push` in between is not incidental: a session whose account has just
+   * been established has a name to put on a bar that a moment ago carried a
+   * sentence saying it had none.
+   */
+  void sessionAccount(entry.sessionId)
+    .then((answer) => {
+      if (answer.kind !== 'known') return
+      if (entries.get(entry.sessionId) !== entry) return
+      push(entry)
+      return seedFromDisk(accountFor('claude', session))
+    })
+    .catch(() => undefined)
 
   if (entry.sources.codexHome !== null) {
     const watcher = new CodexUsageWatcher(
@@ -494,25 +642,42 @@ async function seedFromDisk(account: UsageAccountRef): Promise<UsageWindowReadin
 }
 
 /**
- * Whether this login already has a figure worth drawing, from any source.
+ * Whether a probe could possibly come back with a newer number than this login
+ * already has.
  *
- * Asked of the *pool* rather than of whatever a caller happens to be holding,
- * and that is the difference between two right-looking answers. A refresh that
- * arrives a moment after a neighbour's has landed is not a refresh that failed
- * and is not one that has to wait out a floor — the number it went to fetch is
- * already in this process, published by the session next door, and the honest
- * answer is that there was nothing to do.
+ * ## The bug this replaced, which is the whole reason it is spelled this way
  *
- * `isDrawable` and not a timestamp comparison, so that this agrees with what
- * the bar will actually put on screen: a reading whose window has rolled over,
- * or that has drifted past `STALE_WINDOW_FRACTION`, is not a reason to stop
- * looking.
+ * This used to ask `isDrawable` of every reading in the pool and skip the probe
+ * if any one of them passed. Asad opened the panel and every row said
+ * `read 12m ago`, on a design whose entire premise is that opening the panel is
+ * the fetch — and the reason was here. `isDrawable` retires a reading after a
+ * twelfth of *its own* window, so a five-hour reading survives twenty-five
+ * minutes and a **weekly one survives fourteen hours**. Every reading from one
+ * CLI fetch carries the same `fetchedAtMs`, so the weekly row kept the whole
+ * login looking "live" and the probe was never started, for the rest of the day.
+ * Measured on this machine while the fix was written: the block in
+ * `~/.claude.json` was 31.9 minutes old and a panel open returned `cached`.
+ *
+ * ## Why the CLI's own throttle is the right question instead
+ *
+ * Because it is the only thing that decides whether asking can produce a
+ * different answer. Claude Code rewrites `cachedUsageUtilization` at most once
+ * every five minutes — `CLI_CACHE_WRITE_THROTTLE_MS`, read out of the binary —
+ * so a probe inside that window is guaranteed to hand back the figure this
+ * process already has, at a cost of a 725 MB boot. Outside it, a probe can
+ * genuinely move the number, and the person looking at the panel asked for it.
+ *
+ * So this is a timestamp comparison after all, and deliberately not a judgement
+ * about drawability: whether a reading is *worth drawing* is the renderer's
+ * question and it goes on answering it — an aged row still says `read 12m ago`.
+ * This one is only ever "is there anything to go and get".
  */
-function accountHasLiveReading(configDir: string, now = Date.now()): boolean {
+function accountFigureIsAsFreshAsItCanBe(configDir: string, now = Date.now()): boolean {
   const held = claudeByAccount.get(configDir)
   if (!held) return false
   for (const reading of held.values()) {
-    if (isDrawable(reading, now)) return true
+    if (reading.used.state !== 'reported') continue
+    if (now - reading.reportedAt < CLI_CACHE_WRITE_THROTTLE_MS) return true
   }
   return false
 }
@@ -554,8 +719,12 @@ export async function refreshUsage(
   // taken two minutes ago by the session next door — or by his own terminal —
   // is the same number a probe would go and fetch.
   await seedFromDisk(account)
-  if (!force && accountHasLiveReading(configDir)) {
-    return done(true, 'cached', 'Read from what Claude Code had already written down — nothing was started.')
+  if (!force && accountFigureIsAsFreshAsItCanBe(configDir)) {
+    return done(
+      true,
+      'cached',
+      'Claude Code fetched this less than five minutes ago and will not fetch it again yet, so this is its own newest figure — nothing was started.',
+    )
   }
 
   const accounts = options.accounts ?? forgetfulAccountLimits()
@@ -588,9 +757,9 @@ export async function refreshUsage(
      *
      * The reason it did not is already on the bar — the neighbour that ran it
      * got the sentence — so this says the same thing rather than inventing a
-     * second explanation. The live case cannot reach here: `accountHasLiveReading`
-     * above is re-read after the disk seed, and a probe that succeeded published
-     * into the same pool it reads.
+     * second explanation. A probe that *succeeded* cannot reach here: it
+     * published into the pool that `accountFigureIsAsFreshAsItCanBe` above reads,
+     * and its readings are stamped with the moment it ran.
      */
     return done(false, 'unreadable', 'This login was read a moment ago and had nothing to report.')
   }
@@ -705,6 +874,7 @@ function sessionKey(value: unknown): string {
  *  - `usage:watch`   (invoke, sessionId)        -> UsageReport   subscribe; pushes `usage:update`
  *  - `usage:read`    (invoke, sessionId | null) -> UsageReport   one-shot, no subscription
  *  - `usage:refresh` (invoke, sessionId, force?) -> UsageRefreshResult
+ *  - `usage:context` (invoke, sessionId)        -> ContextWindowReading
  *  - `usage:unwatch` (send,   sessionId)        -> void
  *
  * `usage:refresh` is the channel that replaced `plan:refresh` for everything
@@ -742,6 +912,69 @@ export function registerUsageIpc(ipcMain: IpcMain, options: UsageOptions = {}): 
     'usage:refresh',
     (_e: IpcMainInvokeEvent, sessionId: unknown, force?: unknown): Promise<UsageRefreshResult> =>
       refreshUsage(sessionKey(sessionId), options, force === true),
+  )
+
+  /*
+   * How full the model's context window is, which is the one figure on this bar
+   * that costs nothing to be sure of.
+   *
+   * A separate channel rather than a field on `UsageReport`, because the two
+   * readings have opposite economics and Asad's settlement of 2026-08-19 turns
+   * on exactly that asymmetry — plan limits behind a dropdown, context outside
+   * it. A plan figure costs a whole Claude Code boot to refresh (725 MB peak
+   * RSS, ~3s, measured with `PROBE_ARGS` in `usage-probe.ts`); a context figure
+   * is a bounded tail read of a file the agent already wrote, measured on this
+   * machine at 2–17 ms. Folding the cheap one into the expensive one's report
+   * would tie its freshness to the expensive one's schedule, which is the whole
+   * complaint.
+   *
+   * Unwatched and unpushed on purpose: nothing here subscribes, nothing here
+   * remembers, and the renderer asks when the answer could have changed. See
+   * `useContextWindow` in `src/renderer/shell/useUsageBar.ts` for which events
+   * those are.
+   */
+  ipcMain.handle(
+    'usage:context',
+    async (_e: IpcMainInvokeEvent, sessionId: unknown): Promise<ContextWindowReading> => {
+      const id = sessionKey(sessionId)
+      const session = options.describeSession?.(id) ?? null
+      if (!session) {
+        return blankContextReading(null, 'not-reported', UNKNOWN_SESSION_CONTEXT)
+      }
+      /*
+       * Which store to look in, which is a question about this session's
+       * *account* and was not being asked at all.
+       *
+       * `readContextWindow` defaults its scope to `claudeConfigDir()` — the
+       * machine's own install — so a session running under a named account had
+       * its context read out of the wrong directory entirely. It found either
+       * nothing or, worse, the default login's own conversation in the same
+       * folder. `accountFor` is the one place that resolves a session's login,
+       * and it is asked here rather than a second copy of the resolution being
+       * written, for the reason `index.ts` gives where `describeSession` is
+       * declared: two answers to "whose account is this session on" is how one
+       * login's figure lands on another login's bar.
+       *
+       * Only for the agents whose transcripts live in a Claude store. Codex
+       * takes `codexHome` below and reads nothing from `scope`.
+       */
+      const store =
+        session.provider === 'codex' ? null : accountFor('claude', session).configDir
+      return await readContextWindow({
+        provider: contextProvider(session),
+        cwd: session.cwd,
+        // The conversation this app named at spawn, when it named one. Present
+        // for a Claude session this app started fresh; absent for a resumed one,
+        // for another agent, and for every session started somewhere else — all
+        // of which keep the inference and are labelled as inferred.
+        ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
+        ...(store === null ? {} : { scope: { configDir: store } }),
+        // Only a Codex session has one, and `codexHomeFor` is what already
+        // decides that here — asking it again keeps one answer to the question
+        // rather than two that can disagree about which account a tab reads.
+        codexHome: codexHomeFor(session) ?? undefined,
+      })
+    },
   )
 
   ipcMain.on('usage:unwatch', (event, sessionId: unknown) => {

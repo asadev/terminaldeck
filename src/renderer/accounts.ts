@@ -63,6 +63,44 @@ export interface AccountsBridge {
   setDefaultProfile(id: string | null): Promise<unknown>
   setProjectDefaultProfile(projectPath: string, id: string | null): Promise<unknown>
   profileSignIn(id: string, options?: { refresh?: boolean }): Promise<unknown>
+  /**
+   * Where this account's conversations are kept, read from the disk rather than
+   * remembered from whichever button was pressed last.
+   *
+   * `accounts:history-state` answers from an `lstat` of `<configDir>/projects`
+   * every single time it is asked, and that is the only way a screen can say
+   * "shared" and be right about it: the link is an ordinary thing on a
+   * filesystem, so anything that can write there can make it, move it or remove
+   * it — including the person using the app, in a terminal, while this window
+   * is open.
+   */
+  /**
+   * Which login one **session** is actually running under.
+   *
+   * A different question from {@link AccountsBridge.profileSignIn}, and keeping
+   * them apart is the whole of the 2026-08-19 fix. That one asks who is signed
+   * into an account, which is a fact about a directory. This asks which account
+   * the agent in a given session is using, which is a fact about a process — and
+   * for a session this app did not start, only that process can answer it. The
+   * reply is either the account or a sentence saying why there is none; see
+   * `main/session-account.ts`.
+   */
+  sessionAccount(sessionId: string): Promise<unknown>
+  accountHistoryState(id: string): Promise<unknown>
+  /**
+   * Point this account's `projects/` at the shared history, and say what moving
+   * it cost.
+   *
+   * The reply carries counts rather than a bare acknowledgement because merging
+   * two histories holds the one lossy moment in the whole feature: where both
+   * sides already have a folder for the same project, `shareProjects` in
+   * `main/shared-projects.ts` refuses to decide which of the two files wins and
+   * leaves the account's copy aside under a name that says what it is. A screen
+   * that dropped those numbers would be the reason nobody ever found it again.
+   */
+  shareAccountHistory(id: string): Promise<unknown>
+  /** Give this account its own history back. Answers the new state alone. */
+  unshareAccountHistory(id: string): Promise<unknown>
 }
 
 export function accountsBridge(host?: unknown): Partial<AccountsBridge> | null {
@@ -230,6 +268,129 @@ export function parseSignIn(value: unknown): SignInView {
         ? raw.detail
         : 'This account’s sign-in state could not be read.',
     command: typeof raw?.command === 'string' ? raw.command : '',
+  }
+}
+
+/* -------------------------------------------------------- shared history -- */
+
+/**
+ * Mirrors `ProjectsLink` in `src/main/shared-projects.ts`.
+ *
+ *  - `shared`     this account's `projects/` is a link into the shared history.
+ *  - `elsewhere`  it is a link, but somebody pointed it somewhere else.
+ *  - `separate`   a real directory: the account keeps its own conversations.
+ *  - `absent`     nothing there yet; the CLI would make it on first run.
+ *  - `unmanaged`  not an account this app may relink, so no control is offered.
+ */
+export type HistoryLink = 'shared' | 'elsewhere' | 'separate' | 'absent' | 'unmanaged'
+
+/**
+ * Where one account's conversations live, and the three sentences that go with
+ * it.
+ *
+ * The sentences are carried rather than composed here, and that is the point of
+ * the shape: they are worked out in `main/shared-projects.ts` from what is
+ * actually on the disk — how many folders of its own this account has, where
+ * the shared root is, what a delete would and would not take with it — and a
+ * copy of that reasoning in the renderer would be a second opinion about
+ * somebody's conversation history written by the half of the app that cannot
+ * see the files.
+ *
+ * They are nullable for the same reason every other field here is narrowed: a
+ * reply that did not carry one is a reply this window has nothing true to print
+ * for, and a control whose confirmation is blank must not be offered at all.
+ */
+export interface AccountHistoryView {
+  link: HistoryLink
+  /** Where the link points, when it is one. */
+  target: string | null
+  /** The shared root, so a row can name it without recomputing it. */
+  root: string
+  /** Project folders this account has of its own. Only counted for `separate`. */
+  ownProjects: number
+  /** What turning sharing on will do, in the main process's own words. */
+  share: string | null
+  /** What turning it off will do. */
+  unshare: string | null
+  /** Exactly what deleting this account's files would take with them. */
+  remove: string | null
+}
+
+const HISTORY_LINKS: ReadonlySet<string> = new Set([
+  'shared',
+  'elsewhere',
+  'separate',
+  'absent',
+  'unmanaged',
+])
+
+/** A sentence the main process wrote, or null where it wrote none. */
+function sentence(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+/**
+ * A shared-history answer, narrowed.
+ *
+ * Null for anything that is not an answer at all, because a row with no answer
+ * draws no history line and no button — which is the honest thing to draw
+ * before the read lands, and the only safe thing to draw in a build whose main
+ * process does not have this feature.
+ *
+ * An unrecognised `link` becomes `unmanaged`, never `shared`, and the asymmetry
+ * is the whole reason this function is written out rather than cast. `shared`
+ * is a claim about somebody's conversation history — that it survives switching
+ * account, that deleting this account loses nothing — and making that claim
+ * from a value nothing read back is exactly the dishonesty the rest of this
+ * file spends its comments refusing. `unmanaged` claims nothing and offers
+ * nothing, which is what "I could not tell" should look like on screen.
+ */
+export function parseAccountHistory(value: unknown): AccountHistoryView | null {
+  const raw = asRecord(value)
+  const state = asRecord(raw?.state)
+  if (!state) return null
+  const link = typeof state.link === 'string' && HISTORY_LINKS.has(state.link) ? state.link : 'unmanaged'
+  return {
+    link: link as HistoryLink,
+    target: typeof state.target === 'string' && state.target !== '' ? state.target : null,
+    root: typeof state.root === 'string' ? state.root : '',
+    // Guarded against a negative and against a fraction, because the number is
+    // printed into a sentence about how much history is at stake.
+    ownProjects:
+      typeof state.ownProjects === 'number' && Number.isFinite(state.ownProjects)
+        ? Math.max(0, Math.trunc(state.ownProjects))
+        : 0,
+    share: sentence(raw?.share),
+    unshare: sentence(raw?.unshare),
+    remove: sentence(raw?.remove),
+  }
+}
+
+/**
+ * What sharing actually moved, the one time it is worth saying.
+ *
+ * `kept` is the number that matters: those are folders the shared history
+ * already had, which this app refuses to merge and leaves aside at `keptAt`.
+ * Nothing is deleted, but a conversation that is no longer where its account
+ * looks for it is lost in every sense a person means the word, unless the
+ * screen says where it went.
+ */
+export interface HistoryMove {
+  moved: number
+  kept: number
+  keptAt: string | null
+}
+
+function count(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0
+}
+
+export function parseHistoryMove(value: unknown): HistoryMove {
+  const raw = asRecord(value)
+  return {
+    moved: count(raw?.moved),
+    kept: count(raw?.kept),
+    keptAt: typeof raw?.keptAt === 'string' && raw.keptAt !== '' ? raw.keptAt : null,
   }
 }
 
@@ -1112,4 +1273,264 @@ export function useAccountIdentity(accountId: string | null): SignInView | undef
   }, [accountId, bridge])
 
   return accountId === null ? undefined : known[accountId]
+}
+
+/* ------------------------------------------------- a session's own account -- */
+
+/**
+ * Which login a session's agent is actually running under, as the main process
+ * established it.
+ *
+ * `withheld` rather than `unknown`, matching `shell/usage-reach.ts` and
+ * `main/session-account.ts`: one word for "there is an answer here and you are
+ * not being shown it, and here is why", because the last time two screens each
+ * invented their own wording for a refusal they contradicted each other forty
+ * pixels apart.
+ */
+export type SessionAccountView =
+  | {
+      kind: 'known'
+      provider: ProviderId
+      /** The directory the agent is reading. Always present when known. */
+      configDir: string
+      /** The account record, when this app has one for that directory. */
+      profileId: string | null
+      profileName: string | null
+      /** The address signed into that directory, read from the file the CLI wrote. */
+      email: string | null
+      /** `spawn` — this app started it. `process` — read from the agent's environment. */
+      source: 'spawn' | 'process'
+    }
+  | { kind: 'withheld'; reason: string }
+
+/**
+ * Narrow the reply, refusing anything that is not one of the two shapes.
+ *
+ * A malformed reply becomes a withholding and never a name — the same rule
+ * `parseControls` follows on the wire, and for the same reason: a plausible
+ * account name is the one failure mode this whole feature exists to prevent.
+ */
+export function parseSessionAccount(value: unknown): SessionAccountView {
+  const unreadable: SessionAccountView = {
+    kind: 'withheld',
+    reason: 'This session’s account could not be read, so none is named.',
+  }
+  if (typeof value !== 'object' || value === null) return unreadable
+  const record = value as Record<string, unknown>
+  if (record.kind === 'withheld') {
+    return typeof record.reason === 'string' && record.reason.trim() !== ''
+      ? { kind: 'withheld', reason: record.reason }
+      : unreadable
+  }
+  if (record.kind !== 'known') return unreadable
+  const configDir = typeof record.configDir === 'string' ? record.configDir : null
+  const provider = typeof record.provider === 'string' ? (record.provider as ProviderId) : null
+  if (configDir === null || configDir.trim() === '' || provider === null) return unreadable
+  return {
+    kind: 'known',
+    provider,
+    configDir,
+    profileId: typeof record.profileId === 'string' ? record.profileId : null,
+    profileName: typeof record.profileName === 'string' ? record.profileName : null,
+    email: typeof record.email === 'string' && record.email.trim() !== '' ? record.email : null,
+    source: record.source === 'process' ? 'process' : 'spawn',
+  }
+}
+
+/**
+ * Ask, and re-ask whenever the agent in the session changes.
+ *
+ * `agentRunning` is a dependency rather than a guard: an agent started in a
+ * shell a minute after the tab opened has an account, and one that has just
+ * exited no longer has one to name. Both are presence changes, and both have to
+ * reach this or the chip keeps printing an answer about a process that is gone.
+ *
+ * `undefined` while nothing has answered, which every caller has to keep apart
+ * from a withholding: the first means "not yet", the second means "not knowable",
+ * and only the second has a sentence to show.
+ */
+export function useSessionAccount(
+  sessionId: string | null,
+  agentRunning: boolean | null,
+): SessionAccountView | undefined {
+  const bridge = useMemo(() => accountsBridge(), [])
+  const [answer, setAnswer] = useState<SessionAccountView | undefined>(undefined)
+
+  useEffect(() => {
+    if (sessionId === null) {
+      setAnswer(undefined)
+      return
+    }
+    const ask = bridge?.sessionAccount
+    if (!ask) {
+      // A build whose preload predates the channel. Said plainly rather than
+      // left on "not yet" forever, because "not yet" is what the chip draws
+      // nothing for and a chip that is permanently blank is a chip nobody can
+      // report.
+      setAnswer({
+        kind: 'withheld',
+        reason: 'This build cannot read which account a session is running as.',
+      })
+      return
+    }
+    // The guard is on the *answer*, not on the request: a reply that arrives
+    // after the tab changed describes the session it was asked about and would
+    // be attributed to whichever one is on screen now.
+    let live = true
+    void ask
+      .call(bridge, sessionId)
+      .then((raw) => {
+        if (live) setAnswer(parseSessionAccount(raw))
+      })
+      .catch((cause: unknown) => {
+        if (live) {
+          setAnswer({
+            kind: 'withheld',
+            reason: errorMessage(cause, 'This session’s account could not be read.'),
+          })
+        }
+      })
+    return () => {
+      live = false
+    }
+  }, [bridge, sessionId, agentRunning])
+
+  return answer
+}
+
+
+/* -------------------------------------------------------- shared history -- */
+
+export interface AccountHistories {
+  /**
+   * The answer for each account that has been read. Absent means "not yet",
+   * which every reader must draw as nothing rather than as a guess.
+   */
+  known: Readonly<Record<string, AccountHistoryView>>
+  /** What the last share on an account moved, so its row can keep saying so. */
+  moves: Readonly<Record<string, HistoryMove>>
+  /** Re-read one account, after something changed what is on the disk. */
+  refresh(id: string): void
+  /**
+   * Turn sharing on or off for one account, then re-read it.
+   *
+   * Resolves to the sentence to show when it failed, and to null when it did
+   * not — the shape {@link renameAccount} already answers in, for the same
+   * reason: every caller is a button handler, and an unhandled rejection in one
+   * of those loses the message with the failure in it.
+   */
+  set(id: string, shared: boolean): Promise<string | null>
+}
+
+/**
+ * Where each visible account's conversations are kept, asked once per account.
+ *
+ * Separate from {@link useAccounts} rather than folded into it, because the two
+ * answer questions of quite different weight. The account list is what the
+ * screen is; this is one extra line on a row, and a window whose main process
+ * predates these channels must still draw the list. So a read that fails, or
+ * that has nothing to ask, leaves the account simply absent from `known`, and
+ * every reader of this hook draws absent as nothing at all.
+ *
+ * The fan-out is {@link useAccounts}'s `check` in miniature: one call per id,
+ * each answer filed under the id it was asked about, and nothing asked twice.
+ * It is far cheaper than a sign-in check — an `lstat` and a `readdir` against
+ * one directory, rather than a spawned CLI — which is why it may run as soon as
+ * the list arrives instead of waiting for something to be opened.
+ *
+ * `refresh` exists because pressing either button changes the answer, and the
+ * reply to `accounts:history-share` deliberately does not carry the three
+ * sentences: those are computed from a disk that has just moved underneath
+ * them, so the row re-reads rather than patching what it already had.
+ */
+export function useAccountHistory(accountIds: readonly string[]): AccountHistories {
+  const bridge = useMemo(() => accountsBridge(), [])
+  const [known, setKnown] = useState<Record<string, AccountHistoryView>>({})
+  const [moves, setMoves] = useState<Record<string, HistoryMove>>({})
+
+  const read = useCallback(
+    (id: string) => {
+      const ask = bridge?.accountHistoryState
+      if (typeof ask !== 'function') return
+      void ask.call(bridge, id).then(
+        (raw) => {
+          const view = parseAccountHistory(raw)
+          // Left absent rather than filed as a state, which is the whole rule
+          // of this hook: an unreadable answer is not `unmanaged`, it is no
+          // answer, and the difference is that no answer can still resolve the
+          // next time `refresh` is called.
+          if (view !== null) setKnown((current) => ({ ...current, [id]: view }))
+        },
+        () => {
+          // Deliberately nothing on screen. The account list is what this pane
+          // is for, and a failed read of one extra line on one row has no
+          // business putting an error banner over all of it.
+        },
+      )
+    },
+    [bridge],
+  )
+
+  /**
+   * The ids as one string, so the effect below re-runs when the *list* changes
+   * rather than when the array carrying it is rebuilt.
+   *
+   * A `readonly string[]` argument is a new array on most renders even when it
+   * holds exactly the same ids, and as a dependency it would ask the main
+   * process about every account on every render of the pane. The separator is a
+   * newline because a profile id cannot contain one.
+   */
+  const wanted = accountIds.join('\n')
+
+  /*
+   * Both read through refs so that neither can invalidate the effect. `known`
+   * is the one that matters: it is written by the very replies the effect
+   * starts, so as a dependency it would re-run the fan-out once per answer.
+   */
+  const idsRef = useRef<readonly string[]>(accountIds)
+  idsRef.current = accountIds
+  const knownRef = useRef(known)
+  knownRef.current = known
+
+  useEffect(() => {
+    for (const id of idsRef.current) {
+      if (!(id in knownRef.current)) read(id)
+    }
+  }, [wanted, read])
+
+  const set = useCallback(
+    async (id: string, shared: boolean): Promise<string | null> => {
+      const ask = shared ? bridge?.shareAccountHistory : bridge?.unshareAccountHistory
+      if (typeof ask !== 'function') {
+        return 'Sharing conversation history is not wired into this window.'
+      }
+      try {
+        const raw = await ask.call(bridge, id)
+        setMoves((current) => {
+          const next = { ...current }
+          // Only a share moves anything. Stopping sharing moves no files at
+          // all, so a note left over from an earlier share would be describing
+          // a state this account is no longer in.
+          if (shared) next[id] = parseHistoryMove(raw)
+          else delete next[id]
+          return next
+        })
+        // Re-read rather than trusting the reply. The share reply carries the
+        // new state but none of the three sentences, and those are the half a
+        // person is about to be shown.
+        read(id)
+        return null
+      } catch (cause) {
+        return errorMessage(
+          cause,
+          shared
+            ? 'Could not share this account’s conversation history.'
+            : 'Could not stop sharing this account’s conversation history.',
+        )
+      }
+    },
+    [bridge, read],
+  )
+
+  return { known, moves, refresh: read, set }
 }

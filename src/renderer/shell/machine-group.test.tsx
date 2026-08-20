@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Sidebar, type SidebarMachine } from './Sidebar'
@@ -249,21 +251,29 @@ describe('a remote row says where it is, in its hover and nowhere else', () => {
     expect(rail()).toContain('Fix the parser — C:\\Users\\asad\\site on DESKTOP-DDGMNCV')
   })
 
-  it('says on the ✕ that the machine survives it', () => {
+  it('says that the machine survives the close, wherever the close now lives', () => {
     /*
-     * The question a person actually has, hovering a ✕ on a row that belongs to
-     * a computer they are not sitting at, is whether this unpairs it. He
-     * answered it himself — *"it should not disconnect the remote account"* — and
-     * the answer belongs on the control rather than in a dialog they reach by
+     * The question a person actually has, closing a session that belongs to a
+     * computer they are not sitting at, is whether this unpairs it. He answered
+     * it himself — *"it should not disconnect the remote account"* — and the
+     * answer belongs on the control rather than in a dialog they reach by
      * committing to the press.
+     *
+     * The control moved on 2026-08-20: the row's ✕ became an entry in its ⋯
+     * menu, which is a native menu built in the main process, so the sentence is
+     * no longer in the markup to assert against. It is passed to the menu at the
+     * moment it opens, and this reads it where it is now written — the
+     * `closeSentence` in `Sidebar.tsx`. What is being held is the promise, not
+     * the widget: neither half of it may be lost in the move.
      */
-    const html = rail()
-    const close =
-      /<button[^>]*aria-label="Close Fix the parser on DESKTOP-DDGMNCV"[^>]*>/.exec(html)?.[0] ?? ''
-    expect(close).toContain('ends the session on DESKTOP-DDGMNCV')
-    expect(close).toContain('That machine stays connected.')
+    const source = readFileSync(join(__dirname, 'Sidebar.tsx'), 'utf8')
+    expect(source).toContain('ends the session on ${tab.machine.name}')
+    expect(source).toContain('That machine stays connected.')
     // And a local row keeps the sentence it already had.
-    expect(html).toContain('Close Session 1 — ends the session')
+    expect(source).toContain('ends the session`')
+    // The row still says which machine it belongs to, in the one place it ever
+    // did — its own tooltip.
+    expect(rail()).toContain('on DESKTOP-DDGMNCV')
   })
 
   it('offers no rename on a remote row, where a local one has it', () => {

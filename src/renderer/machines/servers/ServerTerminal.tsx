@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { terminalTheme } from '../../components/TerminalView'
+import { terminalTheme, useTerminalFind } from '../../components/TerminalView'
 import { subscribeTheme } from '../../theme'
+import { attachRenderer } from '../../terminal-renderer'
 import { asShellId, asShellOutput, type ServersBridge, type ShellOutput } from './types'
 
 /**
@@ -43,10 +44,15 @@ import { asShellId, asShellOutput, type ServersBridge, type ShellOutput } from '
  * this window is holding a connection to it, so this component's teardown ends
  * it rather than letting go of it.
  *
- * So the xterm *setup* is written out again and the *behaviour* deliberately is
- * not: no find bar, no clear, no copy chords. What is shared is what has to be —
- * the colours come from the same tokens, so this terminal and a local one are
- * the same terminal to look at.
+ * So the xterm *setup* is written out again. The *behaviour* used to be withheld
+ * — this paragraph read *"no find bar, no clear, no copy chords"* — and that has
+ * not survived the paragraph above it. A shell on a server is a tab in this
+ * window now, with a row in the rail and its own ⌘W; a tab that will not answer
+ * ⌘F because the bytes come from somewhere else is the app changing shape per
+ * machine, which is the rule this file already quotes him on three times. Find,
+ * clickable links and the three chords come from `useTerminalFind` in
+ * `TerminalView`, which is the one place that owns them — the same arrangement,
+ * for the same reason, as `terminalTheme()`.
  *
  * ## Columns first, then rows, in both directions
  *
@@ -117,6 +123,20 @@ export class ShellFrames {
 
 interface Props {
   serverId: string
+  /**
+   * The folder the shell should open in, or null for wherever the account's own
+   * sign-in lands — which is what every terminal this app opened before the
+   * folder picker existed did.
+   *
+   * Read once, at the moment the shell is opened, and never again: it is not
+   * where the shell *is*, it is where it was told to start. Nothing on this side
+   * watches a server shell's working directory, so a prop that claimed to track
+   * it would be a claim this window cannot make.
+   *
+   * Optional, so the component can still be rendered on its own — which is what
+   * every test of it does.
+   */
+  startIn?: string | null
   bridge: ServersBridge
   fontSize?: number
   fontFamily?: string
@@ -142,6 +162,22 @@ interface Props {
    * instead of looking like one that is merely quiet.
    */
   onEnded?(): void
+  /**
+   * The far end's own id for the shell that was just opened.
+   *
+   * Called once, when `servers:shell:open` answers. The window needs it because
+   * the *bar* over this pane does — the model, effort and fast-mode cluster
+   * addresses a server terminal by exactly this id, and it is minted on the far
+   * side of an IPC call that only this component makes. Until it existed the id
+   * lived and died inside the effect below, so the one surface that could have
+   * used it had no way to learn it.
+   *
+   * Not the same thing as `shellKey`, and the difference is why this is
+   * necessary rather than convenient: the key is this window's handle, minted
+   * before anything is opened so a tab can exist while the shell is still being
+   * asked for. This is the handle the main process holds the channel under.
+   */
+  onOpened?(shellId: string): void
 }
 
 export const DEFAULT_SERVER_FONT_SIZE = 13
@@ -154,11 +190,13 @@ function token(name: string, fallback: string): string {
 
 export function ServerTerminal({
   serverId,
+  startIn = null,
   bridge,
   fontSize = DEFAULT_SERVER_FONT_SIZE,
   fontFamily = '',
   visible = true,
   onEnded,
+  onOpened,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -171,6 +209,16 @@ export function ServerTerminal({
    */
   const endedRef = useRef(onEnded)
   endedRef.current = onEnded
+  /** The same ref treatment, for the same reason. See {@link endedRef}. */
+  const openedRef = useRef(onOpened)
+  openedRef.current = onOpened
+  /*
+   * Destructured, because the hook returns a fresh object every render and only
+   * `attach` is stable enough for a dependency list. Listing the object itself
+   * would tear this pane down and open a **second shell on somebody's server**
+   * every time the find field took a keystroke.
+   */
+  const { attach: attachFind, bar: findBar } = useTerminalFind()
   /**
    * Why the terminal is not here, when it is not.
    *
@@ -199,6 +247,16 @@ export function ServerTerminal({
     term.open(host)
     termRef.current = term
     fitRef.current = fit
+
+    // Search, links and the three session chords — the same set a local session
+    // gets, from the one hook that owns them.
+    attachFind(term)
+
+    // The GPU, or deliberately not it: `terminal-renderer.ts` carries the
+    // measurements and the four rules. After `open`, because a renderer can only
+    // replace a DOM that exists, and against `host` because that is the element
+    // the window shows and hides when this tab is left and come back to.
+    const detachRenderer = attachRenderer(term, host)
 
     // Fitted before the shell is asked for, so the first screen the far end
     // paints is already the shape of this pane. Opening first and resizing after
@@ -277,7 +335,7 @@ export function ServerTerminal({
     })
     observer.observe(host)
 
-    void bridge.openServerShell(serverId, term.cols, term.rows).then(
+    void bridge.openServerShell(serverId, term.cols, term.rows, startIn ?? undefined).then(
       (raw) => {
         const opened = asShellId(raw)
         if (gone) {
@@ -292,6 +350,11 @@ export function ServerTerminal({
           return
         }
         shellId = opened
+        // Told before the backlog is drained, so the bar above this pane can
+        // take its first reading of the screen as soon as there is a screen —
+        // the main process has already attached its emulator to this id by the
+        // time this promise resolved.
+        openedRef.current?.(opened)
         // Everything that arrived while the id was in flight, in the order it
         // arrived, and nothing that belonged to a different shell.
         const missed = frames.settled(opened)
@@ -315,11 +378,20 @@ export function ServerTerminal({
       // keep it — so a shell nobody closes is a stranded process on somebody
       // else's machine.
       if (shellId !== null) void bridge.closeServerShell(shellId)
+      // Before `term.dispose()`: the pool has to give this seat up while the
+      // terminal still exists, or the next tab to open is refused a context
+      // that nothing is holding.
+      detachRenderer()
       term.dispose()
       termRef.current = null
       fitRef.current = null
     }
-  }, [serverId, bridge])
+    // `startIn` is deliberately absent from the dependencies. It is read once,
+    // when the shell is opened, and a change to it must not tear down a live
+    // terminal and dial a second one — which is what putting it here would do
+    // if the window ever re-rendered this pane with a different folder.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverId, bridge, attachFind])
 
   useEffect(() => {
     const term = termRef.current
@@ -366,10 +438,21 @@ export function ServerTerminal({
     return () => cancelAnimationFrame(frame)
   }, [visible])
 
+  /*
+   * Arranged exactly as a local session is, for the two reasons `RemoteTerminal`
+   * writes out at the same place: xterm is opened on an element with nothing
+   * else in it — the rule `TerminalView` states — and the outer element is given
+   * a position inline, because `.terminal-find` is `position: absolute` and
+   * `.servers-terminal` has nothing to be absolute to. The stylesheets belong to
+   * another lane this pass; `position` changes no part of this box.
+   */
   return (
     <>
       {refused !== null && <p className="servers-card-why">{refused}</p>}
-      <div className="servers-terminal" ref={hostRef} />
+      <div className="servers-terminal" style={{ position: 'relative' }}>
+        <div ref={hostRef} className="terminal-surface" />
+        {findBar}
+      </div>
     </>
   )
 }

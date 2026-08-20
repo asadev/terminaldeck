@@ -1,6 +1,13 @@
-import type { RemoteSession } from './protocol'
+import { emptyUsageReading, type ControlsReadingWire, type RemoteSession, type UsageWant } from './protocol'
 import { reachesFolder } from './device-reach'
-import type { CreateOutcome, CreateRequest, SessionAccess, SessionHandle } from './server'
+import type {
+  CreateOutcome,
+  CreateRequest,
+  RemoteControlsAccess,
+  RemoteUsageAccess,
+  SessionAccess,
+  SessionHandle,
+} from './server'
 
 /**
  * Lets more than one watcher follow the same session.
@@ -99,6 +106,28 @@ export interface PtySource {
    */
   folders?(deviceId: string): string[]
   /**
+   * Read and set a session's model, effort and fast mode. Absent when this host
+   * has no way to read a session's screen.
+   *
+   * Its absence is what stops the desktop advertising the `controls` capability
+   * — see `SessionAccess.controls` — so it is optional here rather than a method
+   * that exists and always refuses. A stub host with a pipe and no shadow
+   * terminal genuinely cannot answer these, and a client told otherwise draws a
+   * model menu whose every press comes back empty.
+   */
+  controls?: RemoteControlsAccess
+  /**
+   * What a session's account has spent, and how full its context window is.
+   * Absent when this host has no usage layer to ask.
+   *
+   * Its absence is what stops the desktop advertising the `usage` capability —
+   * see `SessionAccess.usage` — so it is optional here rather than a method that
+   * exists and always answers nothing. A stub host with a pipe and no account
+   * genuinely cannot answer these, and a client told otherwise draws a bar that
+   * asks on every mount and reports nothing back.
+   */
+  usage?: RemoteUsageAccess
+  /**
    * Is this session none of the network's business?
    *
    * True for the copilot's own session and for every per-device copilot run.
@@ -135,6 +164,42 @@ export interface PtySource {
    * that can turn the first into the second.
    */
   reach?(deviceId: string): { unrestricted: boolean; folders: string[] }
+}
+
+/**
+ * What a session this fanout will not discuss reports about its controls.
+ *
+ * Every value is the "nothing was read" one, and `live: false` is the field that
+ * carries the answer: it is exactly what a session that has already exited
+ * reports, so a device that asks about the copilot's terminal learns nothing it
+ * could not have learned by asking about an id that never existed.
+ */
+const NOTHING_READ: ControlsReadingWire = {
+  model: { value: null, label: null, source: null },
+  effort: { value: null, label: null, source: null },
+  fast: { value: null, label: null, source: null },
+  permission: { value: null, label: null, source: null },
+  live: false,
+  agent: { running: false, saw: null },
+  gate: { canType: false, reason: null },
+}
+
+/**
+ * What a session this fanout will not discuss reports about its usage.
+ *
+ * The same argument {@link NOTHING_READ} makes one field up: a device asking
+ * about the copilot's terminal learns exactly what it would have learned by
+ * asking about an id that never existed — nothing, in the ordinary words the bar
+ * already has for nothing.
+ *
+ * Composed rather than reduced to a null, because a null would leave the asking
+ * side to invent a sentence about a machine it is not on, and the sentence it
+ * would invent ("nobody answered") is the one that makes somebody ask again.
+ * `emptyUsageReading` is shared with the guest half for exactly that reason:
+ * there is one idea of what an absent reading looks like on this wire.
+ */
+function noSuchSessionUsage(sessionId: string, want: UsageWant): Record<string, unknown> {
+  return emptyUsageReading(want, `No session ${sessionId} is running.`)
 }
 
 interface Listener {
@@ -196,6 +261,37 @@ export class SessionFanout implements SessionAccess {
    */
   readonly visible?: (deviceId: string, sessionId: string) => boolean
 
+  /**
+   * Present exactly when the source can read a screen, assigned for the reason
+   * {@link create} is: `server.ts` reads whether this exists to decide whether
+   * to advertise the `controls` capability, and a prototype property would make
+   * every host claim it.
+   *
+   * It refuses a hidden session outright, whatever the caller learned the id
+   * from, and that is not redundant with the reach check in `server.ts`. The
+   * copilot's own terminal is hidden from *every* device including the owner's
+   * own machines, which reach everything — so without this line the one session
+   * nothing on the network may touch would be the one session any of the
+   * owner's desktops could type `/model` into. The same argument
+   * {@link close} makes, at a door that also writes.
+   */
+  readonly controls?: RemoteControlsAccess
+
+  /**
+   * Present exactly when the source has a usage layer, assigned for the reason
+   * {@link create} is: `server.ts` reads whether this exists to decide whether
+   * to advertise the `usage` capability, and a prototype property would make
+   * every host claim it.
+   *
+   * It refuses a hidden session outright, and here the refusal is guarding
+   * something the other doors are not: a copilot run's usage is *this machine's
+   * own subscription*, and a device that could read it would learn what the
+   * owner has spent on a session the network is never told exists. Refused with
+   * the same "there is no such session" a hidden `attach` gets, and for the same
+   * reason — a distinct answer would confirm that the id names something real.
+   */
+  readonly usage?: RemoteUsageAccess
+
   constructor(private readonly ptys: PtySource) {
     const start = ptys.create
     if (start) this.create = (request) => start(request)
@@ -206,6 +302,46 @@ export class SessionFanout implements SessionAccess {
         return end(id)
       }
     }
+    const controls = ptys.controls
+    if (controls) {
+      this.controls = {
+        /*
+         * A hidden session reads as one that is not there, which is the same
+         * answer `attach` and `close` give it and for the same reason: a
+         * distinct refusal would confirm that the id names something real, and
+         * these ids are recoverable from an alert, a transcript path or an older
+         * list.
+         */
+        read: (id) => (this.isHidden(id) ? Promise.resolve(NOTHING_READ) : controls.read(id)),
+        apply: (id, control, value) =>
+          this.isHidden(id)
+            ? Promise.resolve({
+                ok: false,
+                message: `No session ${id} is running.`,
+                reading: { value: null, label: null, source: null },
+              })
+            : controls.apply(id, control, value),
+      }
+    }
+
+    const usage = ptys.usage
+    if (usage) {
+      this.usage = {
+        /*
+         * A hidden session reads as one that is not there on all three, which is
+         * the answer `attach`, `close` and `controls` give it and for the same
+         * reason. `refresh` matters most of the three: without this line, asking
+         * about the copilot's own terminal would spend a 725 MB agent CLI on
+         * this machine to report the owner's own spending to a device that is
+         * never even told the session exists.
+         */
+        plan: (id) => (this.isHidden(id) ? Promise.resolve(noSuchSessionUsage(id, 'plan')) : usage.plan(id)),
+        refresh: (id, force) =>
+          this.isHidden(id) ? Promise.resolve(noSuchSessionUsage(id, 'refresh')) : usage.refresh(id, force),
+        context: (id) => (this.isHidden(id) ? Promise.resolve(noSuchSessionUsage(id, 'context')) : usage.context(id)),
+      }
+    }
+
     const offer = ptys.folders
     /*
      * The offered folder list has the hidden sessions taken out of it.

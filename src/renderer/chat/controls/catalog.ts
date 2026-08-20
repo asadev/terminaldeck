@@ -187,24 +187,70 @@ export function previousModelOptions(): ControlOption[] {
 export const MODEL_OPTIONS: ControlOption[] = modelOptions()
 
 /**
- * Fast mode, and the two facts about it that decide whether to touch it.
+ * The two states fast mode can be in — a switch's positions, not a menu's rows.
  *
- * Both come off the shipped binary rather than out of a help page. Its own
- * description reads *"Fast mode for Claude Code uses Claude Opus with faster
- * output (it does not downgrade to a smaller model). It can be toggled with
- * /fast and is available on Opus 5/4.8"*, and the model picker prints
- * *"Switching to other models turns off fast mode"* under its rows. So the two
- * things worth saying here are what it costs and what it constrains — the
- * second especially, because a user who turns it on and then picks Sonnet has
- * silently turned it off again and nothing else on screen would say so.
+ * ## Why this stopped being a menu
+ *
+ * Asad, watching the bar: *"then here also now think we don't need, just one to
+ * select is enough."* He is right, and the shape was the giveaway: a control
+ * with exactly two states, one of which is always already in force, is a
+ * toggle. Drawn as a picker it cost two clicks to do a one-click thing, and it
+ * spent one of its two rows telling you what you were already doing. `Off` and
+ * `On` survive as this list because the *values* are still real — `/fast off`
+ * and `/fast on` are what gets typed, and `On`/`Off` are the words the CLI
+ * itself reads back (see `readFast` in `src/main/agent-controls.ts`) — but
+ * nothing renders them as a choice any more. `ControlToggle` reads them and
+ * draws one control.
+ *
+ * ## The hint that was here, and why it is not any more
+ *
+ * The `On` row carried `Draws from your usage credits at a higher rate`. He
+ * disputed it out loud: *"I don't know why it is saying it is extra chargeable
+ * since it is not."*
+ *
+ * He is right that this repository never established it. The comparative — *a
+ * higher rate* — was not measured, not quoted, and not cited anywhere; it was
+ * written from the shape of the CLI's refusal rather than from anything the CLI
+ * said. That is a claim about somebody's bill invented by this app, which is the
+ * one kind of sentence it has no business composing.
+ *
+ * What the repository actually holds about the cost of fast mode is two lines,
+ * both captured off `claude 2.1.234` on this machine, and neither of them is a
+ * rate comparison:
+ *
+ *   `/fast on`  → `⎿  ↯ Fast mode ON · $10/$50 per Mtok`
+ *                 (verbatim in `src/main/cli-screens.capture.json`, key `fastOn`)
+ *   `/fast on`  → `⎿  Fast mode unavailable: Fast mode requires usage credits ·
+ *                 /usage-credits to turn them on`   (on an account without them)
+ *
+ * Neither goes on screen from here, and that is deliberate rather than
+ * squeamish. The price line is one account's price read once, so restating it as
+ * a standing fact would be the same mistake one level down — a number nobody
+ * measured *for this reader*. The refusal is not restated because it is already
+ * shown verbatim at the moment it applies: `readFast` puts it on the reading as
+ * `unavailableReason`, `blockedFor` in `SessionControls.tsx` prints it, and a
+ * sentence pre-empting it would be this app guessing at an answer the CLI is
+ * about to give in its own words.
+ *
+ * So the cost claim is gone rather than softened. If somebody wants a price on
+ * this control, the honest way to get one is to quote the `↯ Fast mode ON ·
+ * $10/$50 per Mtok` line the CLI prints at the moment of the change — which
+ * `applyControl` currently discards in favour of `Fast mode On.` — and not to
+ * write a sentence here.
+ *
+ * ## What is still worth saying, and it says it elsewhere
+ *
+ * The CLI's own description — *"Fast mode for Claude Code uses Claude Opus with
+ * faster output (it does not downgrade to a smaller model). It can be toggled
+ * with /fast and is available on Opus 5/4.8"* — and the line its model picker
+ * prints under its rows, *"Switching to other models turns off fast mode"*. Both
+ * live in {@link describeControl}, which is printed above this control wherever
+ * there is room for a sentence. The second is the one that earns its words: turn
+ * fast mode on, pick Sonnet, and you have silently turned it off again.
  */
 export const FAST_OPTIONS: ControlOption[] = [
   { id: 'off', label: 'Off' },
-  // The hint is the *cost*, and only the cost. What fast mode is belongs to
-  // `describeControl`, which is printed directly above these two rows in the
-  // panel — saying it in both places put the same sentence on screen twice,
-  // three centimetres apart, which was visible the moment it was drawn.
-  { id: 'on', label: 'On', hint: 'Draws from your usage credits at a higher rate' },
+  { id: 'on', label: 'On' },
 ]
 
 export function optionsFor(control: ControlId): ControlOption[] {
@@ -214,71 +260,46 @@ export function optionsFor(control: ControlId): ControlOption[] {
   return PERMISSION_OPTIONS
 }
 
-/**
- * Which controls get a chip on the composer's own row, in reach at one click.
+/*
+ * `PRIMARY_CONTROLS` and `MENU_CONTROLS` used to live here and they are gone.
  *
- * By how often a session reaches for the thing, not by how interesting it is:
+ * They were the composer's two lists — which controls got a chip on the chat
+ * box's own row, and which ones lived in the Options panel behind it — and the
+ * whole argument between them is worth keeping, because it has now been wrong
+ * in both directions and the rule that settles it is not the midpoint.
  *
- *   Model       changes per task — "do this bit on Sonnet".            chip
- *   Permission  changes per phase — plan it, then let it edit.         chip
- *   Effort      set once, if ever, and then left alone.                panel
- *   Fast mode   rarer still, and usually cannot even be read (see      panel
- *               `unreadLabel`), so it spends most of its life
- *               reporting that it has nothing to report.
+ * It began as `FOLDED_CONTROLS`: model and permission on the row, effort and
+ * fast mode behind a button labelled "More", and the usage readout behind it
+ * too. Nothing on screen said the word "effort", so there was no way to look
+ * for it, and the report was *"all the options you have actually removed."* The
+ * answer then was to make the panel the complete inventory of every control,
+ * chip or no chip.
  *
- * These two are the row, and — since the Options panel stopped repeating them,
- * see {@link MENU_CONTROLS} — they are the *only* place either can be changed.
- * `AgentControls` draws this list under exactly the condition under which it
- * draws the panel's sections (`usable`), so neither can be on screen without
- * the other: there is no state in which a control here has no home.
+ * That fixed the finding and created the opposite one, watching the app:
+ * *"options is having all of the things that we already have here and there. So
+ * let's keep everything separate rather than having everything on one page like
+ * on options."* With the panel open, Model and Permission were on screen twice,
+ * three centimetres apart, as a chip and as a section, each showing the same
+ * value and sending the same keystrokes.
+ *
+ * The rule that satisfies both is **one home per control** — a control with a
+ * chip is on the row and only there; a control without one is in the panel and
+ * only there — and it is the rule the app still runs on. What changed is that
+ * there is no longer a composer row for these two lists to describe: *"since we
+ * have it on top we actually don't need them here… remove them from the chat
+ * box side completely."* Every control that survives is drawn by
+ * `shell/SessionControls.tsx`, from `CHROME_CONTROLS`, in the window's own bar.
+ *
+ * So the two lists had been describing a surface that does not exist for some
+ * time, and `catalog.test.ts` was the only thing still reading them. Left in
+ * place they would have become an outright lie the moment permission mode left
+ * the chrome — a list called `PRIMARY_CONTROLS` naming a control that is on no
+ * row anywhere. The invariant they carried has not been dropped with them: it
+ * moved, whole, to `one-home.test.ts`, which reads `CHROME_CONTROLS` out of the
+ * source and fails if a control ends up drawn in neither place. That is the
+ * guard that matters — a control deleted from a list still leaves the app with
+ * every one of its own tests passing.
  */
-export const PRIMARY_CONTROLS: readonly ControlId[] = ['model', 'permission']
-
-/**
- * What the Options panel lists: the controls that have **no other home**.
- *
- * This list has now been wrong in both directions, and both reports are worth
- * keeping because the rule that satisfies them is not the midpoint between
- * them.
- *
- * It began as a second list called `FOLDED_CONTROLS`: model and permission on
- * the row, effort and fast mode behind a button labelled "More", and the usage
- * readout behind it too. Nothing on screen said the word "effort", so there was
- * no way to look for it, and the report was *"all the options you have actually
- * removed."* The answer then was to make the panel the complete inventory of
- * every control, chip or no chip.
- *
- * That fixed the finding and created the opposite one, reported watching the
- * app: *"options is having all of the things that we already have here and
- * there. So let's keep everything separate rather than having everything on one
- * page like on options."* And he is right — with the panel open, Model and
- * Permission were on screen twice, three centimetres apart, as a chip and as a
- * section, each showing the same value and sending the same keystrokes.
- *
- * The rule that satisfies both is neither "everything" nor "the leftovers". It
- * is **one home per control**:
- *
- *   - a control with a chip on the row is on the row, and only there;
- *   - a control without one is in the panel, and only there.
- *
- * The old regression cannot come back through this door, and the reason is
- * worth being precise about rather than trusting. What made "More" unfindable
- * was that nothing on screen named what it held. Nothing on screen still names
- * what is in *this* panel either — except that the button's own hover label is
- * built from this very list (`optionsLabel` in `AgentControls.tsx`), so it
- * reads "Effort and fast mode", which is precisely the naming "More" lacked.
- * And the two controls dropped from the list did not go behind anything: they
- * are chips, with their names printed on them, beside the button. Nothing moved
- * further away; two things stopped being said twice.
- *
- * `catalog.test.ts` pins that this list and `PRIMARY_CONTROLS` partition the
- * four controls — every one in exactly one of them. That is the guard the old
- * "the panel contains everything" assertion was providing, restated as the rule
- * that is actually wanted: a control deleted from both lists still leaves the
- * app with all of its own tests passing, and that is what these two files are
- * here to catch.
- */
-export const MENU_CONTROLS: readonly ControlId[] = ['effort', 'fast']
 
 /*
  * `unsupportedProviderNote` used to live here and it is gone.
@@ -322,8 +343,26 @@ export function describeControl(control: ControlId): string {
   // "Switching to other models turns off fast mode." The second half is the one
   // worth the words — without it, somebody turns fast mode on, picks Sonnet,
   // and has silently turned it off again.
+  //
+  // It used to end `…at a higher draw on your usage credits`, and that clause is
+  // deleted rather than reworded. Nothing in this repository measures a rate,
+  // let alone a *higher* one, and Asad said so watching it: *"I don't know why
+  // it is saying it is extra chargeable since it is not."* The whole account of
+  // what is and is not known about the cost is at {@link FAST_OPTIONS}; the
+  // short version is that the CLI states its own price at the moment of the
+  // change and refuses in its own words when the account cannot pay it, and
+  // both of those are better than a sentence composed here in advance.
+  //
+  // The word `Opus` went with it, and that is a second rule being obeyed rather
+  // than a casualty of the first. This sentence is drawn on a bar that also sits
+  // over Codex and Gemini sessions — drawn back, carrying a refusal, but drawn —
+  // and *"you should not mention in any settings or any pop-up a specific tool
+  // or LLM, because they can use some other also."* `The same model` says the
+  // one thing the CLI's description is actually asserting, which is that fast
+  // mode does not swap you onto a smaller one, and it says it without naming
+  // anybody's model on a screen that may be showing somebody else's agent.
   if (control === 'fast')
-    return 'Opus, answering faster, at a higher draw on your usage credits. Switching to another model turns it off.'
+    return 'The same model, answering faster. Switching to another model turns it off.'
   return 'What the agent may do without stopping to ask you first.'
 }
 
@@ -449,6 +488,52 @@ export function unreadNote(control: ControlId | undefined): string | null {
     return 'Claude prints the permission mode only when it changes, and no default is set in your Claude settings — so this session has not said which one it is in. Pick one and it will.'
   }
   return null
+}
+
+/**
+ * The model name at chip length: the model, and its window when that is what
+ * distinguishes it.
+ *
+ * ## The complaint, and why an ellipsis was the wrong answer to it
+ *
+ * Asad, reading the bar: *"where it is showing model with Opus 5 with 1M, then
+ * dot dot dot — only showing Opus 5 is enough. They can see it inside the
+ * dropdown, they don't need to see this long thing with three dots."*
+ *
+ * `Opus 5 with 1M context` is 22 characters against the chip's 14, so it landed
+ * as `Opus 5 with 1M…`. An ellipsis on a chip whose whole job is to name one
+ * short thing is the label being wrong rather than the bar being narrow: the
+ * name is what needs shortening, and the place with room for the long one is the
+ * menu, which the chip opens and which still prints every row in full.
+ *
+ * ## What must survive the shortening
+ *
+ * The long-context marker, and it is the whole difficulty. The picker offers
+ * `Opus 5` and `Opus 5 with 1M context` as separate rows — genuinely different
+ * windows — so a shortening that returns `Opus 5` for both would leave two
+ * selections that look identical on the bar with nothing to tell them apart.
+ * `1M` is kept for that reason and only that reason: `Opus 5` and `Opus 5 1M`
+ * are nine characters at the longest, both fit the chip without an ellipsis, and
+ * the chip's `title` carries whichever full name it came from.
+ *
+ * The inputs are the four spellings listed on {@link modelKey} — the CLI's
+ * confirmation, its picker row, `labelModelId` off a transcript, and its welcome
+ * panel — plus `Opus in plan mode, else Sonnet`, the one row that names a policy
+ * rather than a model and is the only other row too long for the chip.
+ */
+export function shortModelLabel(label: string): string {
+  const text = label.trim()
+  // The policy row. `Opus Plan` is the picker's own name for it, and the clause
+  // it drops — "else Sonnet" — is the half a reader can already see in the menu.
+  const plan = /^(\S+) in plan mode/i.exec(text)
+  if (plan) return `${plan[1]} Plan`
+  const long = /1m/i.test(text)
+  const name = text
+    .replace(/\((?:default|recommended)\)/gi, '')
+    .replace(/\(1m context\)|with 1m context|·\s*1m/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return long ? `${name} 1M` : name
 }
 
 /**

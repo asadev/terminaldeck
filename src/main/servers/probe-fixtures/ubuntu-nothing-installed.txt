@@ -1,0 +1,30 @@
+schema=1
+os=Ubuntu 24.04.4 LTS
+kernel=Linux 6.8.0-137-generic
+arch=x86_64
+host=terminaldeck-server
+user=tddemo
+root=sudo-password
+init=systemd
+containers=none
+packages=apt-get
+web=
+installer_fetch=
+mem_avail_kb=311204
+home_free_kb=1048576
+cpus=2
+disk_used_kb=5871248
+disk_total_kb=39020108
+memory_total_kb=3911564
+memory_free_kb=311204
+load1=0.13
+uptime_s=234748
+#services ok
+cron.service	active	running	Regular background program processing daemon
+#containers none
+#listeners ok
+0.0.0.0	22		
+#sites none
+#adminunits ok
+#agents ok
+#end ok

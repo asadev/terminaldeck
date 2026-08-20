@@ -314,27 +314,57 @@ describe('components that are built are also wired', () => {
  * Both mounts, not the first: the window's bar carries the host session's
  * cluster and every guest pane carries its own, and a split can hold a live
  * session beside a dead one.
+ *
+ * ## The window's bar stopped passing the expression directly, and why
+ *
+ * On 2026-08-19 that mount became the one mount for three kinds of session — a
+ * local pty, a session on a paired machine, and a terminal on a server — because
+ * *"the same identical options for the remote sessions too"* is a claim about
+ * sameness and three call sites are three things to keep in step. It reads
+ * `barControls.exited` now, and the honest source is one branch deeper.
+ *
+ * So the check follows it there rather than being relaxed. `barControls` is
+ * required to derive the answer from a real fact in every branch: an `exitCode`
+ * for the two kinds of session that have one, and the observed
+ * `servers:shell:closed` status for the one that does not. A literal anywhere in
+ * it fails, which is the same defect the original wording was written against —
+ * `exited={false}` typechecks, and it puts live pressable model and effort chips
+ * on the bar of a session whose process no longer exists.
  */
 describe('the session control cluster is told what is dead', () => {
   const app = read('renderer/App.tsx')
 
   it('mounts two clusters and passes an exit code to each', () => {
     const mounts = app.match(/<SessionControls\b[\s\S]*?\/>/g) ?? []
-    expect(mounts.length, 'a <SessionControls> mount has appeared or gone').toBe(2)
+    expect(mounts.length, 'a control-cluster mount has appeared or gone').toBe(2)
     for (const [index, tag] of mounts.entries()) {
       const passed = propExpression(tag, 'exited')
       expect(passed, `mount ${index + 1} does not pass exited at all`).not.toBeNull()
-      /*
-       * `exitCode` is the only honest source for this in the renderer — it is
-       * the field `chromeSession` reads for the account chip beside this
-       * cluster, so the two components on one bar cannot come to disagree about
-       * whether the session is alive.
-       */
-      expect(
-        passed,
-        `mount ${index + 1} fabricates exited instead of reading the session — live controls over a dead session`,
-      ).toContain('exitCode')
       expect(passed, `mount ${index + 1} passes a literal`).not.toMatch(/^\s*(true|false)\s*$/)
+    }
+  })
+
+  it('derives every branch of the window bar’s answer from something real', () => {
+    /*
+     * `exitCode` is the honest source for the two kinds of session that have a
+     * process — it is the field `chromeSession` reads for the account chip
+     * beside this cluster, so the two components on one bar cannot come to
+     * disagree about whether the session is alive. A shell on a server has no
+     * exit code on any channel, and the fact this window genuinely observes
+     * about one is that `servers:shell:closed` fired.
+     */
+    const table = /const barControls: \{[\s\S]*?\n {12}: null\n/.exec(app)?.[0] ?? ''
+    expect(table, 'barControls has changed shape').not.toBe('')
+    // Deeply indented, which is what tells a branch's answer apart from the
+    // `exited: boolean` on the type annotation above them.
+    const answers = [...table.matchAll(/^ {12,}exited: (.+)$/gm)].map((match) => match[1].replace(/,$/, ''))
+    expect(answers.length, 'a branch of barControls has appeared or gone').toBe(3)
+    for (const answer of answers) {
+      expect(answer, 'a branch of barControls fabricates its answer').not.toMatch(/^(true|false)$/)
+      expect(
+        answer,
+        'a branch of barControls answers from something other than the session’s own state',
+      ).toMatch(/exitCode|status === 'exited'/)
     }
   })
 })
@@ -427,15 +457,28 @@ describe('one route to a new session, and it is the dialog', () => {
     expect(tag).toMatch(/onNewSession=\{\(\) => openNewSessionDialog\(\)\}/)
   })
 
-  it('gives the strip no way to close a session at all', () => {
+  it('hands the strip a close for windows and only a demote for sessions', () => {
     /*
-     * The ✕ on a tab takes the tab off the bar and leaves the session running.
-     * The strongest form that guarantee can take is that the component is not
-     * handed a close: no prop, no path, nothing to wire wrongly later.
+     * *"for the windows it will completely close, and for the sessions it will
+     * just close from the top bar, but it will still stay in the side panel."*
+     * — 2026-08-20.
+     *
+     * The component decides which tabs draw a ✕; what this pins is what each one
+     * can reach. `onCloseWindow` reaches `closeTab`, the one path in this window
+     * that ends anything, and it is handed to the browser ✕ alone. The session ✕
+     * is given `showInstead`, which only moves what is on screen — and the
+     * *absence* of any session-side close prop is the guarantee that no later
+     * edit reconnects a top-bar glyph to a kill. The names are matched as bare
+     * substrings, comments included, which is deliberately stricter than the
+     * rule: the tag may not so much as mention `onEndRemote`, so a half-finished
+     * edit that leaves the name lying about trips this before it ships.
      */
     const tag = openingTag(app, 'WorkspaceTabStrip') ?? ''
-    expect(tag).not.toContain('onClose')
+    expect(tag).toMatch(/onCloseWindow=\{closeTab\}/)
     expect(tag).toMatch(/onShowInstead=\{showInstead\}/)
+    expect(tag).not.toContain('onEndRemote')
+    expect(tag).not.toContain('onCloseTab')
+    expect(tag).not.toContain('onCloseSession')
   })
 
   it('lands ⌘T and ⌘⇧T on the same dialog, and offers one palette row', () => {
@@ -549,12 +592,13 @@ describe('the copilot is a window, not a view', () => {
     expect(propExpression(tag, 'copilot')).toContain('active:')
   })
 
-  it('offers a way to stop it, since the rail gives it no ✕', () => {
-    // A singleton has no row in the rail and so no ✕ that ends it; the ✕ on its
-    // pill takes the pill off the bar like every other pill's does. Losing the
-    // Stop that lived on its page would have left the one session in the window
-    // that cannot be switched off from anywhere you can see it.
-    expect(openingTag(app, 'CopilotStop')).toMatch(/[\s{]copilot[=}]/)
+  it('offers a way to start it over, and not a way to make it vanish', () => {
+    // It was `CopilotStop`, whose only visible effect was this window going
+    // away: the copilot's tab is derived from its pty, so ending the pty ended
+    // the tab the button was drawn on. *"I don't understand what is the purpose
+    // of stop button."* Restarting leaves the window where it is.
+    expect(openingTag(app, 'CopilotRestart')).toMatch(/[\s{]copilot[=}]/)
+    expect(app, 'Stop came back into the copilot toolbar').not.toContain('<CopilotStop')
   })
 })
 

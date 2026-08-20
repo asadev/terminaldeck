@@ -5,6 +5,7 @@ import type { Project } from '../state/store'
 import { useSessionRename } from '../state/session-rename'
 import { folderName, MAX_TITLE_LENGTH } from '../session-title'
 import { tip } from '../keymap'
+import { bindKey, SessionBindChips, WindowBindChip } from '../browser/BindChip'
 import { demote, MAX_PROMOTED, promote, usePromotedOrder } from '../browser/workspace-strip'
 import { accountRail, useKnownSignIns } from '../accounts'
 import { heldAgentName, type HeldSessionView } from '../held-sessions'
@@ -18,6 +19,7 @@ import {
   dragStartedOnControl,
   KIND_ICON,
   MACHINE_ICON,
+  machineTabId,
   sessionLabel,
   startTabDrag,
   tabQualifiers,
@@ -462,35 +464,34 @@ const CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
  * would say the work is already gone. It is not; that is the point of the row.
  */
 const HELD = 'M12 3.6a8.4 8.4 0 1 0 0 16.8 8.4 8.4 0 0 0 0-16.8M8.2 12h7.6'
+/* `TO_STRIP` and `WHY` used to be here — an arrow to the top-right corner for
+   "show this at the top", and a question mark in a ring for "why does this
+   session exist". Both were buttons on the row, and both are now sentences in
+   the ⋯ menu below: *"instead of these two buttons, give … one three-dot
+   button."* A glyph that has to be recognised was always the weaker half of
+   either control, and the arrow in particular cost the row 22px it did not have
+   to spare while the name beside it was being cut to `Update Cl…`. */
 /**
- * Send this window to the top strip: an arrow to the top-right corner.
+ * The one control a row now has: ⋯.
  *
- * There was a pencil next to this until 2026-08-17 and there is not any more —
- * Asad: *"I don't want this edit button here. Just double click should make it
- * editable. That's it."* Losing it moved this control into the slot the pencil
- * was in, which is where he asked for it, and it took the glyph with it:
- * *"it should be some arrow like to the corner to maybe right top corner, not
- * straight to up and without this line above there."*
+ * Three dots because that is what a menu is called on every platform this ships
+ * to, and because Asad asked for it in exactly those words — *"instead of these
+ * two buttons, give … one three-dot button"* — after watching a long session
+ * name run underneath the ✕ it was hiding.
  *
- * So: a diagonal shaft with a corner bracket at its head, and no bar over the
- * top. The strip tab's fold-away control is the exact mirror of this through the
- * diagonal, so the pair reads as out and back rather than as two unrelated
- * marks. Not a pin, not a star: both of those mean "favourite" everywhere else,
- * and this is a placement, not a rating.
+ * Drawn as three dots rather than an ellipsis character so it sits on the same
+ * 24×24 grid as every other glyph in this rail; a text ellipsis would be the one
+ * mark on the row rendered by the font, at the font's weight rather than the
+ * stroke weight beside it.
+ *
+ * Each dot is a closed 0.6-radius circle rather than the `h.01` hairline the
+ * other glyphs here use for a full stop. `Glyph` strokes at 1.5 and fills
+ * nothing, so a hairline dot lands under a pixel once the row draws it at 13px —
+ * fine as the point of a question mark inside a ring, invisible as the whole
+ * content of a button.
  */
-const TO_STRIP = 'M7.5 16.5 16.5 7.5M10.5 7.5H16.5V13.5'
-/**
- * "Why does this exist" — a question mark in a ring, on a copilot-started row.
- *
- * A question mark rather than an info `i`, because the row is answering a
- * question a person actually asks out loud when a tab they did not open appears
- * in their sidebar. It only ever appears on a row that *has* an answer: a
- * copilot session whose spawning turn is not known — one restored from a
- * previous run of the app, where the origin survives on the session metadata and
- * the log row is not loaded — draws no button rather than one that lands
- * nowhere.
- */
-const WHY = 'M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17M9.6 9.4a2.5 2.5 0 0 1 4.85.8c0 1.7-2.45 2.05-2.45 3.55M12 17.1h.01'
+const MORE =
+  'M6 11.4a0.6 0.6 0 1 0 0 1.2 0.6 0.6 0 1 0 0-1.2M12 11.4a0.6 0.6 0 1 0 0 1.2 0.6 0.6 0 1 0 0-1.2M18 11.4a0.6 0.6 0 1 0 0 1.2 0.6 0.6 0 1 0 0-1.2'
 const GEAR =
   'M12 15.1a3.1 3.1 0 1 0 0-6.2 3.1 3.1 0 0 0 0 6.2zM19.3 14.6a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1.1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1h-.2a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1.1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5v-.2a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z'
 
@@ -581,6 +582,22 @@ export function Sidebar({
     storage === undefined ? undefined : storage,
   )
   const stripFull = promotedOrder.length >= MAX_PROMOTED
+
+  /**
+   * The row whose ⋯ menu is open, or null.
+   *
+   * Held because the menu is a **native** one: it is not in this document, so
+   * the moment it appears the pointer has left the row and `.sb-row:hover`
+   * stops being true — the button that opened the menu fades out from under the
+   * menu it opened. Nothing else in this rail has that problem, because nothing
+   * else in it opens a surface the browser does not know about.
+   *
+   * One id rather than a boolean per row: there is one menu, and holding the id
+   * means a stale answer arriving from a row that has since been closed cannot
+   * un-highlight a different row's button — see the `setRowMenu` guards, which
+   * clear only their own id.
+   */
+  const [rowMenu, setRowMenu] = useState<string | null>(null)
 
   /**
    * The thing that follows the cursor during a drag, and the row it left.
@@ -740,7 +757,47 @@ export function Sidebar({
    */
   const listed = tabs.filter((tab) => !tab.isCopilot)
 
-  const browserTabs = listed.filter((tab) => tab.kind === 'browser')
+  /*
+   * There is no `browserTabs` here any more, and its absence is the rule.
+   *
+   * Asad, 2026-08-20, having thought out loud through both halves of it and
+   * then settled it: *"Browser windows will not be on the side bar at all. They
+   * will be always only on the top bar. Side bar is only for the sessions.
+   * Browser can be on the top bar only, and session can be on both side bar and
+   * the top bar."*
+   *
+   * So this rail draws sessions and nothing else. What it buys is the thing he
+   * was actually solving: the two lists stop being two places the same window
+   * can be closed from, which is what made a ✕ mean "hide" in one panel and
+   * "close" in the other three centimetres away. A browser window now has
+   * exactly one home — the strip — and exactly one ✕, which closes it.
+   *
+   * The globe at the top of this rail stays. It *opens* a page rather than
+   * listing one, the window it opens appears on the strip, and taking away the
+   * one control that starts a browser from the panel a person is already in
+   * would be answering a layout complaint by removing a feature.
+   *
+   * `tabs` still arrives holding browser windows, deliberately: the session
+   * rows wear `B1`/`B2` chips naming the pages attached to them, and those are
+   * read out of the binding rather than out of this list — see `sessionNameFor`
+   * immediately below, which resolves a *session* name for the strip's chips.
+   */
+
+  /**
+   * What to call the session a browser window is attached to, or null.
+   *
+   * The binding holds a session id; only this rail knows what that session is
+   * called. Null when the session is not in this window's list — which happens,
+   * because a page stays attached to a session that has since been removed —
+   * and null is drawn as an absent phrase rather than as a raw id, which is not
+   * a name anybody would recognise. `tabs` rather than `listed`, because the
+   * copilot is a session like any other and its pages are attached the same way;
+   * it is only hidden from the rail's *rows*.
+   */
+  const sessionNameFor = (sessionId: string, machineId: string): string | null => {
+    const wanted = machineId === '' ? sessionId : machineTabId(machineId, sessionId)
+    return tabs.find((tab) => tab.id === wanted)?.label ?? null
+  }
 
   /**
    * Yours, and the copilot's, split once.
@@ -1134,12 +1191,37 @@ export function Sidebar({
     ]
       .filter(Boolean)
       .join(' — ')
+    /*
+     * What closing costs, in the words of where the session is.
+     *
+     * Word for word the sentence the row's ✕ carried in its tooltip, moved to
+     * the menu entry that now does the closing. Both halves matter and the
+     * second one is the half somebody hovering a remote row is actually worried
+     * about: *"it will just close all of the sessions from that PC… it should
+     * not disconnect the remote account."*
+     *
+     * It is also the label now rather than a tooltip on a glyph, which is the
+     * quiet win of the menu: there are two ✕s in this window and only one of
+     * them ends a process, and a person can no longer press this one without
+     * having read which it is.
+     */
+    const closeSentence = tab.machine
+      ? `Close ${label} — ends the session on ${tab.machine.name}. That machine stays connected.`
+      : tab.server
+        ? /* Both halves again. This ends the terminal and touches nothing else
+             on the machine. */
+          `Close ${label} — ends this terminal on ${tab.server.name}. The server itself is left alone.`
+        : tab.kind === 'session'
+          ? `Close ${label} — ends the session`
+          : `Close ${label}`
     return (
       <li key={tab.id}>
         <div
           className={`sb-row sb-open${!activePanel && tab.id === activeTabId ? ' active' : ''}${
             unread.includes(tab.id) ? ' unread' : ''
           }`}
+          /* Keeps the ⋯ lit while its own menu is open — see `rowMenu`. */
+          data-menu={rowMenu === tab.id || undefined}
           draggable
           data-dragging={tab.id === draggingId || undefined}
           /*
@@ -1222,142 +1304,103 @@ export function Sidebar({
             {showAccounts && !qualifier && rail?.short && (
               <span className="sb-account">{rail.short}</span>
             )}
+            {/*
+              Which browser windows this session has, or which session this page
+              belongs to.
+
+              The same relation the strip's pill draws, from whichever end this
+              row is, and read through the same hook rather than passed down —
+              two copies of one relation is how a rail row and a pill come to
+              disagree about the same window.
+
+              It goes *after* the account caption and before nothing, because it
+              is the shortest thing on the line and the one that never has to be
+              cut: `B1` is two characters and a session's name is the thing that
+              must never be the first to give. `StatusDot` above keeps its own
+              slot — a binding is not a run state and does not get a dot.
+            */}
+            {tab.kind === 'session' ? (
+              <SessionBindChips {...bindKey(tab)} sessionName={label} />
+            ) : (
+              <WindowBindChip browserTabId={tab.id} nameFor={sessionNameFor} />
+            )}
           </button>
           {/* Mail's idiom: a dot for a row with something new in it. It hides
               under the close button on hover, because at that point the pointer
               is on its way somewhere else. */}
           {unread.includes(tab.id) && <span className="sb-unread" aria-label="Unread output" />}
           {/*
-            The link back to the turn that started this session.
+            One button, and everything the row can do behind it.
 
-            Half of the promise that "why does this exist" is one click in
-            either direction — the copilot's own page holds the other half,
-            listing what it started. It travels as a `focus` through the same
-            `showPanel(id, focus)` a dashboard tile uses to land on the rows it
-            counted, so this is an existing road rather than a new one.
+            There used to be three here — the copilot link, the promote arrow and
+            the ✕ — on a rail 264px wide. Asad, watching a long name run
+            underneath them: *"even the cross button is getting hidden because of
+            this button… it should just finish before these buttons, before this
+            close button and fold back into the sidebar button."* Two of those
+            three were the buttons he then asked to replace outright: *"instead
+            of these two buttons, give … one three-dot button. So from three-dot
+            button we can also have a drop-down to connect the session."*
 
-            Drawn only when there is a turn to open. A copilot session restored
-            from a previous run carries its origin on its metadata and has no
-            log row loaded to point at, and a button that lands nowhere is worse
-            than an absent one.
-          */}
-          {turn !== null && onOpenCopilot && (
-            <button
-              type="button"
-              className="sb-row-action"
-              // See `beginDrag`: the row is draggable, and without this marker a
-              // press that slides a few pixels becomes a drag and this button's
-              // click is cancelled.
-              data-no-drag=""
-              aria-label={`Why ${label} exists — open the copilot turn that started it`}
-              title="Started by the copilot — open that turn"
-              onClick={() => onOpenCopilot(turn)}
-            >
-              <Glyph path={WHY} size={13} />
-            </button>
-          )}
-          {/*
-            The same promotion, without the drag.
+            So the row's controls cost 22px now however much it can do, the name
+            gets the pixels back, and each verb arrives as a sentence instead of
+            a glyph — which matters most for the ✕, the one control in this
+            window that destroys something. What the sentences say is unchanged;
+            they are the very tooltips those three buttons carried, passed
+            through to the menu rather than rewritten in the main process.
 
-            A gesture that exists only under a mouse is half a feature, and this
-            one is also invisible until somebody happens to try it. A button in
-            the row is both halves at once: it is reachable from the keyboard
-            like every other row action — `.sb-row:focus-within` reveals them —
-            and it is the only thing in the window that *teaches* that a session
-            can be sent to the top.
-
-            It stays lit once the window is up there, rather than fading with
-            the rest of the hover controls, because that is then the only thing
-            on either side of the window saying which of these rows the strip is
-            showing. `aria-pressed` says the same in words, and both read the
-            one shared order, so they cannot disagree with the strip.
+            The menu itself is native. `main/session-row-menu.ts` has the whole
+            argument, and the short form is that its headline entry attaches a
+            browser window — so the moment it is most often opened is the moment
+            a `WebContentsView` is composited above this entire renderer and an
+            HTML menu would be drawn behind the page being attached.
           */}
           <button
             type="button"
-            className="sb-row-action sb-promote"
-            // See `beginDrag`. This one is the sharpest case of the defect: the
-            // button exists so the promotion can be done *without* a drag, and a
-            // press on it was being eaten by the drag it was there to replace.
+            className="sb-row-action sb-more"
+            // See `beginDrag`: the row is draggable, and without this marker a
+            // press that slides a few pixels becomes a drag and this button's
+            // click never happens. It was the reported defect on the ✕ this
+            // button now contains.
             data-no-drag=""
-            aria-pressed={promoted}
-            disabled={!promoted && stripFull}
-            aria-label={
-              promoted ? `Fold ${label} back into the sidebar` : `Show ${label} at the top`
-            }
-            title={
-              promoted
-                ? 'Fold back into the sidebar'
-                : stripFull
-                  ? `The top strip is full (${MAX_PROMOTED})`
-                  : 'Show at the top'
-            }
-            onClick={() => togglePromoted(tab.id)}
+            aria-haspopup="menu"
+            aria-expanded={rowMenu === tab.id}
+            aria-label={`More for ${label}`}
+            title="More — connect a browser, move to the top, close"
+            onClick={() => {
+              setRowMenu(tab.id)
+              const key = bindKey(tab)
+              void window.deck
+                .showSessionRowMenu({
+                  sessionId: key.sessionId,
+                  machineId: key.machineId,
+                  name: label,
+                  promoted,
+                  // The strip's own limit, carried as the sentence the disabled
+                  // arrow used to show on hover rather than as a boolean the
+                  // menu would have to find words for.
+                  promoteBlocked: stripFull ? `The top strip is full (${MAX_PROMOTED})` : null,
+                  close: tab.closable ? closeSentence : null,
+                  copilotTurn: turn !== null && onOpenCopilot !== undefined,
+                  // A page cannot have pages attached to it, so its menu has no
+                  // Connect browser — absent rather than drawn and inert.
+                  browser: tab.kind !== 'session',
+                })
+                .then((choice) => {
+                  setRowMenu((open) => (open === tab.id ? null : open))
+                  if (choice === 'promote') togglePromoted(tab.id)
+                  else if (choice === 'close') onCloseTab(tab.id)
+                  else if (choice === 'copilot' && turn !== null) onOpenCopilot?.(turn)
+                })
+                .catch(() => {
+                  // A menu that could not be popped leaves the row exactly as it
+                  // was. There is nothing to tell the person: they pressed a
+                  // button and no menu appeared, which is its own message.
+                  setRowMenu((open) => (open === tab.id ? null : open))
+                })
+            }}
           >
-            <Glyph path={TO_STRIP} size={13} />
+            <Glyph path={MORE} size={13} />
           </button>
-          {/*
-            The ✕ that actually ends things — and the one place in the window
-            where that is true.
-
-            There is a second ✕ in this window, on the tab in the top bar, and
-            since 2026-08-17 it does something entirely different: it takes the
-            tab off the bar and leaves the session running, right here, in this
-            list. *"it should not delete the session… side panel will have
-            everything inside, and above we just set a view which one we want to
-            see."*
-
-            Two identical glyphs with two outcomes, one of which is
-            irreversible, is not a difference a person can be expected to
-            remember. So this one says the consequence in its tooltip rather
-            than naming the verb, and it turns `--color-critical` under the
-            pointer while the strip's stays grey — see `.sb-close:hover`. The
-            confirmation behind it is the third layer and the only one that
-            catches somebody who was not looking.
-          */}
-          {tab.closable && (
-            <button
-              type="button"
-              className="sb-row-action sb-close"
-              // See `beginDrag`. This is the control he reported: without the
-              // marker, a press that slides four pixels starts a drag of the row
-              // and the close never happens.
-              data-no-drag=""
-              /*
-                What this ✕ costs, said in the words of where the session is.
-
-                A remote row's ✕ ends the session **on that machine** and leaves
-                the machine paired — the same thing Close on its heading means,
-                one session's worth: *"It will just close all of the sessions
-                from that PC… it should not disconnect the remote account."* A
-                person hovering the ✕ on a row that belongs to a computer they
-                are not sitting at is owed both halves of that, because the
-                second half is the one they are actually worried about.
-              */
-              aria-label={
-                tab.machine
-                  ? `Close ${label} on ${tab.machine.name}`
-                  : tab.server
-                    ? `Close ${label} on ${tab.server.name}`
-                    : `Close ${label}`
-              }
-              title={
-                tab.machine
-                  ? `Close ${label} — ends the session on ${tab.machine.name}. That machine stays connected.`
-                  : tab.server
-                    ? /* Both halves again, and the second is the one that is
-                         actually worrying somebody hovering a ✕ on a row that
-                         belongs to a live server: this ends the terminal and
-                         touches nothing else on the machine. */
-                      `Close ${label} — ends this terminal on ${tab.server.name}. The server itself is left alone.`
-                    : tab.kind === 'session'
-                      ? `Close ${label} — ends the session`
-                      : `Close ${label}`
-              }
-              onClick={() => onCloseTab(tab.id)}
-            >
-              <Glyph path={CLOSE} size={13} />
-            </button>
-          )}
         </div>
       </li>
     )
@@ -1563,8 +1606,12 @@ export function Sidebar({
               under it, and over *that* the line is true — there is genuinely
               nothing open. A server group only exists while something is open
               on it, so it always counts. */}
+          {/* Browser windows are deliberately not counted any more: they are not
+              in this rail at all (see the note over `listed`), so a window with
+              four pages open and no session is a rail with genuinely nothing
+              open on it — and saying so is right rather than self-contradictory.
+              The strip above is where those four pages are. */}
           {projects.length === 0 &&
-            browserTabs.length === 0 &&
             held.length === 0 &&
             machines.every((group) => group.sessions.length === 0) &&
             servers.every((group) => group.sessions.length === 0) && (
@@ -1644,9 +1691,6 @@ export function Sidebar({
               name their folder, because nothing above them does. */}
           {heldLoose.length > 0 && (
             <ul className="sb-list">{heldLoose.map((row) => heldRow(row, true))}</ul>
-          )}
-          {browserTabs.length > 0 && (
-            <ul className="sb-list">{browserTabs.map((tab) => tabRow(tab, tab.label))}</ul>
           )}
         </section>
 

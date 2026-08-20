@@ -79,12 +79,36 @@ function names(html: string): string[] {
 }
 
 describe('what a running Claude session gets on its bar', () => {
-  it('carries model, effort and fast mode', () => {
+  it('carries model and effort as chips of their own', () => {
     withBridge()
     const html = render()
-    for (const control of ['model', 'effort', 'fast'] as const) {
+    for (const control of ['model', 'effort'] as const) {
       expect(html, control).toContain(controlName(control))
     }
+  })
+
+  it('carries fast mode too, at the end of the model menu rather than as a chip', () => {
+    /*
+     * *"Move fast mode toggle inside the models dropdown at the end."*
+     *
+     * A shut menu renders nothing, so a static markup test can see the chip
+     * that is *gone* and cannot see the item that replaced it. Both halves are
+     * asserted, from the two places they can be: the absence off the rendered
+     * bar, and the presence out of the source, where `NESTED_CONTROLS` is the
+     * one statement of which control ends whose menu. The item's own three
+     * states are exercised in `chat/controls/ControlToggle.test.tsx`, which can
+     * render it directly.
+     */
+    withBridge()
+    const html = render()
+    expect(html, 'fast mode still has a chip on the bar').not.toContain(controlName('fast'))
+    expect(html, 'the switch chip is still on the bar').not.toContain('ac-toggle')
+
+    const view = readFileSync(join(__dirname, 'SessionControls.tsx'), 'utf8')
+    expect(view).toMatch(/NESTED_CONTROLS[^=]*=\s*\{\s*model:\s*'fast'\s*\}/)
+    expect(view, 'nothing passes the nested control to the menu that hosts it').toContain(
+      'nested={nestedIn(id)}',
+    )
   })
 
   it('gives every button a name a person can read or hear', () => {
@@ -92,6 +116,103 @@ describe('what a running Claude session gets on its bar', () => {
     const html = render()
     expect(names(html).length).toBeGreaterThan(0)
     for (const name of names(html)) expect(name).not.toBe('')
+  })
+})
+
+describe('the control that the terminal underneath already draws', () => {
+  /**
+   * Asad, looking at a chip on the bar reading `Bypass`:
+   *
+   *   > *"we don't need this part also at the end, now bypass read things
+   *   > because we have this here already inside."*
+   *
+   * "Here already inside" is Claude Code's own indicator, which it redraws along
+   * the bottom of every session for as long as the session runs — `⏵⏵ bypass
+   * permissions on (shift+tab to cycle)`, captured verbatim in
+   * `src/main/cli-screens.capture.json` and matched by
+   * `SessionControls.presence.test.tsx` two files over.
+   *
+   * The chip was therefore a *second* reading of one fact, and it was the one
+   * that could be wrong: it showed whatever frame this app last parsed, while
+   * the line below it is drawn by the process that owns the answer. This asserts
+   * the removal from the surface a person actually looks at;
+   * `chat/controls/one-home.test.ts` asserts the other half — that the control
+   * still has a home and that the source says which.
+   */
+  it('draws no permission chip and no mode word on the bar', () => {
+    withBridge()
+    const html = render()
+    expect(html).not.toContain(controlName('permission'))
+    // Every mode the picker used to offer, because "no chip" and "no menu" are
+    // different failures and only the second is visible in a static render.
+    for (const mode of ['Bypass', 'Accept edits', 'Plan mode']) {
+      expect(html, mode).not.toContain(mode)
+    }
+  })
+})
+
+describe('fast mode, which is one control and no longer a chip', () => {
+  /**
+   * Asad, in the same breath as the chip above:
+   *
+   *   > *"then here also now think we don't need, just one to select is
+   *   > enough."*
+   *
+   * A picker over `Off` and `On` is two clicks to do a one-click thing, and it
+   * spends one of its two rows telling you what you are already doing. The whole
+   * argument is in `chat/controls/ControlToggle.tsx`.
+   */
+  it('is not a chip on the bar any more, and left no dead one behind', () => {
+    /*
+     * A static render reaches no bridge effect, so nothing has read this
+     * session's fast mode. That used to make this the place the *unread* chip
+     * was checked; the chip is gone — *"move fast mode toggle inside the models
+     * dropdown at the end"* — so what is left to check here is that it went
+     * cleanly, taking its switch markup with it rather than leaving a greyed
+     * husk on the row.
+     *
+     * The unread state itself did not go anywhere. It is drawn inside the model
+     * menu now, still pressable, still offering both settings, and it is
+     * asserted in `chat/controls/ControlToggle.test.tsx` against
+     * `ControlToggleItem`, which can be rendered with a reading and read
+     * without a click.
+     */
+    withBridge()
+    const html = render()
+    for (const gone of ['ac-toggle', 'ac-toggle-track', 'role="switch"']) {
+      expect(html, `${gone} is still drawn on the bar`).not.toContain(gone)
+    }
+  })
+
+  it('takes the stylesheet exception with it, rather than leaving it matching nothing', () => {
+    /*
+     * The names come off the chips on this bar — *"just Opus 5 with drop down is
+     * good enough"* — and the switch was that rule's one exception, because a
+     * knob names nothing: on or off *what*? With no switch on the bar the
+     * exception has nothing to apply to, and a `display: block` aimed at an
+     * element that is never rendered is how a stylesheet comes to describe a
+     * layout the app no longer has.
+     *
+     * The control still says what it is. It leads the row inside the model menu
+     * with `.ac-item-label`, which nothing here hides — which is the same
+     * argument satisfied for free rather than dropped.
+     */
+    const sheet = readFileSync(join(__dirname, 'SessionControls.css'), 'utf8')
+    expect(sheet).not.toContain('.session-controls .ac-toggle .ac-name {')
+    withBridge()
+    expect(render()).not.toContain('class="ac-name">Fast mode')
+  })
+
+  it('picks its shape from the option count, not from the control’s name', () => {
+    /*
+     * `SessionControls.tsx` tests `optionsForRow(id).length === 2`. Written as
+     * `id === 'fast'` it would be this file's private opinion about which
+     * control is two-state — a second copy of a fact `catalog.ts` holds, and the
+     * copy that goes stale is always the one furthest from the list.
+     */
+    const view = readFileSync(join(__dirname, 'SessionControls.tsx'), 'utf8')
+    expect(view).toContain('optionsForRow(id).length === 2')
+    expect(view).not.toMatch(/id === 'fast'/)
   })
 })
 
@@ -127,7 +248,15 @@ describe('the names on the chips', () => {
     // deleting the name, which would have taken this with it.
     withBridge()
     const said = names(render()).join(' ')
-    for (const control of ['model', 'effort', 'fast'] as const) {
+    /*
+     * Model and effort, and fast mode is not in this list because it is not a
+     * chip on this bar any more — it is the last item in the model menu, and it
+     * carries the same four-part label there, asserted where it can be rendered
+     * in `chat/controls/ControlToggle.test.tsx`. Dropped from the loop rather
+     * than the loop dropped, so the rule still has to hold for the two controls
+     * it is about.
+     */
+    for (const control of ['model', 'effort'] as const) {
       expect(said, control).toContain(`${controlName(control)}:`)
     }
   })
@@ -273,7 +402,17 @@ describe('connectors, which exist only when there are connectors', () => {
   })
 
   it('is mounted only under a condition that counts them', () => {
-    expect(view).toContain('const hasConnectors = connectors.loaded && connectors.rows.length > 0')
+    /*
+     * And on the session being on *this* computer, which joined the condition on
+     * 2026-08-19. `listMcpServers` resolves a folder's `.mcp.json` and this
+     * app's own registry here; the servers that matter to a session on a paired
+     * machine or a server are that machine's, and nothing on either wire carries
+     * them. A chip fed from this list would name servers the session cannot
+     * reach and open a view that manages the wrong computer's.
+     */
+    expect(view).toContain(
+      'const hasConnectors = target === undefined && connectors.loaded && connectors.rows.length > 0',
+    )
     // Both homes: the open row and the folded panel's section. An empty section
     // in the panel is the same dead invitation one fold further in.
     expect(view.match(/hasConnectors \? \(/g) ?? []).toHaveLength(2)
@@ -455,17 +594,25 @@ describe('the sentence the folded chip advertises', () => {
    */
   it('names every control the cluster holds', () => {
     const sentence = contentsSentence(true)
-    // Permission mode joined the cluster when the composer's control row was
-    // removed; it is in this list for the same reason the other three are — the
-    // hover label is the only place the folded chip's contents are named.
-    for (const control of ['model', 'effort', 'permission', 'fast'] as const) {
+    /*
+     * Permission mode is deliberately not in this list any more, and its absence
+     * here is the same decision as its absence from the bar rather than a second
+     * one: the sentence is built from `CHROME_CONTROLS`, so it cannot advertise
+     * a control the fold is not hiding. *"we don't need this part also at the
+     * end, now bypass read things because we have this here already inside"* —
+     * the CLI draws `⏵⏵ bypass permissions on (shift+tab to cycle)` under every
+     * session, and `chat/controls/one-home.test.ts` is what stops that becoming
+     * a quiet deletion.
+     */
+    for (const control of ['model', 'effort', 'fast'] as const) {
       expect(sentence.toLowerCase(), control).toContain(controlName(control).toLowerCase())
     }
     expect(sentence.toLowerCase()).toContain('connectors')
+    expect(sentence.toLowerCase()).not.toContain('permission')
   })
 
   it('is prose rather than a row of proper nouns', () => {
-    expect(contentsSentence(true)).toBe('Model, effort, permission, fast mode and connectors')
+    expect(contentsSentence(true)).toBe('Model, effort, fast mode and connectors')
   })
 
   it('never says the word that caused the deletion report', () => {
@@ -530,8 +677,17 @@ describe('what the chrome controls tell the main process', () => {
     // Without this the main process sees `provider: undefined` for a Codex
     // session and falls back to asking the screen — correct by luck rather than
     // by design, and wrong the moment another CLI draws something similar.
-    expect(hook).toMatch(/readAgentControls\(\{[^}]*provider[^}]*\}\)/)
-    expect(hook).toMatch(/apply\(\{[^}]*provider[^}]*\}\)/)
+    /*
+     * Both calls go through `controls-target.ts` now — which computer to ask —
+     * so the pin follows them there. The provider still has to be named on each,
+     * and the router still has to hand it to the local channel; a reading that
+     * lost it would put this machine's Claude settings on a Codex session's bar.
+     */
+    const router = readFileSync(join(__dirname, 'controls-target.ts'), 'utf8')
+    expect(hook).toMatch(/readControlsAt\(where\([^)]*\), \{ sessionId, cwd, provider \}\)/)
+    expect(hook).toMatch(/applyControlAt\(where\(targetKind, targetMachine\), \{[\s\S]*?provider,/)
+    expect(router).toMatch(/readAgentControls[\s\S]{0,400}?provider: request\.provider/)
+    expect(router).toMatch(/applyAgentControl[\s\S]{0,600}?provider: request\.provider/)
   })
 
   it('shows the value the session reported, not the one that was clicked', () => {
@@ -551,6 +707,56 @@ describe('what the chrome controls tell the main process', () => {
      */
     expect(hook).toContain('canType: value.canType === true')
     expect(hook).toMatch(/if \(!isRecord\(value\)\) return \{ canType: false/)
+  })
+
+  it('types nothing at all to open a menu — only to change something', () => {
+    /*
+     * The biggest thing in the 2026-08-19 review, in his words:
+     *
+     *   > *"if I click on Opus, it will run a command just to view, just to view
+     *   > it is running a command. I'm not even clicking on the next one which I
+     *   > want to choose but just by drop down, as soon as drop down comes down
+     *   > it runs the command automatically. At least when I click on something
+     *   > then it should run."*
+     *
+     * The model menu called `discoverAgentModels` on the way open, which typed
+     * `/model` into the live session and cancelled the picker — and cancelling
+     * makes the CLI print `Kept model as …`, so his recording has **five**
+     * `/model` blocks stacked in a working conversation, none of them asked for.
+     *
+     * Asserted three ways because there are three doors and closing two of them
+     * is worse than closing none: the hook no longer holds the call, the row's
+     * pickers no longer take an `onOpen` at all, and the folded panel's own
+     * opener does not smuggle it back in. The list itself now comes from
+     * `catalog.ts`, whose staleness fails safely — the argument, including what
+     * a stale list costs, is beside `optionsForRow` in the view.
+     */
+    /*
+     * Matched as a *call* rather than as a mention, on purpose. Both files keep
+     * a paragraph explaining what the live read did and why the trade was taken
+     * the other way — this codebase keeps superseded reasoning rather than
+     * deleting it — and those paragraphs name the function. A bare
+     * `toContain('discoverAgentModels')` would make the comment fail the test,
+     * which is a rule that punishes writing down why.
+     */
+    expect(hook, 'the hook still reaches for the live picker').not.toMatch(/discoverAgentModels\s*[?(]/)
+    expect(view, 'the model chip still asks the session on open').not.toMatch(/discoverModels\s*\(/)
+    /*
+     * And the door itself is gone, not merely unused: `ControlPicker` on this
+     * bar is handed no `onOpen` at all. Scoped to that tag because
+     * `ConnectorsPicker` two elements away has an `onOpen` of its own and is
+     * right to — it opens the app's MCP servers view, which is a window, not a
+     * keystroke in somebody's session.
+     */
+    const picker = view.slice(view.indexOf('<ControlPicker'))
+    expect(picker.slice(0, picker.indexOf('/>')), 'the model picker still runs something when it opens').not.toContain(
+      'onOpen',
+    )
+    // And what replaced it: the written-down catalogue, with the previous names
+    // appended under their own heading. Both halves, because dropping the second
+    // would quietly lose "Sonnet 4.6" and "Opus 4.x", which he asked for by name.
+    expect(view).toContain('modelOptions()')
+    expect(view).toContain('previousModelOptions()')
   })
 
   it('reads the gate before the click rather than only refusing after it', () => {

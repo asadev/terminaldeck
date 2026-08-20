@@ -121,7 +121,25 @@ export interface AgentEntry {
   bin: string | null
   /** Args for a fresh session. */
   args: readonly string[]
-  /** Args to continue the most recent session in a folder; empty means no resume. */
+  /**
+   * Args to continue the most recent session in a folder; empty means no resume.
+   *
+   * **These are not safe to pass unconditionally, and the reason is a silent
+   * data loss.** `--continue` names no conversation — it means *the most recent
+   * one in this folder*, resolved by the CLI at spawn — so two sessions started
+   * in one folder both attach to the same transcript and both append to it from
+   * the same parent message. `ACCOUNT-MODEL.md` has the measurement: two
+   * divergent branches, one session id, one file, every line parsing, no error
+   * anywhere, and whichever branch the next `--continue` lands on orphans the
+   * other. Neither session ever sees the other's turns.
+   *
+   * It is not an account problem — two sessions of one login do it too — and it
+   * cannot be detected or repaired afterwards, so it is prevented at the spawn
+   * instead. This table stays a table: the rule lives in `main/one-conversation.ts`
+   * and is applied by `host-core.ts` at the one line that chooses between these
+   * args and `args`. Nothing may pass `resumeArgs` to a spawn without going
+   * through it.
+   */
   resumeArgs: readonly string[]
   /** What a person would type to get it. Null when there is nothing to install. */
   install: string | null

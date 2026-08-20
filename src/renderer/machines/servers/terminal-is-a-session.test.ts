@@ -3,8 +3,17 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
- * The door on the server's page opens a **session**, and the pane behind it
+ * The control on the server's page opens a **session**, and the pane behind it
  * behaves like one.
+ *
+ * ## It is no longer a door
+ *
+ * The control lived behind `ServerAdvanced`'s collapsed *Advanced* disclosure,
+ * which is where these assertions used to read it from. It is the primary action
+ * under the server's name now. Asad, having connected a server and looked at its
+ * page: *"i cant open a session in connected server i connected it now see there
+ * is no way for this."* The claims below did not change — only the file they are
+ * read from, and the new one insisting there is exactly one copy of it.
  *
  * ## What this replaced
  *
@@ -28,15 +37,18 @@ import { describe, expect, it } from 'vitest'
 
 const HERE = __dirname
 const ADVANCED = readFileSync(join(HERE, 'ServerAdvanced.tsx'), 'utf8')
+const PAGE = readFileSync(join(HERE, 'ServerPage.tsx'), 'utf8')
 const TERMINAL = readFileSync(join(HERE, 'ServerTerminal.tsx'), 'utf8')
 const PANE = readFileSync(join(HERE, 'ServerSessionPane.tsx'), 'utf8')
 
 describe('the page opens a session rather than a rectangle', () => {
   it('no longer mounts a terminal inside itself', () => {
-    // The whole of the change. A terminal drawn here is a terminal that stops
-    // existing when this page does.
+    // The whole of the original change. A terminal drawn on this page is a
+    // terminal that stops existing when the page does.
     expect(ADVANCED).not.toContain('<ServerTerminal')
     expect(ADVANCED).not.toContain("from './ServerTerminal'")
+    expect(PAGE).not.toContain('<ServerTerminal')
+    expect(PAGE).not.toContain("from './ServerTerminal'")
   })
 
   it('asks the window to open one, by name as well as by id', () => {
@@ -45,14 +57,37 @@ describe('the page opens a session rather than a rectangle', () => {
      * servers list — the list lives inside this panel, which is usually not the
      * thing on screen — and the rail heading, the pill's tooltip, the window bar
      * and the close confirmation all print it.
+     *
+     * Read from `ServerPage.tsx` rather than from `ServerAdvanced.tsx` since the
+     * control moved out from behind the door: it is the primary action under the
+     * server's name now, because behind a disclosure labelled *Advanced* it was
+     * a door people correctly believed was not for them.
      */
-    expect(ADVANCED).toContain('opener.open(server.id, server.name)')
+    /*
+     * Three arguments since 2026-08-19: the folder on the server joined them
+     * when `ServerFolderPicker` did. It is matched here rather than left off
+     * the string, because the point of this assertion is that the *page* is
+     * what makes the call — and a looser match would keep passing if somebody
+     * dropped the folder and quietly went back to opening every terminal in
+     * whichever directory SSH happened to land in.
+     */
+    expect(PAGE).toContain('opener.open(server.id, server.name, folder)')
+  })
+
+  it('offers it in one place rather than two', () => {
+    /*
+     * Not tidiness. Two controls doing one thing are two sets of conditions to
+     * keep in step — this build cannot, this window cannot, this connection
+     * failed — and the copy further from the reader is the copy that goes stale
+     * without anybody noticing it has.
+     */
+    expect(ADVANCED).not.toContain('opener.open(')
   })
 
   it('says where the terminal will appear, before the press', () => {
     // Somebody who has only ever seen the old behaviour needs one sentence to
     // know their work has not been put somewhere they cannot find it.
-    expect(ADVANCED).toContain('a row in the list on the left')
+    expect(PAGE).toContain('a row in the list on the left')
   })
 
   it('draws no button at all when there is no window to hold one', () => {
@@ -62,9 +97,9 @@ describe('the page opens a session rather than a rectangle', () => {
      * swallow the press — which is exactly the shape of defect this pass is
      * removing everywhere else.
      */
-    expect(ADVANCED).toContain('opener === null ? (')
-    expect(ADVANCED.indexOf('opener === null ? (')).toBeLessThan(
-      ADVANCED.indexOf('opener.open(server.id, server.name)'),
+    expect(PAGE).toContain('opener === null')
+    expect(PAGE.indexOf('opener === null')).toBeLessThan(
+      PAGE.indexOf('opener.open(server.id, server.name, folder)'),
     )
   })
 })

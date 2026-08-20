@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { ProviderId, SessionStatus } from '@shared/types'
 import { StatusDot } from '../components/StatusDot'
+import { useSessionBinding } from '../browser/binding-view'
 import { AccountChip } from './AccountChip'
 import type { ChromeSession } from './agent-presence'
 import { FolderTitle } from './FolderChip'
@@ -160,6 +161,79 @@ interface Props {
 
 const PANE_CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
 
+/** The disclosure mark, in the same 24×24 grid as everything else here. */
+const CHEVRON = 'M8 10l4 4 4-4'
+
+/**
+ * Attach a browser window to this pane's session, or detach one.
+ *
+ * ## Why the control is here and not on the chip
+ *
+ * `BindChip` states a fact and is two characters wide; a 20px chip is not a
+ * control surface, and putting the gesture on it would mean the only way to
+ * *attach* a first window is to press something that is not drawn until one is
+ * already attached. This bar is per-session chrome with room, which is the same
+ * reason the account chip and the folder live here.
+ *
+ * ## Why the menu is native
+ *
+ * A `WebContentsView` composites above the entire renderer — the whole subject
+ * of `overlay-watch.ts`, and the reason `SendToAgent` uses a plain `<select>`.
+ * An HTML menu would therefore be invisible in exactly the situation this
+ * feature exists for: a browser page on screen, being attached to a session. So
+ * the menu is built in the main process, the same way `link-open.ts`'s
+ * right-click menu is, and this button's whole job is to ask for it.
+ *
+ * ## It is never a dead control
+ *
+ * With nothing attached it reads `Attach browser` and still opens a menu, which
+ * offers `New window, attached` and says `No browser windows are open.` when
+ * there are none. There is no state in which pressing it does nothing.
+ */
+function AttachBrowser({ sessionId }: { sessionId: string }) {
+  const binding = useSessionBinding(sessionId)
+  const slots = binding?.windows.map((window) => `B${window.n}`) ?? []
+  // What the button says is what is true right now, and the tooltip says what
+  // pressing it does — two different sentences, because a label reading
+  // "B1 B2" would otherwise be a control that never explains itself.
+  const label = slots.length > 0 ? slots.join(' ') : 'Attach browser'
+  const tooltip =
+    slots.length > 0
+      ? `${slots.join(', ')} attached to this session. Attach or detach a browser window.`
+      : 'No browser window attached. Attach one, or open a new one attached to this session.'
+
+  return (
+    <button
+      type="button"
+      className="bind-button"
+      data-attached={slots.length > 0 || undefined}
+      data-bind={binding ? (binding.colour % 4) + 1 : undefined}
+      title={tooltip}
+      aria-label={tooltip}
+      onClick={() => {
+        // Not awaited: the answer is only whether a menu was popped, and the
+        // menu itself is what the person is waiting for.
+        void window.deck.showBrowserBindMenu({ sessionId })
+      }}
+    >
+      <span className="bind-button-label">{label}</span>
+      <svg
+        width="11"
+        height="11"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d={CHEVRON} />
+      </svg>
+    </button>
+  )
+}
+
 /** A page, in the same 24×24 grid everything else in this window is drawn on. */
 const GLOBE =
   'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 0c-2.5 2.3-3.8 5.3-3.8 9s1.3 6.7 3.8 9m0-18c2.5 2.3 3.8 5.3 3.8 9s-1.3 6.7-3.8 9M3.4 9h17.2M3.4 15h17.2'
@@ -211,6 +285,14 @@ export function PaneBar({ paneId, subject, focused, controls, onClose }: Props) 
               />
             </div>
           )}
+          {/*
+            Outside `toolbar-chips` on purpose: that row is the pair "where, and
+            who", both of which are facts about the pty and both of which are
+            absent for a session with no project. Where this session's links open
+            is a third thing, it is true of a session with no folder as well, and
+            it is a control rather than a caption.
+          */}
+          <AttachBrowser sessionId={subject.id} />
         </>
       )}
 

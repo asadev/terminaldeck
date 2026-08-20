@@ -75,6 +75,10 @@ const plan = (over: Parameters<typeof planSwitch>[0] | Partial<Parameters<typeof
     target: profile(),
     decision: decision(),
     occupied: false,
+    // Separate stores unless a case says otherwise. That is what every case
+    // below was written against, and it is still the truth for two accounts
+    // that have not been pointed at one shared conversation history.
+    sharedStore: false,
     ...over,
   })
 
@@ -395,5 +399,34 @@ describe('what a failed switch tells the person', () => {
     const message = startFailed('home@example.com', null)
     expect(message).not.toContain('It said')
     expect(message).toContain('This session is still running as it was.')
+  })
+})
+
+describe('a shared conversation history changes what may be said, not what happens', () => {
+  it('says the conversation follows when both accounts read one store', () => {
+    /*
+     * Option C from `ACCOUNT-MODEL.md`, and the reason it was recommended: with
+     * both accounts' `projects/` linked into one place, the file the replacement
+     * continues is the file this session is writing. `theirs` here would tell
+     * somebody the conversation on screen stays behind and another one takes its
+     * place, which is exactly false and is the sentence they decide on.
+     */
+    const answer = plan({ sharedStore: true })
+    expect(answer.conversation).toBe('follows')
+    expect(answer.resume).toBe(true)
+  })
+
+  it('still admits it cannot read a store it cannot read', () => {
+    // `unreadable` outranks both: the app did not see the store at all, so it
+    // has no business claiming the conversation comes across.
+    expect(
+      plan({ sharedStore: true, decision: decision({ conversation: 'unknown' }) }).conversation,
+    ).toBe('unreadable')
+  })
+
+  it('does not claim a shared store when another tab holds the conversation', () => {
+    // Occupancy is decided first and for a different reason: two terminals on
+    // one transcript fork it silently, whoever owns the two accounts.
+    expect(plan({ sharedStore: true, occupied: true }).conversation).toBe('taken')
   })
 })

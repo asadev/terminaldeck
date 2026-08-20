@@ -92,28 +92,47 @@
     same rhythm as everything else in the window, and the flare is the app's
     small radius.
 
-    ## `--strip-tab-w`, and the width it is putting back
+    ## `--strip-tab-w` is one width for every tab — 2026-08-20
 
-    Asad, on the bar as this sheet first shipped it: *"on the top header the
-    pills of the windows, it got smaller. So let's make them a little bit more
-    wider, just like before."* He is right, and the cause is not in this
-    stylesheet's numbers — the cap went **up** in that pass, 220px to 280px. It
-    is that a tab is sized by what is inside it, and the same pass took a
-    control out: the fold-away arrow that used to sit between the label and the
-    ✕ (*"the arrow inside the pill also doesn't need to be there"*). That arrow
-    was 18px wide with a 2px gap beside it, and with nothing declaring a width
-    the pill simply closed up by those 20 pixels. Measured in the running app,
-    on a tab reading "Session 1": 139px before the rebuild, 119px after.
+    It used to be a *floor* with a 280px ceiling above it, and a tab took
+    whatever it could get in between. That is what produced the row he stopped
+    on: measured off the frame of his recording, six tabs at 155, 110, 110, 140,
+    178 and 109 pixels. *"session tabs and browser tabs should be the same size.
+    I see sometimes inconsistency. Some of them are more wide, some of them are
+    less wide. They should be all at the same size."*
 
-    So the fix is a floor rather than a bigger cap, because the cap was never
-    what was binding. Four times the tab's own height is the proportion that
-    reads as a horizontal pill rather than as a chip, and it lands at 144px —
-    within five pixels of where the row sat before, which is what "just like
-    before" asks for. Stated as a ratio on `--strip-tab-h` and not as `144px`
-    so that a tab is still one number tall and that number is still the bar's.
+    So it is a width now, not a range — the floor and the ceiling are the same
+    number, and every tab is that number until the bar runs out of room, at
+    which point they all give together. Which number is his too, pointed at on
+    screen: *"this one is the perfect size, the one B1 and B2, this tab."* That
+    is the 178px tab in the list above — the one carrying an account, a status
+    dot, a long agent name and two binding chips, i.e. the fullest a tab in this
+    app gets. Five times the tab's own height is 180px, which is that width to
+    within the two pixels a JPEG can be read to, and it keeps the rule the
+    height already follows: a tab is one number tall and a ratio of it wide, so
+    neither has to be re-derived if the bar's height ever changes.
+
+    ## `--strip-tab-min`, and why the floor is a different number now
+
+    Because the tabs have to be able to give. *"whenever we start new, these
+    will become smaller"* — that is the other half of moving the openers out of
+    the scrolling rail: the corner is reserved, so the room a new tab needs
+    comes out of the tabs rather than out of the control it used to slide
+    under.
+
+    3.5 × the height is 126px, and it is chosen by *addition* rather than by
+    taste: a browser tab at its narrowest is 12px of padding, a 15px icon, a
+    binding chip, a ✕ and three 4px gaps — 77px of furniture — over a name that
+    still has to read. Five characters is 33 of those, and 110 fits inside 126
+    with room to spare. Set the floor any lower and the furniture stops fitting:
+    the children keep their own minimums and spill out over the neighbouring
+    tab, which is a worse-looking failure than a rail that scrolls. The crowded
+    frame in his recording sat at 109px, which is exactly where that spill
+    starts — and it is visible in it, as `B1`/`B2` sitting on top of a ✕.
   */
   --strip-tab-h: calc(var(--toolbar-h) - var(--sp-3));
-  --strip-tab-w: calc(var(--strip-tab-h) * 4);
+  --strip-tab-w: calc(var(--strip-tab-h) * 5);
+  --strip-tab-min: calc(var(--strip-tab-h) * 3.5);
   --strip-flare: var(--radius-sm);
   background-color: var(--material-bg);
   background-image: var(--material-sheen);
@@ -200,13 +219,28 @@
     every declaration on it read correctly. The rule that disabled them was one
     the stylesheet never wrote, on their parent, two rules up.
 
-    Measured in Chrome against this sheet, ten tabs with a project qualifier on
-    each. Before: 255px per tab at 1600px, at 820px and at 620px, rail scrolling
-    at all three. After: 144px per tab and **no scroll at all** at 1600px, 144px
-    and a scroll at 820px, and 174px with no scroll when only four are open.
-    Which is the whole intent — give to the floor first, scroll only once the
-    floor is reached.
+    It matters more since the tabs became one fixed width: without it every tab
+    sits at 180px and the rail scrolls at four of them, which is the row he
+    complained about arriving from the opposite direction.
+
+    ## And `flex: 1`, which is what actually hands the tabs their width
+
+    This row is `flex: 0 1 auto` by default, so its base size is its
+    **max-content** — and a flex item's max-content contribution, when it cannot
+    grow, is `min(its content size, its flex base size)`. So with tabs asking
+    for 180px and holding words worth 134, this row asked its parent for 134 per
+    tab and the tabs got exactly what the row asked for. Measured in the
+    harness: four tabs at 134.3px, six at 145.1px — all equal, none of them the
+    width anybody chose, and *wider with more tabs open*, which is the giveaway
+    that content and not the basis was doing the sizing.
+
+    `flex: 1` takes the row off content sizing entirely: it is the rail's width,
+    the tabs lay out inside that, and a bar with room leaves the spare space
+    after the last tab where it belongs. Past the floor the tabs overflow this
+    row, which has visible overflow, so the rail's scrollable area grows and the
+    rail scrolls — the behaviour every paragraph above describes.
   */
+  flex: 1;
   min-width: 0;
 }
 
@@ -316,39 +350,47 @@
      together into something that reads as one smudge at the end of the name. */
   gap: var(--sp-1);
   /*
-    A floor, a ceiling, and free to move between them. Three declarations for
-    three different failures, and leaving any one of them out brings its own
-    back.
+    Every tab exactly as wide as every other tab, at every window size.
 
-    **The floor** is the width he asked for; see `--strip-tab-w` above. Without
-    it a tab is only as wide as "Session 1" happens to render, which is how the
-    row lost twenty pixels the moment a control came off it — a width nobody
-    chose, arrived at by subtraction.
+    That is one rule and it takes four declarations, because "the same width" is
+    two separate claims — the same as each other, and no wider than the width he
+    chose — and flexbox will violate either one on its own.
 
-    **The ceiling** is the qualifier's room: a tab can carry the project that
-    tells it apart from its twin, and the name itself is budgeted in characters
-    by `middleEllipsis`, so this is the width the qualifier borrows on top of it.
+    **`flex-basis: var(--strip-tab-w)`** is the width, and it is the *same*
+    basis on every tab, which is what makes them equal: flexbox distributes both
+    growth and shrinkage in proportion to the basis, so identical bases shrink
+    to identical widths. A tab sized by its content — which is what `auto` gave
+    it, and what the row in his recording was doing — is 110px on "Session 3"
+    and 178px on an agent name with two chips beside it, and no amount of
+    min/max around that makes the two agree.
 
-    **`flex-shrink: 1`** is what stops the floor from becoming a fixed width.
-    A row of tabs with long names and their projects beside them can measure
-    twice the bar; with the tabs shrinkable, that row compresses to the floor
-    before the rail starts scrolling, which is one gesture saved on every window
-    that is merely a bit too full rather than genuinely overflowing. Past the
-    floor the rail does scroll, and the effect in `WorkspaceTabStrip.tsx` keeps
-    the selected tab in view — a tab squeezed narrower than its own furniture
-    would be a worse answer than one you have to scroll to.
+    **`flex-grow: 0`**, and this is the one that was got wrong first. With grow
+    at 1 the tabs were still all equal — and all the *wrong* width: 134px with
+    four open, 145px with six, measured in the harness. A growable flex item's
+    max-content contribution is derived from its **content**, not from its
+    basis, so `.strip-list` asked its parent for the width of the words inside
+    the tabs and the basis never got to be the width of anything. Grow at 0
+    makes the contribution the basis itself, and four tabs sit at 180px.
 
-    That last paragraph was a description of behaviour this rule did not have
-    for as long as `.strip-list` was left at its default `min-width: auto`: the
-    shrink factor here is only permission to give room back, and the parent has
-    to be willing to ask for it. `min-width: 0` on `.strip-list` is what makes
-    the sentence true, so the two rules have to move together — take it off and
-    every word above goes back to being a claim about a strip that scrolls at
-    its natural width. `finish.test.ts` fails if it goes.
+    **`max-width`** at the same number is then belt and braces, and cheap: it
+    stops any future `flex-grow` from stretching four tabs across a 1600px
+    window, which is the failure this whole rule exists to prevent in the other
+    direction.
+
+    **`min-width: var(--strip-tab-min)`** is where they stop giving and the rail
+    starts scrolling. A tab squeezed under its own furniture is worse than one
+    you have to scroll to; the effect in `WorkspaceTabStrip.tsx` keeps the
+    selected tab in view.
+
+    The shrink factor here is only *permission* to give room back, and the
+    parent has to be willing to ask for it: `min-width: 0` on `.strip-list` is
+    what makes the paragraph above true, so the two rules move together. Take it
+    off and every tab sits at 180px and the rail scrolls at four of them.
+    `finish.test.ts` fails if it goes.
   */
-  flex: 0 1 auto;
-  min-width: var(--strip-tab-w);
-  max-width: 280px;
+  flex: 0 1 var(--strip-tab-w);
+  min-width: var(--strip-tab-min);
+  max-width: var(--strip-tab-w);
   height: var(--strip-tab-h);
   padding: 0 var(--sp-1) 0 var(--sp-2);
   /* Top corners only. The bottom two are where the pane begins, and a radius
@@ -628,6 +670,15 @@
   gap: var(--sp-1);
   flex: 1 1 auto;
   min-width: 0;
+  /*
+    `min-width: 0` lets this box shrink, but shrinking is not clipping. The
+    B1/B2 chips inside are `flex-shrink: 0`, so once the name's qualifier has
+    been squeezed away they keep their width and paint straight out of the face
+    and over `.strip-tab-close`. Asad filmed exactly that on 2026-08-20 —
+    *"B1, B2 over the cross button"* — and it is why a ✕ that measures as
+    hittable can still be covered. One line, and the chips ellipsise instead.
+  */
+  overflow: hidden;
   height: 100%;
   color: inherit;
   font-size: var(--t-footnote);
@@ -669,11 +720,15 @@
 .strip-tab-label {
   /* A floor, not a refusal to shrink. `flex-shrink: 0` would keep the name
      whole at any cost, and the cost on a tab of unusually wide glyphs is the
-     buttons being pushed out of the box. Eight characters is where "Session 1"
-     and "Session 12" still read, which is the same floor `.sb-label` holds in
-     the rail, for the same reason. */
+     buttons being pushed out of the box.
+
+     Five characters rather than the rail's eight, and the difference is
+     arithmetic rather than a second opinion about legibility: a tab is now a
+     fixed 180px that gives down to 126 (see `--strip-tab-min`), and 8ch of name
+     plus a chip plus a ✕ does not fit in 126. The rail's rows have a whole
+     panel's width and no such collision, so `.sb-label` keeps its eight. */
   flex: 0 1 auto;
-  min-width: 8ch;
+  min-width: 5ch;
   overflow: hidden;
   white-space: nowrap;
   /* The backstop under `middleEllipsis`. The budget is in characters and this
@@ -759,9 +814,9 @@
 /*
   Grey on hover, and deliberately grey.
 
-  This ✕ removes the tab from this bar and nothing else — the session keeps
-  running and the sidebar keeps its row. The rail's ✕ ends the session, asks
-  first when there is work to lose, and turns `--color-critical` under the
+  On a session tab this ✕ removes the tab from this bar and nothing else — the
+  session keeps running and the sidebar keeps its row. What ends a session is the
+  rail's ⋯ → Delete, which asks first and turns `--color-critical` under the
   pointer. That difference is the only thing standing between "I tidied my tab
   bar" and "I killed a twenty-minute agent run", so it is a real difference in
   colour rather than a difference in wording alone.
@@ -779,16 +834,16 @@
 }
 
 /*
-  Except on a tab whose session is running on another machine, where this ✕
-  really does end it.
+  Except on a browser tab, where this ✕ really does end the window.
 
-  Asad, 2026-08-18, having asked for a remote session to carry the same pill a
-  local one does: the pill is the same and one control on it is not, because he
-  also asked for its ✕ to mean what Close on the machine's heading means — end
-  the session over there, keep the machine paired. So the mark that separates
-  "I tidied my tab bar" from "I killed a twenty-minute agent run" has to be
-  present on this bar too, and it is the same mark the rail already uses for the
-  same distinction: `--color-critical` under the pointer.
+  Asad, 2026-08-20: *"for the windows it will completely close, and for the
+  sessions it will just close from the top bar."* Two identical glyphs sit a
+  centimetre apart on this bar with opposite outcomes, and this rule is the only
+  thing in the running app that separates them by sight — everything else about
+  the two controls, the geometry, the reveal-on-hover, the glyph itself, is
+  deliberately shared. So the mark that separates "I tidied my tab bar" from "I
+  threw away the page I was reading" is the same one the rail already uses for
+  the same distinction: `--color-critical` under the pointer.
 
   A data attribute rather than a second class, because the ✕ is the same control
   in the same place doing a different thing to a different kind of tab — which
@@ -806,11 +861,27 @@
   *"There will be a terminal and browser globe icon next to the last window.
   Whatever the icon we click accordingly it will open the next window."*
 
-  Inside the scrolling rail, so "next to the last window" stays true as tabs are
-  opened rather than becoming "at the right-hand end of the window". As tall as
-  a tab and centring its own children, so the two icons line up with the tab
-  labels without a nudge value that would have to be re-derived every time the
-  bar's height changed.
+  ## In the bar's corner, not in the rail — 2026-08-20
+
+  They were inside the scrolling rail, on the reading that "next to the last
+  window" is a position relative to the tabs. It is, and following it produced
+  the defect: the rail scrolls, so as soon as the strip was full these two
+  scrolled with it and came to rest on top of the last tab's name. *"these two
+  buttons to start new session and new window are like coming above the tab. So
+  they should be always in the corner and whenever we start new, these will
+  become smaller."*
+
+  So they are a sibling of `.strip-rail` and `flex-shrink: 0`, which is the
+  whole mechanism: the bar hands this block its width first, the rail is
+  `flex: 1` over what is left, and the tabs give — down to `--strip-tab-min` and
+  then the rail scrolls underneath a corner that does not move. "These will
+  become smaller" is a description of that arrangement, and it cannot be true
+  while the control and the things that must shrink for it live in the same
+  scroll box.
+
+  As tall as a tab and centring its own children, so the two icons line up with
+  the tab labels without a nudge value that would have to be re-derived every
+  time the bar's height changed.
 */
 .strip-openers {
   display: flex;
@@ -819,6 +890,11 @@
   flex-shrink: 0;
   height: var(--strip-tab-h);
   padding: 0 var(--sp-1);
+  /* The rail sits its tabs on the bar's bottom edge, so a corner centred in the
+     bar's own height would float six pixels above them — one of those
+     misalignments nobody can name and everybody can see. Same edge, same
+     height, so the icons and the tab labels share a centre line. */
+  align-self: flex-end;
 }
 
 .strip-open {

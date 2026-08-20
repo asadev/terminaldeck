@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Group, Notice } from '../settings/controls'
+import { HoverNote } from '../components/HoverNote'
 import { errorText } from '../settings/settings-bridge'
 import { detectPlatform, thisMachine, type UiPlatform } from '../platform'
 import './DeviceFolders.css'
@@ -38,7 +39,19 @@ import './DeviceFolders.css'
  * the strength of it — which is exactly why the old wording was so careful, and
  * exactly why the new wording may not be careless in the other direction.
  *
- * It is the first thing under the heading either way, not fine print.
+ * It is the first thing under the heading either way, not fine print — and
+ * since 2026-08-19 it is the *only* thing under the heading. Four paragraphs
+ * stood there, and Asad said the same thing about them twice in one review:
+ * *"we don't need big descriptions as I discussed before"*, and *"the folder
+ * section is there but I don't know what is this for"*. The second is the
+ * sharper complaint, because a block whose purpose is not on its first line
+ * cannot be skipped — so the heading now names the purpose and the first line
+ * carries it, with everything standing rather than deciding moved behind the ⓘ.
+ *
+ * The line drawn there is deliberate and it is a safety line, not a length one:
+ * the clause saying whether a session is *held* never goes behind a dot on any
+ * platform. Somebody hands a device to a person on the strength of it, and
+ * "they should have hovered" is not an answer for a stranger with a shell.
  *
  * ## Three states, and the difference between two of them matters
  *
@@ -275,7 +288,7 @@ export function DeviceFoldersView({
 
   if (!wired) {
     return (
-      <Group title="Folders">
+      <Group title="Folders a guest may open">
         <p className="settings-prose">
           Choosing folders per device is not available in this build, so nothing on this screen
           would change what a device can open on {machine}.
@@ -285,29 +298,58 @@ export function DeviceFoldersView({
   }
 
   return (
-    <Group title="Folders">
-      {/* The honest sentence, first and not last, and a different one per
-          platform. Someone will decide who holds a device on the strength of
-          whichever of these two they read. */}
+    <Group title="Folders a guest may open">
+      {/*
+        One line about what this is for, then the honest sentence about whether
+        it is a boundary — and the rest behind the dot.
+
+        ## Why the heading changed and why the paragraphs are gone
+
+        Asad, 2026-08-19, reading this section on the Machines page: *"the folder
+        section is there but I don't know what is this for"*, and, twice in the
+        same review, *"we don't need big descriptions as I discussed before"* /
+        *"make sure we don't have this much of big text information over there,
+        so it's a confusing thing."*
+
+        Both complaints are about the same four paragraphs, and they are not the
+        same complaint. The second is length. The first is worse: a reader who
+        does not know what a block is for cannot skip it, so the length is spent
+        on somebody who is still looking for the first sentence. So the heading
+        now names the thing — *folders a guest may open* — and the first line
+        under it is the purpose, in one clause.
+
+        ## What did **not** move behind the dot, and why that line is drawn here
+
+        The clause about whether a session is *held* stays on screen, per
+        platform, and it is the one thing on this panel that may never become a
+        hover. Somebody decides who to hand a device to on the strength of it,
+        and the two mistakes are not symmetrical: reading "held inside them" on
+        a machine where nothing holds it is how a stranger ends up with a shell,
+        and there is no version of "they should have hovered" that answers for
+        that. The file header's argument about this being the first thing under
+        the heading rather than fine print is unchanged — it is now the *only*
+        thing under the heading.
+
+        What went behind the ⓘ is everything that is true and standing: which
+        specific things a held session cannot reach, what it still can (node,
+        git, the network), the home folder it gets, and what confinement does
+        not cover. None of it decides anything in the moment; all of it is what
+        somebody wants when they stop and ask. `HoverNote` keeps the words in
+        the document either way, so nothing here is less assertable than it was
+        and nothing has been cut.
+      */}
       {held ? (
-        <>
-          <p className="settings-prose">
-            Pick which folders each guest can use. On {machine} a session started from a device is{' '}
-            <strong>held inside them</strong> — it can read and write those folders and nothing
-            else. Not your other projects, not your home folder, not your keys, not the accounts
-            you are signed in to.
-          </p>
-          <p className="settings-prose">
-            It still runs node, git and the agent tools, and it still reaches the internet. It gets
-            a home folder of its own, so it starts signed out of those tools until that device
-            signs in. If a session cannot be held inside its folder, it does not start at all.
-          </p>
-          <p className="settings-prose">
-            A guest only sees the sessions running inside these folders — including ones{' '}
-            <em>you</em> started. Everything else on {machine} is invisible to it, and stops being
-            reachable the moment you take a folder away.
-          </p>
-        </>
+        <p className="settings-prose">
+          <span className="settings-label-line">
+            <span>
+              Pick which folders each guest can use. On {machine} a session started from a device
+              is <strong>held inside them</strong>.
+            </span>
+            <HoverNote label="what a held session can reach">
+              {`It can read and write those folders and nothing else. Not your other projects, not your home folder, not your keys, not the accounts you are signed in to. It still runs node, git and the agent tools, and it still reaches the internet. It gets a home folder of its own, so it starts signed out of those tools until that device signs in. If a session cannot be held inside its folder, it does not start at all. A guest only sees the sessions running inside these folders — including ones you started. Everything else on ${machine} is invisible to it, and stops being reachable the moment you take a folder away.`}
+            </HoverNote>
+          </span>
+        </p>
       ) : confine?.canGrant ? (
         /*
          * Windows, built and switched off.
@@ -321,20 +363,33 @@ export function DeviceFoldersView({
          * merely undersell the protection, it stops anyone turning it on.
          */
         <>
+          {/*
+            The warning stays on screen in full, and it is the one place on this
+            panel where shortening would have been the wrong edit. Everything
+            behind the dot here is *setup* — which folders the permission covers,
+            what the main process has to say about granting it — and none of it
+            changes the decision somebody is making while they read the line.
+            The line itself does: until the button below is pressed, a device
+            gets a shell that can reach anything the account can, and that
+            sentence has to be readable without moving a pointer.
+          */}
           <p className="settings-prose">
-            Pick which folders each guest can use. On {machine} a session started from a device can
-            be <strong>held inside them</strong> — but that needs a one-time permission on the
-            folders holding node, git and the agent tools, and only an administrator can grant it.
-            <strong> Until you do, a session from a device runs unconfined</strong> and can reach
-            anything your account can.
+            <span className="settings-label-line">
+              <span>
+                Pick which folders each guest can use. On {machine} a session started from a device
+                can be <strong>held inside them</strong>, but only an administrator can grant that
+                once.<strong> Until you do, a session from a device runs unconfined</strong> and can
+                reach anything your account can.
+              </span>
+              <HoverNote label="the one-time permission">
+                {`The permission is on the folders holding node, git and the agent tools.${
+                  confine.folders.length > 0
+                    ? ` It would cover ${confine.folders.length === 1 ? 'this folder' : 'these folders'}: ${confine.folders.join(', ')}. Nothing else on the disk is touched.`
+                    : ''
+                }${confine.note === '' ? '' : ` ${confine.note}`}`}
+              </HoverNote>
+            </span>
           </p>
-          {confine.folders.length > 0 && (
-            <p className="settings-prose">
-              It would cover {confine.folders.length === 1 ? 'this folder' : 'these folders'}:{' '}
-              {confine.folders.join(', ')}. Nothing else on the disk is touched.
-            </p>
-          )}
-          {confine.note !== '' && <p className="settings-prose">{confine.note}</p>}
           {grantProblem !== null && <Notice tone="error">{grantProblem}</Notice>}
           <div className="df-actions">
             <Button tone="primary" onClick={onGrantConfinement} disabled={granting || !onGrantConfinement}>
@@ -344,10 +399,22 @@ export function DeviceFoldersView({
         </>
       ) : (
         <p className="settings-prose">
-          Pick where each guest can start a session. On {machine}, <strong>that is all this
-          does</strong> — a session is a shell, and once it is running it can move to any other
-          folder, the same as one you start here. This build cannot hold a session inside its
-          folder here, so this is for keeping your own devices tidy, not for keeping anyone out.
+          <span className="settings-label-line">
+            <span>
+              Pick where each guest can start a session. On {machine}, <strong>that is all this
+              does</strong> — it is for keeping your own devices tidy, not for keeping anyone out.
+            </span>
+            {/* The *mechanism* moves behind the dot; the verdict does not. "Not
+                for keeping anyone out" is the clause somebody hands a device on
+                the strength of, and a person who reads only the visible line
+                must come away with the true answer rather than an incomplete
+                one. What is left to explain is why — which is a fact about
+                shells, and is what somebody asks after they have believed the
+                verdict, not before. */}
+            <HoverNote label="why this is not a boundary">
+              {`A session is a shell, and once it is running it can move to any other folder, the same as one you start here. This build cannot hold a session inside its folder here, so choosing one says where a device starts and nothing about where it can go.`}
+            </HoverNote>
+          </span>
         </p>
       )}
 

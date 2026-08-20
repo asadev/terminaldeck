@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { StatusDot } from '../components/StatusDot'
 import { tip } from '../keymap'
+import { bindKey, SessionBindChips, WindowBindChip } from './BindChip'
 import {
   dragStartedOnControl,
   isTabDrag,
@@ -17,6 +18,7 @@ import {
   startTabDrag,
   STRIP_LABEL_BUDGET,
   tabIcon,
+  machineTabId,
   tabIdentities,
   tabTooltip,
   type WorkspaceTab,
@@ -66,7 +68,8 @@ import './WorkspaceTabStrip.css'
  * ## What is on a tab, and what deliberately is not
  *
  * A tab carries its icon, its status, its name, a qualifier when its name alone
- * is ambiguous (see {@link tabIdentities}) — and one ✕.
+ * is ambiguous (see {@link tabIdentities}) — and one ✕, which means a different
+ * thing on each kind of tab. That difference is the section after next.
  *
  * There is no ＋ on it: *"pills of the windows will not show that plus button
  * inside. There will be a terminal and browser globe icon next to the last
@@ -77,14 +80,37 @@ import './WorkspaceTabStrip.css'
  * doesn't need to be there, because we will not move windows down to the side
  * panel from there."* It had become a second control for what the ✕ now does.
  *
- * ## The ✕ is not the sidebar's ✕
+ * ## The two ✕s, which are not the same control — 2026-08-20
  *
- * *"it should not delete the session… side panel will have everything inside,
- * and above we just set a view which one we want to see."* So this one takes
- * the tab off the bar and stops there — the pty keeps running, the sidebar row
- * stays, its status dot keeps moving. The sidebar's ✕ ends the session, asks
- * first when there is work to lose, and hovers red. Two controls, two hovers,
- * two sentences in their tooltips; see {@link removeFromStrip}.
+ * Every tab has one, and pressing it destroys a browser window or destroys
+ * nothing at all depending on which kind of tab it sits on. Asad said sessions
+ * close from the sidebar, and then said what he had meant by it:
+ *
+ *   > *"from the windows it should be able to close it, but at least from the
+ *   > top bar. But to completely close and delete will be only sidebar… for the
+ *   > windows it will completely close, and for the sessions it will just close
+ *   > from the top bar, but it will still stay in the side panel."*
+ *
+ * So **a browser tab's ✕ ends the window** — a page is listed in no other panel,
+ * so "off the bar" would leave it open, bound to a session, and drawn nowhere —
+ * and **a session tab's ✕ takes the tab off this bar and stops there**: the pty
+ * keeps running, the rail keeps the row, the status dot keeps moving. Ending a
+ * session for real is the rail's ⋯ → Delete, which asks first. Nothing on this
+ * bar ends a session, and that is why `onEndRemote` — which once let this ✕ end
+ * one running on another machine — is gone rather than rewired.
+ *
+ * Two identical glyphs a centimetre apart with opposite outcomes is a real
+ * hazard, so the difference is carried in the two places a glyph cannot carry
+ * it. `[data-ends]` goes on the browser one only: it is what paints
+ * `--color-critical` under the pointer, and it is the same mark the rail's
+ * destructive control wears. And each title names its own act in one phrase —
+ * *Take off the bar*, *Close this page*. A phrase and not a sentence, because
+ * the standing instruction this round is no explanatory prose on screen; the
+ * reasoning lives here instead.
+ *
+ * A session tab leaves the strip three ways — its ✕, a drag out of the bar, and
+ * the toggle on its row in the rail. All three are the same act, a *view*
+ * changing, which is why none of them asks anything first.
  *
  * ## The drag, in both directions
  *
@@ -98,10 +124,14 @@ import './WorkspaceTabStrip.css'
  *   "put it back" needs no receiver.
  *
  * Every one of those is a mouse gesture, so none of them is the whole feature.
- * The ✕ removes a tab without one, ⌥← and ⌥→ move a focused tab along the
- * strip, and the sidebar row has a toggle that puts a window here without a
- * drag at all — see `usePromotedOrder`, which is how the two ends share one
- * list.
+ * ⌥← and ⌥→ move a focused tab along the strip, and the sidebar row has a
+ * toggle that puts a window here and takes it back without a drag at all — see
+ * `usePromotedOrder`, which is how the two ends share one list.
+ *
+ * A browser window takes part in none of it. It is not promoted, it cannot be
+ * folded away, and dropping it outside the bar leaves it exactly where it was:
+ * the rail no longer lists pages, so the only thing "out of the strip" could
+ * mean for one is *nowhere*. See {@link shownTabs}.
  */
 
 export interface WorkspaceTabStripProps {
@@ -133,38 +163,41 @@ export interface WorkspaceTabStripProps {
   covered?: boolean
   onSelect(id: string): void
   /**
-   * A tab has been taken off the strip, and it was the one on screen — so show
-   * this instead. `null` means there is nothing left up here to show.
+   * The ✕ on a **session** tab took the tab off the bar, and it was the tab on
+   * screen — so show this instead. `null` means there is nothing left up here.
    *
    * Separate from {@link onSelect}, and the difference is load-bearing rather
    * than tidy: `onSelect` is a *navigation* and pulls any covering view off the
-   * window, which is right for a click on a tab and wrong here. Pressing ✕ on
-   * the tab you will come back to, while you are reading Files, must not throw
-   * you out of Files.
+   * window, which is right for a click on a tab and wrong here. Taking the tab
+   * you will come back to off the bar, while you are reading Files, must not
+   * throw you out of Files.
+   *
+   * Optional, and its absence takes the whole session ✕ with it rather than
+   * leaving one that half-works. Taking the *active* tab off the bar is the
+   * ordinary press — it is the tab whose ✕ is showing without a hover — and
+   * without this the strip immediately redraws that tab as transient, so the
+   * press looks like it did nothing. Same rule as {@link onCloseWindow}: no
+   * handler, no control.
    */
-  onShowInstead(id: string | null): void
+  onShowInstead?(id: string | null): void
   /**
-   * The ✕ on a tab whose session is running on **another machine**.
+   * The ✕ on a **browser** tab: close the window.
    *
-   * A separate handler from {@link onShowInstead} because it is a separate act,
-   * and the difference is the one thing about this bar that has to be understood
-   * before anything else on it makes sense. A local pill's ✕ takes the tab off
-   * the strip and leaves the session running — *"it should not delete the
-   * session… side panel will have everything inside"* — and that reading works
-   * because the rail still holds the row and the process is this app's.
+   * A real close, unlike the ✕ on the session tab beside it — see the note at
+   * the top of this file for the sentence that decided it. A browser window is
+   * listed nowhere else in this app now, so "take it off the strip" is not a
+   * state it can be in: the page would still be open, still bound to whatever
+   * session it was bound to, and unreachable.
    *
-   * A remote session is different in the one way that matters here: he asked for
-   * the ✕ on its pill to mean what Close on its machine's heading means, which
-   * is *"It will just close all of the sessions from that PC… it should not
-   * disconnect the remote account."* So this ends the session where it is
-   * running. The caller routes it through the same confirmation every other
-   * close in the window gets; nothing about the decision is made in this file.
+   * The caller routes it through the same path ⌘W and the rail take, so a page
+   * closes the way everything else in this window closes; nothing about that
+   * decision is made in this file.
    *
-   * Optional, and absent is a real state: a host with no way to end a remote
-   * session — a test, the harness mounting this bare — draws no ✕ on a remote
-   * tab at all rather than one that cannot act.
+   * Optional, and absent is a real state rather than a dead control: a host
+   * with no way to close a page — a test, the harness mounting this bare —
+   * draws no ✕ at all.
    */
-  onEndRemote?(id: string): void
+  onCloseWindow?(id: string): void
   /**
    * The terminal icon after the last tab.
    *
@@ -221,7 +254,7 @@ export function WorkspaceTabStrip({
   covered = false,
   onSelect,
   onShowInstead,
-  onEndRemote,
+  onCloseWindow,
   onNewSession,
   onNewBrowserTab,
   sidebarHidden = false,
@@ -259,6 +292,24 @@ export function WorkspaceTabStrip({
     shown.map((entry) => entry.tab),
     tabs,
   )
+
+  /**
+   * What to call the session a browser window is attached to, or null.
+   *
+   * The binding knows *which* session holds a window; only this strip knows
+   * what that session is called. Null when the session is not on this strip —
+   * which happens, because a window stays attached to a session whose tab has
+   * been folded off the bar — and null is drawn as an absent phrase rather than
+   * as a raw session id, which is not a name anybody would recognise.
+   */
+  const sessionNameFor = (sessionId: string, machineId: string): string | null => {
+    const wanted = machineId === '' ? sessionId : machineTabId(machineId, sessionId)
+    const tab = tabs.find((entry) => entry.id === wanted)
+    if (!tab) return null
+    const identity = identities.get(tab.id)
+    if (!identity) return tab.label
+    return identity.qualifier ? `${identity.label} — ${identity.qualifier}` : identity.label
+  }
 
   /**
    * Every tab id this window has ever had on screen.
@@ -393,23 +444,35 @@ export function WorkspaceTabStrip({
     // Dropped outside the strip: fold it back into the side panel, where it has
     // been listed the whole time. Nothing else has to accept the drop for this
     // to work, which is why demotion does not wait on `Sidebar.tsx`.
-    if (id && !droppedHere.current) setOrder(demote(order, id))
+    //
+    // Sessions only. The rail stopped listing browser windows on 2026-08-20, so
+    // "fold it back" has nowhere to fold one to — `shownTabs` would draw it
+    // again on the next frame anyway, and the only visible effect of demoting it
+    // would be the page jumping to the end of the row for no reason the person
+    // dragging it could name.
+    const kind = tabs.find((tab) => tab.id === id)?.kind
+    if (id && kind === 'session' && !droppedHere.current) setOrder(demote(order, id))
     droppedHere.current = false
   }
 
   /**
-   * The ✕ on a tab: take the view off the bar, leave the work alone.
+   * The ✕ on a session tab: take the view off the bar, leave the work alone.
    *
    * Both halves come out of {@link removeFromStrip} rather than being decided
    * here, because the second half is the one that is easy to get wrong and
    * impossible to see in a screenshot: the strip always draws the tab you are
-   * looking at, so removing *that* tab has to move the window somewhere else or
-   * the press appears to do nothing at all.
+   * looking at, so taking *that* tab off has to move the window somewhere else
+   * or the press appears to do nothing at all.
+   *
+   * The rail's own toggle calls plain `demote` instead, and that is not a
+   * second answer to the same question: it takes a tab off the bar while you
+   * are still looking at it, so there is no selection to move. The correction
+   * is needed only where the press and the thing on screen are the same tab.
    */
   const removeTab = (id: string): void => {
     const result = removeFromStrip(order, tabs, id, activeTabId)
     setOrder(result.order)
-    if (result.select !== undefined) onShowInstead(result.select)
+    if (result.select !== undefined) onShowInstead?.(result.select)
   }
 
   /**
@@ -451,8 +514,8 @@ export function WorkspaceTabStrip({
   )
 
   /**
-   * The two icons after the last tab, and the only things in this bar that open
-   * anything.
+   * The two icons in the bar's trailing corner, and the only things in this bar
+   * that open anything.
    *
    * *"There will be a terminal and browser globe icon next to the last window.
    * Whatever the icon we click accordingly it will open the next window."* So
@@ -460,16 +523,31 @@ export function WorkspaceTabStrip({
    * needed in order to offer two commands from one target, and two targets need
    * no menu at all.
    *
+   * ## Why they left the scrolling rail — 2026-08-20
+   *
+   * They used to ride *inside* it, after the last tab, on the argument that
+   * "next to the last window" is a position relative to the tabs rather than to
+   * the window. That argument is right about the words and wrong about the
+   * result, and the frame says so: with the strip full, the rail scrolls, the
+   * openers scroll with it, and the globe ends up sitting on top of the last
+   * tab's name — *"these two buttons to start new session and new window are
+   * like coming above the tab. So they should be always in the corner and
+   * whenever we start new, these will become smaller."*
+   *
+   * "These will become smaller" is the tabs, and it is the other half of the
+   * fix: the corner is reserved out of the bar's width, the rail gets what is
+   * left, and the tabs give room rather than running underneath a control. So
+   * this block is a sibling of `.strip-rail` now instead of its last child, and
+   * the openers are the one part of the bar that never moves.
+   *
    * The terminal opens the **dialog**, which is the whole of the change he asked
    * for in the same breath: *"if we click directly on the whole button it opens
    * a quick window. We don't want this quick window at all."* The globe opens a
    * browser page, which lands on the start page that lists what is listening.
    *
-   * They ride *inside* the scrolling rail rather than being parked at the right
-   * edge of the bar, because "next to the last window" is a position relative to
-   * the tabs and not to the window. They are outside the `tablist`, because they
-   * are not tabs and a tablist whose children are not all tabs is a promise to a
-   * screen reader that the markup does not keep.
+   * They are outside the `tablist`, because they are not tabs and a tablist
+   * whose children are not all tabs is a promise to a screen reader that the
+   * markup does not keep.
    */
   const openers = (onNewSession || onNewBrowserTab) && (
     <div className="strip-openers">
@@ -554,13 +632,15 @@ export function WorkspaceTabStrip({
       {/*
         The tabs scroll; the bar does not.
 
-        Two elements rather than one, for two reasons that both bite only once
-        the strip is full. The reveal button is positioned against the bar, and
-        an absolutely-positioned child of a scrolling box scrolls *with* its
+        Two elements rather than one, for reasons that all bite only once the
+        strip is full. The reveal button is positioned against the bar, and an
+        absolutely-positioned child of a scrolling box scrolls *with* its
         contents — so on a window with twelve tabs and the rail put away, the one
         control that brings the rail back would slide off the left edge and the
-        tabs would run underneath where it used to be. And the rail holds the two
-        openers as well as the `tablist`, which must contain nothing but tabs.
+        tabs would run underneath where it used to be. The `tablist` inside must
+        contain nothing but tabs. And the two openers are the bar's fixed corner
+        now, which only means anything if there is a box that scrolls and a box
+        that does not.
       */}
       <div
         className="strip-rail"
@@ -668,87 +748,108 @@ export function WorkspaceTabStrip({
                   {tab.kind === 'session' && tab.status && <StatusDot status={tab.status} />}
                   <span className="strip-tab-label">{label}</span>
                   {qualifier && <span className="strip-tab-qualifier">{qualifier}</span>}
+                  {/*
+                    Which browser windows this session has, or which session this
+                    browser window belongs to — the same relation, seen from
+                    whichever end this pill is.
+
+                    This is the slot the paragraph above deliberately left empty,
+                    and it stays empty for a page that is attached to nothing:
+                    the objection there was to a mark that means nothing, and
+                    `B2` is not one. It is a chip rather than a dot precisely so
+                    that it cannot be read as a third status — see `BindChip`.
+
+                    No third *dot*: `StatusDot` keeps its slot and keeps owning
+                    run state, which is a different question from where a link
+                    from this session opens.
+                  */}
+                  {tab.kind === 'session' && <SessionBindChips {...bindKey(tab)} sessionName={spoken} />}
+                  {tab.kind === 'browser' && (
+                    <WindowBindChip browserTabId={tab.id} nameFor={sessionNameFor} />
+                  )}
                 </button>
 
                 {/*
-                  Off the bar, not closed — unless the session is on another
-                  machine, in which case it is exactly closed.
+                  Two ✕s that look the same and mean opposite things —
+                  2026-08-20. Read both branches together; neither is safe to
+                  change on its own.
 
-                  ## The local case, which is most of them
+                  ## The session one: off the bar, nothing ended
 
-                  The label says the whole sentence rather than the verb, because
-                  this is the one control in the window whose obvious reading is
-                  wrong: every ✕ anybody has ever pressed destroys something, and
-                  this one destroys nothing. The rail's ✕ — which does end the
-                  session, and asks first — says so in its own tooltip and turns
-                  red under the pointer. Neither of them is subtle enough to be
-                  mistaken for the other once you have read either one.
+                  *"for the sessions it will just close from the top bar, but it
+                  will still stay in the side panel."* So it demotes and stops:
+                  the pty runs, the rail keeps the row, the status dot keeps
+                  moving. That reading is only available *because* the rail has
+                  the row — which is the whole reason the browser branch below
+                  cannot borrow it.
 
-                  ## The remote case, and why it is the other thing
+                  This is the branch a remote session takes too. `onEndRemote`
+                  used to send one down the other road, ending it on its machine
+                  from a glyph identical to this one; that is deleted rather than
+                  rewired, because nothing on this bar may end a session.
 
-                  A local pill can afford to be harmless because the rail keeps
-                  the row and the process is this app's; "off the bar" is a
-                  complete and honest description of what happened. For a session
-                  on another machine, Asad asked for the ✕ to mean what Close on
-                  that machine's heading means — end it there, keep the machine —
-                  and that is what it does, through the caller's confirmation.
+                  ## The browser one: a real close
 
-                  The tooltip is therefore not the same sentence, and it should
-                  not be: two controls that do opposite things must not describe
-                  themselves identically. `--color-critical` on hover comes from
-                  `[data-ends]` in the stylesheet, which is the same mark the
-                  rail's ✕ wears for the same reason.
+                  Because a page is listed nowhere else: *"Browser windows will
+                  not be on the side bar at all."* With the rail out of the
+                  picture, "off the strip" would leave a window open, bound to a
+                  session, and drawn in no panel — so the only honest thing this
+                  control can do is end it. It goes through the caller's usual
+                  path, which is the same one ⌘W takes, so the main process
+                  learns the window is gone and the number it was wearing is not
+                  handed out again.
 
-                  ## And it is absent rather than inert when it cannot act
+                  Nothing is asked first, and that is unchanged: there is no
+                  process in a page to interrupt. The confirmation exists for
+                  work that would be lost.
 
-                  A machine on an older build never advertised `close`, so the
-                  tab arrives with `closable: false` and gets no ✕. It can still
-                  be taken off the strip — dragged out of the bar, or folded back
-                  from its row in the rail — so nothing is trapped up here; what
-                  is missing is only the control that would have lied.
+                  ## What keeps them apart on screen
+
+                  `[data-ends]` on the browser one and not the session one. It is
+                  the whole difference in the stylesheet: `--color-critical`
+                  under the pointer for the ✕ that destroys something, plain grey
+                  for the one that tidies. Plus a title each, two or three words,
+                  naming the act rather than explaining it — no prose on screen
+                  this round, so the argument is up here instead.
+
+                  ## Absent rather than inert, on both
+
+                  A host that cannot finish the act draws no ✕ for it — a test,
+                  the harness mounting this bare. For the session that means
+                  `onShowInstead`, without which taking the tab you are looking
+                  at off the bar would visibly do nothing; see the prop.
                 */}
-                {/*
-                  A shell on a server takes the same road as a remote session.
-
-                  Not the local road, and the difference is worth stating because
-                  the local reading is the tempting one: taking a tab off the
-                  strip is safe *because the rail still holds the row*, and the
-                  rail does hold a server's row. What decides it is what the ✕
-                  means, and Asad settled that for machines that are not this one:
-                  the pill's ✕ ends the thing. A ✕ that meant "hide" on one row
-                  and "end" on the row above it — both of them sessions somewhere
-                  else — would be the same glyph doing two things a centimetre
-                  apart. So: it ends the terminal, through the same confirmation
-                  everything else in this window closes through.
-                */}
-                {(!(tab.machine || tab.server) ||
-                  (tab.closable && onEndRemote !== undefined)) && (
+                {tab.kind === 'session' && onShowInstead !== undefined && (
                   <button
                     type="button"
                     className="strip-tab-close"
-                    data-ends={tab.machine || tab.server ? '' : undefined}
+                    // No `data-ends`. It is the only thing telling this ✕ apart
+                    // from the one on the tab beside it, and this one ends
+                    // nothing, so it must not wear the mark that says it does.
+                    //
                     // See the guard in `onDragStart` above: the tab is draggable,
                     // and without this marker a press that slides a few pixels
                     // reorders the strip instead of taking this tab off it.
                     data-no-drag=""
-                    aria-label={
-                      tab.machine
-                        ? `Close ${full} on ${tab.machine.name} — ends the session`
-                        : tab.server
-                          ? `Close ${full} on ${tab.server.name} — ends the terminal`
-                          : `Remove ${full} from the top bar`
-                    }
-                    title={
-                      tab.machine
-                        ? `Close ${full} — ends the session on ${tab.machine.name}. That machine stays connected.`
-                        : tab.server
-                          ? `Close ${full} — ends this terminal on ${tab.server.name}. The server itself is left alone.`
-                          : 'Remove from the top bar. It keeps running, in the sidebar.'
-                    }
-                    onClick={() => {
-                      if (tab.machine || tab.server) onEndRemote?.(tab.id)
-                      else removeTab(tab.id)
-                    }}
+                    aria-label={`Take ${full} off the bar`}
+                    title="Take off the bar"
+                    onClick={() => removeTab(tab.id)}
+                  >
+                    <Glyph path={CLOSE} />
+                  </button>
+                )}
+                {tab.kind === 'browser' && onCloseWindow !== undefined && (
+                  <button
+                    type="button"
+                    className="strip-tab-close"
+                    data-ends=""
+                    // See the guard in `onDragStart` above: the tab is draggable,
+                    // and without this marker a press that slides a few pixels
+                    // reorders the strip instead of closing this window.
+                    data-no-drag=""
+                    aria-label={`Close ${full}`}
+                    title="Close this page"
+                    onClick={() => onCloseWindow(tab.id)}
                   >
                     <Glyph path={CLOSE} />
                   </button>
@@ -761,9 +862,9 @@ export function WorkspaceTabStrip({
               the last tab — otherwise the strip ends in an unexplained line. */}
           {dropAt === shown.length && <span className="strip-drop-end" aria-hidden="true" />}
         </div>
-
-        {openers}
       </div>
+
+      {openers}
     </div>
   )
 }

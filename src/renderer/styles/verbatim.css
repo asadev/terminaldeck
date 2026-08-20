@@ -305,7 +305,10 @@
    as a rule for an element nothing renders. */
 .cs-path,
 .settings-path,
-.settings-profile-path,
+/* `.settings-profile-path` was here — the config directory under each account
+   in Settings → Coding AI. That line moved behind the row's ⓘ on 2026-08-19
+   (*"remove big descriptions under each account… folder link"*), so the
+   selector went with it, exactly as `.cs-preview` did above. */
 .settings-url-address,
 .bw-start-address,
 .bw-capture-url,
@@ -328,8 +331,10 @@
    them.
 
    `.copilot-ordinal` is `{index + 1}` — decimal digits and nothing else, and
-   `aria-hidden` at that. `.ub-row-value` is `39%` or the words `Not reported`.
-   Neither can contain a pair this font welds today. `.copilot-action-time` is
+   `aria-hidden` at that. `.ub-row-value` is `39%` or the words `Not reported`,
+   and `.ub-context` is `154.1k` — a token count with a unit on it, in tabular
+   figures so the digits do not jog the icon beside them as they change.
+   None of the three can contain a pair this font welds today. `.copilot-action-time` is
    the one that can: `whenIso` formats a parsed timestamp for the reader, and
    falls back to printing the stored string *verbatim* when `Date.parse` cannot
    read it — so a malformed record shows its own bytes, which is precisely the
@@ -345,6 +350,7 @@
 .copilot-ordinal,
 .copilot-action-time,
 .ub-row-value,
+.ub-context,
 
 .remote-fingerprint,
 /* The same six groups, on the screen where a person actually compares them
@@ -383,6 +389,9 @@
 .widget-note.mono,
 .widget-row-main.mono,
 .widget-row-side.mono,
+.srvpick-path,
+.srvpick-window-path,
+.srvpick-input,
 .tooltip-label[data-mono] {
   font-variant-ligatures: none;
 }

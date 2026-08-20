@@ -1,3 +1,4 @@
+import { HoverNote } from './HoverNote'
 import { Modal } from './Modal'
 import {
   switchConversationNote,
@@ -63,6 +64,17 @@ interface Props {
   problem: string | null
   onCancel(): void
   onConfirm(): void
+  /**
+   * Arm it for the next message instead of doing it now.
+   *
+   * Optional, and absent rather than disabled on a build whose bridge cannot
+   * defer: a button that is present and refuses is worse than one that is not
+   * there, because it reads as a feature that is broken rather than as one this
+   * build does not have.
+   */
+  onDefer?(): void
+  /** Whether this build can defer at all. Decides the button's existence. */
+  canDefer?: boolean
 }
 
 export function SwitchAccountConfirm({
@@ -74,6 +86,8 @@ export function SwitchAccountConfirm({
   problem,
   onCancel,
   onConfirm,
+  onDefer,
+  canDefer = false,
 }: Props) {
   /*
    * Three states, and the button is only offered in one of them.
@@ -101,6 +115,23 @@ export function SwitchAccountConfirm({
                 implies the switch is still pending and could be stopped. */}
             {canSwitch && problem === null ? 'Cancel' : 'Close'}
           </button>
+          {/*
+            The deferred switch, and it is deliberately the *left* of the two
+            rather than the primary.
+
+            It is the one Asad described as the default — "the running agent
+            will keep running on the previous one… when we give another command
+            it will be changed" — but it is also the one whose effect is not
+            immediate, and a primary button that appears to do nothing is the
+            complaint this sheet was built out of. So the visibly-immediate act
+            keeps the primary slot and this sits beside it, saying in the label
+            exactly when it will happen.
+          */}
+          {canSwitch && problem === null && canDefer && onDefer && (
+            <button type="button" className="modal-btn" disabled={busy} onClick={onDefer}>
+              Switch at my next message
+            </button>
+          )}
           {canSwitch && problem === null && (
             <button
               type="button"
@@ -108,7 +139,7 @@ export function SwitchAccountConfirm({
               disabled={busy}
               onClick={onConfirm}
             >
-              {busy ? 'Switching…' : 'Switch account'}
+              {busy ? 'Switching…' : 'Switch now'}
             </button>
           )}
         </>
@@ -132,16 +163,49 @@ export function SwitchAccountConfirm({
 
         {canSwitch && (
           <>
+            {/*
+              Which two accounts, and nothing else.
+
+              Three paragraphs used to stand here — what a switch keeps, what
+              becomes of the conversation, and what the second button means —
+              and they were the thing he singled out:
+
+                > *"here you have a very long description… Remove this full
+                > shit. I don't want any kind of long descriptions anywhere.
+                > Just if somewhere it's very required, give the i icon like
+                > other ones, information icon in the settings, same way."*
+
+              The paragraph about what a switch keeps was written when a switch
+              lost the conversation and had to say so in advance. It does not
+              lose it any more — both accounts are put on one conversation
+              history before this sheet is drawn — so the paragraph is not only
+              long, it is describing a cost that no longer exists. It lives
+              behind the dot now, which is the affordance he named.
+
+              The title says where he is going; this says where he is. Two
+              names and an arrow, because that is information rather than prose.
+            */}
             <p className="switch-confirm-headline">
-              This session is running as {names.from}.
+              {names.from} → {names.to}
+              <HoverNote label="What switching does">{SWITCH_KEEPS}</HoverNote>
             </p>
-            {/* What survives, first — it is the half that makes this different
-                from the new session the menu used to open, and it is the half
-                somebody is looking for. */}
-            <p className="switch-confirm-detail">{SWITCH_KEEPS}</p>
-            {/* And what does not. Never merged into the paragraph above: a cost
-                in the middle of a reassurance is a cost people read past. */}
-            <p className="switch-confirm-detail">{switchConversationNote(plan, names)}</p>
+            {/*
+              And the one sentence that is not a description: the conversation
+              is *not* coming with him.
+
+              Silent when it does come, which is now the ordinary case — a line
+              saying everything is fine is exactly the statement he asked to be
+              rid of. It stays for the cases the app cannot fix on his behalf:
+              an account whose folder somebody chose themselves, an agent whose
+              history this app cannot read, another tab already on the
+              conversation. Those are losses, and a loss he was not warned about
+              is the fault this sheet exists for.
+            */}
+            {plan.conversation !== 'follows' && (
+              <p className="switch-confirm-detail" role="alert">
+                {switchConversationNote(plan, names)}
+              </p>
+            )}
           </>
         )}
 

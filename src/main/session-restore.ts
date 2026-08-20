@@ -1,4 +1,6 @@
+import { realpathSync } from 'node:fs'
 import { access } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
 import { isWithinRoot } from './fs-tree'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
@@ -310,7 +312,65 @@ export interface PlanProbes {
  * folder `b/c` and provider `a/b` with folder `c` are different sessions.
  */
 export function conversationScope(session: SavedSession, configDir: string): string {
-  return `${session.provider}\u0000${configDir}\u0000${session.cwd}`
+  return `${session.provider}\u0000${conversationStore(configDir)}\u0000${session.cwd}`
+}
+
+/**
+ * The conversation store a config directory actually reads, canonicalised.
+ *
+ * A config directory *names* a store; it is not the store. Accounts can now
+ * share one — `shared-projects.ts`, Option C from `ACCOUNT-MODEL.md` — by each
+ * having its `projects/` linked into `~/.claude/projects`, which is what lets a
+ * conversation survive a change of account. Keyed on the directory instead, two
+ * accounts sharing a history look like two stores, and the
+ * one-tab-per-conversation rule in fact 1 above stops applying between them at
+ * exactly the moment it matters most.
+ *
+ * What that costs is not an inconvenience, and it is measured rather than
+ * feared. Two sessions continuing one conversation write two branches into one
+ * file, under one session id, with every line parsing and no error anywhere:
+ *
+ *     user  parent=ffa46102  uuid=de3a640d   ONE says alpha
+ *     user  parent=ffa46102  uuid=b9680b97   TWO says beta      ← same parent
+ *     forked parents (same parent claimed by >1 message): 1
+ *
+ * Whichever branch `--continue` lands on next silently orphans the other, and
+ * nothing downstream can detect that or repair it. It is also **not an account
+ * problem**: two sessions of the same account fork a conversation the same way,
+ * and did before any of this existed. So it has to be prevented at the point a
+ * session is handed `--continue`, and preventing it starts with recognising
+ * that two sessions are in one conversation at all. This function is that
+ * recognition; `host-core.ts` is where the refusal happens.
+ *
+ * `realpathSync` and not `resolve`, because `resolve` does not follow a link
+ * and following the link is the entire question. A failure falls back to the
+ * literal path: a store that does not exist yet is a store nothing else can be
+ * in, so a key that groups it with nothing is right rather than degraded.
+ *
+ * Memoised because this runs once per candidate in `planRestore`'s claim pass
+ * and once per open tab in the switch handler's occupancy check — a `realpath`
+ * per iteration, for an answer that changes only when somebody presses a button
+ * in Settings.
+ */
+const storeCache = new Map<string, string>()
+
+export function conversationStore(configDir: string): string {
+  const cached = storeCache.get(configDir)
+  if (cached !== undefined) return cached
+  const projects = join(configDir, 'projects')
+  let store = projects
+  try {
+    store = realpathSync.native(projects)
+  } catch {
+    // Not there yet, or unreadable. The literal path is the honest answer.
+  }
+  storeCache.set(configDir, store)
+  return store
+}
+
+/** Drop the memo. Called when an account's history is relinked, and by tests. */
+export function resetConversationStores(): void {
+  storeCache.clear()
 }
 
 /**

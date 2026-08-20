@@ -143,6 +143,15 @@ describe('the files app.terminaldeck.dev is built from', () => {
       'src/main/remote/protocol.ts',
       'src/renderer/assets/fonts/hanken-grotesk.woff2',
       'src/renderer/assets/fonts/jetbrains-mono.woff2',
+      // The hold that keeps a session's replay off the screen while it is being
+      // written. Written for the desktop, imported here rather than copied, for
+      // the reason this fixture exists to make somebody state: the policy is a
+      // measurement of how xterm drains a large write, and a second copy of it
+      // is how the desktop comes to be fixed and the phone does not — which is
+      // exactly what he found, in those words, on 2026-08-20. `backfill.test.ts`
+      // beside this file pins the behaviour so that moving the module breaks a
+      // test here rather than a deploy.
+      'src/renderer/components/terminal-backfill.ts',
       'src/shared/brand.ts',
       'src/shared/pairing-link.ts',
       'src/shared/relay-wire.ts',

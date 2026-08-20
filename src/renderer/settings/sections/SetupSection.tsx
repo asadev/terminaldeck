@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Group, LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
+import { Group, LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
 import { errorText, type SectionProps } from '../settings-bridge'
 import { toSetupSnapshot, TOOL_STATE_LABEL, type SetupSnapshot } from '../setup-status'
 import './SetupSection.css'
@@ -86,7 +86,7 @@ function ToolRow({ tool }: { tool: SetupSnapshot['tools'][number] }) {
 */
 
 /**
- * The agent CLIs, which Settings → Agents already lists in full.
+ * The agent CLIs, which Settings → Coding AI already lists in full.
  *
  * The same three rows were drawn twice in one window, under two different
  * headings — "Coding tools" here and "What is installed" there — with the same
@@ -100,6 +100,27 @@ function ToolRow({ tool }: { tool: SetupSnapshot['tools'][number] }) {
  * GitHub CLI — and points at Agents for these.
  */
 export const AGENT_TOOL_IDS: readonly string[] = ['claude', 'codex', 'gemini']
+
+/**
+ * Also not on this pane: GitHub Copilot, which moved to the GitHub page.
+ *
+ *   > *"we will move this GitHub Copilot from here to the main page of GitHub,
+ *   > because we have already a page specifically for GitHub, so don't need to
+ *   > keep it inside the settings."*
+ *
+ * He is right about where it belongs, and the row was an odd one out here for a
+ * reason this list makes plain: everything else Setup probes is something the
+ * app *uses* — git, and the GitHub CLI it shells out to. Copilot it merely
+ * *finds*; nothing in this build starts a Copilot session or writes a Copilot
+ * hook. So the one place that fact is worth reading is the page about GitHub,
+ * and it is drawn there now by `components/GitHubPanel.tsx`.
+ *
+ * Nothing is left behind here: this id is filtered out of `tools` below, so
+ * there is no row, no heading and no "moved to…" pointer — a cross-reference is
+ * the thing that made Setup and Agents read as two halves of one screen, and
+ * one is not being added back on its way out.
+ */
+export const MOVED_TOOL_IDS: readonly string[] = ['copilot']
 
 /**
  * Setup is a pair of groups inside Agents now, not a rail entry.
@@ -168,10 +189,13 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
     )
   }
 
-  // Minus the agents — see `AGENT_TOOL_IDS`. What is left is git and the GitHub
-  // CLI, which is what "what this app needs on your machine" means once the
-  // agents have a section of their own.
-  const tools = (snapshot?.tools ?? []).filter((tool) => !AGENT_TOOL_IDS.includes(tool.id))
+  // Minus the agents and minus Copilot — see `AGENT_TOOL_IDS` and
+  // `MOVED_TOOL_IDS`. What is left is git and the GitHub CLI, which is what
+  // "what this app needs on your machine" means once the agents have a section
+  // of their own and Copilot lives on the GitHub page.
+  const tools = (snapshot?.tools ?? []).filter(
+    (tool) => !AGENT_TOOL_IDS.includes(tool.id) && !MOVED_TOOL_IDS.includes(tool.id),
+  )
 
   return (
     <>
@@ -195,12 +219,10 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
         subject: it existed only because the merge had not happened yet.
       */}
 
-      {/* What is left after the three: the coding tools this app can find and
-          cannot start a session with. GitHub Copilot is the one today — it has
-          no entry in `providers.ts`, which is exactly why it has no row in
-          Agents and would have disappeared from the window altogether if this
-          section had simply dropped its list. */}
-      <Group title="Other coding tools">
+      {/* What is left after the agents and after Copilot: git, and the GitHub
+          CLI this app shells out to. Both are things the app *uses*, which is
+          what makes this the pane they belong on — see `MOVED_TOOL_IDS`. */}
+      <Group title="Other tools">
         <ul className="settings-tools">
           {tools.map((tool) => (
             <ToolRow key={tool.id} tool={tool} />
@@ -218,12 +240,10 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
           */}
           {tools.length === 0 &&
             (checking ? (
-              // One row, because one is what lands once the three agent CLIs
-              // have moved to their own section: GitHub Copilot.
-              // The agents moved to their own section and the placeholder has
-              // to keep being shaped like the answer, or the panel jumps when
-              // the probe returns.
-              [0].map((n) => (
+              // Two rows, because two is what lands: git and the GitHub CLI.
+              // The placeholder has to keep being shaped like the answer, or the
+              // panel jumps when the probe returns.
+              [0, 1].map((n) => (
                 <li key={n} className="settings-tool settings-tool-ghost" aria-hidden="true">
                   <span className="settings-tool-main">
                     <span className="settings-ghost-line" />
@@ -239,11 +259,14 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
               </li>
             ))}
         </ul>
-        <div className="settings-actions">
-          <Button onClick={load} disabled={checking}>
-            {checking ? 'Checking…' : 'Check again'}
-          </Button>
-        </div>
+        {/*
+          "Check again" was here, and it is gone for the same reason the one on
+          the agent list above it is: `load` runs from an effect on every visit
+          to this pane, so the button re-ran a probe that had answered a second
+          earlier. It was also the third control on a pane the recorded review of
+          2026-08-19 called *"too messy and too difficult to understand"* — and
+          two of the three did nothing a person had asked for.
+        */}
       </Group>
 
       {/*

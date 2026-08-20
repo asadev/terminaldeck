@@ -277,6 +277,57 @@ export function folderName(path: string): string {
 }
 
 /**
+ * Shapes a shell writes into its own window title, which are not names.
+ *
+ * A login shell sets the terminal's title from its prompt — `\e]0;%n@%m: %~\a`
+ * in the stock zsh and bash profiles — so the string that arrives here as a
+ * session's "title" is routinely `apple@Mac-mini: ~/Projects/terminaldeck`. That
+ * is a machine and a path, and Asad reported exactly what it does to the rail:
+ * *"in the side panel it is showing the full machine and path, everything in the
+ * pill. It should not show. It should only show the name of the session."*
+ *
+ * Both halves are already stated by where the row sits. A session under a
+ * project heading is under its folder's name, and a session under a machine
+ * heading is under that machine's name — so printing them again on the line
+ * costs the name its room and says nothing the eye did not already have. The
+ * whole string still reaches the row's tooltip through `where`, which is where
+ * every other identifying-but-redundant fact on that row goes.
+ *
+ * Three shapes, and no more, because a fourth guess starts eating real titles:
+ *
+ *  - `user@host`, with or without a `: path` after it. No spaces are allowed
+ *    around the `@` or before the `:`, so an English sentence cannot match.
+ *  - `host: ~/path` or `host: /path` — the same prompt without a user in it,
+ *    and `host: C:\\path` for the Windows half. The tail must begin with `~`,
+ *    `/` or a drive letter and a backslash, so `Fix: the login race` is safe.
+ *  - A bare path, POSIX or Windows. `NOT_A_TASK` already refuses these when a
+ *    title is being *derived*; this is the same judgement applied to a title
+ *    that arrived from somewhere else — the far machine's own store, or a shell
+ *    that titled itself before any agent ran.
+ */
+const MACHINE_AND_PATH = [
+  /^[^\s@:]+@[^\s@:]+(?::.*)?$/,
+  /^[\w.-]+:\s*(?:[~/]|[A-Za-z]:\\).*$/,
+  /^~?\/[^\s]*$/,
+  /^[A-Za-z]:\\/,
+]
+
+/**
+ * Is this "title" just the machine and the folder the shell is sitting in?
+ *
+ * Asked at the point of *display* rather than when the title is stored, because
+ * the string is still the honest answer to "what did this terminal call itself"
+ * and the Inspector is entitled to print it. What is being decided here is only
+ * whether it is worth a row's name — see {@link sessionLabel}, which falls
+ * through to `Session N` when it is not.
+ */
+export function isMachineAndPath(title: string): boolean {
+  const text = title.trim()
+  if (text === '') return false
+  return MACHINE_AND_PATH.some((pattern) => pattern.test(text))
+}
+
+/**
  * The label for a session whose folder name is no label at all.
  *
  * `folderName('')` is `''`, and a cwd that is empty or whitespace is not

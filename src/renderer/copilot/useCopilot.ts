@@ -62,6 +62,42 @@ export interface Copilot {
   ensure(): void
   /** Stop it, and refresh. */
   stop(): void
+  /**
+   * End the running copilot and start a fresh one in its place.
+   *
+   * The one verb the window offers, since 2026-08-20. Asad, on finding a Stop
+   * in the copilot's bar:
+   *
+   *   > *"Why do we even have the stop button? Instead it should say reset, or
+   *   > it should not be there. Restart session or restart only. But I don't
+   *   > understand what is the purpose of stop button."*
+   *
+   * He is right that Stop had no inferable purpose. Stopping took the copilot's
+   * session away, and with it the tab the button was drawn on — so the whole
+   * visible result of pressing it was the window disappearing, and getting back
+   * meant knowing that the pinned row in the rail would start another one.
+   * Nothing on the button said that.
+   *
+   * Restart is the act somebody actually wants from a control in that place: the
+   * conversation is muddled, the CLI is wedged, start again. It is `stop` and
+   * then `ensure`, in that order and sequentially rather than in parallel,
+   * because `ensureCopilot` is idempotent — it answers with the *running*
+   * copilot if there is one — so firing both at once would find the old session
+   * still alive and hand it straight back, which is a Restart that restarts
+   * nothing.
+   *
+   * The pair is not invented here either. `copilot-session.ts` names exactly this
+   * sequence as the way to make an edited `CLAUDE.md` take effect — *"the CLI
+   * reads it as the session spawns and never re-reads it… a window that wants
+   * the edit live calls `copilot:stop` and then `copilot:ensure`"* — so Restart
+   * is also the one control that applies a change to the copilot's own
+   * instructions, which is the second reason somebody presses it.
+   *
+   * `stop` stays on this interface and is still used: Settings → Copilot offers
+   * it, where a person is deliberately turning a feature off rather than asking
+   * for a clean slate, and where there is a screen around it saying so.
+   */
+  restart(): void
   /** Ask again — after a login, after an exit, on a Check again button. */
   refresh(): void
 }
@@ -187,11 +223,49 @@ export function useCopilot(injected?: CopilotBridge | null): Copilot {
       .catch(() => {})
   }, [deck, apply])
 
+  /**
+   * Stop, then start — awaited in that order, never in parallel.
+   *
+   * `ensureCopilot` hands back the running copilot when there is one, so a
+   * restart that did not wait for the stop to land would get the same session
+   * back and change nothing on screen. The interface note above carries the rest
+   * of the argument.
+   *
+   * `setLoading(true)` covers the whole of it rather than only the start: the
+   * gap between the two calls is a moment in which the copilot genuinely is not
+   * running, and a window that drew "Not running" for it would be reporting a
+   * state nobody asked to be in.
+   */
+  const restart = useCallback(() => {
+    if (!deck) return
+    setLoading(true)
+    if (mounted.current) setSignIn(null)
+    void deck
+      .stopCopilot()
+      .then(() => deck.ensureCopilot())
+      .then((value) => {
+        apply(value)
+        askSignIn(readCopilotState(value)?.status === 'running')
+      })
+      .catch(() => {
+        if (mounted.current) setLoading(false)
+      })
+  }, [deck, apply, askSignIn])
+
   useEffect(() => {
     refresh()
     const timer = setInterval(refresh, REFRESH_MS)
     return () => clearInterval(timer)
   }, [refresh])
 
-  return { state, signIn, stage: copilotStage(state, signIn), loading, ensure, stop, refresh }
+  return {
+    state,
+    signIn,
+    stage: copilotStage(state, signIn),
+    loading,
+    ensure,
+    stop,
+    restart,
+    refresh,
+  }
 }

@@ -635,9 +635,10 @@ export function FileViewer({ root, path, className }: Props) {
         aria-label={path ? `Contents of ${name}` : 'No file open'}
       >
         {body.kind === 'empty' && (
-          <PageEmpty icon={panelSpec('files').icon} title="Nothing to open">
-            This project has no file at its top level to show.
-          </PageEmpty>
+          /* Three words. The sentence under them — "This project has no file at
+             its top level to show." — was the same fact at length, on a page
+             whose left half is the folder it is talking about. */
+          <PageEmpty icon={panelSpec('files').icon} title="Nothing to open" />
         )}
 
         {body.kind === 'notice' && <p className="file-viewer-notice">{body.text}</p>}

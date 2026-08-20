@@ -457,11 +457,25 @@ struct SessionListView: View {
      */
     private var list: some View {
         List {
-            if let session = model.resumable {
-                ResumeRow(session: session) { model.open(session: session.id) }
-                    .plainRow()
-            }
-
+            /*
+             * There was a **Resume** card here, pinned above the list: the
+             * session this phone last looked at, tinted, with *"Where you were
+             * last"* under it. It is deleted, in his words, 2026-08-20:
+             *
+             *   > *"in the application, resume the top thing, resume session
+             *   > thing where you were last time — I think that's not required."*
+             *
+             * He is right, and the reason it looked useful is the reason it was
+             * not: the session it named is *already in the list below*, usually
+             * at the top of it, because the list is sorted by what did something
+             * most recently. So the card was a second control for the same row,
+             * one line higher, in the one colour this screen reserves for the
+             * single action worth suggesting.
+             *
+             * What it remembered is not deleted with it — `lastOpenedKey` still
+             * records the session, because inspect mode reads it to decide where
+             * a described element is sent. That is a use nobody has to see.
+             */
             ForEach(listed) { session in
                 Button {
                     model.open(session: session.id)
@@ -512,13 +526,20 @@ struct SessionListView: View {
             // middle of the list. The modifier is inside its `if` instead.
             alertsOffer
 
-            // Last, and now unambiguously about the list above it. It used
-            // to be followed by the dev servers and the port list, which is
-            // why it was placed *between* the sessions and those rather than
-            // at the foot — a footnote under a screen's worth of localhost
-            // rows reads as a footnote about localhost. With those on their
-            // own tab the foot is the right place again.
-            scopeNote.plainRow(top: 18, bottom: 28)
+            /*
+             * There was a footnote here — *"Only sessions started in Terminal
+             * Deck are listed…"* — under every populated list, on every launch,
+             * forever. It is gone, under the rule he restated on 2026-08-20:
+             *
+             *   > *"don't put any single statement in anywhere… We want
+             *   > simplicity. Let the smart people use it."*
+             *
+             * The sentence itself survives in exactly one place, which is the
+             * one place it is genuinely required: the **empty** state, where
+             * "nothing is listed" is the whole screen and the reason for it is
+             * the only useful thing to say. A list with sessions in it does not
+             * need a note explaining which sessions are in it.
+             */
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -669,42 +690,9 @@ struct SessionListView: View {
         .accessibilityIdentifier("session.swipe.details.\(session.id)")
     }
 
-    /**
-     * What this list does *not* contain, said once and quietly.
-     *
-     * The list is every session the desktop started, and people reasonably
-     * expect it to be every session — they have an agent running in a terminal
-     * window or in their editor and they go looking for it here. It is not here
-     * and it cannot be: a session is a pty this product owns, and nothing gives it a
-     * handle on a process some other program spawned. Saying nothing leaves the
-     * only available conclusion being that the app is broken, which is the
-     * failure this line exists to prevent.
-     *
-     * A line at the foot of the list rather than a banner over it, deliberately.
-     * The design brief's rule is that motion and emphasis are earned; this is a
-     * fact worth having available and not worth interrupting anybody for, so it
-     * sits where a footnote sits, in the faint colour, below the last row. The
-     * same sentence is the second half of the empty state's description, because
-     * an empty list is exactly when somebody is most likely to be looking for a
-     * session that was never going to be here.
-     */
-    private var scopeNote: some View {
-        Text(Self.onlyItsOwnSessions)
-            .font(.system(size: 12))
-            .foregroundStyle(Theme.faint)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Four points in from the cards above it, the same offset the
-            // localhost list's footnote uses, and the top gap is `plainRow`'s
-            // argument rather than a padding: a `List` row's own insets are what
-            // decide where a separator would be drawn, and padding inside the
-            // row leaves the row taller than its content in a way that shows up
-            // as an uneven gap under the last card.
-            .padding(.horizontal, 4)
-    }
-
-    /// Written once and read in both places it belongs. Two copies of a sentence
-    /// is two sentences that drift.
+    /// The empty state's second half, and now the only place this sentence is
+    /// said at all — the footnote it used to share with is deleted; see the note
+    /// where it stood.
     ///
     /// It used to end "in Terminal or VS Code", and the review took that out by
     /// name: *"we don't need to mention VS Code because it's another one… but VS
@@ -945,60 +933,6 @@ struct RowButtonStyle: ButtonStyle {
 /* -------------------------------------------------------------------------- */
 /* Rows                                                                        */
 /* -------------------------------------------------------------------------- */
-
-/**
- * The session this phone was last looking at, at the top, one tap away.
- *
- * The one place on this screen that is allowed to be blue, and that is the
- * accent rule doing its job: there is exactly one action being suggested here,
- * so it is the only thing tinted. Everything below it is a card the same colour
- * as every other card.
- */
-private struct ResumeRow: View {
-    let session: RemoteSession
-    let open: () -> Void
-
-    var body: some View {
-        Button(action: open) {
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.uturn.backward.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Theme.accent)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Resume \(session.title)")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.primary)
-                        .lineLimit(1)
-                    Text("Where you were last")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.secondary)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.faint)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(AccentRowButtonStyle())
-    }
-}
-
-/// The resume card's own press state. Separate from `RowButtonStyle` because it
-/// is the tinted card and a 6% white wash over a blue tint is a different
-/// colour from a 6% wash over grey.
-private struct AccentRowButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(Theme.accent.opacity(configuration.isPressed ? 0.22 : 0.14),
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .scaleEffect(configuration.isPressed ? 0.99 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-}
 
 /**
  * One session.

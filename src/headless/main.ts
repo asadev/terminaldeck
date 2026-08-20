@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url'
 import { BRAND } from '../shared/brand'
 import { installPaths, nodePaths, userDataDir, type PlatformPaths } from '../main/platform/paths'
 import type { Device } from '../main/remote/device-auth'
+import { asDeviceKind, type DeviceKind, type DeviceKindRecord } from '../main/remote/device-kind'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import type { PairingToken } from '../main/remote/device-auth'
 import { currentPlatform } from '../main/platform/host'
@@ -39,10 +40,15 @@ import {
   type DaemonRecord,
 } from './control'
 import {
+  KIND_PROMPT,
+  NO_COPILOT_HERE,
   parseArgs,
   pickDevice,
+  renderApproved,
   renderFolders,
+  renderKindQuestion,
   renderNewDevice,
+  renderNotApproved,
   renderNotRunning,
   renderPairCode,
   renderStatus,
@@ -164,7 +170,7 @@ async function dispatch(record: DaemonRecord, command: Command): Promise<number>
     case 'status':
       return await showStatus(record)
     case 'pair':
-      return await pair(record)
+      return await pair(record, command)
     case 'stop':
       return await stop(record)
     case 'folders':
@@ -211,7 +217,10 @@ async function showStatus(record: DaemonRecord): Promise<number> {
  * was printed is passed along so that a device which redeemed while the code was
  * still being drawn is reported immediately rather than waited for.
  */
-async function pair(record: DaemonRecord): Promise<number> {
+async function pair(
+  record: DaemonRecord,
+  command: Extract<Command, { kind: 'pair' }>,
+): Promise<number> {
   const before = await devices(record)
   if (!before.ok) return fail(before.answer)
 
@@ -300,14 +309,87 @@ async function pair(record: DaemonRecord): Promise<number> {
     return 0
   }
 
-  const approved = await ask(record, 'remote:device:approve', device.id)
+  /*
+   * The second question, and it is a second question rather than a wider first
+   * one on purpose.
+   *
+   * "Approve it? [y/N]" is about the fingerprint on the screen above — is this
+   * the device I am holding. This is about what that device is *for*, and the
+   * two have different remedies when you get them wrong: the first is answered
+   * again with the next code, the second cannot be answered again at all, since
+   * `DeviceKinds.claim` writes once and nothing overwrites it.
+   *
+   * Skipped when `--kind` already said, which is the whole reason that flag
+   * exists — a provisioning script has no keyboard to answer this at.
+   */
+  const chosen = command.deviceKind ?? (await askKind())
+  if (chosen === null) {
+    process.stdout.write(
+      '\n  Not approved — that was neither "mine" nor "guest", and this is not a question\n' +
+        `  with a safe default. Run "${BRAND.id} pair" again, or pass --kind mine|guest.\n`,
+    )
+    return 1
+  }
+
+  /*
+   * Kind first, folders with it, approval last — the argument order the handler
+   * requires, and the one it used not to get.
+   *
+   * This call used to be `ask(record, 'remote:device:approve', device.id)` with
+   * no kind at all, and the handler's very first check is `asDeviceKind(kind)`
+   * returning null for `undefined`, which falls into the branch that decides
+   * nothing and answers with the roster. So the device was never approved and
+   * this command printed "Approved." anyway — because it read the fact that a
+   * reply arrived, not the reply. Both halves of that are fixed here: the kind
+   * is sent, and the answer is *read*.
+   *
+   * The empty folder list is only consulted for a guest, and an empty one is the
+   * right start: it is a real answer meaning "may reach nothing yet", where the
+   * absence of a record is what used to mean everything.
+   */
+  const approved = await ask(record, 'remote:device:approve', device.id, chosen, [])
   if (!approved.ok) return fail(approved)
-  process.stdout.write(
-    `\n  Approved. ${device.name} can reach this host now — it may need to reconnect once.\n` +
-      `  It starts with the folders this host has open; "${BRAND.id} folders add <path>"\n` +
-      '  narrows that to exactly what you choose.\n',
-  )
+
+  /*
+   * Read back what the host actually did, from the host.
+   *
+   * The channel answers with the device roster in every case — including every
+   * refusal — so the only honest way to report an outcome is to look for it.
+   * The kind is read from `remote:kinds` rather than assumed from the argument,
+   * because the one refusal a person will realistically hit is re-approving a
+   * device whose kind was already decided, and the useful sentence there names
+   * what it is already recorded as.
+   */
+  const roster = approved.value as Device[]
+  const landed = roster.find((row) => row.id === device.id)
+  const kinds = await ask(record, 'remote:kinds')
+  if (!kinds.ok) return fail(kinds)
+  const recorded = (kinds.value as DeviceKindRecord[]).find((row) => row.deviceId === device.id)
+
+  if (landed?.approved !== true || recorded?.kind !== chosen) {
+    process.stdout.write(renderNotApproved(device, chosen, recorded?.kind ?? null))
+    return 1
+  }
+
+  process.stdout.write(renderApproved(device, chosen, NO_COPILOT_HERE))
   return 0
+}
+
+/**
+ * Ask which of the two this device is, once, and take no for an answer.
+ *
+ * Null for anything that is not one of them, and the caller refuses rather than
+ * choosing — see `device-kind.ts` on why there is no third answer and no
+ * default. Not a retry loop: a wrong keystroke here costs one more `pair`, and a
+ * prompt that will not let go is worse on the surface this runs on, which is
+ * frequently a serial console or an `ssh` session somebody is about to lose.
+ */
+async function askKind(): Promise<DeviceKind | null> {
+  process.stdout.write(renderKindQuestion())
+  const typed = (await question(KIND_PROMPT)).trim().toLowerCase()
+  if (typed === 'm') return 'mine'
+  if (typed === 'g') return 'guest'
+  return asDeviceKind(typed)
 }
 
 async function stop(record: DaemonRecord): Promise<number> {

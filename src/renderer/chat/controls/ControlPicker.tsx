@@ -1,7 +1,17 @@
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useOneMenu } from '../../shell/one-menu'
+import { menuSide, type MenuSide } from './menu-side'
 import type { ControlId, ControlOption, ControlReading } from './catalog'
-import { displayValue, isCurrent, sourceNote, unreadNote } from './catalog'
+import { displayValue, isCurrent, shortModelLabel, sourceNote, unreadNote } from './catalog'
 
 interface Props {
   /** Which control this is. Decides what it says when it cannot read a value. */
@@ -10,24 +20,51 @@ interface Props {
   name: string
   reading: ControlReading | undefined
   options: ControlOption[]
-  /** Printed at the foot of the menu: how far a change reaches, or null when
-   *  that is not something this app has any grounds to state. */
-  reach: string | null
   busy: boolean
   disabled: boolean
   /** Why the control cannot be used, when that is known. Shown instead of the menu. */
   blocked: string | null
-  onPick: (optionId: string) => void
   /**
-   * Called the moment the menu opens, before it is drawn.
+   * Another control, drawn at the end of this one's menu under a rule.
    *
-   * The model picker uses it to ask the session what models it actually has —
-   * see `discoverModels` in `useSessionControls.ts`. It is on the *open* rather
-   * than on a timer because asking types into the session, and it is here rather
-   * than in the parent because only this component knows when it opened.
+   * A `ReactNode` rather than a second set of control props, because this
+   * component must not acquire an opinion about which control lives inside
+   * which — that fact is `NESTED_CONTROLS` in `shell/SessionControls.tsx`, next
+   * to the list that decides what is on the bar at all, which is where every
+   * other placement decision in this cluster already lives. What is decided
+   * *here* is only that a menu has an end and that the end is under a rule.
+   *
+   * It is drawn where the foot used to be, and it is not a replacement for it:
+   * see the tombstone below the options.
    */
-  onOpen?: () => void
+  nested?: ReactNode
+  onPick: (optionId: string) => void
 }
+
+/*
+ * `onOpen` used to be a prop here and it is gone, along with everything that
+ * passed it.
+ *
+ * It was called the moment the menu opened, before it was drawn, and exactly one
+ * caller used it: the model picker, to ask the session what models it actually
+ * had. That meant typing `/model` into the live pty, reading the dialog the CLI
+ * drew and pressing Esc — and cancelling makes the CLI print `Kept model as …`,
+ * so every look left a line in somebody's conversation. The argument for it was
+ * that a list read from the session is the *account's* list, which a table in
+ * this repo can never guarantee.
+ *
+ * Asad, watching it: *"just to view it is running a command… At least when I
+ * click on something then it should run."* Five `/model` blocks stacked in a
+ * working conversation. The trade went the other way — the catalogue in
+ * `catalog.ts` can be slightly stale, and staleness fails safely where writing
+ * into somebody's work does not — and the whole of it is written out beside
+ * `optionsForRow` in `shell/SessionControls.tsx`.
+ *
+ * The prop is removed rather than left unused because an optional hook on a menu
+ * is an invitation: the next person with something to fetch would fill it in,
+ * and the thing that made this wrong was never *what* it fetched. A menu opening
+ * must not run anything.
+ */
 
 /**
  * One control on the composer: a button showing the value that was actually
@@ -56,15 +93,20 @@ export function ControlPicker({
   name,
   reading,
   options,
-  reach,
   busy,
   disabled,
   blocked,
+  nested,
   onPick,
-  onOpen,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [above, setAbove] = useState(true)
+  /*
+   * Which edge the menu hangs from. `'left'` unless this chip is near the
+   * window's right-hand edge, where a left-anchored 304px panel runs off the
+   * glass — see `menu-side.ts`, which holds the measurement and the reasoning.
+   */
+  const [side, setSide] = useState<MenuSide>('left')
   const rootRef = useRef<HTMLDivElement>(null)
   const menuId = useId()
   const close = useCallback(() => setOpen(false), [])
@@ -103,10 +145,21 @@ export function ControlPicker({
   useLayoutEffect(() => {
     if (!open) return
     const box = rootRef.current?.getBoundingClientRect()
-    if (box) setAbove(box.top > window.innerHeight - box.bottom)
+    if (!box) return
+    setAbove(box.top > window.innerHeight - box.bottom)
+    setSide(menuSide(box, window.innerWidth))
   }, [open])
 
   const value = displayValue(reading, control)
+  /*
+   * The chip prints the short name and the `title` prints the one that was read.
+   *
+   * Only the model has a long form worth shortening — `Opus 5 with 1M context`
+   * against fourteen characters of chip — and only the model's menu shows every
+   * name in full underneath, which is what makes the shortening safe. See
+   * {@link shortModelLabel} for what it keeps and why `1M` is not optional.
+   */
+  const shown = control === 'model' ? shortModelLabel(value) : value
   const unknown = !reading || reading.label === null
   const note = unknown ? (unreadNote(control) ?? sourceNote(null)) : sourceNote(reading.source)
 
@@ -142,26 +195,23 @@ export function ControlPicker({
         aria-disabled={blocked !== null ? true : undefined}
         data-blocked={blocked !== null ? '' : undefined}
         title={blocked ?? `${name}: ${value} — ${note}`}
-        onClick={() => {
-          setOpen((was) => {
-            // Only on the way open, and never when the menu has nothing to show
-            // but a reason: a blocked control that still asked the session
-            // would be typing into it on behalf of a control it has already
-            // said cannot act.
-            if (!was && blocked === null) onOpen?.()
-            return !was
-          })
-        }}
+        // Opening this asks nobody anything, which is the whole of the note
+        // above the `Props` interface.
+        onClick={() => setOpen((was) => !was)}
       >
         <span className="ac-name">{name}</span>
-        <span className={unknown ? 'ac-value ac-value-unknown' : 'ac-value'}>{busy ? 'Working…' : value}</span>
+        <span className={unknown ? 'ac-value ac-value-unknown' : 'ac-value'}>{busy ? 'Working…' : shown}</span>
         <svg className="ac-caret" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
           <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
         </svg>
       </button>
 
       {open ? (
-        <div className={above ? 'ac-menu ac-menu-above' : 'ac-menu'} id={menuId} role="menu">
+        <div
+          className={`ac-menu${above ? ' ac-menu-above' : ''}${side === 'right' ? ' ac-menu-right' : ''}`}
+          id={menuId}
+          role="menu"
+        >
           {blocked ? (
             <p className="ac-blocked">{blocked}</p>
           ) : (
@@ -183,6 +233,22 @@ export function ControlPicker({
                     role="menuitemradio"
                     aria-checked={current}
                     className={current ? 'ac-item ac-item-current' : 'ac-item'}
+                    /*
+                     * Locked while anything on this bar is mid-change, and that
+                     * became load-bearing the day fast mode moved into this menu.
+                     *
+                     * It used to be unnecessary: picking a row shut the menu, and
+                     * the chip that reopens it is disabled for as long as the
+                     * command is settling, so there was no way to reach a second
+                     * row. Nesting a switch at the foot of the list broke that —
+                     * flipping fast mode deliberately leaves the menu open, so
+                     * eleven live model rows sat over a `/fast` that was still in
+                     * flight, and two slash commands racing into one pty is the
+                     * thing every other surface in this cluster locks its rows to
+                     * prevent. `ControlToggle`'s popover and `ControlSection`'s
+                     * radiogroup both spell it exactly this way.
+                     */
+                    disabled={disabled || busy}
                     onClick={() => {
                       setOpen(false)
                       onPick(option.id)
@@ -200,11 +266,46 @@ export function ControlPicker({
               )
             })
           )}
-          <p className="ac-reach">
-            <span className="ac-reach-now">Now: {value}</span>
-            <span className="ac-reach-source">{note}</span>
-            {reach ? <span className="ac-reach-scope">{reach}</span> : null}
-          </p>
+          {/*
+            The foot of this menu is deleted, and the `reach` prop with it.
+
+            It printed three lines under every list — `Now: Opus 5`, the source
+            note, and *"This session — and your default too, if the CLI says so
+            when it confirms"* — and Asad, looking at the model menu and the
+            effort menu one after the other: *"I don't want this inside."* He is
+            right about the first two thirds of it. `Now:` is the same fact as
+            the tick six rows above and the same fact again as the value on the
+            chip that opened the menu, which is three copies of one word; the
+            source note is already the chip's hover label, in the same words.
+
+            Two things went with it that were **not** duplicates, and they are
+            written here rather than quietly lost:
+
+             - The reach. Model and effort branch — the CLI decides at confirm
+               time whether a change is this session only or also your default —
+               and this menu was the only place in the app that said so before
+               you pressed anything. It is still said *after*: `applyControl`
+               quotes the arm the CLI actually printed, and that sentence lands
+               in the notice under the bar. So the warning is now a report.
+             - `Now:` was also the unread state's only line. With nothing read,
+               `isCurrent` is false for every row, so an open menu carries no
+               tick at all. The chip above it still says `Unknown` in the
+               unread italic and still names the source in its hover label, so
+               the fact is on screen — but it is on the trigger, not in the
+               list.
+
+            Neither is replaced with an invention. If either needs to be back on
+            screen it should be back as the thing it is, not as a third line of
+            grey text under every menu.
+          */}
+          {/* Outside the refusal above, deliberately. What is nested here is a
+              *different control* with its own answer to whether it can act — a
+              model the account cannot select says nothing about whether fast
+              mode can be switched — and hiding a control that works because its
+              neighbour is refused is the dead-control failure this cluster is
+              audited for. Two refusals stack into two sentences, which is
+              wordy and true; one refusal swallowing a working switch is neither. */}
+          {nested}
         </div>
       ) : null}
     </div>

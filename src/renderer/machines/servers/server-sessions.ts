@@ -75,6 +75,18 @@ export interface ServerSession {
    * different on this row than on the row above it.
    */
   status: SessionStatus
+  /**
+   * The folder the shell was told to start in, or null for wherever the
+   * sign-in lands.
+   *
+   * Carried on the row because the pane that opens the shell is mounted from
+   * this list and there is nowhere else to put it — and read exactly once, when
+   * the shell is opened. It is deliberately **not** kept in step with where the
+   * person has since `cd`'d to: nothing on this side watches a server shell's
+   * working directory, and a field claiming to know it would be a claim this
+   * window cannot make.
+   */
+  startIn: string | null
 }
 
 /** A server that has at least one shell open, and the shells under it. */
@@ -105,6 +117,8 @@ export function withServerSession(
   serverId: string,
   serverName: string,
   shellKey: string = newShellKey(),
+  /** Where on the server it starts. Null — the default — is where SSH lands. */
+  startIn: string | null = null,
 ): ServerSession[] {
   return [
     ...open,
@@ -114,6 +128,7 @@ export function withServerSession(
       serverName,
       shellKey,
       status: 'idle',
+      startIn,
     },
   ]
 }

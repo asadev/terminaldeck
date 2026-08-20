@@ -259,7 +259,7 @@ describe('CloseSessionConfirm', () => {
      */
     for (const status of ['idle', 'waiting', 'completed'] as const) {
       const html = render(status)
-      expect(html).toContain('This ends the session.')
+      expect(html).toContain('Deleting this session ends it.')
       expect(html).not.toContain('still working')
     }
     expect(render('exited')).toContain('already ended')
@@ -291,8 +291,10 @@ describe('CloseSessionConfirm', () => {
   })
 
   it('leads with the safe action', () => {
+    // The destructive one is second and now reads `Delete`, which is the word
+    // the rail's menu and the dialog's own question use.
     expect(render('working').indexOf('Keep it open')).toBeLessThan(
-      render('working').indexOf('Close session'),
+      render('working').indexOf('>Delete<'),
     )
   })
 })

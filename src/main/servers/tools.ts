@@ -79,6 +79,7 @@ import {
   previewOf,
   type ActionId,
   type ServerRoom,
+  type ServerView,
 } from './actions'
 import type { ServerGrants } from './grants'
 
@@ -274,7 +275,7 @@ export function serverTools({ room, grants }: ServerToolsDeps): ToolSpec[] {
         }
         const seen = await room.look(serverId)
         return {
-          value: seen,
+          value: withoutAccount(seen),
           summary: {
             serverId,
             cards: seen.cards.length,
@@ -373,4 +374,31 @@ export function serverTools({ room, grants }: ServerToolsDeps): ToolSpec[] {
   }
 
   return [lookTool, logsTool, controlTool]
+}
+
+/**
+ * The same view, with the address the server's agent is signed in as taken out.
+ *
+ * The probe reads `claude auth status --json`, which answers with an email
+ * address, an organisation id and a subscription plan. All three are worth
+ * showing to the person in front of the screen and none of them is worth
+ * putting into a transcript: what the copilot reads goes into
+ * `copilot-log/actions.jsonl`, and a log entry naming somebody's account is a
+ * record this feature has no reason to keep. It is the same rule `store.ts`
+ * follows — *only what a person can see on a screen, and nothing derived*.
+ *
+ * Nulled rather than dropped, so the shape the model reads is the shape every
+ * other reader sees, minus the one field.
+ */
+function withoutAccount(view: ServerView): ServerView {
+  const facts = view.facts as { agents?: { known: string; value?: Array<{ account: string | null }> } }
+  const agents = facts.agents
+  if (agents === undefined || agents.known !== 'yes' || agents.value === undefined) return view
+  return {
+    ...view,
+    facts: {
+      ...view.facts,
+      agents: { ...agents, value: agents.value.map((agent) => ({ ...agent, account: null })) },
+    } as ServerView['facts'],
+  }
 }

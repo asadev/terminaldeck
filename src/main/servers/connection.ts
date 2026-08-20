@@ -58,7 +58,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { Client, type Channel } from 'ssh2'
+import { Client, type Channel, type FileEntry, type SFTPWrapper } from 'ssh2'
 import type { ServerFacts } from './facts'
 import { PROBE_SCRIPT, parseProbe } from './probe.sh'
 import type { ServerCredentials } from './credentials'
@@ -95,6 +95,17 @@ export type ServerProblemKind =
   | 'identity-changed'
   | 'lost'
   | 'no-secure-store'
+  /**
+   * The account is signed in and simply may not read that folder.
+   *
+   * Its own kind rather than a `lost`, because it is not a failure of the
+   * connection and not something to try again — it is an ordinary fact about
+   * somebody else's machine, and the folder picker draws it as a sentence and
+   * stays usable rather than falling back to an error state.
+   */
+  | 'not-allowed'
+  /** There is nothing at that path any more, or there never was. */
+  | 'no-such-folder'
 
 /**
  * A failure with a sentence already written for it.
@@ -283,6 +294,29 @@ export interface RunResult {
 }
 
 /** The size of a terminal, named, because the library's own two calls disagree. */
+/** One name in a folder on a server, as the picker needs it. */
+export interface RemoteEntry {
+  name: string
+  /**
+   * What it is, as far as one listing can tell.
+   *
+   * `link` is its own answer rather than being resolved here, and that is the
+   * honest shape: `readdir` reports a link as a link, and finding out what it
+   * points at costs one round trip **per entry** — sixty of them on an ordinary
+   * `/etc`. So a link is offered as somewhere you may try to go, and if it is
+   * not a folder the attempt says so in a sentence. Guessing here would mean
+   * either hiding real folders or inventing a kind nobody measured.
+   */
+  kind: 'folder' | 'link' | 'file'
+}
+
+/** What one folder on a server contains, and what that folder is really called. */
+export interface RemoteListing {
+  /** The absolute path, resolved by the server — never assembled on this side. */
+  path: string
+  entries: RemoteEntry[]
+}
+
 export interface TerminalSize {
   cols: number
   rows: number
@@ -457,14 +491,36 @@ export class ServerConnections {
   }
 
   /**
-   * Open an interactive terminal.
+   * Open an interactive terminal, optionally somewhere other than where SSH
+   * drops you.
    *
    * The connection is acquired and **not** released here: a terminal is the one
    * long-lived thing this feature has, and it lives exactly as long as it is on
    * screen. {@link ServerShell.close} releases it. A pty is inherently a
    * stream; that is not polling.
+   *
+   * ## Why `startIn` is typed into the shell and not run as a second command
+   *
+   * SSH has no "start here" — `shell()` gives you the account's login directory
+   * and nothing in the protocol changes that. The two ways to land somewhere
+   * else are to `exec` a command with a pty instead of asking for a shell, or
+   * to type the `cd` the person would have typed. This does the second, and it
+   * is the one that cannot go wrong in a way somebody would have to debug: an
+   * `exec`'d login shell picks up a different set of startup files on several
+   * real systems, so the terminal would quietly behave unlike the one the same
+   * button opened yesterday.
+   *
+   * The line is echoed by the far end, so it is visible in the scrollback
+   * rather than hidden — which is the honest thing anyway, because a failure is
+   * visible in exactly the same place: a folder that has been deleted since the
+   * picker listed it answers `cd: no such file or directory` in the terminal,
+   * where the person is already looking, and leaves them signed in at home
+   * rather than staring at a refusal dialog.
+   *
+   * {@link quote} disables every expansion there is, so a folder named
+   * `$(reboot)` is a folder name.
    */
-  async shell(serverId: string, size: TerminalSize): Promise<ServerShell> {
+  async shell(serverId: string, size: TerminalSize, startIn?: string): Promise<ServerShell> {
     await this.acquire(serverId)
     let released = false
     const release = (): void => {
@@ -477,11 +533,67 @@ export class ServerConnections {
       if (entry === undefined) throw new ServerProblem('lost', 'That connection is gone.')
       const client = await entry.client
       const channel = await openShell(client, size)
-      return wrapShell(channel, release)
+      const shell = wrapShell(channel, release)
+      if (startIn !== undefined && startIn !== '') shell.write(`cd ${quote(startIn)}\n`)
+      return shell
     } catch (error) {
       release()
       throw problemFor(error)
     }
+  }
+
+  /**
+   * What is inside one folder on a server, over SFTP.
+   *
+   * ## Why SFTP and not `ls`
+   *
+   * Because `ls` answers with a *picture of* a listing rather than a listing.
+   * Its output is a string, and every rule for getting names back out of that
+   * string is broken by a name a person is allowed to create: a space, a
+   * newline, a quote, a colour escape from a server whose `ls` is aliased. The
+   * failure is not that the picker looks wrong — it is that a folder called
+   * `my project` becomes two rows and a path built from either of them is a
+   * path that does not exist. SFTP hands over names as data, length-prefixed,
+   * and there is nothing to parse.
+   *
+   * It rides the connection that is already open, so a picker walking six
+   * folders deep is six round trips on one socket rather than six sign-ins.
+   *
+   * ## What it does not do
+   *
+   * It does not resolve links, does not recurse, and does not sort — sorting is
+   * a presentation decision and belongs where the list is drawn. `''` and `'.'`
+   * both mean *the account's own login directory*, which is what SSH would have
+   * dropped you in, and the server answers what that actually is: this side
+   * never assembles `/home/<username>` for itself, because that guess is wrong
+   * on macOS, wrong for `root`, and wrong on any account whose home has been
+   * moved.
+   */
+  async listDirectory(serverId: string, path: string): Promise<RemoteListing> {
+    return this.withConnection(serverId, async (client) => {
+      const sftp = await openSftp(client)
+      try {
+        const absolute = await realpath(sftp, path === '' ? '.' : path)
+        const listed = await readdir(sftp, absolute)
+        const entries: RemoteEntry[] = []
+        for (const one of listed) {
+          // `.` and `..` are not sent by SFTP the way `ls -a` prints them, but a
+          // server is free to send anything; a picker that walked into `..`
+          // twice would be walking a path this side had not resolved.
+          if (one.filename === '.' || one.filename === '..') continue
+          entries.push({
+            name: one.filename,
+            kind: one.attrs.isDirectory() ? 'folder' : one.attrs.isSymbolicLink() ? 'link' : 'file',
+          })
+        }
+        return { path: absolute, entries }
+      } finally {
+        // The channel, not the connection. The pool above still owns the socket
+        // and still decides when it goes, so a picker that has finished walking
+        // does not hang up on the page holding the same server open.
+        sftp.end()
+      }
+    })
   }
 
   /* ------------------------------------------------------------- dialling -- */
@@ -686,6 +798,90 @@ function openShell(client: Client, size: TerminalSize): Promise<Channel> {
  * asks — so they are zero, which is the documented way of saying "not
  * specified" rather than a guess at somebody's monitor.
  */
+/**
+ * Open the SFTP subsystem, or say why not in a sentence.
+ *
+ * A server can perfectly reasonably not run it — `Subsystem sftp` commented out
+ * of `sshd_config`, or an account confined to a shell that has no subsystem at
+ * all — and that is a fact about their configuration rather than a fault here.
+ * It gets its own sentence so that the picker can offer the way round it, which
+ * is typing the path, instead of reporting a broken app.
+ */
+function openSftp(client: Client): Promise<SFTPWrapper> {
+  return new Promise<SFTPWrapper>((resolve, reject) => {
+    try {
+      client.sftp((error, sftp) => {
+        if (error !== undefined) {
+          reject(
+            new ServerProblem(
+              'not-a-server',
+              'This server will not let us list its folders. You can still type the path.',
+            ),
+          )
+          return
+        }
+        resolve(sftp)
+      })
+    } catch (error) {
+      // It throws rather than calling back when the socket has already gone —
+      // the library's own behaviour, documented on `sftp` in `ssh2.d.ts`.
+      reject(problemFor(error))
+    }
+  })
+}
+
+/**
+ * What the far end says one path actually is.
+ *
+ * Every path the picker holds has been through here, which is what makes `..`
+ * safe to offer: the server resolves it, so this side never does string surgery
+ * on a path — and string surgery is how a picker ends up one folder above where
+ * it is showing.
+ */
+function realpath(sftp: SFTPWrapper, path: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    sftp.realpath(path, (error, absolute) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, path))
+        return
+      }
+      resolve(absolute)
+    })
+  })
+}
+
+function readdir(sftp: SFTPWrapper, path: string): Promise<FileEntry[]> {
+  return new Promise<FileEntry[]>((resolve, reject) => {
+    sftp.readdir(path, (error, list) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, path))
+        return
+      }
+      resolve(list)
+    })
+  })
+}
+
+/**
+ * The two answers a folder picker actually gets, told apart by their number.
+ *
+ * RFC 4251 §7: `3` is permission denied and `2` is no such file. They are the
+ * only two worth a sentence of their own, because they are the two that are
+ * **not** errors — one is what an ordinary account gets for half of `/`, the
+ * other is what anybody gets for a folder that has since been deleted. Reading
+ * the server's own English instead would be a lottery: the wording is the
+ * server's, in the server's locale.
+ */
+function sftpProblem(error: Error & { code?: number }, path: string): ServerProblem {
+  if (error.code === 3) {
+    return new ServerProblem('not-allowed', `This sign-in is not allowed to read ${path}.`)
+  }
+  if (error.code === 2) {
+    return new ServerProblem('no-such-folder', `There is nothing at ${path} on this server.`)
+  }
+  return problemFor(error)
+}
+
 function wrapShell(channel: Channel, release: () => void): ServerShell {
   let closed = false
   return {

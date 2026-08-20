@@ -103,6 +103,94 @@
   display: block;
 }
 
+/*
+  The glyph turns while the read is in flight.
+
+  Asad on this button: *"If I click on refresh, I don't know if the refresh is
+  working because we don't feel anything getting refreshed."* The only feedback
+  was `:disabled`'s opacity, which on a 13px icon is not feedback. One second per
+  turn is slow enough to read as "working" rather than as decoration, and it is
+  the icon that already means refresh rather than a second spinner beside it.
+
+  Honoured for anybody who has asked the system for less motion — a spinner is
+  exactly the kind of thing that setting is for, and the disabled state still
+  says the button is busy.
+*/
+@keyframes gh-refresh-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.gh-refresh[data-busy] svg {
+  animation: gh-refresh-turn 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gh-refresh[data-busy] svg {
+    animation: none;
+  }
+}
+
+/* -------------------------------------------------------------- copilot -- */
+
+/*
+  One line, four things: a mark, a name, a state, and — only when it is missing
+  — the link that fixes that. It came from a Settings row that also carried the
+  tool's purpose, a caveat, a remedy and the shell probe; see `CopilotRow`.
+*/
+.gh-copilot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+}
+
+/* The same three tokens `.setup-mark` uses in Settings, so the glyph reads the
+   same after the move as it did before it. Named here rather than borrowed from
+   that stylesheet: the row no longer lives on that pane, and depending on a
+   class defined by a section this page does not render is how a colour goes
+   missing the day somebody splits a bundle. */
+.gh-copilot-mark {
+  flex-shrink: 0;
+  width: var(--sp-4);
+  text-align: center;
+  color: var(--status-idle);
+}
+
+.gh-copilot[data-state='ready'] .gh-copilot-mark {
+  color: var(--status-completed);
+}
+
+.gh-copilot[data-state='installed-not-authed'] .gh-copilot-mark {
+  color: var(--status-waiting);
+}
+
+.gh-copilot[data-state='missing'] .gh-copilot-mark {
+  color: var(--color-critical);
+}
+
+.gh-copilot-name {
+  color: var(--text-primary);
+}
+
+.gh-copilot-state {
+  margin-left: auto;
+}
+
+.gh-copilot-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.gh-copilot-link:hover {
+  text-decoration: underline;
+}
+
 /* ----------------------------------------------------------------- tabs -- */
 
 /* Two words and an ink underline under the selected one. The bordered bar this

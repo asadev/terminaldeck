@@ -95,8 +95,176 @@
   display: none;
 }
 
+/* --------------------------------------------------- which machine's copilot -- */
+
 /*
-  Stop, in the copilot's own toolbar.
+  The machine switch, at the top of the page.
+
+  Asad, 2026-08-20, with two computers paired to each other: *"the same switch we
+  have for sessions"*, at the top, so the copilot can be used against either
+  machine.
+
+  A row of plain buttons rather than a recessed segmented track, for the reason
+  `ModeSwitch.css` sets out one file over: a track says "pick one of these and
+  they are peers", which is right here — but this row can hold five machines, and
+  a five-segment macOS track at caption size is a control nobody can read the
+  ends of. So it is drawn the way the rail's rows are: nothing at rest, a fill on
+  the one you are on, a fill on hover for the ones you are not.
+
+  No accent. The accent means *this is the thing to press*, and a control that is
+  always on screen never is — the same sentence, and the same rule, as the mode
+  switch.
+
+  It is `flex-shrink: 0` above a strip that can scroll and a pane that fills, so
+  a long list of machines wraps rather than squeezing the terminal.
+*/
+.cp-machines {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-4) 0;
+}
+
+.cp-machine {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.cp-machine:hover:not([disabled]) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.cp-machine[data-chosen] {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+/*
+  A machine that is offline, or one that paired this computer as a guest.
+
+  Drawn and disabled rather than dropped: it is a machine he can see in the rail
+  two inches away, and a switch that quietly omits one is the subset problem this
+  project keeps finding. Why it cannot be pressed is on hover — his standing rule
+  is that a sentence explaining a state most people are never in does not go on
+  the page.
+*/
+.cp-machine[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------ another machine's copilot -- */
+
+/*
+  The remote conversation.
+
+  It has no terminal half and never will: `remote/hidden-sessions.ts` refuses to
+  put a copilot's pty on the network for anybody, because a pty is a keyboard and
+  a keyboard sits past every tier and every confirmation dialog. So this is the
+  parsed conversation and a field, and it is laid out as a column that fills what
+  the terminal would have.
+*/
+.cp-remote {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /*
+    The app's own surface, not the terminal's.
+   
+    `.cp-body` paints `--terminal-bg` because what usually fills it is a
+    terminal, and in the light theme that is a recessed grey while the app's
+    chrome is white. There is no terminal in this branch — there cannot be, see
+    the component — so inheriting it left a conversation on a grey plate with a
+    white composer under it and a seam across the middle. Nothing about a remote
+    copilot is a terminal, so it is drawn on the surface the rest of the window
+    is drawn on.
+  */
+  background: var(--bg-primary);
+}
+
+.cp-remote-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+}
+
+/*
+  His on the right, the copilot's on the left — the arrangement he asked for in
+  the app's own chat and the one every messaging surface he uses already has.
+  No name labels on either side: *"no name labels"*, because the side is the
+  label and printing it twice is the statement this app keeps deleting.
+*/
+.cp-bubble {
+  max-width: 78%;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cp-bubble[data-role='agent'] {
+  align-self: flex-start;
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+.cp-bubble[data-role='you'] {
+  align-self: flex-end;
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+/* The far machine's own words about a refusal. One line, above the field it is
+   about, and gone the moment another send starts. */
+.cp-remote-problem {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 var(--sp-4) var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.cp-remote-ask {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.cp-remote-field {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+}
+
+.cp-remote-field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/*
+  Restart, in the copilot's own toolbar.
 
   The one control this window has that a session's does not, and it is there
   because of what the copilot does not have: a row in the rail, and therefore the

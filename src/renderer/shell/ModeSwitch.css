@@ -1,22 +1,25 @@
 /* ============================================================================
-   The mode switch — a macOS segmented control.
+   The mode switch — two icon buttons, not a segmented control.
 
-   A recessed track with a raised, shadowed pill on the selected segment. That
-   shape is Apple's, and it does the whole job here: no colour is involved,
-   because this is a mode and not an action. The accent means "this is the
-   thing to press", and a control that is always on screen never is.
+   It was a macOS segmented control: a recessed track with a raised pill on the
+   selected segment, three words wide. The track was the right shape for three
+   segments answering one question, and it is the wrong shape now that there are
+   two buttons answering two — a view toggle and a split toggle sharing a
+   recessed groove would say they were a pick-one-of-two, which is exactly the
+   reading the split button must not get.
 
-   Inherited from the Terminal/Chat toggle this replaces, down to the dark-mode
-   inversion — the track is the darker surface there and the pill the lighter
-   one, so "raised" still reads as raised.
+   So there is no track. Two square buttons with a hair of space between them,
+   drawn like every other icon button in the window's chrome: nothing at rest, a
+   fill on hover, and — for the one of them that is genuinely on or off — a fill
+   that stays while it is on.
+
+   No colour is involved in the on state. The accent means "this is the thing to
+   press", and a control that is always on screen never is.
    ============================================================================ */
 
 .mode-switch {
   display: inline-flex;
-  gap: 1px;
-  padding: 2px;
-  border-radius: var(--radius-md);
-  background: var(--fill-tertiary);
+  gap: 2px;
   /*
     It sits on a bar that drags the window, and on Windows it sits directly
     beside the OS's own close button.
@@ -25,51 +28,54 @@
     same thing again on purpose: this control is passed into the toolbar as
     `children`, so it does not own where it is mounted, and a drag region covers
     every pixel inside it until something subtracts itself back out — so a
-    caller that dropped this anywhere else on the chrome would get a segmented
-    control that moves the window instead of switching mode. The rule belongs
-    with the control, not with one of its homes.
+    caller that dropped this anywhere else on the chrome would get buttons that
+    move the window instead of switching mode. The rule belongs with the
+    control, not with one of its homes.
   */
   -webkit-app-region: no-drag;
 }
 
-.ms-option {
+.ms-icon {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-radius: var(--radius-sm);
-  padding: 0 var(--sp-3);
+  padding: 0;
+  /* Square, and the same 24px height the segments had, so nothing else on the
+     bar moves by a pixel when this control changes shape. */
+  width: 24px;
   height: 24px;
   background: transparent;
   color: var(--text-secondary);
-  font-family: var(--font-ui);
-  font-size: var(--t-callout);
-  font-weight: var(--w-medium);
   cursor: pointer;
-  white-space: nowrap;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.ms-option:hover {
+.ms-icon:hover {
+  background: var(--fill-tertiary);
   color: var(--text-primary);
 }
 
+/* Split, while the window is split.
+
+   A held fill rather than a raised pill: the pill was legible because it sat in
+   a recessed track, and lifted out of one it would read as a button with a
+   drop shadow floating on the toolbar. A filled square beside an unfilled one
+   is the same idea with nothing to hold it up. */
 .ms-on,
 .ms-on:hover {
-  background: var(--bg-primary);
+  background: var(--fill-secondary);
   color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
 }
 
-[data-theme='dark'] .ms-on,
-[data-theme='dark'] .ms-on:hover {
-  background: var(--bg-tertiary);
-}
-
-.ms-option:focus-visible {
+.ms-icon:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-/* A segment that is an offer rather than a mode.
+/* Split as an offer rather than as a mode.
 
    Split view can be uninstalled, and this is the one place in the window it
    would have been — so it stays, and pressing it installs the feature and
@@ -77,16 +83,40 @@
 
    It used to be *dimmed*: `--text-muted` at rest, measured at rgb(143,143,143)
    against rgb(168,168,168) for the inactive "Chat" beside it. Quieter than an
-   inactive segment is the universal convention for "unavailable", so the one
+   inactive control is the universal convention for "unavailable", so the one
    offer this window had read as a disabled control — a person scanning the
    toolbar concluded the app could not split, which is exactly the
    undiscoverability the store was supposed to avoid. The explanation was in a
    tooltip, where nobody looks for a fact they think they already know.
 
-   So it keeps the ink of the segment next to it and takes the shared offer dot
+   So it keeps the ink of the button next to it and takes the shared offer dot
    (`[data-offer]` in app.css): the mark that means "there is something here",
    not "there is nothing here". Hover still goes accent, because pressing it
    really is an action rather than a mode change. */
 .ms-offer:hover {
   color: var(--accent);
+}
+
+/* A button that cannot act here, and says so when pressed.
+
+   Dimmed, deliberately, which is the opposite of what `.ms-offer` above does —
+   and the two are opposites because they mean opposite things. An offer is
+   "there is something here"; this is "there is nothing here for this session",
+   and quieter-than-inactive is the convention that carries exactly that. The
+   sentence is on the element's `title` and in its accessible name, which with
+   the words gone is the only place a reason can live.
+
+   The pointer stays default rather than becoming `not-allowed`: the button is
+   hoverable on purpose, because hovering is how the tooltip that explains it is
+   reached. `aria-disabled` rather than `disabled` for the same reason — see the
+   note beside it in the component. */
+.ms-blocked,
+.ms-blocked:hover {
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.ms-glyph {
+  display: block;
 }

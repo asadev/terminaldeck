@@ -9,6 +9,7 @@ import {
   activeGitWatchCount,
   applyStats,
   dubiousOwnershipMessage,
+  initRepository,
   NOT_A_REPO_MESSAGE,
   parseNumstat,
   parsePorcelainV2,
@@ -312,9 +313,15 @@ describe('readGitStatus', () => {
       expect(result.message).not.toContain('fatal:')
       expect(result.message).not.toContain('.git')
       // A sentence, and one that names the way out — that is what makes it
-      // different from a label.
-      expect(result.message).toContain('git init')
+      // different from a label. The way out used to be `git init` in a
+      // terminal; Source control performs it now, so the sentence names the
+      // page rather than a command the app would be pretending it cannot run.
+      expect(result.message).toContain('Source control')
       expect(result.message.endsWith('.')).toBe(true)
+      // And it is flagged as something a button can act on, which is what
+      // stops the panel offering "Create a repository" over a folder whose
+      // repository git is merely refusing to read. See `GitNotRepo.canInit`.
+      expect(result.canInit).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -532,4 +539,65 @@ describe('git watches', () => {
       stopAllGitWatches()
     }
   }, GIT_HEAVY_MS)
+})
+
+/**
+ * `git init`, against real git, in a real folder.
+ *
+ * This is the one write in `git.ts`, and it exists because Source control had
+ * no way out of its own empty state — see `initRepository`. It is worth real
+ * git rather than a stub for the same reason `readGitStatus` is: what is being
+ * claimed is that the folder is a repository afterwards, and only git can say.
+ */
+describe('turning a folder into a repository', () => {
+  it('creates one, and answers with the status that follows', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-git-init-'))
+    try {
+      const before = await readGitStatus(dir)
+      // A machine with no git reaches a different branch entirely.
+      if (!before.repo && before.reason === 'git-missing') return
+      expect(before.repo).toBe(false)
+
+      const after = await initRepository(dir)
+      expect(after.repo).toBe(true)
+      if (!after.repo) return
+      // Nothing beyond `git init`: no first commit, no remote, no files added.
+      // The page goes straight to a working tree, and everything past creating
+      // the repository belongs to whoever opened the folder.
+      expect(after.clean).toBe(true)
+      expect(after.staged).toHaveLength(0)
+      expect(after.untracked).toHaveLength(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, GIT_HEAVY_MS)
+
+  it('refuses a folder that is already a repository, rather than nesting one', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-git-init-twice-'))
+    try {
+      const first = await initRepository(dir)
+      if (!first.repo) return // no git on this machine
+      await writeFile(join(dir, 'a.txt'), 'hello\n')
+
+      const second = await initRepository(dir)
+      expect(second.repo).toBe(true)
+      if (!second.repo) return
+      // The guard is on this side of the IPC boundary on purpose: the panel
+      // only ever offers the button on a `repo: false` folder, and the renderer
+      // is not what makes that safe.
+      expect(second.untracked.map((file) => file.path)).toContain('a.txt')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, GIT_HEAVY_MS)
+
+  it('says nothing about a folder that does not exist', async () => {
+    const result = await initRepository(join(tmpdir(), 'terminaldeck-not-here-at-all'))
+    expect(result.repo).toBe(false)
+    if (result.repo) return
+    // `no-such-folder`, not `not-a-repo`: `initRepository` only ever acts on the
+    // one reason a button is offered for, and hands everything else straight
+    // back the way `readGitStatus` reported it.
+    expect(result.reason).toBe('no-such-folder')
+  })
 })

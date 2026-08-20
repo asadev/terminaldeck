@@ -13,9 +13,50 @@ import type { AddServerDraft, AddServerFailure, KeyFileOffer } from './types'
  * has never opened a terminal has to be able to finish this, and the way that is
  * achieved is by not asking them anything else.
  *
- * Everything a more technical flow would ask for — a port, a key algorithm, an
- * identity file, a proxy — is either detected, defaulted, or genuinely not
- * supported yet and therefore not offered as a field that quietly does nothing.
+ * Everything a more technical flow would ask for — a key algorithm, an identity
+ * file, a proxy — is either detected, defaulted, or genuinely not supported yet
+ * and therefore not offered as a field that quietly does nothing.
+ *
+ * ## The port, and why the argument above did not survive contact
+ *
+ * The port used to be on that list, defaulted to 22 and never asked about, and
+ * the reasoning was the reasoning above: a fourth question is a fourth thing to
+ * be stuck on, and 22 is right for nearly every server anybody would type an
+ * address for.
+ *
+ * It is right for nearly every server and it was wrong for his. Asad's own WSL
+ * box listens on **2222**, so the one machine he tried to add could not be
+ * added at all — and the sentence he got was *"That address did not answer. The
+ * server may be off, or something in between may be blocking it"*, which is
+ * this app blaming his machine and his network for a number this form chose
+ * without telling him. There is no route out of that: nothing on the screen
+ * mentions a port, so nothing on the screen can be corrected.
+ *
+ * So the honest form of the original argument is narrower than it was: **a
+ * default is only simple while it is right.** The moment it is wrong it has to
+ * have somewhere to be said, or the simplicity was bought with a machine that
+ * cannot be added. What that does *not* license is a fourth question — the
+ * field is empty, optional, and says on its face that empty is the answer, so
+ * the person the three questions were written for still answers three of them
+ * and reads past this one. Somebody who was handed a port by whoever set the
+ * server up now has the one place it goes.
+ *
+ * Nothing downstream changed to allow it: `src/main/servers/ipc.ts` has taken
+ * `port?: number` on its draft since the channel was written and `store.add`
+ * has always passed it through `validPort`. This form was the only half that
+ * never sent it.
+ *
+ * ## The way back is at the top as well as the bottom
+ *
+ * Asad, on this screen: *"because we are now inside a page and inside something,
+ * so there should be a button to go back. Now I need to click here to go back
+ * or somewhere else and then machines."* Cancel is at the *bottom*, beside the
+ * button that submits, which is where a form's cancel belongs and is no use at
+ * all to somebody who has scrolled and wants out. So the page grows the same
+ * head `ServerPage` has — **Back to machines**, first thing, above the title —
+ * and the pair is not a duplicate: the top one is how you leave a page, the
+ * bottom one is how you abandon a form. Both land in the same place because
+ * there is only one place to land.
  *
  * ## The key is chosen by name, and pasting is still there
  *
@@ -111,6 +152,48 @@ export function wantsPassphrase(reason: AddServerFailure | null, passphrase: str
   return reason === 'needs-passphrase' || reason === 'bad-passphrase' || passphrase !== ''
 }
 
+/**
+ * The port a person typed, or the reason the form will not send it.
+ *
+ * Three answers rather than two, and the first is the one that matters: **an
+ * empty box is a valid answer**, and it means "whatever the usual one is". It
+ * is not an error, it does not colour the field, and it is what almost everyone
+ * leaves behind. That is what keeps this a fourth *box* rather than a fourth
+ * question.
+ *
+ * The refusal is deliberate where the main process would forgive. `store.ts`'s
+ * `validPort` quietly falls back to 22 for anything it cannot read, which is
+ * exactly right for a stored file this app wrote — a row that has been
+ * corrupted should still connect somewhere. It is exactly wrong for a box
+ * somebody is looking at: typing `2222 ` or `port 2222` and being dialled on 22
+ * produces the same unanswerable failure this field exists to end, one step
+ * later and with the number visibly on screen. So a value that is not a port is
+ * said here, while the person is still in the box.
+ *
+ * Whitespace is trimmed rather than refused, because a pasted value carries it
+ * and nobody can see it.
+ */
+export function readPort(raw: string): { ok: true; port?: number } | { ok: false; sentence: string } {
+  const value = raw.trim()
+  if (value === '') return { ok: true }
+  /*
+   * Neither sentence contains the word the field is labelled with, and that is
+   * `plain-words.test.ts`'s rule rather than an accident of phrasing. These
+   * lines are printed *under* the label, so the noun is already on screen and
+   * repeating it would only make the correction longer. They both end on the
+   * same clause because the way out of a mistake in this box is always the same
+   * one: empty it.
+   */
+  if (!/^\d+$/.test(value)) {
+    return { ok: false, sentence: 'That is a number, like 2222. Leave it empty for the usual one.' }
+  }
+  const port = Number(value)
+  if (port < 1 || port > 65535) {
+    return { ok: false, sentence: 'It has to be between 1 and 65535. Leave it empty for the usual one.' }
+  }
+  return { ok: true, port }
+}
+
 /** One labelled field, stacked, because a form is not a list of settings. */
 function Field({
   label,
@@ -137,6 +220,7 @@ function Field({
 export function AddServer({ busy, error, reason, keys, onSubmit, onCancel }: Props) {
   const ids = useId()
   const [address, setAddress] = useState('')
+  const [port, setPort] = useState('')
   const [username, setUsername] = useState('')
   const [method, setMethod] = useState<'password' | 'key'>('password')
   const [password, setPassword] = useState('')
@@ -146,18 +230,24 @@ export function AddServer({ busy, error, reason, keys, onSubmit, onCancel }: Pro
   const [remember, setRemember] = useState(true)
 
   const locked = wantsPassphrase(reason, passphrase)
+  const chosenPort = readPort(port)
 
   const filled =
     address.trim() !== '' &&
     username.trim() !== '' &&
+    chosenPort.ok &&
     (method === 'password' ? password !== '' : key.trim() !== '')
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    if (!filled || busy) return
+    if (!filled || busy || !chosenPort.ok) return
     onSubmit({
       address: address.trim(),
       username: username.trim(),
+      // Spread rather than `port: chosenPort.port`, so an empty box sends no
+      // field at all. See `AddServerDraft.port`: absent and 22 are different
+      // answers on the far side and only one of them is a decision.
+      ...(chosenPort.port === undefined ? {} : { port: chosenPort.port }),
       method,
       ...(method === 'password' ? { password } : { key }),
       ...(locked && passphrase !== '' ? { passphrase } : {}),
@@ -168,7 +258,23 @@ export function AddServer({ busy, error, reason, keys, onSubmit, onCancel }: Pro
 
   return (
     <form className="servers-form" onSubmit={submit}>
-      <h3 className="servers-form-title">Add a server</h3>
+      {/*
+        The way out, first and at the top, exactly as `ServerPage` draws it —
+        same words, same position, same component. Matched rather than invented
+        because these two are the only pages inside this panel, and a person who
+        has learned where "back" is on one of them has learned it for both.
+
+        Disabled while an attempt is in flight, which is the rule the Cancel at
+        the foot of this form already follows: the attempt is what puts a server
+        in the list or rolls it back out again, and walking away from it mid-dial
+        would land somebody on a list that grows a row a moment later on its own.
+      */}
+      <div className="servers-form-head">
+        <Button onClick={onCancel} disabled={busy}>
+          Back to machines
+        </Button>
+        <h3 className="servers-form-title">Add a server</h3>
+      </div>
       <p className="servers-form-blurb">
         Three things, and you can get all three from whoever set the server up.
       </p>
@@ -187,6 +293,38 @@ export function AddServer({ busy, error, reason, keys, onSubmit, onCancel }: Pro
           autoComplete="off"
           spellCheck={false}
           onChange={(event) => setAddress(event.target.value)}
+        />
+      </Field>
+
+      {/*
+        Under the address, because it is part of the same answer — *where the
+        server is* — and nowhere near the sign-in, which is a different question
+        entirely. Narrow rather than full width, and that is the whole of how it
+        stays quiet: a box the width of five digits beside a full-width one reads
+        as an extra, not as a fifth thing to fill in.
+
+        The help line says what empty means in the first clause, because that is
+        the only line most readers will ever need from this field.
+      */}
+      <Field
+        label="Port"
+        htmlFor={`${ids}-port`}
+        help={
+          chosenPort.ok
+            ? 'Leave it empty unless you were given a number — nearly every server uses the usual one, and empty means that.'
+            : chosenPort.sentence
+        }
+      >
+        <input
+          id={`${ids}-port`}
+          className="settings-input servers-narrow"
+          value={port}
+          inputMode="numeric"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="22"
+          aria-invalid={chosenPort.ok ? undefined : true}
+          onChange={(event) => setPort(event.target.value)}
         />
       </Field>
 

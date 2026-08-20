@@ -40,6 +40,21 @@ export interface SpawnSpec {
    */
   profile?: { id: string; name: string }
   /**
+   * The conversation id the caller put on the command line, when it put one
+   * there.
+   *
+   * Carried onto `SessionMeta` and no further, exactly like `profile` above:
+   * nothing in this class reads it, because the thing that *makes* it true is
+   * already in `args`. It is here so that a reader of a transcript can name the
+   * file instead of picking the folder's most recent one — see
+   * `SessionMeta.agentSessionId` for what picking cost.
+   *
+   * Left unset whenever the caller did not name the conversation: a resumed
+   * session, any agent but Claude Code, and every session this app did not
+   * start.
+   */
+  agentSessionId?: string
+  /**
    * Where the operating-system process starts, when that is not the session's
    * own folder.
    *
@@ -258,6 +273,9 @@ export class PtyManager {
       ...(spawnSpec.profile
         ? { profileId: spawnSpec.profile.id, profileName: spawnSpec.profile.name }
         : {}),
+      // Same spread, same reason: an absent id means the transcript has to be
+      // inferred, and that has to be distinguishable from an id that is present.
+      ...(spawnSpec.agentSessionId ? { agentSessionId: spawnSpec.agentSessionId } : {}),
       /*
        * Who wanted this session, copied straight off the request.
        *
@@ -344,6 +362,24 @@ export class PtyManager {
   /** Replay buffered output so a re-mounted terminal shows its history. */
   scrollback(id: string): string {
     return this.sessions.get(id)?.scrollback.join('') ?? ''
+  }
+
+  /**
+   * The pid of the session's own process, or null when there is no such session.
+   *
+   * The pty's process is the *shell or agent this app launched*, which is not
+   * always the agent someone is talking to: pressing Run, or simply typing
+   * `claude`, starts one underneath it. So this is a root to walk down from
+   * rather than an answer on its own — `session-account.ts` does the walking,
+   * and is the only caller, because reading another process's environment is
+   * the one way to establish which login a session this app did not start is
+   * actually using.
+   */
+  pidOf(id: string): number | null {
+    const session = this.sessions.get(id)
+    if (!session || session.meta.exitCode !== null) return null
+    const pid = session.proc.pid
+    return typeof pid === 'number' && pid > 0 ? pid : null
   }
 
 

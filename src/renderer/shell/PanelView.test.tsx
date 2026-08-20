@@ -18,8 +18,19 @@ import type { TreeRootState } from '../components/FileTree'
 describe('filesPageState', () => {
   const state = (s: TreeRootState): TreeRootState => s
 
-  it('draws only the tree when the folder came back empty', () => {
-    expect(filesPageState(state({ status: 'empty' }))).toBe('tree-only')
+  /**
+   * An empty folder gets the page, not a stripe.
+   *
+   * `tree-only` was the answer here until 2026-08-20, and the frame Asad
+   * recorded is what changed it: the words "Nothing to show." in the top-left
+   * of a whole window, over nothing, on a session he had deliberately started
+   * in an empty folder. The tree was right and the page was useless — there was
+   * no way from that screen to the one thing that would have changed it, which
+   * is to stop hiding what `.gitignore` excludes. `blank` is the state that
+   * hands the window to `PageEmpty` and puts that button on it.
+   */
+  it('gives the whole page over when the folder came back empty', () => {
+    expect(filesPageState(state({ status: 'empty' }))).toBe('blank')
   })
 
   it('draws only the tree when the folder could not be read', () => {

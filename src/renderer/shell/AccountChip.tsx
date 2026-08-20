@@ -19,6 +19,7 @@ import {
   signInStateSummary,
   useAccountIdentity,
   useAccounts,
+  useSessionAccount,
   MAX_ACCOUNT_NAME_LENGTH,
   type AccountView,
 } from '../accounts'
@@ -229,6 +230,19 @@ interface Props {
    * whole life of every session.
    */
   current: { id: string; name: string; provider?: ProviderId } | null
+  /**
+   * The account this session is waiting to become, when a switch has been armed
+   * for the next message.
+   *
+   * Named rather than flagged, because "a switch is pending" is not what
+   * somebody needs to read — they picked an account by name and want to see
+   * that name. Null is the ordinary case and draws nothing.
+   *
+   * It sits beside `current` and never replaces it: the session is genuinely
+   * still running as `current`, and drawing the incoming account as though it
+   * had already happened is the one thing this feature is not allowed to do.
+   */
+  pendingAccount?: string | null
   /** The folder a session started from this menu will run in. */
   projectPath: string | null
   /**
@@ -405,6 +419,7 @@ function agentLabel(provider: ProviderId | null | undefined): string | undefined
 
 export function AccountChip({
   current,
+  pendingAccount = null,
   projectPath,
   provider,
   session = null,
@@ -414,6 +429,15 @@ export function AccountChip({
   onManage,
 }: Props) {
   const agent = useAgentPresence(session)
+  /*
+   * Which login the agent in *this* session is on, as the main process
+   * established it — from its own spawn record where it started the session, and
+   * from the agent process's own environment where it did not.
+   *
+   * This is the fix. See `established` below for what it replaced and why the
+   * thing it replaced was a claim the app could not support.
+   */
+  const established = useSessionAccount(session?.id ?? null, agent.running)
   /** Whether the previous render drew the Run button. See `revealing`. */
   const wasRun = useRef(false)
   const [editing, setEditing] = useState<Editing | null>(null)
@@ -476,8 +500,64 @@ export function AccountChip({
    * account that is no longer in the list, and inventing a colour for it would
    * put a coloured dot beside a name that matches no row in the menu.
    */
-  const fallback = accountForFolder(accounts.snapshot, projectPath)
-  const currentId = current?.id ?? fallback?.id ?? null
+  /*
+   * The folder's default account — **only** when there is no session.
+   *
+   * This one line is the reported bug. `accountForFolder` answers "which account
+   * would a new session started here use", which is a true and useful answer to
+   * a question nobody is asking while a session is on screen, and it was being
+   * printed as that session's account whenever the session had no profile of its
+   * own — every plain shell with an agent typed into it, which is most of them.
+   * Asad, twice, the second time pointing at a local session:
+   *
+   *   > "here it is showing actually the wrong account — app.imatch.ae is not
+   *   > the correct account which is connected to this session … this is your
+   *   > terminal account which is becoming visible here"
+   *
+   * Over a session the account now comes from {@link established} or from
+   * nowhere. There is no rung between them, because every candidate for one is a
+   * fact about something other than this session.
+   */
+  const fallback = session ? null : accountForFolder(accounts.snapshot, projectPath)
+
+  /**
+   * The session's own account, and the sentence when there is none to name.
+   *
+   * `current` — the profile off `SessionMeta` — is not consulted separately: it
+   * *is* the first rung of what the main process answered, so preferring it here
+   * would be the same fact read from a staler copy. It is still used below for
+   * the questions that really are about the spawn, such as whether this session
+   * can be switched to another account at all.
+   */
+  const known = established?.kind === 'known' ? established : null
+  const withheld = established?.kind === 'withheld' ? established.reason : null
+  /*
+   * An account this app has no record of is still an account, and is named by
+   * the address signed into it rather than by its path. That is the case a
+   * `CLAUDE_CONFIG_DIR` exported in somebody's shell profile produces, and it is
+   * exactly the case that used to read as the default login.
+   */
+  const sessionAccount =
+    known === null
+      ? null
+      : {
+          id: known.profileId ?? known.configDir,
+          name: known.profileName ?? known.email ?? known.configDir,
+          provider: known.provider,
+        }
+
+  /**
+   * The account this chip names, in the order the answers can be trusted.
+   *
+   * `sessionAccount` is the established one and outranks everything. `current`
+   * behind it is not a second guess: it is this app's own spawn record off
+   * `SessionMeta`, which is the *same* fact the main process's first rung
+   * returns, and it is the only one available to the two callers that pass an
+   * account without passing a `session` to go with it. `fallback` is last and,
+   * by the line above, exists only when there is no session to be wrong about.
+   */
+  const namedAccount = sessionAccount ?? current ?? null
+  const currentId = namedAccount?.id ?? fallback?.id ?? null
   const listed = currentId === null ? null : rows.find((row) => row.id === currentId) ?? null
 
   /**
@@ -498,7 +578,7 @@ export function AccountChip({
       ? null
       : {
           id: currentId,
-          name: listed?.name ?? current?.name ?? fallback?.name ?? currentId,
+          name: listed?.name ?? namedAccount?.name ?? fallback?.name ?? currentId,
           system: listed?.system,
         }
 
@@ -511,8 +591,17 @@ export function AccountChip({
    * time — which is nearly all of it — that map is empty and the single-account
    * probe is the only thing that knows.
    */
-  const probed = useAccountIdentity(currentId)
-  const currentSignIn = (currentId === null ? undefined : accounts.signIn[currentId]) ?? probed
+  /*
+   * Not probed for a directory this app has no account record of.
+   *
+   * `profileSignIn` is keyed on a profile id and answers by starting the agent's
+   * own CLI — ~245 ms — so asking it about a bare path costs a process to be
+   * told nothing. The address for that case has already been read off the file
+   * the CLI wrote, and is the account's `name` above.
+   */
+  const identityId = known !== null && known.profileId === null ? null : currentId
+  const probed = useAccountIdentity(identityId)
+  const currentSignIn = (identityId === null ? undefined : accounts.signIn[identityId]) ?? probed
   const identity = accountIdentity(currentAccount, currentSignIn)
 
   /**
@@ -557,7 +646,37 @@ export function AccountChip({
    * seeing, and Add or sign in is still the way to another one — and the notice
    * inside it says why the rows are inert.
    */
-  const names = current !== null || blocked === null
+  const names =
+    session !== null ? namedAccount !== null : current !== null || blocked === null
+
+  /**
+   * What stands where the name would be when there is none, and why.
+   *
+   * Three states, and collapsing any two of them puts a claim on the chip that
+   * is not true of the session under it:
+   *
+   *  - **Account not known.** The main process looked and could not establish
+   *    it — a session started outside the app whose agent process would not give
+   *    up its environment, or one on a platform where that cannot be asked. This
+   *    is the state this whole change exists to produce, and it is *useful*: it
+   *    says the app is not naming anybody rather than naming the wrong person.
+   *  - **Checking…** Nothing has answered yet. Not the same as the above by any
+   *    means — the answer is a few milliseconds away — and drawing the refusal
+   *    here would flash a permanent-sounding sentence on every tab change.
+   *  - **No login.** There is no session, and the agent a new one here would run
+   *    cannot be given an account at all. The words are `signInStateSummary`'s
+   *    for the same situation, reused so the chip and the menu row do not read as
+   *    two different findings.
+   */
+  const unnamed: { label: string; detail: string | null } =
+    withheld !== null
+      ? { label: 'Account not known', detail: withheld }
+      : session !== null && established === undefined
+        ? {
+            label: 'Checking…',
+            detail: 'Reading which account the agent in this session is running as.',
+          }
+        : { label: 'No login', detail: blocked }
 
   /**
    * Which agent's mark goes on the button, in three fallbacks that are three
@@ -578,7 +697,7 @@ export function AccountChip({
    * its Anthropic mark while the default coding tool is a plain shell, which is
    * a setting about the next session and not about this one.
    */
-  const mark = names ? current?.provider ?? listed?.provider ?? provider : undefined
+  const mark = names ? namedAccount?.provider ?? listed?.provider ?? provider : undefined
 
   /**
    * The agent the Run button would start, and the whole of what it names.
@@ -763,10 +882,18 @@ export function AccountChip({
          */
         title={
           !names
-            ? // Nothing is named, so the notice is the whole of what there is to
-              // say — and now it is the only thing the chip is claiming, rather
-              // than a contradiction of the name printed beside it.
-              blocked
+            ? /*
+               * Nothing is named, so the sentence saying why is the whole of what
+               * there is to say — and now it is the only thing the chip is
+               * claiming, rather than a contradiction of the name printed beside
+               * it.
+               *
+               * The session's own reason first, because it is about the thing on
+               * screen: *this* session's account could not be established. The
+               * notice is about a different session — the one a row would start —
+               * and only stands when there is no session here at all.
+               */
+              (unnamed.detail ?? undefined)
             : [
                 /*
                  * Three sentences for three genuinely different offers, and the
@@ -782,7 +909,7 @@ export function AccountChip({
                  */
                 switching
                   ? 'This session is running as this account — pick another to run this session as instead.'
-                  : current
+                  : namedAccount
                     ? 'This session is running as this account — start one under a different account.'
                     : 'A new session here would use this account.',
                 chosenName === null ? null : `Account: ${chosenName}.`,
@@ -825,8 +952,23 @@ export function AccountChip({
               same thing about an account whose CLI cannot be signed into. Reused
               rather than reworded so the chip and the menu row for the same
               situation do not read as two different findings. */}
-          {names ? identity.label : 'No login'}
+          {names ? identity.label : unnamed.label}
         </span>
+        {/* The armed switch, if there is one. Written as an arrow into the
+            waiting account rather than as a badge saying "pending", because the
+            question somebody has is *which* account and *when* — the arrow
+            answers the first and the title answers the second. Announced
+            politely: it changes without anybody touching the chip, and a bare
+            alert every time one is armed would interrupt the terminal it sits
+            above. */}
+        {pendingAccount !== null && (
+          <span
+            className="account-chip-pending"
+            title={`Switching to ${pendingAccount} when you send your next message.`}
+          >
+            → {pendingAccount}
+          </span>
+        )}
         <svg
           width="14"
           height="14"
@@ -1149,27 +1291,64 @@ export function AccountChip({
 
             {accounts.error && <p className="account-menu-empty">{accounts.error}</p>}
 
-            {/* Says what the rows above actually do — three answers, because
-                the rows do three different things.
+            {/*
+              What the rows above do, for the two modes that still say anything.
 
-                Switching, the sentence has to carry the surprising half up
-                front: something stops. It also has to promise the description
-                that follows, because a menu that both warns and then asks again
-                reads as an app that cannot make up its mind, while a menu that
-                warns and then acts is the restart nobody expected. Saying "it
-                will say what happens first" makes the press safe to make.
+              ## The switching one used to have a paragraph, and now has none
 
-                The other two are unchanged. The last clause of the third is only
-                true while the rows are pickable, and printing it under a list
-                that cannot be picked was the promise that made the silent no-op
-                read as a bug rather than a rule. */}
-            <p className="account-menu-foot">
-              {switching
-                ? 'Stops the agent in this session and starts it again as that account, in this same tab. It will say what happens to the conversation before anything stops.'
-                : blocked
+              It said the tab and the folder survive, that the agent stops and
+              starts again, that it could happen now or at his next message, and
+              that whether the conversation came depended on whether the two
+              accounts shared a history. It was accurate, it was pinned by a
+              test, and he read it out loud and asked for it to go:
+
+                > *"here you have a very long description… Remove this full
+                > shit. I don't want any kind of long descriptions anywhere."*
+
+              The last clause had also stopped being true in the direction that
+              mattered. `adoptSharedHistory` puts both accounts on one
+              conversation history before the sheet is drawn, so the
+              conversation comes with him — a paragraph hedging about it was
+              describing a problem he no longer has, which is the worst kind of
+              statement to leave on a screen. What the two buttons on the sheet
+              do is written on the buttons.
+
+              ## What is left
+
+              `blocked` is not a description. It is a refusal with the fix in
+              it, over rows that cannot be picked, and a menu that refuses
+              silently is the shape of bug this chip has already been reported
+              for once. The default line names what a press opens, in four
+              words, because that is the one thing the rows themselves do not
+              say — these open a *new* session rather than moving this one.
+            */}
+            {/*
+              The switching case says nothing at all now, and that is the point.
+
+                > *"Every single time you bring some card, you put something
+                > new… I said to you, don't put any single statement in
+                > anywhere… We want simplicity. Let the smart people use it."*
+
+              What stood here was a paragraph explaining that a switch keeps the
+              tab and the folder, that it can happen now or at his next message,
+              and that whether the conversation comes depends on the two
+              accounts. Every one of those is either visible in the menu itself
+              — the two buttons are on the next screen, with their own labels —
+              or no longer true: both accounts are put on one conversation
+              history before the sheet is drawn, so the conversation comes.
+
+              What survives is the one line that is not an explanation. `blocked`
+              is a refusal with the fix in it, and a refusal with nothing to do
+              about it is how a menu that cannot be used reads as one that is
+              broken.
+            */}
+            {!switching && (
+              <p className="account-menu-foot">
+                {blocked
                   ? 'Change the default coding tool in Settings to start a session under one of these.'
-                  : 'Opens a new session here under that account. This one keeps the account it started with.'}
-            </p>
+                  : 'Opens a new session here.'}
+              </p>
+            )}
 
             <button
               type="button"

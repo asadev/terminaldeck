@@ -217,6 +217,70 @@ export interface ListenerFact {
   unit: string
 }
 
+/** The coding agents this app knows how to look for. Claude Code is the only one it can set up. */
+export type AgentId = 'claude' | 'codex' | 'gemini'
+
+/**
+ * One coding agent found on a server, and whether it will actually run.
+ *
+ * `path` is absolute and is carried through every later step rather than being
+ * re-resolved, because PATH is exactly what could not be trusted to find it in
+ * the first place — see the `#agents` section of `probe.sh.ts` for the two
+ * layouts that proved it.
+ *
+ * `version` is `''` when the binary is there and would not answer, which is a
+ * genuinely different situation from being absent: something is installed and
+ * broken, and the offer a person needs is to install it again rather than to
+ * install it for the first time.
+ *
+ * `signedIn` is `'unknown'` for every agent but Claude Code, because asking is
+ * the one thing that has been measured, and for Claude Code itself whenever the
+ * question could not be put. `account` is the address it answered with, shown on
+ * screen and written nowhere — not to `servers.json`, not to the copilot's log.
+ */
+export interface AgentFact {
+  id: AgentId
+  path: string
+  version: string
+  signedIn: 'yes' | 'no' | 'unknown'
+  account: string | null
+}
+
+/**
+ * What installing an agent into this account's own home would need, before
+ * anybody is offered a button for it.
+ *
+ * All three come free with the rest of the probe, and each one turns a failure
+ * that would otherwise happen sixty seconds into a download into a sentence
+ * said beforehand: the installer needs `curl` or `wget` and there is no third
+ * way, it is killed by the kernel at around 512 MB of available memory, and it
+ * writes about 320 MB into the account's home.
+ *
+ * `downloader` is `''` when the server has neither, which is a fact about the
+ * server and the one case where the honest answer is to say so and offer
+ * nothing — installing a downloader in order to install an agent is exactly the
+ * general provisioning this feature is not.
+ */
+export interface AgentInstallRoom {
+  /** `curl`, `wget`, or `''` when this server has neither. */
+  downloader: string
+  /**
+   * The path to `npm`, or `''` when this server has none.
+   *
+   * Two of the three agents are npm packages and the third is not, so this is
+   * the fact that decides which rows can be offered on a given machine. It is
+   * read off the same widened PATH the agent search uses, because a server with
+   * Node under `nvm` has an `npm` that a non-interactive `command -v` cannot
+   * see — the same blind spot that made the agent search widen in the first
+   * place.
+   */
+  npm: string
+  /** Memory available now, in kilobytes, or null when the server would not say. */
+  memoryAvailableKb: number | null
+  /** Free space in the account's own home, in kilobytes, or null. */
+  homeFreeKb: number | null
+}
+
 /** How much of the root filesystem is used. Kilobytes, as the server reports them. */
 export interface DiskFact {
   usedKb: number
@@ -279,6 +343,22 @@ export interface ServerFacts {
    * is frequently a private port behind the reverse proxy and reaches nothing.
    */
   siteNames: Fact<string[]>
+  /**
+   * The coding agents installed for **this account**, not for this machine.
+   *
+   * Per-account is the whole shape of it, and it was measured rather than
+   * assumed: the test box carries three separate homes, each with its own
+   * `~/.claude`. A page that reported an agent as "installed on this server"
+   * would be right about the machine and wrong about the person looking at it.
+   *
+   * An empty list is a real answer — we looked in every place an installer puts
+   * one and in the login shell's own idea of PATH, and there is none — so it is
+   * `yes` with `[]` rather than `no`, and `cannot` only when the question could
+   * not be put at all.
+   */
+  agents: Fact<AgentFact[]>
+  /** Whether this account could install one, and what it would cost. */
+  agentInstall: Fact<AgentInstallRoom>
 }
 
 /* --------------------------------------------------- the container trap --- */

@@ -6,7 +6,13 @@ import {
   type ControlReading,
   type ControlsReading,
 } from '../chat/controls/catalog'
-import type { ModelRow } from '../../shared/model-catalog'
+import {
+  applyControlAt,
+  controlsWired,
+  readControlsAt,
+  watchSessionOutput,
+  type ControlsTarget,
+} from './controls-target'
 
 /**
  * One session's model, effort and fast mode, read from the session and written
@@ -24,21 +30,32 @@ import type { ModelRow } from '../../shared/model-catalog'
  * *"it can be a problem, it can be a confusion — which one it is showing right
  * now."*
  *
- * ## Why this is not shared with the chat composer's copy
+ * ## There used to be a second copy of this, and there is not any more
  *
- * `chat/controls/AgentControls.tsx` runs the same conversation with the same
- * bridge, and folding the two together was tried first. It cannot be done
- * without weakening pins that exist for good reasons: `AgentControls.test.tsx`
- * asserts against that file's **source text** — that it names the provider on
- * both bridge calls, and that it writes `answer.reading` rather than the value
- * that was clicked — and `wiring.test.ts` asserts that the same file renders
- * `<ControlPicker` and `<ControlSection` and builds its panel from
- * `MENU_CONTROLS.map`. Every one of those checks is guarding a bug that has
- * actually shipped here, and all of them go silent the moment the lines they
- * read move into a hook. So the composer keeps its copy, this is the chrome's,
- * and the part that would really hurt to duplicate — what the options *are*,
- * what each is called, what a value means and where it was read from — is not
- * duplicated at all: both import `chat/controls/catalog.ts`.
+ * `chat/controls/AgentControls.tsx` ran the same conversation with the same
+ * bridge from the chat composer's own control row, and this note used to argue
+ * at length for keeping the two apart: folding them together would have moved
+ * lines that `AgentControls.test.tsx` and `wiring.test.ts` read out of that
+ * file's **source text** — that it names the provider on both bridge calls, that
+ * it writes `answer.reading` rather than the value that was clicked, that it
+ * renders `<ControlPicker` and `<ControlSection` — and a source-text pin goes
+ * silent the moment the line it reads moves into a hook.
+ *
+ * That argument is settled by deletion rather than by decision. *"Since we have
+ * it on top we actually don't need them here… remove them from the chat box side
+ * completely."* The composer's control row is gone, `AgentControls.tsx` and its
+ * test with it, and every one of those pins now reads
+ * `renderer/shell/SessionControls.tsx` instead — see `wiring.test.ts`, which
+ * still requires that file to hold `<ControlPicker` and `<ControlSection` and
+ * still counts the `<SessionControls>` mounts in `App.tsx`. The reasoning is
+ * kept because it is still the reason this is a *hook* with a component beside
+ * it rather than one file: what a source-text pin can see has not changed, only
+ * which file it is pointed at.
+ *
+ * What was true then and is still true: the part that would really hurt to
+ * duplicate — what the options *are*, what each is called, what a value means
+ * and where it was read from — is not duplicated at all. It is in
+ * `chat/controls/catalog.ts`, which is the one file both surfaces ever imported.
  *
  * Everything below goes to the agent as keystrokes into its pty, because that
  * is the only channel this app has. See `src/main/agent-controls.ts` for the
@@ -72,68 +89,59 @@ export interface SessionControlsState {
   /** True when there is a bridge, a session, and a CLI this build can drive. */
   wired: boolean
   pick(control: ControlId, value: string): void
-  /**
-   * The models this session's own `/model` picker offered, or null until it has
-   * been asked.
-   *
-   * Null and empty mean different things and the UI depends on it: null is "not
-   * asked yet, use the captured list", empty is "asked and could not be told",
-   * which comes with a `notice` saying why.
-   */
-  models: ModelRow[] | null
-  /**
-   * Ask the session what models it has. Types `/model`, reads the dialog and
-   * presses Esc — so it is called when somebody opens the menu, never on a
-   * timer.
-   */
-  discoverModels(): void
 }
 
-/**
- * The bridge, as loosely as the rest of the renderer reads it.
+/*
+ * `models` and `discoverModels` used to be on this state and they are gone.
  *
- * Optional everywhere: a build without these methods gets controls that say
- * they are not wired rather than controls that throw on first click.
+ * They were the session's *own* `/model` picker, read live: `discoverModels`
+ * typed `/model` into the pty, waited for the CLI to draw its dialog, parsed the
+ * rows and pressed Esc, and the menu drew what came back instead of the
+ * catalogue. The reason was real and is worth keeping — a live read is the
+ * account's list, so it can never offer a model the organisation has restricted
+ * away, which a table in this repo absolutely can — and so was the known cost,
+ * written down in that function: cancelling the picker makes the CLI print
+ * `Kept model as …`, so every look left a line behind.
+ *
+ * What settled it was watching somebody use it:
+ *
+ *   > *"if I click on Opus, it will run a command just to view, just to view it
+ *   > is running a command… as soon as drop down comes down it runs the command
+ *   > automatically. At least when I click on something then it should run."*
+ *
+ * Five `/model` blocks stacked in a working conversation, none of them asked
+ * for. A menu is opened to find out what is in it, often by accident, and this
+ * app's one hard rule about sessions is that it types what a person would have
+ * typed — nobody runs a slash command in order to look at a list. So the trade
+ * was taken the other way: the catalogue can be slightly stale, and staleness
+ * fails safely (`/model <name>` by hand for a missing row; the CLI's own
+ * refusal, shown verbatim, for a row the account cannot use), while writing into
+ * somebody's work to render a menu does not.
+ *
+ * The whole argument, with the fallback list's own limits spelled out, is beside
+ * `optionsForRow` in `SessionControls.tsx`. `discoverAgentModels` still exists on
+ * the bridge and in `src/main/agent-controls.ts`; nothing in the renderer calls
+ * it any more.
  */
-interface Bridge {
-  readAgentControls?(request: { sessionId?: string; cwd?: string; provider?: string }): Promise<unknown>
-  applyAgentControl?(request: {
-    sessionId: string
-    cwd?: string
-    control: ControlId
-    value: string
-    provider?: string
-  }): Promise<unknown>
-  discoverAgentModels?(request: { sessionId?: string; provider?: string }): Promise<unknown>
-  onSessionData?(cb: (id: string, data: string) => void): () => void
-}
 
-/**
- * A model row off the bridge, parsed rather than trusted.
+/*
+ * The bridge is not read directly here any more, and that is the whole of what
+ * made these controls reach a session on another computer.
  *
- * Same rule as `asReading` above and for the same reason: what arrives here is
- * `unknown` off an IPC channel. A row missing its alias is dropped outright,
- * because an option whose id is `undefined` is a button that types `/model
- * undefined` into somebody's terminal.
+ * There used to be a `Bridge` interface in this file naming `readAgentControls`,
+ * `applyAgentControl` and `onSessionData` — three channels that all address
+ * *this* machine's `PtyManager` by *this* machine's session id. Over a session
+ * on a paired PC or in a terminal on a server they asked about a session that
+ * does not exist here, were answered with nothing, and the window drew a
+ * sentence in place of the menus. Asad reported that three times.
+ *
+ * `controls-target.ts` is where the three destinations now live, and it is one
+ * module rather than a branch in this hook because `agent-presence.ts` asks the
+ * same question for a different reason — whether an agent is running at all,
+ * which decides whether this cluster is drawn. Two components on one bar reading
+ * one fact from two sources is a bug this project has already shipped once.
  */
-function asModelRows(value: unknown): ModelRow[] {
-  if (!isRecord(value) || !Array.isArray(value.models)) return []
-  const rows: ModelRow[] = []
-  for (const entry of value.models) {
-    if (!isRecord(entry)) continue
-    if (typeof entry.alias !== 'string' || entry.alias === '') continue
-    if (typeof entry.model !== 'string' || entry.model === '') continue
-    rows.push({
-      alias: entry.alias,
-      name: typeof entry.name === 'string' ? entry.name : entry.model,
-      model: entry.model,
-      note: typeof entry.note === 'string' ? entry.note : '',
-      current: entry.current === true,
-      recommended: entry.recommended === true,
-    })
-  }
-  return rows
-}
+
 
 /**
  * How long the session has to stop printing before the controls re-read.
@@ -210,15 +218,6 @@ function asApplyResult(value: unknown): { ok: boolean; message: string; reading:
   }
 }
 
-/**
- * `globalThis` rather than `window`, because the shell's components are rendered
- * to a string in their own tests, where there is no `window` at all — reading it
- * during render throws and takes the whole bar down with it.
- */
-function deckBridge(): Bridge | undefined {
-  return (globalThis as unknown as { deck?: Bridge }).deck
-}
-
 /* --------------------------------------------------- the effort default -- */
 
 /**
@@ -291,13 +290,33 @@ function storage(): Storage | null {
  */
 const defaulted = new Set<string>()
 
+/**
+ * Rebuild the target from the two primitives the hooks carry.
+ *
+ * The pair exists because a fresh object literal in a dependency array is a new
+ * value every render; this turns it back into the shape the router takes, at the
+ * moment of the call, where identity does not matter. `'local'` is the absent
+ * target — the session is on this computer — which is what every caller written
+ * before `controls-target.ts` meant.
+ */
+function where(kind: string, machineId: string): ControlsTarget | undefined {
+  if (kind === 'machine') return { kind: 'machine', machineId }
+  if (kind === 'server') return { kind: 'server' }
+  return undefined
+}
+
 export function useSessionControls(
   sessionId: string | undefined,
   cwd: string | null | undefined,
   provider: string | undefined,
+  /**
+   * Which computer the session is on. Absent means this one, which is what every
+   * caller written before `controls-target.ts` existed meant — so a local bar
+   * behaves exactly as it did.
+   */
+  target?: ControlsTarget,
 ): SessionControlsState {
   const [readings, setReadings] = useState<SessionReadings | null>(null)
-  const [models, setModels] = useState<ModelRow[] | null>(null)
   const [busy, setBusy] = useState<ControlId | null>(null)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const alive = useRef(true)
@@ -309,16 +328,27 @@ export function useSessionControls(
     }
   }, [])
 
-  const bridge = deckBridge()
   // Derived, not state: an effect that flipped this would render one frame of
   // working controls before admitting the bridge is missing, and would never
-  // run at all when the bar is rendered to a string.
-  const wired = typeof bridge?.readAgentControls === 'function' && sessionId !== undefined
+  // run at all when the bar is rendered to a string. Asked per target, because
+  // "is there a channel for this" has three different answers.
+  const wired = controlsWired(target) && sessionId !== undefined
+  /*
+   * The target, flattened to two primitives for the dependency arrays below.
+   *
+   * An object literal built at each render is a new object at each render, so a
+   * `target` in a `useCallback`'s dependencies would rebuild `refresh` every
+   * frame and re-arm the output subscription with it — a resubscribe per render,
+   * for a value that has not changed. Two strings compare by value and say
+   * exactly as much.
+   */
+  const targetKind = target?.kind ?? 'local'
+  const targetMachine = target?.kind === 'machine' ? target.machineId : ''
 
   const refresh = useCallback(async (): Promise<void> => {
-    if (!sessionId || typeof bridge?.readAgentControls !== 'function') return
+    if (!sessionId) return
     try {
-      const answer = await bridge.readAgentControls({ sessionId, cwd: cwd ?? undefined, provider })
+      const answer = await readControlsAt(where(targetKind, targetMachine), { sessionId, cwd, provider })
       if (!alive.current) return
       const parsed = asReadings(answer)
       if (parsed) setReadings(parsed)
@@ -327,7 +357,7 @@ export function useSessionControls(
       // last thing genuinely read, and blanking them would be a regression in
       // honesty rather than an improvement.
     }
-  }, [bridge, sessionId, cwd, provider])
+  }, [targetKind, targetMachine, sessionId, cwd, provider])
 
   useEffect(() => {
     if (!wired) return
@@ -347,24 +377,22 @@ export function useSessionControls(
    */
   useEffect(() => {
     if (!wired || !sessionId) return
-    const deck = deckBridge()
-    if (typeof deck?.onSessionData !== 'function') return
 
     let settle: ReturnType<typeof setTimeout> | null = null
-    const off = deck.onSessionData((id) => {
-      if (id !== sessionId) return
+    const off = watchSessionOutput(where(targetKind, targetMachine), sessionId, () => {
       if (settle !== null) clearTimeout(settle)
       settle = setTimeout(() => {
         settle = null
         void refresh()
       }, SETTLE_MS)
     })
+    if (off === null) return
 
     return () => {
       if (settle !== null) clearTimeout(settle)
       off()
     }
-  }, [wired, sessionId, refresh])
+  }, [wired, sessionId, targetKind, targetMachine, refresh])
 
   // A confirmation expires; a failure does not. See CONFIRM_MS.
   useEffect(() => {
@@ -375,17 +403,26 @@ export function useSessionControls(
 
   const pick = useCallback(
     (control: ControlId, value: string): void => {
-      const apply = bridge?.applyAgentControl
-      // Bound to a local before the closure, not read off `bridge` inside it:
-      // the narrowing a `typeof` check buys is re-widened the moment the
-      // property is read again inside a nested function.
-      if (!sessionId || typeof apply !== 'function') return
+      if (!sessionId) return
       setBusy(control)
       setNotice(null)
       void (async () => {
         try {
+          /*
+           * The busy state is set before this and cleared in the `finally`, and
+           * over a relay that window is seconds rather than milliseconds. That
+           * is the same state a slow local response already produces — the chip
+           * says "Working…" and the rest of the window keeps going — and it is
+           * why nothing here blocks on the answer.
+           */
           const answer = asApplyResult(
-            await apply({ sessionId, cwd: cwd ?? undefined, control, value, provider }),
+            await applyControlAt(where(targetKind, targetMachine), {
+              sessionId,
+              cwd,
+              provider,
+              control,
+              value,
+            }),
           )
           if (!alive.current) return
           setNotice({ ok: answer.ok, text: answer.message })
@@ -419,7 +456,7 @@ export function useSessionControls(
         }
       })()
     },
-    [bridge, sessionId, cwd, provider, refresh],
+    [targetKind, targetMachine, sessionId, cwd, provider, refresh],
   )
 
   /*
@@ -460,19 +497,38 @@ export function useSessionControls(
   useEffect(() => {
     const want = preferredEffort(storage())
     if (want === null || !wired || !sessionId || provider !== 'claude') return
+    /*
+     * And only for a session on this computer, which is the one condition that
+     * is about *whose* preference this is rather than about whether it can be
+     * applied.
+     *
+     * `want` comes out of this window's `localStorage`. Typing it into a session
+     * running on a paired machine would be this desktop silently changing the
+     * effort of somebody else's session to match a setting they made here — and
+     * the window at that machine's own desk has already applied its own default
+     * to that session at the moment it started, from its own storage. Two
+     * machines racing to impose their defaults on one pty is a session whose
+     * effort depends on which window happened to look at it last.
+     *
+     * A server shell never reaches this line anyway (its `provider` is always
+     * `undefined`, because this app did not launch what is in that terminal),
+     * but the rule is written for the target rather than for the side effect, so
+     * it stays true if that ever changes. Choosing an effort *by hand* on either
+     * remote target works exactly as it does here; it is only the unasked one
+     * that stops at this machine's own sessions.
+     */
+    if (targetKind !== 'local') return
     if (readings === null || busy !== null) return
     if (readings.effort.label !== null || readings.effort.unavailableReason !== undefined) return
     if (!readings.gate.canType) return
     if (defaulted.has(sessionId)) return
 
-    const apply = bridge?.applyAgentControl
-    if (typeof apply !== 'function') return
     defaulted.add(sessionId)
     setBusy('effort')
     void (async () => {
       try {
         const answer = asApplyResult(
-          await apply({ sessionId, cwd: cwd ?? undefined, control: 'effort', value: want, provider }),
+          await applyControlAt(undefined, { sessionId, cwd, provider, control: 'effort', value: want }),
         )
         if (!alive.current) return
         setReadings((was) => (was ? { ...was, effort: answer.reading } : was))
@@ -484,52 +540,9 @@ export function useSessionControls(
         void refresh()
       }
     })()
-  }, [wired, sessionId, provider, readings, busy, bridge, cwd, refresh])
-
-  /**
-   * Ask this session's own `/model` picker what it offers.
-   *
-   * ## Why this is a click and not a poll
-   *
-   * Because it types. `refresh` above is passive — it scrapes a screen the
-   * session drew anyway — and it runs every time the session prints something,
-   * which is the right shape for a reading and completely the wrong shape for a
-   * keystroke. This one opens a dialog in somebody's terminal and closes it
-   * again, so it happens when a person opens the menu and at no other moment.
-   *
-   * ## Why a failure is not silent
-   *
-   * The commonest reason this cannot answer is that the session is mid-turn,
-   * and the main process explains that in a sentence worth reading. Swallowing
-   * it would leave the menu showing the captured list with nothing on screen
-   * saying it is the captured list — which is the class of quiet
-   * half-truth this whole cluster is being rebuilt to remove. So the message
-   * goes to the same notice strip a failed change uses.
-   */
-  const discoverModels = useCallback((): void => {
-    const ask = bridge?.discoverAgentModels
-    if (!sessionId || typeof ask !== 'function') return
-    void (async () => {
-      try {
-        const answer = await ask({ sessionId, provider })
-        if (!alive.current) return
-        const rows = asModelRows(answer)
-        setModels(rows)
-        const message = isRecord(answer) && typeof answer.message === 'string' ? answer.message : null
-        if (message !== null) setNotice({ ok: false, text: message })
-        // Opening and cancelling the picker makes the CLI print
-        // `Kept model as …`, which settles the current model on a session that
-        // had never said. Re-reading here is how that reaches the chip.
-        void refresh()
-      } catch {
-        // A bridge that throws leaves `models` as it was: the captured list is
-        // still a real picker from a real CLI, and blanking it would trade a
-        // slightly old truth for no answer at all.
-      }
-    })()
-  }, [bridge, sessionId, provider, refresh])
+  }, [wired, targetKind, sessionId, provider, readings, busy, cwd, refresh])
 
   const dismissNotice = useCallback(() => setNotice(null), [])
 
-  return { readings, busy, notice, dismissNotice, wired, pick, models, discoverModels }
+  return { readings, busy, notice, dismissNotice, wired, pick }
 }

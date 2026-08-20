@@ -4,10 +4,14 @@ import type { Device } from '../main/remote/device-auth'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import {
   duration,
+  NO_COPILOT_HERE,
   parseArgs,
   pickDevice,
+  renderApproved,
   renderFolders,
+  renderKindQuestion,
   renderNewDevice,
+  renderNotApproved,
   renderPairCode,
   renderStatus,
   usage,
@@ -29,7 +33,8 @@ const device = (patch: Partial<Device> = {}): Device => ({
 
 describe('parseArgs', () => {
   it('takes the four commands and nothing else', () => {
-    expect(parseArgs(['pair'])).toEqual({ kind: 'pair' })
+    // `deviceKind: null` is "nobody has said", which is what makes `main.ts` ask.
+    expect(parseArgs(['pair'])).toEqual({ kind: 'pair', deviceKind: null })
     expect(parseArgs(['status'])).toEqual({ kind: 'status' })
     expect(parseArgs(['folders'])).toEqual({ kind: 'folders' })
     expect(parseArgs(['stop'])).toEqual({ kind: 'stop' })
@@ -206,6 +211,77 @@ describe('renderNewDevice', () => {
   })
 })
 
+/**
+ * The kind, which `pair` may be told and otherwise has to ask.
+ *
+ * The bug being pinned is that `terminaldeck pair` sent no kind at all, the
+ * handler's `asDeviceKind(undefined)` answered null, and the whole approval fell
+ * into the branch that decides nothing — while the command printed "Approved."
+ * So there are two properties here and they are separate: that a kind can be
+ * *given*, and that nothing here will invent one.
+ */
+describe('the device kind on `pair`', () => {
+  it('takes it as an option, and only the two words', () => {
+    expect(parseArgs(['pair', '--kind', 'mine'])).toEqual({ kind: 'pair', deviceKind: 'mine' })
+    expect(parseArgs(['pair', '--kind', 'guest'])).toEqual({ kind: 'pair', deviceKind: 'guest' })
+  })
+
+  it('refuses a third word rather than falling back to one of the two', () => {
+    // Both defaults are wrong in a way nobody would notice: `guest` strands the
+    // owner's own phone, `mine` hands a stranger the copilot and every port.
+    const parsed = parseArgs(['pair', '--kind', 'owner'])
+    expect(parsed.kind).toBe('error')
+    if (parsed.kind !== 'error') return
+    expect(parsed.message).toContain('no default')
+  })
+
+  it('refuses --kind with nothing after it', () => {
+    expect(parseArgs(['pair', '--kind']).kind).toBe('error')
+  })
+
+  it('still refuses an argument that is not --kind', () => {
+    expect(parseArgs(['pair', '--yes']).kind).toBe('error')
+  })
+
+  it('says what both words mean, because there is no screen to show it', () => {
+    const text = renderKindQuestion()
+    expect(text).toContain('It’s you at another keyboard')
+    expect(text).toContain('The copilot is never shared')
+    // The part a screen conveys by having no control for it.
+    expect(text).toContain('Nothing changes it afterwards')
+  })
+})
+
+describe('what `pair` prints once the host has answered', () => {
+  it('tells a guest it has no folders yet, rather than the opposite', () => {
+    /*
+     * The old line was printed for every approval and said the device "starts
+     * with the folders this host has open". Approving a guest writes an *empty*
+     * list on purpose, so that sentence sent somebody to their phone to watch a
+     * session refuse to start.
+     */
+    const text = renderApproved(device(), 'guest', NO_COPILOT_HERE)
+    expect(text).toContain('cannot start a session anywhere')
+    expect(text).toContain(`${BRAND.id} folders add`)
+    expect(text).not.toContain('sees whatever projects')
+  })
+
+  it('tells one of your own what it does get, and what this host has not got', () => {
+    const text = renderApproved(device(), 'mine', NO_COPILOT_HERE)
+    expect(text).toContain('sees whatever projects this host has open')
+    expect(text).toContain('has no copilot')
+  })
+
+  it('names the recorded kind when a second approval was refused', () => {
+    // The realistic refusal: a kind is written once, so re-approving a device as
+    // the other one is not a change that gets made.
+    const text = renderNotApproved(device(), 'mine', 'guest')
+    expect(text).toContain('NOT approved')
+    expect(text).toContain('already has it recorded as "guest"')
+    expect(text).toContain('revoke')
+  })
+})
+
 /* ------------------------------------------------------------------ status -- */
 
 const status = (patch: Partial<HostStatus> = {}): HostStatus => ({
@@ -248,6 +324,10 @@ const status = (patch: Partial<HostStatus> = {}): HostStatus => ({
     connections: [],
   },
   devices: [device()],
+  // Empty on purpose, so the default fixture is a device nobody has decided
+  // about — which is the state every device paired before device kinds existed
+  // is in, and the one the status line has to distinguish from a chosen guest.
+  kinds: [],
   folders: [],
   sessions: [],
   neverRunning: ['usage polling (a window feature)'],
@@ -269,6 +349,21 @@ describe('renderStatus', () => {
 
   it('lists what was never running here, so a reader who counts is not misled', () => {
     expect(renderStatus(status(), 0)).toContain('n/a       usage polling')
+  })
+
+  it('says what each device is, since a server has nowhere else to show it', () => {
+    const text = renderStatus(
+      status({ kinds: [{ deviceId: device().id, kind: 'mine', decidedAt: 0 }] }),
+      0,
+    )
+    expect(text).toContain('Asad’s iPhone  —  mine,')
+  })
+
+  it('distinguishes a chosen guest from a device nobody has decided about', () => {
+    // `kindOf` enforces both as `guest`. Only one of them has a remedy, and the
+    // word "guest" on its own would hide which.
+    const text = renderStatus(status(), 0)
+    expect(text).toContain('undecided, enforced as guest')
   })
 
   it('prints the WSL warning where somebody will read it', () => {

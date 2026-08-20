@@ -2,37 +2,53 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { retryOffered, UsageBarView } from './UsageBar'
-import type { UsageReport, UsageWindowReading } from './usage-bar-model'
+import { footNote, nextPanelState, opensPlan, planStatus, retryOffered, UsageBarView } from './UsageBar'
+import {
+  contextFigure,
+  contextLevel,
+  contextPanel,
+  contextSummary,
+  type ContextReading,
+  type UsageReport,
+  type UsageWindowReading,
+} from './usage-bar-model'
 
 /**
  * What the usage element puts on the chrome, and where it is mounted.
  *
- * Three failures are being guarded, and only one of them is about markup.
+ * ## What this file is guarding after 2026-08-19
  *
- * The first is the placement. Asad asked for this reading twice and both times
- * it stayed where it already was — inside the chat composer's Options panel,
- * which a session drawn as a terminal never opens. So the last block here does
- * not render anything: it reads `SessionControls.tsx` and `App.tsx` and asserts
- * that the reading is in the cluster and that the cluster is on both bars. A
- * component that renders beautifully and is mounted nowhere is exactly the state
- * this was in when the audit found it.
+ * Asad split this element in two that day, after watching it report a plan
+ * figure two hours old:
  *
- * The second is the shape, which is what he asked for on 2026-08-17 and what
- * most of this file is about: **two lines, five-hour above weekly**, a
- * percentage on each, the renewal time on the five-hour one alone, and no
- * `Week` and no dates anywhere on the bar.
+ *   > *"no lets keep it in the dropdown and keep context outside"*
  *
- * The third is the absence of a button. *"Claude Code has it, it should
- * automatically do it and bring it here."* `Check now` is gone, and the tests
- * that prove it is gone are worth nothing on their own — so they are paired with
- * the ones proving the thing that replaced it is wired, because deleting the
- * button without that would have emptied the bar rather than simplified it.
+ *   > *"And we will give an icon for it instead of title."*
+ *
+ * So the bar now carries a **context figure** and a **plan icon**, and the two
+ * are held to opposite rules because they cost opposite amounts — measured, and
+ * written down in `useUsageBar.ts`. The tests below are grouped by the four
+ * things that can go wrong with that:
+ *
+ *  1. The context figure appearing when there is nothing to report — a zero or
+ *     a dash where an agent has simply never written a token count down.
+ *  2. The plan icon growing words, a figure, or a second control beside it.
+ *  3. The plan figures being refreshed by anything other than the panel being
+ *     opened. The timer that used to do it — `auto-usage.ts` — was deleted with
+ *     this change, and a test that only asserted "no interval" would not notice
+ *     it coming back under another name, so what is asserted is that the file is
+ *     gone and that the open handler is the only trigger.
+ *  4. The placement. Asad asked for this reading twice and both times it stayed
+ *     where it already was — inside the chat composer's Options panel, which a
+ *     session drawn as a terminal never opens. The last block does not render
+ *     anything: it reads `SessionControls.tsx` and `App.tsx` and asserts the
+ *     reading is in the cluster and the cluster is on both bars.
  *
  * `react-dom/server`, like every other render test in this folder — this project
- * has no DOM in its test setup, which fixes the element in its closed state.
+ * has no DOM in its test setup, which fixes the element in its **closed** state.
  * That is the state a person reads at a glance and the one that has to be true
- * on its own.
+ * on its own; everything inside the panel is reached through the pure functions
+ * that decide it, or pinned at the source.
  */
 
 const NOW = Date.parse('2026-08-17T01:00:00.000Z')
@@ -85,12 +101,34 @@ function report(readings: UsageWindowReading[], reason: string | null = null): U
   }
 }
 
+/** The live reading this app took off its own transcript while this was written. */
+function context(over: Partial<ContextReading> = {}): ContextReading {
+  return {
+    provider: 'claude',
+    state: 'ok',
+    tokens: 154_057,
+    window: 1_000_000,
+    percent: 15.4057,
+    windowBasis: 'model',
+    model: 'claude-opus-5',
+    modelLabel: 'Opus 5',
+    sessionId: '92b0e6db-0f92-4cbb-bae9-0aa67f9a6868',
+    chosen: 'inferred',
+    rivals: 0,
+    reportedAt: NOW - MINUTE,
+    observedAt: NOW,
+    detail: '154,057 of 1,000,000 tokens — 15% of the context window.',
+    ...over,
+  }
+}
+
 function render(props: Partial<Parameters<typeof UsageBarView>[0]> = {}): string {
   return renderToStaticMarkup(
     <UsageBarView
       report={report([claude(), WEEK])}
       provider="claude"
       accountLabel="app.imatch.ae@gmail.com"
+      context={context()}
       now={NOW}
       {...props}
     />,
@@ -102,241 +140,482 @@ function text(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-describe('the two bars, stacked', () => {
-  it('draws a meter and a percentage for each window', () => {
+const SOURCE = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
+
+describe('the context figure, which is the whole of what is outside the dropdown', () => {
+  it('draws a proportion rather than a count, and no label with it', () => {
     /*
-     * His words: *"Maybe two bars, up and down. Upper one for five hours and
-     * down one for weekly. For weekly it will show the 55% … For the five-hour
-     * window it will also show the percentage and it will show the time of
-     * reset."*
+     * *"context window should be a bar instead of numbers. It should be a
+     * bar."* — so what is outside the dropdown is a length, and the count that
+     * used to be there (`154.1k`, this app's own reading off its own transcript
+     * on the day this was written) is in the accessible name and in the panel.
+     *
+     * The width is asserted rather than the element's presence: a bar that
+     * draws is not the same as a bar that draws the reading, and 154,057 of a
+     * million window is the one number a screenshot could not tell apart from
+     * a hard-coded one.
+     */
+    expect(render()).toContain('class="ub-cx-strip"')
+    expect(render()).toMatch(/ub-cx-strip-fill" style="width:15\.4/)
+    expect(text(render())).not.toContain('154.1k')
+    expect(render()).toContain('Context 154.1k of 1M (15%)')
+    expect(text(render())).not.toContain('Context')
+    expect(text(render())).not.toContain('tokens')
+  })
+
+  it('keeps the lines to what he can read, and the jargon to the hover', () => {
+    /*
+     * The second pass over this panel, and the one that took things off it.
+     *
+     * The first turned a run-on sentence into labelled lines, which was right
+     * about the shape and wrong about the content: `Session d4601913 · inferred
+     * · 1 other active here` is still this app talking to itself. *"it's not
+     * understandable so don't keep something which is not understandable"*, and
+     * of the model row, *"the way it is typing claude-opus star dash 5 … it's
+     * too messy"*.
+     *
+     * So the lines are the two a person acts on — which model sets the
+     * denominator, and how old the figure is when that is news — and every fact
+     * that came off the screen is in the panel's `title` and its accessible
+     * name. Cutting it out entirely would have been the other failure: a reading
+     * this app guessed at, presented as one it was told.
+     */
+    const panel = contextPanel(context(), NOW)
+    expect(panel?.used).toBe('154.1k')
+    expect(panel?.window).toBe('1M')
+    expect(panel?.share).toBe('15%')
+    const facts = Object.fromEntries((panel?.facts ?? []).map((fact) => [fact.label, fact.value]))
+    // The name the model menu on this same bar prints, not the transcript's id.
+    expect(facts.Model).toBe('Opus 5')
+    // A figure written seconds ago needs no caption, so there is no row at all.
+    expect(facts.Updated).toBeUndefined()
+    expect(panel?.facts).toHaveLength(1)
+    // The session id, the guess and the rivals are still true and still said.
+    expect(panel?.provenance).toContain('claude-opus-5')
+    expect(panel?.provenance).toContain('92b0e6db-0f92-4cbb-bae9-0aa67f9a6868')
+    expect(panel?.provenance).toContain('rather than being told')
+    // Named rather than guessed at, and the admission is simply absent.
+    expect(contextPanel(context({ chosen: 'named' }), NOW)?.provenance).not.toContain(
+      'rather than being told',
+    )
+    // And how many other conversations in the folder were being written at the
+    // same time, which is the measure of how likely the guess is to be wrong.
+    expect(contextPanel(context({ rivals: 2 }), NOW)?.provenance).toContain(
+      '2 other conversations were active in this folder',
+    )
+  })
+
+  it('prints the age only once it is news, and never as the row he caught lying', () => {
+    /*
+     * `Written 7d ago`, on a session he had opened minutes earlier. The lie was
+     * in the reading rather than in the row — see the walk in
+     * `readContextWindow`, which now picks the transcript with the newest *turn*
+     * instead of the newest file — and what is left is his own test for whether
+     * a row earns its place: useful when the figure is stale, noise when it is
+     * current.
+     */
+    const fresh = contextPanel(context({ reportedAt: NOW - 30_000 }), NOW)
+    expect(fresh?.facts.find((fact) => fact.label === 'Updated')).toBeUndefined()
+    const old = contextPanel(context({ reportedAt: NOW - 3 * 60 * 60_000 }), NOW)
+    expect(old?.facts.find((fact) => fact.label === 'Updated')?.value).toBe('3h ago')
+    // And the word `Written`, which he read as being about the transcript
+    // rather than about the number above it, is gone from the panel.
+    expect(old?.facts.some((fact) => fact.label === 'Written')).toBe(false)
+  })
+
+  it('divides the bar only where the split can be proved, and never by cache', () => {
+    /*
+     * The refusal this panel is built around. Claude Code's own `/context` draws
+     * `Messages`, `System tools`, `Memory files`, `System prompt`, `Skills` and
+     * `Custom agents`, and every one of those is written to disk **only** when
+     * somebody runs `/context` in that session: four of the 5,381 transcripts on
+     * this machine carry the record and all four were made by a probe run to
+     * find out. So this app draws the one split it can prove to the token —
+     * resident against the window — and no other.
+     *
+     * The tempting wrong answer is the cache split, which is on every assistant
+     * line. It is a fact about caching, not about content: on consecutive turns
+     * of one session it went 765,011/372 → 22,119/738,868 → 760,987/912 with the
+     * conversation unchanged. A bar drawn from it would look exactly like
+     * Claude's and mean nothing.
+     */
+    const panel = contextPanel(context(), NOW)
+    expect(panel?.segments.map((segment) => segment.key)).toEqual(['used', 'free'])
+    expect(panel?.segments.map((segment) => segment.amount)).toEqual(['154.1k', '845.9k'])
+    expect(panel?.segments.map((segment) => segment.share)).toEqual(['15%', '85%'])
+    // Used and free are the whole of the window, which is Claude's own
+    // arithmetic: on a first `/context` in a session, `total + free == max`.
+    const total = (panel?.segments ?? []).reduce((sum, segment) => sum + segment.tokens, 0)
+    expect(total).toBe(1_000_000)
+    for (const forbidden of ['Messages', 'System prompt', 'System tools', 'Skills', 'Cache']) {
+      expect((panel?.segments ?? []).map((segment) => segment.label)).not.toContain(forbidden)
+    }
+  })
+
+  it('draws no bar at all when nothing on disk names a window', () => {
+    /*
+     * A length with no denominator is not a proportion. `~/.claude/settings.json`
+     * on this machine sets `opus[1m]` and the transcript records the model
+     * *without* the tag, so a session that reached 999,876 tokens would draw as
+     * 500% against a 200k table value — `context-window.ts` answers `window:
+     * null` rather than guess, and the panel has to honour that with an absence.
+     */
+    const panel = contextPanel(context({ window: null, percent: null, windowBasis: null }), NOW)
+    expect(panel?.used).toBe('154.1k')
+    expect(panel?.window).toBeNull()
+    expect(panel?.share).toBeNull()
+    expect(panel?.segments).toEqual([])
+  })
+
+  it('says the window was seen larger than the model’s, when it was', () => {
+    // The `[1m]` session. `observed` means the transcript proved a window the
+    // table does not know about, which changes what the percentage means — so it
+    // is still said, in the hover, in a sentence rather than in the shorthand
+    // `Window: seen larger than this model’s` that was on the panel.
+    const seen = contextPanel(context({ windowBasis: 'observed' }), NOW)
+    expect(seen?.provenance).toContain('larger than this app’s table for that model')
+    // And the ordinary answer earns no clause at all: the model's own table is
+    // the unremarkable case and there is nothing to remark on.
+    expect(contextPanel(context(), NOW)?.provenance).not.toContain('table for that model')
+  })
+
+  it('speaks the whole reading for anyone who cannot hover it', () => {
+    /*
+     * A hover is not available to everybody, so the control is *named* with
+     * everything — not with the two lines the panel now prints. An accessible
+     * name has no width to run out of, which is why the session id is spelled in
+     * full here and is not on screen at all any more.
+     */
+    const said = contextSummary(context(), NOW) ?? ''
+    expect(said).toContain('Context 154.1k of 1M (15%)')
+    expect(said).toContain('92b0e6db-0f92-4cbb-bae9-0aa67f9a6868')
+    expect(said).toContain('claude-opus-5')
+    expect(said).toContain('wrote this figure just now')
+    expect(contextSummary(null, NOW)).toBeNull()
+  })
+
+  it('shows nothing at all for an agent that does not write one down', () => {
+    /*
+     * Gemini, checked on this machine rather than assumed: nine session files
+     * under `~/.gemini/tmp/*` and not one token count in any of them. Not a
+     * zero — a zero claims the context is empty. Not a dash either: a dash in
+     * the place a number goes is still an element claiming this app is
+     * measuring something.
+     */
+    const gemini = context({
+      provider: 'gemini',
+      state: 'not-reported',
+      tokens: null,
+      window: null,
+      percent: null,
+      detail: 'Gemini does not record how full its context window is.',
+    })
+    expect(contextFigure(gemini)).toBeNull()
+    expect(contextFigure(null)).toBeNull()
+    const html = render({ context: gemini })
+    expect(html).not.toContain('ub-context')
+    expect(text(html)).not.toContain('0')
+    expect(text(html)).not.toContain('—')
+  })
+
+  it('shows nothing for a session that has not taken a turn yet, either', () => {
+    // Different reason, same answer on the bar. The difference is a sentence in
+    // the tooltip: `nothing-yet` becomes a figure on its own and `not-reported`
+    // never will, and only one of those is worth waiting for.
+    const fresh = context({ state: 'nothing-yet', tokens: null, window: null, percent: null })
+    expect(contextFigure(fresh)).toBeNull()
+  })
+
+  it('gives a token count with no percentage rather than inventing a denominator', () => {
+    /*
+     * The refusal `context-window.ts` is built around. `~/.claude/settings.json`
+     * on this machine sets `opus[1m]`, and the transcript that CLI writes records
+     * the model *without* the `[1m]` tag — so a session that reached 999,876
+     * tokens would draw as 500% against a 200k table value. When nothing on disk
+     * names a window, `window` and `percent` are both null and the figure keeps
+     * its colour rather than borrowing a limit it does not have.
+     */
+    const unknown = context({ window: null, percent: null, windowBasis: null, model: null })
+    expect(contextFigure(unknown)).toBe('154.1k')
+    expect(contextLevel(unknown)).toBe('ok')
+  })
+
+  it('colours itself on the app’s own thresholds, and only when it has a share', () => {
+    expect(contextLevel(context({ percent: 15 }))).toBe('ok')
+    expect(contextLevel(context({ percent: 92 }))).toBe('critical')
+    // Not `critical` merely for being large: without a window there is no share.
+    expect(contextLevel(context({ percent: null }))).toBe('ok')
+  })
+})
+
+describe('the plan limits, behind one icon', () => {
+  it('draws an icon and no figure and no words', () => {
+    /*
+     * *"And we will give an icon for it instead of title."* The control is a
+     * glyph; everything it could have printed is in its accessible name.
      */
     const html = render()
-    expect(html.match(/ub-meter-fill/g) ?? []).toHaveLength(2)
-    expect(html).toContain('width:18%')
-    expect(html).toContain('width:55%')
-    expect(text(html)).toContain('18%')
-    expect(text(html)).toContain('55%')
+    expect(html).toContain('ub-plan-glyph')
+    expect(text(html)).not.toContain('5h')
+    expect(text(html)).not.toContain('55%')
+    expect(text(html)).not.toContain('Usage')
   })
 
-  it('puts the five-hour line first, and names only that one', () => {
-    // The order is what tells them apart once the weekly line has given up its
-    // name, so it is asserted on the string rather than on the model — this is
-    // the file that would catch a `flex-direction` or a `.reverse()`.
+  it('has a real accessible name and a title carrying the whole reading', () => {
     const html = render()
-    expect(text(html).indexOf('18%')).toBeLessThan(text(html).indexOf('55%'))
-    expect(text(html)).toContain('5h')
-  })
-
-  it('never says “Week” and never shows the weekly date', () => {
-    // *"No need to say week here and no even need to show the dates."* The
-    // weekly renewal time is not lost — it is in the hover label and in the
-    // panel, both of which have room for the whole phrase including its
-    // timezone. It is off the bar, which is a different thing.
-    const html = render()
-    expect(text(html)).not.toMatch(/\bWeek\b/)
-    expect(html).not.toContain('resets Aug 21')
-  })
-
-  it('shows the renewal time for the five-hour window', () => {
-    const html = render()
-    expect(html).toContain('<span class="ub-caveat">resets 4am</span>')
-    // The timezone the CLI printed is not lost, it is one hover away — see
-    // `chipReset`, and the panel, which prints the phrase whole.
-    expect(html).toContain('resetting 4am (Asia/Dubai)')
-  })
-
-  it('has exactly one renewal clause, on the line that is allowed one', () => {
-    expect(render().match(/ub-caveat/g) ?? []).toHaveLength(1)
-  })
-
-  it('says whose it is, where the lines cannot fit it', () => {
-    // The element sits beside the account chip precisely so the two agree, so
-    // the hover label and the accessible name carry the agent and the login.
-    const html = render()
+    expect(html).toContain('aria-label="Plan limits:')
+    expect(html).toContain('aria-haspopup="dialog"')
+    // Whose, then what — the agent and the login before the numbers, resolved
+    // through the same function the account chip beside it uses.
     expect(html).toContain('Claude Code')
     expect(html).toContain('app.imatch.ae@gmail.com')
+    /*
+     * Every window contributes, and it contributes facts rather than a
+     * sentence. `the weekly window` was this app's own paraphrase, written to
+     * be dropped into prose that no longer exists; what a screen reader gets
+     * now is the same order the row prints — how much, when it renews, how old.
+     */
+    expect(html).toContain('55% used · renews Aug 21 at 2pm (Asia/Dubai)')
+    expect(html).not.toContain('weekly window')
   })
 
-  it('gives up the renewal clause, and nothing else, when the room runs short', () => {
+  it('takes the colour of the worst window, so a hidden limit is not hidden', () => {
     /*
-     * The controls beside this one fold into a single chip, because a control
-     * that is hidden is still reachable through the panel that hid it. A reading
-     * cannot be hidden that way: out of sight it is indistinguishable from a
-     * reading that does not exist, which is the one confusion this component is
-     * built to prevent. So both lines stay, and give up their caption.
+     * The job `extraAlert` used to do on the bar, and the reason it existed:
+     * Claude Code prints `Current week (all models)` and `Current week (Opus)`,
+     * and the second is the one that actually stops people working. With every
+     * window behind one control the hazard is worse, not better.
+     */
+    const opus = claude({
+      id: 'claude/system:claude/weekly:opus',
+      window: 'weekly',
+      label: 'Current week (Opus)',
+      used: { state: 'reported', fraction: 0.97 },
+    })
+    expect(render({ report: report([claude(), WEEK, opus]) })).toContain('data-level="critical"')
+    expect(render()).not.toContain('data-level="critical"')
+  })
+
+  it('tells a login with no limits from a figure that has not arrived', () => {
+    /*
+     * The words the figure column used to carry are an attribute now. The
+     * distinction they exist for is unchanged: `Not reported` describes a number
+     * that is late, and an account billed through the Claude API has no rolling
+     * window at all, so nothing is late and nothing is coming.
+     */
+    expect(planStatus({ unwired: true, noLimits: false, blocked: null, fetching: false, reported: false })).toBe('unwired')
+    expect(planStatus({ unwired: false, noLimits: true, blocked: 'API billing', fetching: false, reported: false })).toBe('no-limits')
+    expect(planStatus({ unwired: false, noLimits: false, blocked: 'Signed out', fetching: false, reported: false })).toBe('stopped')
+    expect(planStatus({ unwired: false, noLimits: false, blocked: null, fetching: true, reported: false })).toBe('reading')
+    expect(planStatus({ unwired: false, noLimits: false, blocked: null, fetching: false, reported: true })).toBe('reported')
+    expect(planStatus({ unwired: false, noLimits: false, blocked: null, fetching: false, reported: false })).toBe('nothing')
+  })
+
+  it('never says “Reading…” for a login that has settled', () => {
+    /*
+     * The top bar on his Windows machine read `Usage Reading…` and never
+     * resolved, because the fetch was being run again and again on a session
+     * where it could not succeed. A state that means "wait, this is coming" must
+     * not be on screen for a state that is not coming — so a settled answer
+     * outranks a fetch in flight.
+     */
+    expect(
+      planStatus({ unwired: false, noLimits: true, blocked: 'no limits', fetching: true, reported: false }),
+    ).toBe('no-limits')
+    const html = render({ report: report([]), blocked: 'Signed out.', fetching: true })
+    expect(html).toContain('data-status="stopped"')
+  })
+
+  it('is muted rather than hidden when there is nothing to report', () => {
+    // A control that is absent and a control that has nothing to report are
+    // indistinguishable, and only one of them is true. The panel says which.
+    const css = readFileSync(join(__dirname, 'UsageBar.css'), 'utf8')
+    expect(css).toContain(".cc-chip.ub-plan[data-status='no-limits']")
+    expect(css).toContain('opacity: 0.5')
+    expect(css).not.toContain('display: none')
+  })
+})
+
+describe('opening the dropdown is the refresh, and nothing else is', () => {
+  it('has no timer file left to run one', () => {
+    /*
+     * `auto-usage.ts` held the quiet-timer that kept the plan figure fresh off
+     * the session's own output. It is deleted, in his words — *"if we need a
+     * cron to keep it updated then we need to completely remove it"* — and the
+     * absence of the file is what is asserted, because a test that only checked
+     * for `setInterval` would not notice the same debounce coming back under
+     * another name.
+     */
+    expect(() => readFileSync(join(__dirname, 'auto-usage.ts'), 'utf8')).toThrow()
+    expect(SOURCE).not.toContain("from './auto-usage'")
+    expect(SOURCE).not.toContain('useAutoUsage({')
+  })
+
+  it('fires the fetch on the way open, once, however it was opened', () => {
+    /*
+     * A close is not a request for anything, and firing on both would double the
+     * cost of every look for nothing. Since the panel opens on hover as well as
+     * on a press, the same rule has to survive a person hovering the icon and
+     * then clicking it — one continuous act of opening, and one fetch.
+     */
+    const shut = { open: null, pinned: false } as const
+    const hovered = nextPanelState(shut, { kind: 'hover', panel: 'plan' })
+    expect(opensPlan(shut, hovered)).toBe(true)
+    expect(opensPlan(hovered, nextPanelState(hovered, { kind: 'press', panel: 'plan' }))).toBe(false)
+    const pinned = nextPanelState(hovered, { kind: 'press', panel: 'plan' })
+    expect(opensPlan(pinned, nextPanelState(pinned, { kind: 'press', panel: 'plan' }))).toBe(false)
+    // And the context panel is not a plan open, whichever way it is reached.
+    expect(opensPlan(shut, nextPanelState(shut, { kind: 'hover', panel: 'context' }))).toBe(false)
+  })
+
+  it('lets a press hold open what a hover opened, instead of closing it', () => {
+    /*
+     * The one that bites, and the reason this is a reducer rather than a
+     * `setOpen(!open)`: a mouse user hovers the icon, the panel opens, they
+     * click it — and a naive toggle reads its own hover as "already open" and
+     * shuts the panel on the press that was meant to keep it there.
+     */
+    const shut = { open: null, pinned: false } as const
+    const hovered = nextPanelState(shut, { kind: 'hover', panel: 'plan' })
+    expect(hovered).toEqual({ open: 'plan', pinned: false })
+    const pinned = nextPanelState(hovered, { kind: 'press', panel: 'plan' })
+    expect(pinned).toEqual({ open: 'plan', pinned: true })
+    // A second press is the only thing that closes what a press opened…
+    expect(nextPanelState(pinned, { kind: 'press', panel: 'plan' })).toEqual(shut)
+    // …the pointer leaving does not, which is the whole difference between a
+    // panel you hovered and a panel you asked for.
+    expect(nextPanelState(pinned, { kind: 'leave' })).toEqual(pinned)
+    expect(nextPanelState(hovered, { kind: 'leave' })).toEqual(shut)
+    // Nor does the pointer wandering onto the other trigger swap it out.
+    expect(nextPanelState(pinned, { kind: 'hover', panel: 'context' })).toEqual(pinned)
+    // Escape and an outside press always win.
+    expect(nextPanelState(pinned, { kind: 'shut' })).toEqual(shut)
+  })
+
+  it('reaches the same panel from a hover and from a click, not two renderings', () => {
+    /*
+     * *"it should show the same as we show on click hover should sho the same
+     * one as hover too with bars"* — he had a text paragraph on hover and meters
+     * on click, for one reading. There is one sheet in this file and one set of
+     * rows in it; the trigger only decides which panel it holds.
+     */
+    expect(SOURCE.match(/className="ub-sheet/g) ?? []).toHaveLength(1)
+    expect(SOURCE).toContain("send({ kind: 'hover', panel: 'plan' })")
+    expect(SOURCE).toContain("send({ kind: 'press', panel: 'plan' })")
+    // And no native tooltip on either *control*, which is what would open over
+    // the panel it duplicates — the two surfaces for one reading he was
+    // complaining about. The single `title` this file has is on the context
+    // section *inside* the sheet, where the pointer is already at rest on the
+    // thing it is asking about, and it carries the provenance the panel stopped
+    // printing on his behalf.
+    expect(SOURCE.match(/title=\{/g) ?? []).toHaveLength(1)
+    expect(SOURCE).toContain('<section className="ub-cx" title={')
+  })
+
+  it('opens without forcing, because a look is not an override', () => {
+    /*
+     * `force` reaches past a login that has settled on "no subscription limits",
+     * and it is reserved for the retry inside the panel, in view of the sentence
+     * explaining what it overrides. The main process holds the real restraint —
+     * one probe per login per minute, against the account.
+     */
+    expect(SOURCE).toContain('onOpen={usage.canCheck && features.controlOn(\'chrome.usage\') ? () => usage.check() : undefined}')
+    expect(SOURCE).toContain('onCheck={() => usage.check(true)}')
+  })
+
+  it('does not chase a plan figure the CLI would refuse to refetch', () => {
+    /*
+     * Claude Code throttles its own usage fetch to once every five minutes —
+     * `CLI_CACHE_WRITE_THROTTLE_MS` in `usage-probe.ts` — so two opens inside
+     * five minutes cannot produce two different numbers. The panel states when
+     * each figure was *read* rather than implying "now", and the main process
+     * declines to start anything inside that window.
+     */
+    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
+    expect(hook).toContain('which is why every row in the panel says when it was')
+    const probe = readFileSync(join(__dirname, '../../main/usage-probe.ts'), 'utf8')
+    expect(probe).toContain('CLI_CACHE_WRITE_THROTTLE_MS = 300_000')
+    /*
+     * The twelve-minute bug, at the gate that caused it.
      *
-     * `dense` is a *measured* tier and deliberately not the controls' fold —
-     * see `fit`. Following the fold meant losing the renewal time at a 1440pt
-     * window whenever the session had a long name, which is not short of room by
-     * any reading of the word.
+     * The rows read `read 12m ago` on a panel whose whole premise is that
+     * opening it is the fetch, and the reason was here: the disk-cache
+     * short-circuit asked whether any reading was still *drawable*, and
+     * `isDrawable` retires a weekly reading after fourteen hours. Every reading
+     * from one CLI fetch shares a timestamp, so the weekly row kept the login
+     * looking current all day and no probe was ever started. The question is now
+     * the CLI's own write throttle, which is the only thing that decides whether
+     * asking can produce a different answer.
      */
-    const html = render({ fit: 'dense' })
-    expect(html.match(/ub-meter-fill/g) ?? []).toHaveLength(2)
-    expect(text(html)).toContain('18%')
-    expect(text(html)).toContain('55%')
-    expect(html).not.toContain('ub-caveat')
-    // …and the clause is still one hover away, whole.
-    expect(html).toContain('resetting 4am (Asia/Dubai)')
-  })
-})
-
-describe('the narrowest bar this app can be made', () => {
-  /**
-   * Measured, not imagined. At the app's own minimum window width — 720, pinned
-   * in `src/main/index.ts` — a toolbar carrying a session name, a folder, a long
-   * account address and the mode switch leaves this cluster 67 pixels, shared
-   * with the folded controls chip. Flex handed the reading 22.9 of them and it
-   * drew the word `5h` and no number at all.
-   *
-   * `tight` is the answer: the figures, and nothing else. Everything asserted
-   * below is something that has to *go* for the two numbers to come out whole,
-   * so each one is a thing somebody could reasonably put back.
-   */
-  const html = render({ fit: 'tight' })
-
-  it('keeps both figures', () => {
-    expect(text(html)).toContain('18%')
-    expect(text(html)).toContain('55%')
+    const ipc = readFileSync(join(__dirname, '../../main/usage-ipc.ts'), 'utf8')
+    expect(ipc).toContain('accountFigureIsAsFreshAsItCanBe')
+    expect(ipc).not.toContain('accountHasLiveReading')
   })
 
-  it('drops the window name, the meters and the renewal clause', () => {
-    expect(text(html)).not.toContain('5h')
-    expect(html).not.toContain('ub-meter')
-    expect(html).not.toContain('ub-caveat')
-  })
-
-  it('drops the caret, which everywhere else on this bar is sacred', () => {
+  it('has no paragraph inside the panel explaining how it fetches', () => {
     /*
-     * With it the control needs 48px and the cap allows 35, so the grid
-     * overflowed its own box and the chevron was drawn *on top of* `18%` — a
-     * 6.9px overlap, measured in the running app. A caret painted through a
-     * percentage is not an affordance. The element is still a button, still
-     * announces `aria-haspopup`, and still carries the whole reading in its
-     * title, all of which is asserted here so that dropping the mark cannot
-     * quietly become dropping the control.
+     * *"i dont want this inside"*, quoted back word for word. Every clause of it
+     * is true and was expensive to establish, and none of it changes what a
+     * reader would do — each row already says when it was read. It moved to the
+     * call it describes, which is where the next person to change the mechanism
+     * will look.
      */
-    expect(html).not.toContain('ac-caret')
-    expect(html).toContain('aria-haspopup="dialog"')
-    expect(html).toContain('<button')
-    expect(html).toContain('resetting 4am (Asia/Dubai)')
+    // The literal, not the prose: the comment below `footNote` quotes the
+    // deleted paragraph on purpose, so what is asserted is that no string
+    // literal in this file still puts it on screen.
+    expect(SOURCE).not.toContain("'Fetched by Claude Code itself")
+    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
+    expect(hook).toContain('no session is typed into')
+    expect(hook).toContain('Opening the panel is what asks, so there is nothing to press')
+    // The ordinary state prints nothing at all now; the two that have stopped
+    // keep their sentence, because the control that acts on it is beside them.
+    expect(footNote({ provider: 'claude', noLimits: false, blocked: null })).toBeNull()
+    expect(footNote({ provider: 'claude', noLimits: true, blocked: 'x' })).toContain('Remembered')
+    expect(footNote({ provider: 'claude', noLimits: false, blocked: 'x' })).toContain(
+      'Nothing was read',
+    )
+    expect(footNote({ provider: 'codex', noLimits: false, blocked: null })).toContain('rollout')
   })
 
-  it('renders one cell per line per column, so the grid cannot shear', () => {
+  it('bounds the wait, so the panel can never sit on a spinner for ever', () => {
     /*
-     * A grid with N explicit columns places items in order, so a line that
-     * renders fewer cells than the template does not lose a column — it pushes
-     * every later cell into the wrong one, and the two lines stop being aligned,
-     * which is the one thing holding the unnamed weekly line together.
-     *
-     * One cell a line when tight (the figure), four when there is room (name,
-     * figure, meter, renewal clause). `UsageBar.css` states the matching
-     * template against the same `data-fit` value, and this is what stops the two
-     * being changed apart.
+     * Longer than the main process's own kill on purpose: `refreshUsage` gives
+     * up at `PROBE_TIMEOUT_MS` and answers with a sentence, so a slow probe is
+     * allowed to finish and report properly. This covers only the reply that
+     * never comes back at all.
      */
-    expect((html.match(/ub-cell/g) ?? []).length).toBe(2)
-    expect((render().match(/ub-cell/g) ?? []).length).toBe(8)
+    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
+    expect(hook).toContain('REFRESH_WAIT_CAP_MS = 18_000')
+    const probe = readFileSync(join(__dirname, '../../main/usage-probe.ts'), 'utf8')
+    expect(probe).toContain('PROBE_TIMEOUT_MS = 15_000')
   })
-})
 
-describe('one window reporting and the other silent', () => {
-  it('keeps the empty line rather than promoting the other window into it', () => {
+  it('says a check is running, and keeps the old figures with their ages when one fails', () => {
     /*
-     * The exact screen he was looking at when he asked for two bars: no
-     * five-hour figure, 81% for the week — and a single element that read
-     * `Week 81% ▬▬ resets Aug 21 at 2pm`, because the weekly reading had been
-     * promoted into the only slot there was. The percentage that is present must
-     * still be the weekly one, and the missing one must still be visibly the
-     * five-hour one.
+     * Nobody pressed a button to start it — opening the panel did — so a panel
+     * that said nothing while it ran would be read as finished. And a failed
+     * check does not clear the rows: a reading that was true twenty minutes ago,
+     * labelled with its age, is worth more than a blank.
      */
-    const html = render({
-      report: report([{ ...WEEK, used: { state: 'reported', fraction: 0.81 } }]),
-    })
-    expect(text(html)).toContain('5h')
-    expect(text(html)).toContain('81%')
-    expect(html.match(/ub-meter-fill/g) ?? []).toHaveLength(1)
-    // An em dash: the absence, marked, in the column a number would be in. Not
-    // a zero — an empty meter and an absent one are opposite claims, so the
-    // silent line has no meter at all.
-    expect(text(html)).toContain('—')
-  })
-})
-
-describe('what is on the bar when nothing has been reported', () => {
-  it('collapses to one line and says so in the main process’s own words', () => {
-    const reason =
-      'Claude Code has not printed a plan-limit line in this session yet — it only does so near a limit, or when /usage is run.'
-    const html = render({ report: report([], reason) })
-    expect(text(html)).toContain('Not reported')
-    expect(html).not.toContain('ub-meter')
-    expect(html).toContain('only does so near a limit')
+    expect(SOURCE).toContain('Checking with Claude Code…')
+    expect(SOURCE).toContain('failed && detail !== null')
+    expect(SOURCE).toContain('read ${readout.age}')
   })
 
-  it('separates a build with no channel from a session with nothing to say', () => {
-    expect(render({ report: null, unwired: true })).toContain('not wired into this build')
-    expect(render({ report: null })).toContain('Asking this session')
-  })
-
-  it('says a fetch is happening while one is, because nobody started it', () => {
-    // A reader who did not press anything and sees "Not reported" for the two
-    // seconds a fetch takes has been told the wrong thing.
-    expect(text(render({ report: report([]), fetching: true }))).toContain('Reading…')
-  })
-
-  it('never draws a bar from an expired window', () => {
+  it('keeps the context figure on a rule of its own, with no scheduled callback', () => {
     /*
-     * The real state of Codex on this machine: 5% of a 30-day window, measured
-     * on 4 June, for a window that reset on 4 July. Exact, and about a period
-     * that no longer exists — the same failure as the cached block in
-     * `~/.claude.json`, which is why neither is ever drawn.
+     * The half of the split that is not about the dropdown. A leading-edge
+     * throttle rather than a debounce: nothing is ever queued, so there is
+     * nothing to cancel, nothing to fire after unmount, and no timer in the
+     * window at all.
      */
-    const html = render({
-      provider: 'codex',
-      accountLabel: 'Signed in · ChatGPT',
-      report: report([
-        claude({
-          id: 'codex/system:codex/monthly',
-          account: {
-            provider: 'codex',
-            id: 'system:codex',
-            name: 'Default (Codex CLI)',
-            configDir: '/Users/apple/.codex',
-          },
-          window: 'monthly',
-          windowMinutes: 43200,
-          label: '30-day limit',
-          used: { state: 'reported', fraction: 0.05 },
-          resets: { state: 'at', at: 1783130065000 },
-          reportedAt: 1780538073460,
-          source: 'codex-rollout',
-        }),
-      ]),
-    })
-    expect(text(html)).toContain('Not reported')
-    expect(text(html)).toContain('window has reset')
-    expect(html).not.toContain('ub-meter-fill')
-    expect(html).toContain('Codex CLI')
-  })
-})
-
-describe('a window near its limit that has no line of its own', () => {
-  it('is put on the bar beside the two that do', () => {
-    // `Current week (Opus)` at 97% behind a comfortable pair is the screen this
-    // whole feature was nearly cancelled for producing.
-    const html = render({
-      report: report([
-        claude(),
-        WEEK,
-        claude({
-          id: 'claude/system:claude/weekly-opus',
-          window: 'other',
-          windowMinutes: 10080,
-          label: 'Current week (Opus)',
-          used: { state: 'reported', fraction: 0.97 },
-        }),
-      ]),
-    })
-    expect(html).toContain('ub-alert')
-    expect(text(html)).toContain('97%')
+    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
+    expect(hook).toContain('export function useContextWindow')
+    expect(hook).toContain('onSessionData')
+    expect(hook).not.toContain('setInterval')
+    // The one `setTimeout` in the file is the bound on the plan refresh above,
+    // and it is the only one there may be.
+    expect(hook.match(/setTimeout\(/g) ?? []).toHaveLength(1)
   })
 })
 
@@ -345,19 +624,16 @@ describe('nobody presses anything until the app gives up', () => {
     /*
      * *"Claude Code has it, it should automatically do it and bring it here."*
      *
-     * Exhaustive over the states a reader can actually be in, because the rule
-     * is not "no button" any more — it is "no button while there is still a
-     * reason to wait". Reachable only as a function: the control lives in the
-     * sheet, the sheet is only rendered while the panel is open, and this
-     * project's render tests produce a static string.
+     * Reachable only as a function: the control lives in the sheet, the sheet is
+     * only rendered while the panel is open, and this project's render tests
+     * produce a static string.
      */
     expect(retryOffered(null, () => {})).toBe(false)
   })
 
   it('offers one press, and only once the app has stopped asking', () => {
     /*
-     * The state the deletion did not consider, and the one his Windows recording
-     * is of: an attempt typed `/usage` into the session, found nothing, and by
+     * The state the deletion did not consider: an attempt found nothing and by
      * design will not try again. A sentence with no way to act on it is the dead
      * end this whole review is about — worse than the button ever was.
      */
@@ -366,148 +642,27 @@ describe('nobody presses anything until the app gives up', () => {
     expect(retryOffered('Claude Code’s usage panel shows no plan limits.', undefined)).toBe(false)
   })
 
-  it('keeps the bar itself down to one control, whatever the state', () => {
+  it('keeps the bar itself down to two controls, whatever the state', () => {
     /*
-     * Counted rather than searched for by name, because the name is the thing
-     * most likely to change and least likely to matter. Two `<button>`s in the
-     * whole file: the chip that opens the panel, and the retry inside it — and
-     * the second is spelled through `retryOffered`, so it cannot be loosened
-     * without the two tests above failing. A third cannot be added anywhere, in
-     * any state, under any label, without this failing.
+     * Counted rather than searched for by name. Three `<button>`s in the whole
+     * file and two of them on the bar: the context figure, which opens its own
+     * breakdown, and the icon, which opens the plan panel. The third is the retry
+     * *inside* that panel, spelled through `retryOffered` so it cannot be
+     * loosened without the two tests above failing. A fourth cannot be added
+     * anywhere, in any state, under any label, without this failing.
+     *
+     * It was two until 2026-08-19, when the figure stopped being a `<span>` with
+     * a tooltip. That is not a control being added to the bar — it is the same
+     * reading, with the paragraph behind it turned into a panel a keyboard can
+     * reach and a screen reader will announce. Nothing about it is drawn as
+     * pressable: `UsageBar.css` gives it no border, no fill and no hover chip.
      *
      * `ub-check` is the class the old always-present control wore, named here so
      * that a wholesale revert is caught by its own spelling.
      */
-    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
-    expect(source.match(/<button/g) ?? []).toHaveLength(2)
-    expect(source).not.toContain('ub-check')
-    expect(source).toContain('retryOffered(blocked, onCheck)')
-  })
-
-  it('says the settled answer rather than “Reading…” for ever', () => {
-    /*
-     * The top bar in his recording read `Usage Reading…` and never resolved,
-     * because the fetch was being run again and again on a session where it
-     * could not succeed. A word that means "wait, this is coming" must not be on
-     * screen for a state that is not coming.
-     */
-    const stopped = render({
-      report: report([], 'Claude Code has not printed a plan-limit line in this session yet.'),
-      blocked: 'Claude Code’s usage panel shows no plan limits for this account, so there is nothing to read.',
-      fetching: true,
-    })
-    expect(text(stopped)).not.toContain('Reading…')
-    expect(text(stopped)).toContain('Not reported')
-    // And the sentence the bar hands to a hover and to a screen reader is the
-    // settled one, not the tracker's "it has not printed one yet" — which is
-    // true, and reads as "give it a moment" for a state that has no moment.
-    expect(stopped).toContain('no plan limits for this account')
-    expect(stopped).not.toContain('has not printed a plan-limit line')
-  })
-
-  it('still says “Reading…” while a fetch really is in flight', () => {
-    const trying = render({ report: report([]), fetching: true })
-    expect(text(trying)).toContain('Reading…')
-  })
-
-  it('fetches by itself instead, off the session’s own output', () => {
-    /*
-     * Paired with the test above deliberately. Removing the button on its own
-     * would not have simplified this element, it would have emptied it: `/usage`
-     * is the only thing in this app that makes Claude Code state its limits, and
-     * the button was the only thing that ran it. So the deletion is only correct
-     * while this is wired, and the two are asserted together so neither can be
-     * undone alone.
-     */
-    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
-    expect(source).toContain('useAutoUsage({')
-    expect(source).toContain('fetch: usage.check')
-    // …and it stops when the feature is switched off. Hooks run before the
-    // early return that stops this being *drawn*, so without this a
-    // switched-off reading would carry on typing `/usage` into people's
-    // sessions for a bar nobody can see.
-    expect(source).toContain("features.controlOn('chrome.usage')")
-    // The freshness judgement is the drawing layer's, not a second opinion — a
-    // figure good enough to show is good enough to leave alone.
-    expect(source).toContain('fresh: leadIsLive(')
-  })
-
-  it('is driven by an event, not by an interval', () => {
-    // The standing rule in this project, in his words: crons and timers *"make
-    // the system heavier"*. The only timers in the fetcher are one-shots.
-    const auto = readFileSync(join(__dirname, 'auto-usage.ts'), 'utf8')
-    expect(auto).toContain('onSessionData')
-    expect(auto).not.toContain('setInterval')
-  })
-
-  it('tells the reader there is nothing to press, rather than leaving a gap', () => {
-    // A person who can see a figure is missing will look for the button. The
-    // honest answer is that the app is already doing it — and saying so is what
-    // stops the absence reading as a fault.
-    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
-    expect(source).toContain('there is nothing to press')
-  })
-
-  it('never types into a session, which is the requirement everything else serves', () => {
-    /*
-     * The half of 2026-08-18 that is about *not* doing something, and the whole
-     * of what he asked for on the second pass.
-     *
-     * His first message was one line — *"this is what keeps happening
-     * repeatedly"* — over fifteen seconds of a `/usage` panel sitting open on a
-     * live Windows session. The fix that followed rationed the typing. He came
-     * back a third time and closed the question instead: *"find out some other
-     * way to keep the bar refresh otherwise we will remove it completely if it
-     * will be heavy"*.
-     *
-     * So there is no rationing left to assert, because there is no typing left
-     * to ration. The fetcher calls one channel and that channel reads a file and,
-     * at worst, starts a `claude` of this app's own — see `usage-probe.ts` for
-     * what that costs, measured. Asserted at the seam, because this project's
-     * tests have no DOM to render a hook into.
-     */
-    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
-    expect(hook).toContain('refreshUsage')
-    expect(hook).not.toContain('refreshPlanLimits')
-    const auto = readFileSync(join(__dirname, 'auto-usage.ts'), 'utf8')
-    expect(auto).not.toContain('refreshPlanLimits')
-
-    /*
-     * And the one thing that is still refused: a login that has answered is not
-     * asked again. It is no longer a *stop* — nothing here costs the reader
-     * anything, so nothing has to be prevented — it is that there is no reason
-     * to keep asking a question that has been answered, and the bar is already
-     * saying so on its face.
-     */
-    expect(auto).toContain('blocked: string | null')
-    expect(auto).toContain('if (current.blocked !== null) return')
-    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
-    expect(source).toContain('blocked: usage.blocked')
-    expect(hook).toContain('SETTLED.has(result.outcome)')
-  })
-
-  it('says a login has no limits, rather than that a figure has not arrived', () => {
-    /*
-     * `Not reported` is right for every other absent reading here — Claude Code
-     * prints its limits only near one or when asked, so the number really is
-     * late. On a login billed through the API there is no rolling window at
-     * all: nothing is late, nothing is coming, and the same two words would be
-     * reporting a failure that did not happen.
-     */
-    const html = renderToStaticMarkup(
-      <UsageBarView
-        report={null}
-        provider="claude"
-        accountLabel="someone@example.com"
-        blocked="This account is billed through the Claude API, which has no subscription limits to read."
-        noLimits
-        onCheck={() => {}}
-        now={NOW}
-      />,
-    )
-    expect(html).toContain('No limits')
-    expect(html).not.toContain('Not reported')
-    expect(html).not.toContain('Reading…')
+    expect(SOURCE.match(/<button/g) ?? []).toHaveLength(3)
+    expect(SOURCE).not.toContain('ub-check')
+    expect(SOURCE).toContain('retryOffered(blocked, onCheck)')
   })
 
   it('does not claim a reading was taken when there is no reading', () => {
@@ -523,49 +678,52 @@ describe('nobody presses anything until the app gives up', () => {
      * tests cannot open it, so the branch is pinned at the source. Delete it and
      * the false sentence comes straight back.
      */
-    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
-    expect(source).toContain('? noLimits\n                ? ')
-    expect(source).toContain('Remembered for this account, so nothing is started to ask again.')
+    expect(SOURCE).toContain('if (input.noLimits) return')
+    expect(SOURCE).toContain('Remembered for this account, so nothing is started to ask again.')
     /*
      * And the same mistake in its second form, caught the same day. The first
      * fix branched on `noLimits`, which left the *signed-out* account printing
      * a provenance line about a fetch that never happened. So the branch is on
-     * "is there a reading" rather than on which reason there is not, and every
-     * stopped state gets a sentence about what happens next instead.
+     * "is there a reading" rather than on which reason there is not.
      */
-    expect(source).toContain('Nothing was read, so there is no figure here')
-    expect(source).not.toContain("? sourceSentence('claude-usage-api')")
+    expect(SOURCE).toContain('Nothing was read, so there is no figure here')
+    expect(SOURCE).not.toContain("? sourceSentence('claude-usage-api')")
   })
 
   it('does not tell the reader their session is typed into, anywhere on the bar', () => {
     /*
-     * The sentence under the bars used to say where the figure came from, and
+     * The sentence under the rows used to say where the figure came from, and
      * the true answer was *"Read from Claude Code's own /usage panel"* — this
      * app having typed `/usage` into the reader's session to produce it. It is
      * not true any more, and a line that still said it would be advertising the
      * exact thing he asked three times to have removed.
      */
-    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
-    expect(source).toContain('no session is typed into')
-    expect(source).not.toContain("sourceSentence('claude-usage-panel')")
+    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
+    expect(hook).toContain('no session is typed into')
+    expect(SOURCE).not.toContain("sourceSentence('claude-usage-panel')")
 
     const model = readFileSync(join(__dirname, 'usage-bar-model.ts'), 'utf8')
     expect(model).toContain("'claude-usage-api'")
   })
 
   it('asks the main process to force, and only from the press', () => {
-    /*
-     * The settled answer is remembered twice over, and deliberately: this hook
-     * can be remounted, and a second window never saw the first answer.
-     * `refreshUsage` in `src/main/usage-ipc.ts` therefore keeps its own record
-     * against the *account* and declines automatic attempts on it — so `force`
-     * is the one thing that reaches past it, and the one caller that passes it
-     * is the button.
-     */
-    const source = readFileSync(join(__dirname, 'UsageBar.tsx'), 'utf8')
-    expect(source).toContain('onCheck={() => usage.check(true)}')
     const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
     expect(hook).toContain('.call(bridge, sessionId, force)')
+  })
+})
+
+describe('what the bar says when nothing has been reported', () => {
+  it('separates a build with no channel from a session with nothing to say', () => {
+    const unwired = render({ report: null, context: null, unwired: true })
+    expect(unwired).toContain('data-status="unwired"')
+    expect(unwired).toContain('Usage is not wired into this build.')
+  })
+
+  it('still draws the icon, because a missing control is a different claim', () => {
+    // The bar is never empty of the control, whatever the state — a reader who
+    // finds nothing there learns that the feature is unreliable, which is the
+    // complaint this whole element was reviewed for.
+    expect(render({ report: null, context: null })).toContain('ub-plan-glyph')
   })
 })
 
@@ -596,14 +754,6 @@ describe('where this is mounted', () => {
     /*
      * Two readings of one subscription, from two channels with two rules about
      * stale numbers, is two answers on one screen.
-     *
-     * This used to prove the point by reading `chat/usage/UsageStrip.tsx` and
-     * checking the plan limit was not in it. That file is gone: the composer's
-     * whole control row went with *"remove them from the chat box side
-     * completely, only keep the maybe add files or something"*, and the strip
-     * went with it. So the rule is now proved the stronger way — by the chat
-     * view mounting no usage reading at all, rather than by one particular
-     * reading being absent from a component that could always grow another.
      */
     const view = readFileSync(join(__dirname, '../components/ChatView.tsx'), 'utf8')
     for (const gone of ['UsageStrip', 'UsageBar', 'PlanSection', 'planLabel']) {
@@ -611,5 +761,77 @@ describe('where this is mounted', () => {
         gone,
       )
     }
+  })
+})
+
+describe('a session that is not on this computer', () => {
+  /*
+   * The defect: this bar was left mounted, unchanged, over remote and server
+   * sessions. Both figures on it are read *here* — the plan limits are the
+   * subscription of the login signed in on this laptop, and the context window
+   * is a transcript file on this disk found by an id this machine's own agent
+   * wrote. So over a session running on his PC it reported one true number about
+   * the wrong computer and one blank, drawn identically to a local bar with
+   * nothing on screen saying which of the two you were looking at.
+   *
+   * The fix is not "hide the bar on remote" — the standing rule is that the
+   * shape must not change between local and remote, and the goal state is a
+   * figure that travels. Until it can, the element is absent with a reason
+   * available. `usage-reach.ts` holds the wording and the cost of the version
+   * that would make it travel.
+   */
+  const REMOTE = 'This session is running on another of your machines'
+
+  it('draws no context figure, whatever it was handed', () => {
+    const html = render({ withheld: `${REMOTE}.`, context: context() })
+    // Absent, not dashed and not zeroed — the same rule a Gemini session gets.
+    // A dash in the place a number goes is still an element claiming this app is
+    // measuring something.
+    expect(html).not.toContain('>154.1k<')
+    expect(html).not.toContain('154,057')
+  })
+
+  it('shows no window rows, so no other machine’s percentage is on screen', () => {
+    const html = render({ withheld: `${REMOTE}.`, report: report([claude(), WEEK]) })
+    expect(html).not.toContain('ub-meter-fill')
+    expect(text(html)).not.toContain('%')
+  })
+
+  it('says why, before anybody presses anything', () => {
+    // In the accessible name the control carries at every width, which is what a
+    // reader gets without opening anything. A gap with the account of it one
+    // press away has already been read as a broken feature.
+    const html = render({ withheld: `${REMOTE}.`, report: null, context: null })
+    expect(html).toContain(REMOTE)
+    expect(html).toContain('data-status="withheld"')
+  })
+
+  it('outranks every other reason the figure could be missing', () => {
+    /*
+     * `nothing`, `no-limits` and `stopped` are all statements about *this*
+     * login, and this bar has stopped claiming to be about it. Only `unwired`
+     * sits above — a build with no channel has nothing to withhold.
+     */
+    const withheld = 'That machine’s, not this one’s.'
+    const base = { unwired: false, noLimits: true, blocked: 'API billing', fetching: true, reported: true }
+    expect(planStatus({ ...base, withheld })).toBe('withheld')
+    expect(planStatus({ ...base, unwired: true, withheld })).toBe('unwired')
+    expect(planStatus({ ...base, withheld: null })).toBe('no-limits')
+  })
+
+  it('and the hooks stop asking, rather than asking and not drawing', () => {
+    /*
+     * Drawing nothing while still fetching would pay the whole cost of the
+     * feature for none of it: `usage:watch` would hold a live subscription to
+     * this login's readings under a bar drawn over another machine's terminal,
+     * and every open of the dropdown would boot a 725 MB agent CLI here to
+     * produce a figure that is then thrown away.
+     */
+    const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
+    expect(hook).toContain("from './usage-reach'")
+    // Three refusals: the subscription, the plan fetch, and the transcript read.
+    expect(hook.match(/if \(withheld !== null\) return/g)?.length).toBe(3)
+    // And the flag that stops the view offering an open at all.
+    expect(hook).toContain('canCheck: withheld === null')
   })
 })

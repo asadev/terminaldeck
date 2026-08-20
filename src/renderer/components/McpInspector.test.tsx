@@ -194,17 +194,27 @@ describe('<McpInspector>', () => {
   })
 
   /**
-   * The subheading was three sentences, and the middle one explained that
-   * adding here writes the same file Claude Code reads — the plumbing, and
-   * exactly what anybody would assume anyway. Held to two now, which is what
-   * the two surviving facts need: where these come from, and the one operation
-   * this window genuinely cannot perform.
+   * The subheading is a dot now, and the sentences are behind it.
+   *
+   * It was three sentences, then two, and on 2026-08-20 it stopped being
+   * standing text at all: *"I don't want any kind of long descriptions
+   * anywhere. Just if somewhere it's very required, give the i icon like other
+   * ones, information icon in the settings, same way."*
+   *
+   * Both facts are still in the rendered output, which is the point of using
+   * `HoverNote` rather than deleting them — it keeps its paragraph in the
+   * document for the screen reader, clipped to a pixel, so a test can still
+   * assert the app has not quietly stopped saying what it cannot do.
    */
-  it('keeps the subheading to the two facts that survived the cut', () => {
+  it('puts the two surviving facts behind the information dot, not on the page', () => {
     const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
-    const sub = /<p class="mcp-subheading">(.*?)<\/p>/s.exec(html)?.[1] ?? ''
-    expect(sub).not.toBe('')
-    expect(sub.replace(/<[^>]*>/g, '').split('.').filter((part) => part.trim() !== '')).toHaveLength(2)
+    const sub = /<div class="mcp-subheading">(.*?)<\/div>/s.exec(html)?.[1] ?? ''
+    // A dot, not a paragraph.
+    expect(sub).toContain('hovernote-dot')
+    expect(sub).not.toContain('<p')
+    // And the words are still there to be read, on the dot's description.
+    expect(sub).toContain('Claude Code configuration')
+    expect(sub).toContain('claude mcp remove')
     expect(sub).not.toMatch(/picks it up too/)
   })
 })

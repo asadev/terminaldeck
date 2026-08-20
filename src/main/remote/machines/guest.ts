@@ -39,21 +39,33 @@
  * that then failed its seal.
  */
 
+import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import {
   CAPABILITY,
   PROTOCOL_VERSION,
+  chunkInput,
+  emptyUsageReading,
+  parseClientMessage,
   parseServerMessage,
   serialize,
   type ClientMessage,
+  type ControlName,
+  type ControlReadingWire,
+  type ControlsReadingWire,
+  type CopilotLinkWire,
+  type CopilotStateReport,
   type LocalPort,
   type ProtocolErrorCode,
   type RemoteSession,
   type ServerMessage,
+  type UsageWant,
 } from '../protocol'
 import type { LocalhostMessage } from '../tunnel'
 import { dialMachine, type GuestChannel, type DialRequest } from './dial'
+import { overPasteCap } from '../../../shared/paste-cap'
 import type { MachineSecrets } from './store'
+import { createUploadSender, type SendFileOutcome, type UploadProgress } from './upload-send'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -69,6 +81,65 @@ const MAX_BACKOFF_MS = 60_000
 
 /** A link that held this long failed for a new reason, not the old one. */
 const STABLE_MS = 60_000
+
+/**
+ * How long a `controls.read` may go unanswered before the promise is given up on.
+ *
+ * A read is passive on the far end — it parses a screen that has already been
+ * written — so the only thing this is really waiting out is the relay. Long
+ * enough that a phone-tethered laptop does not time out on a working answer,
+ * short enough that a menu does not appear to hang: the bar simply keeps
+ * whatever it last genuinely read, which is what the local path does when a read
+ * fails too.
+ */
+const CONTROLS_READ_TIMEOUT_MS = 20_000
+
+/**
+ * And how long a `controls.apply` may. Deliberately much longer, because the far
+ * end really is waiting.
+ *
+ * `SHIPPED_TIMINGS` in `agent-controls.ts` allows 2.5s for the typed command to
+ * echo, 6s for the CLI to answer it, and — for the permission ring — 2.5s per
+ * shift+tab across up to five stops. A ceiling below the far end's own would
+ * report a failure for a change that then lands, which is the one outcome worse
+ * than a slow menu: the chip would say the old value while the session moved.
+ */
+const CONTROLS_APPLY_TIMEOUT_MS = 60_000
+
+/**
+ * How long a cheap `usage.read` may go unanswered — the plan figure the far end
+ * already holds, and the context window it reads off a file.
+ *
+ * The same twenty seconds a `controls.read` gets, and for the same reason: both
+ * are passive over there, so the only thing really being waited out is the
+ * relay, and a bar that gives up early simply keeps whatever it last genuinely
+ * read.
+ */
+const USAGE_READ_TIMEOUT_MS = 20_000
+
+/**
+ * And how long a `usage.read` with `want: 'refresh'` may. Longer, because the
+ * far end really is waiting.
+ *
+ * It boots a whole Claude Code over there — 725 MB peak, about three seconds
+ * measured — and that machine kills its own probe at fifteen seconds and then
+ * has to compose an answer and put it on the relay. A ceiling below its own
+ * would report "nobody answered" for a reading that then arrives, which on this
+ * bar means somebody presses again and spends the 725 MB a second time.
+ */
+const USAGE_REFRESH_TIMEOUT_MS = 45_000
+
+/**
+ * How long a `session.send` may go unanswered.
+ *
+ * The far end's work is one synchronous write into a pty — it does not read a
+ * screen, spawn anything or wait for a CLI — so the only thing being waited out
+ * here is the relay, which is what `CONTROLS_READ_TIMEOUT_MS` waits out and why
+ * this is the same twenty seconds. What it must not be is short: the answer this
+ * settles into on a timeout cannot claim the text failed to land, because by
+ * then it may well have.
+ */
+const SEND_TIMEOUT_MS = 20_000
 
 /** How long a `hello` may go unanswered before the channel is not one. */
 const WELCOME_TIMEOUT_MS = 15_000
@@ -125,10 +196,59 @@ export interface MachineLinkState {
    * this is a question rather than a subscription.
    */
   ports: LocalPort[]
+  /**
+   * That machine's copilot, **as offered to this desktop**, or null.
+   *
+   * Null is the answer to two different questions and deliberately reads as one
+   * sentence: that machine has no copilot, or it has one and paired this
+   * desktop as a guest. `remote/copilot-access.ts` is why they are the same
+   * answer — a guest is sent no `copilot` key at all rather than one saying no,
+   * *"because an advertised capability a device may not use invites the ask,
+   * and the answer to the ask is always no"* — and a client that could tell the
+   * two apart would be a client the desktop had answered a question with.
+   *
+   * That is why it is a separate field from {@link capabilities} rather than a
+   * membership test on it. The capability list says what that *machine* can do
+   * and this says what *this desktop* may do there, and a surface that read the
+   * first as the second would draw a control that is always refused.
+   *
+   * Null is also not "not connected". A machine that is offline has this at
+   * null and a state of `offline` beside it, and the two say different things:
+   * one is a copilot to come back to and the other is a copilot that was never
+   * shared. The panel reads the state, so this field never has to encode it.
+   *
+   * `open` is this socket having said `copilot.hello`, which is a fact about a
+   * connection rather than about a machine, and it is false on every fresh
+   * `welcome` — a session channel does not carry the copilot by existing.
+   */
+  copilot: CopilotLinkWire | null
   /** `darwin`, `win32`, `linux`, or empty. Never guessed. */
   hostPlatform: string
   /** When the next dial is due, epoch ms, or null when one is not scheduled. */
   retryAt: number | null
+}
+
+/**
+ * The answer to every copilot verb on this link: did the request leave, and
+ * what to say when it did not.
+ *
+ * A sentence on every path, including the two that never reach the wire, for
+ * the reason {@link MachineLink.send} gives about its own: there is no terminal
+ * on screen to show a lost frame. A copilot verb that produced nothing at all
+ * would be indistinguishable from a feature that does not work, which is the
+ * defect this whole area exists to remove.
+ *
+ * `ok` means **the frame left this machine**, not that the copilot did
+ * anything. There is no request id on the copilot wire — the host answers
+ * `copilot.attach` with a pushed `copilot.state` and answers `copilot.say` with
+ * nothing at all — so there is nothing here to correlate a reply against. What
+ * the far end thinks arrives on {@link MachineLinkOptions.onCopilotState} and
+ * `onCopilotChat`, and a refusal arrives as an ordinary `error`, which this
+ * link already publishes as `reason`.
+ */
+export interface CopilotVerbOutcome {
+  ok: boolean
+  message: string
 }
 
 export interface MachineLink {
@@ -140,7 +260,33 @@ export interface MachineLink {
   /** Ask for a session's screen. `cols`/`rows` travel so the first paint fits. */
   attach(sessionId: string, cols: number, rows: number): boolean
   detach(sessionId: string): boolean
+  /**
+   * Type into an attached session over there. A keystroke, or a whole paste.
+   *
+   * Split into frames by {@link chunkInput}, which is what makes a paste larger
+   * than `MAX_INPUT_BYTES` arrive at all: the far end refuses an oversized frame
+   * by closing the socket, so before this was chunked a long ⌘V typed nothing
+   * and dropped the link. `chunkInput`'s own note carries the measurement.
+   *
+   * `false` means nothing was sent — the link is down, or the paste is over
+   * `MAX_PASTE_BYTES` in `shared/paste-cap.ts`. It never means *some* of it
+   * went: a paste that cannot be sent whole is not sent at all, because half a
+   * paste at a prompt is worse than none.
+   */
   input(sessionId: string, data: string): boolean
+  /**
+   * Send a file from this machine into that machine's downloads folder.
+   *
+   * The verb behind dropping a photo on a remote session's pane. Resolves with
+   * the path it landed at over there — which the caller types at the prompt,
+   * quoted — or with a sentence. Refused before anything is announced when that
+   * machine never advertised `upload`.
+   *
+   * See `upload-send.ts` for the flow control, the digest and the three bounds.
+   */
+  sendFile(filePath: string): Promise<SendFileOutcome>
+  /** Stop the transfer in flight, if there is one. The far end deletes its half. */
+  cancelFile(): void
   resize(sessionId: string, cols: number, rows: number): boolean
   /** Start a session over there. Refused unless that machine advertised `create`. */
   create(request: { cwd?: string; provider?: string; resume?: boolean }): boolean
@@ -193,6 +339,121 @@ export interface MachineLink {
    * this capability is never a button that discovers it does not work.
    */
   openThere(url: string): boolean
+  /**
+   * What that session's model, effort and fast mode say right now.
+   *
+   * `null` means the question could not be asked — the link is down, or that
+   * machine's build never advertised `controls`. It is deliberately not an
+   * empty reading: a caller that was handed four blank chips could not tell "it
+   * has no model" from "nobody answered", and the bar's rule is that it keeps
+   * the last thing genuinely read rather than blanking on a missed round trip.
+   *
+   * The only verb on this link that answers with a value rather than a boolean,
+   * along with {@link setControl}, and for the reason `machines:reach` is: the
+   * whole point of the request is the thing that comes back.
+   */
+  readControls(sessionId: string): Promise<ControlsReadingWire | null>
+  /**
+   * Set one control on that session, and report what the far end said.
+   *
+   * Always answers with a sentence, on every path, including the two that never
+   * leave this machine — a link that is down and a machine too old to have the
+   * capability. That is the difference between this and every boolean above it:
+   * those are typing and a lost keystroke is visible in the terminal a moment
+   * later, whereas a menu press that produces nothing at all is indistinguishable
+   * from a control that does not work. There is no silent failure here.
+   */
+  setControl(
+    sessionId: string,
+    control: ControlName,
+    value: string,
+  ): Promise<{ ok: boolean; message: string; reading: ControlReadingWire }>
+  /**
+   * What that session's account has spent, or how full its context window is.
+   *
+   * One method for the three `want`s because they are one question asked of one
+   * capability; the *cost* difference between them is carried by the word, not
+   * by the plumbing, and the word comes from a caller that knows which of the
+   * three events it is on. `want: 'refresh'` boots a whole Claude Code on the
+   * far machine — 725 MB, about three seconds — so it may only ever be passed
+   * because a person opened the panel or pressed the retry inside it. `plan` and
+   * `context` are free over there and may ride any event the local bar rides.
+   *
+   * Never `null`. Every path answers with a record the bar can draw, including
+   * the two that never leave this machine — a link that is down and a machine
+   * whose build predates the capability — because the alternative is a bar that
+   * shows nothing with nothing anywhere saying why, which is the defect this
+   * whole pass exists to remove. `readControls` above may answer `null` and this
+   * may not, and the difference is real: a missed controls read leaves four chips
+   * showing the last values they genuinely had, whereas a missed usage read
+   * leaves an element with no previous value to fall back to.
+   */
+  readUsage(sessionId: string, want: UsageWant, force: boolean): Promise<Record<string, unknown>>
+  /**
+   * Put text into a session over there **without attaching to it**, and report
+   * what the far end said about it.
+   *
+   * Not {@link input}, which is the same bytes and a different authorisation.
+   * `input` is only served to a connection that already holds an attach handle
+   * for that session, and taking one out in order to type would displace the
+   * handle a terminal pane on this very link already holds — dropping its
+   * subscription and replaying its whole scrollback at whoever is reading it.
+   * This is the verb for a caller with something to say and nothing to read: the
+   * browser handing an agent the element it just inspected, over a session
+   * running on the PC in the other room.
+   *
+   * Always answers with a sentence, on every path, including the two that never
+   * leave this machine — a link that is down and a machine whose build predates
+   * the capability. That is the difference between this and `input` beside it:
+   * a lost keystroke on an attached session is visible in the terminal a moment
+   * later, whereas this send has no terminal on screen anywhere, so a `false`
+   * with nothing attached to it would be indistinguishable from a feature that
+   * does not work. The same rule {@link setControl} follows, for the same
+   * reason.
+   */
+  send(sessionId: string, data: string): Promise<{ ok: boolean; message: string }>
+  /*
+   * The copilot on **that** machine, reached from this one.
+   *
+   * His words for what this is under: *"the same switch we have for sessions"*
+   * at the top of the copilot page, so one page can be pointed at either
+   * machine. The four verbs below are the whole of the pipe under that switch,
+   * and they are deliberately the same four a phone sends — there is no
+   * desktop-to-desktop dialect here, for the reason at the top of this file.
+   *
+   * None of them opens the connection. `copilot.hello` is sent once per
+   * `welcome`, by this file, the moment a welcome arrives carrying a copilot;
+   * a caller that had to remember to open it first would be a caller that
+   * eventually forgets, and the state it forgets into is a copilot page whose
+   * every press comes back refused.
+   */
+  /**
+   * Watch that machine's copilot, and be sent what already exists.
+   *
+   * Answered over there with a `copilot.state`, and thereafter with pushed
+   * `copilot.chat` frames as the conversation moves — so a caller subscribes
+   * once and draws whatever arrives, rather than asking again on a timer.
+   * Starts nothing and spends nothing on that machine, which is why it is the
+   * read tier and why it is safe to send on a page opening.
+   */
+  copilotAttach(): CopilotVerbOutcome
+  /**
+   * Start **this desktop's own run** on that machine.
+   *
+   * Not a second keyboard on the copilot at that desk, and the distinction is
+   * the load-bearing one of the whole feature — `copilot-remote.ts` argues it
+   * at length. It is also why this is a verb rather than a side effect of
+   * attaching: it spawns an agent process on somebody else's computer and
+   * spends money, so it is a thing a person presses.
+   *
+   * Until it has been sent, `CopilotStateReport.run` is null over there and
+   * {@link copilotSay} has nothing to say anything to.
+   */
+  copilotStart(): CopilotVerbOutcome
+  /** Say something to this desktop's run over there. `act`, because talking to an agent is acting. */
+  copilotSay(text: string): CopilotVerbOutcome
+  /** Ask for the state again, without changing the subscription. */
+  copilotState(): CopilotVerbOutcome
   /** The machine woke up. Redial now rather than waiting out the backoff. */
   wake(): void
 }
@@ -217,6 +478,41 @@ export interface MachineLinkOptions {
    * never receives one of these.
    */
   onLocalhost?(message: ServerMessage): void
+  /**
+   * That machine's copilot said what it is, now.
+   *
+   * Handed out rather than published as link state, for the reason the tunnel
+   * frames above are: it is not something the machines panel draws. It is one
+   * page's subject, it changes on every turn of a conversation, and putting it
+   * on the link would redraw the sidebar for every token an agent on another
+   * computer produced.
+   */
+  onCopilotState?(state: CopilotStateReport): void
+  /**
+   * A slice of the conversation with that machine's copilot.
+   *
+   * The **whole frame**, not one bubble, and that is not laziness about the
+   * name a caller gives it. `run` is what makes a frame from a previous run
+   * droppable rather than mergeable, and `reset` is the instruction to throw
+   * away everything held; a reader handed the messages alone would have to
+   * guess at both, and the guess it would make is the one that splices the end
+   * of a dead conversation onto the start of a live one.
+   *
+   * Merging is the reader's, deliberately. This file holds no transcript: a
+   * conversation kept here would be a second copy of the one the surface
+   * drawing it already has, and the two would disagree about a compaction
+   * replay within a week.
+   */
+  onCopilotChat?(chat: Extract<ServerMessage, { t: 'copilot.chat' }>): void
+  /**
+   * How the file being sent to that machine is getting on.
+   *
+   * Handed out rather than published as link state, for the reason the tunnel
+   * frames and the copilot state above are: it is one pane's subject, and it
+   * changes on every acknowledged slice. Optional, so every existing
+   * construction of a link compiles and behaves exactly as it did.
+   */
+  onUpload?(progress: UploadProgress): void
   now?: () => number
   /** Seams for the tests, so nothing here dials the public internet. */
   dial?: (request: DialRequest) => Promise<GuestChannel>
@@ -265,6 +561,72 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
    */
   let refusal: { message: string; code: ProtocolErrorCode | null } | null = null
 
+  /**
+   * Questions asked of the far machine that have not been answered yet, by `rid`.
+   *
+   * This is the one conversation on this link that is a *request and a reply*
+   * rather than a stream or a fire-and-forget verb, so it is the one that needs
+   * somewhere to put a promise. Keyed on the request id rather than on the
+   * session because a split window mounts a control cluster per pane, and two
+   * panes over one session — which this window does — would otherwise resolve
+   * each other's reads with each other's answers.
+   *
+   * Every entry carries its own timer and every entry is settled exactly once,
+   * on one of three paths: the answer arrives, the deadline passes, or the
+   * channel dies. The third is the one worth being explicit about — a link that
+   * drops with reads outstanding must not leave a menu spinning for ever on a
+   * machine that has gone.
+   */
+  const pending = new Map<
+    string,
+    { settle: (answer: ServerMessage | null) => void; timer: ReturnType<typeof setTimeout> }
+  >()
+
+  /**
+   * Answer one outstanding request, or note that nobody will.
+   *
+   * `null` is "there is no answer coming", which is what a timeout and a dropped
+   * channel both mean. The waiting side turns that into its own sentence rather
+   * than being handed one from here, because the two callers say different
+   * things about it: a read keeps the last value it had and an apply has to
+   * print something.
+   */
+  function settle(rid: string, answer: ServerMessage | null): void {
+    const waiting = pending.get(rid)
+    if (waiting === undefined) return
+    pending.delete(rid)
+    clearTimeout(waiting.timer)
+    waiting.settle(answer)
+  }
+
+  /**
+   * Send a question and wait for its answer, or for the deadline.
+   *
+   * Registered *before* the frame goes out, because `send` is synchronous into a
+   * socket and an answer that came back inside the same tick would otherwise
+   * arrive at an empty map. Refuses without registering anything when the link
+   * cannot carry it, so a caller never waits out a timeout for a question that
+   * was never asked.
+   */
+  function ask(
+    message: ClientMessage & { rid: string },
+    timeoutMs: number,
+    capability: string,
+  ): Promise<ServerMessage | null> {
+    // The capability is a parameter rather than a constant because there are two
+    // correlated conversations on this channel now. Sending a frame a machine
+    // never advertised is not a harmless no-op — a host that does not know the
+    // verb refuses the connection, which would take every terminal session on
+    // the link down with one bar's question.
+    if (!current.capabilities.includes(capability)) return Promise.resolve(null)
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => settle(message.rid, null), timeoutMs)
+      timer.unref?.()
+      pending.set(message.rid, { settle: resolve, timer })
+      if (!send(message)) settle(message.rid, null)
+    })
+  }
+
   let current: MachineLinkState = {
     id: options.id,
     state: 'offline',
@@ -273,6 +635,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     folders: null,
     capabilities: [],
     ports: [],
+    copilot: null,
     hostPlatform: '',
     retryAt: null,
   }
@@ -291,6 +654,79 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     if (channel === null || current.state !== 'online') return false
     channel.send(serialize(message))
     return true
+  }
+
+  /**
+   * The file transfer half of this link, built once and kept for its lifetime.
+   *
+   * Not per-connection: a `send` that fails because the socket went away is
+   * already how a transfer in flight learns it is over, and `drop` below ends it
+   * with a sentence. One instance also enforces the "one file at a time" rule
+   * the far machine enforces from its side, in the one place a person can be
+   * told about it.
+   */
+  const uploads = createUploadSender({
+    send,
+    onProgress: (progress) => {
+      try {
+        options.onUpload?.(progress)
+      } catch (error) {
+        // The listener's own bookkeeping threw, exactly as in `publish`. A
+        // progress line must not be able to take a file transfer down.
+        console.error('[machines] an upload listener threw:', error)
+      }
+    },
+  })
+
+  /**
+   * Why a copilot verb cannot be sent to this machine, in a sentence, or null.
+   *
+   * The same local gate every other capability on this link has, and it is here
+   * for the reason `create` states at the top of the returned object: **a host
+   * that has never heard of a frame answers it by closing the channel**, so a
+   * hopeful send is not a failed request, it is a disconnection that takes
+   * every terminal session on this link with it.
+   *
+   * The two absences are answered as one sentence on purpose. A machine with no
+   * copilot and a machine that paired this desktop as a guest send exactly the
+   * same thing — no capability, no key — and `remote/copilot-access.ts` says
+   * why in as many words: a guest *"has no frame it can send that measures
+   * whether this machine has a copilot"*. A client that told the two apart here
+   * would be re-deriving, on this side of a wire, an answer that machine
+   * deliberately declined to give. So the sentence names both possibilities and
+   * the remedy for the one a person can act on.
+   */
+  function copilotBarred(): string | null {
+    if (current.state !== 'online') return 'This desktop is not connected to that machine right now.'
+    if (!current.capabilities.includes(CAPABILITY.copilot) || current.copilot === null) {
+      return (
+        'That machine is not sharing a copilot with this desktop. ' +
+        'Either it has none, or this desktop is paired there as a guest — ' +
+        'the copilot is only shared with a machine paired as one of your own, and that is decided by pairing it again.'
+      )
+    }
+    return null
+  }
+
+  /** The gate, then the frame. Every copilot verb on this link is these two lines. */
+  function copilotVerb(message: ClientMessage, sent: string): CopilotVerbOutcome {
+    const barred = copilotBarred()
+    return barred === null ? sendCopilot(message, sent) : { ok: false, message: barred }
+  }
+
+  /**
+   * Put a copilot frame on the wire, having already decided it may go.
+   *
+   * The `false` branch is very nearly unreachable — `copilotBarred` has just
+   * established the link is online — and it is written out anyway rather than
+   * asserted, because the alternative is a caller told a message was sent on
+   * the strength of a check made a moment earlier against a channel that can
+   * close between two statements.
+   */
+  function sendCopilot(message: ClientMessage, sent: string): CopilotVerbOutcome {
+    return send(message)
+      ? { ok: true, message: sent }
+      : { ok: false, message: 'The connection to that machine went away before the request could be sent.' }
   }
 
   function schedule(): void {
@@ -324,12 +760,32 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     welcomeTimer = null
     if (live !== null) live.close()
 
+    /*
+     * Nothing that was waiting on this channel is going to be answered on it.
+     *
+     * Settled here rather than left to each request's own deadline, because a
+     * deadline is a *worst case* and this is a known fact: the socket is gone.
+     * Leaving a menu spinning for a minute over a machine that has plainly
+     * dropped off the sidebar is the shape of a control that looks broken, and
+     * the reconnection that follows will re-read anyway.
+     */
+    for (const rid of [...pending.keys()]) settle(rid, null)
+
+    /*
+     * And the file, for the same reason and with one of its own: a transfer is
+     * the only thing on this link whose failure leaves something behind. The far
+     * machine deletes its own `.part` when the socket goes, and this end has to
+     * settle the promise the drop is waiting on — otherwise a pane sits on a
+     * progress line that will never move again.
+     */
+    uploads.closeAll('The link to that machine dropped.')
+
     const wasStable = connectedAt !== 0 && now() - connectedAt >= STABLE_MS
     connectedAt = 0
     if (wasStable) attempts = 0
 
     if (stopped) {
-      publish({ state: 'offline', reason: null, sessions: [], ports: [], retryAt: null })
+      publish({ state: 'offline', reason: null, sessions: [], ports: [], copilot: null, retryAt: null })
       return
     }
     publish({
@@ -342,6 +798,13 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       // the most likely reason this link dropped is that the machine stopped.
       sessions: [],
       ports: [],
+      // And the copilot, most strongly of the three, because half of what it
+      // says is about *this socket*. `open` is "this connection has said hello"
+      // and there is no connection; a link that kept it would draw a composer
+      // over a stream that has gone, and the press would vanish rather than
+      // being refused. It comes back on the next `welcome`, whole, or it does
+      // not come back — which is itself the honest answer.
+      copilot: null,
     })
     schedule()
   }
@@ -385,9 +848,43 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           // Spread rather than assigned, so "never said" survives as null. See
           // the field's own comment.
           ...(message.folders === undefined ? {} : { folders: message.folders }),
+          /*
+           * The copilot, with `open` forced false whatever arrived.
+           *
+           * The desktop always sends false here — a session channel does not
+           * carry the copilot by existing — and a client whose correctness
+           * depends on the far end never having a bug is not correct. It is
+           * also the field this end genuinely knows better: `open` is a fact
+           * about *this socket*, and this socket has not said hello yet on the
+           * line above.
+           *
+           * Absent stays null, and that absence is load-bearing rather than
+           * missing data: it is exactly what a machine that paired this desktop
+           * as a guest sends. See the field's own comment.
+           */
+          copilot: message.copilot === undefined ? null : { ...message.copilot, open: false },
           retryAt: null,
         })
         options.onWelcome(message.hostPlatform ?? '')
+        /*
+         * And open the copilot stream, here, on every welcome that carried one.
+         *
+         * Not on a page mounting and not behind a button. Every `copilot.*`
+         * verb — the read-tier ones included — is refused by that machine until
+         * this socket has said hello, and this socket is new after every
+         * reconnect: a laptop that slept has a copilot it is entitled to and a
+         * stream that is shut. Opening it from a surface would mean the surface
+         * has to notice reconnections, which is a thing no surface can be
+         * relied on to do and which nothing here would tell it about anyway.
+         *
+         * Gated on the key rather than on the capability, because the key is
+         * the per-device fact: a machine that has a copilot and paired this
+         * desktop as a guest advertises neither, and one that offered it sends
+         * both. Sending hello without one would be asking a question whose only
+         * possible answer is the refusal `copilot-access.ts` exists to avoid
+         * inviting.
+         */
+        if (message.copilot !== undefined) send({ t: 'copilot.hello' })
         /*
          * And ask what it is serving, once, here.
          *
@@ -547,6 +1044,61 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         drop(sentence, message.code)
         return
       }
+      case 'copilot.grant':
+        /*
+         * The one copilot frame that *is* link state, and the only one.
+         *
+         * It answers `copilot.hello` — which is how `open` becomes true — and
+         * it also arrives unasked when a person on the other machine revokes
+         * this one. That second case is the whole reason it is published rather
+         * than handed out: capabilities travel only in the `welcome`, so
+         * without this frame a demoted desktop would keep drawing a copilot it
+         * may no longer touch until somebody reconnected it.
+         */
+        publish({ copilot: message.link })
+        return
+      case 'copilot.state':
+        options.onCopilotState?.(message.state)
+        return
+      case 'copilot.chat':
+        options.onCopilotChat?.(message)
+        return
+      case 'controls.reading':
+      case 'controls.applied':
+      case 'usage.reading':
+      case 'session.sent':
+        /*
+         * The answer to one question this end asked, handed to whoever asked it.
+         *
+         * Nothing is published. These are not link state: a reading belongs to
+         * one session's control cluster and there can be two of them mounted at
+         * once over different sessions on the same machine, so putting the newest
+         * answer on the link would be a single slot that the two clusters
+         * overwrite for each other. The `rid` is the routing, and an answer with
+         * no waiting request — a duplicate, or one that arrived after its own
+         * deadline — falls on the floor in `settle`, which is the right place
+         * for it.
+         */
+        settle(message.rid, message)
+        return
+      case 'upload.ready':
+      case 'upload.ack':
+      case 'upload.done':
+      case 'upload.failed':
+        /*
+         * Handed to the transfer that is running, and to nothing else.
+         *
+         * Not published as link state for the reason the copilot frames above
+         * are not: a file crossing to another machine belongs to the pane it was
+         * dropped on, it changes on every acknowledged slice, and putting it on
+         * the link would redraw the sidebar a hundred times a second while a
+         * video copies. `upload-send.ts` holds the state and answers the promise
+         * the drop is waiting on; a frame with no transfer behind it — a late
+         * acknowledgement, an answer that arrived after a cancel — falls on the
+         * floor there, which is the right place for it.
+         */
+        uploads.receive(message)
+        return
       case 'attached':
       case 'detached':
       case 'pong':
@@ -560,7 +1112,12 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
   async function open(): Promise<void> {
     if (stopped || dialling || channel !== null) return
     dialling = true
-    publish({ state: 'connecting', reason: null })
+    // The copilot goes here as well as in `drop`, because not every road to a
+    // new channel runs through a drop: `wake` closes the old one by hand and
+    // dials, and a link that kept the old socket's `open: true` across that
+    // would offer a composer over a stream nothing is listening on. It is
+    // restored by the next `welcome`, which is the only thing that knows.
+    publish({ state: 'connecting', reason: null, copilot: null })
 
     let opened: GuestChannel
     try {
@@ -637,12 +1194,44 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       const live = channel
       channel = null
       live?.close()
-      publish({ state: 'offline', reason: null, sessions: [], ports: [], retryAt: null })
+      publish({ state: 'offline', reason: null, sessions: [], ports: [], copilot: null, retryAt: null })
     },
     state: () => current,
     attach: (sessionId, cols, rows) => send({ t: 'attach', id: sessionId, cols, rows }),
     detach: (sessionId) => send({ t: 'detach', id: sessionId }),
-    input: (sessionId, data) => send({ t: 'input', id: sessionId, data }),
+    input(sessionId, data): boolean {
+      /*
+       * Measured before anything is sent, so an over-size paste is refused
+       * rather than half-delivered. `chunkInput` would happily split a 400 MB
+       * clipboard into twenty-five thousand frames, and the far machine's socket
+       * buffer would answer by dropping the link somewhere in the middle — with
+       * a quarter of the text already typed into a live session.
+       */
+      if (overPasteCap(data)) return false
+      const frames = chunkInput(data)
+      for (const frame of frames) {
+        if (!send({ t: 'input', id: sessionId, data: frame })) return false
+      }
+      // An empty string produces no frames and is not a failure — nothing was
+      // asked for and nothing went wrong.
+      return true
+    },
+    sendFile(filePath): Promise<SendFileOutcome> {
+      // Refused here rather than sent and refused there, for the reason `create`
+      // and `close` give below: the far end answers an unadvertised verb by
+      // closing the channel, and a drop that disconnects you is worse than one
+      // that is turned down.
+      if (!current.capabilities.includes(CAPABILITY.upload)) {
+        return Promise.resolve({
+          ok: false,
+          message: 'That machine is running an older build that cannot receive files.',
+        })
+      }
+      return uploads.send(filePath)
+    },
+    cancelFile(): void {
+      uploads.closeAll('Cancelled.')
+    },
     resize: (sessionId, cols, rows) => send({ t: 'resize', id: sessionId, cols, rows }),
     create(request): boolean {
       // Refused here rather than sent and refused there, because the far end
@@ -691,6 +1280,244 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       // opens — and a second, weaker check written on this side would be the one
       // somebody later mistook for the real one.
       return send({ t: 'web.open', url })
+    },
+    async readControls(sessionId): Promise<ControlsReadingWire | null> {
+      /*
+       * A machine that is up and cannot do this answers with a *reading* rather
+       * than with nothing, and that difference is the whole of what an older host
+       * degrades to.
+       *
+       * Null means "nobody answered", and the bar's rule for that is to keep the
+       * values it already had — right for a link that has dropped, and wrong
+       * here, because there is a settled fact to report. Without this the chips
+       * would sit on "Unknown", stay pressable, and produce the sentence only
+       * *after* somebody pressed one: a menu that looks live and is not. With it
+       * they are drawn back carrying the reason, which is what `blockedFor` in
+       * `SessionControls.tsx` does with every other refusal on this bar.
+       *
+       * `live` is true on purpose. The session really is running over there —
+       * this end simply cannot ask about its model — and reporting it as gone
+       * would be a second, wronger claim in place of the one being made.
+       */
+      if (current.state === 'online' && !current.capabilities.includes(CAPABILITY.controls)) {
+        const barred: ControlReadingWire = {
+          value: null,
+          label: null,
+          source: null,
+          unavailableReason:
+            'That machine is running a build that cannot report or set a model from here. Update it and this will work.',
+        }
+        return {
+          model: barred,
+          effort: barred,
+          fast: barred,
+          permission: barred,
+          live: true,
+          agent: { running: false, saw: null },
+          gate: { canType: false, reason: null },
+        }
+      }
+      const answer = await ask(
+        { t: 'controls.read', rid: randomUUID(), id: sessionId },
+        CONTROLS_READ_TIMEOUT_MS,
+        CAPABILITY.controls,
+      )
+      /*
+       * The session is checked as well as the frame type, because an `rid` only
+       * proves this is the answer to *a* question this end asked. A far end that
+       * echoed the wrong id would put another session's model on this session's
+       * chip, which is precisely the confusion the per-pane clusters exist to
+       * prevent — and it costs one comparison to make impossible rather than
+       * unlikely.
+       */
+      if (answer === null || answer.t !== 'controls.reading' || answer.id !== sessionId) return null
+      return answer.reading
+    },
+    async setControl(sessionId, control, value) {
+      const unread: ControlReadingWire = { value: null, label: null, source: null }
+      /*
+       * The two refusals that never leave this machine, each with its own
+       * sentence, because they have different remedies. A link that is down is
+       * waited out; a machine whose build has no `controls` is updated. Telling
+       * somebody "that failed" for either would send them looking in the wrong
+       * place.
+       */
+      if (current.state !== 'online') {
+        return { ok: false, message: 'This desktop is not connected to that machine right now.', reading: unread }
+      }
+      if (!current.capabilities.includes(CAPABILITY.controls)) {
+        return {
+          ok: false,
+          message:
+            'That machine is running a build that cannot set a model from here. Update it and this will work.',
+          reading: unread,
+        }
+      }
+      const answer = await ask(
+        { t: 'controls.apply', rid: randomUUID(), id: sessionId, control, value },
+        CONTROLS_APPLY_TIMEOUT_MS,
+        CAPABILITY.controls,
+      )
+      if (answer === null || answer.t !== 'controls.applied' || answer.id !== sessionId) {
+        /*
+         * No answer, and the honest sentence for that is the one that does not
+         * claim the change failed.
+         *
+         * It very well may have landed: the command is typed into the far pty
+         * before that machine sends anything back, so a channel that died in
+         * between leaves a session that has changed and a window that was not
+         * told. Saying "it failed" would be a guess in the direction that makes
+         * somebody press it again, which on a session that already moved is a
+         * second `/model` block in their conversation.
+         */
+        return {
+          ok: false,
+          message: 'That machine did not answer, so it is not known whether the change was made.',
+          reading: unread,
+        }
+      }
+      return { ok: answer.ok, message: answer.message, reading: answer.reading }
+    },
+    async readUsage(sessionId, want, force): Promise<Record<string, unknown>> {
+      /*
+       * The two absences that never leave this machine, each with its own
+       * sentence, because they have different remedies — the same split
+       * `setControl` above makes. A link that is down is waited out; a machine
+       * whose build has no `usage` is updated.
+       *
+       * Composed into a *reading* rather than answered with nothing, and that
+       * difference is the whole of what an older host degrades to. The bar has no
+       * previous value to keep for these figures the way the control chips do,
+       * so "nobody answered" would be a blank element with the account of it a
+       * press away — which has already been read as a broken feature once on this
+       * bar. With a reading the sentence is on screen from the moment it mounts,
+       * because `plan` and `context` are both asked for then and both are free.
+       */
+      if (current.state !== 'online') {
+        return emptyUsageReading(want, 'This desktop is not connected to that machine right now.')
+      }
+      if (!current.capabilities.includes(CAPABILITY.usage)) {
+        return emptyUsageReading(
+          want,
+          'That machine is running a build that cannot report its plan usage or context window from here. Update it and this will work.',
+        )
+      }
+      const answer = await ask(
+        { t: 'usage.read', rid: randomUUID(), id: sessionId, want, force },
+        // The deadline is chosen by the word, because the word is what decides
+        // whether the far end is reading memory or booting an agent CLI.
+        want === 'refresh' ? USAGE_REFRESH_TIMEOUT_MS : USAGE_READ_TIMEOUT_MS,
+        CAPABILITY.usage,
+      )
+      /*
+       * The session and the `want` are both checked, not just the frame type.
+       * An `rid` only proves this is the answer to *a* question this end asked,
+       * and the two mistakes it cannot rule out are the two that matter: another
+       * session's spending under this session's bar, and a context reading filed
+       * where a plan report goes — a token count drawn as a percentage of
+       * somebody's subscription. Two comparisons make both impossible rather
+       * than unlikely.
+       */
+      if (answer === null || answer.t !== 'usage.reading' || answer.id !== sessionId || answer.want !== want) {
+        return emptyUsageReading(want, 'That machine did not answer, so there is nothing to show for this session yet.')
+      }
+      const { reading, unavailableReason } = answer.answer
+      if (reading !== null) return reading
+      // A host that answered without a reading owes a sentence, and if it did
+      // not write one this end must not invent a figure to fill the gap — the
+      // honest fallback is the same absence with this end's own wording.
+      return emptyUsageReading(want, unavailableReason ?? 'That machine had nothing to report for this session.')
+    },
+    async send(sessionId, data) {
+      /*
+       * The two refusals that never leave this machine, each with its own
+       * sentence, because they have different remedies — the same split
+       * `setControl` above makes. A link that is down is waited out; a machine
+       * whose build has no `send` is updated.
+       *
+       * The second one is not merely tidiness about a verb that would be
+       * refused. It is the rule `create` states at the top of this object and
+       * every gate here repeats: **a host that has never heard of a frame
+       * answers it by closing the channel**, so a hopeful send is not a failed
+       * request, it is a disconnection — and it would take every terminal
+       * session on this link down with one panel's send button.
+       */
+      if (current.state !== 'online') {
+        return { ok: false, message: 'This desktop is not connected to that machine right now.' }
+      }
+      if (!current.capabilities.includes(CAPABILITY.send)) {
+        return {
+          ok: false,
+          message:
+            'That machine is running a build that cannot be sent to without opening the session there first. Update it and this will work.',
+        }
+      }
+      const answer = await ask(
+        { t: 'session.send', rid: randomUUID(), id: sessionId, data },
+        SEND_TIMEOUT_MS,
+        CAPABILITY.send,
+      )
+      /*
+       * The session is checked as well as the frame type, for the reason
+       * `readControls` gives about its own answer: an `rid` only proves this is
+       * the answer to *a* question this end asked. A far end that echoed the
+       * wrong id would report one session's outcome for another, and two panels
+       * sending to two sessions on one machine is a thing this window does. One
+       * comparison makes that impossible rather than unlikely.
+       */
+      if (answer === null || answer.t !== 'session.sent' || answer.id !== sessionId) {
+        /*
+         * No answer, and the honest sentence for that is the one that does not
+         * claim the text failed to arrive.
+         *
+         * It very well may have: the far end writes into the pty before it puts
+         * anything back on the wire, so a channel that died in between leaves a
+         * session that has been typed into and a panel that was not told.
+         * Saying "it failed" would be a guess in the direction that makes
+         * somebody press send again, which on an agent that already got the
+         * text is the same message twice in its prompt.
+         */
+        return { ok: false, message: 'That machine did not answer, so it is not known whether the text arrived.' }
+      }
+      return { ok: answer.ok, message: answer.message }
+    },
+    copilotAttach: () => copilotVerb({ t: 'copilot.attach' }, 'Watching that machine’s copilot.'),
+    copilotStart: () => copilotVerb({ t: 'copilot.start' }, 'Asked that machine to start a copilot run.'),
+    copilotState: () => copilotVerb({ t: 'copilot.state' }, 'Asked that machine what its copilot is doing.'),
+    copilotSay(text): CopilotVerbOutcome {
+      const barred = copilotBarred()
+      if (barred !== null) return { ok: false, message: barred }
+      if (typeof text !== 'string' || text === '') return { ok: false, message: 'There is nothing to say.' }
+      /*
+       * Shape-checked against the parser the far end will run, rather than
+       * against a second copy of its rules written here.
+       *
+       * It has to be checked *somewhere* on this side and cannot be hoped
+       * through: `parseClientMessage` refuses an oversized or control-bearing
+       * `copilot.say`, and `server.ts` answers a refused frame by closing the
+       * socket — so a long paste would not be a failed message, it would be a
+       * disconnection that took every terminal session on this link with it.
+       * That is the rule every gate in this object repeats.
+       *
+       * Running the real parser rather than re-stating its two rules is what
+       * stops the copy drifting. The cap is bytes rather than characters and
+       * the control-character refusal exists because this text is written into
+       * a pty holding an agent — a carriage return inside it submits early and
+       * turns the rest into a second prompt somebody pays for — and both of
+       * those are decisions that belong to `protocol.ts` and are re-litigated
+       * there, not here.
+       */
+      const frame = parseClientMessage({ t: 'copilot.say', text })
+      if (!frame.ok) {
+        return {
+          ok: false,
+          message:
+            frame.code === 'too-large'
+              ? 'That message is longer than this connection carries in one piece. Shorten it and send it again.'
+              : 'That message cannot be sent as it is: a copilot message may not contain line breaks or control characters.',
+        }
+      }
+      return sendCopilot(frame.message, 'Sent.')
     },
     wake(): void {
       if (stopped) return

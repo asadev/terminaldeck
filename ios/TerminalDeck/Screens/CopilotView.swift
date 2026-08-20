@@ -714,25 +714,29 @@ struct CopilotView: View {
      * a screen that started a second Claude process because somebody looked at
      * it would be a screen with a bill attached to opening it.
      *
-     * The sentence explains what a "run" is, because the word is meaningless
-     * otherwise and the thing it names is genuinely unusual: a second copilot
-     * process on the machine, sharing the same folder, the same `CLAUDE.md`, the
-     * same `memory/` and the same action log as the one at the desk, with its
-     * own conversation. Somebody who thought this was going to appear in the
-     * chat on their Mac would be surprised by it later, and being surprised by
-     * an agent later is the thing this whole feature is built to avoid.
+     * **There was a paragraph here and it is gone.** Four lines explaining what a
+     * "run" is: a second copilot process on the machine, same folder, same
+     * `memory/`, own conversation. He struck out exactly this shape of writing
+     * on 2026-08-20, about every screen in the product:
+     *
+     *   > *"Every single time you bring some card, you put something new… I said
+     *   > to you, don't put any single statement in anywhere… We want simplicity.
+     *   > Let the smart people use it. Smart people knows how it works. We are
+     *   > not making this for the dumb people."*
+     *
+     * What survives is the half that is not an explanation but a **fact about
+     * the tap**: it runs over there, and it spends money. That is the consent
+     * this card exists to take, and two words each is enough to take it — the
+     * paragraph was teaching, and nobody reads a lesson attached to a button.
      */
     private var startCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Start a copilot for this phone")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.primary)
-            Text("It runs on the \(hostNoun), in the copilot's own folder, sharing its memory and "
-                 + "its action log with the one at your desk — and it has its own conversation, so "
-                 + "what you ask here does not appear there. It spends money while it works.")
+            Text("Runs on the \(hostNoun) · spends money")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             Button {
                 link?.start()
             } label: {

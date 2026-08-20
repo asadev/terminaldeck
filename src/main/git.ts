@@ -76,6 +76,20 @@ export interface GitNotRepo {
   cwd: string
   reason: GitUnavailableReason
   message: string
+  /**
+   * Whether `git init` here would actually change anything.
+   *
+   * Set only on the plain "no repository in this folder" case, which is the one
+   * a button can fix. It is deliberately *not* set for dubious ownership, which
+   * reports the same `reason` and is a repository the caller already owns but
+   * git refuses to read — running `init` there would create a second repository
+   * beside the one that is already on disk.
+   *
+   * The panel reads it twice: to decide whether to offer the button, and to
+   * decide whether to print `message`. When there is a button, the title and
+   * the button say the whole thing and the sentence is dropped.
+   */
+  canInit?: boolean
 }
 
 /**
@@ -353,12 +367,18 @@ function notRepo(cwd: string, reason: GitUnavailableReason, message: string): Gi
  * column over already had it right, and this is that sentence, so the two
  * surfaces say the same thing about the same folder.
  *
- * The `git init` half is what makes it a sentence rather than a label: it names
- * the one action that changes the situation, and names where to run it, because
- * nothing in this app runs it for you.
+ * It used to end *"Run `git init` in a terminal, then refresh"* — true when
+ * nothing in this app could run it, and stale the moment Source control grew
+ * the button that does (see `initRepository`). Advice to go and type a command
+ * somewhere else, printed beside a control that performs it, is worse than no
+ * advice: it says the app cannot do the thing it is visibly doing.
+ *
+ * So it names the page instead. Source control drops the sentence entirely when
+ * it is drawing that button — the title and the button carry it — and the
+ * surfaces that cannot act, like the Overview's git tile, print this and send
+ * the reader to the one that can.
  */
-export const NOT_A_REPO_MESSAGE =
-  'This folder is not a git repository. Run `git init` in a terminal, then refresh.'
+export const NOT_A_REPO_MESSAGE = 'This folder is not a git repository. Source control can create one.'
 
 /**
  * A repository git can see but refuses to read.
@@ -386,7 +406,7 @@ function classifyFailure(cwd: string, error: unknown): GitNotRepo {
     return notRepo(cwd, 'not-a-repo', dubiousOwnershipMessage(cwd))
   }
   if (/not a git repository/i.test(text)) {
-    return notRepo(cwd, 'not-a-repo', NOT_A_REPO_MESSAGE)
+    return { ...notRepo(cwd, 'not-a-repo', NOT_A_REPO_MESSAGE), canInit: true }
   }
   // No sentence for this one on purpose. `error` is the bucket for a failure
   // nobody anticipated, and there git's own words are the only information
@@ -462,6 +482,42 @@ export async function readGitStatus(cwd: string): Promise<GitStatusResult> {
   } catch (error) {
     return classifyFailure(cwd, error)
   }
+}
+
+/**
+ * Turn a folder into a repository.
+ *
+ * This exists because Source control had no way out of its own empty state. A
+ * folder that is not a repository produced a page whose entire content was the
+ * sentence *"This folder is not a git repository"* and a suggestion to go and
+ * type `git init` somewhere else — Asad, on that page: *"Source control shows
+ * nothing, so make sure it shows something whatever is necessary to show."* A
+ * page that names the one action that changes the situation and then refuses to
+ * take it is the dead end he was describing.
+ *
+ * Deliberately the plainest possible `git init`: no first commit, no remote, no
+ * branch rename beyond git's own `init.defaultBranch`. Everything past creating
+ * the repository is a decision belonging to whoever opened the folder, and a
+ * button that quietly committed their files would be a far worse surprise than
+ * the empty state it replaced.
+ *
+ * Refuses anything that is already inside a repository, so the button can never
+ * nest one repository inside another by accident — the caller only ever shows
+ * it on a `repo: false` folder, but the check belongs on this side of the IPC
+ * boundary where the renderer cannot skip it.
+ */
+export async function initRepository(cwd: string): Promise<GitStatusResult> {
+  const existing = await readGitStatus(cwd)
+  // Already a repository, or a folder git cannot even look at: hand back what
+  // was found rather than running anything. `not-a-repo` is the only state this
+  // is allowed to act on.
+  if (existing.repo || existing.reason !== 'not-a-repo') return existing
+  try {
+    await git(cwd, ['init'])
+  } catch (error) {
+    return classifyFailure(cwd, error)
+  }
+  return readGitStatus(cwd)
 }
 
 /**
@@ -818,6 +874,7 @@ function asPath(value: unknown): string | null {
  *
  * Channels:
  *  - `git:status`  (invoke, cwd)                  → GitStatusResult
+ *  - `git:init`    (invoke, cwd)                  → GitStatusResult, after `git init`
  *  - `git:diff`    (invoke, cwd, path, options)   → unified diff text
  *  - `git:watch`   (invoke, cwd)                  → GitStatusResult, starts polling
  *  - `git:unwatch` (send,   cwd)                  → stops polling
@@ -831,6 +888,18 @@ export function registerGitIpc(ipcMain: IpcMain): void {
     const path = asPath(cwd)
     return path
       ? readGitStatus(path)
+      : Promise.resolve(notRepo(String(cwd), 'no-such-folder', 'Project path must be absolute'))
+  })
+
+  /*
+   * The one write this module has. It is a `handle` rather than a `send` because
+   * the panel replaces its whole body with the answer — a fire-and-forget init
+   * would leave the page showing "not a repository" over a repository.
+   */
+  ipcMain.handle('git:init', (_event, cwd: unknown): Promise<GitStatusResult> => {
+    const path = asPath(cwd)
+    return path
+      ? initRepository(path)
       : Promise.resolve(notRepo(String(cwd), 'no-such-folder', 'Project path must be absolute'))
   })
 

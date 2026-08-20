@@ -6,7 +6,6 @@ import {
   SessionRow,
   linkFor,
   machineActions,
-  newSessionOffer,
   shortPath,
   type MachineActions,
   type MachinesHalf,
@@ -28,8 +27,9 @@ import {
  *
  * No DOM here, so these render to static markup. That covers what a refactor
  * quietly breaks on this screen: which state a row prints, whether the key it
- * asks a person to compare is still on it, and whether New session is offered
- * against a machine that could not serve it.
+ * asks a person to compare is still on it, and which two buttons a card is
+ * allowed to have — the third one was removed on 2026-08-19 and there is a
+ * whole block below pinning that it stays removed.
  *
  * The presses are pinned separately, through `machineActions`, because markup
  * cannot tell you what a button *does* — and what is behind these is a shell on
@@ -58,6 +58,7 @@ function link(partial: Partial<MachineLinkState> = {}): MachineLinkState {
     folders: ['/Users/a/projects/deck'],
     capabilities: ['create'],
     ports: [],
+    copilot: null,
     hostPlatform: 'win32',
     retryAt: null,
     ...partial,
@@ -70,7 +71,6 @@ const NOTHING: MachineActions = {
   connect: () => {},
   disconnect: () => {},
   forget: () => {},
-  newSession: () => {},
   open: () => {},
   close: () => {},
   openPort: () => {},
@@ -88,12 +88,33 @@ const NOOP_BRIDGE: MachinesBridge = {
   disconnectMachine: () => Promise.resolve({}),
   attachMachineSession: () => Promise.resolve(true),
   detachMachineSession: () => Promise.resolve(true),
+  // Nothing here drops a file. The transfer path is covered end to end in
+  // `main/remote/machines/transfer-live.test.ts`, over a real relay.
+  uploadToMachine: () => Promise.resolve({ ok: false, message: 'not in this fake' }),
+  cancelMachineUpload: () => Promise.resolve(false),
+  onMachineUpload: () => () => {},
   writeToMachineSession: () => Promise.resolve(true),
+  // Answers a record rather than a boolean, like the real one: a send from a
+  // surface with no terminal on screen has to come back carrying its own
+  // sentence, and a stub that answered `true` would let a component that draws
+  // the sentence compile against a shape it never gets.
+  sendToMachineSession: () => Promise.resolve({ ok: true, message: 'Sent.' }),
   resizeMachineSession: () => Promise.resolve(true),
   createMachineSession: () => Promise.resolve(true),
   closeMachineSession: () => Promise.resolve(true),
   refreshMachinePorts: () => Promise.resolve(true),
   openOnMachine: () => Promise.resolve(true),
+  // The copilot verbs answer a record for the same reason `sendToMachineSession`
+  // does, and it is the same defect being guarded: there is no terminal on
+  // screen to make a lost frame visible, so a stub that answered `true` would
+  // let a component that draws the sentence compile against a shape it never
+  // gets.
+  attachMachineCopilot: () => Promise.resolve({ ok: true, message: 'Watching that machine’s copilot.' }),
+  startMachineCopilot: () => Promise.resolve({ ok: true, message: 'Asked that machine to start a copilot run.' }),
+  sayToMachineCopilot: () => Promise.resolve({ ok: true, message: 'Sent.' }),
+  refreshMachineCopilot: () => Promise.resolve({ ok: true, message: 'Asked.' }),
+  onMachineCopilotState: () => () => {},
+  onMachineCopilotChat: () => () => {},
   onMachinesState: () => () => {},
   onMachineOutput: () => () => {},
 }
@@ -226,83 +247,64 @@ describe('a machine row', () => {
   })
 })
 
-describe('what New session may do', () => {
-  it('is offered when that machine can serve it', () => {
-    expect(newSessionOffer(link())).toEqual({ can: true, note: null })
-    expect(row(link())).toContain('New session')
+describe('what the card may press', () => {
+  /*
+   * There were five tests here and they were all about **New session** — when
+   * it was offered, when it was a sentence instead, and which of the two
+   * reasons the sentence gave. The button is gone: *"we don't need this new
+   * session thing here. Just disconnect and forget thing is good enough for
+   * us."* (2026-08-19).
+   *
+   * What replaces them is one test rather than five, and it is the shape the
+   * removal actually needs pinned: not "the button is absent today", which any
+   * render would show, but that **no state of the link brings it back**. The
+   * old gate had three inputs — connected, `create` in the capabilities, a
+   * shared folder — and the way a removal like this quietly reverses is
+   * somebody restoring one branch of it. So every combination that used to draw
+   * the button, and every combination that used to draw a sentence explaining
+   * it, is rendered here and checked for both.
+   */
+  const shapes: Array<[string, MachineLinkState]> = [
+    ['everything the old gate wanted', link()],
+    ['a build that cannot start one', link({ capabilities: [] })],
+    ['no folder shared with this device', link({ folders: [] })],
+    ['a machine that never mentioned folders', link({ folders: null })],
+    ['a machine nobody has dialled', link({ state: 'offline' })],
+  ]
+
+  for (const [what, state] of shapes) {
+    it(`draws no New session, and no note about one, against ${what}`, () => {
+      const markup = row(state)
+      expect(markup).not.toContain('New session')
+      // The two sentences that existed only to explain its absence.
+      expect(markup).not.toContain('cannot start a session')
+      expect(markup).not.toContain('No folder has been shared')
+      expect(markup).not.toContain('not inside a window that can open one')
+    })
+  }
+
+  it('keeps the two that are left, which is what he asked for', () => {
+    // "Just disconnect and forget thing is good enough for us." Connect is the
+    // same control in its other position, so both halves are checked.
+    expect(row(link({ state: 'online' }))).toContain('Disconnect')
+    expect(row(link({ state: 'offline' }))).toContain('Connect')
+    expect(row(link())).toContain('>Forget</button>')
   })
 
-  it('is not drawn at all on a copy of the page with no window behind it', () => {
+  it('leaves the route to a session on that machine standing, in the rail', () => {
     /*
-     * Two gates on this button and they answer different questions. `offer.can`
-     * is about the far machine — connected, capable, has shared a folder. The
-     * action's presence is about *this* end: a window to open the dialog in.
+     * The one thing this removal must not have done is take the capability
+     * away, and the check for it cannot live in this file — the ＋ is on the
+     * sidebar's machine heading. It is pinned in
+     * `renderer/shell/machine-group.test.tsx`, by the accessible name *"New
+     * session on DESKTOP-DDGMNCV"*, and it was verified there **before** the
+     * button was taken off this card rather than after.
      *
-     * A machine that would happily serve one, on a page that cannot ask, is the
-     * combination worth pinning, because it is the one every static render in
-     * this repository is in — including the harness screenshots. Drawing the
-     * button there would put a control on screen that swallows the press, and
-     * hiding it silently would read as a machine that had refused. So the row
-     * says which of the two it is.
+     * This test is a signpost, not a second copy of that assertion: what it
+     * pins is that this file's own actions carry no way to start one, so the
+     * rail is the only route and there is nothing here to drift from it.
      */
-    const markup = renderToStaticMarkup(
-      <MachineRow
-        machine={machine()}
-        link={link()}
-        openSessionId={null}
-        actions={{ ...NOTHING, newSession: undefined }}
-        platform="mac"
-      />,
-    )
-    expect(markup).not.toContain('>New session<')
-    expect(markup).toContain('not inside a window that can open one')
-    // The far machine's own reasons are untouched: it never refused anything.
-    expect(markup).not.toContain('cannot start a session')
-  })
-
-  it('says nothing about windows when the machine is the one refusing', () => {
-    // One explanation per absent button. A row that printed both would be
-    // telling somebody to go and fix a machine that is not the problem.
-    const markup = renderToStaticMarkup(
-      <MachineRow
-        machine={machine()}
-        link={link({ capabilities: [] })}
-        openSessionId={null}
-        actions={{ ...NOTHING, newSession: undefined }}
-        platform="mac"
-      />,
-    )
-    expect(markup).toContain('cannot start a session')
-    expect(markup).not.toContain('not inside a window that can open one')
-  })
-
-  it('is not a button against a machine that cannot start one, and says why', () => {
-    const offer = newSessionOffer(link({ capabilities: [] }))
-    expect(offer.can).toBe(false)
-    expect(offer.note).toMatch(/cannot start a session/)
-    const markup = row(link({ capabilities: [] }))
-    expect(markup).not.toContain('>New session<')
-    expect(markup).toContain('cannot start a session')
-  })
-
-  it('is not a button when no folder has been shared with this device', () => {
-    // Empty is a real state with a real remedy on the other machine, and it is
-    // not the same as a machine that never mentioned folders at all.
-    const offer = newSessionOffer(link({ folders: [] }))
-    expect(offer.can).toBe(false)
-    expect(offer.note).toMatch(/No folder has been shared/)
-    // And the remedy names where to go, which is now Remote on that machine.
-    expect(offer.note).toMatch(/under Remote/)
-  })
-
-  it('is offered to a machine that never mentioned folders', () => {
-    expect(newSessionOffer(link({ folders: null })).can).toBe(true)
-  })
-
-  it('is nothing at all while the link is down', () => {
-    // Not a note either: "that machine cannot start a session" is untrue of a
-    // machine nobody has asked yet.
-    expect(newSessionOffer(link({ state: 'offline' }))).toEqual({ can: false, note: null })
+    expect(Object.keys(NOTHING)).not.toContain('newSession')
   })
 })
 
@@ -416,7 +418,10 @@ describe('the link for a machine', () => {
     expect(resting.state).toBe('offline')
     expect(resting.sessions).toEqual([])
     // Null rather than `[]`: "that machine never mentioned folders" is not "no
-    // folder was shared", and `newSessionOffer` answers differently to each.
+    // folder was shared". Nothing on this card reads the difference any more —
+    // `newSessionOffer` did and went with the button — but the far machine's
+    // own answer is still two different answers, and flattening them here is
+    // how a later reader would conclude they were one.
     expect(resting.folders).toBeNull()
   })
 })
@@ -455,8 +460,6 @@ function pressing(bridge: MachinesBridge | null, digits = ''): {
     view: MachinesView
     busy: boolean
     error: string | null
-    /** Machine ids the window was asked to open the new-session dialog on. */
-    asked: string[]
   }
   settled(): Promise<void>
 } {
@@ -465,7 +468,6 @@ function pressing(bridge: MachinesBridge | null, digits = ''): {
     view: { machines: [], links: [], blocked: null } as MachinesView,
     busy: false,
     error: null as string | null,
-    asked: [] as string[],
   }
   const actions = machineActions({
     bridge,
@@ -484,9 +486,6 @@ function pressing(bridge: MachinesBridge | null, digits = ''): {
     },
     setOpen: () => {},
     isAlive: () => true,
-    // A window, stood in for. The one without is its own case below, because
-    // what it proves is the opposite thing: that there is no press at all.
-    openNewSession: (machineId) => state.asked.push(machineId),
   })
   // Nothing here returns its promise, which is the point — these are presses.
   // One turn of the microtask queue is enough for a resolved bridge.
@@ -559,7 +558,6 @@ describe('typing a code and sending it', () => {
     h.actions.pair()
     h.actions.connect(machine())
     h.actions.forget(machine())
-    h.actions.newSession?.(machine())
     await h.settled()
     expect(h.state.error).toBeNull()
   })
@@ -586,57 +584,37 @@ describe('the machine buttons', () => {
     expect(h.state.view.machines).toHaveLength(0)
   })
 
-  it('asks the window for a new session instead of starting one on the far machine', async () => {
+  it('has no way to start a session on the far machine at all, by any name', async () => {
     /*
-     * These two cases used to be *"starts a session in the first folder that
-     * machine shared"* and *"lets a machine that never mentioned folders choose
-     * for itself"*, and both pinned `createMachineSession` going straight out of
-     * this button. They are one case now, and it pins the opposite: nothing
-     * crosses the bridge on a press, and the window is asked instead.
+     * The strongest thing this file can still say about **New session**, now
+     * that the button is gone from the card.
      *
-     * The old pair were not wrong about what they described — the first shared
-     * folder really is the only one this end knows is allowed. They were pinning
-     * a press that answered *which folder*, *which agent* and *which login* on
-     * somebody else's computer without asking anybody, which is exactly what the
-     * 2026-08-17 review took away everywhere else: *"we just always wanted this
-     * pop-up to come up so we choose which type of terminal we want to open."*
+     * There were two tests here. One pinned that the press asked the *window*
+     * for the dialog rather than calling `createMachineSession` straight out to
+     * the far machine — which was itself the fix for a press that answered
+     * *which folder*, *which agent* and *which login* on somebody else's
+     * computer without asking anybody (2026-08-17: *"we just always wanted this
+     * pop-up to come up so we choose which type of terminal we want to
+     * open."*). The other pinned that no button was drawn where there was no
+     * window to open the dialog in.
      *
-     * `calls` being empty is half the assertion and the important half. A route
-     * that opened the dialog *and* spawned would look right on screen and start
-     * two sessions.
+     * Neither has anything to hold now, so what is pinned instead is the fact
+     * that outlives both: this half exposes **no** action that starts a session,
+     * and pressing every action it does expose sends `createMachineSession` to
+     * nobody. That is what stops the old spawn coming back through a different
+     * door — the door, not the button, was the defect.
      */
     const { bridge, calls } = recorder()
     const h = pressing(bridge)
-    h.actions.newSession?.(machine())
-    await h.settled()
-    expect(h.state.asked).toEqual(['MACHINE1'])
-    expect(calls).toEqual([])
-  })
+    expect(Object.keys(h.actions)).not.toContain('newSession')
 
-  it('has no New session to press at all when there is no window behind the page', () => {
-    /*
-     * Absent, not dead. The dialog is the window's, so a copy of this page with
-     * no window around it — the harness, a test, `renderToStaticMarkup` — has
-     * nowhere for the press to land, and this app's standing rule is that such a
-     * control is not drawn. `undefined` rather than a function that refuses is
-     * what makes that checkable from the row.
-     */
-    const { bridge } = recorder()
-    const actions = machineActions({
-      bridge,
-      digits: '',
-      setDigits: () => {},
-      setView: () => {},
-      setPairing: () => {},
-      setError: () => {},
-      setOpen: () => {},
-      isAlive: () => true,
-      openNewSession: null,
-    })
-    expect(actions.newSession).toBeUndefined()
-    // And every other press still works, because they go to the bridge rather
-    // than to the window: a page outside a window is not a page in trouble.
-    expect(typeof actions.connect).toBe('function')
+    h.actions.connect(machine())
+    h.actions.disconnect(machine())
+    h.actions.forget(machine())
+    h.actions.openPort(machine(), 5173)
+    h.actions.refreshPorts(machine())
+    await h.settled()
+    expect(calls.some((call) => call.startsWith('createMachineSession'))).toBe(false)
   })
 })
 

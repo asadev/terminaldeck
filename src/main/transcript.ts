@@ -465,10 +465,52 @@ export function isTranscriptPath(path: string, options: TranscriptScope = {}): b
   if (typeof path !== 'string' || path.length === 0) return false
   const resolved = resolve(path)
   if (extname(resolved) !== '.jsonl') return false
+  const real = canonical(resolved)
   return configDirs(options).some((dir) => {
     const root = resolve(dir, 'projects')
-    return resolved.startsWith(root + sep)
+    // Both spellings, and the second one is not tidiness. See `canonical`.
+    return resolved.startsWith(root + sep) || real.startsWith(canonical(root) + sep)
   })
+}
+
+/**
+ * A path with every symlink in it followed, or the path itself when it cannot
+ * be.
+ *
+ * ## The trap this closes, which was latent and load-bearing
+ *
+ * Accounts can share one conversation history — `shared-projects.ts` — and they
+ * do it by each account's `projects/` being a **link** into
+ * `~/.claude/projects`. `resolve()` does not follow a link, so the guard above
+ * used to accept exactly one of the two names for one file:
+ *
+ *     path as the app builds it : …/profiles/work/projects/-tmp-x/abc.jsonl
+ *         isTranscriptPath       = true
+ *     the same file, realpathed : …/.claude/projects/-tmp-x/abc.jsonl
+ *         isTranscriptPath       = false      ← refused
+ *
+ * It worked only because `transcriptDirs` happens never to canonicalise. That
+ * is a coincidence, not a design: the first caller that ever does — a filesystem
+ * watcher reporting canonical paths, a `realpathSync` added for tidiness — takes
+ * down `chat:load` and `cost:session` with a guard that still looks correct.
+ *
+ * Comparing canonical forms on **both** sides is what makes the two names one
+ * answer. It does not widen the guard: a path is accepted when it is inside a
+ * store by either spelling, and a path outside every store is outside them
+ * under `realpath` too.
+ *
+ * The fallback matters as much as the call. A transcript can be asked about
+ * before it exists — `cost:session` is called on a session whose first turn has
+ * not landed — and `realpath` on a missing file throws. Falling back to the
+ * literal path keeps that case behaving exactly as it did before this function
+ * existed, which is the only safe direction for a security guard to fail in.
+ */
+function canonical(path: string): string {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return path
+  }
 }
 
 export interface TranscriptFile {

@@ -46,6 +46,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ProviderId } from '@shared/types'
+import { controlsWired, readControlsAt, watchSessionOutput, type ControlsTarget } from './controls-target'
 
 /** The session the chrome is about, as much of it as this needs. */
 export interface ChromeSession {
@@ -109,17 +110,23 @@ export function chipMode(session: ChromeSession | null, agent: AgentPresence): C
   return 'none'
 }
 
-/** The slice of the bridge this needs. Optional throughout: an unwired build says so. */
-interface ControlsBridge {
-  readAgentControls?: (request: { sessionId?: string; cwd?: string }) => Promise<unknown>
-  onSessionData?: (cb: (id: string, data: string) => void) => () => void
-}
-
-function bridge(): ControlsBridge | undefined {
-  // `globalThis`, not `window`: components in this folder are rendered to a
-  // string in their own tests, where there is no window to read.
-  return (globalThis as { deck?: ControlsBridge }).deck
-}
+/*
+ * The bridge is reached through `controls-target.ts` rather than read here.
+ *
+ * This file used to hold its own two-method view of `window.deck`, naming
+ * `readAgentControls` and `onSessionData` — both of which address *this*
+ * machine's session layer by *this* machine's session id. Over a session on a
+ * paired PC or a terminal on a server they asked about something that does not
+ * exist here, so presence was permanently unknown and the control cluster it
+ * gates was permanently withdrawn.
+ *
+ * Routing it through the same module `useSessionControls` uses is not tidiness.
+ * These two hooks read one fact — is there an agent in front of this session —
+ * and the last time two components on one bar answered that from two sources,
+ * the account chip drew its picker over a running agent while the model chip
+ * forty pixels away withdrew itself. One router, one answer, whichever computer
+ * the session is on.
+ */
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -214,8 +221,29 @@ export function runningProvider(
   return provider
 }
 
-export function useAgentPresence(session: ChromeSession | null): AgentPresence {
+export function useAgentPresence(
+  session: ChromeSession | null,
+  /**
+   * Which computer the session is on. Absent means this one — see
+   * {@link ControlsTarget}.
+   */
+  target?: ControlsTarget,
+): AgentPresence {
   const settled = presenceFromSession(session)
+  /*
+   * Flattened to two primitives for the dependency arrays below, for the reason
+   * `useSessionControls` flattens the same value: an object literal rebuilt at
+   * each render is a new value at each render, so a target in a dependency list
+   * would re-arm the output subscription every frame.
+   */
+  const targetKind = target?.kind ?? 'local'
+  const targetMachine = target?.kind === 'machine' ? target.machineId : ''
+  const where: ControlsTarget | undefined =
+    targetKind === 'machine'
+      ? { kind: 'machine', machineId: targetMachine }
+      : targetKind === 'server'
+        ? { kind: 'server' }
+        : undefined
   const [screen, setScreen] = useState<AgentPresence>(UNKNOWN_PRESENCE)
   const alive = useRef(true)
   /** Whether this session's screen has ever carried an agent's own markers. */
@@ -225,10 +253,9 @@ export function useAgentPresence(session: ChromeSession | null): AgentPresence {
   const sessionId = settled === null ? session?.id : undefined
 
   const read = useCallback(async (): Promise<void> => {
-    const deck = bridge()
-    if (!sessionId || typeof deck?.readAgentControls !== 'function') return
+    if (!sessionId || !controlsWired(where)) return
     try {
-      const reading = parseAgentReading(await deck.readAgentControls({ sessionId }))
+      const reading = parseAgentReading(await readControlsAt(where, { sessionId }))
       if (!alive.current) return
       setScreen((previous) => settle(previous, reading, seenAgent.current))
       if (reading.running === true) seenAgent.current = true
@@ -236,7 +263,11 @@ export function useAgentPresence(session: ChromeSession | null): AgentPresence {
       // A read that fails leaves the last real one alone. Blanking it would
       // withdraw a control because one IPC call went missing.
     }
-  }, [sessionId])
+    // `where` is rebuilt from the two primitives at each render and is not in
+    // this list for that reason; the primitives are, and they are what actually
+    // changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, targetKind, targetMachine])
 
   useEffect(() => {
     alive.current = true
@@ -253,22 +284,21 @@ export function useAgentPresence(session: ChromeSession | null): AgentPresence {
     if (!sessionId) return
     void read()
 
-    const deck = bridge()
-    if (typeof deck?.onSessionData !== 'function') return
     let timer: ReturnType<typeof setTimeout> | null = null
-    const off = deck.onSessionData((id) => {
-      if (id !== sessionId) return
+    const off = watchSessionOutput(where, sessionId, () => {
       if (timer !== null) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
         void read()
       }, SETTLE_MS)
     })
+    if (off === null) return
     return () => {
       if (timer !== null) clearTimeout(timer)
       off()
     }
-  }, [sessionId, read])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, targetKind, targetMachine, read])
 
   return settled ?? screen
 }

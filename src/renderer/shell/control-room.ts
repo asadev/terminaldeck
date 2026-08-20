@@ -402,7 +402,26 @@ export function measureRoom(cluster: HTMLElement, bar: HTMLElement): ClusterRoom
  * would unfold into a bar it overflows.
  */
 export function naturalWidth(cluster: HTMLElement): number | null {
-  const chips = [...cluster.querySelectorAll<HTMLElement>('.cc-chip')]
+  /*
+   * Controls *and* readings, since 2026-08-19.
+   *
+   * `.cc-chip` was the whole row for as long as everything in it was a control.
+   * The usage element now puts a context figure on the bar that is deliberately
+   * not a chip — it is data first, and it is drawn with none of a chip's border,
+   * fill or hover. Counting only chips therefore under-measured the row by the
+   * width of that figure, which is the one direction this function must never be
+   * wrong in: the note below says why an under-measured row is the one that
+   * unfolds into a bar it overflows, and it was doing exactly that at the app's
+   * minimum window width.
+   *
+   * `.cc-reading` is the marker for "on this bar, takes room, is not drawn as a
+   * chip". It said "is not pressable" until 2026-08-19, when the figure gained a
+   * breakdown panel and had to become a real control to be reachable by keyboard
+   * — its *appearance* is what this class is about, and that has not changed. It
+   * is a class rather than a component's own name so that this file does not
+   * have to know which components exist.
+   */
+  const chips = [...cluster.querySelectorAll<HTMLElement>('.cc-chip, .cc-reading')]
   if (chips.length === 0) return null
   if (chips.some((chip) => chip.scrollWidth > chip.clientWidth + 1)) return null
   const gap = px(getComputedStyle(cluster).columnGap)

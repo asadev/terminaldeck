@@ -145,20 +145,21 @@ describe('the wired panel', () => {
   const html = renderToStaticMarkup(<BrowserWorkspace bridge={noopBridge} />)
 
   it('gives every control an accessible name', () => {
+    // One or two words each, since 2026-08-20: the names came off the screen and
+    // onto the hover, and `title` and `aria-label` are the same short string.
     for (const label of [
       'Back',
       'Forward',
       'Reload',
       'Home',
-      'Inspect an element in the page',
-      'Record what you do on this page',
-      'Screenshot the page',
-      'Show the page at a phone or tablet size',
-      'Open Chrome devtools for the page',
-      // Cookies is a row in the More menu now rather than a button of its own.
-      // Its accessible name moved with it; what has to be nameable here is the
-      // control that reaches it.
-      'Profiles, saved logins, cookies and the start page',
+      'Inspect',
+      'Record',
+      'Shot',
+      'Size',
+      'Devtools',
+      // Cookies is a row in a menu now rather than a button of its own. What has
+      // to be nameable here is the control that reaches it.
+      'More',
       'Address and search',
     ]) {
       expect(html, `no control named ${label}`).toContain(`aria-label="${label}"`)
@@ -172,23 +173,31 @@ describe('the wired panel', () => {
     expect(html).toContain('aria-label="Forward" disabled=""')
   })
 
-  it('prints every action’s name beside its glyph', () => {
-    // Six unlabelled icons sat here on 2026-08-16 and he could not name one of
-    // them. The accessible name above is the sentence; this is the word on
-    // screen, and a tooltip is not a substitute for it.
+  it('prints no caption beside any glyph, and names every one on the hover', () => {
+    /*
+     * The captions were added on 2026-08-16, because six unlabelled icons sat
+     * here and he could not name one of them. They came off again on 2026-08-20
+     * with the fix he actually wanted:
+     *
+     *   > *"remove all of these titles. Just keep the logos. And when I hover,
+     *   > it should show the title, like shade, inspect, record."*
+     *
+     * The difference from the state that failed the first time is `Tooltips.tsx`
+     * — a hover label drawn in the app's own type and palette, rather than left
+     * to whatever the OS does with a `title`.
+     */
+    expect(html).not.toContain('bw-icon-word')
     for (const word of ['Inspect', 'Record', 'Shot', 'Size', 'Devtools', 'More']) {
-      expect(html, `no visible label for ${word}`).toContain(
-        `<span class="bw-icon-word">${word}</span>`,
-      )
+      expect(html, `no hover name for ${word}`).toContain(`title="${word}"`)
     }
   })
 
-  it('leaves the four navigation glyphs bare', () => {
-    // Back, Forward, Reload and Home have looked the same in every browser for
-    // thirty years. Captioning those would be noise on the same bar the words
-    // were added to.
-    expect(html).not.toContain('<span class="bw-icon-word">Back</span>')
-    expect(html).not.toContain('<span class="bw-icon-word">Home</span>')
+  it('gives the address field every pixel the captions were using', () => {
+    // *"we can have a bigger link bar … Let's make these icons smaller and make
+    // this maybe bigger."* Measured in `.harness/toolbar.tsx` rather than here —
+    // markup cannot see a width — and the container query that used to drop the
+    // captions on a narrow panel has nothing left to drop.
+    expect(html).not.toContain('data-labelled')
   })
 
   it('has nothing at the bottom at all', () => {
@@ -207,10 +216,12 @@ describe('the wired panel', () => {
   })
 
   it('puts what the band held in the top right corner instead', () => {
-    // The menu that took the start page, the cookies dialog, the profiles and
-    // the saved logins. It is the last control on the toolbar's action group,
-    // which is the rectangle every popup in this panel is anchored to.
-    expect(html).toContain('Profiles, saved logins, cookies and the start page')
+    // The menu that took the start page and the recorded flow, and the profile
+    // button beside it that took the profiles, the cookies and the saved logins.
+    // Both are the last controls on the toolbar's action group, and each opens
+    // against its own button — see `menuRef` in `Toolbar.tsx` for why that is
+    // not the group's rectangle any more.
+    expect(html).toContain('aria-label="More"')
   })
 
   it('does not print a second instruction under the first', () => {

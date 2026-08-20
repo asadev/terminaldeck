@@ -144,41 +144,71 @@ describe('the pane is mounted for as long as its tab exists', () => {
   })
 })
 
-describe('the controls that cannot act on a shell are absent', () => {
+describe('the controls a shell can reach, and the ones it cannot', () => {
   /*
-   * The half of §5.5's argument that was right, kept.
+   * §5.5 used to withdraw the whole cluster here, and the argument for it was
+   * mechanically true rather than a matter of taste: every control is a
+   * conversation with a pty **by session id**, `agent-controls.ts` performs a
+   * change by typing `/model` into that pty and reading the screen, and a shell
+   * on a server had no such id in this app.
    *
-   * The reason is mechanical rather than a matter of taste, which matters here:
-   * the tempting shortcut is "servers do not have agents", and that is an
-   * assumption about somebody else's machine — the one thing this whole area is
-   * arranged against. What is actually true is that every control in the cluster
-   * is a conversation with a **local pty, by session id**: `useSessionControls`
-   * reads `agent:controls:read` and writes `agent:controls:set`, both keyed on a
-   * session this app spawned, and `agent-controls.ts` performs a change by
-   * typing `/model` into that pty and waiting for the screen to echo it back. A
-   * shell on a server has no such id.
+   * What it did not check is that a server shell *is* a pty — `connection.ts`
+   * opens it with `client.shell({ term: 'xterm-256color' })` and its bytes
+   * arrive in this main process — which is the only thing the mechanism ever
+   * needed. `servers/ipc.ts` attaches the same shadow terminal a local session
+   * keeps, and the same two functions drive it. Asad asked for exactly this
+   * three times: *"I don't see it in server sessions and in the remote sessions
+   * both."*
    *
-   * And it stays absent on a server that *does* have an agent installed on it.
-   * Installed is not running — `agent-presence.ts` is explicit that for a shell
-   * the question cannot be answered from the record and has to be read off the
-   * screen through that same local channel, so for a server shell the answer is
-   * permanently `null`, which is the state that file already says draws neither
-   * control.
+   * The caution the old note carried is kept, because it is the thing that
+   * would actually hurt: typing `/model` at a plain `sh` submits the word to
+   * whatever is in front of it. That is refused twice on the far side of the IPC
+   * — `refuseByProvider` finds no Claude Code markers on the screen, and
+   * `refuseToType` finds no composer — and this file's job is the wiring, so
+   * what it pins is that the window asks the *server* channel rather than the
+   * local one, and that the two modes which genuinely cannot act say why.
    */
-  it('withdraws the model, effort and connector cluster', () => {
-    const guard = /\{headingSession && !swarm &&[^?]*\?/.exec(APP)?.[0] ?? ''
-    expect(guard, 'the SessionControls guard has changed shape').not.toBe('')
-    expect(guard).toContain('openServerSession === null')
-    // And the reason is written where the branch is, not only here.
-    expect(APP).toContain('Installed is not running')
+  it('reaches the cluster through the server channel, not the local one', () => {
+    const table = /const barControls: \{[\s\S]*?\n {12}: null\n/.exec(APP)?.[0] ?? ''
+    expect(table, 'barControls has changed shape').not.toBe('')
+    // The far end's own id for the shell, which is the only handle the main
+    // process holds the SSH channel under — not `shellKey`, which is this
+    // window's and names nothing over there.
+    expect(table).toContain('serverShellIds[openServerRow.tabId]')
+    expect(table).toContain("target: { kind: 'server' }")
+    /*
+     * And no `cwd` and no `provider`. Both would be facts about *this* machine:
+     * a path here resolves this machine's connectors and transcripts, and a
+     * provider is a record of a spawn this app never made. `undefined` is what
+     * makes `refuseByProvider` consult the screen instead of the record, which
+     * is the only witness there is to what is running in that terminal.
+     */
+    const branch = /serverShellIds\[openServerRow\.tabId\][\s\S]*?\n {12}\}/.exec(table)?.[0] ?? ''
+    expect(branch, 'the server branch has changed shape').not.toBe('')
+    expect(branch).toContain('cwd: null')
+    expect(branch).toContain('provider: undefined')
   })
 
-  it('withdraws the chat and split switch with them', () => {
-    // Chat is a view of a transcript file on this machine's disk and Split
-    // arranges this window's own panes. A shell on a server has neither.
-    const guard = /\{\(activeSession \|\| splitting\) &&[\s\S]*?\? \(/.exec(APP)?.[0] ?? ''
+  it('gives chat and split a reason rather than taking the switch away', () => {
+    /*
+     * Terminal is exactly what a server terminal is already showing, so
+     * withdrawing the whole switch took a working segment with it and left an
+     * empty stretch of toolbar — which cannot tell "not built" from "not
+     * possible". Chat reads the agent's own transcript file, which is on that
+     * server's disk; Split arranges this window's own panes, and these are
+     * mounted outside them so their scrollback survives being switched away
+     * from. Both sentences are on the control, on the segment, where somebody
+     * presses.
+     */
+    const table = /const modesBlocked:[\s\S]*?\n {8}: undefined\n/.exec(APP)?.[0] ?? ''
+    expect(table, 'modesBlocked has changed shape').not.toBe('')
+    expect(table).toContain('openServerSession !== null')
+    expect(table).toMatch(/chat:\s*'Chat reads the agent[^']*server/)
+    expect(table).toMatch(/split:\s*'Split arranges this window[^']*server/)
+    // And the switch is drawn for one, or the sentences reach nobody.
+    const guard = /\{\(activeSession \|\| splitting[\s\S]*?\? \(/.exec(APP)?.[0] ?? ''
     expect(guard, 'the ModeSwitch guard has changed shape').not.toBe('')
-    expect(guard).toContain('openServerSession === null')
+    expect(guard).toContain('openServerSession !== null')
   })
 
   it('gives the window bar a name and the server, and no folder or account chip', () => {

@@ -1,6 +1,6 @@
 import type { ProviderId, SessionStatus } from '@shared/types'
 import { COPILOT_ICON, COPILOT_NAME } from '../copilot/identity'
-import { distinguishingIdLength, folderName, shortSessionId } from '../session-title'
+import { distinguishingIdLength, folderName, isMachineAndPath, shortSessionId } from '../session-title'
 
 /**
  * A tab in the top header.
@@ -419,7 +419,30 @@ export function tabIcon(tab: WorkspaceTab): string {
  * project heading above them to be redundant with.
  */
 export function sessionLabel(title: string, index: number, folderName?: string): string {
-  return title && title !== folderName ? title : `Session ${index + 1}`
+  /*
+   * And not the shell's own window title, which is a machine and a path.
+   *
+   * `%n@%m: %~` is what the stock zsh and bash profiles write into the
+   * terminal's title, so an untouched shell arrives here calling itself
+   * `apple@Mac-mini: ~/Projects/terminaldeck`. Asad, on the rail:
+   * *"it is showing the full machine and path, everything in the pill… it
+   * should only show the name of the session."*
+   *
+   * It is refused rather than trimmed down to its last segment, because the
+   * last segment is the folder — which is the very thing the heading above the
+   * row already says, and the case the line above this one already turns into
+   * `Session N`. So both roads lead to the same place and there is one rule
+   * rather than two.
+   *
+   * Here rather than in the sidebar, because this is the one function that
+   * answers what a session is called on screen and four surfaces read it. A
+   * cleaner applied in the rail alone is how the rail and the strip come to
+   * print two different names for one window — the defect `tabLabel` above was
+   * written to end.
+   */
+  return title && title !== folderName && !isMachineAndPath(title)
+    ? title
+    : `Session ${index + 1}`
 }
 
 /**

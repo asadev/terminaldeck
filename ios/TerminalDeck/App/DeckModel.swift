@@ -1170,10 +1170,6 @@ final class DeckModel {
     var lastActivity: [String: Double] { current?.lastActivity ?? [:] }
     var ports: [LocalPort] { current?.ports ?? [] }
     var upload: FileUpload? { current?.upload }
-    /// The Resume row, and only while the list is what is on screen — offering
-    /// to resume the session already open under it would be a row that does
-    /// nothing.
-    var resumable: RemoteSession? { route.isEmpty ? current?.resumable : nil }
     var canCreateSessions: Bool { current?.canCreateSessions ?? false }
     /// Whether this machine will let this phone end a session. Its own
     /// capability, not implied by `canCreateSessions` — see

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Sidebar, type SidebarMachine, type SidebarServer } from './Sidebar'
@@ -269,14 +271,22 @@ describe('a terminal on a server is a row like any other', () => {
     expect(rail()).toContain(`Session 1 — on ${NAME}`)
   })
 
-  it('says on the ✕ that the server survives it', () => {
-    const html = rail()
-    const close =
-      new RegExp(`<button[^>]*aria-label="Close Session 1 on ${NAME}"[^>]*>`).exec(html)?.[0] ?? ''
-    expect(close).toContain(`ends this terminal on ${NAME}`)
-    expect(close).toContain('The server itself is left alone.')
-    // And a local row keeps the sentence it already had.
-    expect(html).toContain('Close Session 1 — ends the session')
+  it('says that the server survives the close, wherever the close now lives', () => {
+    /*
+     * The row's ✕ became an entry in its ⋯ menu on 2026-08-20, and that menu is
+     * native — built in the main process so it can be drawn over a browser page,
+     * which is the situation its own Connect browser entry exists for. So the
+     * sentence is handed to the menu when it opens rather than sitting in the
+     * markup, and this reads it where it is now written.
+     *
+     * The half that matters is the second one: this ends the terminal and leaves
+     * the server, its sign-in and everything else on it alone.
+     */
+    const source = readFileSync(join(__dirname, 'Sidebar.tsx'), 'utf8')
+    expect(source).toContain('ends this terminal on ${tab.server.name}')
+    expect(source).toContain('The server itself is left alone.')
+    expect(source).toContain('ends the session`')
+    expect(rail()).toContain(`on ${NAME}`)
   })
 
   it('offers no rename on a server row, where a local one has it', () => {

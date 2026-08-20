@@ -144,18 +144,39 @@ function pickBridge(): ChatBridge {
   return bridge
 }
 
-/** What the harness proves, printed on screen so a screenshot carries the result. */
+/**
+ * What the harness proves, printed on screen so a screenshot carries the result.
+ *
+ * ## Why it counts message *bodies* and not the pane
+ *
+ * It used to sweep `.cv-scroll`, which is the whole scrolling region — every
+ * turn plus whatever chrome the view draws around them. That was correct for as
+ * long as the view drew no chrome, and it stopped being correct on 2026-08-20,
+ * when every turn gained a copy button: seven `<button>` and seven `<svg>` of
+ * the app's own, reported as seven injections that had survived sanitising.
+ *
+ * A false FAIL on a security check is worse than no check, so the sweep now
+ * runs over `.cv-body` — the elements that actually hold model output, one per
+ * turn. Nothing is given up by narrowing it: `dangerouslySetInnerHTML` is
+ * reachable from exactly one place in `ChatView.tsx` and that place is a
+ * `.cv-body`, so anything DOMPurify let through lands inside one of these.
+ */
 function audit(): string[] {
   const root = document.querySelector('.cv-scroll')
   if (!root) return ['no chat view mounted']
+  /* Every turn's words, and nothing the app drew around them. */
+  const bodies = [...root.querySelectorAll('.cv-body')]
+  if (bodies.length === 0) return ['no messages rendered']
+  const inside = (selector: string): Element[] =>
+    bodies.flatMap((body) => [...body.querySelectorAll(selector)])
   const out: string[] = []
   const banned = ['script', 'img', 'iframe', 'a', 'svg', 'form', 'input', 'button', 'object', 'embed', 'style', 'link']
   for (const tag of banned) {
-    const n = root.querySelectorAll(tag).length
-    if (n > 0) out.push(`FAIL ${n} <${tag}> in the view`)
+    const n = inside(tag).length
+    if (n > 0) out.push(`FAIL ${n} <${tag}> in a message`)
   }
   const attrs = new Set<string>()
-  for (const el of root.querySelectorAll('*')) {
+  for (const el of inside('*')) {
     for (const a of el.attributes) {
       attrs.add(a.name)
       if (/^on/i.test(a.name)) out.push(`FAIL event attribute ${a.name} on <${el.tagName.toLowerCase()}>`)

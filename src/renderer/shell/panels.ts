@@ -1,4 +1,4 @@
-/** Single source of truth for the sidebar's views — icons, labels, blurbs. */
+/** Single source of truth for the sidebar's views — icons and labels. */
 
 /**
  * There is no `machines` here any more, and that is the point of the entry
@@ -81,11 +81,22 @@ export type PanelId =
  * which is the same category of thing as the update notice and Settings and no
  * part of "what am I doing in this project".
  *
+ * No view is in `foot` today. Machines was the last one and moved to
+ * Integrations on 2026-08-19 — the note on that entry has the reason — and the
+ * strip itself is still there, carrying the update notice, Settings and the
+ * bell, all three placed by `Sidebar.tsx` by hand. The group survives its last
+ * member because the loop that would draw a foot view survives with it, which
+ * is not what happened to `icon` and `pinned`: those two lost their mechanism
+ * as well as their member.
+ *
  * There was a fourth, `icon`, for the one view drawn as a glyph on the Settings
  * line instead of as a row, and it existed for exactly one member: Alerts. That
  * member is a dialog now and not a view at all, so the group went with it — a
  * group no panel can be in is a branch in `Sidebar.tsx` that renders nothing
- * and a shape the next reader has to work out the purpose of.
+ * and a shape the next reader has to work out the purpose of. The branch is
+ * long gone — nothing in `src/renderer` reads `'icon'` — but the union member
+ * outlived it until 2026-08-19, which made this paragraph read as a lie to
+ * anybody who scrolled twenty lines down and found the word still listed.
  */
 /**
  * There was a fifth, `pinned`, for the block above everything, and it existed
@@ -100,7 +111,7 @@ export type PanelId =
  * we will make a copilot"* — and `Sidebar.tsx` places it by hand, because what
  * goes in it is not one of these.
  */
-export type PanelGroupId = 'project' | 'integrations' | 'foot' | 'icon'
+export type PanelGroupId = 'project' | 'integrations' | 'foot'
 
 export interface PanelSpec {
   id: PanelId
@@ -114,8 +125,34 @@ export interface PanelSpec {
    * cannot claim a shortcut the app does not answer to.
    */
   command?: string
-  /** One line under the title in the toolbar. Also the empty state's subtitle. */
-  blurb: string
+  /*
+   * There was a `blurb` here — one sentence per view, printed under the title
+   * in the window's bar on every visit to every page — and this round deleted
+   * all nine of them.
+   *
+   *   > *"Every single time you bring some card, you put something new… I said
+   *   > to you, don't put any single statement in anywhere. Everywhere you are
+   *   > putting a lot of statements. We don't need to give the statements. We
+   *   > want simplicity. Let the smart people use it. Smart people knows how it
+   *   > works. We are not making this for the dumb people."*
+   *
+   * They were the purest example of what he is describing: "Browse the project
+   * and read any file in it." under a page called **Files**, read by somebody
+   * who pressed **Files** to get there. Nine sentences, one per page, none of
+   * them telling anybody anything they did not know a second earlier.
+   *
+   * Deleting the field rather than emptying the strings is deliberate. An empty
+   * string still renders nothing — `WindowToolbar` guards on it — so the app
+   * would have looked identical either way, and the next person to add a panel
+   * would have found a required `blurb: string` and written one. There is
+   * nowhere to put a sentence now.
+   *
+   * Where a view genuinely needs to explain something, the pattern is the ⓘ dot
+   * — `components/HoverNote.tsx` — which is what he asked for by name: *"if
+   * somewhere it's very required, give the i icon like other ones, information
+   * icon in the settings, same way."* MCP servers uses it for the one fact on
+   * that page worth keeping.
+   */
 }
 
 /**
@@ -142,7 +179,6 @@ export const PANELS: PanelSpec[] = [
     group: 'project',
     command: 'view.dashboard',
     icon: 'M4.5 5.5h5.5v5.5H4.5zM14 5.5h5.5v5.5H14zM4.5 13h5.5v5.5H4.5zM14 13h5.5v5.5H14z',
-    blurb: 'Usage, context and activity for this project.',
   },
   {
     id: 'files',
@@ -150,7 +186,6 @@ export const PANELS: PanelSpec[] = [
     group: 'project',
     command: 'view.files',
     icon: 'M13 3.5H6.5A1.5 1.5 0 0 0 5 5v14a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V9.5zM13 3.5V9.5H19',
-    blurb: 'Browse the project and read any file in it.',
   },
   // Search was a page here, and it is not any more.
   //
@@ -181,7 +216,6 @@ export const PANELS: PanelSpec[] = [
       and that is the second chip on the page rather than the subtitle of it.
       See the header comment in `components/ArtifactsPanel.tsx`.
     */
-    blurb: 'Documents, pages and notes your agents made here.',
   },
   {
     id: 'git',
@@ -189,14 +223,12 @@ export const PANELS: PanelSpec[] = [
     group: 'project',
     command: 'view.git',
     icon: 'M7 5.5v8.2a3 3 0 0 0 3 3h4.5M7 19.5a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM7 8.3a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM17 19.1a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z',
-    blurb: 'What has changed, and what is staged.',
   },
   {
     id: 'github',
     label: 'GitHub',
     group: 'integrations',
     icon: 'M12 3a9 9 0 0 0-2.8 17.5c.4.1.6-.2.6-.5v-2c-2.5.5-3-1.2-3-1.2-.4-1-1-1.3-1-1.3-.9-.6 0-.6 0-.6 1 .1 1.4 1 1.4 1 .9 1.5 2.4 1 3 .8.1-.6.3-1 .6-1.3-2-.2-4.1-1-4.1-4.4 0-1 .3-1.8.9-2.4-.1-.3-.4-1.2.1-2.4 0 0 .7-.3 2.5 1a8.6 8.6 0 0 1 4.5 0c1.8-1.3 2.5-1 2.5-1 .5 1.2.2 2.1.1 2.4.6.6.9 1.4.9 2.4 0 3.4-2.1 4.2-4.1 4.4.3.3.6.9.6 1.8v2.7c0 .3.2.6.6.5A9 9 0 0 0 12 3z',
-    blurb: 'Pull requests, checks and issues for this remote.',
   },
   // Alerts was a row here, then a glyph on the Settings line, and it is not a
   // view at all any more.
@@ -219,14 +251,12 @@ export const PANELS: PanelSpec[] = [
     label: 'AI readiness',
     group: 'integrations',
     icon: 'M4.5 6.5h8M4.5 12h8M4.5 17.5h8M16 5.6l1.7 1.7 3.3-3.3M16 11.1l1.7 1.7 3.3-3.3M16 16.6l1.7 1.7 3.3-3.3',
-    blurb: 'How well this repository is set up for an agent.',
   },
   {
     id: 'mcp',
     label: 'MCP servers',
     group: 'integrations',
     icon: 'M4.5 5.5h15v4.2h-15zM4.5 14.3h15v4.2h-15zM7.6 7.6h.01M7.6 16.4h.01',
-    blurb: 'The tools your agents can reach, and what they expose.',
   },
   {
     /*
@@ -244,9 +274,27 @@ export const PANELS: PanelSpec[] = [
      * Machines was in the rail to begin with, and the merge should have moved
      * Remote *out* rather than pulling Machines *in*.
      *
-     * The foot, with the update notice and Settings: another machine is not
-     * something this project integrates with, and the machines you can reach do
-     * not change when you open a different folder.
+     * It sits under **Integrations**, and it sat in the foot — the quiet strip
+     * at the bottom with the update notice and Settings — until Asad read the
+     * rail back on 2026-08-19: *"also move machines in the integrations section
+     * in the side panel."*
+     *
+     * The foot's argument was that the machines you can reach do not change
+     * when you open a different folder, so they are no part of "what am I doing
+     * in this project". That is true, and it does not separate this row from
+     * its new neighbours: an MCP server can be `user` scope as easily as
+     * `project` scope (`McpScope`, in `components/McpInspector.tsx`), and
+     * Session updates writes into each agent CLI's own settings file rather
+     * than into the repository. What every row in this run actually has in
+     * common is the thing this one is — a connection out of this app to
+     * something that is not this app: a remote on GitHub, a tool server, an
+     * agent CLI, a computer across the room.
+     *
+     * It goes after MCP servers and before Session updates, which is where it
+     * already sat in this array — so the two rows about machines somewhere else
+     * are neighbours, and nothing had to be reordered to place it. The group is
+     * the only field that changed: `showPanel` takes the id, `useSidebar`
+     * stores the id, and neither has ever asked which run drew the row.
      */
     /*
      * And the row is called **Machines** again, which is the third name it has
@@ -281,17 +329,14 @@ export const PANELS: PanelSpec[] = [
      */
     id: 'remote',
     label: 'Machines',
-    group: 'foot',
+    group: 'integrations',
     // Two rectangles, one behind the other, joined by a line — the glyph this
     // row has worn under all three of its names, kept because it is the same
     // subject and people already know it. Screens rather than a rack, and that
     // is still right with servers behind it: the drawing says "somewhere else",
     // which is the one thing both kinds have in common.
     icon: 'M3.5 5.5h11v8h-11zM9 17.5h11v-8h-5.5M6.5 17.5h2.5M9 13.5v4',
-    // Both kinds, in the order the page puts them, and in the words the page
-    // uses. A blurb naming only one of them would send half the people looking
-    // for the other somewhere else.
-    blurb: 'Servers you look after, and your own computers and phones.',
+    // Both kinds live behind this one row, in the order the page puts them.
   },
   {
     id: 'hooks',
@@ -309,7 +354,6 @@ export const PANELS: PanelSpec[] = [
       registry are keyed on, and renaming it would silently drop somebody back
       to Overview at their next launch. Only what a person reads changed.
     */
-    blurb: 'Whether a tab can tell you an agent is working, waiting or done.',
   },
 ]
 

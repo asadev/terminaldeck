@@ -112,15 +112,36 @@ describe('a shell with an agent typed into it', () => {
   it('gets the same cluster an agent session gets', () => {
     /*
      * The reported bug, stated as the behaviour that replaces it. Every control
-     * on this bar is Claude Code's — the model it answers with, the effort it
-     * spends, the permission mode, the plan usage — and all four are facts about
-     * the thing on the screen, not about the binary that opened the pty.
+     * on this bar is the agent's — the model it answers with, the effort it
+     * spends, the plan usage — and each is a fact about the thing on the screen,
+     * not about the binary that opened the pty.
+     *
+     * Permission mode was in this list and is not any more, and its absence is
+     * the *point* of the fixture rather than a gap in it: `SAW_AGENT` below is a
+     * frame carrying `⏵⏵ bypass permissions on (shift+tab to cycle)`, which is
+     * Claude Code stating its own permission mode, continuously, two inches
+     * under this bar. *"we don't need this part also at the end, now bypass read
+     * things because we have this here already inside."* So the chip is gone and
+     * the fact is not — see `chat/controls/one-home.test.ts`, which pins that
+     * the removal is argued in the source and not merely done.
      */
     const html = shellBar(SAW_AGENT)
     expect(html, 'the whole cluster is still withdrawn from a running agent').not.toBe('')
-    for (const control of ['model', 'effort', 'fast', 'permission'] as const) {
+    /*
+     * Fast mode is not in this loop and is still in the cluster. It stopped
+     * being a chip on 2026-08-19 — *"move fast mode toggle inside the models
+     * dropdown at the end"* — and a shut menu renders nothing, so a static
+     * markup test can no longer see it here whatever the session underneath is.
+     * What this file is about is unchanged: the controls a *shell* pane gets are
+     * the ones the agent inside it earns, and the model chip below is the one
+     * fast mode now hangs off. `SessionControls.test.tsx` holds the move itself.
+     */
+    for (const control of ['model', 'effort'] as const) {
       expect(html, control).toContain(controlName(control))
     }
+    expect(html, 'the permission chip is back, duplicating the CLI’s own rule').not.toContain(
+      controlName('permission'),
+    )
     // And the reading he asked for twice, which is the element in this cluster
     // that may never be folded away — see `UsageBar` in `SessionControls.tsx`.
     expect(html).toContain('class="usage-bar"')
@@ -212,7 +233,11 @@ describe('the cluster asks the same source its neighbours do', () => {
      * back refused with "this session is a shell", the usage bar loses the
      * account it is a reading of, and the note explains a CLI nobody is running.
      */
-    expect(controls).toMatch(/useSessionControls\(\s*sessionId,\s*cwd,\s*running,\s*\)/)
+    // `target` joined the call on 2026-08-19 — which computer to ask — and it is
+    // matched loosely on purpose: what this test is about is that `running` and
+    // not `provider` is the third argument, and pinning the arity would fail on
+    // an unrelated addition.
+    expect(controls).toMatch(/useSessionControls\(\s*sessionId,\s*cwd,\s*running,/)
     expect(controls).toContain('<UsageBar sessionId={sessionId} provider={running}')
     expect(controls).toContain('foreignAgentNote(running)')
   })
@@ -222,8 +247,18 @@ describe('the cluster asks the same source its neighbours do', () => {
     // present or the question is not asked at all, which is how `ChatView` asks
     // it and is the shape `presenceFromSession` is written against.
     expect(controls).toContain(
-      'useAgentPresence(sessionId && provider ? { id: sessionId, provider, exited } : null)',
+      'useAgentPresence(sessionId && provider ? { id: sessionId, provider, exited } : null, target)',
     )
+    /*
+     * And the target goes with it, which is the half added on 2026-08-19. Both
+     * hooks on this bar read one fact — is there an agent in front of this
+     * session — and presence asked *this* machine about it whatever computer the
+     * session was on, so over a remote one the answer was permanently unknown
+     * and the cluster it gates was permanently withdrawn. Two components on one
+     * bar answering one question from two sources is the bug this file was
+     * opened for; the same argument holds one address further out.
+     */
+    expect(controls).toContain('useSessionControls(')
   })
 
   it('is asking the hook the stand-in above is a copy of', () => {

@@ -17,6 +17,7 @@ import {
   formatAge,
   IssueRow,
   minutesLeft,
+  pageFailureOf,
   PullRow,
   RepositoryList,
   repoFailed,
@@ -995,5 +996,127 @@ describe('the notifications bell', () => {
     )
     expect(html).not.toContain('Notifications')
     expect(html).not.toContain('classic sign-in')
+  })
+})
+
+/**
+ * Two tabs printing one screen — the complaint that came back three times.
+ *
+ *   > *"issue and pull request pages are like identical showing the same stuff,
+ *   > same error, same buttons."* (2026-08-16)
+ *   > *"in the issues and pull requests, this is still like the same old thing
+ *   > that we discussed before many times, so it's not being resolved."*
+ *   > (2026-08-20)
+ *
+ * `listBody(kind, section)` took a `kind` and then branched on it in exactly one
+ * of its six paths. Every failing state — no repository, no `gh`, a rate limit,
+ * an outage — rendered a byte-identical block under both tabs, because both
+ * lists come from one call against one repository and there was never more than
+ * one answer to show.
+ *
+ * These tests pin the split that fixes it: which failures are the *page's*, and
+ * therefore drawn once with the two list tabs withdrawn.
+ */
+describe('a failure that is the page’s, not each list’s', () => {
+  const failure = (kind: GitHubFailure['kind'], message: string): GitHubFailure => ({
+    ok: false,
+    kind,
+    message,
+    action: null,
+    detail: '',
+  })
+
+  const repo: RepoRef = {
+    nameWithOwner: 'asadev/terminaldeck',
+    owner: 'asadev',
+    name: 'terminaldeck',
+    host: 'github.com',
+    url: 'https://github.com/asadev/terminaldeck',
+    remote: 'origin',
+  }
+
+  it('is the repository resolution, when the folder has no GitHub repository', () => {
+    // The state Asad was in: a session started in an empty folder. Both tabs
+    // used to render this same block.
+    const notRepo = failure('not-a-repo', 'This folder is not a git repository.')
+    expect(pageFailureOf(notRepo, null)).toBe(notRepo)
+  })
+
+  it('is the list read, when the repository resolved but the call did not', () => {
+    // `gh` missing, a rate limit, an outage: one call feeds both lists, so its
+    // failure is the page's too.
+    const noGh = failure('gh-missing', 'The GitHub CLI is not installed.')
+    expect(pageFailureOf(repo, noGh)).toBe(noGh)
+  })
+
+  it('names the repository first when both are wrong at once', () => {
+    // Fixing the folder is what makes the other one possible, so it is the one
+    // worth putting on screen.
+    const notRepo = failure('no-github-remote', 'No remote points at GitHub.')
+    const rateLimited = failure('rate-limited', 'Rate limit reached.')
+    expect(pageFailureOf(notRepo, rateLimited)).toBe(notRepo)
+  })
+
+  it('is nothing at all when the lists have something to say for themselves', () => {
+    // The only state where two tabs are two different screens — and the only
+    // state where they are drawn.
+    expect(pageFailureOf(repo, null)).toBeNull()
+    // Before the sign-in has been read there is no repository either way.
+    expect(pageFailureOf(null, null)).toBeNull()
+  })
+
+  it('leaves a per-list failure to its own list', () => {
+    /*
+     * The one thing that must NOT be hoisted. `gh pr list` can fail while
+     * `gh issue list` succeeds — a repository with issues disabled is the
+     * everyday case — and that is a genuine difference between the two tabs.
+     * `pageFailureOf` never sees a section failure, which is what keeps that
+     * difference on the page.
+     */
+    expect(pageFailureOf(repo, null)).toBeNull()
+  })
+})
+
+/**
+ * GitHub Copilot, on the GitHub page rather than in Settings.
+ *
+ *   > *"we will move this GitHub Copilot from here to the main page of GitHub,
+ *   > because we have already a page specifically for GitHub, so don't need to
+ *   > keep it inside the settings."*
+ *
+ * The row is asserted through the file rather than through a render, because
+ * what has to stay true is a *placement*: the component exists here, and the id
+ * it reads is the one `main/setup.ts` reports.
+ */
+describe('the Copilot row moved here', () => {
+  const source = readFileSync(join(process.cwd(), 'src/renderer/components/GitHubPanel.tsx'), 'utf8')
+  const settings = readFileSync(
+    join(process.cwd(), 'src/renderer/settings/sections/SetupSection.tsx'),
+    'utf8',
+  )
+
+  it('is drawn on this page, from the machine probe', () => {
+    expect(source).toContain('function CopilotRow')
+    expect(source).toMatch(/tools\.find\(\(tool\) => tool\.id === 'copilot'\)/)
+  })
+
+  it('left nothing behind in Settings', () => {
+    // Not a "moved to the GitHub page" pointer either: a cross-reference is
+    // what made Setup and Agents read as two halves of one screen, and one is
+    // not being added back on the way out.
+    expect(settings).toContain("MOVED_TOOL_IDS: readonly string[] = ['copilot']")
+    expect(settings).toContain('MOVED_TOOL_IDS.includes(tool.id)')
+  })
+
+  it('brought the name and the state, and none of the four lines under them', () => {
+    // The Settings row carried the tool's purpose, a caveat, a remedy and the
+    // literal shell probe. *"Don't put any single statement in anywhere."*
+    const row = source.slice(source.indexOf('function CopilotRow'))
+    const body = row.slice(0, row.indexOf('\n}\n'))
+    expect(body).toContain('TOOL_STATE_LABEL[tool.state]')
+    expect(body).not.toContain('tool.purpose')
+    expect(body).not.toContain('tool.remedy')
+    expect(body).not.toContain('tool.probe')
+    expect(body).not.toContain('tool.note')
   })
 })

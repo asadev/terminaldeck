@@ -3,6 +3,21 @@ import { dirname, join } from 'node:path'
 import { writeFileAtomic } from './atomic-write'
 import { userDataDir } from './platform/paths'
 import type { ProviderId } from '../shared/types'
+/**
+ * What quitting does when sessions are still running.
+ *
+ * Declared here rather than beside the tray that acts on it, and the reason is
+ * structural rather than tidiness: `resident.ts` imports Electron's `Menu`,
+ * `Tray` and `nativeImage`, and the headless build has no Electron at all. A
+ * bare `import type` from this file was enough to pull that module into the
+ * headless graph and fail `headless/seam.test.ts` — a type import costs nothing
+ * at runtime, but the seam scanner reads the edge, and it is right to: the
+ * store is reachable from `host-core.ts`, which both shells assemble.
+ *
+ * The store persists this value, so the store owns its shape. `resident.ts`
+ * re-exports the name so nothing that already reads it from there has to move.
+ */
+export type QuitBehavior = 'ask' | 'keep' | 'stop'
 import type { SavedSession } from './session-restore'
 
 export interface PersistedProject {
@@ -93,6 +108,22 @@ export interface PersistedState {
    * written under one name cannot fail to be found under another.
    */
   accountLimits?: Record<string, AccountLimitFact>
+  /**
+   * What quitting does to sessions that are still running.
+   *
+   * Additive and absent by default, exactly as `openSessions` above is, so a
+   * `state.json` from an older build loads as `'ask'` and `version` is untouched
+   * — there is nothing here a previous build could misread.
+   *
+   * Deliberately **not** in {@link Preferences}. That interface is copied in
+   * four places — here, `src/shared/types.ts`, `src/renderer/preferences.ts` and
+   * the settings schema — because every field of it is a control a person sets
+   * in Settings. This is not one: it is the answer to a question the app asks at
+   * the moment it matters, with the checkbox on that dialog as the only way to
+   * set it. Putting it in `Preferences` would have meant a fifth copy and a
+   * Settings row for something already decided in front of the person.
+   */
+  quitBehavior?: QuitBehavior
   windowBounds?: { width: number; height: number; x?: number; y?: number }
 }
 
@@ -182,6 +213,25 @@ class Store {
 
   getPreferences(): Preferences {
     return this.state.preferences
+  }
+
+  /**
+   * What to do about running sessions when the app is quit.
+   *
+   * Anything that is not one of the three known answers reads as `'ask'`. A
+   * hand-edited `state.json` — or one written by a build that spells this
+   * differently later — must not be able to put the app into a mode where it
+   * silently keeps agents running, or silently kills them, because a string did
+   * not match. Asking is the one answer that is never a surprise.
+   */
+  getQuitBehavior(): QuitBehavior {
+    const value = this.state.quitBehavior
+    return value === 'keep' || value === 'stop' ? value : 'ask'
+  }
+
+  setQuitBehavior(behavior: QuitBehavior): void {
+    this.state.quitBehavior = behavior
+    this.persist()
   }
 
   setPreferences(patch: Partial<Preferences>): Preferences {

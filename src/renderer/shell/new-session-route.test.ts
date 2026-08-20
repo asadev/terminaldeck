@@ -31,6 +31,23 @@ import { describe, expect, it } from 'vitest'
  * screenshot taken while nothing is paired, which is most screenshots. What can
  * regress is the one line in `App.tsx` that decides where each press lands, and
  * nothing about that line is visible from inside the components it feeds.
+ *
+ * ## What 2026-08-19 changed, and why the file did not shrink
+ *
+ * The block at the bottom used to pin a *second* route to the same dialog: the
+ * **New session** button on a paired machine's card, and the context that
+ * carried its press up to the window. The button is gone — *"we don't need this
+ * new session thing here. Just disconnect and forget thing is good enough for
+ * us."* — and its two assertions went red, correctly: they were guards on a
+ * route that was removed on purpose.
+ *
+ * They are turned round rather than deleted. The defect those cases were written
+ * about was never the button; it was that a session on somebody else's computer
+ * could be started from a place that had not asked which folder, which agent or
+ * which login. A card that opened the dialog was a fix for that. A card that
+ * grows its own way there again — bridge call, opener, anything — is the defect
+ * back, and the absence of one is exactly as invisible in a screenshot as the
+ * presence of one was.
  */
 
 const SRC = join(__dirname, '..', '..', '..', 'src')
@@ -149,7 +166,7 @@ function withoutComments(source: string): string {
     .join('\n')
 }
 
-describe('the Machines page takes the same route the rail does', () => {
+describe('the Machines page has no route of its own to a new session', () => {
   /*
    * The second half of the same requirement, and the one the note above
    * `openNewSessionDialog` in `App.tsx` says was still open: *"the sidebar +
@@ -161,11 +178,39 @@ describe('the Machines page takes the same route the rail does', () => {
    * all: **New session** on a paired machine's card, on the Machines page. It
    * called `bridge.createMachineSession(machine.id, link.folders?.[0] ?? '')`
    * and a session appeared on somebody else's computer, in whichever folder that
-   * machine happened to list first, under whichever agent it defaults to.
+   * machine happened to list first, under whichever agent it defaults to. That
+   * was rewritten to open the window's dialog, and these cases pinned the
+   * rewritten route: the card's action built from the window's opener, and the
+   * page reading that opener out of a context because `PanelView` draws all ten
+   * views and takes no per-view props.
+   *
+   * On 2026-08-19 the button itself went — *"we don't need this new session
+   * thing here. Just disconnect and forget thing is good enough for us."* — so
+   * what is left to pin is that the page reaches a far machine by **no** name:
+   * not the bridge, not an opener, not a context. The rail's ＋ is the route
+   * now, and `leaves the rail holding the only ＋…` says so in the one place
+   * markup cannot.
+   *
+   * The two cases after it are in a stranger position and are kept deliberately.
+   * They read `new-session-context.ts` and the provider in `App.tsx`, and both
+   * of those are now **dead**: `grep -rn useMachineSessionOpener src/renderer`
+   * finds the hook's definition and the notes recording its removal, and no call
+   * site, so `MachineSessions.Provider` wraps a tree in which nobody consumes
+   * it. Deleting the context, the hook and that provider is one edit in
+   * `App.tsx` and is owed — it was not done here because `App.tsx` is not this
+   * pass's to edit. Until it is, the two cases still hold the shape of what is
+   * standing, and they fail in the two different ways that suit them. Drop the
+   * provider alone and `is wired to that same function…` goes quiet rather than
+   * red — it is a `toBeLessThanOrEqual(1)` over a list that would be empty,
+   * which is what lets it survive a tree that has not got one. Delete
+   * `new-session-context.ts` and the `readFileSync` at the top of this file
+   * throws before any case runs, taking the whole suite with it. That is loud
+   * and it is the right kind of loud: whoever removes the module is being told,
+   * in the same commit, that these two cases go with it.
    *
    * These cases are source reads for the reason the two above are: the route is
-   * a wiring decision spread over four files, and nothing about it is visible in
-   * a screenshot taken while no machine is paired, which is every screenshot.
+   * a wiring decision spread over several files, and nothing about it is visible
+   * in a screenshot taken while no machine is paired, which is every screenshot.
    */
 
   it('no longer starts one on the far machine behind the dialog’s back', () => {
@@ -186,16 +231,78 @@ describe('the Machines page takes the same route the rail does', () => {
     ).not.toContain('createMachineSession')
   })
 
-  it('sends the press up to the window instead', () => {
-    // The action exists only when the window handed one down, and all it can do
-    // with it is name the machine. `machine.id` and nothing else is what makes
-    // this the same press the rail's ＋ makes.
-    expect(LINKS).toMatch(/newSession:\s*openNewSession\s*\?[\s\S]{0,200}openNewSession\(machine\.id\)/)
-    // And the page reads the window's opener rather than being handed one
-    // through `PanelView`, which draws all ten views and takes no per-view
-    // props. See the note in `new-session-context.ts`.
-    expect(REMOTE).toContain('useMachineSessionOpener')
-    expect(REMOTE).toMatch(/openNewSession:[\s\S]{0,200}newSessionOpener\.open\(machineId\)/)
+  it('does not send the press up to the window either, because there is no press', () => {
+    /*
+     * What stood here, until the button did not:
+     *
+     *     expect(LINKS).toMatch(/newSession: openNewSession \?[…]openNewSession\(machine\.id\)/)
+     *     expect(REMOTE).toContain('useMachineSessionOpener')
+     *     expect(REMOTE).toMatch(/openNewSession:[…]newSessionOpener\.open\(machineId\)/)
+     *
+     * — the card's action built from an opener the window handed down, carrying
+     * `machine.id` and nothing else, and the page reading that opener out of a
+     * context rather than being prop-drilled one through `PanelView`. All three
+     * were true, all three were the fix for the bridge call above, and all three
+     * describe code that was deleted on 2026-08-19.
+     *
+     * The replacement is the same claim with the sign flipped, and it is worth
+     * the same lines because the shape that regresses is not "somebody puts the
+     * button back". A card that opens the dialog would be harmless — it *was*
+     * this file's subject for two days. What must not come back is a second way
+     * to start a session on a far machine standing beside the rail's ＋: two
+     * presses on one screen, and only the one you did not use asking the
+     * questions. The bridge is one door back and the case above holds it; an
+     * opener of this page's own is the other, and this one holds that.
+     */
+    expect(
+      withoutComments(LINKS),
+      'a machine’s card can start a session again — is that the dialog’s route, or a second one?',
+    ).not.toContain('newSession')
+
+    /*
+     * Comment-stripped, and that is the whole point of reading it this way.
+     *
+     * The straight `expect(REMOTE).toContain('useMachineSessionOpener')` above
+     * stayed **green** after the read was deleted, because the identifier
+     * survives in the paragraph in `RemoteSection.tsx` that explains why it
+     * went. An assertion that matches its own subject's prose is measuring the
+     * explanation, not the code — worse than a red one, because it reports a
+     * route as intact by quoting the note about its removal. Every case in this
+     * file that asks about a *deletion* goes through `withoutComments` for that
+     * reason; `no longer starts one on the far machine behind the dialog’s back`
+     * above already did, which is why it survived the change and this did not.
+     */
+    expect(
+      withoutComments(REMOTE),
+      'the Machines page is reading the window’s machine opener again',
+    ).not.toContain('MachineSessionOpener')
+  })
+
+  it('leaves the rail holding the only ＋ that starts one on a far machine', () => {
+    /*
+     * The other half of a removal, and the half a deleted test would have
+     * dropped: something still has to be able to do it.
+     *
+     * `shell/machine-group.test.tsx` renders the rail and finds the accessible
+     * name *"New session on DESKTOP-DDGMNCV"* on a machine heading, which is
+     * proof the control is drawn and no proof at all of where it goes — markup
+     * cannot say what a button does, which is this whole file's premise. This is
+     * where it goes: one call, in one place, carrying the machine id and nothing
+     * else, into the prop the first case in this file follows on into
+     * `openNewSessionDialog(null, machineId)`.
+     *
+     * The count is asserted rather than the line alone because "the only one" is
+     * the part that matters. A second call site inside the rail — on a session
+     * row, on a hover control, anywhere — would be the pair of presses this file
+     * exists to prevent, rebuilt inside the component that was supposed to be
+     * the single answer.
+     */
+    expect(SIDEBAR).toMatch(/onPress: \(\) => onNewMachineSession\(group\.machineId\)/)
+    const presses = SIDEBAR.match(/onNewMachineSession\(/g) ?? []
+    expect(
+      presses,
+      'the rail asks for a machine session from more than one control — which one is the route?',
+    ).toHaveLength(1)
   })
 
   it('cannot answer more of the dialog’s questions than the rail can', () => {

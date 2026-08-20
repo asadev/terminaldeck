@@ -51,7 +51,7 @@ import type { UiPlatform } from '../platform'
  * looking for its subject — never where it happened to be built.
  *
  * The sections that left the rail are not gone. Accounts and Setup are groups
- * inside Assistants, About is the masthead at the top of Help, and Shortcuts is
+ * inside Coding AI, About is the masthead at the top of Help, and Shortcuts is
  * a popover off the rail's own footer. `MERGED_SECTIONS` below is what keeps
  * every old name pointing at wherever its contents actually went.
  *
@@ -94,7 +94,14 @@ export const SECTIONS = [
    * the things and you drop some stuff."*
    */
   /*
-   * "Agents" was the wrong word, and the id is not the word.
+   * "Agents" was the wrong word, "Assistants" was the wrong word, and the id is
+   * still not the word.
+   *
+   * This entry has been renamed twice in two days. Both rounds are kept below,
+   * because the second one is only decidable if you can read the first — the
+   * argument that chose "Assistants" is also the argument that convicts it.
+   *
+   * ## Round one — why "Agents" went (2026-08-17)
    *
    *   > "Agents is the wrong name for that section. Needs a better one."
    *
@@ -102,28 +109,228 @@ export const SECTIONS = [
    * *"my audience will be mostly non-technical vibe coders"*. "Agent" is our
    * word, not theirs, and inside this one product it already means three
    * different things: the CLI that runs a session, the model that CLI talks to,
-   * and the copilot — which has its own rail entry two rows down. A rail that
-   * reads "Agents … Copilot" is asking somebody to know that the copilot is an
-   * agent but does not live under Agents.
+   * and the copilot — which has a rail entry of its own further down the same
+   * list. A rail that reads "Agents … Copilot" is asking somebody to know that
+   * the copilot is an agent but does not live under Agents.
    *
-   * "Assistants" is what a person who is not a programmer already calls Claude
-   * Code, Codex and Gemini CLI, it names no vendor (the review's own rule —
-   * *"you should not mention in any settings or any pop-up a specific tool or
-   * LLM"*), and it does not collide with **Tools**, which is the label he chose
-   * himself for the voice pane and expects to grow. "Coding tools" and "AI
-   * tools" both would have.
+   * (Round one wrote "two rows down" there. Counted on 2026-08-19 with
+   * `sectionsFor`, it is three on macOS and four on Windows, where Linux sits
+   * between Tools and Browser. The distance was never the argument, but a number
+   * in one of these comments is a claim like any other, and this one was not
+   * checked when it was written. Corrected in place rather than left standing:
+   * preserving superseded *reasoning* is the rule, not preserving arithmetic
+   * that is simply wrong.)
+   *
+   * ## Round one's answer, kept because it is half of round two
+   *
+   * *(Superseded. Every clause of it is still true, which is the point.)*
+   *
+   *   > "Assistants" is what a person who is not a programmer already calls
+   *   > Claude Code, Codex and Gemini CLI, it names no vendor (the review's own
+   *   > rule — *"you should not mention in any settings or any pop-up a specific
+   *   > tool or LLM"*), and it does not collide with **Tools**, which is the
+   *   > label he chose himself for the voice pane and expects to grow. "Coding
+   *   > tools" and "AI tools" both would have.
+   *
+   * ## Round two — why "Assistants" went too (2026-08-19)
+   *
+   *   > "assistant should not be called as assistants actually, it can be a — we
+   *   > need to find out some other words for this. Maybe meanwhile we can call
+   *   > it as models, something somehow."
+   *
+   * **He asked, and that is the reason.** It is a sufficient one on its own and
+   * it goes first, because the paragraph that stood here on 2026-08-19 invented
+   * a better-sounding mechanism instead and got it wrong in three places — the
+   * retraction is at the end of this section, kept rather than deleted. What
+   * follows is what survives checking, and it is corroboration, not cause.
+   *
+   * **The rail half — round one's argument with one word swapped.** The rail is
+   * drawn beside every pane, so its whole column is on screen whichever section
+   * is open. Rendered on Windows it reads:
+   *
+   *     General · Appearance · Notifications · **Coding AI** · Tools · Linux ·
+   *     Browser · **Copilot** · Power · Advanced · Help
+   *
+   * (macOS is the same without Linux. Shortcuts sits under that column too, but
+   * it is the rail *footer's* button and not a section, which is why it is not
+   * in `sectionsFor`.) Under the old label the same column said "… Assistants …
+   * Copilot …": a category and one member of it, siblings in one list, four
+   * rows apart on Windows and three on macOS. Round one rejected exactly that
+   * shape for "Agents" — a rail like this one *"is asking somebody to know that
+   * the copilot is an agent but does not live under Agents"* — and swapping in a
+   * word the product also uses for the copilot left the shape intact.
+   *
+   * **The vocabulary half.** "Assistant" is a word this product had already
+   * spent on the copilot, in copy that reaches a screen:
+   *
+   *   - `copilot/identity.ts:58` — `COPILOT_BLURB`, *"Your assistant for this
+   *     deck — the sessions, the diffs, the prompts."* Grep says it reaches a
+   *     screen in exactly one place: `copilot/CopilotEntry.tsx:105`, as the
+   *     `title=` of the sidebar's pinned Copilot row, and only while
+   *     `stage === null`.
+   *   - `settings/sections/CopilotSection.tsx:932` and `:1680` use the common
+   *     noun for whatever agent owns a folder — *"it picks up whatever assistant
+   *     already lives there"*. Both sit in branches that need a wired copilot
+   *     bridge; without one that pane renders a single sentence and no prose,
+   *     which is measured rather than assumed (`nothing-dropped.test.tsx` says
+   *     what that costs its sweep).
+   *
+   * So it is one word doing two jobs across the product, not two sentences
+   * colliding on one screen. Nowhere does the label sit beside any of those
+   * lines — the rail draws `entry.label` and nothing else. That is a weaker
+   * claim than the one it replaces, and it is the true one.
+   *
+   * ## Retracted: what this section said when it was first written (2026-08-19)
+   *
+   * Kept, because an argument that sounded right and was not is worth more as a
+   * warning than as a deletion, and because the next person to rename this entry
+   * will reach for it again. It read:
+   *
+   *   > *"The measurable reason it failed is that it carried round one's defect
+   *   > across intact. `copilot/identity.ts` exports the line the sidebar and
+   *   > the Copilot pane both print … so the rail read 'Assistants … Copilot'
+   *   > with the Copilot pane calling itself an assistant one row down."*
+   *
+   * Three checkable claims, none of them checked before they were written, all
+   * three false:
+   *
+   *   1. The Copilot pane does not print that line. `grep -rn COPILOT_BLURB src/`
+   *      returns `identity.ts`, `CopilotEntry.tsx` and one test — and
+   *      `CopilotEntry` is the *sidebar's* pinned row, using it as a tooltip.
+   *      Neither `settings/sections/CopilotSection.tsx` nor
+   *      `copilot/CopilotView.tsx` imports it.
+   *   2. The juxtaposition it describes cannot occur on any screen. This same
+   *      comment, in the "Setup" bullet further down, already says correctly
+   *      that the rail draws `entry.label` and nothing else — no blurb, no icon
+   *      (`SettingsWindow.tsx:527` renders `{entry.label}` and closes the
+   *      button) — so no blurb was ever beside the label. The wrong claim and
+   *      its own refutation were written into one comment on the same day. (No
+   *      line count is given here on purpose: a self-referential distance is one
+   *      more claim that goes stale on the next edit, which is how the original
+   *      got its row counts wrong.)
+   *   3. "One row down" is wrong in the other direction from round one's error:
+   *      Copilot is three rows below this entry on macOS, four on Windows.
+   *
+   * The failure is the one the review names outright: a confident, unmeasured
+   * claim written into the file that explains a decision, where the next person
+   * has no reason to doubt it. It is worse than no comment at all. The rule it
+   * broke, stated here so it is stated somewhere: nothing goes in one of these
+   * blocks that has not been grepped, rendered or run — and a claim that turns
+   * out to be weaker once checked gets written down weaker.
+   *
+   * ## Why not "Models", which is what he asked for
+   *
+   * Because there is not one model on this pane, and there is a control called
+   * Model on every session in the app.
+   *
+   *   - This section declares exactly **one** setting, `agents.defaultProvider`,
+   *     and its four options are `Claude Code`, `Codex CLI`, `Gemini CLI` and
+   *     `Plain shell` — four programs, no model among them. The rest of the pane
+   *     is logins, install state and whatever coding tools this machine has
+   *     that cannot start a session. Nothing here would answer somebody who came
+   *     looking for a model, so the name would be a promise the pane cannot
+   *     keep, which is the same failure as a control drawn where it cannot act.
+   *   - `chat/controls/catalog.ts` already spends the word: `controlName('model')`
+   *     is `'Model'` and `describeControl('model')` is *"Which model answers in
+   *     this session."*, on the controls bar of every session. A rail entry
+   *     called Models would be the second Model in one product, which is
+   *     precisely the collision that killed "Agents" — one word, three meanings —
+   *     rebuilt on purpose.
+   *
+   * So his word is not taken, and this comment is where that gets argued rather
+   * than quietly ignored. He asked for it as a stopgap — *"maybe meanwhile"* —
+   * and the half of his instinct that is right is kept below: the family word an
+   * ordinary person reaches for is what belongs in the rail, and "Models" is
+   * that word everywhere except in an app that already ships a Model button.
+   *
+   * ## Why it is not split up instead
+   *
+   * The obvious alternative — model choice on one pane, sign-ins on another,
+   * installs on a third — is not available, and not only because the model
+   * choice does not exist here. This pane *is* the merge of those three, made
+   * two days ago on his own instruction — the quote is at the top of this table
+   * and again in `AgentsSection.tsx`:
+   *
+   *   > "Now see, agents is separate and accounts is separate page, which should
+   *   > be one place because they are related to each other and it is one thing."
+   *
+   * Splitting it back is reversing that. The naming is what is wrong; the
+   * grouping was right and was asked for.
+   *
+   * ## The word, and the ones rejected
+   *
+   * **"Coding AI"**. It is the family word a non-technical reader already uses
+   * for Claude Code, Codex and Gemini CLI, it names no vendor, and — this is the
+   * test "Assistants" failed — the rest of the product has not already spent it:
+   * `grep -rn "Coding AI" src/` returns only files under
+   * `src/renderer/settings/`, and `src/renderer/copilot/` does not contain the
+   * phrase at all. The copilot stays a *named feature* in the rail rather than
+   * an unnamed instance of the category above it, and a named feature beats a
+   * category when somebody is scanning. "Coding" is doing the narrowing work: it
+   * is what keeps the entry from meaning every AI thing in the window.
+   *
+   *   - **"AI"** alone over-claims. Voice dictation on the Tools pane runs on a
+   *     transcription model, the copilot is AI, the Model button is AI, and none
+   *     of the three is here. A label broader than its pane sends people to the
+   *     wrong screen twice: once when they open it and once when they give up
+   *     on it.
+   *   - **"Setup"** is the one with a real argument for it — the application
+   *     menu's *"Setup & Diagnostics"* opens this pane, and `MERGED_SECTIONS`
+   *     already routes the id `setup` here, so the label would finally agree with
+   *     both. It loses on the rule this rail is built on: a section is a
+   *     *subject*, not a stage, and the rail draws `entry.label` and nothing else
+   *     — no blurb, no icon — so a vague label has nothing to lean on. "Which AI
+   *     runs my sessions" is not a question anybody answers with the word Setup.
+   *   - **"Accounts"** would make four rendered cross-references true that are
+   *     currently stale: `copilot/CopilotSetup.tsx:381`, `:633` and `:639`, and
+   *     `copilot/CopilotView.tsx:243`, all four of which still send somebody to
+   *     *"Settings → Accounts"* at a rail that has had no such entry since the
+   *     08-17 merge. (Counted, not estimated — an earlier draft of this bullet
+   *     said three. `CopilotSetup.tsx:269` says it as well but is a comment, and
+   *     `copilot-render.test.tsx:149` pins one of the four.) It still names
+   *     neither the default-tool picker nor the install list, which are the two
+   *     things at the top of the pane, so it buys accuracy elsewhere by being
+   *     wrong here. Those four lines are owed a fix on their own terms.
+   *   - **"Coding tools"** and **"AI tools"** stay rejected for round one's
+   *     reason, unchanged: **Tools** is the very next entry in the rail — one
+   *     row, on all three platforms — and he named it himself. (An earlier draft
+   *     of this bullet said two rows; `sectionsFor` says one.)
+   *   - **"Providers"**, **"Engines"**, **"CLIs"** are this codebase's own words
+   *     (`defaultProvider`, `providers.ts`) and the audience quoted at the top of
+   *     this comment is not this codebase.
+   *
+   * What it costs, stated rather than glossed:
+   *
+   *   - `Plain shell` is one of the four options and is not AI. It is the "none"
+   *     answer to the section's own question, the way a theme can be None, and
+   *     the blurb says *what* runs rather than *which AI* runs for exactly that
+   *     reason.
+   *   - The pane now speaks in three registers: "Coding AI" in the rail, "coding
+   *     tool" on the picker and the Setup group, "agent CLI" in two warnings.
+   *     The third is deliberate — `neutral-naming.test.ts` pins "agent CLI" as
+   *     the category noun the help page uses *in order to* avoid naming a vendor,
+   *     and that is a repo-wide vocabulary that does not get rewritten from
+   *     inside one pane. Unifying all three is real work and it is owed.
    *
    * The **id stays `agents`** and so does the file name. Ids are storage and
    * routing — `finish.test.ts` names `AgentsSection.tsx` by path, and `App.tsx`
    * is a file no single agent may edit while others are working here — and this
    * table already makes that trade once, deliberately, for `features`/"Tools".
    * A label is what a person reads; an id is what the machine reads; they do
-   * not have to agree.
+   * not have to agree. Two renames in two days is the argument for that rule,
+   * not against it: nothing on disk moved either time.
    */
   {
     id: 'agents',
-    label: 'Assistants',
-    blurb: 'Which AI runs your sessions, the logins it uses, and what is installed.',
+    label: 'Coding AI',
+    /*
+     * "Which AI runs your sessions…" was the blurb, and the first two words came
+     * off when the title grew them. Under a heading reading "Coding AI" it was
+     * the label again in a smaller font — the same duplication `browser.startUrl`
+     * has a paragraph about — and "what runs" is the more honest opening anyway,
+     * since one of the four answers is a plain shell with no AI in it at all.
+     */
+    blurb: 'What runs your sessions, the logins it uses, and what is installed.',
   },
   /*
    * The id stays `features` and the label says Tools.
@@ -173,12 +380,13 @@ export const SECTIONS = [
    * copilot's folder and the account it resolves to are both decided in the
    * main process precisely so that no page can point them somewhere else.
    *
-   * It is its own rail entry rather than a group inside Agents on the rule this
-   * table is built on — a section is a *subject*. Agents is "which agent runs,
-   * as which login, with what installed". The copilot is one specific agent
-   * whose files, memory and audit log a person opens Settings to inspect, and
-   * folding six blocks of that under Agents would bury the answer to the
-   * question the whole feature exists to answer.
+   * It is its own rail entry rather than a group inside Coding AI on the rule
+   * this table is built on — a section is a *subject*. Coding AI (the entry
+   * above, called Agents and then Assistants while this paragraph was written)
+   * is "which one runs, as which login, with what installed". The copilot is one
+   * specific agent whose files, memory and audit log a person opens Settings to
+   * inspect, and folding six blocks of that under it would bury the answer to
+   * the question the whole feature exists to answer.
    */
   {
     id: 'copilot',
@@ -197,8 +405,10 @@ export const SECTIONS = [
    * own Connect and Disconnect, where the sign-in it describes actually lives.
    */
   /*
-   * Remote is not a settings section any more — it is a rail panel, beside
-   * Alerts, where Machines used to be. See `shell/panels.ts`.
+   * Remote is not a settings section any more — it is the rail panel called
+   * Machines, under Integrations. It was beside Alerts in the foot until
+   * 2026-08-19; the note on that entry in `shell/panels.ts` has the reason it
+   * moved, and why the id is still `remote` wherever it moves to.
    *
    * Pairing a device is something you do rather than something you configure,
    * and it declared no settings of its own: this entry existed only to give the
@@ -293,8 +503,9 @@ export type LiveSectionId = (typeof SECTIONS)[number]['id']
  * it out is how a link somewhere else in the app quietly starts landing on the
  * wrong screen. Every id that ever named a section still names a real
  * destination: `App.tsx` opens Settings at `setup` from the application menu
- * and at `profiles` from the account chip, and both of those now mean Agents,
- * because that is where their contents went.
+ * and at `profiles` from the account chip, and both of those now mean Coding AI
+ * — the entry whose id is still `agents` — because that is where their contents
+ * went.
  *
  * Kept in the `SectionId` union rather than deleted so those call sites keep
  * compiling — `App.tsx` may not be edited while several agents are working in
@@ -302,9 +513,9 @@ export type LiveSectionId = (typeof SECTIONS)[number]['id']
  * fail the build in a file nobody is allowed to fix.
  */
 export const MERGED_SECTIONS = {
-  /** Accounts is a group inside Assistants. */
+  /** Accounts is a group inside Coding AI. */
   profiles: 'agents',
-  /** Setup is two groups inside Assistants. */
+  /** Setup is two groups inside Coding AI. */
   setup: 'agents',
   /** A popover off the rail's footer, not a pane. */
   shortcuts: 'general',
@@ -503,9 +714,10 @@ export const SETTINGS: readonly Setting[] = [
    * gone to it: how a *session* behaves while you work, and nothing else. The
    * language row went too — see the block where it used to be.
    *
-   * Three rows left this block in this pass. The coding-tool picker went to
-   * Agents, where the list of installed agents and the login each one uses
-   * already were — it had been sitting here with a link to Agents underneath
+   * Three rows left this block in this pass. The coding-tool picker went to the
+   * `agents` pane — Agents when this was written, Coding AI now — where the list
+   * of installed agents and the login each one uses already were; it had been
+   * sitting here with a link to that section underneath
    * it, which is the shape of a row in the wrong section. The sound and the
    * banner went to Notifications, whose own help text had been pointing back at
    * Notifications from inside General.

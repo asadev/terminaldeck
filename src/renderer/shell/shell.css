@@ -546,6 +546,22 @@
   color: inherit;
   font: inherit;
   text-align: left;
+  /*
+     The hard stop at the buttons, and the reason the row was broken.
+
+     `.sb-label` below carries a `min-width` floor so a name is never cut to
+     `S…`, and a floor is a size a flex item refuses to go under — so on a rail
+     narrow enough, or a row carrying a qualifier and an account and a pair of
+     bind chips, the name simply grew out of this box and painted over the
+     controls to its right. Asad reported the consequence rather than the cause:
+     *"even the cross button is getting hidden… it should just finish before
+     these buttons."*
+
+     `min-width: 0` was never the fix for that; it only lets this box shrink,
+     and it was already here while the overflow happened anyway. This is what
+     makes the box a boundary: whatever the floor insists on, nothing inside is
+     painted past the point where the ⋯ begins. */
+  overflow: hidden;
 }
 
 .sb-row-action {
@@ -562,7 +578,15 @@
 
 .sb-row:hover .sb-row-action,
 .sb-row:focus-within .sb-row-action,
-.sb-row.active .sb-close {
+/* A selected row keeps its one control on show. It used to be `.sb-close` named
+   here — the row's only permanent control — and the ⋯ is what that ✕ is now part
+   of. */
+.sb-row.active .sb-more,
+/* And a row whose native menu is open, which the browser cannot see. The
+   pointer is over a surface outside this document the whole time the menu is
+   up, so without this the button fades out from under its own menu — see
+   `rowMenu` in `Sidebar.tsx`. */
+.sb-row[data-menu] .sb-row-action {
   opacity: 1;
 }
 
@@ -572,26 +596,23 @@
 }
 
 /*
-  The ✕ that ends a session, told apart from the ✕ that does not.
+  `.sb-close:hover` used to be here, and the trap it answered is gone.
 
-  There are two of them in this window and they look the same because they mean
-  the same *gesture* — get this out of my way. Since 2026-08-17 they have
-  different consequences: the tab's ✕ takes the tab off the top bar and leaves
-  everything running, and this one kills the pty. Asad asked for the first of
-  those in so many words — *"it should not delete the session"* — and the moment
-  the two diverge, two identical glyphs is a trap.
+  There were two ✕ glyphs in this window, 260 pixels apart, meaning the same
+  *gesture* — get this out of my way — and, since 2026-08-17, two different
+  things: the tab's takes the window off the top bar and leaves everything
+  running, and the rail's killed the pty. Asad asked for the first of those in so
+  many words — *"it should not delete the session"* — and the moment the two
+  diverged, two identical glyphs was a trap. The rail's turned `--color-critical`
+  under the pointer so that at least one layer of the difference was visible
+  before the click.
 
-  So this one recruits the app's own critical colour on approach, which is the
-  one hue in this palette that means "this destroys something", and the strip's
-  stays grey. Colour rather than a different glyph, because a ✕ is what people
-  reach for to close a thing and replacing it would cost more than it bought;
-  and on hover rather than at rest, because a red mark sitting permanently on
-  every row of the rail would read as an error state on the sessions themselves.
+  On 2026-08-20 the rail's ✕ stopped being a glyph. It is an entry in the row's ⋯
+  menu now, and the entry says the whole consequence in words — *"Close Session 1
+  — ends the session"* — which is the layer the colour was standing in for. There
+  is no longer a second ✕ on that side of the window to be mistaken for the
+  strip's, so the pair this rule existed to separate no longer exists.
 */
-.sb-close:hover {
-  background: color-mix(in srgb, var(--color-critical) 16%, transparent);
-  color: var(--color-critical);
-}
 
 /* Dimmed on reveal, not revealed by being dimmed. Setting the opacity on
    `:disabled` alone beats the `opacity: 0` above it, which would have put a
@@ -632,14 +653,15 @@
   opacity: 0.35;
 }
 
-/* Already up in the strip. Lit rather than hover-only, because this mark is
-   then the only thing on this side of the window saying which rows the top
-   strip is showing — and the accent is what this app uses for "this one"
-   everywhere else. */
-.sb-promote[aria-pressed='true'] {
-  opacity: 1;
-  color: var(--accent);
-}
+/* `.sb-promote[aria-pressed='true']` used to be here: the promote arrow stayed
+   lit and accent-coloured on a row whose window was up in the strip, because
+   that mark was then the only thing on this side of the window saying which
+   rows the strip was showing.
+
+   The arrow is a menu entry now, and the entry carries the same fact in the
+   only form a menu has — it reads "Fold back into the sidebar" on a row that is
+   up there and "Show at the top" on one that is not. Nothing is lost that was
+   ever visible at rest: this rule only ever fired on hover-revealed chrome. */
 
 /* What follows the cursor: a copy of the strip tab this row is about to
    become. Off-screen rather than hidden — `display: none` and `visibility:
@@ -1833,6 +1855,25 @@
     and naming the one whose meaning applies is what keeps the reason readable.
   */
   background: var(--terminal-bg);
+  /*
+    Nothing this bar holds may be drawn outside it — 2026-08-20.
+
+    The complaint was about the chips: *"B1, B2 over the cross button and all of
+    this stuff on the windows up there."* The mechanism is flexbox's, and it is
+    the same one wherever it shows up in this app: a row of items that each
+    refuse to shrink does not squeeze when the box gets narrower, it overflows,
+    and an overflow with no `overflow` set on the container is content painted
+    over whatever is beside and beyond it.
+
+    Two things fix it together and both are needed. `.bind-button` can shrink
+    now, so the *ordinary* narrow pane simply truncates a caption. This is the
+    backstop for the rest: whatever the contents turn out to be — a session name,
+    a path, a controls cluster somebody adds next month — they are clipped at
+    this bar's own edge instead of appearing on top of the ✕ or spilling into the
+    terminal underneath. The ✕ is `flex-shrink: 0` and is the last child, so it
+    is the one thing that keeps its box.
+  */
+  overflow: hidden;
 }
 
 /*
@@ -2231,22 +2272,60 @@
   min-height: 0;
 }
 
-.files-page-tree {
+/* The tree and the one control above it, as a single column, so the toggle
+   scrolls with nothing and the tree keeps its own scrollbar. */
+.files-page-left {
   width: 280px;
   min-width: 200px;
   flex-shrink: 0;
-  overflow: auto;
-  padding: var(--sp-3) var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: var(--bg-secondary);
 }
 
-/* Nothing in the folder, or the folder could not be read: the viewer is not
-   rendered at all (see `filesPageState`), so the tree's one sentence owns the
-   page rather than sitting in a 280px stripe beside an empty grey field. */
-.files-page[data-layout='tree-only'] .files-page-tree {
+.files-page-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-3) var(--sp-2);
+}
+
+/* One word, sized like the chips elsewhere rather than like a button, because
+   it is a filter and not an action. */
+.files-ignored-toggle {
+  align-self: flex-start;
+  margin: var(--sp-2) var(--sp-2) 0;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  cursor: pointer;
+}
+
+.files-ignored-toggle:hover {
+  color: var(--text-primary);
+}
+
+.files-ignored-toggle[data-on] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+/* The folder could not be read: the viewer is not rendered at all (see
+   `filesPageState`), so the tree's one line owns the page rather than sitting
+   in a 280px stripe beside an empty grey field. An *empty* folder does not
+   reach this rule any more — it gets `PageEmpty` and a button instead. */
+.files-page[data-layout='tree-only'] .files-page-left {
   width: auto;
   flex: 1;
   background: none;
+}
+
+.files-page[data-layout='tree-only'] .files-page-tree {
   padding-top: var(--sp-8);
   text-align: center;
 }
@@ -2328,6 +2407,15 @@
   flex-direction: column;
   min-height: 0;
   background: var(--terminal-bg);
+}
+
+/* And it is drawn whether or not it is the pane in front, for the reason the
+   server pane below is: leaving one and coming back used to detach from the far
+   machine and dispose the terminal, so the session was fetched and replayed from
+   another computer every visit. It takes the same visibility attribute the local
+   terminals use. */
+.remote-pane[data-visible='false'] {
+  display: none;
 }
 
 /* A shell on a server, filling the pane the same way.

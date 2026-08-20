@@ -395,6 +395,25 @@ describe('the window is actually built from this', () => {
     expect(INDEX).toContain('setTitleBarOverlay')
     expect(INDEX).toContain('nativeTheme')
   })
+
+  it('hands the app’s chosen appearance to Chromium, not only to the window', () => {
+    /*
+     * *"this window should be exactly same color as the application, white … If
+     * it is dark, it should be dark."* — 2026-08-20, of the attach menu.
+     *
+     * That menu is a native `Menu.popup()`, and it has to be: an HTML menu would
+     * open behind the `WebContentsView` the browser page is composited into.
+     * A native menu takes the *OS* appearance, so the app being light and macOS
+     * being dark produced a dark menu over a white window. `themeSource` is the
+     * one switch that moves every native surface — menus, message boxes, native
+     * scrollbars — onto the app's own choice.
+     *
+     * Asserted as source text for the reason the whole of this block is: there
+     * is no Electron here to run, and the claim is that index.ts *does this at
+     * all*, which is exactly what went missing.
+     */
+    expect(INDEX).toContain('nativeTheme.themeSource')
+  })
 })
 
 describe('tokens.css reads the same however git checked it out', () => {

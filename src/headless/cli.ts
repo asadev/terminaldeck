@@ -24,8 +24,27 @@
 
 import { BRAND } from '../shared/brand'
 import type { Device } from '../main/remote/device-auth'
+import { asDeviceKind, type DeviceKind } from '../main/remote/device-kind'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import type { HostStatus } from './host'
+
+/**
+ * What a device paired to a server does not get, in one sentence.
+ *
+ * Here rather than beside the omission it describes — which is the
+ * `registerRemoteIpc` call in `host.ts`, where the reasoning also is — for the
+ * reason at the top of this file: everything printed is a function in here, and
+ * `host.ts` importing one string is nothing, where this file importing the host
+ * module would put the whole daemon into the CLI's bundle.
+ *
+ * Said in the second person about the *device*, because that is who loses
+ * something, and said at all because the wire cannot say it: on the far side,
+ * "no copilot on this host" and "you were approved as a guest" arrive as the
+ * same absence.
+ */
+export const NO_COPILOT_HERE =
+  'This host has no copilot: the copilot’s tools only run in the desktop app, so no Copilot ' +
+  'appears on a device paired to a server, of either kind.'
 
 /* ---------------------------------------------------------------- parsing -- */
 
@@ -33,7 +52,13 @@ export type Command =
   | { kind: 'help' }
   | { kind: 'version' }
   | { kind: 'status' }
-  | { kind: 'pair' }
+  /**
+   * `deviceKind` is the answer to "is this one of mine or somebody else's",
+   * given on the command line, and **null means it has not been answered** —
+   * never "use the usual one". `main.ts` asks out loud when it is null, because
+   * `device-kind.ts` writes the answer once and cannot be told again.
+   */
+  | { kind: 'pair'; deviceKind: DeviceKind | null }
   | { kind: 'stop' }
   | { kind: 'folders' }
   | { kind: 'folders-add'; folder: string; device: string | null }
@@ -55,7 +80,7 @@ export function parseArgs(argv: readonly string[]): Command {
   if (first === '-h' || first === '--help' || first === 'help') return { kind: 'help' }
   if (first === '-v' || first === '--version' || first === 'version') return { kind: 'version' }
   if (first === 'status') return extra(args) ?? { kind: 'status' }
-  if (first === 'pair') return extra(args) ?? { kind: 'pair' }
+  if (first === 'pair') return pairCommand(args)
   if (first === 'stop') return extra(args) ?? { kind: 'stop' }
   if (first !== 'folders') {
     return {
@@ -104,6 +129,53 @@ export function parseArgs(argv: readonly string[]): Command {
   return verb === 'add'
     ? { kind: 'folders-add', folder: rest[0], device }
     : { kind: 'folders-remove', folder: rest[0], device }
+}
+
+/**
+ * `pair`, and the one thing it may be told ahead of the device arriving.
+ *
+ * The kind is an option rather than a positional word because it is genuinely
+ * optional: at a keyboard the natural thing is to run `pair`, look at the
+ * fingerprint, and *then* decide. It is here at all for the case where nobody
+ * will be looking — a provisioning script, or somebody who already knows this is
+ * their own laptop and does not want a second question.
+ *
+ * There is no `--kind` value that means "whatever you think". `asDeviceKind`
+ * answers null for anything that is not literally one of the two, and null is
+ * refused here rather than folded into a default, because both defaults are
+ * wrong in a way nobody would notice: `guest` silently strands the owner's own
+ * phone with no folders, and `mine` silently hands a stranger's phone the
+ * copilot and every port on the machine.
+ */
+function pairCommand(args: readonly string[]): Command {
+  const rest = [...args]
+  let deviceKind: DeviceKind | null = null
+
+  while (rest.length > 0) {
+    const arg = rest.shift() as string
+    if (arg !== '--kind') {
+      return {
+        kind: 'error',
+        message: `"pair" takes only --kind, and got "${arg}".`,
+      }
+    }
+    const value = rest.shift()
+    if (value === undefined) {
+      return { kind: 'error', message: '--kind needs "mine" or "guest" after it.' }
+    }
+    const chosen = asDeviceKind(value)
+    if (chosen === null) {
+      return {
+        kind: 'error',
+        message:
+          `--kind is "mine" or "guest", and got "${value}". There is no third and no default: ` +
+          'one of them is you at another keyboard, the other is somebody else.',
+      }
+    }
+    deviceKind = chosen
+  }
+
+  return { kind: 'pair', deviceKind }
 }
 
 function extra(args: readonly string[]): Command | null {
@@ -177,6 +249,7 @@ export function usage(): string {
     'driven from a phone or from another machine.',
     '',
     `  ${BRAND.id} pair                        show a pairing code, then approve the device`,
+    `  ${BRAND.id} pair --kind mine|guest      the same, without being asked which it is`,
     `  ${BRAND.id} status                      running? reachable? what is it holding open?`,
     `  ${BRAND.id} folders                     which folders each device may use`,
     `  ${BRAND.id} folders add <path>          let a device start sessions there`,
@@ -282,6 +355,107 @@ export function renderNewDevice(device: Device): string {
     '  Check that fingerprint against the one the device is showing.',
     '',
   ].join('\n')
+}
+
+/**
+ * The question the desktop asks with two radio buttons, asked out loud.
+ *
+ * Both sentences are the ones on the desktop's approval screen, quoted in
+ * `device-kind.ts` from the recorded review, and they are repeated rather than
+ * summarised because they are the whole of what somebody is deciding. A headless
+ * host cannot show a screen, so this is the only place a person is ever told
+ * what the two words mean before typing one of them.
+ *
+ * The last line is the part a screen conveys by *not having a control* and a
+ * prompt has to say: the answer is written once, and there is no command that
+ * edits it.
+ */
+export function renderKindQuestion(): string {
+  return [
+    '',
+    '  What is this device?',
+    '',
+    "    mine    Full access. It’s you at another keyboard.",
+    '    guest   You choose what they can reach. The copilot is never shared.',
+    '',
+    '  Decided once, when you approve it. Nothing changes it afterwards — a device',
+    '  that turned out to be the other one is revoked and paired again.',
+    '',
+  ].join('\n')
+}
+
+export const KIND_PROMPT = '  mine or guest? '
+
+/**
+ * What actually happened, said in the terms of the kind that was chosen.
+ *
+ * This used to be one paragraph printed unconditionally, and every clause in it
+ * was wrong for a guest: it said the device starts with the folders this host
+ * has open, which is what a device with *no* folder record gets. Approving a
+ * guest writes an empty list on purpose — see `remote:device:approve` — so a
+ * guest starts with nothing at all and cannot open a session until somebody runs
+ * `folders add`. Telling them otherwise sends them to the phone to watch it fail.
+ *
+ * `noCopilot` is passed in rather than written here because the reason it is
+ * true belongs to the host that decided it — see `NO_COPILOT_HERE`.
+ */
+export function renderApproved(device: Device, kind: DeviceKind, noCopilot: string): string {
+  const lines = ['']
+  if (kind === 'mine') {
+    lines.push(
+      `  Approved as your own device. ${device.name} can reach this host now — it may`,
+      '  need to reconnect once.',
+      '',
+      '  It sees whatever projects this host has open, and the ports on this machine.',
+      `  "${BRAND.id} folders add <path>" narrows it to exactly what you choose.`,
+      '',
+      // Wrapped here rather than written pre-broken, because the sentence lives
+      // in `host.ts` beside the omission it describes and must not have this
+      // file's column width baked into it.
+      ...wrap(noCopilot, 74).map((line) => `  ${line}`),
+    )
+  } else {
+    lines.push(
+      `  Approved as a guest. ${device.name} can reach this host now — it may need to`,
+      '  reconnect once.',
+      '',
+      '  It has an empty folder list, which means it cannot start a session anywhere',
+      `  yet. Give it one: "${BRAND.id} folders add <path>".`,
+      '',
+      '  A guest is never offered the copilot, and cannot reach the ports on this',
+      '  machine.',
+    )
+  }
+  lines.push('')
+  return lines.join('\n')
+}
+
+/**
+ * The host did not do what was asked, and this is what it did instead.
+ *
+ * It exists because the old code printed "Approved." from the fact that the call
+ * returned, and the call returns the device roster whether it approved anything
+ * or not. A CLI that reports an outcome it did not read is worse than one that
+ * reports a failure: the second sends somebody to look, the first sends them to
+ * the phone.
+ */
+export function renderNotApproved(device: Device, wanted: DeviceKind, recorded: DeviceKind | null): string {
+  const lines = ['', `  ${device.name} was NOT approved.`, '']
+  if (recorded !== null && recorded !== wanted) {
+    lines.push(
+      `  This host already has it recorded as "${recorded}", and a kind is written once.`,
+      `  Approving it as "${wanted}" would be a change, which is refused rather than made:`,
+      '  revoke the device and pair it again to decide differently.',
+      '',
+    )
+  } else {
+    lines.push(
+      '  The host accepted the request and did not record the approval. Its log is under',
+      `  the state directory shown by "${BRAND.id} status".`,
+      '',
+    )
+  }
+  return lines.join('\n')
 }
 
 export function renderFolders(
@@ -403,7 +577,18 @@ export function renderStatus(status: HostStatus, now: number): string {
   out.push(`Idle mode (${status.idle.mode}, ${status.idle.attached} attached)`)
   for (const name of status.idle.holding) out.push(`  holding   ${name}`)
   for (const name of status.idle.stopped) out.push(`  stopped   ${name}`)
-  for (const name of status.neverRunning) out.push(`  n/a       ${name}`)
+  for (const name of status.neverRunning) {
+    // Wrapped with a hanging indent, because this list stopped being three short
+    // labels the day the copilot joined it: what a reader needs from that entry
+    // is the reason, and a reason is a sentence. The three that were here are
+    // shorter than the width and come through untouched.
+    // The label is wrapped, never the whole line: `wrap` collapses runs of
+    // whitespace, so wrapping `n/a       usage polling` would quietly close up
+    // the column this block is aligned on.
+    const [first, ...rest] = wrap(name, 64)
+    out.push(`  n/a       ${first}`)
+    for (const line of rest) out.push(`            ${line}`)
+  }
   out.push('')
 
   out.push(`Sessions (${status.sessions.length})`)
@@ -418,7 +603,24 @@ export function renderStatus(status: HostStatus, now: number): string {
   if (live.length === 0) out.push(`  none — run "${BRAND.id} pair"`)
   for (const device of live) {
     const seen = device.lastSeenAt === null ? 'never seen' : `last seen ${duration(now - device.lastSeenAt)} ago`
-    out.push(`  ${device.name}  —  ${device.status}, ${seen}`)
+    /*
+     * The kind, on the same line as the status, because on a server this is the
+     * only place it is ever shown.
+     *
+     * The desktop draws it beside each device in Settings. A headless host had
+     * nowhere at all, so the difference between a phone that can reach every
+     * port on the machine and one that can reach one folder was invisible after
+     * the moment of approving it — including to somebody auditing a box they
+     * inherited.
+     *
+     * "undecided" is not a third kind: `kindOf` answers `guest` for a device
+     * this file has never heard of, and that is what is enforced. It is printed
+     * because it means *nobody chose* — a device paired by a build older than
+     * device kinds — and that has a remedy the word "guest" would hide.
+     */
+    const recorded = status.kinds.find((row) => row.deviceId === device.id)
+    const kind = recorded === undefined ? 'undecided, enforced as guest' : recorded.kind
+    out.push(`  ${device.name}  —  ${kind}, ${device.status}, ${seen}`)
   }
   out.push('')
 

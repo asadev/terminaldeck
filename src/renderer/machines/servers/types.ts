@@ -126,6 +126,51 @@ export interface ServerFacts {
   uptimeSeconds?: Fact<number>
   /** How many things are accepting connections. Zone three's business. */
   listeners?: Fact<number>
+  /**
+   * The coding assistants installed **for this sign-in**, not for the machine.
+   *
+   * Per-account rather than per-machine, and that is measured rather than
+   * pedantic: the test box has three home folders on it, each with its own
+   * settings. A line saying an assistant is "on this server" would be true of
+   * the machine and wrong for the person reading it.
+   *
+   * An empty list is a real answer — every place an installer puts one was
+   * looked in — which is what lets the page offer to put one there. `cannot` is
+   * the answer that offers nothing.
+   */
+  agents?: Fact<AgentOnServer[]>
+}
+
+/**
+ * One coding assistant found on a server, as this screen reads it.
+ *
+ * An empty `version` is not missing data: it means the program is there and
+ * would not start, which is a different thing to offer somebody than an empty
+ * server. `signedIn` has three states for the same reason every other fact does.
+ */
+/**
+ * The three agents this app can set up, as the renderer names them.
+ *
+ * Declared here rather than imported from `main/servers/facts.ts` for the reason
+ * every other type in this file is: the renderer keeps its own narrowed copy of
+ * what crosses the bridge, so that a change on the other side arrives as a
+ * type error here rather than as a screen quietly drawing nothing.
+ *
+ * The order is the order the rows are drawn in, and it is the far end's order —
+ * `SETUP_AGENTS` in `servers/setup.ts` — so the two cannot disagree about which
+ * agent is first on a screen whose whole point is that none of them is special.
+ */
+export type AgentId = 'claude' | 'codex' | 'gemini'
+
+export const AGENT_IDS: readonly AgentId[] = ['claude', 'codex', 'gemini']
+
+export interface AgentOnServer {
+  id: string
+  path: string
+  version: string
+  signedIn: 'yes' | 'no' | 'unknown'
+  /** The address it is signed in as. Shown, and written nowhere. */
+  account: string | null
 }
 
 /* ------------------------------------------------------------- the cards -- */
@@ -307,11 +352,29 @@ export interface GrantState {
  * What the add form collects: three things anybody can answer.
  *
  * Nothing configured in advance, no file to prepare first, no tool to install,
- * no agent to start. Everything else has a sensible answer without being asked.
+ * no agent to start. Everything else has a sensible answer without being asked
+ * — and where the sensible answer can be wrong, there is somewhere to say so
+ * and it is empty until somebody needs it. See {@link AddServerDraft.port}.
  */
 export interface AddServerDraft {
   address: string
   username: string
+  /**
+   * Which port the server listens on. **Absent means 22**, which is what
+   * `store.ts` fills in — `DEFAULT_PORT`, applied through `validPort` on the
+   * way into the stored row, so the number never has to be defaulted twice.
+   *
+   * Absent rather than 22 on purpose. A form that always sends a number cannot
+   * be told apart from a person who typed one, and the two want different
+   * things the day the default changes: an explicit 22 is a decision to keep,
+   * and an empty field is a decision not to have made one.
+   *
+   * `src/main/servers/ipc.ts` has carried `port?: number` on its own copy of
+   * this draft since the channel was written, and `store.add` has always taken
+   * it. This side is the half that never sent it, which is the whole reason a
+   * server on any other port could not be added at all.
+   */
+  port?: number
   method: 'password' | 'key'
   password?: string
   key?: string
@@ -391,14 +454,46 @@ export interface ServersBridge {
   revokeServerCopilot(id: string): Promise<unknown>
   /** `servers:grant-state` */
   serverGrantState(id: string): Promise<unknown>
-  /** `servers:shell:open` — answers the id of the one shell it opened. */
-  openServerShell(id: string, cols: number, rows: number): Promise<unknown>
+  /**
+   * `servers:shell:open` — answers the id of the one shell it opened.
+   *
+   * `startIn` is the folder it should open in. Left off means wherever the
+   * sign-in lands, which is what every terminal this app opened before the
+   * folder picker existed did, and is still what a press that chose no folder
+   * gets.
+   */
+  openServerShell(id: string, cols: number, rows: number, startIn?: string): Promise<unknown>
   /** `servers:shell:write` — by shell id, not by server id. */
   writeToServerShell(shellId: string, data: string): Promise<unknown>
   /** `servers:shell:resize` — columns first, then rows, everywhere. */
   resizeServerShell(shellId: string, cols: number, rows: number): Promise<unknown>
   /** `servers:shell:close` */
   closeServerShell(shellId: string): Promise<unknown>
+  /**
+   * `servers:folder` — what is inside one folder, over SFTP.
+   *
+   * Optional, and it is **not** in `BRIDGE_METHODS` below, for the reason that
+   * list exists at all: a preload older than this channel would otherwise make
+   * `resolveServersBridge` answer null and take the whole servers area away
+   * over a folder picker. Absent means the picker offers no list and the path
+   * is typed, which is the same fallback a server with no SFTP subsystem gets.
+   */
+  listServerFolder?(id: string, path: string): Promise<unknown>
+  /**
+   * `servers:start-in` — the folder this server starts a session in by default.
+   *
+   * Optional for the same reason `listServerFolder` is, and out of
+   * `BRIDGE_METHODS` for the same reason: a preload older than this channel
+   * must lose the default folder, not the whole servers area. Absent means the
+   * picker draws no default and offers no way to set one, which is the screen
+   * this app had the day before yesterday.
+   *
+   * It reads a stored preference and asks the server nothing, which is what
+   * lets the picker call it while it is merely on screen.
+   */
+  serverStartIn?(id: string): Promise<unknown>
+  /** `servers:start-in:set` — remember that folder, or clear it with null. */
+  setServerStartIn?(id: string, path: string | null): Promise<unknown>
   /** `servers:keys` — the private keys already on this computer, by name. */
   serverKeys?(): Promise<unknown>
   /** `servers:key-pick` — a native panel, for a key that is not in `~/.ssh`. */
@@ -415,6 +510,30 @@ export interface ServersBridge {
   forgetServer(id: string): Promise<unknown>
   /** `servers:rename` */
   renameServer(id: string, name: string): Promise<unknown>
+  /**
+   * `servers:setup:look` — what this server has, and what putting one there
+   * would cost.
+   *
+   * All seven of these are optional and **none of them is in `BRIDGE_METHODS`**,
+   * for exactly the reason that list exists: a preload older than these channels
+   * would otherwise make `resolveServersBridge` answer null and take the whole
+   * servers area away over a setup panel. Absent means the page draws the line
+   * saying what is installed and offers no buttons, which is a smaller screen
+   * rather than a broken one.
+   */
+  serverSetup?(id: string): Promise<unknown>
+  /** `servers:setup:state` — where a setup already in flight has got to. */
+  serverSetupState?(id: string, agentId: string): Promise<unknown>
+  /** `servers:setup:install` — typed into the terminal named by `shellId`. */
+  installOnServer?(id: string, agentId: string, shellId: string): Promise<unknown>
+  /** `servers:setup:signin` — same terminal, and it follows an install on its own. */
+  signInOnServer?(id: string, agentId: string, shellId: string): Promise<unknown>
+  /** `servers:setup:cancel` — stop it and leave nothing behind on the server. */
+  cancelServerSetup?(id: string): Promise<unknown>
+  /** `servers:setup:remove` — the way back, and only for what this app installed. */
+  removeServerSetup?(id: string, agentId: string): Promise<unknown>
+  /** `servers:setup:changed` — pushed, because a sixty-second install is not a press. */
+  onServerSetup?(cb: (state: unknown) => void): () => void
 }
 
 const BRIDGE_METHODS = [
@@ -593,7 +712,36 @@ export function asFacts(value: unknown): ServerFacts {
     load: asFact(value.load1, readNumber) ?? asFact(value.load, readNumber),
     uptimeSeconds: asFact(value.uptimeSeconds, readNumber) ?? asFact(value.uptime, readNumber),
     listeners: asFact(value.listeners, readCount),
+    agents: asFact(value.agents, readAgents),
   }
+}
+
+/**
+ * The agent rows, dropping any that could not be read rather than the whole list.
+ *
+ * A row with no path cannot be acted on and a row with no id cannot be named, so
+ * those two go; everything else is carried through as the far end said it,
+ * including an empty version — which is the answer that means *installed and
+ * will not start*.
+ */
+function readAgents(raw: unknown): AgentOnServer[] | null {
+  if (!Array.isArray(raw)) return null
+  const out: AgentOnServer[] = []
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue
+    const id = text(entry.id)
+    const path = text(entry.path)
+    if (id === '' || path === '') continue
+    const signedIn = entry.signedIn
+    out.push({
+      id,
+      path,
+      version: text(entry.version),
+      signedIn: signedIn === 'yes' ? 'yes' : signedIn === 'no' ? 'no' : 'unknown',
+      account: readText(entry.account),
+    })
+  }
+  return out
 }
 
 const CARD_KINDS: readonly CardKind[] = ['site', 'app', 'database', 'other']
@@ -672,6 +820,125 @@ function asKeyedAbsent(value: unknown): Record<string, AbsentAction[]> {
       : []
   }
   return out
+}
+
+/* --------------------------------------------------------------- setting up -- */
+
+/** Where one server's setup has got to. Six steps, and no seventh. */
+export type SetupStep = 'idle' | 'installing' | 'installed' | 'signing-in' | 'done' | 'failed'
+
+/**
+ * The setup's own state, as the main process pushes it.
+ *
+ * Every readable string on it was written on the other side, beside the code
+ * that does the work — §4.3 — and this screen renders them. It composes none,
+ * which is the same rule the action previews follow and for the same reason: a
+ * screen that wrote its own would be describing work it does not do.
+ */
+export interface SetupState {
+  serverId: string
+  /** Which of the three rows this push is about. */
+  agentId: AgentId
+  step: SetupStep
+  /** The one line under the terminal. */
+  line: string
+  /** The server's own words, when something failed. */
+  detail: string
+  /**
+   * The sign-in has fallen back to being finished by hand.
+   *
+   * No address comes with it, deliberately: the one that works for a person
+   * doing it themselves is the one already printed in the terminal, three lines
+   * above the prompt it goes with.
+   */
+  byHand: boolean
+  /** True when this app is the thing that installed it, which is what makes a way back honest. */
+  weInstalled: boolean
+  version: string | null
+}
+
+/**
+ * One agent's row: what this server has of it, and whether that can be changed.
+ *
+ * Three of these arrive on every look, in a fixed order, whether or not the
+ * server has any of them — see {@link SetupOffer}.
+ */
+export interface SetupRow {
+  agentId: AgentId
+  /** The agent's own name, read off the far end rather than spelled here. */
+  label: string
+  installed: AgentOnServer | null
+  canInstall: boolean
+  /** Why not, in the server's own terms. Null when there is nothing in the way. */
+  why: string | null
+  /** The consequence sentence, written where the install is implemented. */
+  consequence: string
+  state: SetupState
+}
+
+/**
+ * What one server would need in order to be set up, for each agent it could run.
+ *
+ * A list rather than a single row since 2026-08-20. The one-row version showed
+ * everybody the same agent whatever they use, which he overruled: *"Maybe some
+ * users are only using Codex, they never use Claude."* An empty list is a far
+ * end too old to answer this, and the panel draws nothing for it.
+ */
+export interface SetupOffer {
+  rows: readonly SetupRow[]
+}
+
+const SETUP_STEPS: readonly SetupStep[] = [
+  'idle',
+  'installing',
+  'installed',
+  'signing-in',
+  'done',
+  'failed',
+]
+
+export function asSetupState(value: unknown): SetupState | null {
+  if (!isRecord(value)) return null
+  const serverId = text(value.serverId)
+  if (serverId === '') return null
+  const agentId = AGENT_IDS.find((known) => known === value.agentId)
+  if (agentId === undefined) return null
+  return {
+    serverId,
+    agentId,
+    step: SETUP_STEPS.find((known) => known === value.step) ?? 'idle',
+    line: text(value.line),
+    detail: text(value.detail),
+    byHand: value.byHand === true,
+    weInstalled: value.weInstalled === true,
+    version: readText(value.version),
+  }
+}
+
+export function asSetupOffer(value: unknown): SetupOffer | null {
+  if (!isRecord(value) || !Array.isArray(value.rows)) return null
+  const rows: SetupRow[] = []
+  for (const raw of value.rows) {
+    if (!isRecord(raw)) continue
+    const state = asSetupState(raw.state)
+    const agentId = AGENT_IDS.find((known) => known === raw.agentId)
+    // A row with no name on it cannot be drawn and cannot be acted on, so it is
+    // dropped rather than guessed at. The pane below shows the two that arrived.
+    if (state === null || agentId === undefined) continue
+    const installed = readAgents([raw.installed])
+    rows.push({
+      agentId,
+      label: text(raw.label),
+      installed: installed !== null && installed.length > 0 ? installed[0] : null,
+      // A button is drawn only when the far end said yes. Anything unreadable is
+      // a no, which draws no button — never a hopeful one.
+      canInstall: raw.canInstall === true,
+      why: readText(raw.why),
+      consequence: text(raw.consequence),
+      state,
+    })
+  }
+  return { rows }
 }
 
 export function asView(value: unknown): ServerView | null {
@@ -765,6 +1032,56 @@ function asServer(value: unknown): Server | null {
 export function asServers(value: unknown): Server[] {
   if (!Array.isArray(value)) return []
   return value.map(asServer).filter((server): server is Server => server !== null)
+}
+
+/** One name inside a folder on a server. */
+export interface FolderEntry {
+  name: string
+  /**
+   * `link` is its own answer rather than resolved to what it points at.
+   *
+   * Resolving costs one round trip per entry — sixty on an ordinary `/etc` —
+   * so a link is drawn as somewhere you may *try* to go, and if it turns out
+   * not to be a folder the attempt says so. `main/servers/connection.ts` makes
+   * the same argument beside the listing that produces these.
+   */
+  kind: 'folder' | 'link' | 'file'
+}
+
+/** One folder on a server, as the picker holds it. */
+export interface Folder {
+  /** Absolute, and resolved by the server. Never assembled on this side. */
+  path: string
+  entries: FolderEntry[]
+}
+
+/**
+ * Narrow a listing off the bridge.
+ *
+ * Null when the reply carries no path, because a path is the one field the
+ * picker cannot do without: it is what the next call up or down is made with,
+ * and a picker holding an empty path would ask for the login directory again
+ * on every press. An empty `entries` is a real answer — an empty folder — and
+ * is not folded into null.
+ */
+export function asFolder(value: unknown): Folder | null {
+  if (!isRecord(value)) return null
+  const path = text(value.path)
+  if (path === '') return null
+  const entries: FolderEntry[] = []
+  if (Array.isArray(value.entries)) {
+    for (const entry of value.entries) {
+      if (!isRecord(entry)) continue
+      const name = text(entry.name)
+      if (name === '') continue
+      const kind = entry.kind
+      entries.push({
+        name,
+        kind: kind === 'folder' || kind === 'link' ? kind : 'file',
+      })
+    }
+  }
+  return { path, entries }
 }
 
 export function asGrant(value: unknown): GrantState | null {

@@ -37,8 +37,39 @@ import './machines.css'
  * flattened into the device roster — is the *direction*: everything in
  * `RemoteSection` is about something reaching this machine, and everything here
  * is about this machine reaching something else. That difference is real, it has
- * its own controls (Connect, New session, a terminal), and collapsing it would
- * have lost a feature rather than merged one.
+ * its own controls (Connect, a terminal, Disconnect, Forget), and collapsing it
+ * would have lost a feature rather than merged one.
+ *
+ * ## The card has two buttons, and it used to have three
+ *
+ * **New session** is gone from this row. Asad, reviewing the machines page on
+ * 2026-08-19: *"we don't need this new session thing here. Just disconnect and
+ * forget thing is good enough for us."*
+ *
+ * It is a removal rather than a loss, and that is worth being precise about,
+ * because the argument for putting it here was a good one. Starting a session on
+ * a paired machine is still one press away and always was — the rail draws a
+ * machine group with the same ＋ a project group has, labelled *"New session on
+ * «machine»"*, and it lands on exactly the call this row had been rewritten to
+ * make: `openNewSessionDialog(null, machineId)`. Two buttons doing the identical
+ * thing, both on screen at once while the Machines panel is open — and the rail's
+ * is the one that stays there while you are looking at the session it started.
+ *
+ * Two suites hold that half up, and they hold different halves of it, which is
+ * why both are named rather than one: `shell/machine-group.test.tsx` renders the
+ * rail and finds the control (by that accessible name, against its
+ * `DESKTOP-DDGMNCV` fixture), and `shell/new-session-route.test.ts` reads the one
+ * line in `Sidebar.tsx` and the one in `App.tsx` that decide where the press
+ * lands — because markup cannot say what a button does. Both were checked before
+ * this row's button was taken out, not after.
+ *
+ * What this card is left with is what a *card* is for: the two things you can
+ * only do from a list of machines — stop talking to one, and forget it.
+ *
+ * Everything that existed solely to explain the button went with it: the offer
+ * gate that decided whether the far machine could honour a press, and the note
+ * that said so when it could not. A row does not get to keep an explanation of a
+ * control it no longer draws.
  *
  * ## Pure, apart from the terminal
  *
@@ -63,35 +94,22 @@ export interface MachineActions {
   connect(machine: Machine): void
   disconnect(machine: Machine): void
   forget(machine: Machine): void
-  /**
-   * Ask the window for a new session on that machine — the dialog, on its
-   * folder step, with the machine already answered.
+  /*
+   * There was a `newSession` here, and its absence is the change rather than an
+   * oversight — see the header. It asked the window for the new-session dialog
+   * pointed at that machine, and it was optional because that dialog is the
+   * window's and a page drawn outside one has nowhere for the press to land.
    *
-   * ## Why it is optional, and why the row checks
+   * Both halves of that are still true of the rail's ＋, which is where the
+   * press lives now. What is not true any more is that this row needs a way to
+   * make it: a card in a list of machines is not where somebody starts work, and
+   * the button that was here duplicated one that is on screen at the same time.
    *
-   * Because it is the only action here that cannot be performed by this half on
-   * its own. Every other one is a call on the machines bridge, which a page has
-   * or has not got and says so in one notice at the top; this one needs a
-   * *window* around the page, because the dialog it opens is the window's. A
-   * copy of this page rendered without one — the harness, a test, any future
-   * tree that mounts the panel outside the shell — has nowhere for the press to
-   * land, and the standing rule for that in this app is that the control is
-   * **absent**, not dead. `ServerAdvanced` answers the identical question the
-   * identical way, one directory over.
-   *
-   * Optional rather than a function that refuses, so the row cannot draw a
-   * button it has no way to honour: `undefined` is checkable and a no-op is not.
-   *
-   * ## Why the link is no longer an argument
-   *
-   * It used to take one, and read `link.folders?.[0]` off it, and that is the
-   * whole defect this signature ends — see `new-session-context.ts`. The folder
-   * is a question the dialog asks now, of the person, against the list that
-   * machine actually shared. Passing the link in would put the old answer back
-   * within reach. `newSessionOffer(link)` still gates whether the button exists
-   * at all, which is a different question and stays where it was.
+   * It is written down rather than deleted because the *shape* is the part worth
+   * keeping — the next action on this list that needs the window around it must
+   * be optional for the same reason, and must be absent rather than dead when it
+   * is not there. `new-session-context.ts` still carries the whole argument.
    */
-  newSession?: (machine: Machine) => void
   open(machineId: string, sessionId: string): void
   close(): void
   /** Open `http://localhost:<port>/` **on that machine**, in its own browser. */
@@ -145,27 +163,46 @@ export function shortPath(cwd: string): string {
   return `…/${parts.slice(-2).join('/')}`
 }
 
-/**
- * What the New session button may do, said in one place.
+/*
+ * `newSessionOffer` stood here: three answers about whether the far machine
+ * could honour a **New session** press — not connected, running a build with no
+ * `create`, or sharing no folder with this device — of which only the first was
+ * a button and the other two were sentences printed under the row.
  *
- * Three different answers and only one of them is a button. A machine that
- * never advertised `create` is running a build that cannot start one; a machine
- * that sent an empty folder list has been told by its owner that this device
- * gets nothing. Neither is a case for a button that fails.
+ * It went with the button. Every one of those three facts was *only* ever read
+ * to decide whether to draw it or what to say instead, so keeping the function
+ * would have kept three sentences about a control that is not on the card.
+ *
+ * ## One of the three was not only a sentence, and is now owed elsewhere
+ *
+ * `link.state` survives on the row as its own label, and the empty-folder case
+ * is asked again where it belongs — and answered, which was checked rather than
+ * assumed: picking a machine in `NewSessionDialog` sets the folder to
+ * `row.folders[0] ?? null`, a null path makes `resolveStart` return
+ * `{ ok: false, code: 'no-project' }`, and the dialog draws that as a disabled
+ * Start under *"Choose a project folder to run the session in."* A machine
+ * sharing nothing cannot be got past the Folder step.
+ *
+ * The `create` capability is the one with nowhere left to be read. A first
+ * draft of this note claimed the rail's ＋ "makes its own decision from the same
+ * link", and that is **false** — measured, not guessed:
+ * `grep -rn "includes('create')" src/renderer` now returns nothing at all, and
+ * the rail's machine rows are built in `App.tsx` with `canClose:
+ * row.link?.capabilities.includes('close') === true` and no `create` sibling, so
+ * the ＋ is drawn on every machine heading whatever build is answering. Press it
+ * against a PC on an older build and `App.tsx` awaits `machines.startSession`,
+ * which sends `createMachineSession`, sees no session appear, times out and
+ * returns `null` — and the caller's `if (sessionId === null) return` closes the
+ * dialog saying nothing.
+ *
+ * The sentence that used to say it out loud — *"That machine is running a build
+ * that cannot start a session from here."* — exists nowhere in the app now
+ * (`grep -rn "cannot start a session from here" src/`: no hits). Taking the
+ * button off this card was right and asked for; taking the app's only statement
+ * of that fact with it was a side effect, and the fix belongs to whoever owns
+ * the rail and the dialog, not to this file. Written down here because this is
+ * where the check used to live and where somebody will come looking for it.
  */
-export function newSessionOffer(link: MachineLinkState): { can: boolean; note: string | null } {
-  if (link.state !== 'online') return { can: false, note: null }
-  if (!link.capabilities.includes('create')) {
-    return { can: false, note: 'That machine is running a build that cannot start a session from here.' }
-  }
-  if (link.folders !== null && link.folders.length === 0) {
-    return {
-      can: false,
-      note: 'No folder has been shared with this device. Choose one on that machine, under Remote.',
-    }
-  }
-  return { can: true, note: null }
-}
 
 /** The link for a machine, or the resting state of one nothing has dialled. */
 export function linkFor(view: MachinesView, id: string): MachineLinkState {
@@ -178,6 +215,7 @@ export function linkFor(view: MachinesView, id: string): MachineLinkState {
       folders: null,
       capabilities: [],
       ports: [],
+      copilot: null,
       hostPlatform: '',
       retryAt: null,
     }
@@ -275,7 +313,6 @@ export function MachineRow({
 }) {
   const [confirming, setConfirming] = useState(false)
   const noun = machineNoun(link.hostPlatform === '' ? machine.platform : link.hostPlatform)
-  const offer = newSessionOffer(link)
 
   return (
     <li className="machines-row" data-state={link.state}>
@@ -338,22 +375,13 @@ export function MachineRow({
 
       <div className="machines-actions settings-chips">
         {/*
-          Two gates, and they answer two different questions.
-
-          `offer.can` is about the *far* machine: is it connected, does its build
-          know how to start one, has anybody over there shared a folder with this
-          device. `actions.newSession` is about *this* end: is there a window
-          around this page to open the dialog in. Either can be false on its own,
-          and the second one is false in exactly the places a screenshot is taken
-          from — so folding them into one condition would have made the harness's
-          copy of this row look like a machine that had refused.
-
-          What is missing is said below rather than here, beside the offer's own
-          note, so a row never grows two explanations in two places.
+          Two buttons, and both of them are about this end's relationship with
+          that machine rather than about starting work on it. A **New session**
+          stood first in this row until 2026-08-19 — *"we don't need this new
+          session thing here. Just disconnect and forget thing is good enough for
+          us."* The header says where that press lives now and why the pair that
+          is left is the right pair.
         */}
-        {offer.can && actions.newSession !== undefined && (
-          <Button onClick={() => actions.newSession?.(machine)}>New session</Button>
-        )}
         {link.state === 'online' || link.state === 'connecting' ? (
           <Button onClick={() => actions.disconnect(machine)}>Disconnect</Button>
         ) : (
@@ -380,26 +408,13 @@ export function MachineRow({
         )}
       </div>
 
-      {offer.note !== null && <p className="machines-note">{offer.note}</p>}
-
       {/*
-        The far machine would serve one and this copy of the page cannot ask for
-        it. Said plainly, and only in that combination: a machine that has
-        refused already has its own note above, and stacking a second sentence
-        under it would explain a button whose absence was already explained.
-
-        Worth a sentence at all for the reason `ServerAdvanced`'s equivalent
-        notice is: the difference between "you cannot" and "this copy cannot" is
-        the difference between a task and a bug report. Nobody sees this in the
-        app — the window provides the opener — so what it is really for is the
-        person looking at a harness screenshot or a test's markup, wondering
-        where the button went.
+        Two sentences used to close this row, and both of them explained why
+        **New session** was not on it — one for a far machine that could not
+        serve one, one for a copy of this page with no window around it to open
+        the dialog in. Neither has anything left to explain, and a note about a
+        control nobody can see is the wall of text this review was about.
       */}
-      {offer.can && actions.newSession === undefined && (
-        <p className="machines-note">
-          This page is not inside a window that can open one.
-        </p>
-      )}
     </li>
   )
 }
@@ -627,8 +642,8 @@ export function MachineSessionPane({
    * again on every keystroke, which is the whole session's scrollback lost each
    * time the font size setting is read.
    */
-  const sink = useRef<((data: string) => void) | null>(null)
-  const subscribe = useRef((handler: (data: string) => void) => {
+  const sink = useRef<((data: string, replay: boolean) => void) | null>(null)
+  const subscribe = useRef((handler: (data: string, replay: boolean) => void) => {
     sink.current = handler
     return () => {
       if (sink.current === handler) sink.current = null
@@ -637,9 +652,18 @@ export function MachineSessionPane({
 
   useEffect(() => {
     return bridge.onMachineOutput((chunk) => {
-      const output = chunk as { machineId?: unknown; sessionId?: unknown; data?: unknown }
+      const output = chunk as {
+        machineId?: unknown
+        sessionId?: unknown
+        data?: unknown
+        replay?: unknown
+      }
       if (output?.machineId !== machineId || output?.sessionId !== sessionId) return
-      if (typeof output.data === 'string') sink.current?.(output.data)
+      // The flag is carried the last step rather than dropped here. It is how
+      // the terminal knows the far machine has finished replaying its
+      // scrollback, which is what stops the history being watched — see
+      // `RemoteTerminal` and `terminal-backfill.ts`.
+      if (typeof output.data === 'string') sink.current?.(output.data, output.replay === true)
     })
   }, [bridge, machineId, sessionId])
 
@@ -671,18 +695,30 @@ export interface MachineActionDeps {
   setOpen(next: { machineId: string; sessionId: string } | null): void
   /** False once the section has gone, so nothing writes to a dead component. */
   isAlive(): boolean
-  /**
-   * Ask the window for a new session on a machine, or null when this copy of
-   * the page has no window around it.
+  /*
+   * `openNewSession` was here — the window's `openNewSessionDialog(null,
+   * machineId)`, passed down as `null` when there is no window, so that one
+   * representation of "there is nothing to press this into" reached the row.
    *
-   * Null rather than absent-and-optional at the *call* site is deliberate: the
-   * caller reads a context whose default is `null`, and passing that value
-   * straight through keeps one representation of "there is no window" from here
-   * to the button. What comes *out* of this function is the optional one —
-   * `newSession` exists exactly when this does — because that is what the row
-   * has to check before drawing a control.
+   * The card no longer draws that button (see the header), so nothing on this
+   * side has a use for the opener, and `RemoteSection` stopped reading the
+   * context in the same change.
+   *
+   * An earlier draft of this note said the context stays "because the rail's ＋
+   * is wired through `App.tsx`", and that is **wrong** — checked, not assumed:
+   * `App.tsx` passes the rail a plain prop,
+   * `onNewMachineSession={(machineId) => openNewSessionDialog(null, machineId)}`,
+   * and has never reached the ＋ through `MachineSessions`. The context was only
+   * ever for this page, because this page is the one `PanelView` draws without
+   * per-view props. With this row's use of it gone there is no call site left
+   * anywhere: `grep -rn useMachineSessionOpener src/renderer` finds the hook's
+   * own definition, and otherwise only notes like this one recording that it
+   * went. So `new-session-context.ts` and the `MachineSessions.Provider` still
+   * mounted at `App.tsx` are dead, and removing them is owed to whoever owns
+   * `App.tsx` rather than done from here — deleting the module from this side
+   * would break the import that mounts the provider. `new-session-context.ts`
+   * says the same at its head, so a reader arriving from either side learns it.
    */
-  openNewSession?: ((machineId: string) => void) | null
 }
 
 /**
@@ -699,9 +735,6 @@ export interface MachineActionDeps {
  */
 export function machineActions(deps: MachineActionDeps): MachineActions {
   const { bridge, setView, setPairing, setError, setOpen, isAlive } = deps
-  /* `?? null`, so "nobody passed one" and "there is no window" are one value
-     rather than two the check below would have to spell out separately. */
-  const openNewSession = deps.openNewSession ?? null
 
   const reread = async (): Promise<void> => {
     if (!bridge) return
@@ -764,37 +797,21 @@ export function machineActions(deps: MachineActionDeps): MachineActions {
       if (bridge) settle(bridge.forgetMachine(machine.id))
     },
     /*
-     * Up to the window, never out to the machine.
+     * A `newSession` was built here and is not any more.
      *
-     * This used to be `bridge.createMachineSession(machine.id, link.folders?.[0]
-     * ?? '')` — one press, and a session was running on somebody else's computer
-     * under whichever agent that machine defaults to, in whichever folder was
-     * first in the list it advertised. The comment defending it argued that the
-     * first shared folder is "the only one this end knows is allowed", which was
-     * true and beside the point: *allowed* is not *chosen*, and a machine that
-     * shares three folders was being given no say at all.
+     * Its history is worth one paragraph, because the thing it *replaced* must
+     * not come back with it if the button ever does. It began as
+     * `bridge.createMachineSession(machine.id, link.folders?.[0] ?? '')` — one
+     * press, and a session was running on somebody else's computer under
+     * whichever agent that machine defaults to, in whichever folder happened to
+     * be first in the list it advertised. That was rewritten to call the
+     * window's `openNewSessionDialog(null, machineId)` so the person answered
+     * those questions. Now the press itself has gone from this card and lives
+     * only on the rail's machine heading, which makes the same call.
      *
-     * Asad, on the local version of the same press: *"we just always wanted this
-     * pop-up to come up so we choose which type of terminal we want to open."*
-     * Every other route to a new session in this app obeys that now. This one is
-     * the last, and it is the one where a wrong guess costs most, because the
-     * folder, the agent and the login it guesses at are on a machine this end
-     * only knows about because that machine described itself.
-     *
-     * `openNewSession` is the window's `openNewSessionDialog(null, machineId)` —
-     * literally the same function the rail's machine heading calls, reached
-     * through `new-session-context.ts`. No bridge call is made here at all: the
-     * dialog's Start is what talks to the far machine, through the same channel
-     * this line used to, once somebody has answered.
-     *
-     * Absent when there is no window, so the row draws no button rather than one
-     * that swallows the press. See {@link MachineActions.newSession}.
+     * So: nothing here talks to a far machine to start a session, and nothing
+     * here ever should again. The dialog's Start is what does that.
      */
-    newSession: openNewSession
-      ? (machine: Machine) => {
-          openNewSession(machine.id)
-        }
-      : undefined,
     open: (machineId, sessionId) => setOpen({ machineId, sessionId }),
     close: () => setOpen(null),
     openPort: (machine, port) => {

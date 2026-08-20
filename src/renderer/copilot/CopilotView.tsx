@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChatView } from '../components/ChatView'
 import { PageEmpty } from '../components/PageEmpty'
 import { TerminalView } from '../components/TerminalView'
+import { CopilotMachines } from './CopilotMachines'
+import { RemoteCopilot } from './RemoteCopilot'
 import { TourRecap } from './driving/TourRecap'
 import { COPILOT_ICON } from './identity'
+import { useCopilotMachines } from './useCopilotMachines'
 import type { CopilotPane } from './copilot-model'
 import type { Copilot } from './useCopilot'
 import './copilot.css'
@@ -45,10 +48,8 @@ import './copilot.css'
  * `mode` is now a prop for the same reason: it is the window's `sessionView` for
  * this session, driven by the same segmented control every other session's is,
  * so there is one answer to "how is this drawn" instead of two that could
- * disagree. `defaultPane` still decides where a first run opens — on the
- * terminal, because a login prints a URL and reads a code back and a
- * conversation pane can do neither — but `App.tsx` seeds it, once, into that
- * shared state.
+ * disagree. `defaultPane` decides where it opens — the terminal, always, since
+ * 2026-08-20 — and `App.tsx` seeds that, once, into the shared state.
  *
  * ## What stayed, and why each one earned it
  *
@@ -101,6 +102,11 @@ interface Props {
   /**
    * Terminal or conversation — the window's own `sessionView` for this session,
    * set by the same mode switch every other session uses.
+   *
+   * Defaulted to the terminal rather than the conversation, agreeing with
+   * `defaultPane`: a caller that has not wired the window's mode state — a test,
+   * the harness — must draw what the app draws, or the two go looking right in
+   * different places.
    */
   mode?: CopilotPane
   /**
@@ -157,7 +163,7 @@ function when(at: string): string {
 export function CopilotView({
   copilot,
   visible = true,
-  mode = 'chat',
+  mode = 'terminal',
   focus = null,
   startedSessions = [],
   onOpenSession,
@@ -167,6 +173,32 @@ export function CopilotView({
   activity,
 }: Props) {
   const { state, stage } = copilot
+
+  /*
+   * Which machine's copilot this page is about — empty for this computer.
+   *
+   * Held here rather than in `App.tsx` on purpose. It is a fact about *this
+   * page*, nothing else in the window reads it, and the window's toolbar already
+   * names the local copilot's session because that is the session whose account,
+   * model and effort the bar is describing. Lifting it would put a
+   * copilot-page-shaped field into the window's state for one consumer.
+   *
+   * It falls back to this computer whenever the chosen machine stops being
+   * reachable — forgotten on another screen, or gone offline — rather than
+   * leaving the page pointed at a computer that cannot answer. That is the same
+   * rule the New Session dialog follows for the same situation, and for the same
+   * reason: a screen quietly becomes a local one, which is a state that works,
+   * instead of a remote one that does not.
+   */
+  const machines = useCopilotMachines()
+  const [chosenMachine, setChosenMachine] = useState('')
+  const machine = machines.find((row) => row.id === chosenMachine) ?? null
+  const elsewhere = machine !== null && machine.id !== '' && machine.reach === 'ready'
+  useEffect(() => {
+    if (chosenMachine !== '' && (machine === null || machine.reach !== 'ready')) {
+      setChosenMachine('')
+    }
+  }, [chosenMachine, machine])
 
   const [turns, setTurns] = useState<Turn[]>([])
   const bridge = useMemo(() => activity ?? activityBridge(), [activity])
@@ -218,6 +250,14 @@ export function CopilotView({
   return (
     <div className="copilot-page" data-visible={visible}>
       {/*
+        Which machine's copilot. Absent entirely with nothing paired — see
+        `CopilotMachines`, which draws nothing for a single row, because a switch
+        with one position is a label, and a label naming the computer you are
+        sitting at tells nobody anything.
+      */}
+      <CopilotMachines machines={machines} chosen={chosenMachine} onChoose={setChosenMachine} />
+
+      {/*
         The record strip: the things this window has to say that are not the
         conversation.
 
@@ -232,9 +272,18 @@ export function CopilotView({
         of the layout. That is what makes the ordinary case a terminal filling
         the window rather than a terminal with a band of padding over it, which
         would be a smaller copy of the complaint this rewrite answers.
+
+        And every one of the four is about the copilot **on this computer** — its
+        sign-in, its last failed start, the turn that opened this window, the
+        tours it drove here. So they are all gated on `!elsewhere` as well:
+        drawn over another machine's copilot they would be four true sentences
+        about the wrong subject, which is worse than four missing ones. Gated
+        child by child rather than by hiding the strip, because `TourRecap` reads
+        the app's tour record when it mounts and there is no reason to spend that
+        read on a screen that will not show it.
       */}
       <div className="cp-strip scroll-fade">
-        {stage === 'first-run' && (
+        {!elsewhere && stage === 'first-run' && (
           <div className="cp-notice" data-kind="first-run">
             <h2>The account it runs as is signed out</h2>
             <p>
@@ -258,7 +307,7 @@ export function CopilotView({
           </div>
         )}
 
-        {stage === 'unverified' && (
+        {!elsewhere && stage === 'unverified' && (
           <div className="cp-notice" data-kind="unverified">
             <p>
               This window could not check whether the copilot is signed in — asking timed out or was
@@ -268,7 +317,7 @@ export function CopilotView({
           </div>
         )}
 
-        {stage === 'stopped' && state?.problem && (
+        {!elsewhere && stage === 'stopped' && state?.problem && (
           <div className="cp-notice" data-kind="problem">
             <p>{state.problem}</p>
           </div>
@@ -282,7 +331,7 @@ export function CopilotView({
           row of the action log, which is the only durable record of what the
           copilot did, so this is the record itself rather than a retelling of it.
         */}
-        {focus !== null && (
+        {!elsewhere && focus !== null && (
           <div className="cp-turn">
             {focused ? (
               <>
@@ -322,7 +371,7 @@ export function CopilotView({
           outside the folder the copilot can write to. Labelling it as the app's is
           the whole value of writing it there.
         */}
-        <TourRecap />
+        {!elsewhere && <TourRecap />}
 
         {/*
           Forward: the sessions this copilot started, from the copilot's own
@@ -333,7 +382,7 @@ export function CopilotView({
           is the question somebody has when they are standing in front of the
           thing that did it.
         */}
-        {startedSessions.length > 0 && onOpenSession && (
+        {!elsewhere && startedSessions.length > 0 && onOpenSession && (
           <div className="cp-started">
             <h2 className="cp-started-label">Sessions it started</h2>
             <ul className="cp-started-list">
@@ -354,7 +403,16 @@ export function CopilotView({
       </div>
 
       <div className="cp-body">
-        {sessionId === null || root === null ? (
+        {elsewhere && machine !== null ? (
+          /*
+            Another machine's copilot, which is a different thing on the wire and
+            therefore a different component: parsed conversation, never bytes.
+            `RemoteCopilot` carries why there is no terminal half of it, and the
+            short version is that `remote/hidden-sessions.ts` will not put a
+            copilot's pty on the network for anybody, ever.
+          */
+          <RemoteCopilot machineId={machine.id} machineName={machine.name} open={machine.open} />
+        ) : sessionId === null || root === null ? (
           <PageEmpty
             // The copilot's own glyph, from the one constant that defines it, so
             // this window and the row that opened it cannot draw two marks.
@@ -370,7 +428,14 @@ export function CopilotView({
           <>
             {/* Both stay mounted; only one is shown. The terminal keeps its
                 scrollback and the login prompt in it across a trip through
-                Chat, which is the whole reason the session views do the same. */}
+                Chat, which is the whole reason the session views do the same.
+
+                A trip through *another machine* does unmount it, and that is the
+                one place this rule is not held: the remote copilot has no
+                terminal to sit beside, so there is nothing to hide it behind.
+                `TerminalView` redraws from the main process's scrollback when it
+                comes back, so what is actually lost is a half-typed line — and
+                switching machines is a deliberate act, unlike clicking a pill. */}
             <div className="cp-pane" data-shown={mode === 'terminal' ? 'true' : undefined}>
               <TerminalView
                 sessionId={sessionId}

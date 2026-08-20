@@ -51,33 +51,97 @@
 
 /* ----------------------------------------------------------------- message */
 
-/* Space is the only separator. A message carries no box, no rule and no card. */
+/*
+  Which side a turn is on — 2026-08-20.
+
+  *"my message should start from the right, should be on the other side, like
+  this one, just like Claude. See, mine is right side. … The left side will be
+  the agent … So no need to give a name actually on both sides. Not even you,
+  for me also not you."*
+
+  Side instead of name. There is no `.cv-who` in this sheet any more, because
+  there is no speaker label left in the markup: in a conversation with exactly
+  two parties the alignment answers "who said this" on every turn without a word
+  to read, and the labels were two words per message in a pane whose whole job
+  is the talking.
+
+  A column rather than the block it was, so `align-items` can place the turn and
+  its footer as one object. Space is still the only separator between turns: a
+  message carries no rule, no card and — on the agent's side — no box at all.
+*/
 .cv-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   padding: 0 0 var(--sp-6);
 }
 
-.cv-meta {
+.cv-you {
+  align-items: flex-end;
+}
+
+/*
+  The metadata, under the words.
+
+  *"give the time and all that. Just the text only and time only will be good
+  enough. And give the copy button wherever it's possible at the end of maybe
+  messages."* So: time, copy, and nothing else — at the end of the turn, which
+  is where the eye already is when one finishes.
+
+  The row reverses on his side so the two land against the same edge his bubble
+  does, with the time nearest the text either way.
+*/
+.cv-foot {
   display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-  margin-bottom: var(--sp-15);
-}
-
-/* Sentence case, not tracked-out capitals: a speaker's name is a name. */
-.cv-who {
-  font-size: var(--t-footnote);
-  font-weight: var(--w-semibold);
-  color: var(--text-secondary);
-}
-
-.cv-you .cv-who {
-  color: var(--text-primary);
+  align-items: center;
+  gap: var(--sp-15);
+  margin-top: var(--sp-1);
+  /* The bubble's own inset, so the time sits under the first character of the
+     message rather than under the fill's rounded corner. */
+  padding: 0 var(--sp-1);
+  min-height: 20px;
 }
 
 .cv-time {
   font-size: var(--t-footnote);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/*
+  One control per turn, and it keeps its box whether or not it is showing.
+
+  Revealed on hover of the turn, and on its own focus — a control that appears
+  only under a pointer cannot be reached from a keyboard, which is the same rule
+  the strip's ✕ is written to. `opacity` rather than `display`, so the footer
+  does not change height as the pointer crosses the column and shuffle every
+  message below it by two pixels.
+*/
+.cv-copy {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.cv-message:hover .cv-copy,
+.cv-copy:focus-visible {
+  opacity: 1;
+}
+
+.cv-copy:hover {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+.cv-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .cv-body {
@@ -87,17 +151,43 @@
   overflow-wrap: anywhere;
 }
 
-/* The one place a role is given a surface of its own, and it is a tint rather
-   than a line or a bubble — enough to find where you last spoke, not enough to
-   turn the column into alternating blocks of colour. */
+/*
+  His turn: a tinted block against the right-hand edge.
+
+  The tint is the same one it has always had, and it is doing more work now than
+  it was — it is what gives the right-hand side an edge to be against. A
+  right-aligned paragraph with no surface would be ragged down its left and
+  would read as a layout fault rather than as a side.
+
+  `max-width` is what keeps it a *message* and not a right-aligned document: a
+  pasted three-paragraph instruction would otherwise fill the measure and land
+  in the same place the agent's replies do, and the alignment would stop saying
+  anything. 80% is the proportion at which a one-line prompt is a short block on
+  the right and a long one still visibly stops short of the left margin.
+
+  `width: fit-content` on the flex child rather than a shrink-to-fit trick: the
+  item is already `align-self`-ed by the column above, so this only has to stop
+  the block from taking the whole row.
+*/
 .cv-you .cv-body {
-  /* Pulled out by exactly its own padding, so the words line up with the "You"
-     above them and with the agent's paragraphs — the fill sits behind the
-     column rather than indenting it. */
-  margin: 0 calc(var(--sp-3) * -1);
-  padding: var(--sp-3);
+  width: fit-content;
+  max-width: 80%;
+  padding: var(--sp-2) var(--sp-3);
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
+  text-align: left;
+}
+
+/* The agent keeps the full measure and no surface: it is the document half of
+   the pane, and a bubble around a long reply with code folded inside it would
+   be a box around most of the window. */
+.cv-agent .cv-body {
+  width: 100%;
+}
+
+/* Reversed, so time and copy finish against the same edge the bubble does. */
+.cv-you .cv-foot {
+  flex-direction: row-reverse;
 }
 
 /* A typed prompt is not markup, so its newlines are all the structure it has. */

@@ -39,63 +39,73 @@ import { machineChoices, readMachines } from './machines-bridge'
  * which is the order they were created. That is what makes the picker read
  * `terminaldeck · Session 2` — the same words as the row he would have clicked.
  *
- * ## Sessions on another machine: listed, named, and not typed into
+ * ## Sessions on another machine: listed, named, and typed into
  *
  * This list used to be `session:list` and nothing else, which is this machine's
- * ptys and only this machine's ptys — `src/main/index.ts:2293`, answered from
- * `ptys.list()`. That was invisible right up until the browser learned to open
- * another machine's `localhost` (`BrowserWorkspace.openThere`, the 2026-08-18
- * change): he would be looking at a page served by his PC, inspect an element on
- * it, open this picker, and find nothing but the sessions on the Mac in front of
- * him. The session he actually wanted was in the rail two inches away, on the
- * machine the page came from, and the picker did not mention that it had left it
- * out. **A screen that quietly shows a subset is the failure mode this project
- * keeps finding**, so the rows are here now.
+ * ptys and only this machine's ptys. That was invisible right up until the
+ * browser learned to open another machine's `localhost`
+ * (`BrowserWorkspace.openThere`, the 2026-08-18 change): he would be looking at
+ * a page served by his PC, inspect an element on it, open this picker, and find
+ * nothing but the sessions on the Mac in front of him. **A screen that quietly
+ * shows a subset is the failure mode this project keeps finding**, so the rows
+ * were added.
  *
- * They are here, and they are refused, and the refusal is a fact about the wire
- * rather than a decision taken here:
+ * They were then listed and *refused*, for a whole day, and that was worse. Asad
+ * found it on camera on 2026-08-20:
  *
- *  - The only verb on the remote protocol that puts characters into a session is
- *    `input`, and `src/main/remote/server.ts:2867-2878` will not act on it
- *    unless this desktop is **attached** to that session. The comment there says
- *    why in four words — *"Attachment is the authorisation"* — and it is load
- *    bearing: without it any device that had ever seen or guessed an id would
- *    have a keyboard on somebody's agent.
- *  - Attaching in order to send is not free, and the cost lands on a terminal he
- *    is reading. There is one connection per machine and `connection.handles` is
- *    keyed by session id, so a second attach for a session a pane already holds
- *    makes the host drop the pane's handle and replay the whole scrollback
- *    (`server.ts:1749-1753` and `:1785-1791`). The pane writes every byte it is
- *    given straight into xterm without looking at the `replay` flag
- *    (`src/renderer/machines/RemoteTerminal.tsx:123`), so he would watch his own
- *    scrollback print itself a second time — and when that pane closed, its
- *    detach (`RemoteTerminal.tsx:147`) would take the browser's target away with
- *    it. One handle, two owners, and no way for either to know about the other.
+ *   > *"I cannot send from my local browser to remote one, remote session… So
+ *   > let's make it, if the browser is local, it should be able to send to the
+ *   > remote session too. Not just local sessions. **If they are visible here,
+ *   > they should be working too.** Okay, make sure it works cross channel."*
  *
- * The obvious way around that was tried on paper and rejected: **list only the
- * remote sessions this window is already attached to.** Those sends do land, and
- * the preload is a choke point every attach passes through, so it is buildable.
- * It was dropped because the resulting list is not a rule anybody could state —
- * a PC running four agents would show the one that happens to have a pane open,
- * and the other three would be missing for a reason that is invisible from the
- * dropdown. Replacing "this machine only", which is a sentence, with "whichever
- * of them you opened here", which is an accident, is not an improvement; it is
- * the same omission with a worse boundary.
+ * He is right, and the refusal was never a rule about what he is allowed to do —
+ * it was this file declining to pretend a send had happened. The wire genuinely
+ * could not carry one. The only verb on the remote protocol that put characters
+ * into a session was `input`, and `server.ts` will not act on it unless this
+ * desktop is **attached** to that session — *"Attachment is the authorisation"*,
+ * which is load bearing, because without it any device that had seen or guessed
+ * an id would have a keyboard on somebody's agent. And attaching in order to
+ * send was not free: one connection per machine, handles keyed by session id, so
+ * a second attach for a session a pane already holds makes the host drop the
+ * pane's handle and replay its whole scrollback into a terminal he is reading.
  *
- * So every session on every connected machine is listed, carrying that machine's
- * name, and choosing one turns Send off with a sentence saying where it is. That
- * is the shape `machines-bridge.ts` already settled on for a machine whose ports
- * cannot be reached — *"Machines that cannot be reached are kept, carrying their
- * sentence"* — and the argument is the same: the most useful thing this dropdown
- * can say about a computer he is looking at is that it is there.
+ * ## What closed it
  *
- * **What closes it.** A verb that authorises typing without subscribing to
- * output, or an `attach` that does not displace a handle this connection already
- * holds — either one in `src/main/remote/protocol.ts` and `server.ts`, with the
- * guest half in `machines/guest.ts`. When that exists, {@link resolveTarget}
- * stops refusing these rows and the send routes on `machineId` through the
- * preload's `writeToMachineSession`, which has been on the bridge since the
- * remote pane needed it. Nothing else here has to change.
+ * Exactly what the note here used to prescribe: **a verb that authorises typing
+ * without subscribing to output.** `session.send` on the wire, gated on
+ * `mayTouch` — the device's folder reach — and on nothing else, which is the
+ * same door `controls.apply` has always gone through to type `/model` into a
+ * remote agent. No attach, no handle, no scrollback replayed at anybody.
+ *
+ * So {@link resolveTarget} no longer refuses a remote row, and the send routes
+ * on `machineId`: local rows through `writeToSession`, remote rows through
+ * `sendToMachineSession`. The one asymmetry that survives is worth stating —
+ * a remote send is a **round trip that answers**, because the far machine can
+ * refuse (the folder was unshared, the session exited a moment ago) and a popup
+ * that said "Sent" about a line dropped on the floor is the thing this whole
+ * file exists to not do.
+ *
+ * ## The labels are built here, and now they carry the name somebody typed
+ *
+ * The rail's numbering lives in `renderer/shell`, which this file may not reach
+ * into, so the scheme is reproduced rather than imported: sessions are grouped
+ * by project folder and numbered in list order, which is creation order. That is
+ * what makes a row read `terminaldeck · Session 2` — the same words as the row
+ * he would have clicked.
+ *
+ * What that scheme could not say was a **name**. Asad, on the same recording,
+ * looking at the copilot in this dropdown:
+ *
+ *   > *"Let's say copilot session one — and it should call commander also,
+ *   > because I name it as commander, but it is showing copilot."*
+ *
+ * `copilot · Session 1` was computed entirely from the session's `cwd`, whose
+ * last segment happens to be the word `copilot`. Nothing in this file had ever
+ * looked at what the session is *called*. So {@link readSessions} now takes the
+ * names the window already knows — the rail's own titles for local sessions, and
+ * the title the far machine sends for remote ones — and a session with a name
+ * says its name where the number used to be. The number is what is left for a
+ * session nobody has named, which is most of them.
  */
 
 /** One session, as a picker needs to see it. Mirrors `SessionMeta`. */
@@ -110,12 +120,23 @@ export interface AgentSession {
   /** Its process has exited. Listed, but never a target. */
   ended: boolean
   /**
+   * What this session is called, or empty when nobody has named it.
+   *
+   * Empty is the ordinary case and is not a missing value: most sessions are
+   * known by their folder and their position in it, which is what {@link label}
+   * falls back to. A non-empty name is either something a person typed into the
+   * rail or something the agent titled itself, and either way it is what the
+   * rest of the window is calling that session — so it is what this picker calls
+   * it too.
+   */
+  name: string
+  /**
    * The paired machine it runs on, or empty for this one.
    *
    * Empty is not a missing value and never should be read as one: it is the
-   * answer for every session on this computer, which is every session that can
-   * be sent to today. `resolveTarget` refuses anything else — see the header for
-   * the wire's reason and for what would let it stop.
+   * answer for every session on this computer. Since `session.send` landed on
+   * the wire it no longer decides whether a row can be sent to — it decides
+   * *how*, which is the routing in `useAgentTarget`.
    */
   machineId: string
   /** What that machine is called here, or empty for this one. Never guessed. */
@@ -251,7 +272,9 @@ export function resolveAgentSessions(host: unknown): AgentSessionBridge | null {
 }
 
 /** One session out of whatever the bridge sent, or null if it is not one. */
-function readSession(value: unknown): { id: string; cwd: string; provider: string; ended: boolean } | null {
+function readSession(
+  value: unknown,
+): { id: string; cwd: string; provider: string; ended: boolean; title: string } | null {
   if (typeof value !== 'object' || value === null) return null
   const record = value as Record<string, unknown>
   if (typeof record.id !== 'string' || record.id === '') return null
@@ -261,33 +284,92 @@ function readSession(value: unknown): { id: string; cwd: string; provider: strin
     provider: typeof record.provider === 'string' ? record.provider : '',
     // `exitCode` is null while the process lives and a number once it has gone.
     ended: typeof record.exitCode === 'number',
+    // Whatever the far end or the main process is calling it. `nameOf` decides
+    // whether that is worth printing; a title that is only the folder name again
+    // is not a name and would print `terminaldeck · terminaldeck`.
+    title: typeof record.title === 'string' ? record.title : '',
   }
 }
 
 /**
- * `folder · Session 2`, or `Session 2` for a session that has no folder.
+ * A session's name, or empty when it has none worth printing.
+ *
+ * Two things arrive here wearing the same field. The main process seeds every
+ * session's `title` with `basename(cwd)` at spawn, and the far machine sends
+ * that same seed for its own sessions — so a title equal to the folder is not a
+ * name, it is the absence of one, and printing it gives `copilot · copilot`. A
+ * title that has moved on from the folder is either the agent titling itself or
+ * a person typing in the rail, and both are names.
+ *
+ * The window's own answer wins over the wire's when there is one: the rail is
+ * where a rename is typed, and a rename that is only in this window has not
+ * reached anybody's `session:list` yet. That is the whole of why `named` is a
+ * parameter rather than something read from the row.
+ */
+function nameOf(id: string, cwd: string, title: string, named: NameSource): string {
+  const typed = named.get(id)
+  if (typed !== undefined && typed !== '') return typed
+  const folder = cwd ? folderName(cwd) : ''
+  return title && title !== folder ? title : ''
+}
+
+/**
+ * Names the window knows that a session list does not carry.
+ *
+ * A `Map`, taken as a parameter, so this module stays pure and the one consumer
+ * decides where the names come from — see `useAgentTarget`, which assembles it
+ * from the session store and from the copilot's own identity file. An empty map
+ * is a real answer and the honest one for a caller with nothing better: every
+ * row falls back to its number.
+ */
+export type NameSource = ReadonlyMap<string, string>
+
+const NO_NAMES: NameSource = new Map()
+
+/**
+ * `folder · Session 2`, or `folder · commander` once somebody has named it.
  *
  * One function because the two lists have to number the same way. A remote
  * session that read `Session 4` while the rail beside it read `Session 2` would
  * be the picker disagreeing with the app about which session it means, which is
  * the failure this labelling scheme exists to avoid in the first place.
+ *
+ * The name displaces the number rather than joining it. `copilot · commander ·
+ * Session 1` is three facts about one row in a dropdown that is 26rem wide, and
+ * the number is the least useful of them the moment there is a name: the number
+ * exists to tell two sessions in one folder apart, and a name already does.
  */
-function labelFor(cwd: string, index: number): string {
+function labelFor(cwd: string, index: number, name: string): string {
   const folder = cwd ? folderName(cwd) : ''
-  return folder ? `${folder} · Session ${index}` : `Session ${index}`
+  const tail = name || `Session ${index}`
+  return folder ? `${folder} · ${tail}` : tail
 }
 
 /** This machine's sessions, in the order the main process listed them. */
-function sessionsHere(value: unknown): AgentSession[] {
+function sessionsHere(value: unknown, named: NameSource): AgentSession[] {
   if (!Array.isArray(value)) return []
   const counts = new Map<string, number>()
   const out: AgentSession[] = []
   for (const entry of value) {
     const session = readSession(entry)
     if (!session) continue
+    // Numbered whether or not it has a name, and that is deliberate: the number
+    // is a position in a folder, so a session that is named must still consume
+    // its place or the two below it renumber every time somebody types in the
+    // rail.
     const index = (counts.get(session.cwd) ?? 0) + 1
     counts.set(session.cwd, index)
-    out.push({ ...session, label: labelFor(session.cwd, index), machineId: '', machineName: '' })
+    const name = nameOf(session.id, session.cwd, session.title, named)
+    out.push({
+      id: session.id,
+      cwd: session.cwd,
+      provider: session.provider,
+      ended: session.ended,
+      name,
+      label: labelFor(session.cwd, index, name),
+      machineId: '',
+      machineName: '',
+    })
   }
   return out
 }
@@ -308,7 +390,7 @@ function sessionsHere(value: unknown): AgentSession[] {
  * than an empty gap. Its `ports` and `refusal` are computed and ignored here,
  * and that is the price of having one naming rule instead of two.
  */
-function sessionsElsewhere(value: unknown): AgentSession[] {
+function sessionsElsewhere(value: unknown, named: NameSource): AgentSession[] {
   const view = readMachines(value)
   const names = new Map(machineChoices(view).map((choice) => [choice.id, choice.name]))
   const counts = new Map<string, number>()
@@ -328,10 +410,17 @@ function sessionsElsewhere(value: unknown): AgentSession[] {
       const key = `${link.id}\u0000${session.cwd}`
       const index = (counts.get(key) ?? 0) + 1
       counts.set(key, index)
+      // The far machine's own word for it. A rename typed on *that* keyboard
+      // rides here in `RemoteSession.title`, which is the only channel it has;
+      // `named` is this window's map and holds nothing about another computer's
+      // sessions, so it contributes nothing to this branch and is passed anyway
+      // rather than forked into a second rule.
+      const name = nameOf(session.id, session.cwd, session.title, named)
       out.push({
         id: session.id,
         cwd: session.cwd,
-        label: `${machineName} · ${labelFor(session.cwd, index)}`,
+        name,
+        label: `${machineName} · ${labelFor(session.cwd, index, name)}`,
         provider: session.provider,
         ended: session.exitCode !== null,
         machineId: link.id,
@@ -355,31 +444,32 @@ function sessionsElsewhere(value: unknown): AgentSession[] {
  * machine" is always the first row — and the useful order besides, since the
  * rows at the top are the ones a send can actually reach.
  */
-export function readSessions(value: unknown): AgentSession[] {
+export function readSessions(value: unknown, named: NameSource = NO_NAMES): AgentSession[] {
   // A bare array is this machine's sessions and nothing else. See the note on
   // `AgentSessionBridge.listSessions`: that is a real answer, not an old one.
-  if (Array.isArray(value)) return sessionsHere(value)
+  if (Array.isArray(value)) return sessionsHere(value, named)
   if (typeof value !== 'object' || value === null) return []
   const envelope = value as Record<string, unknown>
-  return [...sessionsHere(envelope.here), ...sessionsElsewhere(envelope.elsewhere)]
+  return [
+    ...sessionsHere(envelope.here, named),
+    ...sessionsElsewhere(envelope.elsewhere, named),
+  ]
 }
 
 /**
  * The session a send would actually reach, given what is chosen.
  *
- * Null in four cases, and they are all the same answer to the user: nothing
- * chosen, a choice that is no longer in the list, a choice whose process has
- * exited, and a choice on another machine. The third is the case he named —
- * *"if that session dies, I need to select again another session"* — and it is
- * the reason this is a function over the live list rather than a stored object.
+ * Null in three cases, and they are the same answer to the user: nothing
+ * chosen, a choice that is no longer in the list, and a choice whose process has
+ * exited. The last is the case he named — *"if that session dies, I need to
+ * select again another session"* — and it is the reason this is a function over
+ * the live list rather than a stored object.
  *
- * The fourth is the newest and the one to be careful with. It is not a rule
- * about what he is allowed to do; it is this file refusing to pretend a send
- * happened. `input` on the remote wire is fire-and-forget from here — the far
- * machine's refusal comes back as an `error` frame that no popup is listening
- * for — so a target that cannot be typed into would report `Sent` and drop the
- * line on the floor. The header has the mechanism and what would remove this
- * branch.
+ * There was a fourth, and it is gone: a session on another machine used to
+ * resolve to null, because the wire had no verb that could type into one without
+ * attaching. `session.send` is that verb, so a remote row is now a target like
+ * any other and the machine it is on decides the *route* rather than the answer.
+ * The header carries the mechanism.
  */
 export function resolveTarget(
   chosenId: string,
@@ -388,7 +478,6 @@ export function resolveTarget(
   if (!chosenId) return null
   const found = sessions.find((session) => session.id === chosenId)
   if (!found || found.ended) return null
-  if (found.machineId !== '') return null
   return found
 }
 
@@ -412,34 +501,18 @@ export function whyDisabled(
 ): string {
   if (!available) return 'This build cannot list your sessions, so there is nothing to send to.'
   if (sessions.length === 0) return 'No sessions are open. Start one, then choose it here.'
-  if (!chosenId) {
-    // Everything in the list is somewhere else. He is almost certainly looking
-    // at that machine's page — that is how this list came to be all remote — so
-    // the sentence has to say why the rows below it will not do, before he
-    // picks one and finds out.
-    if (sessions.every((session) => session.machineId !== '')) {
-      return (
-        'Every session listed is on another machine. This browser sends only to sessions on ' +
-        'this one — start a session here, then choose it.'
-      )
-    }
-    return 'Choose a session first — this will not guess one for you.'
-  }
+  if (!chosenId) return 'Choose a session first — this will not guess one for you.'
   const found = sessions.find((session) => session.id === chosenId)
   if (!found) return 'That session is gone. Choose another one.'
-  // Before the machine branch, because a session that has exited is finished
-  // wherever it was running, and "open it and type into it there" would be
-  // advice about a process that is not there any more.
   if (found.ended) return `${found.label} has exited. Choose another one.`
-  if (found.machineId !== '') {
-    // Kept to two clauses on purpose. This paragraph is `flex-basis: 100%`
-    // inside a 26rem popup, so a sentence that reads well in this file becomes
-    // five lines under the field; the long form of the argument belongs in the
-    // header, not on his screen.
-    return (
-      `${found.label} is on ${found.machineName}. This browser sends only to sessions on this ` +
-      'machine — open that one from the sidebar and type into it there.'
-    )
-  }
+  /*
+   * Two sentences about machines used to live here — one for a list that was
+   * entirely remote, one for a remote row that had been chosen — and both were
+   * refusals. They are gone with the refusal itself: a session on another
+   * machine is a target now, so there is nothing left to explain before the
+   * press. What can still go wrong goes wrong *during* the send, on the far
+   * machine, and comes back as that machine's own sentence; `useAgentTarget`
+   * shows it there rather than predicting it here.
+   */
   return ''
 }

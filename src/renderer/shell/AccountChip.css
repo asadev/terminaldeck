@@ -253,3 +253,25 @@
 .toolbar-chips > .toolbar-chip-sep:last-child {
   display: none;
 }
+
+/*
+  The account this session is waiting to become.
+
+  Drawn one step back from the name beside it, and that hierarchy is the honest
+  one: the chip's job is to say what this session *is* running as, and the
+  incoming account has not happened yet. Making the two equal weight would read
+  as the switch already having taken, which is the single claim this feature is
+  not allowed to make early.
+
+  Narrower than the name for the same reason, and ellipsised rather than wrapped
+  — the chip sits on a one-line bar and a second line would push the terminal
+  down every time somebody armed a switch.
+*/
+.account-chip .account-chip-pending {
+  color: var(--text-tertiary, var(--text-secondary));
+  font-weight: var(--w-regular, 400);
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

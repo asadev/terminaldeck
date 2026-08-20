@@ -206,7 +206,17 @@ describe('the middle zone', () => {
     const html = page({ id: 's1', link: 'ready', view: view() })
     expect(html).toContain("couldn't find anything this server is set up to keep running")
     // And it points at the thing that makes the empty page honest rather than a
-    // dead end: there is still a terminal, one door further in.
+    // dead end: there is still a terminal. This used to say "one door further
+    // in" and assert only that Advanced existed, which was true while the
+    // control lived inside that disclosure. It was promoted to the page head on
+    // 2026-08-19 — Asad connected a server and reported there was "no way" to
+    // open a session on it — so the reassurance is now on screen beside the
+    // empty result rather than behind a label telling him not to look.
+    // Note the fixture: this page is built with no session opener, so the
+    // control itself is absent and the page says "This build cannot open one."
+    // The sentence is what carries the reassurance here, and it must not name a
+    // place the control no longer lives.
+    expect(html).not.toContain('in Advanced below')
     expect(html).toContain('Advanced')
   })
 

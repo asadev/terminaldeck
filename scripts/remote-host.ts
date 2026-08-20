@@ -69,6 +69,9 @@ import { createRelayClient } from '../src/main/remote/relay-client'
 import { scanDevPorts } from '../src/main/dev-ports'
 import { PtyManager } from '../src/main/pty-manager'
 import { detectProviders, loginPath, PROVIDERS } from '../src/main/providers'
+import { CopilotAccess } from '../src/main/remote/copilot-access'
+import { CopilotRuns, type CopilotChatUpdate } from '../src/main/remote/copilot-runs'
+import { asDeviceKind, DeviceKinds, type DeviceKind } from '../src/main/remote/device-kind'
 import { SessionFanout } from '../src/main/remote/session-fanout'
 import { remoteSessionCreator } from '../src/main/remote/session-create'
 import {
@@ -95,6 +98,24 @@ const RELAY_URL = flag('relay-url', '')
 const RELAY_PORT = Number(flag('relay-port', '8787'))
 const CONTROL_PORT = RELAY_PORT + 1
 const APPROVE_AFTER = Number(flag('approve-after', '4000'))
+/**
+ * What this harness approves a device *as*, and therefore whether it gets the
+ * copilot.
+ *
+ * Since 2026-08-19 the two are one question: a device approved as **my device**
+ * reaches the copilot automatically and a **guest** never does, with no second
+ * connection and no second code (`copilot-access.ts`). So a harness that could
+ * only approve — which is what this was — could not put a phone on either side
+ * of the only rule the feature has, and the client's whole Copilot tab was
+ * unreachable from here.
+ *
+ *   scripts/remote-host.sh --kind guest    # prove the tab is absent
+ *
+ * Defaulted to `mine` because that is what a person approving their own phone
+ * picks, and because every existing invocation of this script predates the
+ * question.
+ */
+const KIND: DeviceKind = asDeviceKind(flag('kind', 'mine')) ?? 'mine'
 const REPO = process.env.TD_REPO_DIR ?? resolve(import.meta.dirname ?? '.', '..')
 /**
  * Which harness host this is, and therefore whose state directory it uses.
@@ -151,7 +172,11 @@ const log = (line: string): void => process.stdout.write(`${new Date().toISOStri
  * That is a real difference and it is named rather than papered over.
  */
 const ptys = new PtyManager(
-  (id, data) => fanout.noteData(id, data),
+  (id, data) => {
+    fanout.noteData(id, data)
+    // And the copilot's conversation, when this session is one. See `chatEcho`.
+    chatEcho(id, data)
+  },
   (id, exitCode) => fanout.noteExit(id, exitCode),
   (id, status) => fanout.noteStatus(id, status),
 )
@@ -252,6 +277,126 @@ const fanout = new SessionFanout({
 
 const sessions: SessionAccess = fanout
 
+/* ------------------------------------------------------------- copilot -- */
+
+/**
+ * The copilot, as a paired device reaches it — and the kind store that decides
+ * whether it may.
+ *
+ * This half of the harness did not exist, and its absence was not neutral. With
+ * no `copilot` passed to `createRemoteServer` the welcome carries no `copilot`
+ * key at all, which is the *guest* shape on the wire — so every phone that has
+ * ever been driven against this script saw a client with no Copilot tab, and a
+ * client with no Copilot tab is indistinguishable from a client whose copilot is
+ * broken. The one screen this repository keeps shipping defects on was the one
+ * screen the harness could not reach.
+ *
+ * What is real here: `DeviceKinds`, `CopilotAccess` and `CopilotRuns` are the
+ * app's own, so the rule a phone meets — *my device gets it, a guest never* — is
+ * enforced by the same three files that enforce it on a Mac, including the
+ * `copilot.hello` path and the per-frame tier gate in `server.ts`.
+ *
+ * What is a stand-in, named rather than glossed: there is no `deck-control` and
+ * no Claude CLI in this process, so a *run* here is a plain shell, its "chat" is
+ * whatever that shell printed, and `desk()` reports the copilot at the machine
+ * as stopped because there is no machine to pin one at. Those are the parts a
+ * phone cannot tell apart from the real thing anyway — it sees frames — and
+ * everything that decides *whether a frame is served* is production code.
+ */
+const kinds = new DeviceKinds(STORAGE)
+
+/**
+ * Approve, having first written down what the device is.
+ *
+ * The order is the app's (`remote:device:approve`) and it is the property rather
+ * than a tidiness preference: `RemoteAuth.verify` starts answering yes the
+ * moment the approval lands, so a kind written afterwards leaves an instant in
+ * which a device is admitted as a guest and told, correctly, that it has no
+ * copilot.
+ */
+function approve(id: string): void {
+  kinds.claim(id, KIND)
+  auth.approveDevice(id)
+}
+
+const copilotAccess = new CopilotAccess({ isMine: (deviceId) => kinds.kindOf(deviceId) === 'mine' })
+
+/** Where a harness run's config files would go. Under the harness state, never a real copilot folder. */
+const COPILOT_ROOT = resolve(STORAGE, 'copilot')
+mkdirSync(COPILOT_ROOT, { recursive: true })
+
+/**
+ * A run's output, turned into the one chat bubble a phone can read.
+ *
+ * The real path is `chat-transcript.ts` reading a Claude CLI's JSONL. There is
+ * no CLI here, so this is the honest minimum: the bytes the shell printed, with
+ * escape sequences dropped, pushed under one growing message id — which is
+ * exactly the shape `mergeChat` on the client is built for, so the client code
+ * under test is the same code either way.
+ */
+const chatSinks = new Map<string, { onUpdate: (update: CopilotChatUpdate) => void; text: string }>()
+
+function chatEcho(sessionId: string, data: string): void {
+  const sink = chatSinks.get(sessionId)
+  if (!sink) return
+  // eslint-disable-next-line no-control-regex
+  sink.text += data.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\r/g, '')
+  sink.onUpdate({
+    messages: [{ id: `${sessionId}-out`, role: 'agent', text: sink.text.slice(-4000), at: Date.now() }],
+    reset: false,
+  })
+}
+
+const copilot = new CopilotRuns({
+  links: copilotAccess,
+  // No `deck-control` in this process, so nothing can be confirmed here and a
+  // phone is told there is nothing waiting — which is the truth, not a stub.
+  consent: () => null,
+  callers: { set: () => undefined, delete: () => false },
+  // A URL rather than null, because null is the app's way of saying *the
+  // copilot's tools are not running* and would leave every Start button on the
+  // phone refusing with a sentence about a machine this harness is standing in
+  // for. The address is this process's own control port; nothing dials it.
+  endpoint: () => ({ url: `http://127.0.0.1:${CONTROL_PORT}/harness-tools` }),
+  copilotRoot: () => COPILOT_ROOT,
+  spawn: async (request) => {
+    const spec = PROVIDERS.shell
+    const meta = ptys.create(
+      { cwd: request.cwd },
+      { provider: 'shell', command: spec.spawn.command, args: spec.spawn.args, path: await loginPath() },
+    )
+    log(`copilot run  ${meta.id} for ${request.deviceId}`)
+    return meta.id
+  },
+  isAlive: (id) => ptys.list().some((session) => session.id === id && session.exitCode === null),
+  stop: (id) => ptys.kill(id),
+  say: (id, text) => ptys.write(id, `${text}\n`),
+  interrupt: (id) => ptys.write(id, '\u0003'),
+  desk: () => ({
+    status: 'stopped',
+    profile: null,
+    signedIn: null,
+    available: true,
+    reason: null,
+  }),
+  cost: () => ({ tools: 0, turnTokens: 0 }),
+  sessions: () =>
+    ptys.list().map((session) => ({
+      id: session.id,
+      title: session.title,
+      cwd: session.cwd,
+      provider: session.provider,
+      status: session.exitCode === null ? 'running' : 'exited',
+      startedAt: session.createdAt,
+      originRunId: null,
+    })),
+  log: () => ({ rows: [], more: false }),
+  chat: (sessionId, onUpdate) => {
+    chatSinks.set(sessionId, { onUpdate, text: '' })
+    return () => void chatSinks.delete(sessionId)
+  },
+})
+
 /* ------------------------------------------------------------------ run -- */
 
 let relayUrl = RELAY_URL
@@ -309,6 +454,11 @@ const server = createRemoteServer({
     log(`web.open     ${url}`)
     return true
   },
+  // The copilot layer, and who it is shared with. Passing the first is what
+  // makes this host advertise the `copilot` capability at all; the second is
+  // what filters the welcome per device, so a guest is sent no `copilot` key.
+  copilot,
+  copilotEligible: (deviceId) => kinds.kindOf(deviceId) === 'mine',
   relay: link,
   // No Tailscale in this process. The relay is the only way in, which is also
   // the path the phone client uses in the field.
@@ -388,8 +538,8 @@ setInterval(() => {
   for (const device of auth.listDevices()) {
     if (device.approved) continue
     if (Date.now() - device.pairedAt < APPROVE_AFTER) continue
-    auth.approveDevice(device.id)
-    log(`approved     ${device.name}`)
+    approve(device.id)
+    log(`approved     ${device.name} as ${KIND}`)
   }
 }, 500).unref()
 
@@ -438,6 +588,22 @@ const control = createServer((request, response) => {
         }),
       )
     }
+    /**
+     * What each device was approved as, and what that buys it.
+     *
+     * The copilot is not a separate connection any more, so this is the only
+     * thing a run can read to explain a Copilot tab that is there or missing.
+     */
+    case '/kinds':
+      return answer(
+        auth.listDevices().map((device) => ({
+          id: device.id,
+          name: device.name,
+          approved: device.approved,
+          kind: kinds.kindOf(device.id),
+          copilot: copilotAccess.linked(device.id),
+        })),
+      )
     case '/ports':
       return void scanDevPorts(true).then((ports) => answer(ports))
     /**
@@ -513,8 +679,8 @@ const control = createServer((request, response) => {
       return void mint().then((uri) => answer({ uri }))
     case '/approve': {
       const approved = auth.listDevices().filter((device) => !device.approved).map((device) => device.id)
-      for (const id of approved) auth.approveDevice(id)
-      return answer({ approved })
+      for (const id of approved) approve(id)
+      return answer({ approved, kind: KIND })
     }
     case '/stop-tunnel': {
       const connection = url.searchParams.get('connection') ?? ''
@@ -528,7 +694,7 @@ const control = createServer((request, response) => {
     default:
       response.writeHead(404, { 'content-type': 'text/plain' })
       response.end(
-        'state | ports | uploads | scrollback | input | start | pair | approve | stop-tunnel | quit\n',
+        'state | kinds | ports | uploads | scrollback | input | start | pair | approve | stop-tunnel | quit\n',
       )
   }
 })

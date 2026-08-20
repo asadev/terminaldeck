@@ -47,33 +47,87 @@ const projects = [
   { path: '/Users/apple/Projects/science-locus', name: 'science-locus' },
 ]
 
+/**
+ * Two icon buttons since 2026-08-19, where there were three words.
+ *
+ * Rule 1 above — *every control in the top-right is a word* — is the one thing
+ * these no longer keep, and the exception is deliberate rather than a
+ * regression: Asad asked for it in as many words (*"total two buttons may be two
+ * icons may be only"*), and what the rule was actually protecting against is a
+ * glyph whose meaning is nowhere on screen. So what is pinned instead is that
+ * every one of these buttons carries a sentence naming both the state it is in
+ * and what a press does — which is the whole safety of an icon-only toggle, and
+ * is more than the pill's selected segment ever said.
+ */
 describe('ModeSwitch', () => {
   const html = renderToStaticMarkup(<ModeSwitch mode="terminal" onChange={noop} />)
 
-  it('offers the three things the window can be doing', () => {
-    for (const label of ['Terminal', 'Chat', 'Split']) expect(html).toContain(`>${label}<`)
+  it('is two buttons and two glyphs, not three words', () => {
+    expect(html.match(/<button/g)).toHaveLength(2)
+    expect(html.match(/<svg/g)).toHaveLength(2)
+    for (const label of ['>Terminal<', '>Chat<', '>Split<']) expect(html).not.toContain(label)
   })
 
-  it('says which one is on', () => {
-    expect(html).toContain('aria-pressed="true"')
-    // One on, two off. A segmented control where nothing is pressed is a row of
-    // buttons, and the shape stops meaning "the same work, shown differently".
-    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1)
-    expect(html.match(/aria-pressed="false"/g)).toHaveLength(2)
+  it('names the view it is showing and the one a press gives', () => {
+    // Both halves, in one string, used as the accessible name and the tooltip.
+    // Whichever convention a reader assumes for a changing icon, this sentence
+    // corrects them before they press — and it is deliberately unchanged by the
+    // 2026-08-20 flip below, because it was already correct under both.
+    expect(html).toContain('aria-label="Terminal — press to show this session as Chat"')
+    expect(html).toContain('title="Terminal — press to show this session as Chat"')
+    const chat = renderToStaticMarkup(<ModeSwitch mode="chat" onChange={noop} />)
+    expect(chat).toContain('aria-label="Chat — press to show this session as Terminal"')
   })
 
-  it('has no unlabelled button in it', () => {
-    // Every segment carries its own text, so none of them needs an aria-label —
-    // what would fail here is a glyph creeping back in.
-    for (const mode of ['terminal', 'chat', 'split'] as const) {
-      expect(renderToStaticMarkup(<ModeSwitch mode={mode} onChange={noop} />)).not.toContain('<svg')
-    }
+  it('draws the mode a press goes to, not the one you are in — 2026-08-20', () => {
+    /*
+     * *"chat icon should be when I am on the terminal mode. And when I am on
+     * the chat mode, then it should show the terminal icon, so I can switch to
+     * that one. Instead of what I am on right now, that one shows."*
+     *
+     * It shipped the other way round on 2026-08-19 with an argument written
+     * out in `ModeSwitch.tsx`; this is his call overturning it, and the file
+     * records that. Asserted against the glyphs' own path data, because the
+     * whole change is which `d` is emitted and nothing else about the markup
+     * moves — a test on classes or labels would pass either way.
+     */
+    const TERMINAL = 'M4 17l6-6-6-6M12 19h8'
+    const BUBBLE = 'M20.5 13.8a'
+    // In Terminal, the button offers Chat.
+    expect(html).toContain(BUBBLE)
+    expect(html).not.toContain(TERMINAL)
+    // In Chat, it offers Terminal.
+    const chat = renderToStaticMarkup(<ModeSwitch mode="chat" onChange={noop} />)
+    expect(chat).toContain(TERMINAL)
+    expect(chat).not.toContain(BUBBLE)
+    // And while split, it offers the view the session will come back to — which
+    // is the other one, not the one it is holding.
+    const split = renderToStaticMarkup(<ModeSwitch mode="split" view="chat" onChange={noop} />)
+    expect(split).toContain(TERMINAL)
   })
 
-  it('moves the pressed segment with the mode', () => {
-    const split = renderToStaticMarkup(<ModeSwitch mode="split" onChange={noop} />)
-    const pressed = /<button[^>]*aria-pressed="true"[^>]*>([^<]+)</.exec(split)?.[1]
-    expect(pressed).toBe('Split')
+  it('keeps the pressed state for split alone', () => {
+    /*
+     * Split really is on or off — the renderer draws terminals in panes and
+     * there is no split-of-chat — so it is the one button here with an
+     * `aria-pressed`. The view toggle is one of two named views, and announcing
+     * "Terminal, not pressed" for a control doing its job is worse than saying
+     * nothing.
+     */
+    expect(html.match(/aria-pressed/g)).toHaveLength(1)
+    expect(html).toContain('aria-pressed="false"')
+    expect(renderToStaticMarkup(<ModeSwitch mode="split" onChange={noop} />)).toContain(
+      'aria-pressed="true"',
+    )
+  })
+
+  it('offers the way out of a split, which the pill never did', () => {
+    // The old control left its Split segment inert once split, so the only exit
+    // was a segment for a mode you might not want.
+    const split = renderToStaticMarkup(<ModeSwitch mode="split" view="chat" onChange={noop} />)
+    expect(split).toContain('Split — press to show Chat on its own again')
+    // And the toggle keeps naming the session's own view while the split is up.
+    expect(split).toContain('Chat — press to leave the split and show this session as Terminal')
   })
 })
 
@@ -589,7 +643,11 @@ describe('WindowToolbar', () => {
   it('gives the right-hand side to the mode switch and nothing else', () => {
     const actions = /<div class="toolbar-actions">([\s\S]*?)<\/header>/.exec(shown)?.[1] ?? ''
     expect(actions).toContain('mode-switch')
-    expect(actions).not.toContain('<svg')
+    // The switch's own two glyphs and nothing beyond them. This counted zero
+    // `<svg>` while the switch was three words, and the four glyph buttons this
+    // toolbar was cleared of are what the count is actually guarding against.
+    expect(actions.match(/<svg/g)).toHaveLength(2)
+    expect(actions).not.toContain('<button type="button" class="toolbar-')
   })
 
   /**
@@ -1085,11 +1143,14 @@ describe('Sidebar', () => {
 
   it('renders every panel exactly once, wherever it belongs', () => {
     /*
-     * The trap this catches: `foot` is a group the scrolling list deliberately
-     * does not render, so a view moved into it is drawn by a different loop.
-     * Getting that wrong draws Remote twice, or not at all — and the "not at
-     * all" version still passes `reachable.test.ts`, because the panel does
-     * have a case in `PanelView`; it just has no control anybody can click.
+     * The trap this catches: the rail draws its views in two loops — the
+     * labelled runs, and the `foot` group the scrolling list deliberately skips
+     * — so moving a view between them means moving it between loops. Getting
+     * that wrong draws it twice, or not at all, and the "not at all" version
+     * still passes `reachable.test.ts`, because the panel does have a case in
+     * `PanelView`; it just has no control anybody can click. Machines made that
+     * exact crossing on 2026-08-19, out of the foot and into Integrations,
+     * which is the move this loop is here for.
      *
      * There used to be a third group, `icon`, and this sweep matched on
      * `aria-label` as well as on the label text to cover the one member it had.

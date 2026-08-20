@@ -169,9 +169,44 @@ export interface HookEvent {
 
 export type HookEventListener = (event: HookEvent) => void
 
+/** A URL the shim caught, on its way to a decision. */
+export interface OpenRequest {
+  url: string
+  /** From the session header. Null for a session this app did not start. */
+  sessionId: string | null
+}
+
+/**
+ * What to tell the shim, in the two lines it prints and acts on.
+ *
+ * `route` is the machine half — `tab` means the app took it and the shim must
+ * stop, anything else means the shim runs the real opener. `line` is the
+ * sentence a person reads, and there is always one: a branch that answered
+ * without saying what happened would be a URL disappearing, which is the exact
+ * failure this whole route exists to end.
+ */
+export interface OpenAnswer {
+  route: 'tab' | 'system'
+  line: string
+}
+
 export interface HookServerOptions {
   /** Called for every accepted event. Errors thrown here are swallowed. */
   onEvent?: HookEventListener
+  /**
+   * Where a URL from a session should open. Absent means "not this build's
+   * job", and the shim is told `system` — which is what it would have done
+   * anyway, so a host with no browser of its own loses nothing.
+   */
+  onOpen?: (request: OpenRequest) => Promise<OpenAnswer> | OpenAnswer
+  /**
+   * What to add to the agent's context at the start of a turn, or null.
+   *
+   * Called **synchronously** while composing the response the agent is blocked
+   * on, so it must not await anything. Null is the common case and stays free:
+   * it becomes the same empty 204 this endpoint has always answered.
+   */
+  contextFor?: (event: { provider: string; event: string; sessionId: string | null }) => string | null
   /**
    * The data directory the endpoint keeps its own directory inside.
    *
@@ -417,6 +452,91 @@ export function hostIsLocal(host: string | undefined): boolean {
   return name === 'localhost' || name === '127.0.0.1' || name === '[::1]' || name === '::1'
 }
 
+/**
+ * The one route on this socket that is not a hook.
+ *
+ * A **different path**, deliberately, rather than a new server. `hook-server.ts`
+ * opens with a written post-mortem of the port version, where one stale address
+ * silently killed the whole hook feature on every launch, and a second socket
+ * would be a second address to go stale. Everything this route needs is already
+ * here and already correct: the unix socket, the per-run token, the host check,
+ * the body cap and the `curl -K` form a hook command already uses.
+ *
+ * Being a separate path is also what keeps the promise made at the hook
+ * handler: `/hook/<provider>/<event>` still answers with nothing that could
+ * steer an agent's tool call. This route is not a tool call — it is the app
+ * being asked where to put a window.
+ */
+export function isOpenPath(url: string | undefined): boolean {
+  if (!url) return false
+  const path = url.split('?')[0]
+  return path === '/open' || path === '/open/'
+}
+
+/**
+ * Which provider may be answered with context, and on which events.
+ *
+ * `SessionStart` and `UserPromptSubmit` are the two moments an agent's own
+ * context is being assembled, so they are the two where a sentence about the app
+ * it is running inside is worth anything. Every other event — and every event
+ * that carries a tool payload — keeps its byte-identical empty answer, which is
+ * what leaves the observing-not-steering contract intact where it actually
+ * matters.
+ *
+ * ## And `PostToolUse`, which is the only door into a turn already running
+ *
+ * Those two fire at the top of a turn. Asad attached a browser window to a
+ * session that was already mid-turn and found the agent knew nothing about it:
+ * *"First of all, it should automatically right away get a context. Whenever I
+ * just connect, it should get a context."* Nothing in this process can push into
+ * a running turn — the agent is not asking us anything between tool calls except
+ * through its own hooks — so the earliest a mid-turn attach can possibly land is
+ * the agent's **next tool call**, which is what this event is.
+ *
+ * It is gated to almost never fire. `index.ts` answers `PostToolUse` with the
+ * *change* announcement only, which `browser-binding.ts` produces exactly once
+ * per attach or detach and then forgets. Every other tool call in every other
+ * session gets the same empty 204 it always did, so a channel that runs after
+ * every Read and every Bash costs one small string per attach and nothing at all
+ * the rest of the time.
+ *
+ * Nothing is written to the terminal by any of this. That constraint is the
+ * reason the mechanism is shaped this way rather than as a pty write, and he has
+ * stated it three times.
+ *
+ * ## Why this is keyed by provider and not just by event name
+ *
+ * It was a bare set of event names, and that was a bet rather than a fact.
+ * `hooks.ts` installs `SessionStart` and `UserPromptSubmit` for **Codex** too and
+ * `SessionStart` for **Gemini**, so a bare name matched all three and both of
+ * them were being handed a `hookSpecificOutput` envelope that is Claude's
+ * schema. Claude Code documents that shape and honours it; what the other two do
+ * with an object they did not ask for has not been watched on this machine —
+ * Codex's binary is not installed here at all, which is the same reason
+ * `hooks.ts` gives its entries no `timeout`. The plausible failure is the one
+ * this whole channel exists to avoid: a CLI printing a complaint about an
+ * unrecognised hook output *into the terminal Asad is looking at*, which is
+ * exactly the visible noise he ruled out.
+ *
+ * That was survivable while the answer only appeared for a session with a
+ * browser window attached. It is not survivable now: the answer is composed for
+ * every prompt of every session the app started, so an unmeasured schema would
+ * be posted at Codex and Gemini thousands of times a day.
+ *
+ * So Claude gets the context and the other two get the 204 they have always had.
+ * Adding a provider here is a one-line change once somebody has actually watched
+ * that CLI read the body.
+ *
+ * The hook *command* is deliberately not narrowed to match. `hooks.ts` still
+ * drops `-o /dev/null` for those event names on every provider, so Codex and
+ * Gemini keep a reader with nothing to read — the harmless half of that
+ * mismatch, and worth it because narrowing the command would invalidate their
+ * installed entries and ask for a second reinstall.
+ */
+const CONTEXT_EVENTS: Readonly<Record<string, ReadonlySet<string>>> = {
+  claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse']),
+}
+
 /** `/hook/<provider>/<event>` and nothing else. */
 export function parseHookPath(url: string | undefined): { provider: string; event: string } | null {
   if (!url) return null
@@ -530,7 +650,54 @@ function deny(res: ServerResponse, code: number): void {
   res.end()
 }
 
-async function handle(req: IncomingMessage, res: ServerResponse, live: HookEndpoint): Promise<void> {
+/**
+ * The URL out of a `POST /open` body, in either form the shim may send it.
+ *
+ * The shim sends the bare URL as `text/plain`, because building `{"url":"…"}`
+ * in `sh` means escaping quotes and backslashes that can legally appear in a
+ * URL and getting that wrong loses the address. JSON is still accepted so that
+ * anything else that ever posts here — a test, a future client with a real JSON
+ * encoder — does not need to know which of the two this endpoint prefers.
+ */
+export function openUrlFromBody(body: string): string | null {
+  const text = body.trim()
+  if (text === '') return null
+  if (text.startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(text)
+      if (typeof parsed === 'object' && parsed !== null) {
+        const url = (parsed as Record<string, unknown>).url
+        return typeof url === 'string' && url.trim() !== '' ? url.trim() : null
+      }
+    } catch {
+      // Not JSON after all. Fall through and treat it as the address itself,
+      // which is the reading that cannot lose a URL.
+    }
+  }
+  // One line only: a body with a newline in it is not a URL, and taking the
+  // first line of something unexpected would open a page nobody asked for.
+  return text.includes('\n') ? null : text
+}
+
+/**
+ * Answer the shim: the route on one line, the sentence on the next.
+ *
+ * Two lines of text rather than JSON because the client is a POSIX shell script
+ * that cannot assume `jq` exists. `open-shim.ts` reads exactly this shape with
+ * `head -n 1` and `sed -n '2,$p'`, and the pair is pinned by that module's test.
+ */
+function answerOpen(res: ServerResponse, answer: OpenAnswer): void {
+  if (res.writableEnded || res.destroyed) return
+  res.writeHead(200, { 'content-type': 'text/plain' })
+  res.end(`${answer.route}\n${answer.line}\n`)
+}
+
+async function handle(
+  req: IncomingMessage,
+  res: ServerResponse,
+  live: HookEndpoint,
+  options: HookServerOptions,
+): Promise<void> {
   // No check on the peer address, and none is possible: a unix socket has no
   // remote address, because the peer is on this machine by construction. The
   // old `isLoopback(remoteAddress)` guard was answering the question "is this
@@ -542,8 +709,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, live: HookEndpo
   // routes exist.
   if (!tokenMatches(req.headers[TOKEN_HEADER], live.token)) return deny(res, 403)
 
-  const route = parseHookPath(req.url)
-  if (!route) return deny(res, 404)
+  const opening = isOpenPath(req.url)
+  const route = opening ? null : parseHookPath(req.url)
+  if (!opening && !route) return deny(res, 404)
 
   let body: string
   try {
@@ -556,17 +724,77 @@ async function handle(req: IncomingMessage, res: ServerResponse, live: HookEndpo
 
   const sessionId = str(req.headers[SESSION_HEADER])
 
-  // 204 with no body: the CLI blocks on this response, so it should be the
-  // cheapest thing we can send. Anything we return would be parsed as hook
-  // output and could change the agent's behaviour — we are observing, not
-  // steering.
-  res.writeHead(204)
-  res.end()
+  if (opening) {
+    const url = openUrlFromBody(body)
+    if (!url) {
+      // A `POST /open` with nothing openable in it is answered rather than
+      // refused with a status code, because the shim on the other end reads
+      // this body and prints it. A bare 400 would reach a person as silence.
+      return answerOpen(res, {
+        route: 'system',
+        line: `${BRAND.name} could not read that address — opening it in your default browser.`,
+      })
+    }
+    if (!options.onOpen) {
+      return answerOpen(res, {
+        route: 'system',
+        line: `${BRAND.name} has no browser window to put this in — opening it in your default browser.`,
+      })
+    }
+    try {
+      return answerOpen(res, await options.onOpen({ url, sessionId }))
+    } catch {
+      // Whatever went wrong in there, the URL is still somebody's. Falling back
+      // to the machine is the one answer that cannot lose it.
+      return answerOpen(res, {
+        route: 'system',
+        line: `${BRAND.name} could not place that link — opening it in your default browser.`,
+      })
+    }
+  }
+
+  /*
+   * The answer, and the one narrow case where it is no longer empty.
+   *
+   * It was `204` with no body for every event, and the reason still holds for
+   * almost all of them: the CLI blocks on this response, and anything returned
+   * is parsed as hook output that could change what the agent does — we are
+   * observing, not steering.
+   *
+   * The exception is Claude's `SessionStart` and `UserPromptSubmit`, and only
+   * for a session this app actually started. Those are the two moments the
+   * agent's context is being built, and this is the only channel that can tell
+   * it where it is running and what "B2" means without typing a single character
+   * into a terminal Asad is looking at — which he has objected to three times and
+   * which this feature will not do. It carries no tool payload and no permission
+   * decision; it is a description of the session's own surroundings, and
+   * `browser-binding.ts` composes it from what is true of that session right now.
+   *
+   * Every other event, every provider that does not spell its events this way,
+   * and every session with nothing attached — which is most of them, and every
+   * session this app did not start — still gets the byte-identical empty 204,
+   * so this costs nothing in the ordinary case.
+   */
+  const context =
+    route && CONTEXT_EVENTS[route.provider]?.has(route.event)
+      ? (options.contextFor?.({ provider: route.provider, event: route.event, sessionId }) ?? null)
+      : null
+
+  if (context !== null && route) {
+    const payload = JSON.stringify({
+      hookSpecificOutput: { hookEventName: route.event, additionalContext: context },
+    })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(payload)
+  } else {
+    res.writeHead(204)
+    res.end()
+  }
 
   // Only now tell the app. Subscribers run synchronously, and a slow one on
   // this side of the response would be a slow one inside the user's turn: the
   // agent is stopped dead until its hook command returns.
-  emit(toHookEvent(route.provider, route.event, sessionId, body))
+  if (route) emit(toHookEvent(route.provider, route.event, sessionId, body))
 }
 
 /* --------------------------------------------------------------- lifecycle -- */
@@ -813,7 +1041,7 @@ async function openServer(options: HookServerOptions): Promise<HookEndpoint> {
   await clearStaleSocket(socketPath, platform)
 
   const next = createServer((req, res) => {
-    void handle(req, res, live).catch(() => {
+    void handle(req, res, live, options).catch(() => {
       // A handler that threw has already told us nothing useful; the CLI just
       // needs a response so its hook does not hang.
       if (!res.headersSent) deny(res, 500)

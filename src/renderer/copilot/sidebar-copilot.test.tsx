@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Sidebar } from '../shell/Sidebar'
@@ -146,11 +148,22 @@ describe('sessions the copilot started', () => {
   })
 
   it('offer "why does this exist" only where there is a turn to open', () => {
+    /*
+     * The link was a button on the row until 2026-08-20 and is an entry in the
+     * row's ⋯ menu now — one control per row, whatever it can do. The menu is
+     * native, so what a static render can see is the flag the row hands it:
+     * `copilotTurn`, which is true only when there is a turn *and* a caller that
+     * can open one. An entry that lands nowhere is worse than an absent one, and
+     * that judgement did not move with the control.
+     */
     const withLink = render({ onOpenCopilot: noop })
-    expect(withLink).toContain('Why Review the diff exists')
-    // The restored one carries its origin and no run id, so no button — a
-    // control that lands nowhere is worse than an absent one.
-    expect(withLink).not.toContain('Why Overnight sweep exists')
+    expect(withLink).toContain('aria-label="More for Review the diff"')
+    const source = readFileSync(join(__dirname, '..', 'shell', 'Sidebar.tsx'), 'utf8')
+    expect(source).toContain('copilotTurn: turn !== null && onOpenCopilot !== undefined')
+    expect(source).toContain("choice === 'copilot' && turn !== null")
+    const menu = readFileSync(join(__dirname, '..', '..', 'main', 'session-row-menu.ts'), 'utf8')
+    expect(menu).toContain('if (request.copilotTurn)')
+    expect(menu).toContain('Started by the copilot — open that turn')
   })
 
   it('draws no heading when the copilot has started nothing', () => {

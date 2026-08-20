@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { FileTree, type TreeRootState } from '../components/FileTree'
 import { FileViewer } from '../components/FileViewer'
 import { ArtifactsPanel } from '../components/ArtifactsPanel'
@@ -99,13 +99,22 @@ function NeedsProject({ panel, onOpenProject }: { panel: PanelId; onOpenProject(
  * in it, there is no file in it to be reading either, and the page says one
  * thing.
  */
-export type FilesPageState = 'tree-and-viewer' | 'tree-only'
+export type FilesPageState = 'tree-and-viewer' | 'tree-only' | 'blank'
 
 export function filesPageState(tree: TreeRootState): FilesPageState {
   // Loading is deliberately `tree-and-viewer`: the viewer has its own loading
   // state and its own file, and blanking it while the tree re-reads would make
   // a background refresh throw away the file somebody is reading.
-  return tree.status === 'empty' || tree.status === 'error' ? 'tree-only' : 'tree-and-viewer'
+  //
+  // `blank` is new, and it is the answer to the frame Asad recorded: an empty
+  // tree drew the words **"Nothing to show."** in the top-left of a whole
+  // window, with a grey stripe under it. The folder really was empty — he had
+  // started the session in `~/Templates` on purpose — so the tree was not
+  // wrong, it was just unhelpful, and there was no way from that screen to the
+  // one thing that would have changed it. An empty root gets the page now,
+  // with the button on it.
+  if (tree.status === 'empty') return 'blank'
+  return tree.status === 'error' ? 'tree-only' : 'tree-and-viewer'
 }
 
 /**
@@ -132,19 +141,94 @@ function FilesPage({
    * never travels and this never loops.
    */
   const [tree, setTree] = useState<TreeRootState>({ status: 'loading' })
+
+  /*
+   * Whether the tree obeys `.gitignore`, and the reason this switch had to
+   * exist before the empty state could be honest.
+   *
+   * `FileTree` has taken a `showIgnored` prop since it was written, `fs-tree.ts`
+   * has honoured it, and **nothing in the renderer had ever passed it** — so
+   * the page filtered by `.gitignore` with no way to say so and no way to stop.
+   * On a folder whose contents are all ignored — a `dist`, a downloads folder,
+   * a checkout mid-build — the page therefore said the same "Nothing to show."
+   * it says for a folder that is genuinely empty, and the two are not the same
+   * fact. The switch is what lets the empty state offer a way to find out
+   * which one you are looking at instead of asserting the wrong one.
+   */
+  const [showIgnored, setShowIgnored] = useState(false)
   const layout = filesPageState(tree)
+
+  /*
+   * Flipping the filter puts the page back into `loading`, and that is not
+   * cosmetic — without it the button does nothing at all.
+   *
+   * Found by pressing it in a real browser rather than by reading it: the blank
+   * state replaces the tree, so `FileTree` is *unmounted* while it is on screen.
+   * Toggling `showIgnored` therefore changed a prop nothing was reading, no
+   * fresh listing was ever requested, and `tree` stayed on the `empty` that had
+   * put the page there — a button that highlights on hover and changes nothing,
+   * which is the one thing this window is not allowed to have.
+   *
+   * Resetting the condition first is what lifts the page out of `blank` for a
+   * frame, which mounts the tree again with the new flag. It reports back
+   * immediately, and the page settles on whichever answer is true.
+   */
+  const setFilter = useCallback((on: boolean) => {
+    setTree({ status: 'loading' })
+    setShowIgnored(on)
+  }, [])
+
+  if (layout === 'blank') {
+    /*
+     * Two words and a button, and the two words are chosen not to claim
+     * something the page has not checked.
+     *
+     * With ignored files hidden, "empty folder" would be a guess — so the page
+     * says only what it did (`Nothing to show`) and offers the one press that
+     * settles it. With them shown and still nothing there, the folder is empty
+     * and the page can say so, and there is nothing left to offer.
+     */
+    return (
+      <PageEmpty
+        icon={panelSpec('files').icon}
+        title={showIgnored ? 'Empty folder' : 'Nothing to show'}
+        action={
+          showIgnored
+            ? undefined
+            : { label: 'Show ignored files', onClick: () => setFilter(true), primary: true }
+        }
+      />
+    )
+  }
 
   return (
     <div className="files-page" data-layout={layout}>
-      <FileTree
-        root={root}
-        selected={selected}
-        className="files-page-tree"
-        onRootState={setTree}
-        onSelect={(entry) => {
-          if (entry.kind === 'file') onSelect(entry.relPath)
-        }}
-      />
+      <div className="files-page-left">
+        {/* One word, pressed rather than explained. It is drawn beside a tree
+            that has something in it, which is the only state where turning the
+            filter back off is a thing anybody needs — the empty page above owns
+            the other direction. */}
+        <button
+          type="button"
+          className="files-ignored-toggle"
+          data-on={showIgnored || undefined}
+          aria-pressed={showIgnored}
+          title={showIgnored ? 'Hide files your .gitignore excludes' : 'Show files your .gitignore excludes'}
+          onClick={() => setFilter(!showIgnored)}
+        >
+          Ignored
+        </button>
+        <FileTree
+          root={root}
+          selected={selected}
+          showIgnored={showIgnored}
+          className="files-page-tree"
+          onRootState={setTree}
+          onSelect={(entry) => {
+            if (entry.kind === 'file') onSelect(entry.relPath)
+          }}
+        />
+      </div>
       {layout === 'tree-and-viewer' && (
         <FileViewer root={root} path={selected} className="files-page-viewer" />
       )}

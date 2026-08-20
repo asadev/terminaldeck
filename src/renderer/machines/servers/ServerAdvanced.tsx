@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import { Button, Notice } from '../../settings/controls'
-import { useServerSessionOpener } from './session-context'
+import { Button } from '../../settings/controls'
 import { howLong } from './words'
 import type { Fact, Server, ServerState, ServersBridge } from './types'
 
@@ -11,7 +10,6 @@ import type { Fact, Server, ServerState, ServersBridge } from './types'
  *
  * | | |
  * |---|---|
- * | **The way to a terminal** | It is unbounded. Everything above is a named action with a known consequence; this is a shell, and a shell has none. The *door* is what is behind Advanced — the terminal itself opens as an ordinary session, in the window, with a row in the rail and a tab of its own. |
  * | **What is listening** | Explaining it needs the word the calm surface does not use. |
  * | **How you sign in** | Changing the way you get in is how people lock themselves out. |
  * | **This server's identity** | Only ever wanted when checking something specific. |
@@ -21,13 +19,26 @@ import type { Fact, Server, ServerState, ServersBridge } from './types'
  * secret: the request was for somewhere out of the way to reach, which is not
  * the same as a hidden gesture only the author knows about.
  *
+ * ## The way to a terminal used to be the first row of that table
+ *
+ * It is not here any more. It is the primary control under the server's name,
+ * one zone up; {@link OpenTerminal} in `ServerPage.tsx` carries the whole
+ * argument and the warning that came with it. The short version is that the
+ * reason it was filed here — a shell is unbounded where every other action has a
+ * stated cost — is a reason to keep it apart from the cards, and was never a
+ * reason to hide it behind a label that tells people they do not need to go
+ * through it. Asad connected a server and could find no way to open one.
+ *
+ * It is not offered in both places. Two controls doing one thing is two things
+ * to keep true, and the one further from the reader is the one that rots.
+ *
  * ## Why the copilot's permission is granted here
  *
  * Because the place you hand an assistant control of a machine should be the
  * page that shows you what is on it — not a settings pane, and not the
  * assistant's own window, where the thing being granted is furthest from view.
  * The grant is for **this one server**, it covers the named actions only, and it
- * runs out. It never covers anything else on this page: not the shell, not the
+ * runs out. It never covers anything else at all: not the shell, not the
  * sign-in, not the identity, not forgetting it.
  */
 
@@ -89,16 +100,6 @@ function FactLine<T>({
 
 export function ServerAdvanced({ server, state, bridge, now, onRename, onForget, onGrant, onRevoke }: Props) {
   const [open, setOpen] = useState(false)
-  /*
-   * The window's list of open shells, or null when this page is not inside one.
-   *
-   * Read here rather than passed down through `ServerPage` and `MachinesPanel`,
-   * because the only route from the window to this component is `PanelView`,
-   * which draws all ten views from a `PanelId` and takes no per-view props.
-   * `session-context.ts` carries the argument.
-   */
-  const opener = useServerSessionOpener()
-  const openHere = opener?.openOn(server.id) ?? 0
   const [confirmForget, setConfirmForget] = useState(false)
   const [name, setName] = useState(server.name)
   const facts = state?.view?.facts
@@ -119,49 +120,9 @@ export function ServerAdvanced({ server, state, bridge, now, onRename, onForget,
         <Button onClick={() => setOpen(false)}>Hide advanced</Button>
       </div>
 
-      <h4 className="settings-group-title">A terminal on this server</h4>
-      <p className="settings-prose">
-        Everything else on this page does one named thing and tells you what it costs. This does
-        whatever you type, and nothing checks it first.
-      </p>
-      <p className="settings-prose">
-        {/*
-          Where it goes, said before the press rather than discovered after it.
-
-          The terminal used to appear in a box on this page, which meant it only
-          existed while this page was the thing on screen. It opens as an
-          ordinary session now — a row in the side list and a tab along the top —
-          so it behaves like every other one, and a person who has only ever seen
-          the old behaviour needs one sentence to know their work has not been
-          put somewhere they cannot find it.
-        */}
-        It opens like any other session: a row in the list on the left, under this server’s name,
-        and a tab along the top. You can look at something else and come back to it.
-      </p>
-      {bridge === null ? (
-        <Notice tone="warn">This build cannot open one.</Notice>
-      ) : opener === null ? (
-        /*
-          Absent rather than dead. The window is what holds open sessions, so a
-          copy of this page rendered without one — the harness, a test — has
-          nowhere to put a terminal, and a button here could only ever swallow
-          the press. Said once, plainly, for the same reason the missing-channels
-          notice above is: the difference between "you cannot" and "this copy
-          cannot" is the difference between a task and a bug report.
-        */
-        <Notice tone="warn">This page is not inside a window that can hold one open.</Notice>
-      ) : (
-        <div className="servers-card-actions">
-          <Button onClick={() => opener.open(server.id, server.name)}>Open a terminal</Button>
-          {openHere > 0 && (
-            <span className="servers-card-why">
-              {openHere === 1
-                ? 'One is already open on this one.'
-                : `${openHere} are already open on this one.`}
-            </span>
-          )}
-        </div>
-      )}
+      {/* The terminal was the first thing behind this door and is now the
+          primary control under the server's name. See the note at the top of
+          this file, and `OpenTerminal` in `ServerPage.tsx`. */}
 
       <h4 className="settings-group-title">What this server is</h4>
       <div className="servers-facts">
@@ -190,8 +151,9 @@ export function ServerAdvanced({ server, state, bridge, now, onRename, onForget,
         {/*
           Stated rather than offered, and the reason is the rule the rest of this
           area is built on: installing updates cannot be undone, and everything
-          here has a way back. Somebody who wants to can do it in the terminal
-          above, where it is plainly their own decision.
+          here has a way back. Somebody who wants to can do it in a terminal,
+          which this page no longer opens but the one above it does, and there it
+          is plainly their own decision.
         */}
         Installing updates is not something this app does — there is no way to undo it, and
         everything here has a way back.
@@ -258,7 +220,7 @@ export function ServerAdvanced({ server, state, bridge, now, onRename, onForget,
       <h4 className="settings-group-title">Let the copilot use this server</h4>
       <p className="settings-prose">
         Off unless you turn it on, and then only for this one server and only for a while. It covers
-        the buttons on the cards above and nothing on this page — not the terminal, not the sign-in,
+        the buttons on the cards above and nothing else at all — not the terminal, not the sign-in,
         not forgetting it. Without it the copilot can still look, and has to ask you before it
         changes anything.
       </p>
