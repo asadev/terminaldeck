@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-20
+
 ### Added
 
 - **A device you grant remote access to can be given all your running sessions,
@@ -57,7 +59,6 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 - **The copilot page described the wrong machine.** Choosing a remote machine left
   the window bar's Restart, account and Model chips pointing at the local copilot —
   so Restart on that screen restarted something else.
-
 
 ## [0.7.0] — 2026-08-20
 
@@ -1679,7 +1680,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.8.0
 [0.7.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.7.0
 [0.6.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.6.1
 [0.6.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.6.0
