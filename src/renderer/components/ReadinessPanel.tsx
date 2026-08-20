@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { panelSpec } from '../shell/panels'
 import { AgentCliUpdate } from './AgentCliUpdate'
 import { PageEmpty } from './PageEmpty'
+import { Pill, PillRow } from './Pill'
 import {
   dismiss,
   idsFor,
@@ -44,12 +45,36 @@ export interface ReadinessCheck {
   opens: string | null
 }
 
+/**
+ * The same project graded for one named agent. Mirrors `ReadinessForAgent` in
+ * `src/main/readiness.ts`, where the argument for it is written down.
+ */
+export interface ReadinessForAgent {
+  agent: string
+  label: string
+  file: string
+  check: ReadinessCheck
+  score: number
+  band: ReadinessBand
+  cappedBy: string | null
+}
+
 export interface ReadinessReport {
   projectPath: string
   score: number
   band: ReadinessBand
   checks: ReadinessCheck[]
   cappedBy: string | null
+  /**
+   * One entry per agent whose instructions file the scan knows.
+   *
+   * Optional, and read as `[]` when it is absent, for the reason every mirror
+   * in this file is defensive: what arrives is an IPC payload, and a window
+   * whose main process predates this field would otherwise take the page down
+   * inside a `.map`. No entries means no pills, which is the honest degrade —
+   * there is nothing to switch between.
+   */
+  agents?: ReadinessForAgent[]
   scannedAt: string
 }
 
@@ -135,6 +160,79 @@ export function actionFor(check: ReadinessCheck, canOpen: boolean): 'fix' | 'ope
   if (check.status === 'pass') return 'none'
   if (check.fix) return 'fix'
   return canOpen && check.opens !== null ? 'open' : 'none'
+}
+
+/**
+ * The report as one agent sees it — the instructions row swapped, and the score
+ * that follows from the swap.
+ *
+ * Pure, exported and tested, because it is the join that can silently come
+ * apart: a page that swapped the row and left the ring showing the neutral
+ * number would be *"1 of 5 checks passing"* over twelve rows all over again,
+ * one release later. `scanReadiness` scored each variant with the same
+ * `scoreChecks` the neutral one went through, so everything here is a
+ * substitution and nothing is arithmetic.
+ *
+ * A pick this report has no entry for — an agent that left the catalogue
+ * between the scan and the click — falls back to the neutral view rather than
+ * to an empty one.
+ */
+export interface ReadinessView {
+  checks: ReadinessCheck[]
+  score: number
+  band: ReadinessBand
+  cappedBy: string | null
+  /** The agent this view is graded for, or null for the project's own answer. */
+  agent: ReadinessForAgent | null
+}
+
+export function reportFor(report: ReadinessReport, agent: string | null): ReadinessView {
+  const picked = agent === null ? null : (report.agents ?? []).find((entry) => entry.agent === agent)
+  if (!picked) {
+    return {
+      checks: report.checks,
+      score: report.score,
+      band: report.band,
+      cappedBy: report.cappedBy,
+      agent: null,
+    }
+  }
+  return {
+    checks: report.checks.map((check) => (check.id === picked.check.id ? picked.check : check)),
+    score: picked.score,
+    band: picked.band,
+    cappedBy: picked.cappedBy,
+    agent: picked,
+  }
+}
+
+/**
+ * The line under the band, and the arithmetic it has to survive.
+ *
+ * Asad, on the readiness page, reading *"38 out of 100 — 1 of 5 checks passing,
+ * weighted"* above twelve rows:
+ *
+ *   > *"Maybe you know the reason why it is at risk, AI readiness."*
+ *
+ * The reasons were printed — every row carried one. What was missing is why the
+ * headline counted five things while the page listed twelve: seven of them were
+ * *skipped*, which the scan decides ("No package.json to look for a lint script
+ * in") and the score honours by leaving them out of the denominator. The page
+ * showed skipped rows in the same list, in the same shape, with nothing saying
+ * they were outside the count.
+ *
+ * So the count says which five it means, and how many rows it is not counting.
+ * Add the two and you have the rows on screen, which is the property that was
+ * missing rather than a longer sentence for its own sake.
+ */
+export function headlineFor(
+  score: number,
+  passing: number,
+  applicable: number,
+  skipped: number,
+): string {
+  const counted = `${score} out of 100 — ${passing} of ${applicable} applicable check${applicable === 1 ? '' : 's'} passing, weighted`
+  return skipped === 0 ? `${counted}.` : `${counted} · ${skipped} not applicable here.`
 }
 
 const BAND_COPY: Record<ReadinessBand, string> = {
@@ -370,6 +468,54 @@ export function CheckRow({ check, busy, result, onApply, onOpen, onDismiss }: Ro
   )
 }
 
+/**
+ * The pills that choose what this page is a report on.
+ *
+ * Its own component so it can be rendered on its own in a test, which is where
+ * the rule about offering every agent is pinned. `neutral-naming.test.ts` says
+ * so in as many words: *"whether a screen could support three agents is a
+ * question about what the code behind it can do, and no scan over string
+ * literals can answer it… it is checked by the screens' own tests."* This is
+ * that test's subject.
+ *
+ * Nothing at all when the scan answered for no agents — a build whose main
+ * process predates the per-agent report. A lone "Any agent" pill with nothing
+ * to switch to is a control that cannot be used, which is the one thing this
+ * window is not allowed to have.
+ */
+export function AgentPills({
+  agents,
+  pick,
+  onPick,
+}: {
+  agents: readonly ReadinessForAgent[]
+  pick: string | null
+  onPick(agent: string | null): void
+}) {
+  if (agents.length === 0) return null
+  return (
+    <PillRow label="Which agent this page is graded for" lead="Report on">
+      <Pill
+        on={pick === null}
+        title="Any agent — passes if any of their instructions files is here"
+        onClick={() => onPick(null)}
+      >
+        Any agent
+      </Pill>
+      {agents.map((entry) => (
+        <Pill
+          key={entry.agent}
+          on={pick === entry.agent}
+          title={`Grade this project for ${entry.label}, which reads ${entry.file}`}
+          onClick={() => onPick(entry.agent)}
+        >
+          {entry.label}
+        </Pill>
+      ))}
+    </PillRow>
+  )
+}
+
 /* ------------------------------------------------------------------ panel -- */
 
 /**
@@ -395,6 +541,17 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
    * synchronously.
    */
   const [put, setPut] = useState<DismissedMap>(() => readDismissed())
+  /*
+   * Which agent the page is graded for, or null for the project's own answer.
+   *
+   * Held here rather than remembered across launches, deliberately: it is a
+   * question about what you are reading right now, and a pill that came back
+   * pressed from three weeks ago would grade somebody's next project against an
+   * agent they picked once for a different one. `readiness-dismissed.ts` stores
+   * what it stores because a dismissal is a decision about a *project*; this is
+   * not one.
+   */
+  const [pick, setPick] = useState<string | null>(null)
 
   // Guards against a slow scan for a project the user has already navigated
   // away from overwriting the one they are now looking at.
@@ -425,6 +582,10 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
     setReport(null)
     setResults({})
     setBusyFix(null)
+    // The agent goes back to the project's own answer with the project. A pill
+    // left pressed across a change of folder would put the previous project's
+    // question on this one's page.
+    setPick(null)
     void scan()
   }, [scan])
 
@@ -498,9 +659,18 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
     [projectPath, resolved],
   )
 
-  const rows = useMemo(() => (report ? sortChecks(report.checks) : []), [report])
+  /*
+   * The report as the chosen agent sees it. `reportFor` carries the whole of
+   * the substitution — see the note there — so the ring, the headline and the
+   * rows are three readings of one object rather than three of two.
+   */
+  const view = useMemo(() => (report ? reportFor(report, pick) : null), [report, pick])
+  const rows = useMemo(() => (view ? sortChecks(view.checks) : []), [view])
   const passing = rows.filter((check) => check.status === 'pass').length
   const applicable = rows.filter((check) => check.status !== 'skip').length
+  const skipped = rows.length - applicable
+  /** Every agent this scan answered for, and the pills that switch between them. */
+  const agents = report?.agents ?? []
   /*
    * Hidden rows are hidden and nothing else. They are still in `rows`, so they
    * are still counted above and still weighted by `scoreChecks` in the main
@@ -525,12 +695,12 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
   return (
     <section className="readiness" aria-label="AI readiness">
       <header className="readiness-head">
-        {report ? <ScoreRing score={report.score} band={report.band} /> : <div className="readiness-ring" />}
+        {view ? <ScoreRing score={view.score} band={view.band} /> : <div className="readiness-ring" />}
         <div className="readiness-headline">
-          {report ? (
+          {view ? (
             <>
-              <p className="readiness-band" data-band={report.band}>
-                {BAND_COPY[report.band]}
+              <p className="readiness-band" data-band={view.band}>
+                {BAND_COPY[view.band]}
               </p>
               {/* The number in the ring is a *weighted* score out of 100 —
                   `scoreChecks` gives every check a share of it — so "87" and
@@ -538,13 +708,23 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
                   Printing the count alone left the 87 unexplained and looking
                   like arithmetic that had gone wrong; the word "weighted" is
                   the whole of what the trailing clause was doing, and the rest
-                  of it moves to the hover. */}
+                  of it moves to the hover. The count itself is `headlineFor`,
+                  which is where the twelve-rows-over-five problem is answered. */}
               <p
                 className="readiness-summary"
                 title="Each check carries a share of the score, sized by how much it matters."
               >
-                {report.score} out of 100 — {passing} of {applicable} checks passing, weighted.
+                {headlineFor(view.score, passing, applicable, skipped)}
               </p>
+              {/* Which target this is a report on, said in the header — the
+                  pills below say it too, and a pressed pill is a control's
+                  state rather than a sentence somebody reads. Absent for the
+                  project's own answer, where there is no target to name. */}
+              {view.agent ? (
+                <p className="readiness-target">
+                  Graded for {view.agent.label} · reads {view.agent.file}
+                </p>
+              ) : null}
             </>
           ) : (
             <p className="readiness-summary">{error ? 'Scan failed' : 'Scanning…'}</p>
@@ -555,11 +735,33 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
         </button>
       </header>
 
+      {/*
+        What this page is reporting on, as pills.
+
+        Asad: *"So maybe here we also need pills to switch between and see MCP
+        server and machine."* This is the agent half of that, and it is the half
+        this page has something to switch: one of these ten checks is about an
+        agent rather than about the project, and until now it was about an
+        unnamed one. Pressing a pill re-reads nothing — the scan already
+        answered for every agent, so the swap is instant and cannot disagree
+        with the ring.
+
+        There is no machine pill here, and that is an absence rather than an
+        omission: no frame on the wire carries a paired machine's project
+        readiness, so a pill for one could only lead to an apology. The MCP
+        servers page *can* report on another machine — its connectors ride the
+        controls frame — and it has the machine pills for that reason.
+
+        Drawn only when there is more than one thing to be, which is his most
+        repeated rule about controls: *"a dropdown only when some exist."*
+      */}
+      <AgentPills agents={agents} pick={pick} onPick={setPick} />
+
       {error ? <p className="readiness-error">{error}</p> : null}
 
-      {report?.cappedBy ? (
+      {view?.cappedBy ? (
         <p className="readiness-cap" role="status">
-          Score held at {report.score} by <strong>{report.cappedBy}</strong> — fix that first.
+          Score held at {view.score} by <strong>{view.cappedBy}</strong> — fix that first.
         </p>
       ) : null}
 
@@ -572,16 +774,30 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
       </div>
 
       <ul className="readiness-list">
-        {shown.map((check) => (
-          <CheckRow
-            key={check.id}
-            check={check}
-            busy={busyFix === check.id}
-            result={results[check.id] ?? null}
-            onApply={(target) => void applyFix(target)}
-            onOpen={resolved.openLinkExternally ? openFile : null}
-            onDismiss={putAway}
-          />
+        {shown.map((check, index) => (
+          <Fragment key={check.id}>
+            {/*
+              Where the counted rows stop.
+
+              `sortChecks` has always put the skipped ones last; nothing said so
+              on screen, so twelve rows sat in one list under a headline that
+              counted five of them. One caption at the seam is the whole fix —
+              it needs no count of its own, because the headline above carries
+              both numbers and two places counting the same rows is how they
+              come to disagree.
+            */}
+            {check.status === 'skip' && (index === 0 || shown[index - 1]?.status !== 'skip') ? (
+              <li className="readiness-aside">Not applicable to this project</li>
+            ) : null}
+            <CheckRow
+              check={check}
+              busy={busyFix === check.id}
+              result={results[check.id] ?? null}
+              onApply={(target) => void applyFix(target)}
+              onOpen={resolved.openLinkExternally ? openFile : null}
+              onDismiss={putAway}
+            />
+          </Fragment>
         ))}
       </ul>
 

@@ -2,13 +2,18 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   actionFor,
+  AgentPills,
   CheckRow,
   fileUrlFor,
+  headlineFor,
   ReadinessPanel,
+  reportFor,
   ScoreRing,
   sortChecks,
   type ReadinessCheck,
   type ReadinessFix,
+  type ReadinessForAgent,
+  type ReadinessReport,
 } from './ReadinessPanel'
 
 /**
@@ -220,6 +225,143 @@ describe('CheckRow', () => {
     )
     expect(html).toContain('data-ok="false"')
     expect(html).toContain('nothing was changed')
+  })
+})
+
+/* --------------------------------------------------------------- headline -- */
+
+/**
+ * The arithmetic he could not do.
+ *
+ *   > *"Maybe you know the reason why it is at risk, AI readiness."*
+ *
+ * *"1 of 5 checks passing"* stood over ten rows, five of which the scan had
+ * skipped and left out of the denominator. Both numbers were right and the pair
+ * was unreadable.
+ */
+describe('headlineFor', () => {
+  it('says which rows the count is about, and how many it is not counting', () => {
+    expect(headlineFor(38, 1, 5, 5)).toBe(
+      '38 out of 100 — 1 of 5 applicable checks passing, weighted · 5 not applicable here.',
+    )
+  })
+
+  it('adds up to the rows on screen', () => {
+    // The property that was missing, stated as one: applicable + skipped is
+    // what a reader counts down the page.
+    const line = headlineFor(70, 4, 7, 3)
+    expect(line).toContain('4 of 7')
+    expect(line).toContain('3 not applicable')
+  })
+
+  it('says nothing about skipped checks when none were skipped', () => {
+    expect(headlineFor(100, 10, 10, 0)).toBe(
+      '100 out of 100 — 10 of 10 applicable checks passing, weighted.',
+    )
+  })
+
+  it('keeps the grammar of a single applicable check', () => {
+    expect(headlineFor(0, 0, 1, 9)).toContain('0 of 1 applicable check passing')
+  })
+})
+
+/* ------------------------------------------------------------- per agent -- */
+
+function forAgent(over: Partial<ReadinessForAgent> & { agent: string }): ReadinessForAgent {
+  return {
+    label: over.agent,
+    file: 'INSTRUCTIONS.md',
+    check: check({ id: 'claude-md', status: 'pass', detail: 'found it' }),
+    score: 90,
+    band: 'strong',
+    cappedBy: null,
+    ...over,
+  }
+}
+
+function report(over: Partial<ReadinessReport> = {}): ReadinessReport {
+  return {
+    projectPath: '/p',
+    score: 38,
+    band: 'at-risk',
+    checks: [check({ id: 'claude-md', status: 'fail', detail: 'nothing here' }), check({ id: 'readme' })],
+    cappedBy: null,
+    scannedAt: '2026-08-21T00:00:00.000Z',
+    ...over,
+  }
+}
+
+/**
+ * Switching the pill has to move the row *and* the ring, or the page is back to
+ * a headline that does not follow from what is under it.
+ */
+describe('reportFor', () => {
+  it('gives the project’s own answer when no agent is picked', () => {
+    const view = reportFor(report({ agents: [forAgent({ agent: 'codex' })] }), null)
+    expect(view.agent).toBeNull()
+    expect(view.score).toBe(38)
+    expect(view.checks[0]?.detail).toBe('nothing here')
+  })
+
+  it('swaps the instructions row and the score together', () => {
+    const scanned = report({ agents: [forAgent({ agent: 'codex', label: 'Codex CLI', file: 'AGENTS.md' })] })
+    const view = reportFor(scanned, 'codex')
+    expect(view.agent?.label).toBe('Codex CLI')
+    expect(view.checks[0]?.detail).toBe('found it')
+    expect(view.score).toBe(90)
+    expect(view.band).toBe('strong')
+    // Every other row is the same object — one scan, one list, one swap.
+    expect(view.checks[1]).toBe(scanned.checks[1])
+  })
+
+  it('falls back to the neutral view for an agent the scan did not answer for', () => {
+    const view = reportFor(report({ agents: [] }), 'gemini')
+    expect(view.agent).toBeNull()
+    expect(view.score).toBe(38)
+  })
+
+  it('survives a report from a build that answered for no agents at all', () => {
+    const view = reportFor(report(), 'claude')
+    expect(view.checks).toHaveLength(2)
+  })
+})
+
+/**
+ * The rule this screen has to keep, pinned where it can be:
+ *
+ *   > *"where we can have an option between Claude, Codex, Gemini, in those
+ *   > places don't name only Claude. Give all the options."*
+ */
+describe('AgentPills', () => {
+  const three = [
+    forAgent({ agent: 'claude', label: 'Claude Code', file: 'CLAUDE.md' }),
+    forAgent({ agent: 'codex', label: 'Codex CLI', file: 'AGENTS.md' }),
+    forAgent({ agent: 'gemini', label: 'Gemini CLI', file: 'GEMINI.md' }),
+  ]
+
+  it('offers every agent the scan answered for, and the project’s own answer', () => {
+    const html = renderToStaticMarkup(<AgentPills agents={three} pick={null} onPick={() => {}} />)
+    for (const label of ['Any agent', 'Claude Code', 'Codex CLI', 'Gemini CLI']) {
+      expect(html, label).toContain(label)
+    }
+  })
+
+  it('says which file each agent reads before it is pressed', () => {
+    const html = renderToStaticMarkup(<AgentPills agents={three} pick={null} onPick={() => {}} />)
+    for (const file of ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md']) {
+      expect(html, file).toContain(file)
+    }
+  })
+
+  it('marks the pressed one for a reader who cannot see the fill', () => {
+    const html = renderToStaticMarkup(<AgentPills agents={three} pick={'codex'} onPick={() => {}} />)
+    expect(html).toContain('data-on="true"')
+    // One pressed, and it is not the first — the default must not be sticky.
+    expect(html.match(/data-on="true"/g)).toHaveLength(1)
+  })
+
+  it('draws nothing when there is nothing to switch between', () => {
+    expect(renderToStaticMarkup(<AgentPills agents={[]} pick={null} onPick={() => {}} />)).toBe('')
   })
 })
 

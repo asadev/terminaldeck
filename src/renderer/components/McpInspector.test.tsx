@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   countFor,
+  MachinePills,
   formatCommand,
   McpInspector,
   resultText,
@@ -11,6 +12,7 @@ import {
   type McpInventory,
   type McpServerStatus,
 } from './McpInspector'
+import { thisMachine } from '../platform'
 
 /**
  * No DOM environment in this project's test setup, so rendering goes through
@@ -161,6 +163,65 @@ describe('<McpInspector>', () => {
     expect(html).toContain('MCP is not available here')
     // The shared blank, not a bare sentence of its own — see `PageEmpty`.
     expect(html).toContain('page-blank-title')
+  })
+
+  /**
+   * *"Here also maybe we need to see which MCP servers or which machine
+   * connected."*
+   *
+   * The page named a folder in the corner of a header and nothing else. With a
+   * PC and a server both connected, "No servers yet" is a sentence about a
+   * machine, and which machine it was about was not on screen anywhere.
+   */
+  it('names the folder and the machine the list came from', () => {
+    const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
+    expect(html).toContain('page-scope')
+    expect(html).toContain('/work/app')
+    expect(html).toContain(`on ${thisMachine()}`)
+  })
+
+  /**
+   * And no pills for a person with one computer.
+   *
+   * `reportableMachines` decides which machines qualify (its own test covers
+   * the rule); with none connected there is nothing to switch between, and
+   * *"a dropdown only when some exist"* is the most repeated note in the whole
+   * review. Static rendering runs no effects, so the machine list here is
+   * genuinely empty rather than merely unloaded — which is the same state a
+   * fresh install is in.
+   */
+  it('draws no machine pills when there is no other machine to show', () => {
+    const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
+    expect(html).not.toContain('page-pills')
+    // And the Add button does not start naming machines at somebody who has one.
+    expect(html).toContain('>Add server<')
+  })
+
+  /**
+   * The pills themselves, which no static render of the page can produce —
+   * effects do not run, so the machine list is always empty there.
+   *
+   * `reportableMachines` has its own test for which machines qualify; this one
+   * is about what the reader is offered once some do.
+   */
+  it('offers this machine and every one it can report on', () => {
+    const targets = [
+      { machineId: 'm1', name: 'DESKTOP-DDGMNCV', sessionId: 's1', sessionTitle: 'AAAA', cwd: '/home/imza/AAAA' },
+    ]
+    const html = renderToStaticMarkup(<MachinePills targets={targets} pick={null} onPick={() => {}} />)
+    expect(html).toContain('DESKTOP-DDGMNCV')
+    expect(html).toContain(thisMachine())
+    // This machine is the one in force until somebody presses another.
+    expect(html.match(/data-on="true"/g)).toHaveLength(1)
+  })
+
+  it('marks the machine being reported on, so the page cannot lie about whose list it is', () => {
+    const targets = [
+      { machineId: 'm1', name: 'DESKTOP-DDGMNCV', sessionId: 's1', sessionTitle: 'AAAA', cwd: '/x' },
+    ]
+    const html = renderToStaticMarkup(<MachinePills targets={targets} pick="m1" onPick={() => {}} />)
+    expect(html).toMatch(/data-on="true"[^>]*>DESKTOP-DDGMNCV|DESKTOP-DDGMNCV/)
+    expect(html.match(/data-on="true"/g)).toHaveLength(1)
   })
 
   it('renders its frame when a bridge is supplied', () => {

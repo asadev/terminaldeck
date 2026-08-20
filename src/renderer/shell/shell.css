@@ -2090,10 +2090,164 @@
    pages in the app agreed where a page starts. One measure is worth more than
    the extra column. */
 
-/* Two panes and no page scroll of its own. */
+/* Two panes and no page scroll of its own — plus the scope line above them,
+   which is why this is a column rather than a single filled box. */
 .panel-page[data-panel='files'] {
   padding: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-page[data-panel='files'] > .page-scope {
+  padding: var(--sp-3) var(--sp-4) 0;
+}
+
+.panel-page[data-panel='files'] > .files-page {
+  flex: 1;
+  min-height: 0;
+}
+
+/* --------------------------------------------- what a page is reporting on -- */
+
+/*
+  One quiet line under the title: the folder this page read, and the machine it
+  is on. See `components/PageScope.tsx` for the report behind it — every one of
+  these pages drew a bare title over an empty body, and *"maybe I'm not the
+  actual one"* is what somebody says when nothing on the page says where it
+  looked.
+
+  It is drawn by `PanelView` for every view rather than by six pages, so the six
+  cannot drift into six different ideas of where their subject lives. The rules
+  below are the whole of its design: a caption, muted, the path in mono because
+  it is data, and no rule under it — separate with space (CLAUDE.md → Design).
+*/
+.page-scope {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-4);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.page-scope-path {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* The tail of a path is the half that identifies it — two checkouts of the
+     same project differ in their last segment, not their first — so a path too
+     long for the line loses its head. `direction` flips the truncation; the
+     isolate keeps the characters themselves in reading order. */
+  direction: rtl;
+  unicode-bidi: isolate;
+}
+
+/* A dot rather than a character in the markup, so nothing reads it out. */
+.page-scope-sep::before {
+  content: '·';
+}
+
+.page-scope-where,
+.page-scope-detail {
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------- pills, once, for pages -- */
+
+/*
+  The one pill in this app — see `components/Pill.tsx` for the argument.
+
+  These rules are `.artifacts-chip`'s, moved rather than rewritten: that page's
+  chips were the pattern he pointed at when he asked for pills on the readiness
+  page, so the way to give him "the same ones" is to make them literally the
+  same ones. A fill, not an outline — a row of bordered chips draws a line per
+  chip across the top of a page.
+*/
+.page-pill {
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--t-callout);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.page-pill:hover {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+.page-pill[data-on='true'] {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.page-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.page-pills {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* One quiet word in front of a row, for the page that has two of them. */
+.page-pills-lead {
+  padding-right: var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+}
+
+/*
+  A page with a scope line is a column: the line, then the view under it.
+
+  Three page roots — the Overview, Source control and Artifacts — ask for
+  `height: 100%` because each fills the window with its own internal scrollers.
+  With one more line above them that is exactly one line too much, and the
+  window grew a 25px scrollbar on every one of those pages. They take what is
+  left of the column instead, which is the same intent said against the new
+  layout rather than against the old one.
+*/
+.panel-page:has(> .page-scope) {
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-page > .page-scope ~ .dashboard,
+.panel-page > .page-scope ~ .git-panel,
+.panel-page > .page-scope ~ .artifacts {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/*
+  And a page whose whole content is a blank state still centres it.
+
+  `.panel-page:has(> .page-blank:only-child)` below does that job for a page
+  with nothing above the blank, and the scope line is precisely something above
+  it — so the auto margins do it here instead. Kept identical for the "Reading…"
+  line, because a page that says it is reading and then says what it found must
+  not move the answer.
+*/
+.page-scope ~ .page-blank,
+.page-scope ~ .page-blank-line[data-page] {
+  margin-block: auto;
 }
 
 /* ----------------------------------------------------- a page with nothing -- */

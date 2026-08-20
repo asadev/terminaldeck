@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filesPageState } from './PanelView'
+import { filesBlankReason, filesPageState } from './PanelView'
 import type { TreeRootState } from '../components/FileTree'
 
 /**
@@ -51,5 +51,31 @@ describe('filesPageState', () => {
    */
   it('keeps the viewer while the tree is still reading', () => {
     expect(filesPageState(state({ status: 'loading' }))).toBe('tree-and-viewer')
+  })
+})
+
+/**
+ * *"For files is empty, not showing anything."*
+ *
+ * No frame caught this page, so what it did is not in doubt and what it *said*
+ * is: two words in the middle of a window, about a folder it never named. The
+ * folder — `~/Templates` — really was empty, and being right without saying
+ * what you read is indistinguishable from being broken.
+ */
+describe('filesBlankReason', () => {
+  it('names the folder it listed', () => {
+    expect(filesBlankReason('/Users/apple/Templates', false)).toContain('/Users/apple/Templates')
+    expect(filesBlankReason('/Users/apple/Templates', true)).toContain('/Users/apple/Templates')
+  })
+
+  /**
+   * The two empties are different facts. A folder whose every file is covered
+   * by `.gitignore` — a downloads folder, a checkout mid-build — is not an
+   * empty folder, and the page must not say it is while the filter is on.
+   */
+  it('says which pass produced the nothing', () => {
+    expect(filesBlankReason('/p', false)).toContain('.gitignore')
+    expect(filesBlankReason('/p', true)).toContain('ignored files included')
+    expect(filesBlankReason('/p', true)).not.toContain('.gitignore')
   })
 })

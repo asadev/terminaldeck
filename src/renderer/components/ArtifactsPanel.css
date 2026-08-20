@@ -98,37 +98,16 @@
   width: var(--sp-4);
 }
 
-/* A fill, not an outline — a row of bordered chips draws a line per chip
-   across the top of the page. */
-.artifacts-chip {
-  height: var(--control-h);
-  padding: 0 var(--sp-3);
-  border: none;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: var(--t-callout);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
+/*
+  The chips themselves are `.page-pill` now, in `shell.css`.
 
-.artifacts-chip:hover {
-  background: var(--fill-tertiary);
-  color: var(--text-primary);
-}
-
-.artifacts-chip[data-on='true'] {
-  background: var(--fill-secondary);
-  color: var(--text-primary);
-  font-weight: var(--w-medium);
-}
-
-.artifacts-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
+  These rules — the fill, the pressed state, the focus ring — were the pattern
+  Asad pointed at when he asked for pills on the readiness page: *"maybe here we
+  also need pills."* Giving him the same ones meant making them the same ones,
+  so the block moved and this page renders `components/Pill.tsx` like the other
+  two. What is left here is the *row*, which is this page's own: a wrapping,
+  scrolling strip that can hold one chip per session.
+*/
 
 .artifacts-status {
   flex-shrink: 0;

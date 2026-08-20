@@ -351,22 +351,33 @@ const NAMED_IN_THE_REVIEW = /\bCLAUDE\.md\b|\bGEMINI\.md\b|\bVS ?Code\b|\bVisual
  * anybody — they are both disclosing what is about to be written where, after
  * the choice has already been made.
  */
-const DISCLOSED_FILENAMES: ReadonlyArray<{ text: string; because: string }> = [
-  {
-    text: 'The file is CLAUDE.md.',
-    because:
-      'Said in the description of a fix that is about to create a file, immediately before somebody presses ' +
-      'the button. What lands in their repository is a fact about their filesystem and they are entitled to ' +
-      'it; the button itself says "Create instructions file".',
-  },
-  {
-    text: '# CLAUDE.md',
-    because:
-      'The first line of the file that fix writes, not a line of this app. A Markdown document titling ' +
-      'itself with its own filename is the convention every one of these files follows, and it is read in ' +
-      'an editor rather than in this app.',
-  },
-]
+/*
+ * The list is **empty** as of 2026-08-21, and that is a change in where the
+ * disclosure lives rather than a decision to stop disclosing.
+ *
+ * Both entries were the readiness fix that creates an instructions file: the
+ * sentence "The file is CLAUDE.md." in its description, and "# CLAUDE.md" as
+ * the first line of the skeleton it wrote. One file, named unconditionally,
+ * because the check had exactly one idea of which agent a person runs.
+ *
+ * That check answers per agent now. `INSTRUCTIONS_AGENTS` in
+ * `src/main/readiness.ts` carries a row for Claude Code, Codex CLI and Gemini
+ * CLI, the readiness page draws a pill for each, and the file named — in the
+ * finding, on the button and in the template's own title — is the file *the
+ * chosen agent* reads. Nothing in this tree spells those names as copy any
+ * more; they are read out of that table at the moment somebody has said which
+ * agent they mean, which is part 3 of the rule satisfied rather than excused.
+ *
+ * **What that costs this scanner, said plainly.** A name composed at runtime is
+ * not a string literal, so the strict rule below can no longer see it — the
+ * same hole the collector's note 3 describes. The guard against it is not here,
+ * because it cannot be: it is `describe('AgentPills')` in
+ * `ReadinessPanel.test.tsx`, which fails if that row of pills ever offers fewer
+ * than every agent the scan answered for, and the assertion at the foot of this
+ * file, which fails if the table itself ever holds one agent's file and not the
+ * others.
+ */
+const DISCLOSED_FILENAMES: ReadonlyArray<{ text: string; because: string }> = []
 
 /* --------------------------------------------------------------- collecting -- */
 
@@ -1012,18 +1023,29 @@ describe('the neutral vocabulary is used consistently', () => {
     ).toBe(true)
   })
 
-  it('the readiness card says what a fix changes by category on its visible line', () => {
-    // `touches` is printed under "Changes" the moment the card is drawn, on any
-    // repository with any agent in it. The filename is still disclosed — in the
-    // fix's `description`, which is on the {@link DISCLOSED_FILENAMES} list and
-    // is asserted to still exist by the staleness test above.
-    expect(says('src/main/readiness.ts', 'your instructions file')).toBe(true)
+  it('the readiness check is titled by category, whichever agent it is about', () => {
+    // The heading is the same row whether the page is graded for one agent or
+    // for the project, so it names the category. Which agent a given reading is
+    // about is said in the finding, where it is a fact rather than a heading
+    // that would have to change under a pill.
+    expect(says('src/main/readiness.ts', 'Agent instructions present and useful')).toBe(true)
   })
 
-  it('the readiness check is titled by category, and its fix by what it makes', () => {
-    expect(says('src/main/readiness.ts', 'Agent instructions present and useful')).toBe(true)
-    expect(says('src/main/readiness.ts', 'Create instructions file')).toBe(true)
-  })
+  /*
+   * The structural half of part 3 is not asserted here, and the absence is
+   * deliberate rather than a gap.
+   *
+   * The readiness page spells `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` at
+   * runtime, out of `INSTRUCTIONS_AGENTS` in `src/main/readiness.ts` — on the
+   * button, under "Changes" and in the finding. That is allowed because all
+   * three are offered, and it stops being allowed the moment the table holds
+   * one of them and not the others. The assertion that notices lives in
+   * `readiness.test.ts` ("names an instructions file for every agent…"), beside
+   * the table, because importing the main process from this root-level file
+   * drags `src/main` into the *web* project's program and fails `tsc` with
+   * TS6307. The screen's own half is `describe('AgentPills')` in
+   * `ReadinessPanel.test.tsx`.
+   */
 
   it('the fixed-prefix warning and the pane above it use the same words', () => {
     expect(says('src/main/cost.ts', 'check your instructions file and MCP tool schemas')).toBe(true)

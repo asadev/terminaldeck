@@ -206,13 +206,22 @@ describe('what Source control shows when there is no repository', () => {
     ...over,
   })
 
-  it('offers the repository instead of a sentence about not having one', () => {
+  /**
+   * Both halves, because the page had been through one of them already.
+   *
+   * The sentence was suppressed whenever the button was drawn — a title plus a
+   * button already say "no repository, and here is how to get one" — and he
+   * looked at the result and said *"Source control, nothing."* Two words and a
+   * button is what nothing looks like. The Overview tile one click away had the
+   * missing half all along.
+   */
+  it('says why it is empty and offers the repository', () => {
     const view = unavailableView(notRepo({ canInit: true }), true)
     expect(view.canInit).toBe(true)
-    expect(view.title).toBe('Not a repository')
-    // The one that matters: with a button there, the page does not also print
-    // the sentence. Two copies of one fact is the thing this round removed.
-    expect(view.message).toBeNull()
+    expect(view.title).toBe('Nothing to track here')
+    expect(view.message).toBe('This folder is not a git repository.')
+    // And not the tile's last clause, which points at this very page.
+    expect(view.message).not.toContain('Source control can create one')
   })
 
   it('never offers to create one over a repository git is only refusing to read', () => {
@@ -241,13 +250,34 @@ describe('what Source control shows when there is no repository', () => {
     for (const reason of ['not-a-repo', 'git-missing', 'no-such-folder', 'error'] as const) {
       const view = unavailableView(notRepo({ reason, canInit: false }), true)
       expect(view.title.length, reason).toBeGreaterThan(0)
-      expect(view.message, reason).not.toBeNull()
+      expect(view.message.length, reason).toBeGreaterThan(0)
     }
+  })
+
+  /**
+   * The titles are the Overview tile's, word for word.
+   *
+   * They were four different words for the same four situations — "Nothing to
+   * track here" on the tile, "Not a repository" on the page it links to — while
+   * `widgets.tsx` carried a comment claiming they were the same. Two names for
+   * one situation is how somebody comes to believe they are looking at two
+   * findings.
+   */
+  it('uses the same four headings the Overview tile uses', () => {
+    const titles = (['not-a-repo', 'git-missing', 'no-such-folder', 'error'] as const).map(
+      (reason) => unavailableView(notRepo({ reason, canInit: false }), true).title,
+    )
+    expect(titles).toEqual([
+      'Nothing to track here',
+      'git is not installed',
+      'That folder is gone',
+      'Source control is unavailable',
+    ])
   })
 
   it('has a title for a status that never arrived at all', () => {
     const view = unavailableView(null, true)
-    expect(view.title).toBe('git could not read this folder')
+    expect(view.title).toBe('Source control is unavailable')
     expect(view.canInit).toBe(false)
   })
 })

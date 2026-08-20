@@ -265,6 +265,32 @@
   color: var(--text-secondary);
 }
 
+/* The machine pills, above everything this page draws. `.page-pill` in
+   shell.css is the pill itself — one pill in this app, per `Pill.tsx`. */
+.mcp > .page-pills {
+  margin-bottom: var(--sp-4);
+}
+
+/*
+  The same row, for a server on another machine — a `<span>`, because there is
+  nothing to press.
+
+  It is not the disabled button above: that one is a control this app has and
+  cannot use on one transport. This is a row that was never a control, because
+  opening a server over there would spawn a process on that computer and no
+  frame on this wire carries the request. Same geometry, so the two lists read
+  as one page.
+*/
+.mcp-server-static {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--t-body);
+  color: var(--text-secondary);
+}
+
 .mcp-server-name {
   font-weight: var(--w-semibold);
   color: var(--text-primary);
@@ -318,6 +344,15 @@
 .mcp-tag[data-scope='local'] {
   background: var(--fill-secondary);
   color: var(--text-primary);
+}
+
+/* Which machine a server lives on. Quieter than the scope beside it: it is the
+   answer to "whose is this", which only matters at all once there is more than
+   one machine on the page. */
+.mcp-tag[data-machine='true'] {
+  background: none;
+  padding-inline: 0;
+  color: var(--text-muted);
 }
 
 .mcp-tag[data-warn='true'] {

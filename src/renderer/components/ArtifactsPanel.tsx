@@ -3,6 +3,7 @@ import { readFailure, withDeadline } from '../deadline'
 import { recall, remember } from '../panel-cache'
 import { renderMarkdown } from './ChatView'
 import { PageEmpty, PageNote } from './PageEmpty'
+import { Pill } from './Pill'
 import { HoverNote } from './HoverNote'
 import { formatBytes, relativeTime } from './relative-time'
 import './ArtifactsPanel.css'
@@ -305,6 +306,50 @@ export function previewKindOf(relPath: string): PreviewKind {
 }
 
 /**
+ * What the page says when the scan found nothing — every fact it has, in one
+ * line.
+ *
+ * ## The report
+ *
+ * Asad, on this page, 2026-08-21:
+ *
+ *   > *"No artifacts are still. I don't know. We don't have artifacts maybe."*
+ *
+ * "I don't know" is the finding. The page said *"Nothing written or edited in
+ * 15 sessions."* and stopped, which leaves a reader with no way to tell a
+ * correct zero from a broken page — and his was almost certainly correct: the
+ * folder was `~/Templates`, which is not even a git repository. A zero has to
+ * carry its own evidence.
+ *
+ * Three facts make it checkable, and all three were already in the answer and
+ * thrown away:
+ *
+ *  - **the folder**, `list.root`. Nothing on the page named it, so "no
+ *    artifacts here" and "the wrong here" read identically. The same defect the
+ *    MCP page had, fixed the same way.
+ *  - **how many sessions were read**, which was the only fact it did print.
+ *  - **`outsideProject`** — tool calls that named a file *outside* the folder,
+ *    counted by `main/artifacts.ts` since it was written and never once shown.
+ *    This is the interesting zero: an agent launched from a parent workspace
+ *    writes into that parent, so "15 sessions, 40 files, none of them in this
+ *    folder" is a complete explanation where "nothing in 15 sessions" is a
+ *    shrug. It is also what makes the *Every session* chip beside it worth
+ *    pressing rather than a guess.
+ */
+export function nothingFound(list: ArtifactList): string {
+  const where = `Nothing written or edited in ${list.root}`
+  if (list.sessionsScanned === 0) return `${where} — no sessions have been recorded for it yet.`
+  const read = `${list.sessionsScanned} session${list.sessionsScanned === 1 ? '' : 's'} read`
+  // Only when there were some. A zero here is not evidence of anything, and a
+  // clause saying "0 files elsewhere" is furniture.
+  const elsewhere =
+    list.outsideProject > 0
+      ? `, ${list.outsideProject} change${list.outsideProject === 1 ? '' : 's'} to files outside it`
+      : ''
+  return `${where} — ${read}${elsewhere}.`
+}
+
+/**
  * The one-line summary under the controls.
  *
  * Exported because it is the sentence that has to stay truthful: it says how
@@ -312,11 +357,7 @@ export function previewKindOf(relPath: string): PreviewKind {
  * more. A list that quietly stops at four hundred is a list that lies.
  */
 export function summarize(list: ArtifactList, shown: number, kind: ArtifactScopeKind): string {
-  if (list.artifacts.length === 0) {
-    return list.sessionsScanned === 0
-      ? 'No sessions recorded for this project yet.'
-      : `Nothing written or edited in ${list.sessionsScanned} session${list.sessionsScanned === 1 ? '' : 's'}.`
-  }
+  if (list.artifacts.length === 0) return nothingFound(list)
   // Counted against the half of the list that is on screen, not against every
   // file found — "12 of 33" under a Made chip showing 12 of 12 was the page
   // reporting a filter as if it were a shortfall.
@@ -1067,26 +1108,20 @@ export function ArtifactsPanel({
           press it.
         */}
         <div className="artifacts-scope" role="group" aria-label="What to show">
-          <button
-            type="button"
-            className="artifacts-chip"
-            data-on={made === 'made' ? 'true' : undefined}
-            aria-pressed={made === 'made'}
+          <Pill
+            on={made === 'made'}
             title="Files an agent wrote whole — the things it produced"
             onClick={() => setMade('made')}
           >
             Made here {madeCount}
-          </button>
-          <button
-            type="button"
-            className="artifacts-chip"
-            data-on={made === 'changed' ? 'true' : undefined}
-            aria-pressed={made === 'changed'}
+          </Pill>
+          <Pill
+            on={made === 'changed'}
             title="Files that already existed and an agent edited"
             onClick={() => setMade('changed')}
           >
             Changed {changedCount}
-          </button>
+          </Pill>
         </div>
       </header>
 
@@ -1104,45 +1139,27 @@ export function ArtifactsPanel({
             default is this project's own sessions; an agent launched from a
             parent workspace records its writes under *that* folder, which is
             the whole reason the second chip exists. */}
-        <button
-          type="button"
-          className="artifacts-chip"
-          data-on={scope === 'project' ? 'true' : undefined}
-          aria-pressed={scope === 'project'}
-          onClick={() => setScope('project')}
-        >
+        <Pill on={scope === 'project'} onClick={() => setScope('project')}>
           This project’s sessions
-        </button>
-        <button
-          type="button"
-          className="artifacts-chip"
-          data-on={scope === 'all' ? 'true' : undefined}
-          aria-pressed={scope === 'all'}
+        </Pill>
+        <Pill
+          on={scope === 'all'}
           title="Also read sessions started elsewhere that wrote into this folder"
           onClick={() => setScope('all')}
         >
           Every session
-        </button>
+        </Pill>
 
         {sessions.length > 1 && (
           <>
             <span className="artifacts-chip-gap" aria-hidden="true" />
-            <button
-              type="button"
-              className="artifacts-chip"
-              data-on={session === null ? 'true' : undefined}
-              aria-pressed={session === null}
-              onClick={() => setSession(null)}
-            >
+            <Pill on={session === null} onClick={() => setSession(null)}>
               All sessions
-            </button>
+            </Pill>
             {sessions.map((entry) => (
-              <button
-                type="button"
+              <Pill
                 key={entry.sessionId}
-                className="artifacts-chip"
-                data-on={session === entry.sessionId ? 'true' : undefined}
-                aria-pressed={session === entry.sessionId}
+                on={session === entry.sessionId}
                 title={entry.sessionId}
                 onClick={() => setSession(session === entry.sessionId ? null : entry.sessionId)}
               >
@@ -1152,7 +1169,7 @@ export function ArtifactsPanel({
                     over another. */}
                 {sessionNames.get(entry.sessionId) ?? relativeTime(entry.at, clock)} ·{' '}
                 {entry.files} file{entry.files === 1 ? '' : 's'}
-              </button>
+              </Pill>
             ))}
           </>
         )}
@@ -1192,11 +1209,14 @@ export function ArtifactsPanel({
               : undefined
           }
         >
-          {/* Three words and a dot. Two sentences stood here explaining what a
-              scope is and where agents get launched from — the shape of thing
-              he asked to be rid of everywhere: *"I don't want any kind of long
-              descriptions anywhere. Just if somewhere it's very required, give
-              the i icon."* */}
+          {/* What was read, on the page rather than behind a dot.
+              *"No artifacts are still. I don't know."* — a zero with no
+              evidence is a page a reader cannot check, and this is the same
+              sentence the status line carries when there is a list to head, so
+              the two cannot come to say different things. The `i` still holds
+              what a scope *is*, which is the part that is a definition rather
+              than a finding. */}
+          {nothingFound(list.list)}{' '}
           <HoverNote label="What was read">
             {scope === 'project'
               ? 'Only the sessions started in this folder were read. Read every session to include agents launched from a parent folder.'
@@ -1264,15 +1284,9 @@ export function ArtifactsPanel({
                     keeping, but it is the answer to a second question and it
                     used to be the only thing this pane ever showed.
                   */}
-                  <button
-                    type="button"
-                    className="artifacts-chip"
-                    data-on={showHistory ? 'true' : undefined}
-                    aria-pressed={showHistory}
-                    onClick={() => setShowHistory((on) => !on)}
-                  >
+                  <Pill on={showHistory} onClick={() => setShowHistory((on) => !on)}>
                     {showHistory ? 'Show the file' : `History ${changeSummary(current)}`}
-                  </button>
+                  </Pill>
                   {onOpenFile && current.onDisk && (
                     <button
                       type="button"
@@ -1318,7 +1332,7 @@ export function ArtifactsPanel({
                 <PageNote>{history.message}</PageNote>
                 <button
                   type="button"
-                  className="artifacts-chip"
+                  className="page-pill"
                   onClick={() => setHistoryAttempt((n) => n + 1)}
                 >
                   Try again
