@@ -707,22 +707,71 @@
     'Hanken Grotesk', sans-serif;
   --font-mono: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 
-  /* macOS type scale. Sizes are the HIG's; the tracking is what makes SF sit
-     right at each of them — tighter as the size grows. */
-  --t-largetitle: 26px;
+  /*
+    macOS type scale, one notch up from the HIG's own.
+
+    Sizes were the HIG's exactly — 13px body, 17px title, 22px large title — and
+    the tracking is what makes SF sit right at each of them, tighter as the size
+    grows. The tracking is unchanged; the sizes are not.
+
+    ## Why the ladder moved, and by how much
+
+    Asad, 2026-08-21, with Settings → Appearance open at "Terminal font size 14":
+    *"at least this much of size like we have inside, I want to increase app for
+    everything, for overall the application also, a little bit, not too much, but
+    a little bit."* And again a few minutes later: *"let's make 14 a little bit
+    bigger for everything."*
+
+    Two things in that, and only one of them is this block. He is **not** asking
+    for the 14 to change — that is `appearance.terminalFontSize`, it is a
+    person's own setting, and it goes nowhere near here. What he is asking is
+    that the chrome around the terminal stop being visibly smaller than the text
+    inside it. At 13px body against a 14px terminal it was, on every screen at
+    once: the rail's rows, the strip's tab labels and every row in Settings.
+
+    So the whole ladder moves up one rung and body lands on 14px, which is the
+    number he pointed at. Every rung moves with it rather than the small end
+    alone, because a scale is a set of relations — lifting body into title3 would
+    have put a heading and the line under it at one size on four screens.
+
+    The arithmetic, so the next notch can be taken the same way: each rung is its
+    old size × 14/13, rounded to the nearest whole pixel from title3 up and to
+    the nearest half below it, which is the grid the old ladder already sat on.
+    Every one of the ten lands on its number that way.
+
+    It is a **type** change and deliberately not a density one. The row directly
+    above the field he was looking at reads "Density: Comfortable", and he did
+    not touch it: `--row-h`, `--control-h` and the `--sp-*` rhythm are all
+    unchanged below, and nothing in the window got taller for this. That was
+    checked rather than assumed — every rule in the renderer that pins a fixed
+    height around a token font size was measured against the new size, and each
+    still has room for its line box. The tightest is the rail's rename field, at
+    22px around 14px of text; the one after it is the unread badge, which states
+    its own `line-height` in pixels and is unaffected by any of this.
+
+    ## The two numbers elsewhere that had to move with it
+
+    A pixel measured against 13px type is not the same measurement at 14px, and
+    two of those exist. `--strip-tab-w` in `WorkspaceTabStrip.css` is the width
+    at which the fullest tab stops truncating, and `ACCOUNT_NEEDS_RAIL` in
+    `shell/workspace-tabs.ts` is the rail width at which a session's name and its
+    account both still fit on the line. Both carry their own arithmetic; both
+    were re-derived here rather than left to be discovered as a truncation.
+  */
+  --t-largetitle: 28px;
   --t-largetitle-ls: -0.022em;
-  --t-title1: 22px;
+  --t-title1: 24px;
   --t-title1-ls: -0.019em;
-  --t-title2: 17px;
+  --t-title2: 18px;
   --t-title2-ls: -0.014em;
-  --t-title3: 15px;
+  --t-title3: 16px;
   --t-title3-ls: -0.01em;
-  --t-headline: 13px;
-  --t-body: 13px;
-  --t-callout: 12px;
-  --t-subhead: 11.5px;
-  --t-footnote: 11px;
-  --t-caption: 10.5px;
+  --t-headline: 14px;
+  --t-body: 14px;
+  --t-callout: 13px;
+  --t-subhead: 12.5px;
+  --t-footnote: 12px;
+  --t-caption: 11.5px;
   --t-caption-ls: 0.005em;
 
   --lh-tight: 1.25;

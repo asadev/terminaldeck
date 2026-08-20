@@ -815,38 +815,62 @@ export function profileLoginLabel(
 }
 
 /**
- * The same login, for a column twelve characters wide.
+ * The same login, for a column twelve characters wide — **and never an address.**
  *
  * The sidebar is the one list that cannot be given the label above. Its account
  * column is capped at `12ch` in `shell.css`, and that cap is not arbitrary:
- * `ACCOUNT_NEEDS_RAIL` in `workspace-tabs.ts` works out that a 240px rail has
- * 203px of line, of which the account may have about 84 — because the session's
- * *name* is what the row exists to carry and the account is the thing that
- * gives. "Your own Claude Code install" in that column is `Your own Cl…`, which
- * identifies nothing, and the whole address is `app.imatch.…`, which cuts off
- * exactly the half that differs.
+ * `ACCOUNT_NEEDS_RAIL` in `workspace-tabs.ts` works out how much of a row's line
+ * is left once the session's name has had what it needs — because the *name* is
+ * what the row exists to carry and the account is the thing that gives. "Your
+ * own Claude Code install" in that column is `Your own Cl…`, which identifies
+ * nothing.
  *
- * So the rungs are the same three facts, said in the shortest true form:
+ * ## No address on a session row, whatever is signed in — 2026-08-21
  *
- *  1. the mailbox of the address — the part before the `@`. Two logins of one
- *     agent are nearly always two mailboxes at the *same* domain, so the domain
- *     is the half carrying no information in a column this narrow, and dropping
- *     it is what makes `app.imatch.ae` fit where `app.imatch.…` did not.
- *  2. the name, when a person chose it. "Work" was already short.
- *  3. nothing at all. This is the deliberate one: there is no twelve-character
- *     way to say "your own Codex CLI install" that still distinguishes it from
- *     "your own Claude Code install", and an abbreviation that drops the agent
- *     would put two identical captions on two rows that are not the same
- *     account — the exact failure this whole pass is closing. An empty column
- *     is honest, and the fact is not lost: it moves into the row's tooltip,
- *     which is the same trade `accountsWorthShowing` already makes when the
- *     rail is too narrow to caption at all.
+ * Asad, looking at the rail: *"inside the sessions here, in our old versions it
+ * was showing emails. Now it's not showing, which is good. Make sure we will not
+ * show them again."*
+ *
+ * The rail he was looking at showed none, and that is not the same thing as an
+ * address being unable to get there. It was one account: `accountsWorthShowing`
+ * suppresses the whole column when every row would say the same thing, so the
+ * frames prove the *column* was empty and prove nothing about this function,
+ * which until now answered the mailbox — the half of the address before the `@`
+ * — as its first rung. Sign a second account in and every row in the Open list
+ * would have carried one. So the rung is gone rather than guarded downstream: a
+ * caption this cannot produce is a caption no width, no account count and no
+ * later change to `accountsWorthShowing` can put back.
+ *
+ * What is *not* in scope is the account chip on the session bar over the
+ * terminal, which prints the whole address and which he wants: *"Templates · ✳
+ * imzapremium@gmail.com ⌄"* is the answer to "who is this session running as",
+ * asked in the one place there is room to answer it. This is the rail's column,
+ * and the rail's answer is a name or nothing.
+ *
+ * So the rungs are two facts and a silence, said in the shortest true form:
+ *
+ *  1. the name, when a person chose it. "Work" was already short — and this is
+ *     the rung that carries the multi-account case, because an account somebody
+ *     adds is an account somebody named. It is first now; it used to be second,
+ *     behind the mailbox, which meant a login called "Work" was drawn as `work`
+ *     off its own address.
+ *  2. nothing at all, for the install this machine generated for itself. This is
+ *     the deliberate one and it predates the rule above: there is no
+ *     twelve-character way to say "your own Codex CLI install" that still
+ *     distinguishes it from "your own Claude Code install", and an abbreviation
+ *     that drops the agent would put two identical captions on two rows that are
+ *     not the same account. An empty column is honest, and the fact is not lost
+ *     — it moves into the row's tooltip, which is the same trade
+ *     `accountsWorthShowing` already makes when the rail is too narrow to
+ *     caption at all.
  *
  * `note` is that tooltip clause, and it is returned from here rather than
- * composed by the caller so the two can never describe different rungs. Its
- * wording follows the rung: "signed in as" is a claim about a login and is only
- * made where there is one, while the machine's own install gets "on …", which
- * is true whether or not anybody has ever signed into it.
+ * composed by the caller so the two can never describe different rungs. The
+ * address lives *there*, on hover, where there is room for all of it and where
+ * nothing is drawn on screen until somebody asks. Its wording follows the fact:
+ * "signed in as" is a claim about a login and is only made where there is one,
+ * while the machine's own install gets "on …", which is true whether or not
+ * anybody has ever signed into it.
  */
 export interface RailIdentity {
   /** The caption for the row, or null when nothing true is short enough. */
@@ -859,18 +883,19 @@ export function accountRail(
   account: NamedAccount,
   signIn: SignInFacts | undefined,
 ): RailIdentity {
+  // Read once, and only ever for the tooltip. There is no branch below that puts
+  // it on the line — no whole address, no mailbox split off the front of one, no
+  // `@` — which is the entire point of the shape: the rail cannot print an
+  // address because there is no expression here that would produce one.
   const address = accountLabel(signIn)
-  if (address !== null) {
-    // `split` rather than a slice at `indexOf`, and the guard is not decorative:
-    // `profiles-signin.ts` hands through whatever the CLI printed, and a line
-    // with no `@` in it — or one that begins with it — must not become an empty
-    // caption that reads as a value which failed to load.
-    const mailbox = address.split('@')[0]
-    return { short: mailbox === '' ? address : mailbox, note: `signed in as ${address}` }
-  }
   if (!isGeneratedAccount(account)) {
-    return { short: account.name, note: `signed in as ${account.name}` }
+    // The address when the agent's CLI has named one, because the tooltip has
+    // room for it and it is the more precise answer to the same question; the
+    // name when it has not, which is still true and is what the line already
+    // says.
+    return { short: account.name, note: `signed in as ${address ?? account.name}` }
   }
+  if (address !== null) return { short: null, note: `signed in as ${address}` }
   const label = profileLoginLabel(account, signIn)
   // Lower-cased for the one rung whose label is a phrase rather than a name:
   // it is being joined into the middle of the row's tooltip, and "Session 5 —

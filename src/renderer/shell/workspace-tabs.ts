@@ -295,13 +295,34 @@ export function asSessionStatus(raw: string): SessionStatus {
  * The narrowest rail that can hold a session's name *and* an account beside it.
  *
  * Measured rather than guessed, off the rail this was written in. A row is 8px
- * of left pad, a 15px status dot, an 8px gap and 6px of right pad, so a 240px
- * rail leaves 203px of line. The account is capped at 12 characters of caption
- * type — about 84px — which leaves 119px, or roughly seventeen characters, for
- * the name. Seventeen is enough to read "Update the parser"; below it the row
- * starts cutting words in half, and the thing that gets cut is always the name.
+ * of left pad, a 15px status dot, an 8px gap and 6px of right pad — 37px of
+ * furniture — and the account beside the name is capped at 12 characters of
+ * caption type. Seventeen characters is the name this has to protect: it is
+ * enough to read "Update the parser", and below it the row starts cutting words
+ * in half, with the thing that gets cut always being the name.
+ *
+ * ## It was 240, and the type under it moved
+ *
+ * At the old scale — 13px body, 10.5px caption — 12 characters of caption were
+ * about 84px and seventeen of body about 119, so 37 + 84 + 119 = 240. Those two
+ * measurements are the only ones here that are not geometry, and they come out
+ * as 7.0px per character of caption and 7.0px per character of name.
+ *
+ * `styles/tokens.css` came up a notch on 2026-08-21, because he asked for the
+ * chrome to stop reading smaller than the terminal inside it. Type of one face
+ * at one size advances proportionally, so both per-character numbers move by
+ * their own token's ratio and nothing else is re-measured: 7.0 × 11.5/10.5 =
+ * 7.67px of caption and 7.0 × 14/13 = 7.54px of name. That is 12 × 7.67 ≈ 92 and
+ * 17 × 7.54 ≈ 128, so the same rule lands on 37 + 92 + 128 = 257.
+ *
+ * Left at 240 the constant would have kept its number and quietly changed its
+ * meaning: a 240px rail now holds about fourteen characters of name beside an
+ * account, so the caption would stay on the line at exactly the widths where it
+ * has stopped being affordable. Which of the two gives is not in question — the
+ * name is what the row exists to carry, and the account is a fact you can get at
+ * from the row's own tooltip.
  */
-export const ACCOUNT_NEEDS_RAIL = 240
+export const ACCOUNT_NEEDS_RAIL = 257
 
 /**
  * Whether a list of tabs needs to say which account each session belongs to —
@@ -881,7 +902,7 @@ export function middleEllipsis(label: string, budget: number): string {
  * How many characters of a title a tab in the top strip can hold.
  *
  * Measured off the real thing rather than guessed, and re-measured when the tab
- * got wider. A strip tab is `--strip-tab-w` = 232px, and its icon, status dot,
+ * got wider. A strip tab was `--strip-tab-w` = 232px, and its icon, status dot,
  * two trailing controls and padding take about 80 of them, leaving ~152px of
  * 11px UI text. Rendered in `.harness/strip.html`, thirty characters of a
  * mixed-case title are where the CSS backstop starts clipping, so this is two
@@ -893,6 +914,16 @@ export function middleEllipsis(label: string, budget: number): string {
  * this tab"* is 232px because that is what a full tab needs, and a tab cutting
  * "Fix the parser in the reader" with 77px of empty space beside it is the
  * ragged row arriving from the other direction.
+ *
+ * It survived the type scale coming up a notch on 2026-08-21 without moving, and
+ * that is not an oversight: the label is 12px now rather than 11px, and
+ * `--strip-tab-w` was re-derived to 246px so that the *same* ~152px of text
+ * became ~166px. A budget is a count of characters, the tab grew by exactly what
+ * those characters grew by, so the count is still thirty and this is still two
+ * short of it. Had the width been left at 232 this number would have had to come
+ * down to about 26 instead — which is the trade that was rejected there, because
+ * it shortens every name in the bar to keep a pixel that no longer means
+ * anything.
  *
  * Tabs compress to `--strip-tab-min` on a crowded bar, where a budget written
  * for the full width cannot hold and `text-overflow` takes over — that is the

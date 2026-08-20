@@ -1,4 +1,4 @@
-import type { WorkspaceTab } from './workspace-tabs'
+import { readMachineTabId, readServerTabId, type WorkspaceTab } from './workspace-tabs'
 
 /**
  * What the window is showing — including the answer "nothing, on purpose".
@@ -99,4 +99,87 @@ export function resolveActiveTab(
     if (found) return found
   }
   return tabs[0] ?? null
+}
+
+/**
+ * Which of the window's three surfaces has to hold what is being shown.
+ *
+ * ## The failure this exists for
+ *
+ * Asad, 2026-08-21, sitting in a terminal on Office PC with that session's tab
+ * active: *"Now if I am on this session and I want to close this session from
+ * here, from top bar, I think I cannot because I am inside. So either it should
+ * not matter if I am inside or not."* And a beat later, the bound on it: *"If I
+ * click close, it should close, but it will stay live in side panel. But from
+ * the top bar it should go."*
+ *
+ * The ✕ was pressed and the tab did not leave the bar — in his frames it *moved*
+ * from third position to the far right and stayed selected, which is the exact
+ * signature of a demotion that took effect followed by the strip drawing the tab
+ * again because it is still what is on screen. Three pieces, each correct:
+ *
+ *  - `removeFromStrip` takes the id out of the promoted order and names the
+ *    neighbour the window should show instead.
+ *  - `App.tsx` holds "which session on another computer is filling the pane" in
+ *    two pieces of state of its own, and `railActiveTabId` prefers them over
+ *    every local tab, because when one is on screen it *is* what is on screen.
+ *  - `shownTabs` always draws the active tab, promoted or not, so that the
+ *    heading can never name a session with no tab.
+ *
+ * `showInstead` moved the *local* selection and nothing else, so those two
+ * pieces of state still named the session that had just been taken off the bar,
+ * `railActiveTabId` still resolved to it, and it came back as a transient tab.
+ * A local tab has no such second home, which is why the same press worked there
+ * and why the bug read as "only the ones on other machines".
+ *
+ * ## Why a function here rather than two more branches in the handler
+ *
+ * Because `selectTab` in `App.tsx` already carries these branches, and the two
+ * are answering one question: *given an id, where does that window live*.
+ * Written twice they are two answers, and the one that drifts is the one nobody
+ * navigates with. Written here it is pure, and the routing can be pinned without
+ * a window — which matters, because this is the half of the press no screenshot
+ * shows.
+ *
+ * `selectTab` has not been moved onto it yet, and that is a deliberate stop
+ * rather than an oversight: it is the busiest function in the largest file in
+ * the renderer, its branches are held by their own wiring tests, and a rewrite
+ * of them is not what a ✕ that does not work needs. It is the next caller.
+ *
+ * `null` is a window with nothing left to show, and it clears both: a person who
+ * took the last tab off the bar has emptied the window, and a server terminal
+ * still filling the pane under an empty strip would be the same contradiction
+ * from the other side.
+ *
+ * ## What it deliberately does not decide
+ *
+ * Whether anything is *ended*. Nothing here reaches a pty, a machine or a
+ * server; a session taken off the bar keeps running and keeps its row in the
+ * rail, which is the whole model of the strip — *"side panel will have
+ * everything inside, and above we just set a view which one we want to see."*
+ * Ending one for real is the rail row's ⋯ → Delete and stays there.
+ */
+export interface PaneForTab {
+  /** The session on a paired machine to show, or null to put that pane away. */
+  machine: { machineId: string; sessionId: string } | null
+  /** The tab id of the server terminal to show, or null to put that pane away. */
+  server: string | null
+  /**
+   * True when the id names something this window draws itself — a local
+   * session, the copilot, a browser page — or names nothing at all.
+   *
+   * The callers need it because the *rest* of showing a local tab (making it the
+   * active session, filling the focused pane in a split) is meaningless for a
+   * window on another computer, and asking `machine === null && server === null`
+   * at each call site is the same test written twice more.
+   */
+  local: boolean
+}
+
+export function paneForTab(id: string | null): PaneForTab {
+  if (id === null) return { machine: null, server: null, local: true }
+  const machine = readMachineTabId(id)
+  if (machine) return { machine, server: null, local: false }
+  if (readServerTabId(id)) return { machine: null, server: id, local: false }
+  return { machine: null, server: null, local: true }
 }

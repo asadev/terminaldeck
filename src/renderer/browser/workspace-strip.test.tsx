@@ -4,8 +4,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   isTabDrag,
+  machineTabId,
   middleEllipsis,
   readTabDrag,
+  serverTabId,
   startTabDrag,
   STRIP_LABEL_BUDGET,
   tabIcon,
@@ -16,6 +18,13 @@ import {
   type TabTransfer,
   type WorkspaceTab,
 } from '../shell/workspace-tabs'
+import {
+  AUTO_SELECTION,
+  paneForTab,
+  resolveActiveTab,
+  showTabSelection,
+  type TabSelection,
+} from '../shell/tab-selection'
 import { Sidebar } from '../shell/Sidebar'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import {
@@ -1253,7 +1262,7 @@ describe('a strip tab', () => {
   })
 
   it('carries the whole title and the folder in its tooltip', () => {
-    // The tab is 232px wide; this is where the rest of the answer lives.
+    // A tab is `--strip-tab-w` wide; this is where the rest of the answer lives.
     expect(html).toContain('title="Update Claude Code terminal to new API')
     expect(html).toContain('/Users/apple/Projects/terminaldeck"')
   })
@@ -1754,7 +1763,7 @@ describe('the width of a tab', () => {
   const css = readFileSync(join(__dirname, 'WorkspaceTabStrip.css'), 'utf8')
   const rule = /\.strip-tab \{[\s\S]*?\n\}/.exec(css)?.[0] ?? ''
 
-  it('is the tab he pointed at, 232px, measured off his own frame', () => {
+  it('is the tab he pointed at, carried across the type scale, and not a ratio', () => {
     /*
      * A pixel and not a ratio, and that is the correction rather than a lapse.
      * This shipped as `--strip-tab-h * 5` = 180px, fitted to a reading of his
@@ -1767,8 +1776,17 @@ describe('the width of a tab', () => {
      * inside a tab; the width does not, because it is a measurement of the
      * fullest tab's content and calling it 6.44 heights would be the same
      * invented derivation that produced 180.
+     *
+     * 246 rather than 232 since 2026-08-21, and it is the *same* measurement
+     * rather than a second opinion about it. The 232 was read off a frame whose
+     * tab labels were 11px; `--t-footnote` is 12px now, because he asked for the
+     * whole chrome to come up to the terminal's size. Of the 232, ~80 is
+     * furniture that does not scale and ~152 is text, so 80 + 152 × 12/11 = 246
+     * is where the fullest tab stops truncating at the new size — which is what
+     * the number has always meant. `STRIP_LABEL_BUDGET` is unchanged for exactly
+     * that reason: the characters did not move, the pixels under them did.
      */
-    expect(css).toContain('--strip-tab-w: 232px;')
+    expect(css).toContain('--strip-tab-w: 246px;')
     expect(css).toContain('--strip-tab-min: calc(var(--strip-tab-h) * 3.5);')
   })
 
@@ -2118,5 +2136,194 @@ describe('keepWindowBesideInStrip', () => {
 
   it('survives a window with no storage at all', () => {
     expect(() => keepWindowBesideInStrip('a', null, null)).not.toThrow()
+  })
+})
+
+/* ------------------------------------- the ✕ on the tab you are looking at -- */
+
+/**
+ * Pressing ✕ on the active tab takes it off the bar, whatever kind of session it
+ * is and wherever that session is running.
+ *
+ * Asad, 2026-08-21, inside a terminal on Office PC with its own tab selected:
+ * *"Now if I am on this session and I want to close this session from here, from
+ * top bar, I think I cannot because I am inside. So either it should not matter
+ * if I am inside or not."* He is clear that it is every kind: *"regardless of
+ * whatever the session it is, even the commander."* And equally clear about the
+ * bound: *"If I click close, it should close, but it will stay live in side
+ * panel."*
+ *
+ * ## Why this is a model of the window rather than the window
+ *
+ * There is no test in this repository that renders `App.tsx` — it is six
+ * thousand lines with a preload bridge under it — so what its wiring can be held
+ * to is the source assertions in `wiring.test.ts`. What *those* cannot see is
+ * the composition, and the composition is where the bug was: four correct pieces
+ * (`removeFromStrip` demotes, `paneForTab` routes, `resolveActiveTab` resolves,
+ * `shownTabs` always draws whatever is active) that produced a ✕ which appeared
+ * to do nothing.
+ *
+ * So the three lines of `App.tsx` that join them are restated here, once, beside
+ * the assertions — `railActive` is `railActiveTabId` and `press` is the strip's
+ * `removeTab` followed by `showInstead`. It is a model and it is worth saying
+ * so: it proves the pieces compose into the press he asked for, and it would
+ * still pass if somebody deleted the call in `App.tsx`. That half is
+ * `wiring.test.ts`'s, and the two are only worth anything together.
+ */
+describe('taking the active tab off the bar', () => {
+  const MACHINE_TAB = machineTabId('m-1', 'r7')
+  const SERVER_TAB = serverTabId('11111111-2222-3333-4444-555555555555', 'k1')
+
+  /** Everything open, in the order `openTabs` builds it: local, then far. */
+  const TABS: WorkspaceTab[] = [
+    { id: 'copilot', kind: 'session', label: 'Commander', isCopilot: true, closable: true },
+    session('s1', 'Session 1'),
+    { id: 'b1', kind: 'browser', label: 'IMZA CRM', closable: true },
+    {
+      id: MACHINE_TAB,
+      kind: 'session',
+      label: 'AAAA',
+      machine: { id: 'm-1', name: 'DESKTOP-DDGMNCV' },
+      closable: true,
+    },
+    {
+      id: SERVER_TAB,
+      kind: 'session',
+      label: 'Session 1',
+      server: { id: '11111111-2222-3333-4444-555555555555', name: 'Office PC' },
+      closable: true,
+    },
+  ]
+
+  /** Only the tabs `resolveActiveTab` is given — this window's own. */
+  const LOCAL = TABS.filter((tab) => tab.id === 'copilot' || tab.id === 's1' || tab.id === 'b1')
+
+  /** The window, in the four fields this press touches. */
+  interface Window {
+    order: string[]
+    selection: TabSelection
+    machine: { machineId: string; sessionId: string } | null
+    server: string | null
+  }
+
+  /** `railActiveTabId` in `App.tsx`: a far session wins, because it is in front. */
+  const railActive = (win: Window): string | null =>
+    win.machine
+      ? machineTabId(win.machine.machineId, win.machine.sessionId)
+      : (win.server ?? resolveActiveTab(win.selection, LOCAL)?.id ?? null)
+
+  /** Opening a window: it is kept on the bar and it is what you are looking at. */
+  const showing = (id: string): Window => {
+    const pane = paneForTab(id)
+    return {
+      order: TABS.map((tab) => tab.id),
+      selection: pane.local ? showTabSelection(id) : AUTO_SELECTION,
+      machine: pane.machine,
+      server: pane.server,
+    }
+  }
+
+  /** The strip's `removeTab`, then `App.tsx`'s `showInstead` on its answer. */
+  const press = (win: Window, id: string): Window => {
+    const result = removeFromStrip(win.order, TABS, id, railActive(win))
+    const next: Window = { ...win, order: result.order }
+    if (result.select === undefined) return next
+    const pane = paneForTab(result.select)
+    next.machine = pane.machine
+    next.server = pane.server
+    if (pane.local) next.selection = showTabSelection(result.select)
+    return next
+  }
+
+  /** What the bar draws afterwards. */
+  const bar = (win: Window): string[] =>
+    shownTabs(win.order, TABS, railActive(win)).map((entry) => entry.tab.id)
+
+  for (const [what, id] of [
+    ['a local session', 's1'],
+    ['the copilot', 'copilot'],
+    ['a session on a paired machine', MACHINE_TAB],
+    ['a terminal on a server', SERVER_TAB],
+  ] as const) {
+    it(`removes ${what} while it is the one on screen`, () => {
+      const before = showing(id)
+      expect(bar(before), 'the tab was not on the bar to begin with').toContain(id)
+      const after = press(before, id)
+      /*
+       * Gone, and not merely demoted. The failure he filmed is the difference:
+       * the id left the promoted order and `shownTabs` appended it again at the
+       * end of the row as a transient tab, so the pill moved and stayed
+       * selected. Reading the drawn bar rather than the order is what tells
+       * those two apart.
+       */
+      expect(bar(after)).not.toContain(id)
+      expect(after.order).not.toContain(id)
+    })
+
+    it(`shows something else after removing ${what}`, () => {
+      // *"either it should not matter if I am inside or not"* — the other half:
+      // the window cannot go on showing a tab that is no longer on the bar.
+      const after = press(showing(id), id)
+      expect(railActive(after)).not.toBe(id)
+    })
+
+    it(`leaves ${what} open, because the ✕ ends nothing`, () => {
+      /*
+       * *"it will stay live in side panel."* The tab list is what the rail is
+       * drawn from, and nothing on this path touches it — the press is an
+       * arrangement, not a verb. Ending a session for real is the row's
+       * ⋯ → Delete and is reached from nowhere here.
+       */
+      const after = press(showing(id), id)
+      expect(TABS.map((tab) => tab.id)).toContain(id)
+      expect(after).not.toHaveProperty('closed')
+    })
+  }
+
+  it('leaves a tab that is not the one on screen exactly as it did before', () => {
+    // The half that already worked, kept working. `removeFromStrip` answers no
+    // selection at all for this press, so the window does not move.
+    const before = showing(SERVER_TAB)
+    const after = press(before, 's1')
+    expect(after.order).not.toContain('s1')
+    expect(railActive(after)).toBe(SERVER_TAB)
+    expect(after.server).toBe(SERVER_TAB)
+  })
+
+  it('empties the window rather than putting the last tab back', () => {
+    /*
+     * The 2026-08-17 behaviour, checked here for the kinds that could not reach
+     * it before: with one tab promoted and it being a server terminal, the press
+     * has nothing to fall back to, so the pane goes empty and the far session is
+     * put away rather than left mounted under an empty bar.
+     */
+    const only: Window = { order: [SERVER_TAB], selection: AUTO_SELECTION, machine: null, server: SERVER_TAB }
+    const after = press(only, SERVER_TAB)
+    expect(after.server).toBeNull()
+    expect(after.machine).toBeNull()
+    /*
+     * The page is still there, and has to be: a browser window is drawn by
+     * `shownTabs` whether or not anybody promoted it, because the rail lists no
+     * pages and one taken off the bar would be open and reachable from nowhere.
+     * *"Browser windows will not be on the side bar at all."* No **session** is
+     * left on the bar, which is what the press was about.
+     */
+    expect(bar(after)).toEqual(['b1'])
+  })
+
+  it('moves the pane to the neighbour when the neighbour is on another machine', () => {
+    // Two far sessions side by side on the bar: taking the second off has to
+    // *show* the first, not merely stop showing the second.
+    const win: Window = {
+      order: [MACHINE_TAB, SERVER_TAB],
+      selection: AUTO_SELECTION,
+      machine: null,
+      server: SERVER_TAB,
+    }
+    const after = press(win, SERVER_TAB)
+    expect(after.server).toBeNull()
+    expect(after.machine).toEqual({ machineId: 'm-1', sessionId: 'r7' })
+    // Plus the page, which `shownTabs` draws whether or not it was promoted.
+    expect(bar(after)).toEqual([MACHINE_TAB, 'b1'])
   })
 })

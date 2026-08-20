@@ -653,6 +653,55 @@ describe('the last tab can be closed', () => {
     expect(showInstead).toContain('setSelection(showTabSelection(id))')
   })
 
+  /**
+   * And the ✕ works on a session that is not running on this computer.
+   *
+   * Asad, 2026-08-21, inside a terminal on Office PC: *"Now if I am on this
+   * session and I want to close this session from here, from top bar, I think I
+   * cannot because I am inside."*
+   *
+   * The strip demoted the tab correctly and `shell/tab-selection.ts` resolves
+   * correctly; what kept the pill on the bar was this window holding *which far
+   * session is filling the pane* in two pieces of state that the press never
+   * touched, and `railActiveTabId` preferring them over every local tab. So the
+   * routing is the fix, and the routing lives here — which is why it is a wiring
+   * claim: `paneForTab` has its own tests and cannot see whether anybody calls
+   * it.
+   */
+  it('takes the far panes with it, so a session on another computer can leave the bar', () => {
+    const showInstead = /const showInstead = useCallback\([\s\S]*?\n {2}\)/.exec(app)?.[0] ?? ''
+    expect(showInstead, 'showInstead has changed shape').not.toBe('')
+    expect(showInstead).toContain('const pane = paneForTab(id)')
+    expect(showInstead).toContain('setOpenMachineSession(pane.machine)')
+    expect(showInstead).toContain('setOpenServerSession(pane.server)')
+    // Both before the local half, or the press moves the selection under a
+    // terminal that is still in front of it.
+    expect(showInstead.indexOf('setOpenServerSession(pane.server)')).toBeLessThan(
+      showInstead.indexOf('setSelection(showTabSelection(id))'),
+    )
+  })
+
+  it('still ends nothing, on any of the four kinds of tab', () => {
+    /*
+     * The bound he put on it in the same breath: *"If I click close, it should
+     * close, but it will stay live in side panel. But from the top bar it should
+     * go."* The routing above made this handler reach two more pieces of state,
+     * and the thing to be sure of afterwards is what it did **not** reach. A
+     * remote or server session ends through a verb on a wire, and none of those
+     * names may appear in the one handler the ✕ arrives at.
+     */
+    const showInstead = /const showInstead = useCallback\([\s\S]*?\n {2}\)/.exec(app)?.[0] ?? ''
+    for (const verb of [
+      'closeTab',
+      'closeServerSession',
+      'closeMachineSession',
+      'killSession',
+      'confirmClose',
+    ]) {
+      expect(showInstead, `showInstead reaches ${verb}`).not.toContain(verb)
+    }
+  })
+
   it('draws the pane’s own empty state rather than the launch screen', () => {
     /*
      * Two different nothings. With no windows open it is a launch, and the

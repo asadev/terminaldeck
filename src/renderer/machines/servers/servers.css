@@ -739,8 +739,16 @@ a.settings-btn {
  */
 .servers-setup-heading {
   margin: 0 0 var(--sp-3);
-  font-size: var(--text-sm);
-  font-weight: 600;
+  /* `var(--text-sm)` until 2026-08-21, which is not a token this app has ever
+     defined — `tokens.css` names the rungs `--t-*`. An undefined custom property
+     is not an error, it is an *invalid value at computed-value time*, so this
+     line did nothing at all and the heading was drawn at whatever it inherited.
+     It went unnoticed because the inherited size was body, which is close enough
+     to a small heading to look deliberate; raising the scale is what makes a
+     rung that is not named worth naming. `--t-headline` is body's size at
+     semibold, which is what this row already wanted to be. */
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
   color: var(--text-secondary);
 }
 

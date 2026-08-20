@@ -343,26 +343,52 @@ describe('signInStateSummary', () => {
 
 describe('accountRail', () => {
   /**
-   * The sidebar's account column, which is twelve characters wide.
+   * The sidebar's account column, which is twelve characters wide and never
+   * holds an address.
    *
-   * Every screenshot of the rail showed rows reading `Default` — the word he
-   * objected to, in the most visible list in the app, while the chip forty
-   * pixels above the same session read the address. The column cannot hold an
-   * address, so it holds the half of one that differs.
+   * Two separate complaints, a session apart, meet in this function. The first:
+   * every screenshot of the rail showed rows reading `Default` — the profile key
+   * the main process mints, not a name anybody gave — while the chip forty
+   * pixels above the same session read the address. The second, 2026-08-21:
+   * *"inside the sessions here, in our old versions it was showing emails. Now
+   * it's not showing, which is good. Make sure we will not show them again."*
+   *
+   * The first answer to the first complaint was the *mailbox* — the half of the
+   * address before the `@` — which is exactly what the second complaint is
+   * about. So the column now says a chosen name or says nothing, and the address
+   * lives only in `note`, which is the row's hover.
    */
   const own = { id: 'system', name: 'Default', provider: 'claude' as const }
 
-  it('prints the mailbox, because the domain is the half that is shared', () => {
+  it('never puts an address, or half of one, on the line', () => {
+    /*
+     * The frames of 2026-08-21 could not prove this, and that is why it is a
+     * test rather than a screenshot: he had one account signed in, and
+     * `accountsWorthShowing` suppresses the whole column when every row would
+     * say the same thing. The mechanism was still live underneath it.
+     */
     const rail = accountRail(own, parseSignIn({ state: 'signed-in', account: 'app.imatch.ae@gmail.com' }))
-    expect(rail.short).toBe('app.imatch.ae')
-    // The whole address is still said where there is room to say it.
+    expect(rail.short).toBeNull()
+    // Said in full where there is room to say it, and only there.
     expect(rail.note).toBe('signed in as app.imatch.ae@gmail.com')
   })
 
-  it('keeps a name a person chose', () => {
+  it('keeps a name a person chose, which is what a second account has', () => {
+    // The rung that carries the multi-account case. An account somebody adds is
+    // an account somebody named, so this is what two rows are told apart by
+    // once the address is off the line.
     const rail = accountRail({ id: 'work', name: 'Work', provider: 'claude' }, undefined)
     expect(rail.short).toBe('Work')
     expect(rail.note).toBe('signed in as Work')
+  })
+
+  it('prefers the address in the tooltip of a named account, and only there', () => {
+    const rail = accountRail(
+      { id: 'work', name: 'Work', provider: 'claude' },
+      parseSignIn({ state: 'signed-in', account: 'work@example.com' }),
+    )
+    expect(rail.short).toBe('Work')
+    expect(rail.note).toBe('signed in as work@example.com')
   })
 
   it('says nothing on the line rather than an abbreviation that identifies nothing', () => {
@@ -396,11 +422,34 @@ describe('accountRail', () => {
     }
   })
 
-  it('does not hand back an empty caption for an address it cannot split', () => {
-    // `profiles-signin.ts` passes through whatever the CLI printed. A line with
-    // no mailbox in it must not become a column that reads as a failed value.
-    const rail = accountRail(own, parseSignIn({ state: 'signed-in', account: '@example.com' }))
-    expect(rail.short).toBe('@example.com')
+  it('puts no @ on the line for any account, in any state', () => {
+    /*
+     * The guard he asked for, stated as the thing he would check: read every row
+     * at every account count and find no address. Both kinds of account, and
+     * every shape `profiles-signin.ts` can hand through — including the two that
+     * used to have their own branch here, an address with nothing before the `@`
+     * and an expired login that still reports its email.
+     */
+    const accounts = [
+      own,
+      { id: 'system:codex', name: 'Default (Codex CLI)', provider: 'codex' as const },
+      { id: 'work', name: 'Work', provider: 'claude' as const },
+    ]
+    const signIns = [
+      undefined,
+      parseSignIn({ state: 'unknown' }),
+      parseSignIn({ state: 'signed-out' }),
+      parseSignIn({ state: 'signed-in' }),
+      parseSignIn({ state: 'signed-in', account: 'app.imatch.ae@gmail.com' }),
+      parseSignIn({ state: 'signed-in', account: '@example.com' }),
+      parseSignIn({ state: 'signed-out', account: 'a@b.com' }),
+    ]
+    for (const account of accounts) {
+      for (const signIn of signIns) {
+        const rail = accountRail(account, signIn)
+        expect(rail.short ?? '', `${account.id} / ${JSON.stringify(signIn)}`).not.toContain('@')
+      }
+    }
   })
 })
 

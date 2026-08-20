@@ -253,6 +253,21 @@ describe('continue-last-session on a project heading', () => {
  * anybody promoted it. Half of that is a browser window listed twice; the other
  * half is a browser window listed nowhere, open, and unreachable.
  */
+/** A storage already holding a promoted order, so every named tab is on the bar. */
+function promoting(ids: readonly string[]): Storage {
+  const held = new Map<string, string>([['terminaldeck.strip.promoted', JSON.stringify(ids)]])
+  return {
+    get length() {
+      return held.size
+    },
+    clear: () => held.clear(),
+    getItem: (key: string) => held.get(key) ?? null,
+    key: (index: number) => [...held.keys()][index] ?? null,
+    removeItem: (key: string) => void held.delete(key),
+    setItem: (key: string, value: string) => void held.set(key, value),
+  }
+}
+
 describe('a browser window lives on the strip and nowhere else', () => {
   const WITH_PAGE: WorkspaceTab[] = [
     ...TABS,
@@ -301,5 +316,47 @@ describe('a browser window lives on the strip and nowhere else', () => {
     )
     expect(html).toContain('data-tab-id="b1"')
     expect(html).toContain('localhost:5173')
+  })
+
+  /**
+   * *"Now the browsers are up there, which is the right design, and sessions are
+   * here."* — 2026-08-21, pointing at the strip and then at the rail.
+   *
+   * He is describing the arrangement as correct, which makes this a guard rather
+   * than a change. The two halves above hold one direction each for a page; this
+   * holds the other object, which is the half a page-only test cannot see: a
+   * **session** belongs in both places, and a filter written to keep pages out
+   * of the rail is one edit away from keeping a session out of the strip.
+   *
+   * The rail's side of it for sessions that run somewhere else is in
+   * `machine-group.test.tsx` and `server-group.test.tsx`, which build the groups
+   * this rail draws them under.
+   */
+  it('draws a tab for every session and a rail row for none of the pages', () => {
+    /*
+     * Promoted, unlike the page above: *"session can be on both side bar and the
+     * top bar"*, and the strip is the half a person arranges. A session that is
+     * neither promoted nor on screen is correctly absent from the bar — that is
+     * the whole distinction `shownTabs` draws — so what is being checked is that
+     * a session can get there at all, for every session in the list.
+     */
+    const strip = renderToStaticMarkup(
+      <WorkspaceTabStrip
+        tabs={WITH_PAGE}
+        activeTabId="s1"
+        onSelect={() => {}}
+        onShowInstead={() => {}}
+        onCloseWindow={() => {}}
+        storage={promoting(WITH_PAGE.map((tab) => tab.id))}
+      />,
+    )
+    for (const tab of WITH_PAGE) {
+      expect(strip, `${tab.id} is not in the strip`).toContain(`data-tab-id="${tab.id}"`)
+    }
+    // And the same list down the side, with the page and only the page missing.
+    const rail = railMarkup({ tabs: WITH_PAGE })
+    expect(rail).toContain('Session 1')
+    expect(rail).toContain('Session 2')
+    expect(rail).not.toContain('localhost:5173')
   })
 })

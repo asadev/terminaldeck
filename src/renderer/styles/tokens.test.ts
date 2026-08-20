@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -1110,5 +1110,217 @@ describe('the selected row is visible on the surface it sits on', () => {
     const hovered = over(get(light!, '--bg-hover'), RAIL.light)
     expect(selected).toBeLessThan(rail)
     expect(selected).toBeLessThan(hovered)
+  })
+})
+
+/* --------------------------------------------------------------- type scale */
+
+/**
+ * The type ladder, checked as claims for the same reason the palette above is.
+ *
+ * This file's prologue is about colour and its argument is not: *a value that is
+ * described correctly in a comment and written incorrectly in the code*. A size
+ * fails that way as readily as a hex does, and it fails wider — every screen in
+ * this app is drawn on ten numbers, so a size that lands in the wrong place is
+ * not one screen looking odd, it is the chrome and the terminal disagreeing
+ * about how big the product is.
+ *
+ * ## What is being pinned, and why
+ *
+ * Asad, 2026-08-21, with Settings → Appearance open at 14: *"at least this much
+ * of size like we have inside, I want to increase app for everything, for
+ * overall the application also, a little bit, not too much, but a little bit."*
+ *
+ * Three claims in that sentence, one test each. The chrome must be **at least**
+ * the size of the terminal text, or the complaint stands. It must be larger
+ * **everywhere**, which means the ladder moved as a ladder rather than body
+ * being lifted into title3's lap. And it must not be the *terminal* that moved
+ * — that number is a person's own setting and it is nowhere in this sheet.
+ *
+ * The fourth test keeps the answer to "where is the knob" true: the whole
+ * renderer draws type from these ten tokens, so the next notch is one edit
+ * rather than an archaeology of one screen at a time.
+ */
+describe('the app type scale reaches the terminal it sits around', () => {
+  /** The rungs, largest first, as the sheet writes them. */
+  const LADDER = [
+    '--t-largetitle',
+    '--t-title1',
+    '--t-title2',
+    '--t-title3',
+    '--t-headline',
+    '--t-body',
+    '--t-callout',
+    '--t-subhead',
+    '--t-footnote',
+    '--t-caption',
+  ] as const
+
+  /**
+   * The shared `:root`, which is where type lives.
+   *
+   * Sizes are not a theme — the light and dark rules carry colour only — so this
+   * is deliberately not read through `THEMES` like everything above it. The bare
+   * `:root {` is the shared block; the sheet's first rule is `:root,` with the
+   * light theme beside it, which this pattern does not match.
+   */
+  const SHARED = cssVars(TOKENS, /^:root \{/m)
+
+  /** One rung, in pixels. */
+  const px = (token: string): number => {
+    const raw = SHARED.get(token)
+    if (raw === undefined) throw new Error(`${token} is not in the shared :root any more`)
+    const match = /^([\d.]+)px$/.exec(raw)
+    if (!match) throw new Error(`${token} is ${raw}, which this test cannot measure`)
+    return Number(match[1])
+  }
+
+  /** Every stylesheet the renderer ships, so the inventory below cannot be partial. */
+  const cssFiles = (): string[] => {
+    const out: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+        const rel = `${dir}/${entry.name}`
+        if (entry.isDirectory()) walk(rel)
+        else if (entry.name.endsWith('.css')) out.push(rel)
+      }
+    }
+    walk('src/renderer')
+    return out.sort()
+  }
+
+  it('sets body at least as large as an untouched terminal', () => {
+    /*
+     * The default is read out of `TerminalView.tsx` as text rather than
+     * imported, because importing it pulls xterm into a run that has no DOM. It
+     * is the number the window actually builds xterm with.
+     */
+    const terminal = /DEFAULT_TERMINAL_FONT_SIZE = (\d+)/.exec(
+      read('src/renderer/components/TerminalView.tsx'),
+    )
+    expect(terminal, 'TerminalView no longer states a default font size').not.toBeNull()
+    expect(px('--t-body')).toBeGreaterThanOrEqual(Number(terminal![1]))
+    /*
+     * And it is 14 specifically, which is the size on screen in the frame he
+     * stopped on. Clearing the 13px default alone would leave the chrome smaller
+     * than the terminal on his own machine, which is the whole complaint.
+     */
+    expect(px('--t-body')).toBe(14)
+  })
+
+  it('moved the whole ladder, not just the rung he pointed at', () => {
+    /*
+     * *"for everything, for overall the application also."* Lifting body alone
+     * would put a heading and the line beneath it at one size on every settings
+     * page, so each rung sits one notch above the HIG number it used to hold —
+     * 26/22/17/15/13/13/12/11.5/11/10.5 — at the same 14/13 proportion.
+     */
+    expect(LADDER.map(px)).toEqual([28, 24, 18, 16, 14, 14, 13, 12.5, 12, 11.5])
+
+    /*
+     * And by the rule the sheet states, rather than by ten numbers somebody
+     * typed: each rung is its old size × 14/13, rounded to the nearest whole
+     * pixel from title3 up and to the nearest half below it — which is the grid
+     * the old ladder already sat on. Written out so the *next* notch can be
+     * taken the same way and checked the same way.
+     */
+    const WAS = [26, 22, 17, 15, 13, 13, 12, 11.5, 11, 10.5]
+    const derived = WAS.map((size, index) => {
+      const scaled = (size * 14) / 13
+      return index <= 3 ? Math.round(scaled) : Math.round(scaled * 2) / 2
+    })
+    expect(LADDER.map(px)).toEqual(derived)
+  })
+
+  it('keeps the ladder a ladder, with no two rungs crossed', () => {
+    // A scale is a set of relations, and this is what a partial edit trips on:
+    // one screen patched, one token nudged, two rungs now equal or inverted.
+    const sizes = LADDER.map(px)
+    for (let i = 1; i < sizes.length; i += 1) {
+      expect({ rung: LADDER[i], ordered: sizes[i] <= sizes[i - 1] }).toEqual({
+        rung: LADDER[i],
+        ordered: true,
+      })
+    }
+    // Headline and body are one size at two weights, in the HIG and here.
+    expect(px('--t-headline')).toBe(px('--t-body'))
+  })
+
+  it('leaves the terminal’s own size alone, because it is somebody’s setting', () => {
+    /*
+     * The two knobs are separate and stay separate: this sheet dresses the
+     * chrome, and `appearance.terminalFontSize` is a number a person chose for
+     * the text inside their sessions. He was not asking for the 14 to change; he
+     * was asking for everything around it to catch up.
+     */
+    const entry =
+      /id: 'appearance\.terminalFontSize'[\s\S]*?\n {2}\}/.exec(
+        read('src/renderer/settings/settings-schema.ts'),
+      )?.[0] ?? ''
+    expect(entry, 'the terminal font size setting has changed shape').not.toBe('')
+    expect(entry).toContain('default: 13')
+    expect(read('src/renderer/components/TerminalView.tsx')).toContain(
+      'DEFAULT_TERMINAL_FONT_SIZE = 13',
+    )
+    /*
+     * And no terminal reads a chrome rung. If one ever did, changing the app's
+     * scale would silently resize somebody's shell — which is the one outcome
+     * this whole pass had to avoid.
+     */
+    for (const file of [
+      'src/renderer/components/TerminalView.tsx',
+      'src/renderer/machines/RemoteTerminal.tsx',
+      'src/renderer/machines/servers/ServerTerminal.tsx',
+    ]) {
+      expect(read(file), `${file} reads a chrome type token`).not.toMatch(/--t-[a-z]/)
+    }
+  })
+
+  it('draws the whole renderer from those ten tokens, so the next notch is one edit', () => {
+    /*
+     * The reason a scale change is ten lines rather than a survey. Every
+     * `font-size` in the renderer either names a rung or is one of the five
+     * below, and each of those is a size measured against something that is
+     * *not* the ladder — a fixed circle, or the line it sits inside.
+     *
+     * Kept as an inventory rather than a ban, in the same spirit as
+     * `verbatim.css`: the right answer to a literal is nearly always a rung, and
+     * the way to keep that true is to make adding one to this list a deliberate
+     * act with a line of reasoning beside it.
+     *
+     * It caught two the first time it ran. `.servers-setup-heading` read
+     * `font-size: var(--text-sm)` and `.readiness-touches` read
+     * `var(--t-caption-2)`, and neither token has ever existed in this app. An
+     * undefined custom property is not an error, it is an invalid value at
+     * computed-value time — so both declarations did nothing, both rows took
+     * whatever they inherited, and both looked close enough to deliberate that
+     * nobody had noticed. That is the exact failure mode this file's prologue is
+     * about, in a size rather than a colour.
+     *
+     * Which is also why the check is `var(--t-…)` by name rather than "is it a
+     * `var()`": a variable that does not resolve is indistinguishable from a
+     * missing declaration on screen, and a spelling test is the only thing that
+     * separates them.
+     */
+    const ALLOWED = new Map<string, string>([
+      ['src/renderer/styles/app.css:10px', 'the binding chip, sized to a 15px chip'],
+      [
+        'src/renderer/browser/BrowserWorkspace.css:10px',
+        'the profile initial, sized to an 18px circle',
+      ],
+      ['src/renderer/shell/shell.css:0.92em', 'a nested line, a shade under its parent'],
+      ['src/renderer/components/ChatView.css:0.86em', 'code inside a chat line'],
+      ['src/renderer/settings/SettingsWindow.css:inherit', 'a control taking the row it is on'],
+    ])
+    const stray: string[] = []
+    for (const file of cssFiles()) {
+      for (const decl of stripComments(read(file)).matchAll(/font-size:\s*([^;]+);/g)) {
+        const value = decl[1].trim()
+        if (/^var\(--t-[a-z0-9]+\)$/.test(value)) continue
+        if (ALLOWED.has(`${file}:${value}`)) continue
+        stray.push(`${file}: font-size: ${value}`)
+      }
+    }
+    expect(stray).toEqual([])
   })
 })

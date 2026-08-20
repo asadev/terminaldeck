@@ -135,6 +135,29 @@
     leaves a 232px tab printing 'Fix the par…the reader' with 77px of empty
     space beside it, which is the ragged row arriving from the other direction.
 
+    ### And 246px is that same tab, after the type scale moved — 2026-08-21
+
+    232 was measured off a frame whose tab labels were 11px, because `--t-footnote`
+    was 11px. It is 12px now: *"I want to increase app for everything, for overall
+    the application also, a little bit"*, and `styles/tokens.css` carries the
+    whole of that argument. A measurement of content does not survive the content
+    growing — left at 232 the fullest tab, which is the one he named, would start
+    middle-eliding at the width he chose precisely because it did not.
+
+    Re-derived rather than re-guessed, off the arithmetic `STRIP_LABEL_BUDGET`
+    already states: of the 232, about 80 is furniture that does not scale — the
+    glyph, the status dot, the two binding chips, the ✕ and the padding — and the
+    remaining ~152 is text. 152 × 12/11 is 166, and 80 + 166 is 246. The
+    character budget is therefore unchanged, which is the point of scaling the
+    width rather than the budget: the same thirty characters fit, in larger type.
+
+    What it costs is where the giving starts, and the giving is unchanged in
+    kind. Six tabs held their full width down to a 1526px window; at 246 they
+    hold to about 1618, and below that they compress toward `--strip-tab-min`
+    exactly as before — *"whenever we start new, these will become smaller."*
+    The floor is untouched, because a floor is furniture plus five characters and
+    5ch grows with the type on its own.
+
     ## `--strip-tab-min`, and why the floor is a different number now
 
     Because the tabs have to be able to give. *"whenever we start new, these
@@ -164,7 +187,7 @@
     is the same place it landed before.
   */
   --strip-tab-h: calc(var(--toolbar-h) - var(--sp-3));
-  --strip-tab-w: 232px;
+  --strip-tab-w: 246px;
   --strip-tab-min: calc(var(--strip-tab-h) * 3.5);
   --strip-flare: var(--radius-sm);
   background-color: var(--material-bg);

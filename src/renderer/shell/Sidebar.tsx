@@ -1159,10 +1159,16 @@ export function Sidebar({
      * email ID."*
      *
      * `accountRail` returns both halves off one rung, so the caption and this
-     * sentence can never describe different things: the mailbox on the line, the
-     * whole address in the tooltip, and — where the login has no address and no
-     * name a person chose — nothing on the line and the install named in full
-     * here. Which is the same trade the narrow rail already makes.
+     * sentence can never describe different things: a chosen name on the line,
+     * the whole address here, and — where the login has no name a person chose —
+     * nothing on the line and the address or the install named in full here.
+     * Which is the same trade the narrow rail already makes.
+     *
+     * The address is **only** ever here. It was on the line too, as the mailbox
+     * before the `@`, and 2026-08-21 took it off: *"in our old versions it was
+     * showing emails. Now it's not showing, which is good. Make sure we will not
+     * show them again."* A hover is a thing you ask for; a row is a thing you are
+     * shown. `accountRail` carries that argument and the test that holds it.
      */
     const rail = tab.account ? accountRail(tab.account, knownSignIns[tab.account.id]) : null
     /*

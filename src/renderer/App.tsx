@@ -120,6 +120,7 @@ import {
 } from './machines/servers/server-sessions'
 import {
   AUTO_SELECTION,
+  paneForTab,
   resolveActiveTab,
   showTabSelection,
   type TabSelection,
@@ -2046,9 +2047,55 @@ function Workspace() {
    * Nothing is closed by this. Every session is still running and still in the
    * rail, which is the model of the strip itself: *"side panel will have
    * everything inside, and above we just set a view which one we want to see."*
+   *
+   * ## It has to route, or the ✕ works on this computer only — 2026-08-21
+   *
+   * Asad, inside a terminal on Office PC with its own tab active: *"Now if I am
+   * on this session and I want to close this session from here, from top bar, I
+   * think I cannot because I am inside. So either it should not matter if I am
+   * inside or not."*
+   *
+   * `openMachineSession` and `openServerSession` are where this window keeps
+   * *"which session on another computer is filling the pane"*, and
+   * `railActiveTabId` prefers them over every local tab, because when one is on
+   * screen it is what is on screen. This handler used to move the local
+   * selection and nothing else — so after taking a server tab off the bar, the
+   * server terminal was still mounted in front, `railActiveTabId` still resolved
+   * to its id, and `shownTabs` drew it again as a transient tab at the end of the
+   * row. In his frames the pill visibly *moves* from third place to last and
+   * stays selected, which is that, exactly.
+   *
+   * `paneForTab` is the routing, and it is the whole of the fix: a local id puts
+   * both panes away, a remote or server id moves the pane to the window being
+   * shown instead, and `null` puts both away for a window somebody has emptied.
+   * The four kinds of session then leave the bar identically, which is what he
+   * asked for — *"regardless of whatever the session it is, even the commander."*
+   *
+   * It is a function rather than two more branches here because `selectTab`
+   * below asks the identical question — *given an id, where does that window
+   * live* — and the copy of it that drifts is always the one nobody navigates
+   * with. `selectTab` still answers it inline, with its own wiring tests over
+   * that shape; when it is next opened it should come through here too.
+   *
+   * What it still does not do is end anything. `paneForTab` reaches no pty, no
+   * machine and no server; the session keeps running and keeps its row in the
+   * rail, and Delete on that row is still the only thing in this app that ends
+   * one.
    */
   const showInstead = useCallback(
     (id: string | null) => {
+      const pane = paneForTab(id)
+      setOpenMachineSession(pane.machine)
+      setOpenServerSession(pane.server)
+      /*
+       * A window on another computer is drawn by `mainView` as the whole pane
+       * rather than as a tab, so the local selection is not what says it is on
+       * screen and must not be moved to name it — `selectTab` returns at the
+       * same point and for the same reason. Leaving it alone is also what keeps
+       * the covering view: pressing ✕ while reading Files must leave you in
+       * Files, whichever machine the tab belonged to.
+       */
+      if (!pane.local) return
       setSelection(showTabSelection(id))
       if (id === null) return
       if (windowSessionsRef.current.some((session) => session.id === id)) setActiveSession(id)

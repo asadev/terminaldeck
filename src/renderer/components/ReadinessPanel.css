@@ -330,7 +330,12 @@
   gap: var(--sp-1);
   margin: var(--sp-1) 0 0;
   font-family: var(--font-mono);
-  font-size: var(--t-caption-2);
+  /* `var(--t-caption-2)` until 2026-08-21, which is not a rung `tokens.css` has
+     ever defined — there is one caption, not two. An undefined custom property
+     is an invalid value at computed-value time rather than an error, so this
+     line did nothing and the row was drawn at whatever it inherited. It is the
+     smallest thing on the panel, which is exactly what `--t-caption` is for. */
+  font-size: var(--t-caption);
   line-height: var(--lh-body);
   color: var(--text-tertiary);
 }
