@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { readSessions, resolveAgentSessions, resolveTarget, whyDisabled } from './agent-target'
+import {
+  readSessions,
+  resolveAgentSessions,
+  resolveTarget,
+  sendPayload,
+  whyDisabled,
+} from './agent-target'
 
 /**
  * "It will just randomly send to anyone whatever I say here."
@@ -350,5 +356,27 @@ describe('resolveAgentSessions', () => {
     // Both let go, or a browser window closed while it was open leaves a
     // listener writing into a dead hook.
     expect(unsubscribed).toBe(2)
+  })
+})
+
+describe('what actually goes down the pty', () => {
+  it('submits a chat message and does not submit context', () => {
+    /*
+     * One character, two features. The copilot's rail panel is a chat box —
+     * *"only one small typing box and send button"* — and a message left sitting
+     * on the agent's command line is a box that did nothing. The browser's
+     * popups send an element or a flow into a session for somebody to edit
+     * before they press Return themselves, and a return there would fire off a
+     * half-written prompt.
+     */
+    expect(sendPayload('what is on this page?', true)).toBe('what is on this page?\r')
+    expect(sendPayload('what is on this page?', false)).toBe('what is on this page?')
+  })
+
+  it('answers empty for anything there is nothing to send about', () => {
+    // The caller refuses on empty rather than writing a bare return into
+    // somebody's agent, which on a CLI showing a numbered dialog answers it.
+    expect(sendPayload('   ', true)).toBe('')
+    expect(sendPayload('', false)).toBe('')
   })
 })

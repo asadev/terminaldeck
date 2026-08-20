@@ -85,6 +85,7 @@ import { resolveOmnibox } from './omnibox'
 import { browserOverlayDom, isCovered, watchOverlays, type Overlay } from './overlay-watch'
 import { ConnectSessionButton } from './BindChip'
 import { MachinePicker } from './MachinePicker'
+import { forgetFrontPage, setFrontPage } from './front-page'
 import { forgetWindowMachine, setWindowMachine } from './window-machine'
 import {
   destinationFor,
@@ -809,6 +810,17 @@ export function BrowserWorkspace({
       tabId,
       boundMachineId === '' ? null : { id: boundMachineId, name: boundMachineName },
     )
+    /*
+     * And say whether this page is the one on screen.
+     *
+     * `visible` is already the app's exact answer to that — see the prop — so
+     * this publishes it rather than deriving a second one. The sidebar is the
+     * reader: the copilot's rail panel is drawn only over the page being driven,
+     * and until this store existed it had no way to ask, so it sat over the rail
+     * on the MCP servers page, on Machines and on a terminal session. See
+     * `front-page.ts`.
+     */
+    setFrontPage(tabId, visible ? { tabId, viewId: boundViewId ?? '' } : null)
   }, [tabId, boundViewId, boundUrl, pageTitle, boundMachineId, boundMachineName, visible])
 
   /*
@@ -822,7 +834,10 @@ export function BrowserWorkspace({
    */
   useEffect(() => {
     if (!tabId) return
-    return () => forgetWindowMachine(tabId)
+    return () => {
+      forgetWindowMachine(tabId)
+      forgetFrontPage(tabId)
+    }
   }, [tabId])
 
   /* -- the device rectangle, recomputed on every layout pass. */

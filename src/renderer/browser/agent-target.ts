@@ -491,6 +491,31 @@ export function resolveTarget(
 }
 
 /**
+ * What actually goes down the pty, or empty when there is nothing to send.
+ *
+ * Two callers with two meanings, and the difference is one character. The
+ * browser's popups send **context** — an element, a recorded flow, a
+ * screenshot's description — into a session for somebody to read and edit before
+ * they press Return themselves; a `\r` there would fire off a half-written
+ * prompt. The copilot's rail panel is a **chat box**, and a message that lands
+ * on the agent's command line without being sent is a box that silently did
+ * nothing.
+ *
+ * `\r` rather than `\n` for the reason `agent-controls.ts` gives at length: it
+ * is what the CLI's key parser reads as return.
+ *
+ * Pure and exported so both of those are pinned. There is no DOM in this
+ * project's tests, so the hook that calls this cannot be driven, and "the chat
+ * box does not submit" is exactly the shape of defect that passes a typecheck
+ * and every existing test.
+ */
+export function sendPayload(text: string, submit: boolean): string {
+  const typed = text.trim()
+  if (typed === '') return ''
+  return submit ? `${typed}\r` : typed
+}
+
+/**
  * Why the send button is off, in one sentence, or empty when it is on.
  *
  * A disabled control with no explanation is the thing this whole change is

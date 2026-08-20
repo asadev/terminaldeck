@@ -10,6 +10,8 @@ import { demote, MAX_PROMOTED, promote, usePromotedOrder } from '../browser/work
 import { accountRail, useKnownSignIns } from '../accounts'
 import { heldAgentName, type HeldSessionView } from '../held-sessions'
 import { CopilotEntry } from '../copilot/CopilotEntry'
+import { CopilotRailPanel } from '../copilot/driving/CopilotRailPanel'
+import { useRailPanel } from '../copilot/driving/rail-panel'
 import { SERVER_ICON } from '../machines/servers/glyph'
 import type { CopilotStage, CopilotStateView } from '../copilot/copilot-model'
 import { partitionByOrigin, turnOf } from '../copilot/session-origin'
@@ -1002,6 +1004,18 @@ export function Sidebar({
   const knownSignIns = useKnownSignIns()
 
   /**
+   * Whether the copilot's side panel has this column.
+   *
+   * Read here rather than passed in, for the reason `binding-view.ts` gives
+   * about the same shape of fact: it is computed from a drive nobody in this
+   * tree can see and a browser page nobody in this tree can see, and threading
+   * it through would run up to `App.tsx` and back down to hold a second copy of
+   * one answer. `useSidebar` asks the same hook one tree higher to size this
+   * column, so the width and what is drawn in it cannot disagree.
+   */
+  const railPanel = useRailPanel()
+
+  /**
    * Whether this row offers a rename.
    *
    * Sessions only. A browser tab is named by the page it is showing, and the
@@ -1517,6 +1531,22 @@ export function Sidebar({
       </div>
 
       {/*
+        The copilot's side panel takes this column while it is driving a page.
+
+        *"this should actually replace with this instead of coming in front of
+        it somehow."* So it is drawn **instead of** the rail's list rather than
+        over it: same element tree, same width, no seam to agree on and no
+        fragment of the rail left showing beside it. The gutter and the New
+        session row above stay exactly where they are — *"the top header also
+        should not be covering it"* — and so does the foot below, which is how
+        Settings stays reachable while a scrape runs.
+
+        `railPanel.state` is the whole decision and it is made in one place; see
+        `copilot/driving/rail-panel.ts` for what it answers and why the fold is
+        durable.
+      */}
+      {railPanel.state === 'panel' ? <CopilotRailPanel /> : (
+      /*
         `scroll-fade` because this is the rail's own scroll edge, and it was the
         sixth surface in the app found slicing a row in half at one.
 
@@ -1529,7 +1559,7 @@ export function Sidebar({
         no argument for the rail being the exception — only that nobody had put
         it on. `finish.test.ts` now lists this file beside the other five, so a
         seventh cannot be added without one.
-      */}
+      */
       <div className="sidebar-scroll scroll-fade">
         {/*
           The pinned block, above the views and above what you have open.
@@ -1976,6 +2006,7 @@ export function Sidebar({
         })}
 
       </div>
+      )}
 
       {/*
         The foot: the app talking about itself, in the order you would want to

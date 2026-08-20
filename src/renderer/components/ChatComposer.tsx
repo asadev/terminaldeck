@@ -72,6 +72,24 @@ interface Props {
   sessionId?: string | null
   /** Test seam for browse, drop and paste. Absent means the real bridge. */
   outsideBridge?: AttachOutsideBridge
+  /**
+   * Plain text mode: the box, the attach menu, and send. Nothing else.
+   *
+   * Asked for by name for the copilot's side panel, which is a narrow column
+   * beside a page somebody is watching being driven:
+   *
+   * > *"it will be like this text mode, not terminal mode. Basic text mode,
+   * > sending only kind of things, and no other things, only one small typing
+   * > box and send button… only maybe add file thing can be there."*
+   *
+   * Today the only thing it withholds is the microphone, which is why it is a
+   * flag rather than a second component: everything else in this box is already
+   * the box, the plus and the arrow. It is worth having anyway, because the
+   * microphone is drawn from a *setting* — save a transcription key and it
+   * appears — so without this the panel would satisfy that sentence on this
+   * machine and quietly stop satisfying it on one where dictation is on.
+   */
+  plain?: boolean
 }
 
 const MAX_ROWS = 12
@@ -146,6 +164,7 @@ export function ChatComposer({
   shell = false,
   sessionId,
   outsideBridge,
+  plain = false,
 }: Props) {
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -560,7 +579,10 @@ export function ChatComposer({
                 saved and proved — see `DictateButton`. `insert` is the same
                 appender the attach menu uses, so dictated words land in a
                 half-typed sentence the way pasted ones do. */}
-            {voiceOffer === null && (
+            {/* `plain` withholds it outright — see the prop. The offer check
+                stays in front of it so the two reasons a microphone is absent
+                are still asked in the same order. */}
+            {!plain && voiceOffer === null && (
               <DictateButton onInsert={insert} onFocusComposer={focusBox} disabled={off} />
             )}
             <button

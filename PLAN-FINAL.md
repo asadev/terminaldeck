@@ -145,6 +145,10 @@ consent dialog, and looked at in both themes.
    resolved** (its label, not the selector it was asked for) and how much text it
    took. **Proven:** open → read → click on a real page produced *"Terminal Deck
    harness"*, *"124 characters · 11 elements"*, *"Show sidebar"*.
+   *Superseded 2026-08-21:* that column is the connected session's own
+   conversation now (`CopilotRailPanel`) — *"it is not actually for the updates…
+   I want to chat here while it is scrapping"* — and the action log stayed where
+   it always was, in `actions.jsonl` and Settings → Copilot.
 
 Two things found while proving those, both fixed here:
 
