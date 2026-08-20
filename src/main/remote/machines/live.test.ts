@@ -84,6 +84,10 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 8000
 }
 
 interface Sessions extends SessionAccess {
+  /** Every account switch this layer was asked to perform, in order. */
+  switched: Array<{ sessionId: string; accountId: string }>
+  /** The session list, which a test can grow to stand in for one started at that desk. */
+  rows: RemoteSession[]
   typed: string[]
   started: string[]
   /**
@@ -109,6 +113,7 @@ function fakeSessions(): Sessions {
   const typed: string[] = []
   const started: string[] = []
   const attaches: string[] = []
+  const switched: Array<{ sessionId: string; accountId: string }> = []
   const grants = new Map<string, string[]>()
   const session: RemoteSession = {
     id: SESSION_ID,
@@ -118,12 +123,15 @@ function fakeSessions(): Sessions {
     status: 'running',
     exitCode: null,
   }
+  const rows: RemoteSession[] = [session]
   return {
     typed,
     started,
     attaches,
+    switched,
+    rows,
+    list: () => rows,
     grants,
-    list: () => [session],
     attach(id): SessionHandle | null {
       attaches.push(id)
       return id === SESSION_ID ? { sessionId: id, replay: SCROLLBACK } : null
@@ -139,6 +147,63 @@ function fakeSessions(): Sessions {
         ok: true,
         session: { ...session, id: `${SESSION_ID}-2`, cwd: request.cwd ?? session.cwd },
       })
+    },
+    /*
+     * The control cluster, **with the far machine's connectors on it**.
+     *
+     * Present because its presence is what makes that machine advertise the
+     * `controls` capability at all — see `SessionAccess.controls` — and the
+     * connectors are on the reading rather than on a frame of their own because
+     * that is where `host-core.ts` puts them. Asad, on a session running on his
+     * PC: *"I want it exactly like the local ones."*
+     */
+    controls: {
+      read: (id) =>
+        Promise.resolve({
+          model: { value: 'opus-5', label: 'Opus 5', source: 'screen' },
+          effort: { value: 'xhigh', label: 'Extra high', source: 'screen' },
+          fast: { value: 'off', label: 'Off', source: 'screen' },
+          permission: { value: null, label: null, source: null },
+          live: id === SESSION_ID,
+          agent: { running: true, saw: 'Claude Code' },
+          gate: { canType: true, reason: null },
+          connectors: [
+            { id: 'user:github', name: 'github', scope: 'user', transport: 'stdio', enabled: true, disabledReason: null },
+            {
+              id: 'project:figma',
+              name: 'figma',
+              scope: 'project',
+              transport: 'http',
+              enabled: false,
+              disabledReason: 'Not approved for this project',
+            },
+          ],
+        }),
+      apply: () =>
+        Promise.resolve({ ok: true, message: 'Model is now Opus 5.', reading: { value: 'opus-5', label: 'Opus 5', source: 'screen' } }),
+    },
+    /*
+     * And the account chip's seam, which is the other half of the same sentence.
+     *
+     * `switch` **replaces the session**, so the fixture does what the real one
+     * does: it puts a new row in the list and answers with its id. A test that
+     * echoed the old id back would let a window that ignores the new one pass.
+     */
+    account: {
+      read: () =>
+        Promise.resolve({
+          current: { id: 'work', name: 'work@example.com', provider: 'claude', color: 'acct-3', system: false },
+          accounts: [
+            { id: 'work', name: 'work@example.com', provider: 'claude', color: 'acct-3', system: false },
+            { id: 'system', name: 'Default', provider: 'claude', color: 'acct-1', system: true },
+          ],
+        }),
+      switch: (sessionId, accountId) => {
+        switched.push({ sessionId, accountId })
+        const replacement = { ...session, id: `${SESSION_ID}-as-${accountId}` }
+        rows.splice(0, rows.length, replacement)
+        return Promise.resolve({ ok: true, message: '', session: replacement.id })
+      },
     },
     // Keyed by device, exactly as `folder-grants.ts` is. A paired desktop is a
     // device with a device id like any phone, and this is what makes the claim
@@ -761,6 +826,191 @@ describe('pairing, and then being a guest', () => {
     // somebody a second time.
     expect(far.sessions.attaches, 'the send attached to the far session').toEqual([])
     expect(output, 'the send replayed the far session at this machine').toEqual([])
+
+    link.disconnect()
+  }, 30_000)
+
+  it('draws all four chips over a session on the other machine, and moves it to another login', async () => {
+    /*
+     * The cross-machine proof of the two seams the 2026-08-20 review was still
+     * missing, on the same relay and the same pairing as the tests above.
+     *
+     * Asad, watching a session running on his PC:
+     *
+     *   > *"on the remote sessions, I don't have any of these features. We had
+     *   > this before, but I don't have it now. I want it exactly like the local
+     *   > ones."*
+     *
+     * and, a minute later:
+     *
+     *   > *"Then also bring the account selection here for the remote sessions
+     *   > too."*
+     *
+     * Two chips were missing and both were missing for the same reason: nothing
+     * on the wire carried the fact. The connectors ride the reading the control
+     * cluster was already asking for, and the account is a capability of its own
+     * because it is a different act — `switch` stops a process over there and
+     * starts another, which is why the answer carries a **new session id** and
+     * why that is the assertion that matters most here.
+     */
+    const far = await farMachine()
+    const code = far.desk.create()
+    const beacon = startBeacon({ code: code.token, offer: far.offer, relayUrl: far.relayUrl })
+    closers.push(() => beacon?.stop())
+    expect(await beacon?.ready()).toBe(true)
+
+    const paired = await pairWithCode({ code: code.token, relayUrl: far.relayUrl })
+    if (!paired.ok) throw new Error(`pairing failed: ${paired.message}`)
+    beacon?.stop()
+
+    const states: MachineLinkState[] = []
+    const link = createMachineLink({
+      id: paired.offer.hostId,
+      secrets: {
+        hostId: paired.offer.hostId,
+        hostPublicKey: Buffer.from(paired.offer.publicKey, 'base64'),
+        relayUrl: paired.offer.relayUrl,
+        credential: paired.credential,
+        guestKeys: paired.guestKeys,
+      },
+      onState: (state) => states.push(state),
+      onOutput: () => {},
+      onWelcome: () => {},
+      baseBackoffMs: 20,
+      maxBackoffMs: 60,
+    })
+    closers.push(() => link.disconnect())
+    link.connect()
+
+    await waitFor(() => link.state().state === 'awaiting-approval', 'the pending refusal')
+    const deviceId = far.auth.listDevices()[0].id
+    far.sessions.grants.set(deviceId, ['/tmp/project'])
+    far.auth.approveDevice(deviceId)
+    await waitFor(() => link.state().state === 'online', 'the link to come up after approval')
+
+    // Both advertised, and each off its own member of `SessionAccess` — a host
+    // that could read a screen but not replace a session says only the first.
+    expect(link.state().capabilities).toContain('controls')
+    expect(link.state().capabilities).toContain('account')
+
+    /* ------------------------------------------------------ connectors -- */
+
+    const reading = await link.readControls(SESSION_ID)
+    expect(reading?.model.label).toBe('Opus 5')
+    // The far machine's own `mcp:list`, resolved for the far session's folder,
+    // arriving over the relay on the reading the cluster was already asking for.
+    expect(reading?.connectors?.map((row) => row.name)).toEqual(['github', 'figma'])
+    // Every field the chip draws survives, including the CLI's own reason for a
+    // server it would skip — the wording is composed on the drawing side by
+    // `rowDetail`, so what has to travel is the facts.
+    expect(reading?.connectors?.[1]).toEqual({
+      id: 'project:figma',
+      name: 'figma',
+      scope: 'project',
+      transport: 'http',
+      enabled: false,
+      disabledReason: 'Not approved for this project',
+    })
+
+    /* --------------------------------------------------------- account -- */
+
+    const account = await link.readAccount(SESSION_ID)
+    expect(account?.current?.name).toBe('work@example.com')
+    expect(account?.accounts.map((row) => row.id)).toEqual(['work', 'system'])
+
+    const moved = await link.switchAccount(SESSION_ID, 'system')
+    expect(moved.ok).toBe(true)
+    // It reached the far machine's own switch — the same operation the window at
+    // that desk performs — with the session and the account it was given.
+    expect(far.sessions.switched).toEqual([{ sessionId: SESSION_ID, accountId: 'system' }])
+    /*
+     * And came back with the id the session has *now*, which is not the id it
+     * was asked about. This is the field with no counterpart on `controls`: a
+     * switch replaces the process, so a window that kept the old id would sit
+     * attached to a pty that machine has already killed.
+     */
+    expect(moved.session).toBe(`${SESSION_ID}-as-system`)
+    expect(moved.session).not.toBe(SESSION_ID)
+
+    link.disconnect()
+  }, 30_000)
+
+  it('shows a session started at the other machine’s own keyboard, without being asked', async () => {
+    /*
+     * K2, watched rather than reasoned about.
+     *
+     * `sessionsChanged()` is wired in `src/main/index.ts` from the core's own
+     * `onSessionStarted` and `onSessionRemoved` hooks, and `server.test.ts` pins
+     * that it puts a `sessions` frame on every live socket. What nobody had done
+     * is watch a session appear at one end and turn up at the other **with
+     * nothing on this side asking** — which is the whole claim, because this
+     * link polls for nothing and a list that only refreshed on `list` would look
+     * identical in source.
+     *
+     * So: no `link.list()` anywhere below. The far machine grows a session the
+     * way its own keyboard would, calls the same hook `index.ts` calls, and the
+     * assertion is on the state this link published on its own.
+     */
+    const far = await farMachine()
+    const code = far.desk.create()
+    const beacon = startBeacon({ code: code.token, offer: far.offer, relayUrl: far.relayUrl })
+    closers.push(() => beacon?.stop())
+    expect(await beacon?.ready()).toBe(true)
+
+    const paired = await pairWithCode({ code: code.token, relayUrl: far.relayUrl })
+    if (!paired.ok) throw new Error(`pairing failed: ${paired.message}`)
+    beacon?.stop()
+
+    const link = createMachineLink({
+      id: paired.offer.hostId,
+      secrets: {
+        hostId: paired.offer.hostId,
+        hostPublicKey: Buffer.from(paired.offer.publicKey, 'base64'),
+        relayUrl: paired.offer.relayUrl,
+        credential: paired.credential,
+        guestKeys: paired.guestKeys,
+      },
+      onState: () => {},
+      onOutput: () => {},
+      onWelcome: () => {},
+      baseBackoffMs: 20,
+      maxBackoffMs: 60,
+    })
+    closers.push(() => link.disconnect())
+    link.connect()
+
+    await waitFor(() => link.state().state === 'awaiting-approval', 'the pending refusal')
+    const deviceId = far.auth.listDevices()[0].id
+    far.sessions.grants.set(deviceId, ['/tmp/project'])
+    far.auth.approveDevice(deviceId)
+    await waitFor(() => link.state().state === 'online', 'the link to come up after approval')
+    await waitFor(() => link.state().sessions.length === 1, 'the list that arrives with the welcome')
+
+    // Somebody sits down at the other machine and starts a session. The core's
+    // `onSessionStarted` is what calls this; nothing here is a shortcut past it.
+    far.sessions.rows.push({
+      id: 'started-at-that-desk',
+      title: 'agent',
+      cwd: '/tmp/project',
+      provider: 'claude',
+      status: 'running',
+      exitCode: null,
+    })
+    expect(far.endpoint.sessionsChanged()).toBe(1)
+
+    await waitFor(
+      () => link.state().sessions.some((row) => row.id === 'started-at-that-desk'),
+      'the new session to arrive on its own',
+    )
+
+    // And the other direction: it ends over there, and the row leaves this list
+    // without a reload. `onSessionRemoved` calls the same function.
+    far.sessions.rows.splice(1, 1)
+    expect(far.endpoint.sessionsChanged()).toBe(1)
+    await waitFor(
+      () => link.state().sessions.every((row) => row.id !== 'started-at-that-desk'),
+      'the ended session to leave on its own',
+    )
 
     link.disconnect()
   }, 30_000)

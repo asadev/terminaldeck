@@ -454,6 +454,42 @@ describe('what a public host offers', () => {
        * applies no gate of its own. This line is the whole of the decision.
        */
       CAPABILITY.send,
+      /*
+       * `account` is withheld, and it is the strongest case on this list.
+       *
+       * It names **the owner's logins** — every account on that machine, by the
+       * address each one signed in as — and `account.switch` ends a running agent
+       * and starts another under a different configuration directory. On a box
+       * handed to a stranger for an App Store review, the first is a list of
+       * somebody's email addresses handed to a visitor, and the second is a
+       * visitor restarting a process on hardware they do not own, under a login
+       * they were never shown.
+       *
+       * Withheld twice over, and worth knowing which half is doing the work. The
+       * demo assembly passes no `switchAccount` to `createHostCore`, so the seam
+       * behind this capability does not exist on that box and `server.ts` reads
+       * the advertisement off the seam — a demo host could not offer it even if
+       * this list were wrong. This line is the decision; that absence is what
+       * makes the decision unable to be undone by accident.
+       */
+      CAPABILITY.account,
+      /*
+       * `chat` is withheld, and it is the plainest one on this list.
+       *
+       * It hands over **what the owner said to their agent**, in words, read off
+       * the transcripts on that machine's disk. Every other entry above is a
+       * capability, a figure or a name; this one is prose somebody wrote in
+       * private. On a box handed to a stranger for an App Store review there is
+       * nothing to weigh: a demo needs a terminal that works, and it does not
+       * need to read anybody's conversations.
+       *
+       * Load-bearing rather than belt-and-braces, like `controls` and `usage`
+       * and for the same mechanical reason: the demo builds its session layer
+       * through `createHostCore`, which wires `createChatServe`, so the object
+       * behind this capability genuinely exists on that box and it is this line
+       * that stops it being advertised.
+       */
+      CAPABILITY.chat,
     ])
   })
 })

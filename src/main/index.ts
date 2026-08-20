@@ -399,6 +399,23 @@ let updates: ReturnType<typeof registerUpdateIpc> | null = null
 let remoteLayer: { server: { sessionsChanged(): number } } | null = null
 
 /**
+ * Running a session as a different account, once the IPC handlers exist.
+ *
+ * At module scope for the reason {@link remoteLayer} is: the core is constructed
+ * here, at module scope, and the switch is assembled inside `registerIpc` out of
+ * `startSession`, the ledger and the survival probe. Null until then, and a
+ * paired machine that asks in that window is told so in a sentence rather than
+ * left holding a promise — see the `switchAccount` option below.
+ *
+ * There is exactly one of these on this machine and this is a reference to it,
+ * not a second arrangement of the same parts: the window at this desk and a
+ * window on his PC press the same function.
+ */
+let performSwitchAccount:
+  | ((sessionId: string, accountId: string) => Promise<SessionMeta>)
+  | null = null
+
+/**
  * The per-device copilot runs, once the remote layer is assembled.
  *
  * At module scope for one reason: `before-quit` has to be able to stop them, and
@@ -607,6 +624,44 @@ const core = createHostCore({
   // The window has to be told, or a session a phone started is running on this
   // Mac and only the phone knows about it.
   onSessionCreated: (meta) => announceSession(meta),
+  /*
+   * The account chip on a window on one of his other machines.
+   *
+   * Asad, 2026-08-20: *"Then also bring the account selection here for the remote
+   * sessions too."* This is the shell's half — the operation itself, which only
+   * this file has, because a switch starts a replacement, waits to see whether
+   * the agent survived, and only then ends the session it replaced.
+   *
+   * `performSwitchAccount` rather than the function directly, because that one is
+   * built inside `registerIpc` and this object is constructed before it. A
+   * request that arrives in the gap is answered with a sentence rather than a
+   * rejected promise, which on the far side would be an unexplained "that could
+   * not be reached".
+   *
+   * The new id travels because a switch replaces the process: the far window is
+   * attached to the old session and has to follow, or it is looking at a pty that
+   * no longer exists. `meta.id` is the id the session has afterwards.
+   */
+  switchAccount: async (sessionId, accountId) => {
+    const perform = performSwitchAccount
+    if (perform === null) {
+      return { ok: false, message: 'This computer is still starting up.', session: null }
+    }
+    try {
+      const meta = await perform(sessionId, accountId)
+      return { ok: true, message: '', session: meta.id }
+    } catch (error) {
+      /*
+       * The refusal as it was written, not a wrapper around it. `performSwitch`
+       * throws `plan.refusal` — "that account has never signed in", the CLI's own
+       * start failure — and those sentences are already written for the person
+       * reading them. `session` is the id the session still has, because a switch
+       * that did not happen left it running.
+       */
+      const message = error instanceof Error ? error.message : 'That account could not be used.'
+      return { ok: false, message, session: sessionId }
+    }
+  },
 })
 
 /**
@@ -1290,6 +1345,22 @@ function registerIpc(): void {
     return linuxPathFromUnc(picked)?.path ?? picked
   })
 
+  /**
+   * A folder to run in when there is genuinely no project — the home directory.
+   *
+   * Signing an account in means running that account's CLI so its own login
+   * takes over, and a CLI has to run *somewhere*. On a machine that has never
+   * opened a folder there is nothing to fall back on, so pressing **Sign in**
+   * put a folder chooser on screen instead of a login, and cancelling it did
+   * nothing at all. That is the state a new user is in the first time they add
+   * an account.
+   *
+   * The distribution's own `$HOME` when there is one, for the reason
+   * `host-core.ts` gives about the same fallback: on a Windows machine whose
+   * work is all inside WSL, `C:\Users\…` is the one folder with nothing in it.
+   */
+  ipcMain.handle('project:home', () => wsl.home() ?? app.getPath('home'))
+
   /*
    * Which machine is being asked about.
    *
@@ -1715,6 +1786,11 @@ function registerIpc(): void {
     // the panel edits what `create` is checked against, or it edits a copy and
     // the phone keeps the folders the user just removed until the next launch.
     folders: core.grants,
+    // And the same session-choice store the fanout's predicate closes over,
+    // for the reason one line up: the panel ticks what `visible` is checked
+    // against, or it ticks a copy and the phone keeps a session the user just
+    // unticked until the next launch.
+    sessionGrants: core.sessionGrants,
     // And the same kind store the reach rule closes over, for the same reason
     // one line up: the approval screen decides what a device is, and every
     // connection is checked against it, so two copies would agree until the
@@ -2735,6 +2811,16 @@ function registerIpc(): void {
   ipcMain.handle(SESSION_SWITCH_CHANNEL, (_e, sessionId: unknown, profileId: unknown) =>
     performSwitch(sessionId, profileId),
   )
+
+  /*
+   * And the same function, for a window on one of his other machines.
+   *
+   * Published rather than reimplemented: `remote/account-serve.ts` reaches this
+   * exact reference, so a switch asked for from his PC runs the same plan, the
+   * same conversation guard and the same survival probe as one pressed at this
+   * keyboard. See `performSwitchAccount` at module scope for why it is late-bound.
+   */
+  performSwitchAccount = (sessionId, accountId) => performSwitch(sessionId, accountId)
 
   /* ------------------------------- the same switch, at his next message -- */
 

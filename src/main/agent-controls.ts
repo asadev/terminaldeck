@@ -105,7 +105,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { IpcMain } from 'electron'
-import { normalizeModelId } from './cost'
+import { normalizeModelId, SYNTHETIC_MODEL } from './cost'
 import {
   foldDefaultRow,
   isTypeableModelValue,
@@ -1310,6 +1310,22 @@ export function fastFromSettings(settings: Record<string, unknown>): ControlRead
  * is not a setting or an intention — it is the model that served the last reply.
  * Tails the file rather than parsing all of it; transcripts here run to tens of
  * megabytes and the answer is always near the end.
+ *
+ * ## `<synthetic>` is not a model, and it was reaching the bar
+ *
+ * Claude Code writes assistant lines of its own — interrupts, API errors, the
+ * notices it emits around a resume — and stamps them `"model": "<synthetic>"`.
+ * `cost.ts` has known this since it was written; this function did not, so it
+ * returned the placeholder verbatim whenever one of those lines happened to be
+ * the newest. Found in the audit, after an account switch resumed a
+ * conversation: the toolbar's Model chip read the placeholder itself, where the same
+ * session had read *Opus 5 · 1M* a moment earlier.
+ *
+ * So those lines are stepped over and the walk continues to the newest line a
+ * model actually served. A transcript with nothing but synthetic lines answers
+ * null, which is not a failure — it hands the question to the welcome panel and
+ * then to `settings.json`, the two sources below this one in `readControls`,
+ * both of which name a real model.
  */
 export async function readModelFromTranscript(cwd: string): Promise<string | null> {
   // Every store, because a session started from a paired device runs with a home
@@ -1338,7 +1354,10 @@ export async function readModelFromTranscript(cwd: string): Promise<string | nul
       const message = parsed.message
       if (!isRecord(message)) continue
       const model = message.model
-      if (typeof model === 'string' && model.trim() !== '') return model.trim()
+      if (typeof model !== 'string') continue
+      const trimmed = model.trim()
+      if (trimmed === '' || trimmed === SYNTHETIC_MODEL) continue
+      return trimmed
     } catch {
       // A partially flushed final line — keep walking back.
     }

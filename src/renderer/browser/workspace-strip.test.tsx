@@ -10,6 +10,7 @@ import {
   STRIP_LABEL_BUDGET,
   tabIcon,
   tabLabel,
+  tabQualifiers,
   tabTooltip,
   TAB_DRAG_MIME,
   type TabTransfer,
@@ -23,6 +24,7 @@ import {
   demote,
   dropIndex,
   keepBesideInStrip,
+  offEdgeNames,
   keepInStrip,
   keepNewWindowInStrip,
   keepWindowBesideInStrip,
@@ -34,9 +36,12 @@ import {
   removeFromStrip,
   replaceInStrip,
   replaceWindowInStrip,
+  orderIndexForDrop,
   shownTabs,
+  stripGroups,
   stripIsPresent,
   stripTabs,
+  type ShownTab,
   writePromoted,
 } from './workspace-strip'
 
@@ -800,6 +805,193 @@ describe('shownTabs', () => {
 
 /* ------------------------------------- taking a tab off, and not closing -- */
 
+/* ------------------------------------------- one place, per machine -- */
+
+/**
+ * *"if I open any browser here and if I connect it to, let's say, desktop, now
+ * this is in desktop, it should come under this table, under the desktop
+ * sessions. So all the desktop browser, including session, should be at one
+ * place."*
+ *
+ * With browser windows off the sidebar — *"They will be always only on the top
+ * bar"* — this bar is the only place that pair can be shown together at all.
+ */
+describe('stripGroups', () => {
+  const here = (id: string): ShownTab => ({ tab: session(id), promoted: true })
+  const away = (id: string, machine: string): ShownTab => ({
+    tab: { ...session(id), machine: { id: machine, name: machine.toUpperCase() } },
+    promoted: true,
+  })
+  const pageOn = (id: string): ShownTab => ({ tab: page(id), promoted: true })
+
+  it('draws no heading at all when everything is on this computer', () => {
+    // The ordinary machine gets exactly the bar it had before this existed.
+    const groups = stripGroups([here('a'), pageOn('b')], () => null)
+    expect(groups).toHaveLength(1)
+    expect(groups[0].heading).toBeNull()
+    expect(groups[0].entries.map((entry) => entry.tab.id)).toEqual(['a', 'b'])
+  })
+
+  it('puts a machine’s session and its browser window in one run', () => {
+    // The whole of E11: the page is served by the PC and the session runs on
+    // the PC, and they arrive from two different sources — the tab for the
+    // session, the window-machine store for the page.
+    const groups = stripGroups(
+      [here('a'), pageOn('page'), away('remote', 'pc')],
+      (tab) => (tab.id === 'page' ? { id: 'pc', name: 'PC' } : (tab.machine ?? null)),
+    )
+    expect(groups.map((group) => group.heading)).toEqual([null, 'PC'])
+    expect(groups[1].entries.map((entry) => entry.tab.id)).toEqual(['page', 'remote'])
+  })
+
+  it('still names the machine when nothing is open on this computer', () => {
+    // One group, and it is not this computer's — which is the state where the
+    // question "whose machine is this" is hardest, so it is the last one that
+    // may go unanswered.
+    const groups = stripGroups([away('r1', 'pc'), away('r2', 'pc')], (tab) => tab.machine ?? null)
+    expect(groups).toHaveLength(1)
+    expect(groups[0].heading).toBe('PC')
+  })
+
+  it('leads with this computer even when its first tab is not first', () => {
+    const groups = stripGroups([away('r', 'pc'), here('a')], (tab) => tab.machine ?? null)
+    expect(groups.map((group) => group.id)).toEqual(['', 'pc'])
+  })
+
+  it('keeps the arrangement inside a machine', () => {
+    // The promoted order is hand-made. Grouping is a partition, never a sort.
+    const groups = stripGroups(
+      [away('r2', 'pc'), here('a'), away('r1', 'pc')],
+      (tab) => tab.machine ?? null,
+    )
+    expect(groups[1].entries.map((entry) => entry.tab.id)).toEqual(['r2', 'r1'])
+  })
+
+  it('names a machine that reported no name by its id', () => {
+    const groups = stripGroups(
+      [here('a'), { tab: { ...session('r'), machine: { id: 'pc', name: '' } }, promoted: true }],
+      (tab) => tab.machine ?? null,
+    )
+    expect(groups[1].heading).toBe('pc')
+  })
+})
+
+describe('offEdgeNames', () => {
+  /*
+   * *"we always need a truth. So just be sure we always be able to see the
+   * truth."* The bar scrolls once the tabs stop giving, and a scrolled-out tab
+   * was drawn nowhere and mentioned nowhere — which, for a browser window that
+   * is listed on no other surface, is the same as gone.
+   */
+  const rail = { left: 100, right: 500 }
+
+  it('counts a window only when it is wholly past an edge', () => {
+    const { start, end } = offEdgeNames(rail, [
+      { left: -60, right: 60, name: 'gone left' },
+      // Half on screen. Still a tab you can see and press, so it is not missing.
+      { left: 40, right: 160, name: 'partly here' },
+      { left: 200, right: 320, name: 'here' },
+      { left: 460, right: 580, name: 'partly there' },
+      { left: 540, right: 660, name: 'gone right' },
+    ])
+    expect(start).toEqual(['gone left'])
+    expect(end).toEqual(['gone right'])
+  })
+
+  it('says nothing about a bar that fits', () => {
+    expect(offEdgeNames(rail, [{ left: 110, right: 230, name: 'a' }])).toEqual({
+      start: [],
+      end: [],
+    })
+  })
+
+  it('names them, so the count can say which windows it stands for', () => {
+    // A `+3` nobody can expand is a number you have to go and find the meaning
+    // of — the same reason the bind chip's own count names its windows.
+    expect(offEdgeNames(rail, [{ left: 900, right: 1000, name: 'Stripe Dashboard' }]).end).toEqual([
+      'Stripe Dashboard',
+    ])
+  })
+})
+
+describe('orderIndexForDrop', () => {
+  /*
+   * The rendered row and the stored order are two different lists — the row also
+   * holds every browser window and the transient active tab, and since the
+   * grouping it is a permutation of the order as well. A rendered index handed
+   * straight to `promote` counted things the order does not hold.
+   */
+  it('counts only the tabs the order actually holds', () => {
+    const shown: ShownTab[] = [
+      { tab: session('a'), promoted: true },
+      { tab: page('p1'), promoted: true },
+      { tab: page('p2'), promoted: true },
+      { tab: session('b'), promoted: true },
+    ]
+    expect(orderIndexForDrop(shown, ['a', 'b'], 3)).toBe(1)
+    expect(orderIndexForDrop(shown, ['a', 'b'], 0)).toBe(0)
+  })
+
+  it('answers the end of the order for a drop past the last tab', () => {
+    const shown: ShownTab[] = [
+      { tab: session('a'), promoted: true },
+      { tab: session('b'), promoted: true },
+    ]
+    expect(orderIndexForDrop(shown, ['a', 'b'], 2)).toBe(2)
+    expect(orderIndexForDrop(shown, ['a', 'b'], 99)).toBe(2)
+  })
+})
+
+/* ------------------------------------------------ what a tab may be called -- */
+
+describe('tabQualifiers', () => {
+  it('never identifies a browser window by its id', () => {
+    /*
+     * Two windows opened from the globe are both `New tab`, so the ladder used
+     * to walk all the way down to the id — and a browser id is
+     * `browser:<epoch>:<seq>`, which `shortSessionId` cannot cut, so the tab
+     * printed **browser:1787199912** beside the name and truncated the name to
+     * make room. Its human name is its slot, `B1`, which the strip draws as a
+     * chip; a window attached to nothing has no name and gets none.
+     */
+    const tabs = [page('browser:1787199912:1', 'New tab'), page('browser:1787199912:2', 'New tab')]
+    expect(tabQualifiers(tabs, ['New tab', 'New tab'])).toEqual([null, null])
+  })
+
+  it('still identifies two identical sessions by their id', () => {
+    // The rung is refused for a browser window, not removed.
+    const twins: WorkspaceTab[] = [
+      { id: '9c1f4a20-aaaa', kind: 'session', label: 'Fix', projectPath: '/p', closable: true },
+      { id: '4d0e7b31-bbbb', kind: 'session', label: 'Fix', projectPath: '/p', closable: true },
+    ]
+    expect(tabQualifiers(twins, ['Fix', 'Fix'])).toEqual(['9c1f', '4d0e'])
+  })
+
+  it('names the folder on every row of a run with no folder heading', () => {
+    /*
+     * *"five remote rows still say almost nothing."* Under a machine heading
+     * there is no project name above the row, so the folder is the fact each row
+     * is missing — and it is printed whether or not the names collide, because
+     * the question it answers is "which folder is this in", not "which of these
+     * two is which".
+     */
+    const remote: WorkspaceTab[] = [1, 2].map((n) => ({
+      id: `machine PC ${n}`,
+      kind: 'session',
+      label: `Session ${n}`,
+      projectPath: '/Users/apple/Projects/terminaldeck',
+      machine: { id: 'PC', name: 'PC' },
+      closable: true,
+    }))
+    expect(tabQualifiers(remote, ['Session 1', 'Session 2'], { nameFolder: true })).toEqual([
+      'terminaldeck',
+      'terminaldeck',
+    ])
+    // And without it, two rows a heading already separates get nothing.
+    expect(tabQualifiers(remote, ['Session 1', 'Session 2'])).toEqual([null, null])
+  })
+})
+
 describe('removeFromStrip', () => {
   /**
    * The ✕ on a tab, and the whole of what it may and may not do.
@@ -1262,10 +1454,20 @@ describe('promoting from the sidebar', () => {
      * wear.
      */
     const source = readFileSync(join(__dirname, '..', 'shell', 'Sidebar.tsx'), 'utf8')
-    // The ✕ became a menu entry, and the entry is the sentence — see
-    // `closeSentence`. A native menu is not in this document, so the assertion
-    // reads the words where they are now written.
-    expect(source).toContain('ends the session`')
+    /*
+     * The ✕ became an entry in a native ⋯ menu, and then the entry became one
+     * word — *Delete* — so the rail's half of the difference is no longer a
+     * sentence anywhere. What the rail promises is that the press is *asked
+     * about*: `onCloseTab` goes to the confirmation `App.tsx` owns. The strip's
+     * half, below, promises the opposite and is drawn in this document.
+     */
+    expect(source).toContain('close: tab.closable,')
+    expect(source).not.toContain('ends the session`')
+    const confirm = readFileSync(
+      join(__dirname, '..', 'components', 'CloseSessionConfirm.tsx'),
+      'utf8',
+    )
+    expect(confirm).toContain('Deleting this session ends it.')
 
     const strip = renderToStaticMarkup(
       <WorkspaceTabStrip

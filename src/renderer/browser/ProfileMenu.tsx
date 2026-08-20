@@ -15,17 +15,17 @@ interface Props {
   api: AccountsApi
   anchor: Box
   /**
-   * How many sites have data in the **active** profile's partition.
+   * How many sites have data in **one named profile's** partition.
    *
    * Passed in rather than reached for, because the cookie jar belongs to the
-   * browser bridge and not to the accounts one, and only the active profile's
-   * session can be read at all — `browser-session.ts` resolves `guestSession()`
-   * to whichever partition is on. So this is one number about one profile, and
-   * the menu is careful to print it only against that profile's row.
+   * browser bridge and not to the accounts one. It takes the profile now: the
+   * main process used to answer this only for whichever partition was switched
+   * on, which is the whole reason a row could be a name and nothing else. See
+   * `profileSession` in `src/main/browser-session.ts`.
    */
-  countSites?: () => Promise<number>
-  /** Open the cookies-and-site-data dialog. */
-  onSiteData(): void
+  countSites?: (profileId: string) => Promise<number>
+  /** Open the cookies-and-site-data dialog, for that profile's jar. */
+  onSiteData(profileId: string): void
   /** Reopen this page in the profile that was just switched to. */
   onReopen(): void
   onClose(): void
@@ -120,7 +120,8 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
   const [profiles, setProfiles] = useState<ProfileState | null>(null)
   /** Saved logins per profile id, so every row can carry its own count. */
   const [counts, setCounts] = useState<Record<string, number>>({})
-  const [sites, setSites] = useState<number | null>(null)
+  /** Sites with data, per profile id. Same shape, same reason, other store. */
+  const [sites, setSites] = useState<Record<string, number>>({})
   const [logins, setLogins] = useState<SavedLoginSummary[]>([])
   /** Whose logins the second view is showing — not necessarily the active one. */
   const [loginsFor, setLoginsFor] = useState('')
@@ -162,26 +163,36 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
     [api],
   )
 
+  /** The other half of the same gather, from the other store. */
+  const loadSites = useCallback(
+    async (state: ProfileState | null) => {
+      if (!countSites || !state) return
+      const pairs = await Promise.all(
+        state.profiles.map(async (profile) => [profile.id, await countSites(profile.id)] as const),
+      )
+      setSites(Object.fromEntries(pairs))
+    },
+    [countSites],
+  )
+
   useEffect(() => {
     void (async () => {
       const state = await loadProfiles()
-      await loadCounts(state)
+      await Promise.all([loadCounts(state), loadSites(state)])
     })()
     if (api.browserPasswordsAvailable) {
       void api.browserPasswordsAvailable().then((value) => setCanStore(value === true))
     }
-    if (countSites) void countSites().then(setSites)
-  }, [api, loadProfiles, loadCounts, countSites])
+  }, [api, loadProfiles, loadCounts, loadSites])
 
   const activeId = profiles?.activeId ?? ''
 
   const activate = async (id: string): Promise<void> => {
     if (!api.browserProfileActivate || id === activeId) return
     setProfiles(readProfileState(await api.browserProfileActivate(id)))
-    // The site count belonged to the profile that was on a moment ago, and the
-    // new one's jar cannot be read until a page in it exists. Clearing it is the
-    // honest state; leaving the old number under a new name is not.
-    setSites(null)
+    // The counts do not move with the tick. Every row's numbers are that row's
+    // own now, read from that partition, so switching changes which row is
+    // ticked and nothing else on screen.
     setSwitched(true)
   }
 
@@ -189,7 +200,7 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
     if (!api.browserProfileCreate) return
     const next = readProfileState(await api.browserProfileCreate(draft))
     setProfiles(next)
-    await loadCounts(next)
+    await Promise.all([loadCounts(next), loadSites(next)])
     setDraft('')
     setNaming(false)
   }
@@ -199,7 +210,7 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
     setArming('')
     const next = readProfileState(await api.browserProfileDelete(id))
     setProfiles(next)
-    await loadCounts(next)
+    await Promise.all([loadCounts(next), loadSites(next)])
   }
 
   /*
@@ -283,7 +294,11 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
 
   return (
     <AnchoredPopup anchor={anchor} label="Profiles" onClose={onClose}>
-      <div className="bw-menu">
+      {/* `bw-menu-profiles` only widens the popup. Every row here carries the
+          profile's name *and* what it holds *and* a Delete, and at the shared
+          19rem the name — the one thing that identifies the row — was the part
+          that ellipsised. See `BrowserWorkspace.css`. */}
+      <div className="bw-menu bw-menu-profiles">
         {/* No heading. This menu opens from a button whose hover already says
             the profile's name, and a title repeating the control you just
             pressed is a statement. `AnchoredPopup`'s `label` is the accessible
@@ -292,6 +307,7 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
           {(profiles?.profiles ?? []).map((profile) => {
             const on = profile.id === profiles?.activeId
             const saved = counts[profile.id] ?? 0
+            const stored = sites[profile.id] ?? 0
             const armed = arming === profile.id
 
             return (
@@ -311,36 +327,55 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
                   <span className="bw-avatar" aria-hidden="true">
                     {profileInitial(profile.name)}
                   </span>
-                  {profile.name}
-                  {/* `bw-menu-count` is the sheet's existing grammar for "a
-                      small word at the end of a row, saying a different thing" —
-                      the machine picker prints its port count with it. Only the
-                      active row: the cookie jar of a profile that is not on
-                      cannot be enumerated, and a blank would read as zero.
-
-                      And never `0 sites`. A count that is zero is not a fact
-                      about the profile, it is a filler making the row look
-                      occupied — which is the thing he keeps deleting. An empty
-                      profile is a name, because an empty profile *is* a name. */}
-                  {on && sites !== null && sites > 0 && !armed && (
-                    <span className="bw-menu-count">
-                      {sites} {sites === 1 ? 'site' : 'sites'}
-                    </span>
-                  )}
+                  <span className="bw-menu-label">{profile.name}</span>
                 </button>
-                {/* The count is the door. Pressing it reads that profile's
-                    logins without switching into it — see `openLogins`. Hidden
-                    while the row is asking to be deleted: a row cannot offer to
-                    open something and ask a question at the same time. */}
-                {saved > 0 && !armed && (
-                  <button
-                    type="button"
-                    className="bw-text-button"
-                    title="Saved logins"
-                    onClick={() => void openLogins(profile.id)}
-                  >
-                    {saved} saved
-                  </button>
+                {/*
+                  What is in this profile, as the two doors into it.
+
+                    > *"if I click on profile, there is nothing inside the
+                    > profile, just the name, not like Chrome … even profile
+                    > doesn't make any sense if there is nothing that we can see
+                    > in each profile."*
+
+                  Both are on **every** row, not only the one that is switched
+                  on, and both act on that row's own partition — which is the
+                  wire that did not exist until `browser-session.ts` learned to
+                  take a profile id. Opening either one does not switch into the
+                  profile: what a profile holds is exactly what you want to know
+                  *before* deciding to go there.
+
+                  They carry the count when there is one and the plain word when
+                  there is not, because `0 sites` is a number printed to stop a
+                  row looking empty — the filler he strikes out — while a door is
+                  a door whether or not the room behind it has anything in it.
+                  Either way the row is not a name on its own, which was the
+                  complaint.
+
+                  Both hidden while the row is armed for deletion: a row cannot
+                  offer to open something and ask a question at the same time.
+                */}
+                {!armed && (
+                  <>
+                    <button
+                      type="button"
+                      className="bw-text-button"
+                      aria-label={`Sites in ${profile.name}`}
+                      onClick={() => {
+                        onSiteData(profile.id)
+                        onClose()
+                      }}
+                    >
+                      {stored > 0 ? `${stored} ${stored === 1 ? 'site' : 'sites'}` : 'Sites'}
+                    </button>
+                    <button
+                      type="button"
+                      className="bw-text-button"
+                      aria-label={`Logins in ${profile.name}`}
+                      onClick={() => void openLogins(profile.id)}
+                    >
+                      {saved > 0 ? `${saved} ${saved === 1 ? 'login' : 'logins'}` : 'Logins'}
+                    </button>
+                  </>
                 )}
                 {!profile.isDefault &&
                   (armed ? (
@@ -430,25 +465,11 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
           </button>
         )}
 
-        {/* The one thing left that really is about the profile that is *on*: the
-            cookie jar can only be enumerated for the active session. Saved
-            logins are not here, because every profile's own row opens its own —
-            *"It doesn't make any sense to keep in both side the same thing."*
-
-            It had `In this profile` written over it — three words of heading
-            above one row, in a menu whose every other row is also about a
-            profile. The heading went and the row stayed: it is the action, and
-            the `n sites` on the active row above is what it opens. */}
-        <button
-          type="button"
-          className="bw-menu-item"
-          onClick={() => {
-            onSiteData()
-            onClose()
-          }}
-        >
-          Cookies and site data
-        </button>
+        {/* `Cookies and site data` used to stand here, at the foot, opening the
+            active profile's jar — which is the door that is now on the active
+            profile's own row, along with every other profile's. One thing
+            reachable two ways from one menu is *"the same thing in both side."*
+            It is gone from here and it is on all of them. */}
       </div>
     </AnchoredPopup>
   )

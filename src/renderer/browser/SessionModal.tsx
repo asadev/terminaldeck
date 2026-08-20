@@ -1,10 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
+import { HoverNote } from '../components/HoverNote'
 import { Modal } from '../components/Modal'
 import type { BrowserBridge, BrowserSessionInfo, CookieDomain } from './bridge'
 
 interface Props {
   open: boolean
   bridge: BrowserBridge
+  /**
+   * Whose jar this is. `''` means the profile that is switched on.
+   *
+   * The dialog used to have no way to ask about anything else, which is the
+   * limitation the profile menu inherited: a row could not say what it held
+   * because nothing under it could answer. Every call below carries it.
+   */
+  profileId?: string
+  /** That profile's name, drawn as the badge in the header. */
+  profileName?: string
   onClose(): void
   /**
    * True when the tab this was opened from is on a partition of its own.
@@ -50,7 +61,14 @@ export function formatBytes(bytes: number): string {
  * and does its own loading — it exists for exactly as long as the page is
  * hidden, and the shorter that is, the better.
  */
-export function SessionModal({ open, bridge, onClose, isolated = false }: Props) {
+export function SessionModal({
+  open,
+  bridge,
+  profileId = '',
+  profileName = '',
+  onClose,
+  isolated = false,
+}: Props) {
   const [info, setInfo] = useState<BrowserSessionInfo | null>(null)
   const [domains, setDomains] = useState<CookieDomain[]>([])
   const [busy, setBusy] = useState(false)
@@ -60,15 +78,15 @@ export function SessionModal({ open, bridge, onClose, isolated = false }: Props)
     setError(null)
     try {
       const [nextInfo, nextDomains] = await Promise.all([
-        bridge.browserSessionInfo(),
-        bridge.browserCookies(),
+        bridge.browserSessionInfo(profileId),
+        bridge.browserCookies(profileId),
       ])
       setInfo(nextInfo)
       setDomains(nextDomains)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
-  }, [bridge])
+  }, [bridge, profileId])
 
   useEffect(() => {
     if (!open) return
@@ -90,8 +108,12 @@ export function SessionModal({ open, bridge, onClose, isolated = false }: Props)
   return (
     <Modal
       open={open}
-      title="Cookies and site data"
-      description="Kept in the browser's own session, separate from the app, and across restarts."
+      // Whose jar, in the title, because this dialog is opened from a row in the
+      // profile menu and there is more than one of them now. The sentence that
+      // stood under it — where the data is kept and that it survives a restart —
+      // is the *"long description"* rule, and the facts it stated are already
+      // the `On disk` row and the `kept on disk` count below it.
+      title={profileName === '' ? 'Cookies and site data' : `Cookies and site data — ${profileName}`}
       onClose={onClose}
       size="lg"
       footer={
@@ -105,9 +127,9 @@ export function SessionModal({ open, bridge, onClose, isolated = false }: Props)
             disabled={busy}
             onClick={() =>
               void run(async () => {
-                await bridge.browserClearCookies()
-                await bridge.browserClearStorage()
-                await bridge.browserClearCache()
+                await bridge.browserClearCookies(undefined, profileId)
+                await bridge.browserClearStorage(undefined, profileId)
+                await bridge.browserClearCache(profileId)
               })
             }
           >
@@ -118,11 +140,19 @@ export function SessionModal({ open, bridge, onClose, isolated = false }: Props)
     >
       {error && <p className="bw-error">{error}</p>}
 
+      {/* Three sentences stood here saying that an isolated tab's jar is in
+          memory, on a partition of its own, and cannot be cleared from this
+          dialog. Two words say which tab this is not about, and the explanation
+          is behind the same ⓘ the Settings window uses — *"if somewhere it's
+          very required, give the i icon like other ones, information icon in
+          the settings, same way."* */}
       {isolated && (
         <p className="bw-muted">
-          This tab is <strong>Isolated</strong>, so none of the below is what it is using. Its
-          cookies are held in memory on a partition of its own and are thrown away when the tab
-          closes — there is nothing here to clear for it.
+          <span className="bw-tagpill">Isolated tab</span>
+          <HoverNote label="Isolated tab">
+            Its cookies are held in memory, on a partition of its own, and thrown away when the tab
+            closes. Nothing below is what it is using.
+          </HoverNote>
         </p>
       )}
 
@@ -136,7 +166,7 @@ export function SessionModal({ open, bridge, onClose, isolated = false }: Props)
           </div>
           <div>
             <dt>Survives a restart</dt>
-            <dd>{info.persistent ? 'Yes' : 'No — this is a bug, tell someone'}</dd>
+            <dd>{info.persistent ? 'Yes' : 'No'}</dd>
           </div>
           <div>
             <dt>On disk</dt>
@@ -163,7 +193,7 @@ export function SessionModal({ open, bridge, onClose, isolated = false }: Props)
       )}
 
       {domains.length === 0 ? (
-        <p className="bw-muted">No cookies yet. Sign in to a site and it will show up here.</p>
+        <p className="bw-muted">Nothing yet.</p>
       ) : (
         <ul className="bw-domains">
           {domains.map((domain) => (
@@ -181,8 +211,8 @@ export function SessionModal({ open, bridge, onClose, isolated = false }: Props)
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
-                      await bridge.browserClearCookies(domain.domain)
-                      await bridge.browserClearStorage(domain.domain)
+                      await bridge.browserClearCookies(domain.domain, profileId)
+                      await bridge.browserClearStorage(domain.domain, profileId)
                     })
                   }
                 >

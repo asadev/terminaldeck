@@ -1129,6 +1129,14 @@
   display: flex;
   flex-direction: column;
   min-width: 9rem;
+  /* A last resort, not the mechanism. `settings/menu-room.ts` flips the panel
+     above the dot when the row is near the foot of the pane; this is what saves
+     the geometry where neither side has room — the panel scrolls rather than
+     putting its last item under the sheet's footer with no way to reach it.
+     `--menu-room` is published by that module; with no script at all the
+     fallback is generous enough never to clamp a menu that fits. */
+  max-block-size: var(--menu-room, 100vh);
+  overflow-y: auto;
   padding: var(--sp-1);
   border-radius: var(--radius-md);
   /* The same glass every other floating surface in this app wears — see
@@ -1143,8 +1151,18 @@
   box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
 }
 
+/* Opened upwards, when the row is close enough to the foot of the scrolling
+   pane that a downward panel would be drawn under the sheet's footer. Decided by
+   measurement in `settings/menu-room.ts` — there is no CSS length for "how far
+   is this row from the bottom of the box that clips it". */
+.settings-rowmenu[data-up] > .settings-rowmenu-items {
+  top: auto;
+  bottom: calc(var(--control-h) + var(--sp-1));
+}
+
 .settings-rowmenu-items > button {
   height: var(--row-h);
+  flex: none;
   padding: 0 var(--sp-2);
   border: 0;
   border-radius: var(--radius-sm);
@@ -1399,10 +1417,28 @@
 }
 
 .settings-addmenu-name {
+  display: flex;
   flex: 1;
+  align-items: baseline;
+  /* The version sits in this span now — the standing list it used to live in is
+     gone from the pane. Without a gap the row read `Claude Code2.1.237`. */
+  gap: var(--sp-2);
   min-width: 0;
   font-size: var(--t-callout);
   color: var(--text-primary);
+}
+
+/* The ⓘ on a menu row — today only Codex's, saying which copy of the binary
+   actually runs. A fixed slot whether the dot is drawn or not, so "Add account"
+   stays in one column down the menu instead of shunting left on the one row that
+   has a caveat. It wraps the dot rather than being the dot, because `HoverNote`
+   also emits a screen-reader span, and that span was a 1px child of the row. */
+.settings-addmenu-tail {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
 }
 
 /* The right-hand half of a row: "Installed" where nothing can be done, "Add

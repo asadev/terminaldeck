@@ -20,20 +20,30 @@ import '../src/renderer/shell/shell.css'
 import { WorkspaceTabStrip } from '../src/renderer/browser/WorkspaceTabStrip'
 import { setWindowMachine } from '../src/renderer/browser/window-machine'
 import { setBindings } from '../src/renderer/browser/binding-view'
-import type { WorkspaceTab } from '../src/renderer/shell/workspace-tabs'
+import { machineTabId, type WorkspaceTab } from '../src/renderer/shell/workspace-tabs'
 
 const params = new URLSearchParams(location.search)
 if (params.get('theme') === 'light') document.documentElement.dataset.theme = 'light'
+
+const OFFICE = { id: 'mach-1', name: 'Office PC' }
 
 const TABS: WorkspaceTab[] = [
   { id: 's1', kind: 'session', label: 'Session 1', status: 'working', projectPath: '/Users/apple/Templates', closable: true },
   { id: 'b1', kind: 'browser', label: 'New tab', closable: true },
   { id: 'b2', kind: 'browser', label: 'localhost:5199', closable: true },
   { id: 'b3', kind: 'browser', label: 'Stripe Dashboard', closable: true },
+  /*
+    A session on the same machine one of the windows is served by — which is the
+    whole of what he asked to be able to see in one place: *"all the desktop
+    browser, including session, should be at one place."* Without it this page
+    proves only that a window can be labelled, not that a machine's two kinds of
+    window are drawn together.
+  */
+  { id: machineTabId(OFFICE.id, '7'), kind: 'session', label: 'Session 1', status: 'idle', projectPath: '/Users/apple/Projects/site', machine: OFFICE, closable: true },
 ]
 
 // b2 is the one on the other machine. b1 and b3 are here, and must wear nothing.
-setWindowMachine('b2', { id: 'mach-1', name: 'Office PC' })
+setWindowMachine('b2', OFFICE)
 setBindings({
   sessions: [
     {

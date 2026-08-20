@@ -272,11 +272,16 @@ describe('the caveat when the port numbers could not match', () => {
     sameNumber: false,
   }
 
-  it('says which number is which, and what will go wrong because of it', () => {
+  it('says which number is which, as the arithmetic and not as a paragraph', () => {
+    expect(differentPortNote(opened, 'office-pc')).toBe('office-pc:3000 → :53412')
+  })
+
+  // The rule he repeated most, pinned where it was broken: this note was two
+  // sentences long. Anything that grows it back past the arithmetic fails here.
+  it('is not a sentence', () => {
     const note = differentPortNote(opened, 'office-pc')
-    expect(note).toContain('3000')
-    expect(note).toContain('53412')
-    expect(note).toContain('office-pc')
+    expect(note.length).toBeLessThan(40)
+    expect(note).not.toMatch(/[.,]/)
   })
 
   it('says nothing at all when the number was kept', () => {
@@ -413,6 +418,18 @@ describe('moveFor — the page follows the picker, or the picker goes back', () 
     expect(moveFor(THIS_MACHINE, 'http://localhost:5173/', [])).toEqual({ kind: 'already' })
   })
 
+  it('lets an empty tab simply choose, which is the only way to reach a remote port list', () => {
+    /*
+     * Found by rendering: on a new browser tab the picker refused every other
+     * machine and snapped straight back, because a start page has no address
+     * and an address with no port in it was read as "nothing to move". The
+     * remote machine's port list is drawn *on that start page*, so the one
+     * route to a remote port was closed by the control that exists to open it.
+     */
+    expect(moveFor('m-desktop', '', opened)).toEqual({ kind: 'choose' })
+    expect(moveFor('m-desktop', '   ', opened)).toEqual({ kind: 'choose' })
+  })
+
   it('refuses a page that belongs to nobody in this room, and says where it is', () => {
     // Stripe's website is not on a computer here. There is nothing to move, and
     // the picker has to go back rather than claim it moved.
@@ -427,7 +444,17 @@ describe('moveFor — the page follows the picker, or the picker goes back', () 
     expect(moveFor(THIS_MACHINE, 'https://example.com/', opened)).toEqual({ kind: 'already' })
   })
 
-  it('refuses a start page rather than opening a machine at nothing', () => {
-    expect(moveFor('m-desktop', '', opened)).toEqual({ kind: 'refused', at: THIS_MACHINE })
+  it('does not treat a start page as a page that refuses to move', () => {
+    /*
+     * This test used to assert the opposite — `refused` — and asserting it kept
+     * a real defect pinned in place. Rendered in `.harness/index.html`, which
+     * has a paired machine: on a new browser tab, choosing `office-pc` snapped
+     * the picker back to This machine and printed a refusal, every time. The
+     * start page draws *the chosen machine's* port list, so refusing there
+     * closed the only route to a remote port.
+     *
+     * See the `choose` case above; this is the same fact from the other side.
+     */
+    expect(moveFor('m-desktop', '', opened)).not.toMatchObject({ kind: 'refused' })
   })
 })

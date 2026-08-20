@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Group, LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
+import { LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
+import { HoverNote } from '../../components/HoverNote'
 import { errorText, type SectionProps } from '../settings-bridge'
 import { toSetupSnapshot, TOOL_STATE_LABEL, type SetupSnapshot } from '../setup-status'
 import './SetupSection.css'
@@ -52,13 +53,29 @@ function ToolRow({ tool }: { tool: SetupSnapshot['tools'][number] }) {
         <span className="settings-tool-name">
           {tool.label}
           <ToolVersion tool={tool} />
+          {/* What this app uses it for, and the caveat when there is one — the
+              two lines that used to stand under the name. A caveat about a tool
+              that is not even here is noise, so it is only joined on for one
+              that is. */}
+          <HoverNote label={tool.label}>
+            {tool.note && tool.state !== 'missing' ? `${tool.purpose}. ${tool.note}` : tool.purpose}
+          </HoverNote>
         </span>
-        <span className="settings-tool-note">{tool.purpose}</span>
-        {/* A caveat about a tool that is not even here is noise; the probe and
-            the install link are what that row is for. */}
-        {tool.note && tool.state !== 'missing' && (
-          <span className="settings-tool-note">{tool.note}</span>
-        )}
+        {/*
+          `purpose` was a standing line under every name — "Read branches and
+          diffs for the source control panel", "Read issues and pull requests
+          without a token of your own". True of both, and a description of what
+          a tool is for rather than anything about the state of this machine:
+
+            > *"Why do we have all of this full list? Why not just one drop-down
+            > to look at it if we need it? Why do, if I have ten like this, how
+            > I will read all of them?"*
+
+          It is behind the ⓘ on the name now, which is where a fact that is
+          occasionally wanted and never urgent goes on this pane. What is left on
+          the row is what is *wrong* with it and how to fix that, which is not a
+          description.
+        */}
         {!ok && tool.remedy && <span className="settings-tool-note">{tool.remedy}</span>}
         {tool.probe && (
           <code className="setup-probe" title={tool.probe.command}>
@@ -221,8 +238,22 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
 
       {/* What is left after the agents and after Copilot: git, and the GitHub
           CLI this app shells out to. Both are things the app *uses*, which is
-          what makes this the pane they belong on — see `MOVED_TOOL_IDS`. */}
-      <Group title="Other tools">
+          what makes this the pane they belong on — see `MOVED_TOOL_IDS`.
+
+          Behind a disclosure rather than standing open, and it is the sixth and
+          last of the blocks that made this pane read as three pages stacked. It
+          is a list of things that are working, which is the definition of a
+          thing you look at when you go looking:
+
+            > *"Also here again, it is too big thing to give someone to read.
+            > Why do we have all of this full list? Why not just one drop-down
+            > to look at it if we need it?"*
+
+          The same `<details>` the Add-agent menu is, for the same two reasons —
+          it is real markup a `renderToStaticMarkup` test can read, and it costs
+          the closed pane nothing. */}
+      <details className="settings-addmenu">
+        <summary>Other tools</summary>
         <ul className="settings-tools">
           {tools.map((tool) => (
             <ToolRow key={tool.id} tool={tool} />
@@ -267,7 +298,7 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
           2026-08-19 called *"too messy and too difficult to understand"* — and
           two of the three did nothing a person had asked for.
         */}
-      </Group>
+      </details>
 
       {/*
         The "Session hooks" group was here, and it is gone because it was the

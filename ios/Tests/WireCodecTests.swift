@@ -17,7 +17,7 @@ final class WireCodecTests: XCTestCase {
     func testWelcomeWithNullTokenMeansYouAlreadyHaveOne() {
         let raw = #"{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"iPhone","token":null,"sessions":[]}"#
         guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .welcome(_, _, _, token, _, _, _, _, _) = message else {
+              case let .welcome(_, _, _, token, _, _, _, _, _, _) = message else {
             return XCTFail("expected a welcome")
         }
         XCTAssertNil(token)
@@ -40,7 +40,7 @@ final class WireCodecTests: XCTestCase {
         ]}
         """
         guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .welcome(version, _, _, token, sessions, _, _, _, _) = message else {
+              case let .welcome(version, _, _, token, sessions, _, _, _, _, _) = message else {
             return XCTFail("expected a welcome")
         }
         XCTAssertEqual(version, 1)
@@ -63,7 +63,7 @@ final class WireCodecTests: XCTestCase {
     func testAWelcomeWithoutFoldersHasNotSaidAnything() {
         let raw = #"{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"iPhone","token":null,"sessions":[]}"#
         guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .welcome(_, _, _, _, _, _, _, folders, _) = message else {
+              case let .welcome(_, _, _, _, _, _, _, _, folders, _) = message else {
             return XCTFail("expected a welcome")
         }
         XCTAssertNil(folders)
@@ -72,7 +72,7 @@ final class WireCodecTests: XCTestCase {
     func testAWelcomeWithAnEmptyFolderListHasSaidNone() {
         let raw = #"{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"iPhone","token":null,"sessions":[],"folders":[]}"#
         guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .welcome(_, _, _, _, _, _, _, folders, _) = message else {
+              case let .welcome(_, _, _, _, _, _, _, _, folders, _) = message else {
             return XCTFail("expected a welcome")
         }
         XCTAssertEqual(folders, [])
@@ -84,7 +84,7 @@ final class WireCodecTests: XCTestCase {
          "folders":["/Users/asad/Projects/deck","/Users/asad/Projects/imza"]}
         """
         guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .welcome(_, _, _, _, _, _, _, folders, _) = message else {
+              case let .welcome(_, _, _, _, _, _, _, _, folders, _) = message else {
             return XCTFail("expected a welcome")
         }
         XCTAssertEqual(folders, ["/Users/asad/Projects/deck", "/Users/asad/Projects/imza"])
@@ -98,7 +98,7 @@ final class WireCodecTests: XCTestCase {
          "folders":["/a",7,"","/b",null]}
         """
         guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .welcome(_, _, _, _, _, _, _, folders, _) = message else {
+              case let .welcome(_, _, _, _, _, _, _, _, folders, _) = message else {
             return XCTFail("expected a welcome")
         }
         XCTAssertEqual(folders, ["/a", "/b"])

@@ -197,6 +197,53 @@ final class CredentialStoreTests: XCTestCase {
     }
 
     /**
+     * The machine's own name, which arrives on a `welcome` rather than a pairing.
+     *
+     * The chips read `2C7DUW` and `K3ZQW7` — relay slot codes, which name nothing
+     * anybody owns — for a person with one Mac and one Windows PC. A machine
+     * paired before `hostName` existed has nil here, and the pairing link that
+     * would have filled it is read exactly once, at the desk. So the label falls
+     * through to it on every connection instead, and the ordering is what makes
+     * that safe: the person's word first, the machine's own second, the address
+     * last.
+     */
+    func testTheMachinesOwnNameBeatsTheSlotCodeAndLosesToANickname() {
+        let plain = credential("a")
+        XCTAssertEqual(plain.label, plain.endpoint.shortName,
+                       "a pairing that predates the field still reads its code")
+
+        let named = plain.hostNamed("Asads-MacBook-Pro")
+        XCTAssertEqual(named.label, "Asads-MacBook-Pro")
+        // Nothing else about the record moved — this is not a re-pair.
+        XCTAssertEqual(named.token, plain.token)
+        XCTAssertEqual(named.deviceId, plain.deviceId)
+        XCTAssertEqual(named.kind, plain.kind)
+
+        // The person's word always wins, whichever order the two arrive in.
+        XCTAssertEqual(named.renamed("Studio").label, "Studio")
+        XCTAssertEqual(credential("a", nickname: "Studio").hostNamed("Asads-MacBook-Pro").label, "Studio")
+
+        // And it survives the redemption that turns a pairing token into a
+        // device credential, which is the one write that happens right after the
+        // welcome this name arrives on.
+        XCTAssertEqual(named.redeemed(token: "t", deviceId: "d", deviceName: "iPhone").label,
+                       "Asads-MacBook-Pro")
+
+        store.save(named)
+        XCTAssertEqual(store.load(Self.macId)?.label, "Asads-MacBook-Pro")
+    }
+
+    /// A record written before the field existed still decodes, and reads as
+    /// having no machine name — which is the state the whole migration is for.
+    func testARecordWithoutTheFieldStillDecodes() {
+        let older = #"{"endpoint":{"relay":{"url":"wss://relay.example","hostId":"\#(Self.macId)","hostKey":"\#(Data(repeating: 7, count: 32).base64EncodedString())"}},"token":"a","kind":"pairing","deviceId":"d","deviceName":"iPhone","pairedAt":0}"#
+        // Decoded rather than round-tripped: the point is a JSON document this
+        // build did not write.
+        let decoded = try? JSONDecoder().decode(StoredCredential.self, from: Data(older.utf8))
+        XCTAssertNil(decoded?.hostName)
+    }
+
+    /**
      * **A copilot credential an older build stored is erased on the way in.**
      *
      * Between 2026-08-17 and 2026-08-19 a `StoredCredential` carried a second

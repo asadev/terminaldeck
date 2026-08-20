@@ -381,6 +381,53 @@ describe('the folded chip says less rather than drawing less', () => {
   })
 })
 
+/**
+ * The panel behind that chip, and the four blocks of prose it used to print.
+ *
+ * This is the surface Asad opens whenever his window is narrower than about nine
+ * hundred pixels, and it was the one place in the app nobody audited. Rendered
+ * on 2026-08-20 it carried a description under every heading, the same two-line
+ * refusal three times, a two-line foot under every section naming where the value
+ * had been read from and how far a change reaches, and a closing sentence about
+ * what pressing anything does. Every one of them is deleted; what a reader still
+ * needs is behind the ⓘ or in a hover label.
+ *
+ *   > *"don't put any single statement in anywhere. Everywhere you are putting a
+ *   > lot of statements. We don't need to give the statements. We want
+ *   > simplicity. Let the smart people use it. Smart people knows how it
+ *   > works."*
+ *
+ * Source text rather than a render, because the panel is only in the DOM once a
+ * chip has been pressed and this project's tests have no DOM. What the panel
+ * looks like once open is `ControlSection.test.tsx`'s; what is asserted here is
+ * that this file is not putting a sentence back around it.
+ */
+describe('the folded panel prints no standing sentence of its own', () => {
+  const view = readFileSync(join(__dirname, 'SessionControls.tsx'), 'utf8')
+  const shared = readFileSync(join(__dirname, '..', 'chat', 'controls', 'AgentControls.css'), 'utf8')
+
+  it('has no foot under the last section', () => {
+    expect(view).not.toContain('ac-sheet-foot')
+    expect(view).not.toContain('Every change here is typed into this session')
+    // And the rules are gone with the markup. A style with nothing drawing it is
+    // a paragraph waiting to be written again. (Both class names still appear in
+    // this stylesheet's *prose*, saying why they went, so what is checked is that
+    // neither opens a rule.)
+    expect(shared).not.toMatch(/\.ac-sheet-foot\s*[,{]/)
+    expect(shared).not.toMatch(/\.ac-section-desc\s*[,{]/)
+  })
+
+  it('does not name the connectors chip twice on one line', () => {
+    /*
+     * `Connectors` as a section heading over a chip whose only word is
+     * `Connectors` — a centimetre apart, in the same panel. *"It doesn't make
+     * any sense to keep in both side the same thing."* The chip keeps it,
+     * because the chip is also the thing you press.
+     */
+    expect(view).not.toContain('<h4 className="ac-section-name">Connectors</h4>')
+  })
+})
+
 describe('connectors, which exist only when there are connectors', () => {
   /**
    * Asad: *"connectors — a dropdown only when some exist. Hide it when empty."*
@@ -401,21 +448,56 @@ describe('connectors, which exist only when there are connectors', () => {
     expect(render()).not.toContain('Connectors')
   })
 
-  it('is mounted only under a condition that counts them', () => {
+  it('is mounted only under a condition that counts them, whichever machine they are on', () => {
     /*
-     * And on the session being on *this* computer, which joined the condition on
-     * 2026-08-19. `listMcpServers` resolves a folder's `.mcp.json` and this
-     * app's own registry here; the servers that matter to a session on a paired
-     * machine or a server are that machine's, and nothing on either wire carries
-     * them. A chip fed from this list would name servers the session cannot
-     * reach and open a view that manages the wrong computer's.
+     * Counted from two different sources, and never from the wrong one.
+     *
+     * `listMcpServers` resolves a folder's `.mcp.json` and this app's own
+     * registry *here*, so it answers only for a local session. The servers that
+     * matter to a session on a paired machine are that machine's, and since
+     * 2026-08-20 they travel: the far end resolves its own three files for that
+     * session's own folder and puts them on the `controls.reading` it was
+     * already sending. Asad: *"I want it exactly like the local ones."*
+     *
+     * The two branches are pinned separately because folding them into one
+     * `connectors.rows.length > 0` is exactly the regression to catch — it would
+     * draw *this* machine's servers under a session on his PC.
      */
+    expect(view).toContain("const remoteConnectors = target?.kind === 'machine' ? (readings?.connectors ?? null) : null")
     expect(view).toContain(
-      'const hasConnectors = target === undefined && connectors.loaded && connectors.rows.length > 0',
+      'const connectorRows = target === undefined ? connectors.rows : (remoteConnectors ?? [])',
+    )
+    expect(view).toContain(
+      'target === undefined ? connectors.loaded && connectors.rows.length > 0 : connectorRows.length > 0',
     )
     // Both homes: the open row and the folded panel's section. An empty section
     // in the panel is the same dead invitation one fold further in.
     expect(view.match(/hasConnectors \? \(/g) ?? []).toHaveLength(2)
+  })
+
+  it('takes the door away over a session that is not on this computer', () => {
+    /*
+     * The list travels; the action does not. `onOpenConnectors` opens *this*
+     * machine's MCP servers view, so under a session on his PC it would be a
+     * button that walks from a list of that machine's connectors to a page
+     * managing this one's. Withdrawn, and withdrawn silently — a sentence in its
+     * place is the habit he asked to have removed everywhere.
+     */
+    expect(view).toContain('const openConnectorsHere = target === undefined ? onOpenConnectors : null')
+    expect(view).toContain('{onOpen !== null || blocked !== null ? (')
+    // And the row really is gone rather than disabled, for a picker with neither.
+    const html = renderToStaticMarkup(
+      <ConnectorsPicker
+        rows={[{ id: 'user:github', name: 'github', scope: 'user', transport: 'stdio', enabled: true, disabledReason: null }]}
+        onOpen={null}
+        blocked={null}
+      />,
+    )
+    // The chip is still there — the list is the substance and it stays. Only the
+    // action row is gone. (The panel itself is shut in a static render, which is
+    // why the row is asserted by its class rather than by a server's name.)
+    expect(html).toContain('Connectors')
+    expect(html).not.toContain('sc-sheet-actions')
   })
 
   it('lists what it found, and offers exactly one thing to press', () => {

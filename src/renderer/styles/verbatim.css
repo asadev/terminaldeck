@@ -298,6 +298,12 @@
    character by character when two keys differ by one. */
 .servers-keylist-name,
 .df-folder-path,
+/* And the same path again under the per-session choice beside it — the folder a
+   running session is in, printed so two agents with the same title can be told
+   apart. Same argument as the folder grant above it: a path is machine text
+   somebody matches against what they see in Finder, and `--` and `=>` inside a
+   directory name are exactly what ligatures reach. */
+.ds-session-path,
 /* The copilot setup flow: the folder it will work in. `.cs-preview` used to be
    listed here too — the block of instructions the summary screen showed byte for
    byte — and that screen was deleted on 2026-08-17 (*"this whole card is not

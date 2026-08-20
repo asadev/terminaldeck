@@ -376,6 +376,29 @@ export const PROTOCOL_VERSION = 1
  * or an older list, and a distinct refusal would confirm that one names
  * something real.
  */
+/**
+ * `account` is which login a session on the far machine is running as, the
+ * logins that machine has, and changing one for the other.
+ *
+ * ## Why it is not part of `controls`
+ *
+ * {@link CONTROL_IDS} is pinned, in `protocol.test.ts`, against the four
+ * controls `agent-controls.ts` performs — and it performs them by **typing a
+ * slash command into a pty**. An account is not that. Changing one stops the
+ * agent process and starts another under a different config directory, which is
+ * a session-lifecycle operation with a different door, a different refusal set
+ * and a different answer: the session it produces has a **new id**, and a
+ * client holding the old one has to follow it or find itself attached to
+ * something that no longer exists. Folding that into a control would have put a
+ * process restart on the code path that fires whenever a session prints.
+ *
+ * ## What an older host does
+ *
+ * Never advertises it, so the chip is drawn with the far machine's account on
+ * it and no rows to press — the same degrade `controls` has, for the same
+ * reason: a menu that looks live and is not is worse than one that says what it
+ * knows.
+ */
 export const CAPABILITY = {
   localhost: 'localhost',
   create: 'create',
@@ -388,6 +411,23 @@ export const CAPABILITY = {
   controls: 'controls',
   usage: 'usage',
   send: 'send',
+  account: 'account',
+  /**
+   * The conversation, as a chat rather than as a terminal.
+   *
+   * Asad, about the desktop's chat view: *"my message should start from the
+   * right… the left side will be the agent… no need to give a name actually on
+   * both sides… just the text only and time only… give the copy button"*. That
+   * view exists on the Mac and reads a transcript **on the Mac's own disk**,
+   * through `chat:load`/`chat:tail`, which is why nothing on this wire carried
+   * it and why a phone could only ever see a terminal.
+   *
+   * The reading is the same one: a bounded tail of the JSONL the agent is
+   * already writing, collapsed by the same `ChatCollapser`. What travels is the
+   * collapsed bubbles, never the file — a transcript runs to tens of megabytes
+   * and this is a relay.
+   */
+  chat: 'chat',
 } as const
 
 /**
@@ -412,6 +452,8 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.controls,
   CAPABILITY.usage,
   CAPABILITY.send,
+  CAPABILITY.account,
+  CAPABILITY.chat,
 ]
 
 /**
@@ -724,6 +766,17 @@ export const MAX_CLIENT_CAPABILITIES = 16
 export const MAX_CAPABILITY_LENGTH = 32
 
 /**
+ * The longest machine name a `welcome` may carry.
+ *
+ * The same sixty-four `machines/rendezvous.ts` bounds a pairing offer's name
+ * at, so one string cannot arrive whole by one route and cut by the other.
+ * Clients narrow it further to fit their own chips — the browser client keeps
+ * twenty-four — and that is presentation; this is the wire's ceiling on a
+ * string a machine sends about itself.
+ */
+export const MAX_HOST_NAME_LENGTH = 64
+
+/**
  * Longest username and secret a device may answer a credential request with.
  *
  * Generous rather than tight, because what is on the other end of these fields
@@ -945,6 +998,20 @@ export const MAX_COPILOT_LOG_ROWS = 200
  * client shows that there is more and offers the desktop, which has the file.
  */
 export const MAX_COPILOT_MESSAGE_CHARS = 8 * 1024
+
+/**
+ * How many bubbles one `chat.rows` may carry.
+ *
+ * A chat view is read from the bottom. A conversation on this machine runs to
+ * thousands of turns, and a phone handed all of them would spend its memory —
+ * and a relay's bandwidth — on the part nobody scrolls to. Two hundred is more
+ * than a phone screen holds several times over and small enough that a client
+ * reconnecting in a loop cannot make a Mac serialise a day's work per attempt.
+ *
+ * The same number `MAX_COPILOT_LOG_ROWS` is, for the same reason and against the
+ * same wire.
+ */
+export const MAX_CHAT_ROWS = 200
 
 /** One bubble of a copilot conversation. Parsed text, never terminal bytes. */
 export interface CopilotChatMessage {
@@ -1203,6 +1270,48 @@ export interface ControlsReadingWire {
   /** Whether an agent CLI is drawing that session's screen over there. */
   agent: { running: boolean; saw: string | null }
   gate: { canType: boolean; reason: string | null }
+  /**
+   * The connectors that session's folder resolves to **on that machine**.
+   *
+   * Absent, not empty, from a host that does not report them — and the two mean
+   * opposite things to the chip, which exists only when there are connectors.
+   * An empty array is *"that folder has none"* and draws no chip; absent is
+   * *"nobody said"*, which also draws no chip but must not be recorded as an
+   * answer. A build older than this field sends neither and behaves exactly as
+   * it did.
+   *
+   * It rides this frame rather than one of its own because it is read on the
+   * same schedule as everything else here and is drawn by the same cluster: MCP
+   * config is three files on the far machine, resolved for that session's
+   * directory, which is what `mcp:list` does for a window at that desk.
+   */
+  connectors?: ConnectorWire[]
+}
+
+/**
+ * One connector on the far machine, as its own MCP list reported it.
+ *
+ * The same six fields `McpRow` carries in the renderer and no more, because
+ * everything else `McpServerStatus` holds is either about *reaching* a server —
+ * which the asking machine cannot do, the process would be spawned over there —
+ * or about managing one, which is a decision made where the config file is.
+ *
+ * The **facts** travel and the **wording** does not. What a row's second line
+ * says is composed on the drawing side by `rowDetail`, which is the same
+ * function the chip already calls for this machine's own connectors: one idea
+ * of how a connector is described, in the file that owns naming, rather than a
+ * sentence assembled on a computer whose build may be older than the words.
+ */
+export interface ConnectorWire {
+  id: string
+  name: string
+  /** `user`, `project`, `local` — null when the far end did not say. Never guessed. */
+  scope: string | null
+  transport: string | null
+  /** Whether the far machine's own CLI would load this server for that folder. */
+  enabled: boolean
+  /** Why it would not, in that machine's words. Null when it would. */
+  disabledReason: string | null
 }
 
 /* ---- capability `usage` -------------------------------------------------- */
@@ -1304,6 +1413,39 @@ export function emptyUsageReading(want: UsageWant, detail: string): Record<strin
    * wire to send it separately.
    */
   return { ok: false, outcome: 'unwatched', detail, elapsedMs: 0, spawned: false, report }
+}
+
+/* ---- capability `account` ------------------------------------------------ */
+
+/** How many accounts one machine will report. A person has a handful. */
+export const MAX_ACCOUNTS_REPORTED = 64
+/** How many connectors one folder will report, for the same reason. */
+export const MAX_CONNECTORS_REPORTED = 64
+/** The longest an account or connector name may be on this wire. */
+export const MAX_ACCOUNT_NAME_LENGTH = 120
+/** The longest an account or connector id may be. Ids are slugs. */
+export const MAX_ACCOUNT_ID_LENGTH = 200
+
+/**
+ * One login on the far machine, as its own account list holds it.
+ *
+ * `color` is a custom property **name** and never a colour value, exactly as
+ * `Profile.color` is: the palette lives in one stylesheet on the drawing side,
+ * and a machine sending `#c96` would be a second palette arriving over a wire.
+ * Null when the far end had none to give, which draws the chip's neutral dot.
+ *
+ * `provider` is a bare agent id — `claude`, `codex`, `gemini` — and is not
+ * narrowed here for the reason `RemoteSession.provider` is not: this file is
+ * bundled for clients that have never heard of an agent this machine has added,
+ * and a union would turn a new agent into a dropped account.
+ */
+export interface AccountWire {
+  id: string
+  name: string
+  provider: string | null
+  color: string | null
+  /** The machine's own install — the login every fallback ends on. */
+  system: boolean
 }
 
 export type ClientMessage =
@@ -1786,6 +1928,39 @@ export type ClientMessage =
    * may not type into a session may not learn what its account has spent.
    */
   | { t: 'usage.read'; rid: string; id: string; want: UsageWant; force: boolean }
+  /* ---- capability `account`. Refused when it is not advertised. ---------- */
+  /**
+   * Which login is this session running as, and which logins does that machine
+   * have?
+   *
+   * Passive: a state file and, for the running session, what that machine
+   * already established when it spawned the process. Nothing is typed and no
+   * agent is started, so it may be sent on a mount and whenever the far end
+   * says its session list changed.
+   *
+   * `rid` names *this question*, for the reason `controls.read`'s does: two
+   * panes over one session on one machine must not resolve each other's reads.
+   *
+   * `id` is the session, authorised at the same door `input` is. A device that
+   * may not type into a session may not learn whose login it is on.
+   */
+  | { t: 'account.read'; rid: string; id: string }
+  /**
+   * Run that session as another of that machine's logins.
+   *
+   * **This stops a process and starts another one.** It is the reason this is
+   * not a control: `controls.apply` types a slash command and the session
+   * survives it, and this replaces the session outright — a different config
+   * directory, a different transcript store, and a new session id that comes
+   * back on {@link ServerMessage} `account.switched` so the asking client can
+   * follow the tab it was already looking at.
+   *
+   * Composed on the far end, never here. The frame names an account id and
+   * nothing else; that machine runs the same plan-and-refuse its own window
+   * runs, and a refusal arrives as the sentence it wrote. Silence is never an
+   * answer: every path ends in an `account.switched`.
+   */
+  | { t: 'account.switch'; rid: string; id: string; accountId: string }
   /* ---- capability `send`. Refused when it is not advertised. ------------- */
   /**
    * Put text into that session **without subscribing to it**.
@@ -1816,6 +1991,25 @@ export type ClientMessage =
    * that was dropped is a spinner on a panel that has no other way to find out.
    */
   | { t: 'session.send'; rid: string; id: string; data: string }
+  /**
+   * That session's conversation, as bubbles.
+   *
+   * `tail` is the difference between the two things a chat view does. False is
+   * *give me the conversation* — what opening the view asks for, answered with
+   * `reset: true` so the client replaces whatever it held. True is *what has
+   * changed*, which is what the same view asks for when the session prints
+   * something, and is answered with only the bubbles that are new or have grown.
+   *
+   * One verb with a flag rather than two, unlike `usage.read`'s three wants,
+   * because the two cost the same on the far side: both are a tail read of a
+   * file the agent is already writing. What `usage.read` was splitting was a
+   * reading that boots a 725 MB CLI, and there is no such thing here.
+   *
+   * Authorised by `mayTouch`, the same per-device folder reach every keystroke
+   * asks: a device that may not type into a session may not read what was said
+   * in it either.
+   */
+  | { t: 'chat.read'; rid: string; id: string; tail: boolean }
 
 export type ServerMessage =
   | {
@@ -1849,6 +2043,29 @@ export type ServerMessage =
        * constant compiled into the phone.
        */
       hostPlatform?: string
+      /**
+       * What this machine calls **itself** — its hostname.
+       *
+       * The same string `machines/rendezvous.ts` puts on a pairing offer, from
+       * the same `describeThisMachine()`, and it is here because the offer is
+       * read exactly once in a machine's life. A client that stored the name at
+       * pairing time and nowhere else has no name at all for every machine
+       * paired before the field existed, and no way to get one short of
+       * unpairing and pairing again at the desk. Those clients fell back to the
+       * platform noun, so a person with one Mac and one Windows PC read "Mac"
+       * and "PC" on the switcher — better than the relay slot codes that were
+       * there before, and still not the names of his computers.
+       *
+       * So it travels on the one frame that arrives on every connection.
+       * Optional for the reason {@link hostPlatform} is: a desktop older than
+       * this field is one a current client still has to talk to, and a client
+       * that reads nothing here keeps whatever it already had.
+       *
+       * Display text and nothing else. It is not an identity — {@link hostId}
+       * is — and it is never trusted: a client renders it beside terminal
+       * output, so it is stripped and bounded on arrival.
+       */
+      hostName?: string
       /**
        * Folders this device may start a session in, most relevant first.
        *
@@ -2237,6 +2454,54 @@ export type ServerMessage =
    * discuss.
    */
   | { t: 'usage.reading'; rid: string; id: string; want: UsageWant; answer: UsageAnswerWire }
+  /* ---- capability `account` ---------------------------------------------- */
+  /**
+   * The answer to one `account.read`, and only ever to one.
+   *
+   * Never pushed, for the reason `controls.reading` is not: the far machine has
+   * no idea which of a client's panes is showing which session, and an
+   * unsolicited state frame would arrive with no `rid` for anybody to match.
+   *
+   * `current` is null when that machine could not establish whose login the
+   * session is on — a session it did not start, an agent that reported nothing —
+   * and null is drawn as *no name*, never as the default account, because a
+   * chip naming the wrong login is the defect this whole area exists to remove.
+   */
+  | { t: 'account.state'; rid: string; id: string; current: AccountWire | null; accounts: AccountWire[] }
+  /**
+   * What happened to one `account.switch`, in the far machine's own words.
+   *
+   * `session` is the id the session has **now**. It is the same id on a refusal
+   * and a different one on a success, because a switch replaces the process —
+   * so a client that attaches to `session` after this frame is looking at what
+   * it asked for either way. Null only when that machine could not say, which a
+   * client treats as "stay where you are".
+   *
+   * There is no `account.failed`. A refusal is this frame with `ok: false` and
+   * the sentence, for the reason `controls.applied` gives: the asking side has
+   * one place to look for the outcome.
+   */
+  | { t: 'account.switched'; rid: string; id: string; ok: boolean; message: string; session: string | null }
+  /**
+   * The answer to one `chat.read`, and only ever to one.
+   *
+   * `rows` are collapsed bubbles, never transcript lines, and never the file:
+   * one transcript on this machine is 154 MB and this is a relay. `reset` says
+   * to replace rather than merge — the answer to a `tail: false`, and also what
+   * a rolled-over transcript produces mid-conversation, which is the case a
+   * client that only ever appended would render as the conversation happening
+   * twice.
+   *
+   * Bounded at {@link MAX_CHAT_ROWS} per answer, newest kept: a chat view is
+   * read from the bottom, and a phone that was handed nine thousand bubbles
+   * would spend its memory on the part nobody scrolls to.
+   *
+   * `found` is false when the folder has no transcript at all, which is a
+   * different empty state from a session that has not spoken yet — the same
+   * distinction `ChatUpdate` draws, and it travels because the two want
+   * different things drawn.
+   */
+  | { t: 'chat.rows'; rid: string; id: string; rows: CopilotChatMessage[]; reset: boolean; found: boolean }
   /* ---- capability `send` ------------------------------------------------- */
   /**
    * What happened to one `session.send`, and only ever to one.
@@ -2941,6 +3206,60 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return { ok: true, message: { t: 'usage.read', rid: requestId, id: sessionId, want, force: parsed.force === true } }
     }
 
+    /* ---- capability `account` ------------------------------------------- */
+    // Shape only. Whether this desktop can switch an account at all, and
+    // whether this device may touch the session named, are the server's
+    // questions — it is the only thing that knows which device the socket
+    // belongs to.
+    case 'account.read': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('account.read without a request id')
+      const sessionId = id(parsed.id)
+      if (!sessionId) return bad('account.read without a session id')
+      return { ok: true, message: { t: 'account.read', rid: requestId, id: sessionId } }
+    }
+    case 'account.switch': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('account.switch without a request id')
+      const sessionId = id(parsed.id)
+      if (!sessionId) return bad('account.switch without a session id')
+      // Bound before it is looked at, for the reason `session.send`'s `data` is:
+      // the value that reaches the far end must be the one that was checked.
+      const accountId = parsed.accountId
+      if (typeof accountId !== 'string' || accountId === '') return bad('account.switch without an account')
+      if (accountId.length > MAX_ACCOUNT_ID_LENGTH) return tooLarge('account.switch with an oversized account id')
+      /*
+       * A slug, and a colon.
+       *
+       * `slugifyProfileId` produces `[a-z0-9-]` and nothing else, so a chosen
+       * account's id is already inside the narrow class. The colon is here for
+       * the ids nobody chose: an agent's *own install* is `system`, `system:codex`,
+       * `system:gemini` — written by `systemProfileId`, on disk in every
+       * `profiles.json` this app has ever produced — and refusing it here would
+       * have made the one row that is on every machine the one row that cannot be
+       * picked. There is still no separator and no dot-dot, which is what the
+       * class is for: this selects a directory on somebody else's computer.
+       */
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(accountId)) return bad('account.switch with an unusable account id')
+      return { ok: true, message: { t: 'account.switch', rid: requestId, id: sessionId, accountId } }
+    }
+
+    /* ---- capability `chat` ----------------------------------------------- */
+    // Shape only, like `account.read` above. Whether this desktop can read a
+    // transcript at all, and whether this device may touch the session named,
+    // are the server's questions.
+    case 'chat.read': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('chat.read without a request id')
+      const sessionId = id(parsed.id)
+      if (!sessionId) return bad('chat.read without a session id')
+      // Absent reads as `false` — *give me the conversation* — which is the
+      // answer that is always correct to send: a client that meant `tail` and
+      // was given the whole thing renders the same conversation, while the
+      // reverse would silently drop everything said before it connected.
+      return { ok: true, message: { t: 'chat.read', rid: requestId, id: sessionId, tail: parsed.tail === true } }
+    }
+
     /* ---- capability `send` ---------------------------------------------- */
     // Shape only, and the shape is `input`'s: this frame carries the same bytes
     // to the same `SessionAccess.write`. What it does not carry is an attach,
@@ -3515,6 +3834,7 @@ function parseControls(value: unknown): ControlsReadingWire {
   const record = isRecord(value) ? value : {}
   const agent = isRecord(record.agent) ? record.agent : {}
   const gate = isRecord(record.gate) ? record.gate : {}
+  const connectors = parseConnectors(record.connectors)
   return {
     model: parseReading(record.model),
     effort: parseReading(record.effort),
@@ -3523,6 +3843,10 @@ function parseControls(value: unknown): ControlsReadingWire {
     live: record.live === true,
     agent: { running: agent.running === true, saw: asString(agent.saw) },
     gate: { canType: gate.canType === true, reason: asString(gate.reason) },
+    // Spread rather than assigned, so "the far end said nothing about
+    // connectors" stays absent instead of becoming an empty list this end would
+    // then record as an answer.
+    ...(connectors === undefined ? {} : { connectors }),
   }
 }
 
@@ -3541,6 +3865,79 @@ function parseControls(value: unknown): ControlsReadingWire {
  * at all: anything else is not a reading, and becomes null rather than an empty
  * object that the bar would then draw as "reported nothing".
  */
+/**
+ * One account off the wire, or null.
+ *
+ * Total and defensive, like {@link parseReading}: it takes `unknown` and either
+ * produces a row a menu can draw or produces nothing. An id and a name are the
+ * two fields a row cannot be drawn without — the id is what a press sends back
+ * and the name is what a person reads — so a record missing either is not a
+ * half-row, it is not a row.
+ */
+function parseAccount(value: unknown): AccountWire | null {
+  if (!isRecord(value)) return null
+  const accountId = asString(value.id)
+  const name = asString(value.name)
+  if (accountId === null || accountId === '' || accountId.length > MAX_ACCOUNT_ID_LENGTH) return null
+  if (name === null || name === '') return null
+  return {
+    id: accountId,
+    name: name.slice(0, MAX_ACCOUNT_NAME_LENGTH),
+    provider: asString(value.provider),
+    color: asString(value.color),
+    system: value.system === true,
+  }
+}
+
+/** A short field off the wire, cut to the name cap. Null stays null. */
+function clip(value: string | null): string | null {
+  return value === null ? null : value.slice(0, MAX_ACCOUNT_NAME_LENGTH)
+}
+
+/** The list of them, capped and with the unusable rows dropped. */
+function parseAccounts(value: unknown): AccountWire[] {
+  if (!Array.isArray(value)) return []
+  const rows: AccountWire[] = []
+  for (const entry of value) {
+    if (rows.length >= MAX_ACCOUNTS_REPORTED) break
+    const row = parseAccount(entry)
+    if (row !== null) rows.push(row)
+  }
+  return rows
+}
+
+/**
+ * The connectors off a `controls.reading`, or absent.
+ *
+ * Absent and empty are different answers here and the difference decides
+ * whether a chip exists at all — see {@link ControlsReadingWire.connectors} —
+ * so a frame with no `connectors` key returns `undefined` rather than `[]`.
+ */
+function parseConnectors(value: unknown): ConnectorWire[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const rows: ConnectorWire[] = []
+  for (const entry of value) {
+    if (rows.length >= MAX_CONNECTORS_REPORTED) break
+    if (!isRecord(entry)) continue
+    const connectorId = asString(entry.id)
+    const name = asString(entry.name)
+    if (connectorId === null || connectorId === '' || connectorId.length > MAX_ACCOUNT_ID_LENGTH) continue
+    if (name === null || name === '') continue
+    const disabledReason = asString(entry.disabledReason)
+    rows.push({
+      id: connectorId,
+      name: name.slice(0, MAX_ACCOUNT_NAME_LENGTH),
+      scope: clip(asString(entry.scope)),
+      transport: clip(asString(entry.transport)),
+      // `!== false`, matching `readServers`: a row that did not say is loaded by
+      // the CLI, so a missing field must read as on rather than as off.
+      enabled: entry.enabled !== false,
+      disabledReason: disabledReason === null ? null : disabledReason.slice(0, MAX_ACCOUNT_NAME_LENGTH),
+    })
+  }
+  return rows
+}
+
 function parseUsageAnswer(value: unknown): UsageAnswerWire {
   if (!isRecord(value)) return { reading: null }
   const answer: UsageAnswerWire = { reading: isRecord(value.reading) ? value.reading : null }
@@ -3886,6 +4283,27 @@ export function parseServerFrame(parsed: unknown): ServerParse {
       // been shut out".
       const hostPlatform = asString(parsed.hostPlatform)
       if (hostPlatform !== null) message.hostPlatform = hostPlatform
+      /*
+       * Cleaned here rather than at each client, and dropped when it cleans away
+       * to nothing.
+       *
+       * This is display text from the far end of a sealed channel — authenticated,
+       * which is not the same as trusted — and it lands on a switcher chip next
+       * to terminal output. An escape sequence in it would be a name that
+       * repaints the screen around itself, so the control characters go and the
+       * length is bounded, exactly as `parseOffer` does to the same string on the
+       * other route. An empty result is *absent*: a machine that sent a name made
+       * only of control characters said nothing, and a client that stored the
+       * empty string would have overwritten a good name with it.
+       */
+      const rawHostName = asString(parsed.hostName)
+      if (rawHostName !== null) {
+        const hostName = rawHostName
+          .replace(/[\u0000-\u001f\u007f]/g, '')
+          .trim()
+          .slice(0, MAX_HOST_NAME_LENGTH)
+        if (hostName !== '') message.hostName = hostName
+      }
       const folders = stringList(parsed.folders, MAX_CWD_BYTES)
       if (folders !== null) message.folders = folders
       /*
@@ -4248,6 +4666,99 @@ export function parseServerFrame(parsed: unknown): ServerParse {
         message: { t: 'usage.reading', rid: requestId, id: sessionId, want, answer: parseUsageAnswer(parsed.answer) },
       }
     }
+    /* ---- capability `account` ---------------------------------------------- */
+    /*
+     * The far machine's account list, read totally and clipped rather than
+     * rejected.
+     *
+     * A row that does not carry an id and a name is dropped, because a chip row
+     * with neither is a row nobody can press or read; everything else about a
+     * row is optional and folds onto null. The list is capped so a host cannot
+     * make this window build an unbounded array of strings before anything has
+     * looked at it, and clipping rather than refusing is deliberate: a machine
+     * with sixty-five logins should draw sixty-four, not nothing.
+     */
+    case 'account.state': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'account.state without a request id' }
+      const sessionId = id(parsed.id)
+      if (sessionId === null) return { ok: false, reason: 'account.state without a session id' }
+      return {
+        ok: true,
+        message: {
+          t: 'account.state',
+          rid: requestId,
+          id: sessionId,
+          current: parseAccount(parsed.current),
+          accounts: parseAccounts(parsed.accounts),
+        },
+      }
+    }
+    /*
+     * The outcome of one switch. `ok` must be the literal `true`, for the reason
+     * `session.sent`'s must: a garbled frame read as success is a window that
+     * follows a session id that was never created.
+     */
+    case 'account.switched': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'account.switched without a request id' }
+      const sessionId = id(parsed.id)
+      if (sessionId === null) return { ok: false, reason: 'account.switched without a session id' }
+      return {
+        ok: true,
+        message: {
+          t: 'account.switched',
+          rid: requestId,
+          id: sessionId,
+          ok: parsed.ok === true,
+          message: typeof parsed.message === 'string' ? parsed.message : '',
+          session: id(parsed.session),
+        },
+      }
+    }
+    /* ---- capability `chat` ------------------------------------------------- */
+    /*
+     * One answer's worth of bubbles.
+     *
+     * Every row is narrowed by `copilotChatMessage`, which is the same reader
+     * the copilot's own conversation goes through — deliberately one reader, so
+     * a bubble that a phone can draw in one place is a bubble it can draw in the
+     * other. A row that will not read is dropped rather than costing the frame:
+     * a chat view missing one message is a great deal better than a chat view
+     * that stayed empty because the desktop appended a field.
+     *
+     * Clipped to {@link MAX_CHAT_ROWS} keeping the **end**, because a
+     * conversation is read from the bottom and the newest bubbles are the ones
+     * somebody opened the view for.
+     */
+    case 'chat.rows': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'chat.rows without a request id' }
+      const sessionId = id(parsed.id)
+      if (sessionId === null) return { ok: false, reason: 'chat.rows without a session id' }
+      if (!Array.isArray(parsed.rows)) return { ok: false, reason: 'chat.rows without a list' }
+      const rows: CopilotChatMessage[] = []
+      for (const row of parsed.rows) {
+        const bubble = copilotChatMessage(row)
+        if (bubble !== null) rows.push(bubble)
+      }
+      return {
+        ok: true,
+        message: {
+          t: 'chat.rows',
+          rid: requestId,
+          id: sessionId,
+          rows: rows.slice(-MAX_CHAT_ROWS),
+          // `reset` and `found` must both be the literal `true`. A garbled frame
+          // read as `reset` would throw away a conversation somebody is reading;
+          // read as `found` it would draw an empty conversation for a folder
+          // that has none, which are two different things to say.
+          reset: parsed.reset === true,
+          found: parsed.found === true,
+        },
+      }
+    }
+
     /* ---- capability `send` ------------------------------------------------- */
     /*
      * The answer to one `session.send`, read the way `controls.applied` is.

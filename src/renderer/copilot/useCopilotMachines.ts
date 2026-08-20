@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { detectPlatform, thisMachine } from '../platform'
 import { asView, type MachineLinkState, type MachinesView } from '../machines/types'
-import { asServers, type Server } from '../machines/servers/types'
 
 /**
  * Which machines' copilots this window can reach — for the switch at the top of
@@ -34,8 +33,37 @@ import { asServers, type Server } from '../machines/servers/types'
  * machine that is offline is a machine we have not asked; a machine that is
  * online and sent no copilot link is one that has answered, and the answer is
  * no. Collapsing those into "unavailable" would be the app claiming to know
- * something it has not been told — and the remedy differs: one is *wait*, the
- * other is *pair this machine again as your own*.
+ * something it has not been told.
+ *
+ * What `refused` must **not** be turned into on screen is *"that machine paired
+ * you as a guest"*. `protocol.ts` sends the identical frame for that and for
+ * *"this host has no copilot"* — deliberately, since a headless host has none
+ * and *"an advertised thing a device may not use invites the ask."* Asad runs a
+ * headless host. `RemoteCopilot` words it about the offer for that reason.
+ *
+ * **`reach` decides what the pane says, and never whether the row can be
+ * pressed.** Asad, looking at this switch: *"here icon not still choose the
+ * local connected server."* His word for a paired computer is *server* — the
+ * same word he uses in *"two buttons to switch between local machine and server
+ * machines"* — and the row he wanted to press was one of these. A round of this
+ * drew the unready ones greyed out with the reason on hover, which answers a
+ * man who says he cannot choose a machine by taking the choice away and writing
+ * a sentence about it. So every row here is a row the page will switch to, and
+ * `RemoteCopilot` says which of the three it found when it got there.
+ *
+ * ## Why there are no servers on it
+ *
+ * Because no server has a copilot to switch to, and that is measurable rather
+ * than a judgement: the headless host is this app without a window and it ships
+ * without one on purpose — `headless/host.ts` withholds `CAPABILITY.copilot`,
+ * and `headless/cli.ts` prints *"This host has no copilot: the copilot's tools
+ * only run in the desktop app."* An SSH server does not run this app at all. A
+ * round of this listed every stored server here and had to disable each one,
+ * which is a row that can never lead anywhere — the dead control this week has
+ * been spent removing. The copilot reaches a server through its `servers.*`
+ * tools from whichever machine it is running on, and the permission for that is
+ * asked for on that server's own page: `SERVERS-DESIGN.md` §6.2, *"not in
+ * Settings, and not in the copilot's window."*
  *
  * ## Read, not owned
  *
@@ -50,28 +78,13 @@ import { asServers, type Server } from '../machines/servers/types'
 export type CopilotReach =
   /** Connected, and its welcome carried a copilot link for this device. */
   | 'ready'
-  /** Connected, and it did not. This device is a guest there. */
+  /**
+   * Connected, and it did not — so no copilot there for this computer, in
+   * whichever of the two ways the far end declines to tell apart.
+   */
   | 'refused'
   /** Not connected, so the question has not been asked yet. */
   | 'unreachable'
-  /**
-   * A server, which has no copilot of its own and never will.
-   *
-   * Asad, on this switch: *"here icon not still choose the local connected
-   * server, by the way, I think. Maybe server is not connected, I don't know."*
-   * The switch listed paired devices only, so a server he had signed in to was
-   * simply not on it and he could not tell whether that meant *not connected*
-   * or *not shown*. It is shown now.
-   *
-   * It cannot be switched **to**, and that is a fact about servers rather than
-   * a control we declined to build. A server does not run this app — see the
-   * vocabulary note at the top of `machines/servers/types.ts` — so there is no
-   * copilot process there to point at. The copilot that works on a server is
-   * the one on this computer, and whether it may act is a per-server grant that
-   * `SERVERS-DESIGN.md` §6.2 puts on that server's own page in as many words:
-   * *"not in Settings, and not in the copilot's window."*
-   */
-  | 'server'
 
 export interface CopilotMachine {
   /** Empty for this computer, which is always the first row. */
@@ -95,16 +108,6 @@ export interface CopilotMachine {
 interface MachinesReadBridge {
   listMachines(): Promise<unknown>
   onMachinesState(callback: (view: unknown) => void): () => void
-  /**
-   * The stored servers, and nothing more.
-   *
-   * Deliberately not `lookAtServer`, which is the call that would tell us
-   * whether one is up: it opens an SSH connection. A switch at the top of a page
-   * that dialled every server the moment the page was drawn would be this
-   * project's own polling complaint with a worse bill attached — *"events, not
-   * polling"* — for a row that cannot be pressed either way.
-   */
-  listServers?(): Promise<unknown>
 }
 
 function bridge(): MachinesReadBridge | null {
@@ -135,7 +138,6 @@ function reachOf(link: MachineLinkState): CopilotReach {
 
 export function useCopilotMachines(): CopilotMachine[] {
   const [view, setView] = useState<MachinesView | null>(null)
-  const [servers, setServers] = useState<Server[]>([])
 
   const read = useCallback((deck: MachinesReadBridge) => {
     void deck
@@ -152,17 +154,6 @@ export function useCopilotMachines(): CopilotMachine[] {
     const deck = bridge()
     if (!deck) return
     read(deck)
-    // The servers are read once, on mount. The stored list only changes when
-    // somebody adds or forgets one, which is a page away, and re-reading it on
-    // a timer would be a poll for a row that cannot be pressed.
-    if (typeof deck.listServers === 'function') {
-      void deck
-        .listServers()
-        .then((value) => setServers(asServers(value)))
-        .catch(() => {
-          // No servers feature in this build. The rows simply do not appear.
-        })
-    }
     // Every change to any link arrives on this one push — a machine coming up,
     // a copilot grant being revoked at the far keyboard — so there is no timer
     // here and nothing to poll.
@@ -186,13 +177,6 @@ export function useCopilotMachines(): CopilotMachine[] {
         rest.push({ id: link.id, name, reach: reachOf(link), open: link.copilot?.open === true })
       }
     }
-    // The servers, last, and never pressable — see `CopilotReach['server']`.
-    // Listed because the switch being silent about a machine he had signed in to
-    // is what he was looking at when he said he could not tell whether it was
-    // connected.
-    for (const server of servers) {
-      rest.push({ id: `server ${server.id}`, name: server.name, reach: 'server', open: false })
-    }
     return [here, ...rest]
-  }, [view, servers])
+  }, [view])
 }

@@ -58,7 +58,7 @@ final class CopilotWireTests: XCTestCase {
         {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,
          "sessions":[],"capabilities":["copilot"],
          "copilot":{"linked":true,"open":false,"grant":{"read":true,"act":true,"alter":true}}}
-        """#), case let .welcome(_, _, _, _, _, capabilities, _, _, connection) = message else {
+        """#), case let .welcome(_, _, _, _, _, capabilities, _, _, _, connection) = message else {
             return XCTFail("a welcome with a copilot connection should decode")
         }
         XCTAssertTrue(capabilities.contains(Copilot.capability))
@@ -92,7 +92,7 @@ final class CopilotWireTests: XCTestCase {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,
          "sessions":[],"capabilities":["copilot","create","localhost","upload","credential","devserver"]}
-        """#), case let .welcome(_, _, _, _, _, capabilities, _, _, connection) = message else {
+        """#), case let .welcome(_, _, _, _, _, capabilities, _, _, _, connection) = message else {
             return XCTFail("the welcome should decode")
         }
         XCTAssertTrue(capabilities.contains(Copilot.capability), "it did advertise it")
@@ -119,7 +119,7 @@ final class CopilotWireTests: XCTestCase {
         {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,
          "sessions":[],"capabilities":["copilot"],
          "copilot":{"open":false,"grant":{"read":true,"act":true,"alter":true}}}
-        """#), case let .welcome(_, _, _, _, _, _, _, _, connection) = message else {
+        """#), case let .welcome(_, _, _, _, _, _, _, _, _, connection) = message else {
             return XCTFail("the welcome should decode")
         }
         XCTAssertTrue(connection.stated)
@@ -176,7 +176,7 @@ final class CopilotWireTests: XCTestCase {
     func testAWelcomeWithNoCopilotFieldConnectsNothing() {
         guard case let .ok(message, _) = WireCodec.decode(#"""
         {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,"sessions":[]}
-        """#), case let .welcome(_, _, _, _, _, _, _, _, connection) = message else {
+        """#), case let .welcome(_, _, _, _, _, _, _, _, _, connection) = message else {
             return XCTFail("a welcome without the field should still decode")
         }
         XCTAssertEqual(connection, .silent)
@@ -191,7 +191,7 @@ final class CopilotWireTests: XCTestCase {
             guard case let .ok(message, _) = WireCodec.decode(#"""
             {"t":"welcome","protocol":1,"deviceId":"d","deviceName":"iPhone","token":null,
              "sessions":[],"capabilities":["copilot"],"copilot":\#(liar)}
-            """#), case let .welcome(_, _, _, _, _, _, _, _, connection) = message else {
+            """#), case let .welcome(_, _, _, _, _, _, _, _, _, connection) = message else {
                 return XCTFail("\(liar) should still decode as a welcome")
             }
             XCTAssertEqual(connection, .silent, "\(liar) is not a copilot")

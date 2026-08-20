@@ -345,28 +345,14 @@ kbd {
 }
 
 /*
-  A browser window whose page is on another computer.
+  `.tab-machine-mark` was here and is deleted — 2026-08-20.
 
-  Drawn beside the tab's own icon rather than in the trailing cluster, and that
-  placement is the point: `.bind-chips` is already shrinking and dropping chips
-  into a count to fit, and a mark that competes with it would be the first thing
-  clipped — which is the failure this is meant to prevent, not join. It is a
-  fact about the window's identity, so it sits with the icon that says what kind
-  of window it is.
-
-  Secondary ink and never a colour. The tab already carries a status dot's
-  palette and a bind chip's palette; a third meaning-bearing colour on the same
-  15px row would be the third dot vocabulary `BindChip`'s header refuses.
+  It painted a 12px display glyph on a browser tab whose page was being served by
+  another computer, with the machine's name in the `title`. The name lives on the
+  bar itself now, as a heading over that machine's whole run of tabs — see
+  `.strip-group` in `WorkspaceTabStrip.css`, and `stripGroups` for why a tooltip
+  was not the *one place* he asked for.
 */
-.tab-machine-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--text-secondary);
-  /* It states a fact; the thing you press is the tab under it. */
-  cursor: inherit;
-}
 
 /*
   The control that attaches a browser window to a session, and detaches one.

@@ -982,11 +982,39 @@ final class HostLink: Identifiable {
         if upload?.receive(message) == true { return }
 
         switch message {
-        case let .welcome(_, _, _, _, list, capabilities, platform, folders, copilotConnection):
+        case let .welcome(_, _, _, _, list, capabilities, platform, name, folders, copilotConnection):
             sessions = list
             lastActivity = activity
             lastError = nil
             hostPlatform = platform
+            /*
+             * The machine's own name, recorded on every connection.
+             *
+             * Not only at pairing: a phone that learned the name once, off the
+             * pairing link, has none for a machine paired before that field
+             * existed — and the chip then reads a relay slot code, which names
+             * nothing anybody owns. A nickname the person typed still wins over
+             * it; see `StoredCredential.label`.
+             *
+             * Written through `onCredential`, which is the one writer to the
+             * drawer, and through **this object's own** `credential` as well —
+             * that second half is what makes the row redraw. It was left out of
+             * the first version of this and the name only appeared after a
+             * relaunch, because `label` reads the copy held here.
+             *
+             * Re-read from the drawer rather than composed from the copy held
+             * here, for the reason `DeckModel` gives about its captured record:
+             * the drawer has been written since this link was built — a
+             * redemption mints a device credential over the pairing token — and
+             * composing from a stale copy would put a spent pairing token back.
+             */
+            if let name {
+                let held = credentials.load(id) ?? credential
+                if held.hostName != name {
+                    credential = held.hostNamed(name)
+                    onCredential?(credential)
+                }
+            }
             granted = folders
             if capabilities.contains(WireCapability.localhost) { transport?.send(.ports) }
             /*

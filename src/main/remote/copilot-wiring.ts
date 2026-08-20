@@ -43,6 +43,7 @@ import type { ActionRow } from '../deck-control/action-log'
 import type { CreateSessionInput, SessionMeta } from '../../shared/types'
 import { buildRecordsFence } from '../confine/records'
 import { copilotPaths } from '../copilot-home'
+import { trustCopilotFolder } from '../copilot-trust'
 import { copilotLayerArgs, writeCopilotLayer, type LayerTool } from '../copilot-layer'
 import type { SpawnFence } from '../copilot-session'
 import { currentPlatform } from '../platform/host'
@@ -278,6 +279,24 @@ export async function startCopilotRun(
   const profile = resolveProfile(profilesState(), { projectPath: request.cwd })
 
   const paths = copilotPaths(userData, request.cwd)
+  /*
+   * Before the spawn, because a phone cannot answer what comes up first.
+   *
+   * A Claude CLI started in a directory it has no record of draws a modal —
+   * *"Quick safety check: Is this a project you created or one you trust?"* —
+   * that is invisible from a phone and unanswerable from one. On a machine where
+   * the copilot has never been started at the desk, that is every run. See
+   * `copilot-trust.ts` for what is written, what is never overwritten, and why
+   * this is not a decision being made on somebody's behalf.
+   *
+   * The outcome is logged rather than acted on: `refused` is a person's own
+   * answer and `failed` leaves the modal exactly where it already was, so
+   * neither is a reason to keep a run from starting.
+   */
+  const trust = trustCopilotFolder(profile.configDir, request.cwd)
+  if (trust === 'refused') {
+    console.warn(`[copilot] ${request.cwd} is recorded as not trusted, so this run will stop at the CLI’s prompt`)
+  }
   const layer = writeCopilotLayer(paths.layer, {
     root: paths.root,
     actionsLog: paths.actions,

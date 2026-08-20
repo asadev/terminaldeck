@@ -164,7 +164,13 @@ describe('the hook blocks', () => {
 
   it('keeps a provider’s extra requirement with it', () => {
     const codex = build().hooks.find((block) => block.id === 'codex')
-    expect(codex?.requirement).toContain('codex_hooks')
+    // `codex_hooks` was renamed to `hooks` in Codex 0.146 — the old key still
+    // works and now prints a deprecation line into the terminal at every session
+    // start, so this page must not keep asking for it. The trust step is the
+    // other half: an installed Codex hook does not run until it is trusted once.
+    expect(codex?.requirement).toContain('`hooks = true`')
+    expect(codex?.requirement).not.toContain('codex_hooks')
+    expect(codex?.requirement).toContain('Trust')
   })
 
   /**

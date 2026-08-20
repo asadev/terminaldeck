@@ -662,13 +662,44 @@ describe('running this session as somebody else', () => {
     // An account is a login of one CLI. `resolveProfileId` declines the mismatch
     // quietly, by falling back to the machine's own install, and the quiet
     // version is what made picking a Codex account look like an ignored click.
-    expect(source).toContain("account.provider !== sessionAgent || isCurrent")
+    expect(source).toMatch(/inert = switching\s*\?\s*account\.provider !== sessionAgent/)
   })
 
   it('does not offer to switch to the account it is already on', () => {
     // The tick has already said everything there is to say, and a press could
     // only stop a healthy agent and start it again as itself.
-    expect(source).toMatch(/const inert = switching\s*\?\s*account\.provider !== sessionAgent \|\| isCurrent/)
+    expect(source).toMatch(/inert = switching\s*\?[^:]*\bisCurrent\b/s)
+  })
+
+  /**
+   * D1's last state, 2026-08-20.
+   *
+   * The switch itself keeps the conversation now, and there is one account it
+   * cannot keep it for: one that has never signed in. That switch does not
+   * fail — it succeeds, the CLI runs its own first-run onboarding and then a
+   * login prompt, and the conversation on screen is replaced. On screen it is
+   * indistinguishable from the defect he filmed:
+   *
+   *   > *"See, it is not going to keep it… It's not keeping the conversation
+   *   > history."*
+   *
+   * So the row is listed and is not pressable, and no sentence is added for it:
+   * the right of the row already reads "Not signed in".
+   */
+  it('does not offer to switch into an account that has never signed in', () => {
+    expect(source).toMatch(/inert = switching\s*\?[^:]*state\?\.state === 'signed-out'/s)
+  })
+
+  /**
+   * And only a *measured* signed-out. `unknown` is a probe that could not be
+   * run — an old CLI, a timeout, a machine under load — and refusing on that
+   * would take a perfectly good account away over a failure to ask it.
+   */
+  it('still offers an account whose sign-in state could not be read', () => {
+    const at = source.indexOf('const inert = switching')
+    const expression = source.slice(at, source.indexOf('\n\n', at))
+    expect(expression).not.toContain("=== 'unknown'")
+    expect(expression).not.toContain("!== 'signed-in'")
   })
 
   it('calls the switch rather than falling through to a new session', () => {

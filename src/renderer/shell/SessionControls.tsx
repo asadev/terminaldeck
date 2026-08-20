@@ -795,6 +795,21 @@ export function ConnectorsPicker({
               <span className="sc-connector-detail">{rowDetail(row)}</span>
             </p>
           ))}
+          {/*
+            The one action, and only where there is one.
+
+            A remote session's list has no door under it: `onOpenConnectors`
+            opens *this* machine's MCP servers view, and a button that took you
+            from a list of his PC's connectors to a page managing this Mac's
+            would be a control acting on something other than the thing it is
+            drawn over. Absent, and silently absent — a sentence saying "not from
+            here" is exactly the habit he asked to have removed.
+
+            `blocked` is the other case and keeps its button: the feature is
+            uninstalled *on this machine*, which is something the person reading
+            it can act on.
+          */}
+          {onOpen !== null || blocked !== null ? (
           <div className="sc-sheet-actions">
             <button
               type="button"
@@ -813,6 +828,7 @@ export function ConnectorsPicker({
               {blocked === null ? `Open ${spec.label}` : 'Not available in this build'}
             </button>
           </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -1057,23 +1073,31 @@ export function SessionControls({
    */
   const connectors = useConnectors(target === undefined ? cwd : null)
   /*
-   * And never for a session on another computer, which is not a layout decision.
+   * And for a session on another computer, the far machine's own list.
    *
    * `listMcpServers` resolves the connectors of a folder **on this machine** —
-   * its `.mcp.json`, this app's own registry, this user's globals. A session on
-   * a paired desktop or on a server has its own, over there, and nothing on
-   * either wire carries them; a chip fed from this machine's list would name
-   * servers that session cannot reach and open a view that manages the wrong
-   * computer's. So the chip is absent, and since 2026-08-20 it is absent without
-   * a sentence beside it saying so — see `App.tsx` where that note stood, and
-   * `usage-reach.ts` for the four seams the figures beside it needed to travel,
-   * which are the same four this would need.
-   *
-   * `null` rather than `cwd` on the hook above for the same reason and one more:
-   * a remote path that happens to exist on this machine too would otherwise
+   * its `.mcp.json`, this app's own registry, this user's globals — so it is
+   * asked only for a local session, and `null` rather than `cwd` above is what
+   * says so: a remote path that happens to exist here too would otherwise
    * resolve *this* machine's project connectors under somebody else's session.
+   *
+   * What changed on 2026-08-20 is that there is now an answer for the other
+   * case. Asad, on a session running on his PC: *"on the remote sessions, I
+   * don't have any of these features … I want it exactly like the local ones."*
+   * The far machine resolves its own three files for that session's own folder
+   * and puts the rows on the `controls.reading` it was already sending — see
+   * `ControlsReadingWire.connectors` — so the chip names servers that session
+   * can actually reach.
+   *
+   * A server on a **server** is still nothing, and permanently: a server is not
+   * running this app, there is no `mcp:list` over there and no frame that could
+   * carry one. It reads as absent, which draws no chip, which is the same
+   * outcome it has always had.
    */
-  const hasConnectors = target === undefined && connectors.loaded && connectors.rows.length > 0
+  const remoteConnectors = target?.kind === 'machine' ? (readings?.connectors ?? null) : null
+  const connectorRows = target === undefined ? connectors.rows : (remoteConnectors ?? [])
+  const hasConnectors =
+    target === undefined ? connectors.loaded && connectors.rows.length > 0 : connectorRows.length > 0
   /*
    * What the row needs changes with what it is saying, and nothing about that
    * resizes the bar — so the widths that decide the fold are re-read whenever
@@ -1269,8 +1293,20 @@ export function SessionControls({
     )
   }
 
+  /*
+   * The one action under the list, and it is withdrawn over a session that is
+   * not on this computer.
+   *
+   * `onOpenConnectors` opens **this** machine's MCP servers view — the surface
+   * that adds, inspects and connects servers here. Over a session on his PC that
+   * would be a button that took you from a list of that machine's connectors to
+   * a page managing this one's, which is a control acting on something other
+   * than the thing it is drawn over. The list is the substance and it stays; the
+   * door goes, without a sentence in its place.
+   */
+  const openConnectorsHere = target === undefined ? onOpenConnectors : null
   const connectorsBlocked =
-    onOpenConnectors === null
+    target === undefined && onOpenConnectors === null
       ? 'The MCP servers view is not installed in this build, so there is nowhere for this to open.'
       : null
 
@@ -1505,7 +1541,6 @@ export function SessionControls({
                   control={id}
                   reading={readings?.[id]}
                   options={optionsForRow(id)}
-                  reach={reachOf(id)}
                   busy={busy === id}
                   disabled={busy !== null && busy !== id}
                   blocked={blockedFor(id)}
@@ -1524,22 +1559,47 @@ export function SessionControls({
                   on an absence. */}
               {hasConnectors ? (
                 <section className="ac-section">
-                  <h4 className="ac-section-name">Connectors</h4>
-                  {/* The heading, and then the control. The sentence that used
-                      to sit between them was the MCP view's blurb, and those are
-                      deleted app-wide this round — see `shell/panels.ts`. */}
+                  {/*
+                    No heading over this one, and that is the difference between
+                    it and the three sections above.
+
+                    Those are a name and then a set of rows, so the name has to
+                    be drawn. This is a name and then *one chip that carries the
+                    same name* — rendered with a heading it read `Connectors`
+                    over `Connectors ⌄`, a centimetre apart, which is the
+                    duplication he objected to elsewhere in the same recording:
+                    *"It doesn't make any sense to keep in both side the same
+                    thing."* The chip is the one that has to keep it, because it
+                    is also the thing you press.
+
+                    The blurb that used to sit between them was the MCP view's,
+                    and those are deleted app-wide this round — see
+                    `shell/panels.ts`.
+                  */}
                   <div className="sc-sheet-actions">
                     <ConnectorsPicker
-                      rows={connectors.rows}
-                      onOpen={onOpenConnectors}
+                      rows={connectorRows}
+                      onOpen={openConnectorsHere}
                       blocked={connectorsBlocked}
                     />
                   </div>
                 </section>
               ) : null}
-              <p className="ac-sheet-foot">
-                Every change here is typed into this session, exactly as you would type it.
-              </p>
+              {/*
+                And nothing under the last section.
+
+                There was a foot here — *"Every change here is typed into this
+                session, exactly as you would type it."* — and it is deleted
+                rather than shortened. It was the app explaining its own
+                mechanism at the bottom of a panel whose every row is a setting,
+                to a reader who came to change one, and it was the fourth block
+                of prose on the surface Asad opens every time his window is
+                narrower than about nine hundred pixels: *"don't put any single
+                statement in anywhere… Let the smart people use it."* Nothing
+                replaces it; what it said is visible the moment anything here is
+                pressed, because the command lands in the session's own
+                scrollback and the CLI's reply lands in the notice above.
+              */}
             </div>
           ) : null}
         </>
@@ -1584,8 +1644,8 @@ export function SessionControls({
               and out while the answer is on its way. */}
           {hasConnectors ? (
             <ConnectorsPicker
-              rows={connectors.rows}
-              onOpen={onOpenConnectors}
+              rows={connectorRows}
+              onOpen={openConnectorsHere}
               blocked={connectorsBlocked}
             />
           ) : null}

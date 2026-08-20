@@ -445,6 +445,17 @@ export function servedBy(url: string, opened: readonly ReachedPort[]): ReachedPo
 export type MachineMove =
   /** It is already there. Re-opening it would only lose its scroll position. */
   | { kind: 'already' }
+  /**
+   * There is no page yet, so the choice is only a choice.
+   *
+   * A tab showing the start page has no address, and the picker on it is what it
+   * was before it could move anything: where the *next* address opens. Treating
+   * that as a failed move made the other machine unreachable from a new tab
+   * altogether — the picker snapped straight back and printed a refusal, and the
+   * remote machine's port list, which is the entire reason to switch there from
+   * a blank tab, could never be reached.
+   */
+  | { kind: 'choose' }
   /** Open this address on this computer. */
   | { kind: 'here'; url: string }
   /** Open this port on that machine, carrying the path. */
@@ -460,6 +471,8 @@ export function moveFor(
   const here = servedBy(url, opened)
   const at = here?.machineId ?? THIS_MACHINE
   if (next === at) return { kind: 'already' }
+  // No address at all is the start page, not a page that refuses to move.
+  if (url.trim() === '') return { kind: 'choose' }
   // The port on whichever machine is serving it — see the note above on why
   // this is not the number in the address bar.
   const port = here ? here.port : loopbackPort(url)
@@ -478,12 +491,19 @@ export function moveFor(
  * both loopbacks are already busy on this machine — which is exactly the case
  * this feature is for, somebody with the same project running on two computers,
  * so the caveat is not a rare one and it is not left to be discovered.
+ *
+ * It used to be two sentences and ~200 characters of it, printed in a bar under
+ * the toolbar — the habit he struck out more times than any other:
+ *
+ *   > *"don't put any single statement in anywhere … We want simplicity. Let the
+ *   > smart people use it. Smart people knows how it works."*
+ *
+ * So it is the arithmetic and nothing else, the same shape the toolbar's own
+ * hover was cut down to for this identical fact: `office-pc:3000 → :53412`.
+ * Which number is which is the entire content of the paragraph that was here,
+ * and a person who can read a port number can read this.
  */
 export function differentPortNote(opened: ReachOpened, machineName: string): string {
   if (opened.sameNumber) return ''
-  return (
-    `Port ${opened.port} on ${machineName} is being served here on port ${opened.localPort}, because ` +
-    `${opened.port} is already in use on this machine. Anything that site writes as an absolute ` +
-    `localhost:${opened.port} link will go to this machine’s own port instead.`
-  )
+  return `${machineName}:${opened.port} → :${opened.localPort}`
 }

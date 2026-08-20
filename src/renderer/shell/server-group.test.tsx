@@ -273,19 +273,29 @@ describe('a terminal on a server is a row like any other', () => {
 
   it('says that the server survives the close, wherever the close now lives', () => {
     /*
-     * The row's ✕ became an entry in its ⋯ menu on 2026-08-20, and that menu is
-     * native — built in the main process so it can be drawn over a browser page,
-     * which is the situation its own Connect browser entry exists for. So the
-     * sentence is handed to the menu when it opens rather than sitting in the
-     * markup, and this reads it where it is now written.
-     *
      * The half that matters is the second one: this ends the terminal and leaves
-     * the server, its sign-in and everything else on it alone.
+     * the server, its sign-in and everything else on it alone. Somebody pressing
+     * this is afraid they have stopped their website.
+     *
+     * The words are no longer composed on the row. The ✕ became an entry in a
+     * native ⋯ menu, and then the entry became the single word *Delete* — so the
+     * sentence `Sidebar.tsx` went on building was handed to a field the menu
+     * reads as a boolean and printed nowhere. The promise is kept in the
+     * confirmation that entry opens, which is the surface between the press and
+     * the loss, and that is where this reads it.
      */
     const source = readFileSync(join(__dirname, 'Sidebar.tsx'), 'utf8')
-    expect(source).toContain('ends this terminal on ${tab.server.name}')
-    expect(source).toContain('The server itself is left alone.')
-    expect(source).toContain('ends the session`')
+    expect(source).toContain('close: tab.closable,')
+    // And the row composes no sentence of its own for it any more.
+    expect(source).not.toContain('const closeSentence')
+
+    const confirm = readFileSync(
+      join(__dirname, '..', 'components', 'CloseSessionConfirm.tsx'),
+      'utf8',
+    )
+    expect(confirm).toContain('This closes the terminal on that server.')
+    expect(confirm).toContain('Nothing else on the server is touched')
+
     expect(rail()).toContain(`on ${NAME}`)
   })
 

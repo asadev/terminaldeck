@@ -115,7 +115,12 @@ describe('the layout decisions that cannot be seen from a test', () => {
     // would ignore the attribute without a rule of its own, and the failure would
     // be the worst one in this client: a permission dialog that stays on screen
     // after it has been answered.
-    const hidden = ['.tabs', '.ask', '.dock', '.sheet']
+    // `.sbar` is the session's own row of chips — usage, context, account — and
+    // it is empty far more often than the others: a desktop that predates
+    // `CAPABILITY.usage`, a session nothing has answered for yet, an account that
+    // could not be established. Empty it would still be a 1px rule across the top
+    // of the terminal, so it is hidden, so it needs the hatch.
+    const hidden = ['.tabs', '.ask', '.dock', '.sheet', '.sbar']
     for (const selector of hidden) {
       expect(flexBlocks, `${selector} should still be a flex container`).toContain(selector)
       expect(styles, `${selector} is hidden by main.ts and needs a [hidden] rule`).toContain(`${selector}[hidden] {`)
@@ -146,6 +151,11 @@ describe('the layout decisions that cannot be seen from a test', () => {
       '.banner',
       '.body',
       '.chat',
+      // `.chatv` is the *session's* conversation — the copilot's is `.chat` — and
+      // it is swapped in and out of the pane rather than hidden in place, so it
+      // needs no attribute rule. Both halves of the mode toggle exist for the
+      // life of the pane; only one is in the document.
+      '.chatv',
       '.composer',
       '.content',
       '.copilot',

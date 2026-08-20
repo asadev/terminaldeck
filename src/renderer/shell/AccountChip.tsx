@@ -1206,8 +1206,8 @@ export function AccountChip({
               )
 
               /*
-               * Whether this row can be acted on at all, and there are now two
-               * quite different reasons it might not be.
+               * Whether this row can be acted on at all, and there are now
+               * three quite different reasons it might not be.
                *
                * Starting: the agent a new session here would run cannot be
                * handed a config directory, so no row means anything — `blocked`
@@ -1218,9 +1218,33 @@ export function AccountChip({
                * account this session is *already* running as, where the tick has
                * already said everything there is to say and a press could only
                * stop a healthy agent and start it again as itself.
+               *
+               * And — new, 2026-08-20 — switching *into an account that has
+               * never signed in*. That switch does not fail; it succeeds, and
+               * what appears is the CLI's own first-run onboarding followed by
+               * a login prompt, with the conversation he was reading gone off
+               * the screen. On screen it is indistinguishable from the defect he
+               * filmed:
+               *
+               *   > *"See, it is not going to keep it… It's not keeping the
+               *   > conversation history."*
+               *
+               * There is nothing to resume into an account with no login, so the
+               * only outcome a press here can have is losing what is on screen.
+               * The row stays listed, because it is a real account and it is
+               * what **Sign in** in Settings is for; it just is not a thing this
+               * session can be handed to. No sentence is added for it: the right
+               * of the row already reads *Not signed in*, which is the whole
+               * reason, in two words that were already there.
+               *
+               * Only a measured `signed-out` counts. `unknown` is a probe that
+               * could not be run — an old CLI, a timeout — and refusing on that
+               * would block a perfectly good account over a failure to ask.
                */
               const inert = switching
-                ? account.provider !== sessionAgent || isCurrent
+                ? account.provider !== sessionAgent ||
+                  isCurrent ||
+                  state?.state === 'signed-out'
                 : blocked !== null
 
               /*

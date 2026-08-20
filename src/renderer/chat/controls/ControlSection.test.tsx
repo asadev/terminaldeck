@@ -1,12 +1,21 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ControlSection } from './ControlSection'
-import { optionsFor, reachOf, type ControlId, type ControlReading } from './catalog'
+import { describeControl, optionsFor, type ControlId, type ControlReading } from './catalog'
 
 /**
  * The folded controls, rendered to static markup — this project has no DOM in
  * its test setup, and none is needed: what matters here is what the panel
  * *claims*, and every claim is in the markup.
+ *
+ * One caveat, and it is the reason several assertions below are about *classes*
+ * rather than about words. `HoverNote` keeps its paragraph in the document at
+ * all times, clipped to a pixel, so that `aria-describedby` resolves for a
+ * screen reader — see the long note in `components/HoverNote.tsx`. So a
+ * sentence behind the ⓘ is still in this markup, and "the words are absent" is
+ * the wrong test for "the words are off the screen". What proves prose is gone
+ * is that no element draws it: `.ac-section-desc` and `.ac-blocked` are the
+ * elements that did, and neither is rendered by this component any more.
  */
 
 function render(
@@ -19,7 +28,6 @@ function render(
       control={control}
       reading={reading}
       options={optionsFor(control)}
-      reach={reachOf(control)}
       busy={overrides.busy ?? false}
       disabled={overrides.disabled ?? false}
       blocked={overrides.blocked ?? null}
@@ -31,17 +39,63 @@ function render(
 
 const read = (value: string, label: string): ControlReading => ({ value, label, source: 'screen' })
 
-describe('a control with room to explain itself', () => {
-  it('gives the title, the description and every option', () => {
+describe('a control is a heading and its rows, and nothing else', () => {
+  it('gives the title and every option', () => {
     const html = render('effort', read('xhigh', 'Extra high'))
     expect(html).toContain('Effort')
-    expect(html).toContain('How much reasoning')
     for (const option of optionsFor('effort')) expect(html).toContain(option.label)
+  })
+
+  /**
+   * The rule Asad repeated more than any other on 2026-08-20, on the surface
+   * this component draws:
+   *
+   *   > *"don't put any single statement in anywhere. Everywhere you are putting
+   *   > a lot of statements. We don't need to give the statements. We want
+   *   > simplicity. Let the smart people use it. Smart people knows how it
+   *   > works."*
+   *
+   * The sheet printed *"Which model answers in this session."* over a list of
+   * models and *"How much reasoning the model spends before it answers."* over
+   * a list of effort levels. Both are gone, and the element that drew them is
+   * gone with them so that nothing can quietly put a second sentence back into
+   * the same slot.
+   */
+  it('prints no description under the heading', () => {
+    for (const control of ['model', 'effort'] as ControlId[]) {
+      const html = render(control, read('opus-5', 'Opus 5'))
+      expect(html, control).not.toContain('ac-section-desc')
+      expect(html, control).not.toContain(describeControl(control))
+    }
+  })
+
+  /**
+   * And no dot either, on the two controls whose description was only ever a
+   * restatement of the heading. A dot on every section is the paragraph coming
+   * back one glyph at a time — see `controlNote` in `catalog.ts`.
+   */
+  it('carries no ⓘ on a working control with nothing to add', () => {
+    const html = render('effort', read('xhigh', 'Extra high'))
+    expect(html).not.toContain('hovernote-dot')
   })
 
   it('ticks the option in force and only that one', () => {
     const html = render('effort', read('xhigh', 'Extra high'))
     expect(html.match(/aria-checked="true"/g)).toHaveLength(1)
+  })
+
+  /**
+   * The provenance, which is a hover label now and not a line of the panel.
+   *
+   * "Opus 5" read from the session and "Opus 5" assumed from a settings file are
+   * different claims and the tick alone cannot tell them apart — so the fact is
+   * kept, in the same words and the same order the bar's own chip uses, where it
+   * costs no pixel.
+   */
+  it('names where the value came from in its hover label, not on the panel', () => {
+    const html = render('effort', read('high', 'High'))
+    expect(html).toContain('title="Effort: High — read from this session"')
+    expect(html).not.toContain('class="ac-reach"')
   })
 
   /*
@@ -54,44 +108,79 @@ describe('a control with room to explain itself', () => {
   it('ticks nothing when the value was never read — a tick is a claim', () => {
     const html = render('permission', undefined)
     expect(html).not.toContain('aria-checked="true"')
-    // And it says which kind of "unknown" this is: one nothing can currently
-    // answer, with the thing to press about it, which is why `unreadNote` exists.
-    expect(html).toContain('Not reported')
+    // And which kind of "unknown" this is is still reachable — behind the dot,
+    // which is the one place he allowed an explanation to live.
+    expect(html).toContain('hovernote-dot')
     expect(html).toContain('prints the permission mode only when it changes')
   })
 
-  it('names where the value came from, not just what it is', () => {
-    // "Opus 5" read from the session and "Opus 5" assumed from a settings file
-    // are different claims, and the tick alone cannot tell them apart.
-    expect(render('effort', read('high', 'High'))).toContain('read from this session')
+  it('keeps the fast-mode consequence behind the ⓘ, because it cannot be deduced', () => {
+    // Turn it on, pick another model from the section directly above, and it is
+    // silently off again. That is the one description in this cluster that
+    // survives, and it survives behind a dot.
+    const html = render('fast', read('off', 'Off'), { toggle: true })
+    expect(html).toContain('hovernote-dot')
+    expect(html).toContain('Switching to another model turns it off.')
+    expect(html).not.toContain('ac-section-desc')
+  })
+})
+
+/**
+ * A refusal, which used to be a paragraph in place of the control.
+ *
+ * On his machine it was the same two-line paragraph printed three times down one
+ * 340px panel — *"There is unsent text at this session's prompt ("/login"). A
+ * command typed now would run into the middle of it, so nothing was sent — clear
+ * the prompt and pick again."* — once under Model, once under Effort, once under
+ * Fast mode. It is the ⓘ now, and the rows it used to delete stay on screen and
+ * locked, which is also the more honest drawing of a gate that opens again the
+ * moment the prompt is cleared.
+ */
+describe('a control the session will not accept right now', () => {
+  const REFUSAL = 'There is unsent text at this session’s prompt (“/login”).'
+
+  it('draws no paragraph, and keeps the reason behind the dot', () => {
+    const html = render('effort', read('high', 'High'), { blocked: REFUSAL })
+    expect(html).not.toContain('class="ac-blocked"')
+    expect(html).toContain('hovernote-dot')
+    expect(html).toContain(REFUSAL)
   })
 
-  it('replaces the options with the reason when the CLI has refused', () => {
-    const html = render('fast', read('off', 'Off'), { blocked: 'Your plan has no fast mode.' })
-    expect(html).toContain('Your plan has no fast mode.')
-    // No control that cannot work: a button arguing with the CLI on every press
-    // is the dead-affordance this app refuses to ship.
-    expect(html).not.toContain('role="radio"')
+  it('locks every row instead of deleting it', () => {
+    const html = render('effort', read('high', 'High'), { blocked: REFUSAL })
+    // The rows are still there — a refusal that empties the control tells the
+    // reader the app has lost the control, not that the session is busy.
+    expect(html.match(/role="radio"/g)).toHaveLength(optionsFor('effort').length)
+    expect(html.match(/disabled=""/g)).toHaveLength(optionsFor('effort').length)
+    expect(html).toContain('aria-disabled="true"')
+    // And the tick still says what is in force, which is the one fact a person
+    // opening a refused control most wants.
+    expect(html.match(/aria-checked="true"/g)).toHaveLength(1)
   })
 
   /*
-   * The refusal outranks the shape, and that ordering is the point of asserting
-   * it twice. A `blocked` toggle must not draw a switch either — a switch is a
-   * promise that pressing it changes something, and this is the state in which
-   * pressing it changes nothing.
+   * The refusal outranks the shape. A `blocked` toggle must not draw a switch:
+   * a switch is a promise that pressing it changes something, and this is the
+   * state in which pressing it changes nothing.
    */
-  it('draws no switch either when the CLI has refused', () => {
+  it('draws no switch when the CLI has refused', () => {
     const html = render('fast', read('off', 'Off'), {
       toggle: true,
       blocked: 'Fast mode requires usage credits · /usage-credits to turn them on',
     })
-    expect(html).toContain('requires usage credits')
     expect(html).not.toContain('role="switch"')
+    expect(html).toContain('requires usage credits')
+    expect(html).not.toContain('class="ac-blocked"')
   })
 
   it('locks the options while another control is being applied', () => {
     const html = render('effort', read('high', 'High'), { disabled: true })
     expect(html.match(/disabled=""/g)).toHaveLength(optionsFor('effort').length)
+  })
+
+  it('says one word while a command is in flight, and only then', () => {
+    expect(render('effort', read('high', 'High'), { busy: true })).toContain('Working…')
+    expect(render('effort', read('high', 'High'))).not.toContain('Working…')
   })
 })
 
@@ -131,30 +220,34 @@ describe('a control with two states, in the panel', () => {
     expect(html.match(/>Fast mode</g) ?? []).toHaveLength(1)
   })
 
-  it('draws no position at all when the session has not said', () => {
+  it('draws no position at all when the session has not said, and no sentence about it', () => {
     /*
      * The state a switch has no answer for. Drawing the knob to the left when
      * the truth is "we have not been told" is the confident-looking falsehood
-     * this whole cluster exists to remove — so it says so in a sentence, which
-     * the panel has room for and the bar does not.
+     * this whole cluster exists to remove.
+     *
+     * It used to say so in a paragraph. It does not now: the two rows underneath
+     * are on screen and pressable, and a list with no tick on it is already the
+     * statement that nothing has been read. Model and effort say nothing in the
+     * same state, and a panel where one control explains its silence and two do
+     * not is the inconsistency that made this one read as broken.
      */
     const html = render('fast', undefined, { toggle: true })
     expect(html).not.toContain('role="switch"')
-    expect(html).toContain('has not drawn one yet')
+    expect(html).not.toContain('ac-unread-note')
+    expect(html).not.toContain('has not drawn one yet')
   })
 
-  it('still offers the two settings underneath that sentence', () => {
+  it('still offers the two settings underneath', () => {
     /*
-     * This branch used to be the sentence and nothing else: a heading, a
+     * This branch used to be a sentence and nothing else: a heading, a
      * description, a paragraph, and no control — on every session whose screen
      * had not been read yet, which is every session at mount. Model and effort
      * directly above it were full working lists at the same moment.
      *
-     * Nothing justified it. `applyControl` types `/fast on` and reads the screen
-     * afterwards, so both ids are sendable with nothing read, and this component
-     * already knows how to draw two rows. The sentence explains why there is no
-     * *switch*; the rows are what there is instead. The whole argument is in
-     * `ControlToggle.tsx`, and the matching repair on the bar is beside it.
+     * `applyControl` types `/fast on` and reads the screen afterwards, so both
+     * ids are sendable with nothing read, and this component already knows how
+     * to draw two rows.
      */
     const html = render('fast', undefined, { toggle: true })
     expect(html.match(/role="radio"/g) ?? []).toHaveLength(2)
@@ -162,24 +255,7 @@ describe('a control with two states, in the panel', () => {
     expect(html).toContain('>On<')
     // A tick is a claim, and nothing has been read — so neither row carries one.
     expect(html).not.toContain('aria-checked="true"')
-    // And the sentence is not dressed as a refusal. `.ac-blocked` is the
-    // refusal's class and this state is not a refusal; they were briefly
-    // indistinguishable and that is the bug being kept out.
-    expect(html).toContain('class="ac-unread-note"')
-    expect(html).not.toContain('class="ac-blocked"')
-  })
-
-  it('keeps the refusal a refusal, with no rows under it', () => {
-    /*
-     * The other half of the same distinction, asserted here so that "give the
-     * unread state its rows back" cannot be over-applied to the state that
-     * genuinely cannot act. Rows under a refusal are buttons that argue with the
-     * CLI on every press.
-     */
-    const html = render('fast', undefined, { toggle: true, blocked: 'Fast mode requires usage credits' })
-    expect(html).toContain('class="ac-blocked"')
-    expect(html).not.toContain('role="radio"')
-    expect(html).not.toContain('role="switch"')
-    expect(html).not.toContain('ac-unread-note')
+    // Unread is not refused: the rows are live, not locked.
+    expect(html).not.toContain('disabled=""')
   })
 })

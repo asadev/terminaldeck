@@ -102,8 +102,13 @@ export interface StoredMachine {
    * the machine's own and is only ever a default.
    *
    * It exists because the chips read `2JJGF8` and `9ZA6K3` — relay slot codes —
-   * for somebody who owns one Mac and one Windows PC. See `MachineOffer.name`
-   * in `rendezvous.ts` for why the `welcome` frame cannot supply this.
+   * for somebody who owns one Mac and one Windows PC.
+   *
+   * Filled from the pairing offer (`MachineOffer.name`) when a machine is paired
+   * here, and refreshed from `welcome.hostName` on every connection after that.
+   * The second route is what gives a machine paired before this field existed a
+   * name at all, and what makes a computer renamed since show up under the new
+   * one — see {@link withHostName}.
    */
   hostName: string | null
   credential: StoredCredential
@@ -424,6 +429,36 @@ export function withCredential(book: MachineBook, id: string, credential: Stored
   if (at < 0) return book
   const machines = [...book.machines]
   machines[at] = { ...machines[at], credential }
+  return { ...book, machines }
+}
+
+/**
+ * Record what a machine calls itself, from the `welcome` frame.
+ *
+ * The migration this pairs with, and the reason it is not folded into
+ * {@link withCredential}: every machine paired before {@link StoredMachine.hostName}
+ * existed has a null there, and the pairing offer that would have filled it is
+ * read exactly once, at the desk, when a six-digit code is typed. So those rows
+ * fell through {@link machineLabel} to the platform noun — a person with one Mac
+ * and one Windows PC read "Mac" and "PC" on the switcher and had no way to fix it
+ * short of unpairing both.
+ *
+ * `welcome.hostName` carries the same string on every connection, so the name
+ * arrives on the next socket rather than the next pairing. Nothing is renamed
+ * that a person named: a nickname always wins in `machineLabel` and is not
+ * touched here.
+ *
+ * Ignored when the frame said nothing — an older desktop sends no such key, and
+ * writing null over a name read off a pairing offer would be this migration
+ * undoing itself against exactly the builds it exists for.
+ */
+export function withHostName(book: MachineBook, id: string, hostName: string | null): MachineBook {
+  const clean = cleanNickname(hostName)
+  if (clean === null) return book
+  const at = book.machines.findIndex((held) => held.id === id)
+  if (at < 0 || book.machines[at].hostName === clean) return book
+  const machines = [...book.machines]
+  machines[at] = { ...machines[at], hostName: clean }
   return { ...book, machines }
 }
 

@@ -3629,6 +3629,106 @@ describe('the controls capability', () => {
   })
 })
 
+/**
+ * Whose login a session is on, and running it as another one, over the wire.
+ *
+ * The same two properties the controls block above pins, and the second one is
+ * sharper here. `controls.apply` types a slash command at a session that
+ * survives it; `account.switch` **ends the agent process and starts another**,
+ * so a device that may not touch a session must certainly not be able to replace
+ * it — and the refusal is the same `unknown-session` an unauthorised `attach`
+ * gets, because a distinct one would confirm the id names something real.
+ */
+describe('the account capability', () => {
+  const account = {
+    read: async () => ({
+      current: { id: 'work', name: 'work@example.com', provider: 'claude', color: 'acct-3', system: false },
+      accounts: [
+        { id: 'work', name: 'work@example.com', provider: 'claude', color: 'acct-3', system: false },
+        { id: 'system', name: 'Default', provider: 'claude', color: null, system: true },
+      ],
+    }),
+    switch: async (sessionId: string) => ({
+      ok: true,
+      message: '',
+      // A switch replaces the process, so the id changes. This is the field with
+      // no counterpart on `controls.applied`.
+      session: `${sessionId}-replaced`,
+    }),
+  }
+
+  it('is not advertised by a host with no way to replace a session', async () => {
+    /*
+     * Gated on its own member and not on `controls`, because the two are
+     * genuinely separable: `scripts/remote-host.ts` has terminals and no account
+     * store, and the headless build has an account store and no session
+     * lifecycle to replace one through. A chip advertised by either would be a
+     * menu whose every row is refused after the press.
+     */
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.account)
+  })
+
+  it('carries the list and the login in force, keyed to the request that asked', async () => {
+    const harness = await serve({ sessions: { ...fakeSessions(), account } })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.account)
+
+    client.send({ t: 'account.read', rid: 'acc-1', id: 'sess-1' })
+    const answer = await client.until((m) => m.t === 'account.state', 'the state')
+    expect(answer.t === 'account.state' && answer.rid).toBe('acc-1')
+    expect(answer.t === 'account.state' && answer.current?.name).toBe('work@example.com')
+    expect(answer.t === 'account.state' && answer.accounts.map((row) => row.id)).toEqual(['work', 'system'])
+  })
+
+  it('answers a switch with the id the session has afterwards', async () => {
+    const harness = await serve({ sessions: { ...fakeSessions(), account } })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'account.switch', rid: 'acc-2', id: 'sess-1', accountId: 'system' })
+    const answer = await client.until((m) => m.t === 'account.switched', 'the answer')
+    expect(answer.t === 'account.switched' && answer.ok).toBe(true)
+    // The whole reason this frame is not `controls.applied`: a window that kept
+    // the old id would be attached to a pty this machine has already killed.
+    expect(answer.t === 'account.switched' && answer.session).toBe('sess-1-replaced')
+  })
+
+  it('refuses a device that may not touch that session, and never asks the layer', async () => {
+    let asked = 0
+    const watched = {
+      read: async () => {
+        asked += 1
+        return account.read()
+      },
+      switch: async (sessionId: string) => {
+        asked += 1
+        return account.switch(sessionId)
+      },
+    }
+    const harness = await serve({
+      sessions: { ...fakeSessions(), account: watched, visible: () => false },
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'account.switch', rid: 'acc-3', id: 'sess-1', accountId: 'system' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unknown-session')
+    expect(asked, 'the account layer was reached for a session this device may not see').toBe(0)
+
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+  })
+})
+
 describe('a guest gets no port list and no tunnel', () => {
   /** Every connection is a guest: `device-1` is the only device this file knows. */
   const everyoneIsAGuest = (): boolean => false

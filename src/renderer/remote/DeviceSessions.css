@@ -1,0 +1,126 @@
+/* ============================================================================
+   Per-device session choice.
+
+   Deliberately the same shapes as `DeviceFolders.css` beside it: a soft-filled
+   card per device, a name at the top, rows of things inside. The two panels are
+   read one after the other and answer two halves of one question — where a
+   device may start, and which of the running sessions it may open — so a
+   different look between them would suggest a difference that is not there.
+
+   Everything that is already a settings control is one. The All / Selected pair
+   reuses `.settings-scope` from `SettingsWindow.css` unchanged, so it stays the
+   same segmented control as the one on the Agents pane rather than a second idea
+   of what that looks like.
+   ============================================================================ */
+
+.ds-list {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* Larger than the gap between sessions inside a device, for the reason
+     `.df-list` gives: the two nestings are one hierarchy, and equal gaps would
+     leave indentation alone to say which device a row belongs to. */
+  gap: var(--sp-3);
+}
+
+.ds-device {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* --------------------------------------------------------------- a head -- */
+
+/* Name and switch on one line, unlike `.df-head` which stacks. There is no
+   sentence under the name here — the two buttons are the state — so the row has
+   the space, and putting the control beside the name it applies to is what
+   makes a column of devices scannable. */
+.ds-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.ds-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  /* Both, or a long device name shoulders the switch off the end of the card:
+     a flex item's default minimum is its content, so without `min-width: 0` the
+     name refuses to shrink and the buttons leave the fill. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `.settings-scope` carries a bottom margin for its use at the top of a pane,
+   which is wrong inside a row. Nothing else about it changes. */
+.ds-scope {
+  margin: 0;
+  flex: none;
+}
+
+/* ------------------------------------------------------------- sessions -- */
+
+.ds-sessions {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* The whole row is the label, so the title and the path are both hit targets
+   for the tick. A checkbox alone is a 14px target beside 300px of text that
+   does nothing when pressed, which is the shape people click at and miss. */
+.ds-session {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.ds-session input {
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.ds-session-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  flex: 1;
+  min-width: 0;
+}
+
+.ds-session-name {
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The folder under the title, monospaced and clipped to one line — the same
+   treatment `.df-folder-path` gives a granted folder, and for the same reason:
+   two agents in two projects write the same session title constantly, and a
+   path that wrapped mid-segment would read as two paths. The component puts a
+   `title` on it because a browser adds no tooltip to text it has ellipsised. */
+.ds-session-path {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

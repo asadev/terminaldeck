@@ -103,6 +103,10 @@
   --status-completed: #5fbf95;
   --status-idle: #8f8f8f;
   --color-critical: #ff6f60;
+  /* The sixth of `PROFILE_COLORS` in `profiles.ts`, and the only one this
+     palette did not already have. An account whose colour is a property name
+     nothing here defines draws no dot at all, so all six have to resolve. */
+  --color-warning: #ddb04a;
 
   /* The terminal's own paper, which in this theme is the page's. It has its own
      token because the light theme's is *not* the page's — see the note there —
@@ -184,6 +188,7 @@
     --status-completed: #19714a;
     --status-idle: #666666;
     --color-critical: #bd3a2c;
+    --color-warning: #8f5800;
 
     --terminal-bg: #e8e8e8;
     --terminal-fg: #141414;
@@ -235,6 +240,7 @@
   --status-completed: #19714a;
   --status-idle: #666666;
   --color-critical: #bd3a2c;
+  --color-warning: #8f5800;
 
   --terminal-bg: #e8e8e8;
   --terminal-fg: #141414;
@@ -2909,4 +2915,269 @@ a.browse__go {
   .body {
     flex-direction: column;
   }
+}
+
+/* ------------------------------------------------------------------------ */
+/* The session bar — usage, context, account.                                */
+/*                                                                           */
+/* Three chips and no words. Each one is drawn only when the far machine      */
+/* answered with a figure, so an older desktop leaves this row empty and the  */
+/* row collapses rather than explaining what it is missing. See              */
+/* `session-bar.ts`.                                                          */
+/* ------------------------------------------------------------------------ */
+.sbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Collapsed to nothing, borders included, when there is nothing to say — an
+   older desktop, or a session nothing has answered for yet. A 1px line above a
+   terminal with no content behind it is a rule that reads as a rendering fault.
+
+   The rule exists because this is a flex container and a flex container ignores
+   `hidden` outright; `tests/layout.test.ts` is what makes every flex block here
+   answer that question rather than discover it on a screen. */
+.sbar[hidden] {
+  display: none;
+}
+
+/* The ring he asked for, four figures into this one number: "give it a maybe
+   ring icon will be better, just like cloud, like this ring". */
+.sbar__ring,
+.sbar__acct {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  /* 44px is the touch target this whole client is built to; the visible chip is
+     smaller and the tappable box is not. */
+  min-height: 28px;
+  cursor: pointer;
+}
+
+.sbar__ring:active,
+.sbar__acct:active,
+.sbar__row:active {
+  background: var(--bg-active);
+}
+
+.sbar__ring[data-busy='yes'],
+.sbar__acct[data-busy='yes'] {
+  opacity: 0.55;
+}
+
+.sbar__ring svg {
+  width: 18px;
+  height: 18px;
+  /* Twelve o'clock, which is where a ring is read from. SVG angles start at
+     three. */
+  transform: rotate(-90deg);
+}
+
+.sbar__track,
+.sbar__used {
+  fill: none;
+  stroke-width: 3;
+}
+
+.sbar__track {
+  stroke: var(--border);
+}
+
+.sbar__used {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+
+/* The context window as a bar rather than a number — "context window should be
+   a bar instead of numbers. It should be a bar." The figure stays beside it so
+   the phone and the Mac can be compared; one number is not a statement. */
+.sbar__ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.sbar__ctx > i {
+  display: block;
+  width: 64px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.sbar__ctx > i > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.sbar__ctx > i > i[data-level='warning'] {
+  background: var(--status-waiting);
+}
+
+.sbar__ctx > i > i[data-level='critical'] {
+  background: var(--color-critical);
+}
+
+.sbar__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-muted);
+  flex: none;
+}
+
+.sbar__acct {
+  margin-left: auto;
+  max-width: 45%;
+}
+
+.sbar__acct > span,
+.sbar__row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Anchored to the chip and clamped to the pane, because a popover with no room
+   check is the defect this review found twice on the desktop. */
+.sbar__sheet {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 8px;
+  left: auto;
+  z-index: 40;
+  max-width: calc(100vw - 24px);
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.sbar__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sbar__row[data-chosen='yes'] {
+  background: var(--accent-soft);
+}
+
+/* ------------------------------------------------------------------------ */
+/* The chat view.                                                            */
+/*                                                                           */
+/* "my message should start from the right… the left side will be the agent…  */
+/*  no need to give a name actually on both sides… just the text only and     */
+/*  time only will be good enough. And give the copy button." Right, left,    */
+/*  time, copy, no names — and nothing else on the screen. See `chat-view.ts`.*/
+/* ------------------------------------------------------------------------ */
+.chatv {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  background: var(--terminal-bg);
+}
+
+.chatv__row {
+  display: flex;
+  flex-direction: column;
+  /* The side is the whole of whose message this is. There is no label above it
+     and no name inside it, which is why the alignment has to be unambiguous. */
+  align-items: flex-start;
+  max-width: 88%;
+  align-self: flex-start;
+}
+
+.chatv__row[data-role='you'] {
+  align-items: flex-end;
+  align-self: flex-end;
+}
+
+.chatv__bubble {
+  padding: 8px 11px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+  /* A transcript carries its own line breaks and its own code blocks. Preserved
+     rather than collapsed, and wrapped rather than scrolled, because a bubble
+     that scrolls sideways on a phone is a bubble nobody reads the end of. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chatv__row[data-role='you'] .chatv__bubble {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.chatv__meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chatv__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.chatv__copy:active {
+  background: var(--bg-active);
+}
+
+/* Two seconds of a tick, on the button itself. A toast saying "Copied" would be
+   a sentence about something the finger already knows it did. */
+.chatv__copy[data-done='yes'] {
+  color: var(--status-completed);
 }

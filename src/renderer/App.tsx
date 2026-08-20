@@ -5,6 +5,11 @@ import { StoreProvider, useStore, type Session } from './state/store'
 import { TerminalView } from './components/TerminalView'
 import { MachineSessionPane } from './machines/MachineLinks'
 import { useMachines } from './machines/useMachines'
+// The account chip over a session on one of his own machines, and the two calls
+// behind it. See `machines/machine-account.ts` for why the read is here rather
+// than inside the control cluster beside it.
+import { MachineAccountChip } from './machines/MachineAccountChip'
+import { switchMachineAccount, useMachineAccount } from './machines/machine-account'
 import { EmptyState } from './components/EmptyState'
 import { SettingsWindow } from './settings/SettingsWindow'
 import type { SectionId } from './settings/settings-schema'
@@ -552,6 +557,52 @@ function Workspace() {
    * where a link once sent you.
    */
   const [copilotTurn, setCopilotTurn] = useState<string | null>(null)
+  /**
+   * The machine the copilot page has been switched to, or null for this one.
+   *
+   * ## Why the bar needs it, said as the defect it was
+   *
+   * `CopilotView` has had a machine switch at the top since 2026-08-20 and the
+   * window's bar knew nothing about it. So with a paired PC chosen, the bar over
+   * that PC's conversation still drew **this** Mac's copilot: its account chip,
+   * its model and effort, and a Restart wired to `useCopilot`. Restart there is
+   * not a mislabelled button — it is a button that ends a conversation on a
+   * computer that is not on screen, which is the one class of defect this bar
+   * has spent the week removing. *"A control that looks right and acts on the
+   * wrong computer."*
+   *
+   * ## Why the answer is to withdraw them rather than to re-point them
+   *
+   * Because there is nothing on the wire to re-point them at. `copilot.chat`
+   * carries parsed turns and a state report and nothing else — no account, no
+   * model, no effort, and no restart verb — which is the same reason a session
+   * on a paired machine gets no account chip and no control cluster, decided one
+   * ternary down and stated there. So the copilot page follows the rule the rest
+   * of the bar already follows for another machine: the facts it cannot have are
+   * absent, and *silently* absent, because a missing control is not something a
+   * toolbar explains.
+   *
+   * The machine's **name** is the one thing that is added, in the subtitle slot
+   * a remote session's machine already uses, because which computer is on screen
+   * is the fact that must never go missing.
+   */
+  const [copilotMachine, setCopilotMachine] = useState<{ id: string; name: string } | null>(null)
+  /*
+   * Stable, and it compares before it writes.
+   *
+   * `CopilotView` reports on mount and on every change; an inline arrow here
+   * would be a new function each render, and storing a fresh object for an
+   * unchanged machine would re-render the whole window for nothing.
+   */
+  const onCopilotMachine = useCallback((machine: { id: string; name: string } | null) => {
+    setCopilotMachine((current) => {
+      if (current === null && machine === null) return current
+      if (current !== null && machine !== null && current.id === machine.id && current.name === machine.name) {
+        return current
+      }
+      return machine
+    })
+  }, [])
   const [swarm, setSwarm] = useState(false)
   const [sessionView, setSessionView] = useState<Record<string, SessionViewMode>>({})
   /**
@@ -1829,10 +1880,30 @@ function Workspace() {
     (path?: string, resume = false, profileId?: string, runAs?: ProviderId) => {
       const target = path ?? activeProjectPath ?? lastFolderRef.current
       if (target) void newSessionIn(target, resume, profileId, runAs)
-      // No folder anywhere — a first launch. The chooser is not "a dialog in
-      // the way" at that point, it is the only question left, and the account
-      // travels through it — with the agent it is a login of, which has to
-      // survive the detour for the same reason the account does.
+      /*
+       * No folder anywhere, and an account was named: a sign-in.
+       *
+       * This fell through to the folder chooser, which is the state a new user
+       * is in the first time they add an account — the button whose own steps
+       * read *"Sign in, in the terminal that opens"* put a directory picker on
+       * screen instead, and cancelling it did nothing whatsoever. A login runs
+       * inside the account's own CLI and that CLI has to run somewhere; *where*
+       * is not a question the person signing in has an opinion about, so it is
+       * not asked. Home is the answer the main process gives — `project:home`.
+       *
+       * Optional-called and caught on both sides: a window whose preload predates
+       * this channel, and a main process that answers with nothing, both land
+       * back on the chooser — which is exactly what this path always did.
+       */
+      else if (profileId) {
+        void Promise.resolve(window.deck.homeFolder?.())
+          .catch(() => null)
+          .then((home) =>
+            home ? newSessionIn(home, resume, profileId, runAs) : openProjectAs(profileId, runAs),
+          )
+      }
+      // No folder and no account — a first launch. The chooser is not "a dialog
+      // in the way" at that point, it is the only question left.
       else void openProjectAs(profileId, runAs)
     },
     [activeProjectPath, newSessionIn, openProjectAs],
@@ -3897,6 +3968,12 @@ function Workspace() {
       focus={copilotTurn}
       startedSessions={copilotStarted}
       onOpenSession={selectTab}
+      /* Which machine this page is about, for the bar above it. Spelled as a
+         plain prop rather than a conditional spread so `wiring.test.ts` can see
+         it: this is exactly the seam that guard was written to watch, and the
+         bar drawing the local copilot's Restart over another machine's
+         conversation is what happens when it goes missing. */
+      onMachine={onCopilotMachine}
       fontSize={terminalFontSize}
       fontFamily={terminalFontFamily}
       copyOnSelect={copyOnSelect}
@@ -4499,7 +4576,7 @@ function Workspace() {
    * bar's heading is a page's name and there is no session under it.
    */
   const headingSession =
-    !showingPanel && headingTab?.kind === 'session'
+    !showingPanel && headingTab?.kind === 'session' && !(headingTab.isCopilot && copilotMachine !== null)
       ? windowSessions.find((entry) => entry.id === headingTab.id) ?? null
       : null
 
@@ -4536,6 +4613,88 @@ function Workspace() {
     : null
   const openRemoteSession = openMachine?.link?.sessions.find(
     (session) => session.id === openMachineSession?.sessionId,
+  )
+
+  /**
+   * Whose login that remote session is running as, and the logins that machine
+   * has to offer instead.
+   *
+   * Asad, 2026-08-20: *"Then also bring the account selection here for the
+   * remote sessions too."* Read from the far machine rather than resolved here,
+   * which is the whole of it — see `machines/machine-account.ts`. Null and null
+   * for a local session, where the chip below has its own sources.
+   */
+  const machineAccount = useMachineAccount(
+    openMachineSession?.machineId ?? null,
+    openMachineSession?.sessionId ?? null,
+  )
+  /** A switch in flight over the wire, which makes every row inert while it runs. */
+  const [machineSwitching, setMachineSwitching] = useState(false)
+  /**
+   * What the far machine said about a switch that did not happen.
+   *
+   * Transient and only ever after a press. It is not a caption: the rule he
+   * repeated most is about sentences that sit on screen explaining things
+   * nobody asked, and this appears because somebody pressed a row and the
+   * answer was no — which is the one case the same review insists must never be
+   * silent. It clears itself, because an outcome nobody is waiting for any more
+   * is clutter.
+   */
+  const [machineSwitchProblem, setMachineSwitchProblem] = useState<string | null>(null)
+  useEffect(() => {
+    if (machineSwitchProblem === null) return
+    const timer = setTimeout(() => setMachineSwitchProblem(null), 8000)
+    return () => clearTimeout(timer)
+  }, [machineSwitchProblem])
+
+  /**
+   * Run the remote session on screen as one of that machine's other logins.
+   *
+   * The far end performs the same switch its own window performs — same plan,
+   * same conversation guard, same survival probe — and answers with the id the
+   * session has afterwards, because a switch replaces the process. Following
+   * that id is what keeps the pane pointed at the session it was pointed at:
+   * without it this window would sit attached to a pty that machine has already
+   * killed.
+   */
+  const switchMachineSession = useCallback(
+    (machineId: string, sessionId: string, accountId: string) => {
+      setMachineSwitching(true)
+      setMachineSwitchProblem(null)
+      void switchMachineAccount(machineId, sessionId, accountId)
+        .then((answer) => {
+          setMachineSwitching(false)
+          if (!answer.ok) {
+            setMachineSwitchProblem(answer.message === '' ? 'That account could not be used.' : answer.message)
+            return
+          }
+          /*
+           * Nothing is announced on success, on purpose. The chip above the
+           * terminal now reads the other account and the conversation is the one
+           * that machine resumed — that *is* the feedback, and a banner for
+           * something he asked for and can already see would be the app
+           * congratulating itself. The local switch takes the same position.
+           */
+          if (answer.session !== null && answer.session !== sessionId) {
+            setOpenMachineSession((current) =>
+              current && current.machineId === machineId && current.sessionId === sessionId
+                ? { machineId, sessionId: answer.session as string }
+                : current,
+            )
+          }
+          // The far list has a new row and has lost one. Its own push says so —
+          // see `RemoteEndpoint.sessionsChanged` — and this asks as well, because
+          // the pane on screen is pointed at the new id already and a list that
+          // has not caught up would prune it.
+          machines.reread()
+          machineAccount.reload()
+        })
+        .catch(() => {
+          setMachineSwitching(false)
+          setMachineSwitchProblem('That machine did not answer.')
+        })
+    },
+    [machineAccount, machines],
   )
 
   /**
@@ -4607,7 +4766,30 @@ function Workspace() {
       // whole set is deleted rather than reworded; `shell/panels.ts` carries
       // the argument and no longer has a field to hold one.
       { title: panelSpec(panel).label, subtitle: null, folder: null, account: null }
-    : headingTab
+    : headingTab?.isCopilot && copilotMachine !== null
+      ? /*
+         * The copilot, with its page switched to another machine.
+         *
+         * Its own name — the copilot is named per install and the far one has a
+         * name of its own, but nothing on `copilot.chat` carries it, and
+         * inventing a second name for this window would be worse than reusing
+         * the one on the tab — and the machine underneath, in the slot a remote
+         * *session* already puts its machine in. That subtitle is the whole
+         * reason this branch exists: which computer is on screen is the fact
+         * that must never go missing.
+         *
+         * No folder and no account, and they are the same absence. The folder
+         * chip would name this Mac's copilot directory over a PC's conversation,
+         * and which account that PC's copilot runs as is not a fact any frame
+         * carries. See `copilotMachine`.
+         */
+        {
+          title: labelOf(headingTab),
+          subtitle: `on ${copilotMachine.name}`,
+          folder: null,
+          account: null,
+        }
+      : headingTab
       ? {
           title: labelOf(headingTab),
           subtitle: null,
@@ -5316,24 +5498,67 @@ function Workspace() {
                     itself rather than a second composition of the same words so
                     the two cannot drift.
 
-                    The account chip is not drawn over a remote session and that
-                    is not a layout decision. Every row of its menu acts on a
-                    session this app spawned — start one here, switch this one's
-                    login — and which account an agent on another machine was
-                    spawned under is not a fact any frame on the wire carries. It
-                    would be a menu of choices that reach the wrong computer.
-                    Absent, and *silently* absent since 2026-08-20: the sentence
-                    that used to say so lived on the bar's other half and has been
-                    deleted, because a missing control is not something a toolbar
-                    explains.
+                    And then the account, which is now on this line too. The note
+                    that stood here said the chip could not be: *"which account an
+                    agent on another machine was spawned under is not a fact any
+                    frame on the wire carries. It would be a menu of choices that
+                    reach the wrong computer."* Both halves are answered rather
+                    than argued with. `CAPABILITY.account` carries the fact, and
+                    the rows reach the far machine's own switch — the same
+                    operation the window at *that* desk performs — so the menu
+                    acts on the session it is drawn over. Asad: *"Then also bring
+                    the account selection here for the remote sessions too."*
+
+                    A machine whose build predates the capability answers
+                    nothing, and the chip is then **absent** rather than empty.
+                    That is his most repeated finding applied to itself — *"a
+                    dropdown only when some exist. Hide it when empty."* — and it
+                    is the same silent degrade the connectors chip beside it makes
+                    for the same machine, with no sentence anywhere saying so.
                   */}
                       {openMachineSession !== null ? (
-                        heading.subtitle !== null ? (
-                          <>
-                            <span className="toolbar-chip-sep" aria-hidden="true" />
-                            <span className="toolbar-subtitle">{heading.subtitle}</span>
-                          </>
-                        ) : null
+                        <>
+                          {heading.subtitle !== null ? (
+                            <>
+                              <span className="toolbar-chip-sep" aria-hidden="true" />
+                              <span className="toolbar-subtitle">{heading.subtitle}</span>
+                            </>
+                          ) : null}
+                          {machineAccount.current !== null || machineAccount.accounts.length > 0 ? (
+                            <>
+                              <span className="toolbar-chip-sep" aria-hidden="true" />
+                              <MachineAccountChip
+                                current={machineAccount.current}
+                                accounts={machineAccount.accounts}
+                                busy={machineSwitching}
+                                /* Asked again as the menu opens, which is the
+                                   moment somebody is about to read it. An account
+                                   list changes when somebody adds or signs one in
+                                   over there, not when the session prints — so
+                                   this deliberately does not ride the output
+                                   events the model chip rides. */
+                                onOpen={machineAccount.reload}
+                                onPick={(accountId) =>
+                                  switchMachineSession(
+                                    openMachineSession.machineId,
+                                    openMachineSession.sessionId,
+                                    accountId,
+                                  )
+                                }
+                              />
+                              {/* And the only sentence this line ever draws,
+                                  which appears because somebody pressed a row and
+                                  the far machine said no. It clears itself. */}
+                              {machineSwitchProblem === null ? null : (
+                                <span className="machine-switch-host">
+                                  <span className="machine-switch-problem" role="status">
+                                    {machineSwitchProblem}
+                                  </span>
+                                </span>
+                              )}
+                            </>
+                          ) : null}
+                        </>
                       ) : (
                         <>
                           <span className="toolbar-chip-sep" aria-hidden="true" />
@@ -5535,8 +5760,16 @@ function Workspace() {
               Still absent in swarm and behind a panel, for the original reason:
               every terminal is drawn at once, or none is, so there is no session
               for a mode to be a mode of.
+
+              And absent over another machine's copilot, where all three of its
+              answers are unreachable rather than two: that pane is a parsed
+              conversation and there is no second view of it to switch to —
+              `remote/hidden-sessions.ts` will not put a copilot's pty on the
+              network for anybody. A control with nothing left to offer is
+              withdrawn rather than drawn with three reasons hanging off it.
             */}
             {(activeSession || splitting || openMachineSession !== null || openServerSession !== null) &&
+            !(headingTab?.isCopilot && copilotMachine !== null) &&
             !showingPanel &&
             !swarm ? (
               <ModeSwitch
@@ -5565,8 +5798,17 @@ function Workspace() {
               Last in the row, where the rail puts a session's ✕ at the end of
               its own row, and after the mode switch so it can never come between
               the controls and the way out of a split.
+
+              And absent entirely while the copilot page is switched to another
+              machine, which is not a tidiness rule — this button is wired to
+              `useCopilot`, the copilot on *this* computer, and nothing on the
+              wire restarts one anywhere else. Left drawn, it was a button over a
+              PC's conversation that ended a conversation on this Mac. Silently
+              absent, exactly as the account chip is over a remote session, for
+              the reason stated there: a missing control is not something a
+              toolbar explains.
             */}
-            {headingTab?.isCopilot && !showingPanel && !swarm ? (
+            {headingTab?.isCopilot && copilotMachine === null && !showingPanel && !swarm ? (
               <CopilotRestart copilot={copilot} />
             ) : null}
           </WindowToolbar>

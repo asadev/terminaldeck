@@ -69,6 +69,16 @@ const api = {
 
   pickProjectFolder: (): Promise<string | null> => ipcRenderer.invoke('project:pick'),
 
+  /**
+   * Where to run when there is no project at all.
+   *
+   * Asked only on the sign-in path: an account's login runs inside its own CLI,
+   * the CLI needs a working directory, and on a machine that has never opened a
+   * folder there is none — which turned **Sign in** into a folder chooser and,
+   * if you cancelled it, into nothing happening at all.
+   */
+  homeFolder: (): Promise<string | null> => ipcRenderer.invoke('project:home'),
+
   createSession: (input: CreateSessionInput): Promise<SessionMeta> =>
     ipcRenderer.invoke('session:create', input),
 
@@ -359,6 +369,30 @@ const api = {
   setDeviceFolders: (deviceId: string, folders: string[]): Promise<unknown> =>
     ipcRenderer.invoke('remote:folders:set', deviceId, folders),
   /*
+   * The second axis: which of the *running* sessions each device may see.
+   *
+   * A folder grant shares whatever happens to be running in the folder, which
+   * is not the question he asked on 2026-08-20 — the sessions he wants told
+   * apart are usually in the same project. `remote/session-grants.ts` holds the
+   * store and `SessionFanout.visible` ANDs it with the folder rule, so an
+   * unticked session is refused at the listing and at every verb rather than
+   * merely left off a list.
+   *
+   * `listRunningSessions` is here because the settings window is a different
+   * React tree from the one holding the rail and has no list of this machine's
+   * terminals. It answers from the same `SessionAccess.list()` the wire is
+   * answered from, hidden sessions already removed, so the panel can never
+   * offer a tick for a session no device could be given.
+   *
+   * `setSessionGrants` sends the mode **and** the whole tick list, and answers
+   * with what the main process stored — the panel then draws the answer instead
+   * of what it asked for, the same rule `setDeviceFolders` follows.
+   */
+  listSessionGrants: (): Promise<unknown> => ipcRenderer.invoke('remote:sessions'),
+  listRunningSessions: (): Promise<unknown> => ipcRenderer.invoke('remote:sessions:running'),
+  setSessionGrants: (deviceId: string, mode: string, sessions: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('remote:sessions:set', deviceId, mode, sessions),
+  /*
    * There were five channels here — `listDeviceCopilot`, `setDeviceCopilot`,
    * `copilotConnectCode`, `disconnectDeviceCopilot` and a pushed
    * `remote:copilot:changed` — and they are gone rather than renamed.
@@ -527,6 +561,27 @@ const api = {
    */
   readMachineUsage: (id: string, sessionId: string, want: string, force: boolean): Promise<unknown> =>
     ipcRenderer.invoke('machines:usage:read', id, sessionId, want, force),
+  /*
+   * Whose login a session on one of his own machines is on, and running it as a
+   * different one — the account chip, which until now was simply not drawn over
+   * a remote session because no frame carried the fact.
+   *
+   * Two channels rather than one, for the reason the controls pair is two: the
+   * read is passive and rides the events the bar already re-reads on, and the
+   * switch **ends a process and starts another** over there. Folding them
+   * together would put a session restart on a path that fires when a session
+   * prints.
+   *
+   * The read answers `null` when the question could not be asked, and the chip
+   * keeps the account it last genuinely had. The switch always answers with a
+   * sentence *and* with the id the session has afterwards — the same one on a
+   * refusal, a new one on a success — because a switch replaces the session and a
+   * window that ignored the new id would stay attached to a pty that is gone.
+   */
+  readMachineAccount: (id: string, sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:account:read', id, sessionId),
+  switchMachineAccount: (id: string, sessionId: string, accountId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:account:switch', id, sessionId, accountId),
   /*
    * The copilot on one of his other machines.
    *
@@ -1527,7 +1582,7 @@ const api = {
     name: string
     promoted: boolean
     promoteBlocked?: string | null
-    close?: string | null
+    close?: boolean
     copilotTurn?: boolean
     browser?: boolean
   }): Promise<string | null> => ipcRenderer.invoke('session:row-menu', request),
@@ -1620,8 +1675,10 @@ const api = {
   chooseWslDistro: (distro: string | null): Promise<unknown> =>
     ipcRenderer.invoke('wsl:choose', distro),
 
-  browserSessionInfo: (): Promise<unknown> => ipcRenderer.invoke('browser-session:info'),
-  browserCookies: (filter?: unknown): Promise<unknown> => ipcRenderer.invoke('browser-session:cookies', filter),
+  browserSessionInfo: (profileId?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-session:info', profileId),
+  browserCookies: (profileId?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-session:cookies', profileId),
   clearBrowserCache: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-cache'),
   browserViewRelease: (id: string): Promise<unknown> => ipcRenderer.invoke('browser-view:release', id),
   browserViewZoom: (id: string, factor: number): Promise<unknown> => ipcRenderer.invoke('browser-view:zoom', id, factor),
@@ -1659,9 +1716,18 @@ const api = {
     ipcRenderer.invoke('browser-view:record', id, on),
   browserRecordClear: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-view:record-clear', id),
-  browserClearCookies: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-cookies'),
-  browserClearStorage: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-storage'),
-  browserClearCache: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-cache'),
+  // Both arguments forwarded, and the first of them is a bug fix: these two
+  // took `domain` in the bridge's type and in the main handler, and dropped it
+  // here. So the per-site `Clear` in the cookies dialog invoked the whole-jar
+  // clear — one site's button signing you out of every site, silently. The
+  // second argument is which profile's jar, without which a row in the profile
+  // menu can only ever act on the profile that happens to be switched on.
+  browserClearCookies: (domain?: unknown, profileId?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-session:clear-cookies', domain, profileId),
+  browserClearStorage: (domain?: unknown, profileId?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-session:clear-storage', domain, profileId),
+  browserClearCache: (profileId?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-session:clear-cache', profileId),
 
   // No main-process emitter exists for these two yet, so they never fire. They
   // are still real subscriptions returning a real unsubscribe: the workspace

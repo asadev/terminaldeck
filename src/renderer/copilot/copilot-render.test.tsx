@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
+import type { CopilotMachine } from './useCopilotMachines'
 import { COPILOT_BLURB } from './identity'
 import type { Copilot } from './useCopilot'
 import type { CopilotStage, CopilotStateView } from './copilot-model'
@@ -56,10 +59,15 @@ vi.mock('react-dom', async (importOriginal) => {
 const { CopilotEntry } = await import('./CopilotEntry')
 const { CopilotRestart } = await import('./CopilotRestart')
 const { CopilotMachines } = await import('./CopilotMachines')
+const { RemoteCopilot } = await import('./RemoteCopilot')
 const { CopilotView } = await import('./CopilotView')
 const { CopilotConsent } = await import('./CopilotConsent')
 
 const noop = (): void => {}
+
+/** One source file, for the two claims that are about what is *not* in one. */
+const read = (rel: string): string =>
+  readFileSync(join(__dirname, '..', '..', '..', 'src', rel), 'utf8')
 
 const state = (over: Partial<CopilotStateView> = {}): CopilotStateView => ({
   status: 'running',
@@ -251,53 +259,35 @@ describe('which machine’s copilot', () => {
     expect(html).toContain('aria-checked="true"')
   })
 
-  it('keeps a machine it cannot reach, disabled, with the remedy on hover', () => {
-    /*
-     * *"We always need a truth."* A machine that paired this computer as a guest
-     * is one he can see in the rail two inches away, and leaving it out would be
-     * the switch quietly showing a subset — the failure this project keeps
-     * finding. The reason is on hover rather than on the page, which is his
-     * standing rule about sentences explaining states most people never see.
-     */
-    const html = renderToStaticMarkup(
-      <CopilotMachines
-        machines={[here, { ...pc, reach: 'refused' as const }]}
-        chosen=""
-        onChoose={noop}
-      />,
-    )
-    expect(html).toContain('disabled')
-    expect(html).toContain('Pair it again as your own')
-    expect(html).not.toContain('guest devices do not')
-  })
-
   /**
-   * A server, on the switch that used to be silent about servers.
+   * The whole of H2, and it is one word: **choose**.
    *
-   * *"So here icon not still choose the local connected server, by the way, I
-   * think. Maybe server is not connected, I don't know."* — he could not tell
-   * *not connected* from *not shown*, because it was the second one. It is drawn
-   * now, and it cannot be pressed: a server does not run this app, so there is no
-   * copilot over there. The move is on that server's own page, which is where
-   * `SERVERS-DESIGN.md` §6.2 puts it.
+   * Asad, looking at this switch: *"here icon not still choose the local
+   * connected server, by the way, I think. Maybe server is not connected, I
+   * don't know."* A round of this answered him by drawing the machine greyed
+   * out with the reason on hover — which meets a man saying he cannot pick a
+   * machine by taking the pick away and writing him a sentence about it. There
+   * is no `disabled` on this switch any more, in any state.
    */
-  it('lists a server, unpressable, and points at the page the grant lives on', () => {
-    const html = renderToStaticMarkup(
-      <CopilotMachines
-        machines={[here, { id: 'server s1', name: 'web-01', reach: 'server' as const, open: false }]}
-        chosen=""
-        onChoose={noop}
-      />,
-    )
-    expect(html).toContain('web-01')
-    expect(html).toContain('disabled')
-    expect(html).toContain('is a server')
-    expect(html).toContain('on the server')
+  it('lets every machine be chosen, including one it cannot reach', () => {
+    for (const reach of ['ready', 'refused', 'unreachable'] as const) {
+      const html = renderToStaticMarkup(
+        <CopilotMachines machines={[here, { ...pc, reach }]} chosen="" onChoose={noop} />,
+      )
+      expect(html, `a ${reach} machine cannot be pressed`).not.toContain('disabled')
+      expect(html).toContain('office-pc')
+    }
   })
 
-  it('says wait, not re-pair, about a machine that is merely offline', () => {
-    // Two different remedies. Telling somebody to pair a sleeping PC again would
-    // send them to the wrong keyboard for the wrong reason.
+  it('marks the condition rather than writing it', () => {
+    /*
+     * *"We always need a truth."* A machine that is asleep, or one that paired
+     * this computer as a guest, still says so before it is pressed — as a mark
+     * the row is drawn with, the way the rail dims a sleeping machine. Not as a
+     * sentence: *"don't put any single statement in anywhere."* The words that
+     * used to be the hover reason are in the pane now, where somebody is looking
+     * after the press.
+     */
     const html = renderToStaticMarkup(
       <CopilotMachines
         machines={[here, { ...pc, reach: 'unreachable' as const }]}
@@ -305,8 +295,99 @@ describe('which machine’s copilot', () => {
         onChoose={noop}
       />,
     )
-    expect(html).toContain('is not connected')
+    expect(html).toContain('data-reach="unreachable"')
+    expect(html).not.toContain('Pair it again as your own')
+    expect(html).not.toContain('is not connected')
+  })
+
+  /**
+   * No servers on it, and this is a measurement rather than a preference.
+   *
+   * `headless/host.ts` withholds `CAPABILITY.copilot` and `headless/cli.ts`
+   * prints *"This host has no copilot: the copilot's tools only run in the
+   * desktop app"* — so this app, installed on a server, still has no copilot
+   * there. An SSH server does not run it at all. A round of this listed every
+   * stored server and had to disable each row, which is the dead control rather
+   * than the truth. `useCopilotMachines` reads no server list at all now, so
+   * there is nothing here to draw.
+   */
+  it('has no reach a server could ever have', () => {
+    const reaches: CopilotMachine['reach'][] = ['ready', 'refused', 'unreachable']
+    expect(reaches).toHaveLength(3)
+    expect(read('renderer/copilot/useCopilotMachines.ts')).not.toContain('listServers')
+  })
+})
+
+/* ------------------------------------------- another machine's copilot -- */
+
+/**
+ * What the pane says once a row that cannot answer has been pressed.
+ *
+ * The switch used to refuse the press and put these on hover. Both moved here,
+ * because that is where somebody is looking after they press — and each is a
+ * title with nothing under it. The remedy differs between them and the far end
+ * reports them differently, so they are two answers rather than one:
+ * *"collapsing those would be the app claiming to know something it has not been
+ * told."*
+ */
+describe('a machine that will not answer', () => {
+  const bridge = {
+    attachMachineCopilot: async () => ({ ok: true, message: '' }),
+    startMachineCopilot: async () => ({ ok: true, message: '' }),
+    sayToMachineCopilot: async () => ({ ok: true, message: '' }),
+    onMachineCopilotChat: () => noop,
+    onMachineCopilotState: () => noop,
+  }
+
+  it('says a sleeping machine is not connected, and nothing else', () => {
+    const html = renderToStaticMarkup(
+      <RemoteCopilot
+        machineId="m1"
+        machineName="office-pc"
+        reach="unreachable"
+        open={false}
+        bridge={bridge}
+      />,
+    )
+    expect(html).toContain('office-pc is not connected')
     expect(html).not.toContain('guest')
+    expect(html).not.toContain('Reaching')
+  })
+
+  it('says the copilot is not on offer, and does not guess why', () => {
+    /*
+     * The far end sends the identical frame for *"you are a guest here"* and
+     * *"this host has no copilot"* — `protocol.ts`, **absent means this host has
+     * none**, deliberately, because an advertised thing a device may not use
+     * invites the ask. A headless host is the second one and Asad runs one, so
+     * a screen naming a guest pairing would be asserting which of the two it is
+     * having been told neither. That is what the hover label this replaces did.
+     */
+    const html = renderToStaticMarkup(
+      <RemoteCopilot
+        machineId="m1"
+        machineName="office-pc"
+        reach="refused"
+        open={false}
+        bridge={bridge}
+      />,
+    )
+    expect(html).toContain('office-pc is not offering its copilot to this computer')
+    expect(html).not.toContain('guest')
+    expect(html).not.toContain('Pair it again as your own')
+  })
+
+  it('waits on the machine it can reach rather than saying anything about it', () => {
+    const html = renderToStaticMarkup(
+      <RemoteCopilot
+        machineId="m1"
+        machineName="office-pc"
+        reach="ready"
+        open={true}
+        bridge={bridge}
+      />,
+    )
+    expect(html).toContain('Reaching office-pc')
   })
 })
 

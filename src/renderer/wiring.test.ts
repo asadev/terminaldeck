@@ -184,6 +184,25 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     why: 'the only place in the window where the account for a session can be seen, chosen, or changed on the session already running',
   },
   {
+    file: 'renderer/App.tsx',
+    child: 'MachineAccountChip',
+    props: ['current', 'accounts', 'busy', 'onOpen', 'onPick'],
+    // The same failure this table exists for, one machine over. Asad, on a
+    // session running on his PC: *"Then also bring the account selection here
+    // for the remote sessions too."* The title line had no chip at all, and the
+    // note where one should have been argued that it could not: *"which account
+    // an agent on another machine was spawned under is not a fact any frame on
+    // the wire carries."* `CAPABILITY.account` carries it now, and every prop
+    // here is what stops the chip going back to being a caption. `current` is
+    // the login the far session is genuinely on; `accounts` is what that machine
+    // has to offer instead; `onPick` is the choice, which reaches that machine's
+    // own switch. `busy` is the fourth because the switch replaces a process
+    // over there and a second request mid-replacement starts a second one; and
+    // `onOpen` is the fifth because the list is asked for when somebody opens
+    // the menu, which is the only moment it is about to be read.
+    why: 'the only place in the window where the account for a session on another machine can be seen or changed',
+  },
+  {
     file: 'renderer/settings/sections/AddAccountDialog.tsx',
     child: 'AccountProviderList',
     props: ['rows', 'selected', 'onSelect'],

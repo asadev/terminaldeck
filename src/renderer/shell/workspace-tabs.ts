@@ -678,10 +678,47 @@ function qualifyingId(tab: WorkspaceTab): string {
   return tab.id
 }
 
+/**
+ * Whether this tab is allowed to be identified by its id at all.
+ *
+ * **No, for a browser window**, and this is the whole of that fix. Two windows
+ * opened from the globe are both called `New tab`, which is a collision, so the
+ * ladder walked all the way down to the id — and a browser window's id is
+ * `browser:<epoch-ms>:<seq>`, which has no hyphen for `shortSessionId` to cut
+ * at, so the tab printed **browser:1787199912** beside its name. It was in the
+ * audit's own capture of a full bar: the id also ate the room, so the name was
+ * cut to `New t…` to make space for a number nothing else in this app prints.
+ *
+ * It is refused rather than shortened, because there is no length at which that
+ * string is worth a person's attention. A browser window's human name is its
+ * slot — `B1`, `B2` — which the strip already draws as a chip from the binding
+ * map, and which is the name he says out loud: *"I open this in your browser and
+ * check B2, B1."* An unbound window has no name, and nothing is the honest
+ * qualifier for it: the two blank tabs really are the same thing, and neither
+ * the id nor the address (`WorkspaceTab.url` is read once at mount and never
+ * again) is a fact about the window as it is now.
+ */
+function mayPrintId(tab: WorkspaceTab): boolean {
+  return tab.kind !== 'browser'
+}
+
 export function tabQualifiers(
   tabs: readonly WorkspaceTab[],
   labels: readonly string[],
-  options: { accountsShown?: boolean } = {},
+  /**
+   * `nameFolder` says the caller is drawing this run with **no folder heading
+   * above it** — a machine's sessions, a server's, the copilot's — so the folder
+   * is printed on every row that has one rather than only on the rows a name
+   * collision has left ambiguous.
+   *
+   * The rung below states the general case: inside a project heading the folder
+   * is the word three pixels above the row and printing it again says nothing.
+   * Under a *machine* heading there is no such word, and five rows reading
+   * `Session 1 … Session 5` with no folder between them is the state the audit
+   * found: *"five remote rows still say almost nothing."* The same rule
+   * `heldRow` in `Sidebar.tsx` already follows for a held session's own line.
+   */
+  options: { accountsShown?: boolean; nameFolder?: boolean } = {},
 ): (string | null)[] {
   const count = (keys: readonly string[]): Map<string, number> => {
     const seen = new Map<string, number>()
@@ -704,13 +741,13 @@ export function tabQualifiers(
   })
 
   const byLabel = count(labels)
-  const qualified = tabs.map((tab, index) =>
-    (byLabel.get(labels[index]) ?? 0) > 1 &&
-    (folders.get(labels[index])?.size ?? 0) > 1 &&
-    tab.projectPath
+  const qualified = tabs.map((tab, index) => {
+    if (!tab.projectPath) return null
+    if (options.nameFolder) return folderName(tab.projectPath)
+    return (byLabel.get(labels[index]) ?? 0) > 1 && (folders.get(labels[index])?.size ?? 0) > 1
       ? folderName(tab.projectPath)
-      : null,
-  )
+      : null
+  })
 
   /*
    * Then **where it is running**, when that is what differs.
@@ -798,7 +835,7 @@ export function tabQualifiers(
    * and a column of ids that are four characters on one row and six on the next
    * reads as a value that varies rather than as an identifier.
    */
-  const needsId = tabs.map((_, index) => (byKey.get(key(index)) ?? 0) > 1)
+  const needsId = tabs.map((tab, index) => (byKey.get(key(index)) ?? 0) > 1 && mayPrintId(tab))
   const idChars = distinguishingIdLength(
     tabs.filter((_, index) => needsId[index]).map((tab) => qualifyingId(tab)),
   )

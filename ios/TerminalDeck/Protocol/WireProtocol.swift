@@ -907,7 +907,7 @@ enum ServerMessage: Equatable {
      */
     case welcome(protocolVersion: Int, deviceId: String, deviceName: String, token: String?,
                  sessions: [RemoteSession], capabilities: Set<String>, hostPlatform: HostPlatform,
-                 folders: [String]?, copilot: CopilotConnection)
+                 hostName: String?, folders: [String]?, copilot: CopilotConnection)
     case sessions([RemoteSession])
     /**
      * This device's folder list changed while it was connected.

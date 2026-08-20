@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ControlToggle, ControlToggleItem, toggleUnreadBrief, toggleUnreadNote } from './ControlToggle'
-import { controlName, optionsFor, reachOf, type ControlReading } from './catalog'
+import { controlName, describeControl, optionsFor, reachOf, type ControlReading } from './catalog'
 
 /**
  * A two-state control, and the three answers it can be given.
@@ -304,6 +304,26 @@ describe('the same two-state control, at the end of another control’s menu', (
     // own label. A switch that names nothing is the "on or off *what*" failure
     // the stylesheet exception used to prevent.
     expect(item(read('off', 'Off'))).toContain(controlName('fast'))
+  })
+
+  /**
+   * The three-line paragraph that used to sit under this switch, and does not.
+   *
+   * `describeControl('fast')` in full — *"The same model, answering faster.
+   * Switching to another model turns it off."* — wrapped to three lines of grey
+   * at the foot of the model menu. Asad: *"I don't want any kind of long
+   * descriptions anywhere."*
+   *
+   * What is left is the half that is a fact about the rows directly above this
+   * one, at four words. Deleting it outright would have been the easier change
+   * and the wrong one: fast mode going off when you pick a model is invisible,
+   * and this row is the only place it can be read before it happens.
+   */
+  it('carries a tag about the rows above it, not a description of the feature', () => {
+    const html = item(read('off', 'Off'))
+    expect(html).toContain('off if you switch model')
+    expect(html).not.toContain(describeControl('fast'))
+    expect(html).not.toContain('The same model, answering faster')
   })
 
   it('keeps the four facts the chip’s hover label carried', () => {

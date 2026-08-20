@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { ProviderId } from '@shared/types'
 import { Button, closeMenu, Group, Notice, SectionHead } from '../controls'
 import { HoverNote } from '../../components/HoverNote'
@@ -11,6 +11,7 @@ import {
   useAccountProviderRows,
   type AccountProviderRow,
 } from '../../components/ProviderPicker'
+import { onMenuToggle } from '../menu-room'
 import { AddAccountDialog } from './AddAccountDialog'
 import { agentCanStart, agentProblem, canHaveMore } from './account-agent'
 import {
@@ -336,6 +337,22 @@ export interface AccountsViewProps {
   providerRows: readonly AccountProviderRow[]
   /** Null when nothing in this window can start a session — no Sign in button. */
   onSignIn: ((account: AccountView) => void) | null
+  /**
+   * The one control at the foot of the list, handed in from the pane above.
+   *
+   * It is **Add agent** — a disclosure of every agent, where an installed one
+   * opens this pane's own Add-account popup already pointed at it. What it
+   * replaces is a primary button called *Add account* that stood here, one row
+   * below a button called *Sign in*, which is the pair the recorded review
+   * collided with twice: *"why do we have see sign in here separately, add
+   * account here separately?"*
+   *
+   * A node rather than a flag because `AgentsSection` owns the probe the menu is
+   * built from, and this file cannot import from it — that module imports this
+   * one. Absent draws nothing at all, which is what this view is rendered as on
+   * its own in a test.
+   */
+  addAgent?: ReactNode
   /*
    * `onCheck` was here, behind a "Check again" button in the foot with a line
    * of help under it saying what it asked. The read runs when the pane opens —
@@ -411,6 +428,7 @@ export function AccountsView({
   onRename,
   onRemove,
   onMakeDefault,
+  addAgent,
   history = {},
 }: AccountsViewProps) {
   /*
@@ -627,13 +645,14 @@ export function AccountsView({
                 stack trace into it, five times in one recording; the row
                 below says what is wrong and what to type instead.
 
-                It is the *only* button on the row now, and no longer the
-                primary one. Two blue buttons stood one above the other at
-                the foot of this pane — a row's Sign in and the pane's Add
-                account — and read as the same control offered twice:
-                *"why do we have see sign in here separately, add account
-                here separately?"* Add account is the pane's act and keeps
-                the accent; this is a row's act and does not. */}
+                It is the *only* button on this pane now. Two blue buttons
+                stood one above the other — a row's Sign in and the pane's
+                **Add account** — and read as the same control offered
+                twice: *"why do we have see sign in here separately, add
+                account here separately?"* The one at the foot is gone (see
+                `addAgent`), so this is what a person presses to sign a
+                login in, and there is nothing beside it saying the same
+                thing in different words. */}
             {onSignIn &&
               state &&
               state.state !== 'signed-in' &&
@@ -669,9 +688,18 @@ export function AccountsView({
               one login to choose between — Gemini keeps one per machine, so
               there it would be a choice between an account and itself — and
               the whole dot disappears when it would hold nothing.
+
+              `onToggle` is where it opens. This panel is absolutely positioned
+              inside `.settings-panel`, which scrolls and is followed by the
+              sheet's footer, so on the last row of the list it drew a grey
+              sliver with every item under the footer — measured on 2026-08-20
+              at 1280×900 as `{y: 757.8, h: 98, bottom: 855.8}` against a pane
+              whose bottom edge is 786. `menu-room.ts` measures the row against
+              whatever is clipping it and flips the panel above the dot when
+              that is the side with the room.
             */}
             {(!account.system || (!isDefault && canHaveMore(providerRows, account.provider))) && (
-              <details className="settings-rowmenu">
+              <details className="settings-rowmenu" onToggle={onMenuToggle}>
                 <summary aria-label={`More for ${profileLoginLabel(account, state)}`}>
                   <span aria-hidden="true">⋯</span>
                 </summary>
@@ -819,39 +847,35 @@ export function AccountsView({
       )}
 
       {/*
-        One button, and it is the whole of this pane's foot.
+        One control, and it is the whole of this pane's foot.
+
+        It used to be a primary button called **Add account**, and it is now the
+        **Add agent** disclosure handed down from the pane above — see the
+        `addAgent` prop. The change is not cosmetic and it is not a rename: the
+        button was the second of two doors to one act, standing a row below the
+        **Sign in** on every signed-out account, and he walked into the pair of
+        them twice in one recording before saying so.
+
+          > *"And why do we have see sign in here separately, add account here
+          > separately? … Let's try from here, add of sign in. It's also taking
+          > me same place."*
+
+        So the row's Sign in survives — it is a row's act, on a specific login,
+        and it is the only thing on this pane that can be pressed — and the
+        pane's own act is the drop-down he asked for by name. Both still open
+        the *same* popup, which is the point: one place an account is added,
+        reachable from wherever somebody happened to be looking for it.
 
         Everything that used to sit under this line — a heading, the agent
         question, the list, a name field, its own Sign in button, three notices
-        and an ⓘ — is behind **Add account**, in a popup that carries the
-        sign-in steps and nothing else. His words: *"'Add' and 'Sign in' should
-        be one thing, called Add account. It must open a small popup with only
-        the sign-in steps — not the whole Agents page. It is confusing."*
-
-        It is one button rather than two because it is one act. Adding an
-        account without signing it in leaves a directory that no agent has ever
-        written to, which is not an account in any sense a person cares about —
-        `signInToNewAccount` makes both happen on one press and unmakes the
-        first if the second fails.
-
-        And it is one button rather than three because the other two were not
-        acts at all. "Check again" re-ran a probe that runs when the pane opens,
-        and the line of help under it described that probe — a control and a
-        statement, side by side with the only thing on the foot anybody came
-        here to press.
+        and an ⓘ — is inside that popup, which carries the sign-in steps and
+        nothing else. And "Check again" is not here either: it re-ran a probe
+        that runs when the pane opens, with a line of help under it describing
+        that probe.
       */}
-      <div className="settings-account-foot">
-        <Button
-          tone="primary"
-          disabled={busy}
-          onClick={() => {
-            setAddingFor(null)
-            setAdding(true)
-          }}
-        >
-          Add account
-        </Button>
-      </div>
+      {addAgent !== undefined && addAgent !== null && (
+        <div className="settings-account-foot">{addAgent}</div>
+      )}
 
       <AddAccountDialog
         open={adding}
@@ -1033,7 +1057,11 @@ export function signInRequest(account: AccountView): {
 
 /* -------------------------------------------------------------- section -- */
 
-export function AccountsSection({ startSession, head }: SectionProps & { head?: boolean }) {
+export function AccountsSection({
+  startSession,
+  head,
+  addAgent,
+}: SectionProps & { head?: boolean; addAgent?: ReactNode }) {
   const accounts = useAccounts()
   /*
    * Always on, because this pane is only mounted while it is the one on screen
@@ -1107,6 +1135,7 @@ export function AccountsSection({ startSession, head }: SectionProps & { head?: 
   return (
     <AccountsView
       head={head}
+      addAgent={addAgent}
       snapshot={accounts.snapshot}
       signIn={accounts.signIn}
       loading={accounts.loading}

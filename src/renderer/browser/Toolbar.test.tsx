@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Toolbar } from './Toolbar'
 import { newTab, type WorkspaceTab } from './tabs'
+import type { ServedBy } from './served-mark'
 
 /**
  * The Shared / Isolated switch, checked as markup.
@@ -206,7 +207,7 @@ describe('the top-right corner carries what the bottom used to', () => {
 
 function withMachines(
   machinePicker?: React.ReactNode,
-  servedBy?: { name: string; port: number; localPort: number; sameNumber: boolean } | null,
+  servedBy?: ServedBy | null,
 ): string {
   return renderToStaticMarkup(
     <Toolbar
@@ -262,11 +263,14 @@ describe('the toolbar with another machine in play', () => {
   })
 
   it('names the machine a loopback page is really being served from', () => {
+    // Only when it is *not* the machine the picker is naming. Same machine on
+    // both is the duplication he struck out — see `served-mark.ts`.
     const markup = withMachines(undefined, {
       name: 'office-pc',
       port: 3000,
       localPort: 3000,
       sameNumber: true,
+      agrees: false,
     })
     expect(markup).toContain('office-pc')
     expect(markup).toContain('3000')
@@ -279,6 +283,7 @@ describe('the toolbar with another machine in play', () => {
       port: 3000,
       localPort: 53412,
       sameNumber: false,
+      agrees: true,
     })
     expect(markup).toContain('53412')
     expect(markup).toContain('title="office-pc:3000 → :53412"')

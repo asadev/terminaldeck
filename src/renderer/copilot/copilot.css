@@ -137,7 +137,7 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.cp-machine:hover:not([disabled]) {
+.cp-machine:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
@@ -150,15 +150,15 @@
 /*
   A machine that is offline, or one that paired this computer as a guest.
 
-  Drawn and disabled rather than dropped: it is a machine he can see in the rail
-  two inches away, and a switch that quietly omits one is the subset problem this
-  project keeps finding. Why it cannot be pressed is on hover — his standing rule
-  is that a sentence explaining a state most people are never in does not go on
-  the page.
+  Dimmed, and still pressable — the pane says which of the two it is once you
+  are there. It used to be `[disabled]` with the reason on hover, which answered
+  *"here icon not still choose the local connected server"* by keeping the
+  choice away from him. A mark carries the condition without a sentence; the
+  rail dims a sleeping machine the same way.
 */
-.cp-machine[disabled] {
-  opacity: 0.4;
-  cursor: not-allowed;
+.cp-machine[data-reach='unreachable'],
+.cp-machine[data-reach='refused'] {
+  opacity: 0.55;
 }
 
 /* ------------------------------------------ another machine's copilot -- */

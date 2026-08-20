@@ -807,13 +807,13 @@ describe('the hook answer', () => {
     expect(asked).toEqual(['PostToolUse'])
   })
 
-  it('never hands the envelope to a CLI whose schema has not been watched', async () => {
-    // `hooks.ts` installs `SessionStart` for all three providers and
-    // `UserPromptSubmit` for two, so matching on the event name alone posted
-    // Claude's `hookSpecificOutput` shape at Codex and Gemini. What either does
-    // with it is unmeasured, and a CLI complaining about an unrecognised hook
-    // output would print into the terminal — the one thing this channel exists
-    // to avoid.
+  it('never hands the envelope to an event that would put a turn on his screen', async () => {
+    // `hooks.ts` installs `SessionStart` for all three providers, so matching on
+    // the event name alone posted Claude's `hookSpecificOutput` shape at every
+    // CLI. Gemini reads it there and adds it to the model's history as a
+    // synthesised **user** turn — a message he never typed, which is the exact
+    // thing he objected to out loud. `BeforeAgent` reaches the same model on the
+    // same first prompt without it.
     const asked: string[] = []
     const endpoint = await startHookServer({
       dir: scratch(),
@@ -829,6 +829,83 @@ describe('the hook answer', () => {
     expect(asked).toEqual([])
     expect((await askHook(endpoint, '/hook/claude/SessionStart', 's1')).status).toBe(200)
     expect(asked).toEqual(['claude'])
+  })
+
+  it('boots a Codex session with context, in the envelope Codex’s own schema declares', async () => {
+    /*
+     * The entry `CONTEXT_EVENTS` was blocked on. `codex` 0.146.0's binary
+     * carries generated JSON Schemas, and `session-start.command.output` and
+     * `post-tool-use.command.output` both take
+     * `hookSpecificOutput.additionalContext` beside a `hookEventName` const with
+     * `additionalProperties: false` — so the object below is the whole of what
+     * Codex will accept, and a real `codex` run against exactly it answered out
+     * of the context it was handed.
+     */
+    const endpoint = await startHookServer({
+      dir: scratch(),
+      contextFor: ({ provider, event }) => (provider === 'codex' ? `${event} — B1` : null),
+    })
+    live = endpoint
+
+    const booted = await askHook(endpoint, '/hook/codex/SessionStart', 's1')
+    expect(booted.status).toBe(200)
+    expect(JSON.parse(booted.text)).toEqual({
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'SessionStart — B1' },
+    })
+
+    // The mid-turn door: a window attached while Codex is working lands at its
+    // next tool call rather than waiting for a prompt.
+    const midTurn = await askHook(endpoint, '/hook/codex/PostToolUse', 's1')
+    expect(midTurn.status).toBe(200)
+    expect(JSON.parse(midTurn.text)).toEqual({
+      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'PostToolUse — B1' },
+    })
+  })
+
+  it('gives every agent this app launches both doors — the boot one and the mid-turn one', async () => {
+    /*
+     * The invariant behind *"each session"* and *"whenever I just connect"*.
+     *
+     * A provider with only a top-of-turn door learns about a browser window
+     * attached mid-work at his next prompt instead of at its next tool call; a
+     * provider with only a mid-turn door boots knowing nothing. Codex had
+     * neither until today. Adding a fourth agent with one door and not the other
+     * fails here rather than in front of him.
+     */
+    const endpoint = await startHookServer({ dir: scratch(), contextFor: () => 'inside the app' })
+    live = endpoint
+
+    const doors: Record<string, { boot: string; midTurn: string }> = {
+      claude: { boot: 'SessionStart', midTurn: 'PostToolUse' },
+      codex: { boot: 'SessionStart', midTurn: 'PostToolUse' },
+      // Gemini's spellings of the same two moments, and its boot door is its
+      // first prompt: `SessionStart` there becomes a user turn he never typed.
+      gemini: { boot: 'BeforeAgent', midTurn: 'AfterTool' },
+    }
+    for (const [provider, { boot, midTurn }] of Object.entries(doors)) {
+      expect((await askHook(endpoint, `/hook/${provider}/${boot}`, 's1')).status, provider).toBe(200)
+      expect((await askHook(endpoint, `/hook/${provider}/${midTurn}`, 's1')).status, provider).toBe(
+        200,
+      )
+    }
+  })
+
+  it('does not spend his screen on every Codex prompt', async () => {
+    // Codex prints what a hook hands it, and `suppressOutput` does not hide it.
+    // Once at the top of a session is the moment he asked for; the same
+    // paragraph above every prompt he types is the thing he banned.
+    const asked: string[] = []
+    const endpoint = await startHookServer({
+      dir: scratch(),
+      contextFor: ({ event }) => {
+        asked.push(event)
+        return 'inside the app'
+      },
+    })
+    live = endpoint
+
+    expect((await askHook(endpoint, '/hook/codex/UserPromptSubmit', 's1')).status).toBe(204)
+    expect(asked).toEqual([])
   })
 
   it('says nothing for a session with nothing attached', async () => {

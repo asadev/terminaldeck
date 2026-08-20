@@ -1244,6 +1244,48 @@ describe('reading the model from a confined session transcript', () => {
     resetDeviceHomes()
     expect(await readModelFromTranscript('/nowhere/at/all')).toBeNull()
   })
+
+  it('steps over the CLI’s own <synthetic> lines to the model that served a reply', async () => {
+    /*
+     * Found in the audit of 2026-08-20, after an account switch that resumed a
+     * conversation: the toolbar's Model chip read the placeholder itself where
+     * the same session had read *Opus 5 · 1M* a moment before.
+     *
+     * Claude Code writes assistant lines of its own — interrupts, API errors and
+     * the notices around a resume — stamped `"model": "<synthetic>"`. `cost.ts`
+     * has known that since it was written; this reader did not, and returned
+     * whichever assistant line happened to be newest.
+     */
+    const homes = scratch('deck-controls-synthetic-')
+    installDeviceHomes(homes)
+    try {
+      const store = join(homes, 'dev-a', '.claude', 'projects', encodeProjectPath(CWD))
+      mkdirSync(store, { recursive: true })
+      writeFileSync(
+        join(store, 'sess-phone.jsonl'),
+        assistant('claude-opus-5[1m]') + assistant('<synthetic>') + assistant('<synthetic>'),
+      )
+      expect(await readModelFromTranscript(CWD)).toBe('claude-opus-5[1m]')
+    } finally {
+      resetDeviceHomes()
+    }
+  })
+
+  it('answers null for a transcript that is nothing but synthetic lines', async () => {
+    // Not a failure: the chain in `readControls` goes on to the CLI's welcome
+    // panel and then to `settings.json`, both of which name a real model. A
+    // placeholder returned here would be printed on the bar.
+    const homes = scratch('deck-controls-synthetic-only-')
+    installDeviceHomes(homes)
+    try {
+      const store = join(homes, 'dev-a', '.claude', 'projects', encodeProjectPath(CWD))
+      mkdirSync(store, { recursive: true })
+      writeFileSync(join(store, 'sess-phone.jsonl'), assistant('<synthetic>'))
+      expect(await readModelFromTranscript(CWD)).toBeNull()
+    } finally {
+      resetDeviceHomes()
+    }
+  })
 })
 
 /**

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -275,22 +276,46 @@ describe('AccountsView', () => {
     )
   })
 
-  it('offers exactly one way in, and it is called Add account', () => {
+  it('offers exactly one way in, and the pane does not ask the questions itself', () => {
     /*
      * The change this pass is about, stated as a property of the pane rather
-     * than of the popup: *"'Add' and 'Sign in' should be one thing, called Add
-     * account. It must open a small popup with only the sign-in steps — not the
-     * whole Agents page."*
+     * than of the popup: *"'Add' and 'Sign in' should be one thing… It must open
+     * a small popup with only the sign-in steps — not the whole Agents page."*
      *
      * So the pane may not carry the question, the agent list or a name field.
      * Each of those was correct on its own and the sum of them was the
      * complaint.
      */
     const html = render()
-    expect(html).toContain('>Add account<')
     expect(html).not.toContain('Which agent is this a login for?')
     expect(html).not.toContain('Name this Claude Code account')
     expect(html).not.toMatch(/<input[^>]*value="claude"/)
+  })
+
+  /**
+   * And, 2026-08-20, the button itself is gone from the foot.
+   *
+   *   > *"And why do we have see sign in here separately, add account here
+   *   > separately? … Let's try from here, add of sign in. It's also taking me
+   *   > same place."*
+   *
+   * It did take him to the same place — a primary **Add account** at the foot of
+   * the list, one row under a **Sign in** on every signed-out account. One of
+   * the two had to go, and it is the one that was not about a specific login:
+   * the foot is now whatever the pane above hands down, which is the **Add
+   * agent** drop-down he asked for by name. Nothing on this pane is two doors to
+   * one act.
+   */
+  it('carries no Add account button of its own at the foot', () => {
+    const html = render()
+    expect(html).not.toContain('>Add account<')
+    expect(html).not.toContain('settings-account-foot')
+  })
+
+  it('puts whatever the pane hands down at the foot, and nothing when it hands nothing', () => {
+    const html = render({ addAgent: <button type="button">Add agent</button> })
+    expect(html).toContain('settings-account-foot')
+    expect(html).toContain('>Add agent</button>')
   })
 })
 
@@ -674,18 +699,19 @@ describe('an agent that will not start', () => {
       />,
     )
     /*
-     * Present, and deliberately not the accent.
+     * Present, and the only button on the pane.
      *
      *   > *"And why do we have see sign in here separately, add account here
      *   > separately?"*
      *
      * Two blue buttons stood one above the other — a row's Sign in and the
-     * pane's Add account — and read as one control offered twice. Add account
-     * is the pane's act and keeps the accent; a row's Sign in does not.
+     * pane's Add account — and read as one control offered twice. The one at
+     * the foot is gone, so this is what a person presses to sign a login in and
+     * there is nothing beside it saying the same thing in other words.
      */
     expect(html).toContain('>Sign in<')
     expect(html).not.toContain('data-tone="primary">Sign in')
-    expect(html).toContain('data-tone="primary">Add account')
+    expect(html).not.toContain('Add account')
   })
 
   /**
@@ -1068,16 +1094,41 @@ describe('the account list after the 2026-08-19 review', () => {
     expect(groups.map((group) => group.label)).toEqual(['Claude Code', 'Other agents'])
   })
 
-  it('leaves exactly one control at the foot of the list', () => {
+  it('leaves exactly one control at the foot of the list, and it is handed down', () => {
     /*
      * "Check again" re-ran a probe that runs when the pane opens, beside a line
      * of help describing that probe, beside the one button anybody came here to
-     * press. *"Don't put any single statement in anywhere."*
+     * press. *"Don't put any single statement in anywhere."* And the button
+     * itself went a day later — see `carries no Add account button of its own`.
      */
-    const html = render()
-    expect(html).toContain('>Add account<')
+    const html = render({ addAgent: <button type="button">Add agent</button> })
+    expect(html.match(/settings-account-foot/g) ?? []).toHaveLength(1)
+    // The row's Sign in, and this. The ⓘ dots and the ⋯ summaries are not
+    // buttons in the sense the sentence is about, and `settings-btn` is what
+    // separates the two.
+    expect(html.match(/class="settings-btn"/g) ?? []).toHaveLength(1)
+    expect(html).toContain('>Add agent</button>')
     expect(html).not.toContain('Check again')
     expect(html).not.toContain('Asks the agent, once per account')
+  })
+
+  /**
+   * NEW-2, 2026-08-20, found by rendering it.
+   *
+   * The ⋯ panel is absolutely positioned inside `.settings-panel`, which scrolls
+   * and is followed by the sheet's footer. On the last account in the list it
+   * drew a grey sliver — measured `{y: 757.8, h: 98, bottom: 855.8}` against a
+   * pane whose bottom edge is 786 — with Use by default, Rename and Remove all
+   * under the footer.
+   *
+   * The arithmetic is `menu-room.ts` and is tested there. What belongs here is
+   * that the row is actually wired to it: a `<details>` with no `onToggle` never
+   * measures anything, which is exactly the state this was found in.
+   */
+  it('measures the room under a row before its ⋯ menu opens', () => {
+    const source = readFileSync(new URL('./AccountsSection.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('<details className="settings-rowmenu" onToggle={onMenuToggle}>')
+    expect(source).toContain("import { onMenuToggle } from '../menu-room'")
   })
 
   it('says a row’s state in a word where the name above it has said the rest', () => {

@@ -12,8 +12,8 @@
  * The schemas here were read off this machine, not guessed:
  *
  *   claude  ~/.claude/settings.json   `hooks` -> event -> [{ matcher, hooks: [] }]
- *   codex   ~/.codex/hooks.json       same shape, and needs
- *                                     `[features] codex_hooks = true` in config.toml
+ *   codex   ~/.codex/hooks.json       same shape; needs `[features] hooks = true`
+ *                                     in config.toml, and one trust step in Codex
  *   gemini  ~/.gemini/settings.json   same shape; entries also accept `name`,
  *                                     `description` and `env`
  *
@@ -135,9 +135,9 @@ interface HookProviderSpec {
   events: string[]
   /**
    * Unit of the per-entry `timeout` key, or null to omit it. Claude counts
-   * seconds and Gemini milliseconds; Codex's schema could not be read on this
-   * machine (its vendored binary is missing), so it gets no timeout at all
-   * rather than a guessed one in the wrong unit.
+   * seconds and Gemini milliseconds; Codex sets its own default (its hook
+   * review screen shows `Timeout 600s` for an entry with no key), so it gets
+   * none rather than a guessed one in the wrong unit.
    */
   timeout: { key: 'timeout'; value: number } | null
   /** Entries here accept a `name`, which makes ownership legible in the file. */
@@ -166,8 +166,11 @@ const CLAUDE_EVENTS = [
 
 /**
  * Only the five that a real Codex install on this machine is already using.
- * Codex's own binary is not present here to check a longer list against, and an
- * invented event name in a config file is a silent no-op at best.
+ *
+ * Its own vocabulary is longer — its hook screen lists `PermissionRequest`,
+ * `PreCompact`, `PostCompact`, `SessionEnd`, `SubagentStart` and `SubagentStop`
+ * as well — and each one added here is another entry he has to trust inside
+ * Codex, so the list stays at what the app actually consumes.
  */
 const CODEX_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']
 
@@ -201,7 +204,24 @@ export const HOOK_PROVIDERS: Record<HookProviderId, HookProviderSpec> = {
     events: CODEX_EVENTS,
     timeout: null,
     supportsName: false,
-    requirement: 'Codex only runs hooks with `codex_hooks = true` under [features] in ~/.codex/config.toml.',
+    /*
+     * Two facts, both measured against `codex` 0.146.0 on this machine, and both
+     * the difference between a Codex session knowing where it is and not.
+     *
+     *  - The flag is `hooks`. `codex_hooks` still works and still enables it,
+     *    but Codex now prints "deprecated: `[features].codex_hooks` is
+     *    deprecated" into the terminal at every session start — which is his
+     *    screen, spent by us, on a line we told him to write.
+     *  - A new or changed hook does not run at all until it is trusted once
+     *    inside Codex ("Hooks need review — 1 hook is new or changed",
+     *    Installed 1 / Active 0). The answer is kept as a `trusted_hash` under
+     *    `[hooks.state]` in `~/.codex/config.toml`; nothing this app writes can
+     *    stand in for it, because the hash is over a form that could not be
+     *    reproduced here. Reinstalling from this pane changes the command, so
+     *    it asks again — once.
+     */
+    requirement:
+      'Codex needs `hooks = true` in ~/.codex/config.toml [features], then Trust all once when it asks.',
   },
   gemini: {
     id: 'gemini',

@@ -101,6 +101,9 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'controls.apply': true,
   'usage.read': true,
   'session.send': true,
+  'account.read': true,
+  'account.switch': true,
+  'chat.read': true,
 }
 
 /** Same guard for the other direction. */
@@ -142,7 +145,10 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'controls.reading': true,
   'controls.applied': true,
   'usage.reading': true,
+  'account.state': true,
+  'account.switched': true,
   'session.sent': true,
+  'chat.rows': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -244,6 +250,18 @@ const VALID_CLIENT: ClientMessage[] = [
   // `input` it is answered and two panels sending to two sessions on one
   // machine must not resolve each other's answers.
   { t: 'session.send', rid: 'snd-1', id: SESSION_ID, data: 'look at this button\r' },
+  // Whose login a session is on, and running it as another one. The second is
+  // the frame that stops a process and starts another, so its account id goes
+  // through the same slug class a config directory's name has always been.
+  { t: 'account.read', rid: 'acc-1', id: SESSION_ID },
+  { t: 'account.switch', rid: 'acc-2', id: SESSION_ID, accountId: 'work-example-com' },
+  // An agent's own install, whose id `systemProfileId` writes with a colon in
+  // it. On every machine this app has ever run on, so a class that refused it
+  // would refuse the one row that is always there.
+  { t: 'account.switch', rid: 'acc-3', id: SESSION_ID, accountId: 'system:codex' },
+  // The conversation, and the same view asking what has changed since.
+  { t: 'chat.read', rid: 'cht-1', id: SESSION_ID, tail: false },
+  { t: 'chat.read', rid: 'cht-2', id: SESSION_ID, tail: true },
 ]
 
 const SESSION: RemoteSession = {
@@ -287,6 +305,20 @@ const VALID_SERVER: ServerMessage[] = [
   // already decided.
   { t: 'session.sent', rid: 'snd-1', id: SESSION_ID, ok: true, message: 'Sent.' },
   { t: 'session.sent', rid: 'snd-2', id: SESSION_ID, ok: false, message: `No session ${SESSION_ID} is running.` },
+  {
+    t: 'chat.rows',
+    rid: 'cht-1',
+    id: SESSION_ID,
+    rows: [
+      { id: 'm-1', role: 'you', text: 'what does this repo do', at: 1_787_000_000_000 },
+      { id: 'm-2', role: 'agent', text: 'It is an Electron app.', at: 1_787_000_001_000 },
+    ],
+    reset: true,
+    found: true,
+  },
+  // A folder with no transcript at all, which is not the same empty as a
+  // session that has not spoken yet.
+  { t: 'chat.rows', rid: 'cht-2', id: SESSION_ID, rows: [], reset: true, found: false },
   { t: 'pong' },
   { t: 'created', session: SESSION },
   { t: 'closed', id: SESSION_ID },
@@ -554,6 +586,27 @@ const VALID_SERVER: ServerMessage[] = [
       unavailableReason: 'That machine is running a build that cannot report a context window from here.',
     },
   },
+  // The account list, and the outcome of changing one. `session` is the id the
+  // session has *now*: the same one on a refusal, a new one on a success,
+  // because a switch replaces the process.
+  {
+    t: 'account.state',
+    rid: 'acc-1',
+    id: SESSION_ID,
+    current: { id: 'work-example-com', name: 'work@example.com', provider: 'claude', color: 'acct-3', system: false },
+    accounts: [
+      { id: 'work-example-com', name: 'work@example.com', provider: 'claude', color: 'acct-3', system: false },
+      { id: 'system-claude', name: 'Claude Code', provider: 'claude', color: null, system: true },
+    ],
+  },
+  {
+    t: 'account.switched',
+    rid: 'acc-2',
+    id: SESSION_ID,
+    ok: true,
+    message: 'Running as work@example.com.',
+    session: '9a2f77d7-c0a1-4b3e-8f1d-4f1c2ae08f1d',
+  },
 ]
 
 /**
@@ -603,6 +656,124 @@ const CONTROL_PIN: Record<ControlId, true> = { model: true, effort: true, fast: 
 describe('the controls capability', () => {
   it('names the same four controls agent-controls.ts performs', () => {
     expect(new Set<string>(CONTROL_IDS)).toEqual(new Set(Object.keys(CONTROL_PIN)))
+  })
+})
+
+describe('the account capability', () => {
+  /*
+   * The id on this frame selects a **configuration directory on somebody else's
+   * computer**, and the frame that carries it ends in a process being stopped
+   * and another started. So the class is checked here at the parser rather than
+   * three files away, and the two ends of it are what these cases are about: a
+   * slug is accepted, an agent's own install — which has a colon in it and is on
+   * every machine — is accepted, and anything that could climb out of a
+   * directory name is not.
+   */
+  it('takes a slug and an agent’s own install, and nothing that could be a path', () => {
+    const base = { t: 'account.switch', rid: 'acc-9', id: SESSION_ID }
+    expect(accepted(serialize({ ...base, accountId: 'work-example-com' } as ClientMessage))).toBeTruthy()
+    expect(accepted(serialize({ ...base, accountId: 'system:gemini' } as ClientMessage))).toBeTruthy()
+
+    for (const bad of ['../escape', 'a/b', 'a\\b', '.hidden', '', 'x'.repeat(300)]) {
+      const result = parseClientMessage({ ...base, accountId: bad })
+      expect(result.ok, `account id ${JSON.stringify(bad)} was accepted`).toBe(false)
+    }
+  })
+
+  it('refuses a read or a switch with nothing to correlate or nothing to act on', () => {
+    expect(parseClientMessage({ t: 'account.read', id: SESSION_ID }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'account.read', rid: 'acc-1' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'account.switch', rid: 'acc-1', id: SESSION_ID }).ok).toBe(false)
+  })
+
+  it('drops an account row a menu could not draw, and keeps the rest', () => {
+    /*
+     * An id and a name are the two fields a row cannot exist without — the id is
+     * what a press sends back, the name is what a person reads — so a record
+     * missing either is not a half-row. Everything else folds onto null rather
+     * than onto a plausible value: a mark or a colour invented here is this app
+     * asserting something the other machine never said.
+     */
+    const frame = parseServerMessage(
+      JSON.stringify({
+      t: 'account.state',
+      rid: 'acc-1',
+      id: SESSION_ID,
+      current: { id: 'work' },
+      accounts: [
+        { id: 'work', name: 'work@example.com' },
+        { id: 'nameless' },
+        { name: 'idless' },
+        'not a row',
+      ],
+      }),
+    )
+    expect(frame.ok).toBe(true)
+    if (!frame.ok || frame.message.t !== 'account.state') throw new Error('unreachable')
+    // `current` carried no name, so there is nothing to draw and nothing is claimed.
+    expect(frame.message.current).toBeNull()
+    expect(frame.message.accounts).toEqual([
+      { id: 'work', name: 'work@example.com', provider: null, color: null, system: false },
+    ])
+  })
+
+  it('reads a switch that says nothing as a switch that did not happen', () => {
+    // `ok` must be the literal `true`. A garbled frame read as success is a
+    // window that follows a session id that was never created.
+    const frame = parseServerMessage(
+      JSON.stringify({ t: 'account.switched', rid: 'acc-2', id: SESSION_ID, ok: 'yes' }),
+    )
+    expect(frame.ok).toBe(true)
+    if (!frame.ok || frame.message.t !== 'account.switched') throw new Error('unreachable')
+    expect(frame.message.ok).toBe(false)
+    expect(frame.message.session).toBeNull()
+  })
+})
+
+describe('the connectors on a controls reading', () => {
+  it('keeps absent and empty apart, because the chip depends on the difference', () => {
+    /*
+     * Empty is *"that folder has none"* and absent is *"nobody said"*. Neither
+     * draws a chip, but only the first is an answer — and a build older than the
+     * field sends neither, which must not be recorded as a folder with no
+     * connectors.
+     */
+    const bare = parseServerMessage(
+      JSON.stringify({ t: 'controls.reading', rid: 'ctl-1', id: SESSION_ID, reading: { live: true } }),
+    )
+    if (!bare.ok || bare.message.t !== 'controls.reading') throw new Error('unreachable')
+    expect(bare.message.reading.connectors).toBeUndefined()
+
+    const none = parseServerMessage(
+      JSON.stringify({
+        t: 'controls.reading',
+        rid: 'ctl-1',
+        id: SESSION_ID,
+        reading: { live: true, connectors: [] },
+      }),
+    )
+    if (!none.ok || none.message.t !== 'controls.reading') throw new Error('unreachable')
+    expect(none.message.reading.connectors).toEqual([])
+  })
+
+  it('drops a row with no name and reads a missing `enabled` as on', () => {
+    // `!== false`, matching `readServers` in the renderer: a row the far end did
+    // not flag is a server its own CLI would load.
+    const frame = parseServerMessage(
+      JSON.stringify({
+        t: 'controls.reading',
+        rid: 'ctl-1',
+        id: SESSION_ID,
+        reading: {
+          live: true,
+          connectors: [{ id: 'user:github', name: 'github' }, { id: 'nameless' }],
+        },
+      }),
+    )
+    if (!frame.ok || frame.message.t !== 'controls.reading') throw new Error('unreachable')
+    expect(frame.message.reading.connectors).toEqual([
+      { id: 'user:github', name: 'github', scope: null, transport: null, enabled: true, disabledReason: null },
+    ])
   })
 })
 

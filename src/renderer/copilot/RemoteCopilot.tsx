@@ -8,6 +8,7 @@ import {
   type RemoteBubble,
   type RemoteReport,
 } from './remote-copilot-model'
+import type { CopilotReach } from './useCopilotMachines'
 import './copilot.css'
 
 /**
@@ -52,6 +53,27 @@ import './copilot.css'
 interface Props {
   machineId: string
   machineName: string
+  /**
+   * What the switch knew about this machine when the row was pressed.
+   *
+   * Here because the row that chose it no longer refuses the press. Until
+   * 2026-08-20 an offline machine and one that paired this computer as a guest
+   * were greyed out on the switch with the reason on hover, and Asad's sentence
+   * about that switch was *"here icon not still choose the local connected
+   * server"* — he pressed, nothing happened, and he was left guessing whether
+   * the machine was even connected. Every row is pressable now, so the two
+   * answers have to arrive somewhere, and this is the pane he is looking at when
+   * he asks.
+   *
+   * They are two answers rather than one because they are two different facts:
+   * a machine that is offline has not been asked, and a machine that is online
+   * and sent no copilot link has answered. `useCopilotMachines` carries why
+   * collapsing those would be the app claiming something it has not been told —
+   * and the second answer is worded about the *offer* rather than about the
+   * pairing, for the same reason, since the far end sends the same frame for
+   * *"you are a guest"* and *"this host has no copilot."*
+   */
+  reach: CopilotReach
   /**
    * That link has said `copilot.hello` on its current socket.
    *
@@ -101,7 +123,7 @@ function outcome(value: unknown): { ok: boolean; message: string } {
   }
 }
 
-export function RemoteCopilot({ machineId, machineName, open, bridge }: Props) {
+export function RemoteCopilot({ machineId, machineName, reach, open, bridge }: Props) {
   const deck = useMemo(() => (bridge === undefined ? resolveBridge() : bridge), [bridge])
   const [report, setReport] = useState<RemoteReport | null>(null)
   const [bubbles, setBubbles] = useState<RemoteBubble[]>([])
@@ -196,6 +218,38 @@ export function RemoteCopilot({ machineId, machineName, open, bridge }: Props) {
       <PageEmpty icon={COPILOT_ICON} title="This build cannot reach another machine's copilot">
         Update this app on both computers.
       </PageEmpty>
+    )
+  }
+
+  /*
+   * The two answers the switch used to give on hover, given here instead.
+   *
+   * A title and nothing under it, in both cases. The condition is the whole
+   * fact, and a paragraph explaining what a guest pairing is would be the habit
+   * this week has been spent deleting: *"we don't need to give the statements.
+   * We want simplicity."* Neither is a dead end — the rail pairs and re-pairs a
+   * machine, and this row goes back to being ordinary the moment it does,
+   * because the switch is watching the same push.
+   */
+  if (reach === 'unreachable') {
+    return <PageEmpty icon={COPILOT_ICON} title={`${machineName} is not connected`} />
+  }
+  if (reach === 'refused') {
+    /*
+     * Said about the *offer*, not about the pairing, and that wording is
+     * load-bearing. `protocol.ts` on the far side: **absent means this host has
+     * none** — a machine that paired this computer as a guest and a machine that
+     * has no copilot at all send the identical frame, deliberately, *"because an
+     * advertised thing a device may not use invites the ask."* A headless host
+     * is the second one and Asad runs one. So naming a guest pairing here would
+     * be this window asserting which of two it is, having been told neither,
+     * which is the failure `useCopilotMachines` refuses one level up.
+     */
+    return (
+      <PageEmpty
+        icon={COPILOT_ICON}
+        title={`${machineName} is not offering its copilot to this computer`}
+      />
     )
   }
 

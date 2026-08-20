@@ -494,9 +494,29 @@
    rule needed because that is what `flex: 1 1 auto` does, and the argument for
    the length lives on `distinguishingIdLength`. Which is why there is still no
    floor written here: the length is decided in TypeScript, where it can be
-   checked against the ids, not in CSS, where it could only be guessed. */
+   checked against the ids, not in CSS, where it could only be guessed.
+
+   ## And why it may be *ellipsised* since 2026-08-20, having never needed to be
+
+   Because it is no longer always an id. A session under a machine heading has
+   no project heading over it, so its row names its own folder here — see
+   `nameFolder` in `Sidebar.tsx` — and a folder name is three times the width of
+   a four-character id. Rendered at a rail the window had capped to 168px, the
+   row read **Session 1  ter**: `.sb-label` holds an `8ch` floor and cannot give,
+   so the overflow fell on the last item on the line and the browser cut it
+   mid-word with nothing to say it had.
+
+   `text-overflow` is what turns that into `termina…`, which reads as a name that
+   did not fit rather than as a value nobody can place. The shrink is permission
+   to reach that state at all — flexbox only takes it when the line genuinely
+   overflows, so a four-character id on any rail wide enough for it is untouched,
+   and the paragraph above still describes what happens to an id. */
 .sb-qualifier {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--t-caption);
   color: var(--text-muted);

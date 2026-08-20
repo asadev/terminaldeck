@@ -62,6 +62,7 @@ import {
   type ClientMessage,
   type ControlName,
   type ControlReadingWire,
+  type AccountWire,
   type ControlsReadingWire,
   type CopilotLinkWire,
   type CopilotStateReport,
@@ -138,6 +139,26 @@ const USAGE_READ_TIMEOUT_MS = 20_000
  * bar means somebody presses again and spends the 725 MB a second time.
  */
 const USAGE_REFRESH_TIMEOUT_MS = 45_000
+
+/**
+ * How long an `account.read` may go unanswered. The same twenty seconds its two
+ * neighbours get, and for the same reason: it is a state file and a spawn record
+ * over there, so the only thing being waited out is the relay.
+ */
+const ACCOUNT_READ_TIMEOUT_MS = 20_000
+
+/**
+ * And how long an `account.switch` may. The longest ceiling on this wire,
+ * because the far end really is waiting the longest.
+ *
+ * A switch spawns an agent CLI over there, waits for `survivedStart` to see
+ * whether it is still alive a moment later, and only then kills the session it
+ * replaced. A ceiling below the far end's own would report a failure for a
+ * switch that then lands — and here that is worse than on a control, because
+ * what lands is a *replacement session*: the window would keep the old id and
+ * end up attached to a pty that has already been killed.
+ */
+const ACCOUNT_SWITCH_TIMEOUT_MS = 90_000
 
 /**
  * How long a `session.send` may go unanswered.
@@ -399,6 +420,31 @@ export interface MachineLink {
    * leaves an element with no previous value to fall back to.
    */
   readUsage(sessionId: string, want: UsageWant, force: boolean): Promise<Record<string, unknown>>
+  /**
+   * Whose login that session is on, and which logins that machine has.
+   *
+   * `null` means the question could not be asked — the link is down, or that
+   * machine's build never advertised `account`. Deliberately not an empty state:
+   * a chip handed an empty account list could not tell "that machine has one
+   * login" from "nobody answered", and those want opposite things drawn.
+   */
+  readAccount(
+    sessionId: string,
+  ): Promise<{ current: AccountWire | null; accounts: AccountWire[] } | null>
+  /**
+   * Run that session as another of that machine's logins.
+   *
+   * Always answers with a sentence, on every path including the two that never
+   * leave this machine, for the reason {@link setControl} does — and here there
+   * is a second reason. This **replaces the far session**, so the answer carries
+   * the id it has afterwards: the same one on a refusal, a new one on a success,
+   * and null when that machine could not say. A window that ignored it would sit
+   * attached to a pty that has already been killed.
+   */
+  switchAccount(
+    sessionId: string,
+    accountId: string,
+  ): Promise<{ ok: boolean; message: string; session: string | null }>
   /**
    * Put text into a session over there **without attaching to it**, and report
    * what the far end said about it.
@@ -1095,6 +1141,8 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       case 'controls.reading':
       case 'controls.applied':
       case 'usage.reading':
+      case 'account.state':
+      case 'account.switched':
       case 'session.sent':
         /*
          * The answer to one question this end asked, handed to whoever asked it.
@@ -1456,6 +1504,76 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       // not write one this end must not invent a figure to fill the gap — the
       // honest fallback is the same absence with this end's own wording.
       return emptyUsageReading(want, unavailableReason ?? 'That machine had nothing to report for this session.')
+    },
+    async readAccount(sessionId) {
+      /*
+       * Null rather than an empty state on both of the absences that never leave
+       * this machine, and that is not the split `readUsage` above makes.
+       *
+       * A usage bar has no previous value to keep, so it is handed a composed
+       * reading with the sentence in it. The account chip does: it keeps the last
+       * account it genuinely read, exactly as the control chips beside it do, and
+       * an empty list would empty a menu that had rows in it a moment ago. Where
+       * the sentence belongs is on the *switch* below, which is the thing
+       * somebody presses.
+       */
+      if (current.state !== 'online') return null
+      if (!current.capabilities.includes(CAPABILITY.account)) return null
+      const answer = await ask(
+        { t: 'account.read', rid: randomUUID(), id: sessionId },
+        ACCOUNT_READ_TIMEOUT_MS,
+        CAPABILITY.account,
+      )
+      /*
+       * The session is checked as well as the frame type, for the reason
+       * `readControls` gives: an `rid` only proves this is the answer to *a*
+       * question this end asked, and another session's login on this session's
+       * chip is precisely the confusion the per-session clusters exist to
+       * prevent.
+       */
+      if (answer === null || answer.t !== 'account.state' || answer.id !== sessionId) return null
+      return { current: answer.current, accounts: answer.accounts }
+    },
+    async switchAccount(sessionId, accountId) {
+      /*
+       * The two refusals that never leave this machine, each with its own
+       * sentence, because they have different remedies — the same split
+       * `setControl` makes. A link that is down is waited out; a machine whose
+       * build has no `account` is updated.
+       */
+      if (current.state !== 'online') {
+        return { ok: false, message: 'This desktop is not connected to that machine right now.', session: null }
+      }
+      if (!current.capabilities.includes(CAPABILITY.account)) {
+        return {
+          ok: false,
+          message:
+            'That machine is running a build that cannot change a session’s account from here. Update it and this will work.',
+          session: null,
+        }
+      }
+      const answer = await ask(
+        { t: 'account.switch', rid: randomUUID(), id: sessionId, accountId },
+        ACCOUNT_SWITCH_TIMEOUT_MS,
+        CAPABILITY.account,
+      )
+      if (answer === null || answer.t !== 'account.switched' || answer.id !== sessionId) {
+        /*
+         * No answer, and the honest sentence for that is the one that does not
+         * claim it failed — the same position `setControl` takes, and here the
+         * stakes are higher. The far end starts the replacement before it sends
+         * anything back, so a channel that died in between leaves a session that
+         * has genuinely been switched and a window that was not told. Saying "it
+         * failed" is the guess that makes somebody press again, which on a session
+         * that already moved starts a *second* replacement.
+         */
+        return {
+          ok: false,
+          message: 'That machine did not answer, so it is not known whether the account was changed.',
+          session: null,
+        }
+      }
+      return { ok: answer.ok, message: answer.message, session: answer.session }
     },
     async send(sessionId, data) {
       /*

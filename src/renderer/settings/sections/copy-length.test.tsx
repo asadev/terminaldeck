@@ -249,14 +249,16 @@ describe('what the cut was not allowed to take with it', () => {
     expect(html).toContain('Default coding tool')
     expect(html).toContain('Primary account')
     expect(html).toContain('Add agent')
-    // Accounts — its own heading, and the button that adds one. The group that
-    // used to carry the whole add form here is now a popup: *"'Add' and 'Sign
-    // in' should be one thing, called Add account. It must open a small popup
-    // with only the sign-in steps."* Nothing was dropped, which is what this
-    // test is for — the steps are asserted in `AccountsSection.test.tsx`, on
-    // the panel itself.
+    // Accounts — its own heading. The group that used to carry the whole add
+    // form here is a popup, and the *button* that opened it is gone too: it
+    // stood one row under a **Sign in** on every signed-out account, which is
+    // the pair he collided with — *"why do we have see sign in here separately,
+    // add account here separately?"* The **Add agent** menu asserted above is
+    // the pane's one door now, and it opens the same popup. Nothing was
+    // dropped, which is what this test is for — the steps are asserted in
+    // `AccountsSection.test.tsx`, on the panel itself.
     expect(html).toContain('>Accounts<')
-    expect(html).toContain('Add account')
+    expect(html).not.toContain('>Add account<')
     // Setup. "Other coding tools" was the heading until GitHub Copilot moved to
     // the GitHub page — what is left under it is git and the GitHub CLI, which
     // are tools this app uses rather than coding tools. See `MOVED_TOOL_IDS`.

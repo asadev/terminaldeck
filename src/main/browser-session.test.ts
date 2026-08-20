@@ -36,12 +36,36 @@ const fakeSession = {
   },
 }
 
+/** Every partition string `fromPartition` was asked for, in order. */
+const asked: string[] = []
+
+/*
+ * One userData directory for the whole file, not one per call.
+ *
+ * `browser-profiles.ts` writes its profile list into this directory and reads it
+ * back, so a fresh temporary directory per `getPath` call meant every read saw
+ * an empty machine — which made the profile argument these channels now take
+ * untestable, because no profile except the default could ever be found.
+ */
+let userDataDir = ''
+const userData = (): string => {
+  if (userDataDir === '') userDataDir = mkdtempSync(join(tmpdir(), 'terminaldeck-session-test-'))
+  return userDataDir
+}
+
 // The module imports electron for its IPC half. Nothing runs at module scope,
 // so a shell is enough to let the pure exports be imported and tested.
 vi.mock('electron', () => ({
-  app: { getPath: () => mkdtempSync(join(tmpdir(), 'terminaldeck-session-test-')) },
-  session: { fromPartition: () => fakeSession },
+  app: { getPath: () => userData() },
+  session: {
+    fromPartition: (partition: string) => {
+      asked.push(partition)
+      return fakeSession
+    },
+  },
 }))
+
+const { createProfile } = await import('./browser-profiles')
 
 const {
   GUEST_PARTITION,
@@ -254,5 +278,63 @@ describe('the clear-cookies channel', () => {
       ['http://example.com/', 'csrf'],
     ])
     stored = []
+  })
+})
+
+
+/**
+ * The profile argument — E7's mechanism, tested where it lives.
+ *
+ * Asad, with the profile menu open on his own machine:
+ *
+ *   > *"if I click on profile, there is nothing inside the profile, just the
+ *   > name, not like Chrome … even profile doesn't make any sense if there is
+ *   > nothing that we can see in each profile."*
+ *
+ * A menu row could not say what its profile held because every channel below it
+ * resolved the *active* session and no other. These tests are the wire.
+ */
+describe('answering about a named profile', () => {
+  it('reads the jar of the profile it was asked about, not the one that is on', async () => {
+    const work = createProfile(userData(), 'Work')
+    asked.length = 0
+    await invoke('browser-session:cookies', work.id)
+    expect(asked).toContain(work.partition)
+  })
+
+  it('clears one site in one profile without touching another', async () => {
+    const other = createProfile(userData(), 'Other')
+    stored = [{ name: 'sid', domain: 'example.com', value: 'v' }]
+    removed.length = 0
+    asked.length = 0
+    await invoke('browser-session:clear-cookies', 'example.com', other.id)
+    // Both halves at once: the right partition, and only the site asked for.
+    // The preload used to drop the domain entirely, so this button cleared
+    // everything — see `browserClearCookies` in `src/preload/index.ts`.
+    expect(asked).toContain(other.partition)
+    expect(removed).toEqual([['http://example.com/', 'sid']])
+  })
+
+  it('names that profile in the info it reports', async () => {
+    const third = createProfile(userData(), 'Third')
+    const info = (await invoke('browser-session:info', third.id)) as { partition: string }
+    expect(info.partition).toBe(third.partition)
+  })
+
+  it('falls back to the active profile for an id it did not mint', async () => {
+    // An id arrives over IPC as a string, and `fromPartition` will make a
+    // directory for any string it is handed — including one with a path
+    // separator in it. A panel asking a question about a profile that no longer
+    // exists gets an answer about the one in front of it, not an exception.
+    asked.length = 0
+    await invoke('browser-session:cookies', '../../../etc/passwd')
+    expect(asked).not.toContain('../../../etc/passwd')
+    expect(asked.every((partition) => partition.startsWith('persist:terminaldeck-browser'))).toBe(true)
+  })
+
+  it('answers about the profile that is on when nothing is passed', async () => {
+    asked.length = 0
+    await invoke('browser-session:cookies')
+    expect(asked.every((partition) => partition.startsWith('persist:terminaldeck-browser'))).toBe(true)
   })
 })

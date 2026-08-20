@@ -48,6 +48,17 @@ import { applyControl, readControls } from './agent-controls'
 // And the three usage readings that bar is drawn from, for the same reason and
 // through the same seam. See the `usage` entry on the `SessionFanout` below.
 import { createUsageServe } from './remote/usage-serve'
+import { accountFor } from './usage-ipc'
+// And the conversation that bar sits above, through the same kind of seam. See
+// the `chat` entry on the `SessionFanout` below.
+import { createChatServe } from './remote/chat-serve'
+// And the account chip beside them, through the same kind of seam. See the
+// `account` entry on the `SessionFanout` below.
+import { createAccountServe } from './remote/account-serve'
+// The connectors chip's list, which is three files on *this* machine resolved
+// for the session's own folder — the same read `mcp:list` performs for a window
+// at this desk. It rides the `controls` reading; see that seam below.
+import { loadServers } from './mcp-client'
 import { storedAccountLimits } from './account-limits'
 import {
   PROVIDERS,
@@ -81,6 +92,7 @@ import { installDeviceHomes, installHomeScopes } from './transcript'
 import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-session'
 import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
 import { FolderGrants } from './remote/folder-grants'
+import { SessionGrants } from './remote/session-grants'
 import { DeviceKinds } from './remote/device-kind'
 import { reachFor, type DeviceReach } from './remote/device-reach'
 import { guestGitDir, HELPER_FILE, type GuestGitEnv } from './remote/git-guest'
@@ -337,6 +349,27 @@ export interface HostCoreOptions {
    * listener that reads either sees the finished state.
    */
   onSessionStarted?(meta: SessionMeta): void
+  /**
+   * Run one of this machine's sessions as a different login, for a window on
+   * another machine.
+   *
+   * **Optional, and its absence is the switch.** A shell that does not supply it
+   * makes this core advertise no `account` capability at all, and the chip on
+   * the far window is drawn with what it can read and no rows to press — which
+   * is honest for the headless build, whose whole job is terminals and which has
+   * no session-lifecycle operation to replace one through.
+   *
+   * Handed in rather than composed here because the operation belongs to the
+   * shell that owns it: it starts a replacement, waits to see whether the agent
+   * survived its first seconds, and only then ends the session it replaced. A
+   * second arrangement of `startSession` and a kill, written in this file, is how
+   * one of the two comes to drop the conversation guard — which is exactly the
+   * defect *"it's not keeping the conversation history"* was.
+   */
+  switchAccount?(
+    sessionId: string,
+    accountId: string,
+  ): Promise<{ ok: boolean; message: string; session: string | null }>
   platform?: Platform
 }
 
@@ -346,6 +379,15 @@ export interface HostCore {
   /** The `SessionAccess` the remote server serves, and the `PtySource` behind it. */
   sessions: SessionFanout
   grants: FolderGrants
+  /**
+   * Which of the running sessions each paired device may see.
+   *
+   * On the core beside `grants` and for the same reason: the settings panel
+   * registers IPC against *this* instance, and a shell that built its own would
+   * tick sessions in one copy of the file while every connection was checked
+   * against another.
+   */
+  sessionGrants: SessionGrants
   /**
    * Whether each paired device is one of the owner's own or a guest.
    *
@@ -472,6 +514,18 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    * is wiring it.
    */
   const grants = new FolderGrants(options.storageDir)
+
+  /**
+   * And which of the running sessions each device may see.
+   *
+   * The second axis, beside the first and for the same reason it is here: two
+   * instances would be two in-memory copies of one file, the settings panel
+   * writing to one while every `list`, `attach` and keystroke is checked against
+   * the other. Built at assembly rather than by the Electron shell so that the
+   * headless daemon, which serves the same protocol from the same fanout, cannot
+   * be the build where the rule is missing.
+   */
+  const sessionGrants = new SessionGrants(options.storageDir)
 
   /**
    * Whether each paired device is one of the owner's own or a guest.
@@ -1332,9 +1386,44 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * exactly the case the screen has to settle.
      */
     controls: {
-      read: (id) => {
+      read: async (id) => {
         const row = ptys.list().find((session) => session.id === id)
-        return readControls(ptys, id, row?.cwd, row?.provider)
+        const reading = await readControls(ptys, id, row?.cwd, row?.provider)
+        /*
+         * And the connectors, on the same answer.
+         *
+         * They ride this frame rather than one of their own because they are
+         * read on the same schedule and drawn by the same cluster — the chip is
+         * one of the four on that bar, and giving it a capability of its own
+         * would be a second round trip per output pause for a list that is three
+         * file reads. `loadServers` is the same function `mcp:list` calls for a
+         * window at this desk, resolved for *this* session's folder, which is
+         * what makes the chip over a remote session name the servers that
+         * session can actually reach rather than the asking machine's own.
+         *
+         * `statusFor` is deliberately not applied. That decorates each row with
+         * this machine's *connection* state, which is about an inspector process
+         * over here and means nothing to a chip a thousand kilometres away; what
+         * travels is the configuration, which is what the chip draws.
+         *
+         * A read that throws leaves the field absent rather than empty, and the
+         * two mean opposite things to a chip that exists only when there are
+         * connectors — see `ControlsReadingWire.connectors`.
+         */
+        let connectors
+        try {
+          connectors = loadServers(row?.cwd ?? null).map((server) => ({
+            id: server.id,
+            name: server.name,
+            scope: server.scope,
+            transport: server.transport,
+            enabled: server.enabled,
+            disabledReason: server.disabledReason,
+          }))
+        } catch {
+          connectors = undefined
+        }
+        return connectors === undefined ? reading : { ...reading, connectors }
       },
       apply: (id, control, value) => {
         const row = ptys.list().find((session) => session.id === id)
@@ -1375,6 +1464,61 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       describeSession: (id) => ptys.list().find((session) => session.id === id) ?? null,
       accounts: storedAccountLimits(),
     }),
+    /*
+     * The conversation, for a chat view that is not on this machine.
+     *
+     * The fourth seam, and the one that had nothing at all: `controls`, `usage`
+     * and `account` each closed a chip that was drawn-but-wrong over a remote
+     * session, and this closes a whole *view* that only ever existed at the
+     * desk. The chat view reads a transcript on this disk through
+     * `chat:load`/`chat:tail`, so a phone — which has neither the file nor a
+     * filesystem to find it in — could see a terminal and nothing else. Asad,
+     * about the phone client: *"app needs enrichment"*.
+     *
+     * Delegated exactly as the three above are: `createChatServe` uses the same
+     * `ChatReader` and the same `ChatCollapser` the window at this desk uses, so
+     * the bubbles are the same bubbles rather than a second reading of the same
+     * file that can disagree with it.
+     *
+     * `configDirFor` is the same question `usage` asks one line up and is asked
+     * the same way. An account is a config directory, so a session running as a
+     * second login files its conversation under that login's `projects/` — and
+     * without this a phone would be shown the *default* account's conversation
+     * in the same folder, which is words rather than a number and therefore the
+     * worse version of the mistake `usage-serve.ts` names.
+     *
+     * Here at assembly for the reason the others are: the headless build serves
+     * the same protocol from the same fanout, and a capability a shell had to
+     * remember to install is one the other shell forgets.
+     */
+    chat: createChatServe({
+      describeSession: (id) => ptys.list().find((session) => session.id === id) ?? null,
+      configDirFor: (session) =>
+        session.provider === 'codex' ? null : accountFor('claude', session).configDir,
+    }),
+    /*
+     * Whose login a session is on, and running it as another one, for a chip on
+     * another machine.
+     *
+     * The third of the three seams that make a remote session's bar the same bar
+     * as a local one, and the last one missing. Asad, on a session running on his
+     * PC: *"I want it exactly like the local ones"*, and *"bring the account
+     * selection here for the remote sessions too"*. The account chip was withheld
+     * because no frame carried the fact; this is the fact travelling.
+     *
+     * Spread rather than assigned, because its absence is what stops this machine
+     * advertising the capability — see `SessionAccess.account`. The headless build
+     * passes no `switchAccount` and therefore offers no chip, rather than offering
+     * one whose every row is refused after the press.
+     */
+    ...(options.switchAccount === undefined
+      ? {}
+      : {
+          account: createAccountServe({
+            describeSession: (id) => ptys.list().find((session) => session.id === id) ?? null,
+            switchAccount: options.switchAccount,
+          }),
+        }),
     /*
      * Ending a session from a device, which until tonight nothing could do.
      *
@@ -1444,6 +1588,36 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * what a device is offered and what it may touch, so the two cannot drift.
      */
     reach,
+    /*
+     * And the second axis, which the folder rule cannot express.
+     *
+     * `reach` above answers by folder, and this file's own comment on it admits
+     * what that costs: sharing a project shares whatever else is running in it.
+     * Asad, 2026-08-20: *"when we give remote access we should be able to choose
+     * between running sessions which ones to give and which ones not, i mean
+     * select vs all type of options"*. The two sessions he wants told apart are
+     * usually in the same folder.
+     *
+     * Handed to the fanout rather than folded into `reach`, because the two are
+     * genuinely different questions with different stores and different empty
+     * states — `reach` for a guest with nothing chosen is *nothing*, while a
+     * device nobody has narrowed here keeps everything. `SessionFanout.visible`
+     * ANDs them, which is the one predicate `server.ts` already funnels the
+     * listing and every verb through.
+     */
+    shared: (deviceId, sessionId) => sessionGrants.shares(deviceId, sessionId),
+    /*
+     * A session a device started itself is ticked for that device.
+     *
+     * Only for a device already on *Selected* — the store makes it a no-op
+     * otherwise — and it is not a hole in "a session started after the choice is
+     * not shared". That rule is about sessions somebody *else* started. This one
+     * passed the folder rule to be spawned at all and the device named it; the
+     * alternative is `create` handing back an id its caller may not attach to.
+     */
+    noteStarted: (deviceId, sessionId) => {
+      sessionGrants.include(deviceId, sessionId)
+    },
     // Both halves out of one starter, so the list a phone's picker is drawn from
     // is the list `create` checks against rather than a second computation of
     // the same idea. See `remoteSessionStart`.
@@ -1566,6 +1740,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       // process on this machine runs as the same account, so "nothing behind it"
       // is not a theoretical caller.
       credentials.sessionEnded(id)
+      // A tick naming a session that has exited can never mean anything again —
+      // ids are minted once — so it is dropped rather than left to grow the
+      // file. It cannot widen anything: the id it removes names nothing.
+      sessionGrants.dropSession(id)
       options.onExit?.(id, exitCode)
     },
     (id, status) => {
@@ -1606,6 +1784,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     wsl,
     sessions,
     grants,
+    sessionGrants,
     kinds,
     agents,
     credentials,

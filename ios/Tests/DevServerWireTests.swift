@@ -210,7 +210,7 @@ final class DevServerWireTests: XCTestCase {
     func testDevServersAreOnlyOfferedWhenTheDesktopAdvertisesThem() {
         let without = #"{"t":"welcome","protocol":1,"deviceId":"d","deviceName":"p","token":null,"sessions":[],"capabilities":["localhost","create"]}"#
         guard case let .ok(plain, _) = WireCodec.decode(without),
-              case let .welcome(_, _, _, _, _, none, _, _, _) = plain else {
+              case let .welcome(_, _, _, _, _, none, _, _, _, _) = plain else {
             return XCTFail("a welcome without devserver should decode")
         }
         XCTAssertFalse(none.contains(WireCapability.devserver),
@@ -218,7 +218,7 @@ final class DevServerWireTests: XCTestCase {
 
         let with = #"{"t":"welcome","protocol":1,"deviceId":"d","deviceName":"p","token":null,"sessions":[],"capabilities":["devserver"]}"#
         guard case let .ok(newer, _) = WireCodec.decode(with),
-              case let .welcome(_, _, _, _, _, offered, _, _, _) = newer else {
+              case let .welcome(_, _, _, _, _, offered, _, _, _, _) = newer else {
             return XCTFail("a welcome with devserver should decode")
         }
         XCTAssertTrue(offered.contains(WireCapability.devserver))

@@ -256,21 +256,32 @@ describe('a remote row says where it is, in its hover and nowhere else', () => {
      * The question a person actually has, closing a session that belongs to a
      * computer they are not sitting at, is whether this unpairs it. He answered
      * it himself — *"it should not disconnect the remote account"* — and the
-     * answer belongs on the control rather than in a dialog they reach by
-     * committing to the press.
+     * promise has to be kept somewhere he will read it.
      *
-     * The control moved on 2026-08-20: the row's ✕ became an entry in its ⋯
-     * menu, which is a native menu built in the main process, so the sentence is
-     * no longer in the markup to assert against. It is passed to the menu at the
-     * moment it opens, and this reads it where it is now written — the
-     * `closeSentence` in `Sidebar.tsx`. What is being held is the promise, not
-     * the widget: neither half of it may be lost in the move.
+     * It moved twice. The row's ✕ became an entry in a **native** ⋯ menu, so the
+     * words left the markup; and then the entry became the single word *Delete*
+     * — *"Close session one and end session, both are the same thing, two times.
+     * So only give the delete button here."* From that moment the sentence
+     * `Sidebar.tsx` was still composing went to a field the menu reads as a
+     * boolean, and this test was holding a promise nothing on screen was making.
+     *
+     * So it now reads the promise where it is actually kept: the confirmation
+     * the choice opens, which is the one surface between the press and the loss.
+     * And it pins the row to handing over the boolean, so the dead prose cannot
+     * quietly come back.
      */
     const source = readFileSync(join(__dirname, 'Sidebar.tsx'), 'utf8')
-    expect(source).toContain('ends the session on ${tab.machine.name}')
-    expect(source).toContain('That machine stays connected.')
-    // And a local row keeps the sentence it already had.
-    expect(source).toContain('ends the session`')
+    expect(source).toContain('close: tab.closable,')
+    // And the row composes no sentence of its own for it any more.
+    expect(source).not.toContain('const closeSentence')
+
+    const confirm = readFileSync(
+      join(__dirname, '..', 'components', 'CloseSessionConfirm.tsx'),
+      'utf8',
+    )
+    expect(confirm).toContain('This ends the session on that machine.')
+    expect(confirm).toContain('The machine itself stays connected.')
+
     // The row still says which machine it belongs to, in the one place it ever
     // did — its own tooltip.
     expect(rail()).toContain('on DESKTOP-DDGMNCV')

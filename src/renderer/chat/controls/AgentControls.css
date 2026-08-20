@@ -200,11 +200,11 @@
 /*
   `--ac-label` is the distance from the panel's inner edge to where an option's
   *words* start: a row's own left padding, plus the tick column, plus the gap
-  after it. Everything in a menu that is not a row — the "Now: …" footer, a
-  section's name and its description — is set to that instead of to the row's
-  padding, because otherwise it hangs 18px to the left of every label it is
-  describing, which is what "Effort" was doing above "Auto". Alignment is the
-  thing that makes an app feel amateur when nobody can name why.
+  after it. Everything in a menu that is not a row — a section's heading line, a
+  caption over a run of rows, the `Working…` line — is set to that instead of to
+  the row's padding, because otherwise it hangs 18px to the left of every label
+  it is describing, which is what "Effort" was doing above "Auto". Alignment is
+  the thing that makes an app feel amateur when nobody can name why.
 */
 .ac-menu,
 .ac-sheet,
@@ -336,8 +336,15 @@
   color: var(--text-muted);
 }
 
-/* The foot of a menu or a section: what the value is, where it came from, how
-   far a change reaches. Space sets it apart from the options; it needs no rule. */
+/* What is left of the foot of a section: one word, `Working…`, while a command
+   is in flight. Space sets it apart from the options; it needs no rule.
+
+   It used to be three lines — the current value, where it was read from, and
+   how far a change reaches — under every section of the folded sheet. The value
+   was the tick six rows above it, the source note is the section's `title` now,
+   and the reach is the CLI's own confirmation quoted into the notice after the
+   press. `ControlToggle` still uses the box for its own one-line reach inside a
+   popover, which is why the rule stays. */
 .ac-reach {
   display: flex;
   flex-direction: column;
@@ -475,18 +482,41 @@
   box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
 }
 
-/* Title bright, description dim, air around the block — the treatment the
-   settings window gives the same kind of thing. Space separates the sections;
-   there is no rule between them. */
+/* A title and its rows, with air around the block — the treatment the settings
+   window gives the same kind of thing. Space separates the sections; there is
+   no rule between them.
+
+   There is no description any more. `.ac-section-desc` was a line of grey prose
+   under every heading in this panel and it is deleted with the markup that drew
+   it: *"don't put any single statement in anywhere… Let the smart people use
+   it."* What survives of it is behind the ⓘ, for the one control whose
+   description says something a reader cannot deduce — see `controlNote` in
+   `catalog.ts`. */
 .ac-section {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
+/* The heading's own line: the name, and the ⓘ where there is one.
+
+   A row rather than a bare `<h4>` because the dot has to sit *on* the line, at
+   the end of the word, and baseline-aligned to it — an ⓘ that sits a pixel or
+   two high next to a semibold title is the kind of thing nobody can name and
+   everybody sees. The label offset moves here from `.ac-section-name` for the
+   same reason it was ever on it: every word in this panel starts where an
+   option's words start. */
+.ac-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: 0 var(--sp-2) 0 var(--ac-label);
+}
+
 .ac-section-name {
   margin: 0;
-  padding: 0 var(--sp-2) 0 var(--ac-label);
+  min-width: 0;
   font-family: var(--font-ui);
   font-size: var(--t-body);
   font-weight: var(--w-semibold);
@@ -494,13 +524,13 @@
   color: var(--text-primary);
 }
 
-.ac-section-desc {
-  margin: var(--sp-1) 0 var(--sp-2);
-  padding: 0 var(--sp-2) 0 var(--ac-label);
-  font-family: var(--font-ui);
-  font-size: var(--t-footnote);
-  line-height: var(--lh-body);
-  color: var(--text-muted);
+/* Air under the heading, which the description used to bring with it.
+
+   Set on the block that follows rather than on the head, so a section whose
+   rows are a switch and a section whose rows are a radiogroup keep the same
+   gap without either of them knowing about the other. */
+.ac-section-head + * {
+  margin-top: var(--sp-2);
 }
 
 .ac-options {
@@ -594,21 +624,18 @@
   color: var(--text-muted);
 }
 
-/* The first caption in a list needs no space above it: it is already the first
-   thing after the description, which brought its own. */
+/* The first caption in a list needs no space above it: the heading it sits
+   under already brought its own. */
 .ac-option-group:first-child {
   margin-top: 0;
 }
 
-.ac-sheet-note,
-.ac-sheet-foot {
-  margin: 0;
-  padding: 0 var(--sp-2) 0 var(--ac-label);
-  font-family: var(--font-ui);
-  font-size: var(--t-footnote);
-  line-height: var(--lh-body);
-  color: var(--text-muted);
-}
+/* `.ac-sheet-note` and `.ac-sheet-foot` were declared here and both are gone.
+   The foot was *"Every change here is typed into this session, exactly as you
+   would type it."* under the last section of the folded sheet, and it went with
+   every other standing sentence in this panel on 2026-08-20. The note had
+   already lost its markup. A class with nothing drawing it is a paragraph
+   waiting to be written again. */
 
 /* The usage readout is written as the last line of a wide pane — one centred
    row of items capped to the reading measure. In here it is a column 344px

@@ -65,13 +65,16 @@ final class MultiHostTests: XCTestCase {
         func goLive(_ sessions: [RemoteSession],
                     capabilities: Set<String> = ["create", "localhost"],
                     hostPlatform: HostPlatform = .mac,
+                    /// What the machine calls itself. Nil is every desktop older
+                    /// than the field, and is what a chip has to survive.
+                    hostName: String? = nil,
                     folders: [String]? = nil) {
             self.capabilities = capabilities
             state = ConnectionState(phase: .online, detail: "Connected.", retryAt: nil, attempts: 0)
             onEvent?(.state(state))
             onEvent?(.message(.welcome(protocolVersion: 1, deviceId: "d", deviceName: "iPhone",
                                        token: nil, sessions: sessions, capabilities: capabilities,
-                                       hostPlatform: hostPlatform, folders: folders, copilot: .silent),
+                                       hostPlatform: hostPlatform, hostName: hostName, folders: folders, copilot: .silent),
                               activity: [:]))
         }
 

@@ -145,10 +145,13 @@ import {
   saveBook,
   selectMachine,
   withCredential,
+  withHostName,
   withMachine,
   type MachineBook,
   type StoredMachine,
 } from './machines'
+import { ChatView } from './chat-view'
+import { SessionBar } from './session-bar'
 import { watchPhysicalKeyboard, type KeyBarFit, type MatchMedia } from './physical-keyboard'
 import {
   clearPairing,
@@ -360,6 +363,46 @@ function clipIcon(): SVGSVGElement {
   return svg
 }
 
+/**
+ * The mode toggle's glyph — and it draws **where you are going**, not where you are.
+ *
+ * His correction, in as many words, and it reverses what was built the night
+ * before: *"chat icon should be when I am on the terminal mode. And when I am on
+ * the chat mode, then it should show the terminal icon, so I can switch to that
+ * one instead of what I am on right now."*
+ *
+ * So `mode` is the *destination*: `'chat'` draws a speech bubble and takes you to
+ * the conversation; `'terminal'` draws a prompt and takes you back.
+ */
+function modeIcon(mode: 'chat' | 'terminal'): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('width', '16')
+  svg.setAttribute('height', '16')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '1.8')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  if (mode === 'chat') {
+    const bubble = document.createElementNS(SVG_NS, 'path')
+    bubble.setAttribute('d', 'M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.2A8 8 0 1 1 21 12Z')
+    svg.append(bubble)
+    return svg
+  }
+  const box = document.createElementNS(SVG_NS, 'rect')
+  box.setAttribute('x', '3')
+  box.setAttribute('y', '4')
+  box.setAttribute('width', '18')
+  box.setAttribute('height', '16')
+  box.setAttribute('rx', '2')
+  const prompt = document.createElementNS(SVG_NS, 'path')
+  prompt.setAttribute('d', 'm7 10 3 2.5L7 15M12.5 15H17')
+  svg.append(box, prompt)
+  return svg
+}
+
 function themeIcon(choice: ThemeChoice): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg')
   svg.setAttribute('viewBox', '0 0 24 24')
@@ -488,6 +531,19 @@ class Deck {
    * only function is to explain that it does not function is a fake feature.
    */
   private readonly attachButton = element('button', 'appearance')
+  /**
+   * Terminal ⇄ chat, in the header beside the paperclip.
+   *
+   * In the header rather than in the session bar because it is not a *reading*
+   * about the session, it is the thing you press to change what you are looking
+   * at — the same class of control the paperclip is, on the same session.
+   *
+   * Absent rather than disabled when the machine did not advertise `chat`,
+   * following the rule the paperclip and New session already follow: a control
+   * whose only function is to explain that it does not function is a fake
+   * feature.
+   */
+  private readonly modeButton = element('button', 'appearance')
   /**
    * The picker, and the only reason it is a permanent node.
    *
@@ -624,6 +680,28 @@ class Deck {
   private backfill: Backfill | null = null
   private keybar: KeyBarHandle | null = null
   private terminalScreen: HTMLElement | null = null
+  /**
+   * The three chips a session has on a Mac — usage, context, account.
+   *
+   * Held beside the terminal rather than inside it because it outlives no
+   * session: built with the pane, fed by the router, dropped by
+   * `destroyTerminal`. See `session-bar.ts` for why nothing new is on the wire.
+   */
+  private sessionBar: SessionBar | null = null
+  /**
+   * The same session read as a conversation rather than as a screen.
+   *
+   * Held beside the terminal, not instead of it: switching modes must not tear
+   * down a pty's emulator and replay its scrollback, which is what "rebuild the
+   * pane" would mean. Both exist; one is in the document.
+   */
+  private chatView: ChatView | null = null
+  /** Which of the two is on screen. The terminal is always the one you land on. */
+  private chatMode = false
+  /** Answers this client is waiting for, by request id. */
+  private readonly chatAsked = new Set<string>()
+  private chatRid = 0
+  private chatTailTimer: number | null = null
   /** Set while a message needs saying on the sessions screen. */
   private notice: string | null = null
   /**
@@ -903,10 +981,13 @@ class Deck {
     this.attachButton.title = 'Send a file to this session'
     this.attachButton.append(clipIcon())
     this.attachButton.addEventListener('click', () => this.fileField.click())
+    this.modeButton.type = 'button'
+    this.modeButton.hidden = true
+    this.modeButton.addEventListener('click', () => this.toggleMode())
 
     const titles = element('div', 'header__titles')
     titles.append(this.title, this.subtitle)
-    this.header.append(this.back, titles, this.attachButton, this.appearanceButton, this.fileField)
+    this.header.append(this.back, titles, this.modeButton, this.attachButton, this.appearanceButton, this.fileField)
 
     this.bannerAction.type = 'button'
     this.bannerAction.addEventListener('click', () => this.connection?.resume())
@@ -1765,6 +1846,29 @@ class Deck {
      * and a second copy of that in the router is the copy that goes out of step.
      */
     if (this.upload?.receive(message)) return
+    /*
+     * And the session bar, which owns four frame types the switch below has a
+     * case for none of. Routed by asking it whether the frame was its own, for
+     * the reason the transfer above is: `rid` is what tells two panels' answers
+     * apart, and a second copy of that mapping in the router is the copy that
+     * goes out of step.
+     */
+    if (this.sessionBar?.receive(message)) return
+    /*
+     * And the conversation, routed by `rid` for the reason the transfer and the
+     * bar above are: an answer belongs to the request that asked for it, and a
+     * router that matched on `t` alone would hand a reply to whichever surface
+     * happened to be listening.
+     */
+    if (message.t === 'chat.rows' && this.chatAsked.delete(message.rid)) {
+      if (message.id === this.attachedId) {
+        this.chatView?.apply(message.rows, message.reset, message.found)
+        // The toggle is taken away when the far machine has looked and found no
+        // transcript, so the answer has to be able to change the header.
+        this.renderHeader()
+      }
+      return
+    }
 
     switch (message.t) {
       case 'welcome':
@@ -1796,6 +1900,12 @@ class Deck {
               Date.now(),
             ),
           )
+          // After the machine is certain to be in the book, and on every
+          // connection rather than only at pairing. A machine paired before
+          // `hostName` was kept has none, and the offer that would have supplied
+          // one is read once, at the desk. See `withHostName`.
+          this.book = withHostName(this.book, this.dialledId, message.hostName ?? null)
+          this.keep()
         }
         this.applySessions(message.sessions, activity)
         if (this.screen === 'pair') this.screen = 'sessions'
@@ -1919,6 +2029,13 @@ class Deck {
         // Replay is scrollback from before this client arrived, so it says
         // nothing about when the session last did something.
         if (message.replay !== true) this.activity.set(message.id, Date.now())
+        // The context window moves when the agent writes, so the bar is asked
+        // when the writing stops rather than on a clock. See `noteOutput`.
+        if (message.replay !== true) this.sessionBar?.noteOutput()
+        // And the conversation, on the same event and only while it is the pane
+        // on screen. A transcript grows when the agent writes, which is exactly
+        // what this frame is.
+        if (message.replay !== true && this.chatMode) this.armChatTail()
         return
 
       case 'status': {
@@ -2184,6 +2301,7 @@ class Deck {
     const attached = this.sessions.find((session) => session.id === this.attachedId)
     this.back.hidden = this.backTarget() === null
     this.attachButton.hidden = !this.canSendFiles
+    this.renderModeButton()
     this.title.textContent = BRAND.name
     if (this.screen === 'terminal' && attached) {
       this.title.textContent = attached.title
@@ -4408,17 +4526,16 @@ class Deck {
   private chatBlock(compact: boolean): HTMLElement {
     const block = element('div', 'chat')
     const messages = compact ? this.copilot.chat.slice(-6) : this.copilot.chat
-    if (messages.length === 0) {
-      block.append(
-        element(
-          'p',
-          'empty',
-          this.copilot.report?.run === null
-            ? 'No run from this browser yet. Start one to talk to the copilot on that machine.'
-            : 'Nothing said yet.',
-        ),
-      )
-    }
+    /*
+     * An empty conversation is drawn as an empty conversation.
+     *
+     * Two sentences used to sit here — *"No run from this browser yet. Start one
+     * to talk to the copilot on that machine."* and *"Nothing said yet."* — and
+     * the first of them narrated a Start button that is on the same screen, two
+     * inches below. That is the habit he has now named four times: *"don't put
+     * any single statement in anywhere… Let the smart people use it."* The
+     * button says what to do; the blank says there is nothing yet.
+     */
     for (const message of messages) {
       const bubble = element('div', `chat__bubble chat__bubble--${message.role}`)
       bubble.append(element('div', 'chat__text', plain(message.text)))
@@ -5099,6 +5216,10 @@ class Deck {
         ? this.connection?.send({ t: 'attach', id })
         : this.connection?.send({ t: 'attach', id, cols: size.cols, rows: size.rows })
     this.attachSent = sent === true
+    // Only once the attach is on the wire: `usage.read` and `account.read` are
+    // authorised by the same per-device reach every keystroke is, and asking for
+    // a session this connection has not been given is answered `unknown-session`.
+    if (this.attachSent) this.sessionBar?.start()
   }
 
   private leaveTerminal(): void {
@@ -5140,8 +5261,37 @@ class Deck {
     const dock = element('div', 'keybar-dock')
     dock.append(keybar.element)
 
+    /*
+     * The session's own bar, above the terminal.
+     *
+     * Above rather than in the header because the header is the *machine* — its
+     * name, the paperclip, the theme — and these three are about the one session
+     * on screen. It draws nothing at all until an answer arrives, and nothing
+     * ever if the far machine does not advertise `usage` and `account`, so a
+     * desktop older than those capabilities gets a pane that is exactly what it
+     * was rather than a row explaining what it is missing.
+     */
+    const bar = new SessionBar({
+      send: (message) => this.connection?.send(message) === true,
+      capabilities: () => this.capabilities,
+      sessionId: () => this.attachedId,
+    })
+    this.sessionBar = bar
+
+    /*
+     * The same session as a conversation, built beside the terminal rather than
+     * instead of it.
+     *
+     * Both exist for the life of the pane and one is in the document at a time:
+     * rebuilding on every toggle would dispose an emulator and replay a whole
+     * scrollback to get back to where somebody already was.
+     */
+    const chat = new ChatView()
+    this.chatView = chat
+    this.chatMode = false
+
     const screen = element('div', 'terminal-screen')
-    screen.append(terminal.element, dock)
+    screen.append(bar.element, terminal.element, dock)
 
     /*
      * A file dragged onto the terminal, in a browser on a computer.
@@ -5201,10 +5351,137 @@ class Deck {
 
   private showTerminalScreen(): void {
     if (this.terminalScreen === null) return
+    const chat = this.chatView
+    if (chat === null) {
+      this.content.replaceChildren(this.terminalScreen)
+      return
+    }
+    /*
+     * One of the two is in the pane, and the bar stays above both.
+     *
+     * The usage, context and account chips are facts about the *session*, not
+     * about which way it is being read, so they do not move or disappear when
+     * the mode changes.
+     */
+    const bar = this.sessionBar?.element
+    if (this.chatMode) {
+      this.terminalScreen.replaceChildren(...(bar ? [bar] : []), chat.element)
+    } else {
+      /*
+       * The dock comes from the field, never from a `querySelector` on the pane.
+       *
+       * Switching to chat takes it out of the document, so a lookup on the way
+       * back finds nothing and the key bar is gone for the life of the session —
+       * which is exactly what the first render of this did, and what looking at
+       * it caught. `this.keybarDock` holds the node whether or not it is
+       * attached, which is the whole reason the field exists.
+       */
+      const terminal = this.terminal?.element
+      const dock = this.keybarDock
+      this.terminalScreen.replaceChildren(
+        ...(bar ? [bar] : []),
+        ...(terminal ? [terminal] : []),
+        ...(dock ? [dock] : []),
+      )
+      // The dock's own `hidden` is decided by the keyboard fit, not by the swap.
+      this.applyKeyBar()
+    }
     this.content.replaceChildren(this.terminalScreen)
   }
 
   /* -------------------------------------------------------------- files -- */
+
+  /* --------------------------------------------------------------- chat -- */
+
+  /**
+   * Whether the conversation can be read from here, right now.
+   *
+   * The same four facts `canSendFiles` asks and for the same reason: a session
+   * on screen, an attach that went out, a socket, and a machine that said it can
+   * read a transcript. One place, so the button and the frames cannot disagree
+   * about whether the gesture will work.
+   */
+  private get canReadChat(): boolean {
+    return (
+      this.screen === 'terminal' &&
+      this.attachedId !== null &&
+      this.state.phase === 'online' &&
+      this.capabilities.includes('chat')
+    )
+  }
+
+  /**
+   * Draw the toggle, or take it away.
+   *
+   * The glyph is the **destination**, which is his correction rather than a
+   * preference: *"chat icon should be when I am on the terminal mode. And when I
+   * am on the chat mode, then it should show the terminal icon."* So the icon and
+   * the label always name where the press goes.
+   *
+   * Hidden outright when the far machine has looked and found no transcript for
+   * this folder. That is a real state — a session running a shell, an agent that
+   * has never written one — and the alternative is a button that opens an empty
+   * screen with nothing on it to say why.
+   */
+  private renderModeButton(): void {
+    const empty = this.chatView !== null && this.chatView.hasTranscript === false
+    this.modeButton.hidden = !this.canReadChat || (empty && !this.chatMode)
+    if (this.modeButton.hidden) return
+    const going = this.chatMode ? 'terminal' : 'chat'
+    const label = going === 'chat' ? 'Read this session as a conversation' : 'Back to the terminal'
+    this.modeButton.setAttribute('aria-label', label)
+    this.modeButton.title = label
+    this.modeButton.replaceChildren(modeIcon(going))
+  }
+
+  /**
+   * Ask for the tail once the session has stopped printing.
+   *
+   * Debounced rather than sent per frame: one answer of an agent CLI is hundreds
+   * of `output` frames, and a file read per frame would be hundreds of round
+   * trips across a relay for one paragraph.
+   */
+  private armChatTail(): void {
+    if (this.chatTailTimer !== null) clearTimeout(this.chatTailTimer)
+    this.chatTailTimer = window.setTimeout(() => {
+      this.chatTailTimer = null
+      this.askChat(true)
+    }, 900)
+  }
+
+  /** Swap the pane, and ask for the conversation the first time. */
+  private toggleMode(): void {
+    if (!this.canReadChat) return
+    this.chatMode = !this.chatMode
+    if (this.chatMode) this.askChat(false)
+    this.showTerminalScreen()
+    this.renderHeader()
+    if (!this.chatMode) {
+      // The emulator was in a hidden subtree and cannot have measured itself
+      // while it was. Fitting before the frame lands would size it to zero and
+      // reflow scrollback that has already been painted.
+      requestAnimationFrame(() => {
+        this.terminal?.fit()
+        this.terminal?.focus()
+      })
+    }
+  }
+
+  /**
+   * Ask for the conversation, or for what has changed since.
+   *
+   * `tail` false is what opening the view asks; true is what a session going
+   * quiet asks. Nothing is asked while the chat pane is not on screen — a
+   * terminal somebody is typing into must not be sending a file read across a
+   * relay after every burst of output.
+   */
+  private askChat(tail: boolean): void {
+    const id = this.attachedId
+    if (id === null || !this.canReadChat) return
+    const rid = `chat-${(this.chatRid += 1)}`
+    if (this.connection?.send({ t: 'chat.read', rid, id, tail }) !== true) return
+    this.chatAsked.add(rid)
+  }
 
   /**
    * Whether a file can be sent from here, right now.
@@ -5298,9 +5575,19 @@ class Deck {
   }
 
   private destroyTerminal(): void {
-    // First, and before the terminal it is holding is disposed: it owns two
-    // timers, and one of them firing into a disposed emulator is a throw out of
-    // a `setTimeout` that nothing catches.
+    // First of all, and for the same reason the backfill is: it owns a timer,
+    // and one firing into a pane that has gone would ask for a session nothing
+    // is attached to.
+    this.sessionBar?.destroy()
+    this.sessionBar = null
+    this.chatView = null
+    this.chatMode = false
+    this.chatAsked.clear()
+    if (this.chatTailTimer !== null) clearTimeout(this.chatTailTimer)
+    this.chatTailTimer = null
+    // Then the backfill, before the terminal it is holding is disposed: it owns
+    // two timers, and one of them firing into a disposed emulator is a throw out
+    // of a `setTimeout` that nothing catches.
     this.backfill?.stop()
     this.backfill = null
     this.keybar?.destroy()

@@ -1,6 +1,8 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type DragEvent,
@@ -8,7 +10,7 @@ import {
 } from 'react'
 import { StatusDot } from '../components/StatusDot'
 import { tip } from '../keymap'
-import { bindKey, SessionBindChips, WindowBindChip, WindowMachineMark } from './BindChip'
+import { bindKey, SessionBindChips, WindowBindChip } from './BindChip'
 import {
   dragStartedOnControl,
   isTabDrag,
@@ -16,6 +18,7 @@ import {
   middleEllipsis,
   readTabDrag,
   startTabDrag,
+  MACHINE_ICON,
   STRIP_LABEL_BUDGET,
   tabIcon,
   machineTabId,
@@ -27,12 +30,18 @@ import {
   defaultStorage,
   demote,
   dropIndex,
+  offEdgeNames,
+  orderIndexForDrop,
   promote,
   pruneOrder,
   removeFromStrip,
   shownTabs,
+  stripGroups,
   usePromotedOrder,
+  type ShownTab,
+  type StripPlace,
 } from './workspace-strip'
+import { useWindowMachines } from './window-machine'
 import './WorkspaceTabStrip.css'
 
 /**
@@ -228,6 +237,9 @@ export interface WorkspaceTabStripProps {
 /** Points the way the content's left edge moves — the same glyph the rail uses. */
 const CHEVRON_RIGHT = 'M9.5 6.5 15 12l-5.5 5.5'
 
+/** Its mirror, for the count of windows scrolled off the leading edge. */
+const CHEVRON_LEFT = 'M14.5 6.5 9 12l5.5 5.5'
+
 const CLOSE = 'M7 7l10 10M17 7L7 17'
 
 function Glyph({ path, size = 14 }: { path: string; size?: number }) {
@@ -292,6 +304,37 @@ export function WorkspaceTabStrip({
     shown.map((entry) => entry.tab),
     tabs,
   )
+
+  /**
+   * Where each tab is running, from the two places that know.
+   *
+   * A **session** carries its machine (or its server) on the tab itself, because
+   * `App.tsx` builds it from the machines view. A **browser window** does not and
+   * cannot: which machine is serving the page is resolved inside
+   * `BrowserWorkspace`, against the tunnels that window itself opened — the
+   * address cannot answer it, since a tunnelled page wears a `127.0.0.1` address
+   * on *this* machine — so it arrives through the module store `window-machine.ts`
+   * publishes. Two sources, one question, and they meet here so that a session on
+   * his PC and a page served by his PC land in the same run.
+   */
+  const windowMachines = useWindowMachines()
+  const placeOf = useCallback(
+    (tab: WorkspaceTab): StripPlace | null => {
+      if (tab.kind === 'browser') return windowMachines.get(tab.id) ?? null
+      return tab.machine ?? tab.server ?? null
+    },
+    [windowMachines],
+  )
+  const groups = stripGroups(shown, placeOf)
+  /**
+   * Each tab's position in the whole row, by id.
+   *
+   * The drop caret and ⌥←/⌥→ count pills across the entire bar; the groups are a
+   * *drawing* order. Recovering the index from the inner map would restart the
+   * count at every heading, which would put the caret in the wrong gap the moment
+   * a second machine had anything open.
+   */
+  const positions = new Map(shown.map((entry, index) => [entry.tab.id, index]))
 
   /**
    * What to call the session a browser window is attached to, or null.
@@ -403,6 +446,76 @@ export function WorkspaceTabStrip({
     }
   }, [])
 
+  /**
+   * The windows that are on this bar and **not on screen** — one list per edge.
+   *
+   * ## What was silently lost
+   *
+   * The rail scrolls once the tabs stop giving (`--strip-tab-min`), and a
+   * scrolled-out tab is drawn nowhere and mentioned nowhere: measured in the
+   * harness at 700px with six tabs, `b2` sits entirely past the right edge while
+   * `b1` is in plain sight, and nothing on screen says a sixth window exists. A
+   * browser window is listed on no other surface — *"Browser windows will not be
+   * on the side bar at all"* — so for one of those, off the edge is the same as
+   * gone. Against the rule he stated for the whole feature: *"we always need a
+   * truth. So just be sure we always be able to see the truth."*
+   *
+   * ## Why a count and a press, and not a menu
+   *
+   * The count is the truth ("there are three more"), and the press is the way to
+   * them. A menu would be a second list of the same windows, drawn in a second
+   * shape, in a window that already has the rail and this bar — and it would put
+   * words on screen where a number and a chevron say it. The names are on the
+   * hover, which is where the `+N` bind chip already puts what it stands for.
+   *
+   * Names rather than a number in state, so the tooltip can say *which* windows
+   * without a second pass, and so the comparison below is over what is actually
+   * drawn.
+   */
+  const railRef = useRef<HTMLDivElement | null>(null)
+  const [offEdge, setOffEdge] = useState<{ start: string[]; end: string[] }>({
+    start: [],
+    end: [],
+  })
+
+  const measureEdges = useCallback((): void => {
+    const rail = railRef.current
+    if (!rail) return
+    // The reading is the DOM's; the rule about it is `offEdgeNames`', which is
+    // pure and has a test.
+    const { start, end } = offEdgeNames(
+      rail.getBoundingClientRect(),
+      Array.from(rail.querySelectorAll('[data-strip-tab]')).map((node) => {
+        const at = node.getBoundingClientRect()
+        return { left: at.left, right: at.right, name: node.getAttribute('data-tab-name') ?? '' }
+      }),
+    )
+    setOffEdge((held) => {
+      const same = (a: string[], b: string[]): boolean =>
+        a.length === b.length && a.every((value, index) => value === b[index])
+      return same(held.start, start) && same(held.end, end) ? held : { start, end }
+    })
+  }, [])
+
+  // After every render, because what is off the edge changes with the tabs, the
+  // window, the scroll position and the fold state — and only the first of those
+  // is a prop. It writes state only when the answer changed, so a settled bar is
+  // a measurement and nothing else. The same rule `useChipFit` follows.
+  useLayoutEffect(measureEdges)
+
+  useEffect(() => {
+    const rail = railRef.current
+    if (!rail) return
+    rail.addEventListener('scroll', measureEdges, { passive: true })
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measureEdges)
+    observer?.observe(rail)
+    return () => {
+      rail.removeEventListener('scroll', measureEdges)
+      observer?.disconnect()
+    }
+  }, [measureEdges])
+
   const boxes = useCallback((): Array<{ left: number; width: number }> => {
     const node = listRef.current
     if (!node) return []
@@ -432,7 +545,7 @@ export function WorkspaceTabStrip({
     // storage, or a drag from somewhere that speaks the same MIME type, would
     // otherwise put a permanent ghost in the strip.
     if (!tabs.some((tab) => tab.id === id)) return
-    setOrder(promote(order, id, dropIndex(boxes(), event.clientX)))
+    setOrder(promote(order, id, orderIndexForDrop(shown, order, dropIndex(boxes(), event.clientX))))
     onSelect(id)
   }
 
@@ -485,7 +598,9 @@ export function WorkspaceTabStrip({
   const moveByKey = (event: KeyboardEvent<HTMLDivElement>, id: string, index: number): void => {
     if (!event.altKey || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return
     event.preventDefault()
-    setOrder(promote(order, id, index + (event.key === 'ArrowLeft' ? -1 : 1)))
+    setOrder(
+      promote(order, id, orderIndexForDrop(shown, order, index + (event.key === 'ArrowLeft' ? -1 : 1))),
+    )
   }
 
   /**
@@ -512,6 +627,52 @@ export function WorkspaceTabStrip({
       <Glyph path={CHEVRON_RIGHT} size={18} />
     </button>
   )
+
+  /**
+   * How many windows are off one edge, and the press that brings them back.
+   *
+   * Drawn only when there are any, so the ordinary bar has neither — the same
+   * bargain every other mark in this window makes. A number and a chevron and no
+   * words: the standing rule this round is that nothing explains itself on
+   * screen, and what a `3 ›` at the end of a scrolling row means is not a thing
+   * anybody has to be told.
+   *
+   * Outside `.strip-rail`, deliberately. It is the report *about* the scroll, so
+   * it cannot ride inside the box it is reporting on — that is the same mistake
+   * the two openers were fixed for on 2026-08-20, when they scrolled away with
+   * the tabs and ended up drawn on top of one.
+   */
+  const offEdgeButton = (side: 'start' | 'end') => {
+    const names = side === 'start' ? offEdge.start : offEdge.end
+    if (names.length === 0) return null
+    const count = (
+      <span className="strip-off-count">{names.length}</span>
+    )
+    const chevron = <Glyph path={side === 'start' ? CHEVRON_LEFT : CHEVRON_RIGHT} size={12} />
+    return (
+      <button
+        type="button"
+        className="strip-off"
+        data-side={side}
+        /* Every window the number stands for, by name — the same thing the `+N`
+           bind chip's hover does, and for the same reason: a count nobody can
+           expand is a number you have to go and find the meaning of. */
+        title={names.join('\n')}
+        aria-label={`${names.length} more ${names.length === 1 ? 'window' : 'windows'} — scroll to ${
+          side === 'start' ? 'the start' : 'the end'
+        }`}
+        onClick={() => {
+          const rail = railRef.current
+          if (!rail) return
+          const step = Math.max(rail.clientWidth * 0.8, 1)
+          rail.scrollBy({ left: side === 'start' ? -step : step, behavior: 'smooth' })
+        }}
+      >
+        {side === 'start' ? chevron : count}
+        {side === 'start' ? count : chevron}
+      </button>
+    )
+  }
 
   /**
    * The two icons in the bar's trailing corner, and the only things in this bar
@@ -576,6 +737,242 @@ export function WorkspaceTabStrip({
     </div>
   )
 
+  /**
+   * One tab, drawn.
+   *
+   * A function rather than an inline callback because the row is no longer one
+   * flat `map`: {@link stripGroups} cuts the bar into a run per machine, and the
+   * tabs are drawn a group at a time. `index` is still the position in the whole
+   * row — the drop caret and ⌥←/⌥→ both count pills across the entire bar, not
+   * within a group — so it is passed in rather than taken from the inner map.
+   */
+  const renderTab = ({ tab, promoted }: ShownTab, index: number) => {
+    /*
+     * The name, then whatever it takes to tell it from its neighbour,
+     * then the cut — in that order. The qualifier is a separate element
+     * rather than part of the string so the stylesheet can make the
+     * *qualifier* give when the tab runs out of room: the identifier
+     * must never be the thing that shrinks, which is the same rule the
+     * sidebar row now holds against the account chip.
+     */
+    const { label: full, qualifier } = identities.get(tab.id) ?? {
+      label: tab.label,
+      qualifier: null,
+    }
+    const label = middleEllipsis(full, STRIP_LABEL_BUDGET)
+    const spoken = qualifier ? `${full} — ${qualifier}` : full
+    return (
+      <div
+        key={tab.id}
+        data-strip-tab=""
+        data-tab-id={tab.id}
+        /* What the off-edge count calls this window in its hover. On
+           the element the count is measuring, so the two can never
+           name different tabs. */
+        data-tab-name={spoken}
+        className="strip-tab"
+        data-active={tab.id === selectedId || undefined}
+        data-transient={!promoted || undefined}
+        data-drop-before={dropAt === index || undefined}
+        data-dragging={tab.id === draggingId || undefined}
+        draggable
+        onDragStart={(event) => {
+          /*
+           * A press on the tab's own ✕ is a press, not a drag.
+           *
+           * The same defect as the sidebar row's — see
+           * `dragStartedOnControl`, which holds the measurement — but it
+           * fails worse here, and that is worth spelling out. On the rail
+           * a swallowed press does nothing. Here the drag *completes*
+           * four pixels away, lands back on this strip, and reorders it:
+           * the user pressed ✕ on the second tab and the second tab moved
+           * to third place. A control that rearranges the bar when asked
+           * to remove something from it is worse than one that is inert.
+           */
+          if (dragStartedOnControl(event.clientX, event.clientY)) {
+            event.preventDefault()
+            return
+          }
+          dragging.current = tab.id
+          setDraggingId(tab.id)
+          droppedHere.current = false
+          startTabDrag(event.dataTransfer, tab.id)
+        }}
+        onDragEnd={onDragEnd}
+        onKeyDown={(event) => moveByKey(event, tab.id, index)}
+      >
+        {/*
+          The two flares at the tab's feet, which are what makes it read
+          as continuous with the pane rather than as a plate resting on
+          a bar. A real element rather than the tab's own `::before` and
+          `::after`: the insertion caret already owns `::before`, and a
+          shape that disappears whenever something is being dragged past
+          would be a very confusing bug to look at. Drawn for every tab
+          and painted only for the selected one, so nothing has to be
+          mounted or unmounted as the selection moves.
+        */}
+        <span className="strip-tab-skirt" aria-hidden="true" />
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab.id === selectedId}
+          className="strip-tab-face"
+          /* The whole title and the folder it runs in — the two things a
+             24-character tab cannot say for itself, and the pair that tells
+             three sessions in one project apart. */
+          title={tabTooltip(tab, spoken)}
+          onClick={() => onSelect(tab.id)}
+        >
+          <svg
+            className="strip-tab-icon"
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            {/* Its kind's mark, except for the copilot — the only
+                window in here there is exactly one of, which keeps the
+                compass it wears in the rail so the row and the pill are
+                recognisably one thing. See `tabIcon`. */}
+            <path d={tabIcon(tab)} />
+          </svg>
+          {/*
+            Which computer the page is on is **not** here any more, and
+            that is the E11 fix rather than a removal.
+
+            It was a 12px display glyph whose tooltip held the machine's
+            name, on the argument that a 232px tab cannot spare the
+            characters. The argument is still true and the answer was
+            still wrong: the fact he asked to be able to see was on no
+            surface without hovering, and it said nothing about the
+            *session* on the same machine two tabs along. The name is now
+            a heading over the whole run — see `stripGroups` — which
+            costs the title nothing and puts a machine's sessions and its
+            windows in one place, which is what he asked for.
+          */}
+          {/* The app's own status dot, not a second one drawn here: it owns
+              the colour, the fill and — the part that matters — the words a
+              screen reader says for each state, and a private copy would drift
+              from the sidebar's. A browser page has no status and gets no
+              mark, rather than a grey one that means nothing. */}
+          {tab.kind === 'session' && tab.status && <StatusDot status={tab.status} />}
+          <span className="strip-tab-label">{label}</span>
+          {qualifier && <span className="strip-tab-qualifier">{qualifier}</span>}
+          {/*
+            Which browser windows this session has, or which session this
+            browser window belongs to — the same relation, seen from
+            whichever end this pill is.
+
+            This is the slot the paragraph above deliberately left empty,
+            and it stays empty for a page that is attached to nothing:
+            the objection there was to a mark that means nothing, and
+            `B2` is not one. It is a chip rather than a dot precisely so
+            that it cannot be read as a third status — see `BindChip`.
+
+            No third *dot*: `StatusDot` keeps its slot and keeps owning
+            run state, which is a different question from where a link
+            from this session opens.
+          */}
+          {tab.kind === 'session' && <SessionBindChips {...bindKey(tab)} sessionName={spoken} />}
+          {tab.kind === 'browser' && (
+            <WindowBindChip browserTabId={tab.id} nameFor={sessionNameFor} />
+          )}
+        </button>
+
+        {/*
+          Two ✕s that look the same and mean opposite things —
+          2026-08-20. Read both branches together; neither is safe to
+          change on its own.
+
+          ## The session one: off the bar, nothing ended
+
+          *"for the sessions it will just close from the top bar, but it
+          will still stay in the side panel."* So it demotes and stops:
+          the pty runs, the rail keeps the row, the status dot keeps
+          moving. That reading is only available *because* the rail has
+          the row — which is the whole reason the browser branch below
+          cannot borrow it.
+
+          This is the branch a remote session takes too. `onEndRemote`
+          used to send one down the other road, ending it on its machine
+          from a glyph identical to this one; that is deleted rather than
+          rewired, because nothing on this bar may end a session.
+
+          ## The browser one: a real close
+
+          Because a page is listed nowhere else: *"Browser windows will
+          not be on the side bar at all."* With the rail out of the
+          picture, "off the strip" would leave a window open, bound to a
+          session, and drawn in no panel — so the only honest thing this
+          control can do is end it. It goes through the caller's usual
+          path, which is the same one ⌘W takes, so the main process
+          learns the window is gone and the number it was wearing is not
+          handed out again.
+
+          Nothing is asked first, and that is unchanged: there is no
+          process in a page to interrupt. The confirmation exists for
+          work that would be lost.
+
+          ## What keeps them apart on screen
+
+          `[data-ends]` on the browser one and not the session one. It is
+          the whole difference in the stylesheet: `--color-critical`
+          under the pointer for the ✕ that destroys something, plain grey
+          for the one that tidies. Plus a title each, two or three words,
+          naming the act rather than explaining it — no prose on screen
+          this round, so the argument is up here instead.
+
+          ## Absent rather than inert, on both
+
+          A host that cannot finish the act draws no ✕ for it — a test,
+          the harness mounting this bare. For the session that means
+          `onShowInstead`, without which taking the tab you are looking
+          at off the bar would visibly do nothing; see the prop.
+        */}
+        {tab.kind === 'session' && onShowInstead !== undefined && (
+          <button
+            type="button"
+            className="strip-tab-close"
+            // No `data-ends`. It is the only thing telling this ✕ apart
+            // from the one on the tab beside it, and this one ends
+            // nothing, so it must not wear the mark that says it does.
+            //
+            // See the guard in `onDragStart` above: the tab is draggable,
+            // and without this marker a press that slides a few pixels
+            // reorders the strip instead of taking this tab off it.
+            data-no-drag=""
+            aria-label={`Take ${full} off the bar`}
+            title="Take off the bar"
+            onClick={() => removeTab(tab.id)}
+          >
+            <Glyph path={CLOSE} />
+          </button>
+        )}
+        {tab.kind === 'browser' && onCloseWindow !== undefined && (
+          <button
+            type="button"
+            className="strip-tab-close"
+            data-ends=""
+            // See the guard in `onDragStart` above: the tab is draggable,
+            // and without this marker a press that slides a few pixels
+            // reorders the strip instead of closing this window.
+            data-no-drag=""
+            aria-label={`Close ${full}`}
+            title="Close this page"
+            onClick={() => onCloseWindow(tab.id)}
+          >
+            <Glyph path={CLOSE} />
+          </button>
+        )}
+      </div>
+    )
+
+  }
   /*
    * Nothing exists to draw, so there is nothing to be the top band of.
    *
@@ -629,6 +1026,7 @@ export function WorkspaceTabStrip({
       data-armed={armed || undefined}
     >
       {reveal}
+      {offEdgeButton('start')}
       {/*
         The tabs scroll; the bar does not.
 
@@ -644,230 +1042,56 @@ export function WorkspaceTabStrip({
       */}
       <div
         className="strip-rail"
+        ref={railRef}
         onDragOver={onDragOver}
         onDragLeave={() => setDropAt(null)}
         onDrop={onDrop}
       >
         <div className="strip-list" role="tablist" aria-label="Open tabs" ref={listRef}>
-          {shown.map(({ tab, promoted }, index) => {
-            /*
-             * The name, then whatever it takes to tell it from its neighbour,
-             * then the cut — in that order. The qualifier is a separate element
-             * rather than part of the string so the stylesheet can make the
-             * *qualifier* give when the tab runs out of room: the identifier
-             * must never be the thing that shrinks, which is the same rule the
-             * sidebar row now holds against the account chip.
-             */
-            const { label: full, qualifier } = identities.get(tab.id) ?? {
-              label: tab.label,
-              qualifier: null,
-            }
-            const label = middleEllipsis(full, STRIP_LABEL_BUDGET)
-            const spoken = qualifier ? `${full} — ${qualifier}` : full
-            return (
-              <div
-                key={tab.id}
-                data-strip-tab=""
-                data-tab-id={tab.id}
-                className="strip-tab"
-                data-active={tab.id === selectedId || undefined}
-                data-transient={!promoted || undefined}
-                data-drop-before={dropAt === index || undefined}
-                data-dragging={tab.id === draggingId || undefined}
-                draggable
-                onDragStart={(event) => {
-                  /*
-                   * A press on the tab's own ✕ is a press, not a drag.
-                   *
-                   * The same defect as the sidebar row's — see
-                   * `dragStartedOnControl`, which holds the measurement — but it
-                   * fails worse here, and that is worth spelling out. On the rail
-                   * a swallowed press does nothing. Here the drag *completes*
-                   * four pixels away, lands back on this strip, and reorders it:
-                   * the user pressed ✕ on the second tab and the second tab moved
-                   * to third place. A control that rearranges the bar when asked
-                   * to remove something from it is worse than one that is inert.
-                   */
-                  if (dragStartedOnControl(event.clientX, event.clientY)) {
-                    event.preventDefault()
-                    return
-                  }
-                  dragging.current = tab.id
-                  setDraggingId(tab.id)
-                  droppedHere.current = false
-                  startTabDrag(event.dataTransfer, tab.id)
-                }}
-                onDragEnd={onDragEnd}
-                onKeyDown={(event) => moveByKey(event, tab.id, index)}
-              >
-                {/*
-                  The two flares at the tab's feet, which are what makes it read
-                  as continuous with the pane rather than as a plate resting on
-                  a bar. A real element rather than the tab's own `::before` and
-                  `::after`: the insertion caret already owns `::before`, and a
-                  shape that disappears whenever something is being dragged past
-                  would be a very confusing bug to look at. Drawn for every tab
-                  and painted only for the selected one, so nothing has to be
-                  mounted or unmounted as the selection moves.
-                */}
-                <span className="strip-tab-skirt" aria-hidden="true" />
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={tab.id === selectedId}
-                  className="strip-tab-face"
-                  /* The whole title and the folder it runs in — the two things a
-                     24-character tab cannot say for itself, and the pair that tells
-                     three sessions in one project apart. */
-                  title={tabTooltip(tab, spoken)}
-                  onClick={() => onSelect(tab.id)}
-                >
+          {groups.map((group) => (
+            <Fragment key={group.id || '.'}>
+              {/*
+                The machine's name, once, over its own run of tabs — the *one
+                place* his sentence asked for.
+
+                Not on each tab: a 232px pill has a 28-character budget for a
+                title (`STRIP_LABEL_BUDGET`) and is already shedding chips into a
+                count to fit, so eight of those characters spent on `Office PC`
+                would cost the thing that actually tells two tabs apart, on every
+                tab, to state a fact that is the same for all of them. Once, over
+                the run, is the same trade the sidebar makes with a project
+                heading and the same one `browser-binding-ipc.ts` makes in its
+                menus — and it is what makes a machine's sessions and its browser
+                windows read as one thing rather than as two kinds of tab that
+                happen to be adjacent.
+
+                A label and not a sentence, so it stands with the standing rule
+                about prose on screen. `role="presentation"` because the tablist
+                may promise a screen reader nothing but tabs; the machine is on
+                each tab's own hover and accessible name already — see
+                `tabTooltip`.
+              */}
+              {group.heading !== null && (
+                <span className="strip-group" role="presentation">
                   <svg
-                    className="strip-tab-icon"
-                    width="15"
-                    height="15"
+                    width="12"
+                    height="12"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
-                    strokeWidth="1.5"
+                    strokeWidth="1.8"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     aria-hidden="true"
                   >
-                    {/* Its kind's mark, except for the copilot — the only
-                        window in here there is exactly one of, which keeps the
-                        compass it wears in the rail so the row and the pill are
-                        recognisably one thing. See `tabIcon`. */}
-                    <path d={tabIcon(tab)} />
+                    <path d={MACHINE_ICON} />
                   </svg>
-                  {/*
-                    And which computer the page is on, when it is not this one.
-
-                    Beside the kind-of-window icon because it is the same kind of
-                    fact, and because the trailing cluster is already shedding
-                    chips to fit. Nothing at all for a window on this machine —
-                    see `WindowMachineMark`, which is also where the argument
-                    lives for why a *session* pill deliberately has no twin of
-                    this and a browser window needs one.
-                  */}
-                  {tab.kind === 'browser' && <WindowMachineMark browserTabId={tab.id} />}
-                  {/* The app's own status dot, not a second one drawn here: it owns
-                      the colour, the fill and — the part that matters — the words a
-                      screen reader says for each state, and a private copy would drift
-                      from the sidebar's. A browser page has no status and gets no
-                      mark, rather than a grey one that means nothing. */}
-                  {tab.kind === 'session' && tab.status && <StatusDot status={tab.status} />}
-                  <span className="strip-tab-label">{label}</span>
-                  {qualifier && <span className="strip-tab-qualifier">{qualifier}</span>}
-                  {/*
-                    Which browser windows this session has, or which session this
-                    browser window belongs to — the same relation, seen from
-                    whichever end this pill is.
-
-                    This is the slot the paragraph above deliberately left empty,
-                    and it stays empty for a page that is attached to nothing:
-                    the objection there was to a mark that means nothing, and
-                    `B2` is not one. It is a chip rather than a dot precisely so
-                    that it cannot be read as a third status — see `BindChip`.
-
-                    No third *dot*: `StatusDot` keeps its slot and keeps owning
-                    run state, which is a different question from where a link
-                    from this session opens.
-                  */}
-                  {tab.kind === 'session' && <SessionBindChips {...bindKey(tab)} sessionName={spoken} />}
-                  {tab.kind === 'browser' && (
-                    <WindowBindChip browserTabId={tab.id} nameFor={sessionNameFor} />
-                  )}
-                </button>
-
-                {/*
-                  Two ✕s that look the same and mean opposite things —
-                  2026-08-20. Read both branches together; neither is safe to
-                  change on its own.
-
-                  ## The session one: off the bar, nothing ended
-
-                  *"for the sessions it will just close from the top bar, but it
-                  will still stay in the side panel."* So it demotes and stops:
-                  the pty runs, the rail keeps the row, the status dot keeps
-                  moving. That reading is only available *because* the rail has
-                  the row — which is the whole reason the browser branch below
-                  cannot borrow it.
-
-                  This is the branch a remote session takes too. `onEndRemote`
-                  used to send one down the other road, ending it on its machine
-                  from a glyph identical to this one; that is deleted rather than
-                  rewired, because nothing on this bar may end a session.
-
-                  ## The browser one: a real close
-
-                  Because a page is listed nowhere else: *"Browser windows will
-                  not be on the side bar at all."* With the rail out of the
-                  picture, "off the strip" would leave a window open, bound to a
-                  session, and drawn in no panel — so the only honest thing this
-                  control can do is end it. It goes through the caller's usual
-                  path, which is the same one ⌘W takes, so the main process
-                  learns the window is gone and the number it was wearing is not
-                  handed out again.
-
-                  Nothing is asked first, and that is unchanged: there is no
-                  process in a page to interrupt. The confirmation exists for
-                  work that would be lost.
-
-                  ## What keeps them apart on screen
-
-                  `[data-ends]` on the browser one and not the session one. It is
-                  the whole difference in the stylesheet: `--color-critical`
-                  under the pointer for the ✕ that destroys something, plain grey
-                  for the one that tidies. Plus a title each, two or three words,
-                  naming the act rather than explaining it — no prose on screen
-                  this round, so the argument is up here instead.
-
-                  ## Absent rather than inert, on both
-
-                  A host that cannot finish the act draws no ✕ for it — a test,
-                  the harness mounting this bare. For the session that means
-                  `onShowInstead`, without which taking the tab you are looking
-                  at off the bar would visibly do nothing; see the prop.
-                */}
-                {tab.kind === 'session' && onShowInstead !== undefined && (
-                  <button
-                    type="button"
-                    className="strip-tab-close"
-                    // No `data-ends`. It is the only thing telling this ✕ apart
-                    // from the one on the tab beside it, and this one ends
-                    // nothing, so it must not wear the mark that says it does.
-                    //
-                    // See the guard in `onDragStart` above: the tab is draggable,
-                    // and without this marker a press that slides a few pixels
-                    // reorders the strip instead of taking this tab off it.
-                    data-no-drag=""
-                    aria-label={`Take ${full} off the bar`}
-                    title="Take off the bar"
-                    onClick={() => removeTab(tab.id)}
-                  >
-                    <Glyph path={CLOSE} />
-                  </button>
-                )}
-                {tab.kind === 'browser' && onCloseWindow !== undefined && (
-                  <button
-                    type="button"
-                    className="strip-tab-close"
-                    data-ends=""
-                    // See the guard in `onDragStart` above: the tab is draggable,
-                    // and without this marker a press that slides a few pixels
-                    // reorders the strip instead of closing this window.
-                    data-no-drag=""
-                    aria-label={`Close ${full}`}
-                    title="Close this page"
-                    onClick={() => onCloseWindow(tab.id)}
-                  >
-                    <Glyph path={CLOSE} />
-                  </button>
-                )}
-              </div>
-            )
-          })}
+                  <span className="strip-group-name">{group.heading}</span>
+                </span>
+              )}
+              {group.entries.map((entry) => renderTab(entry, positions.get(entry.tab.id) ?? 0))}
+            </Fragment>
+          ))}
 
           {/* The gap at the end, drawn only while something is being dragged past
               the last tab — otherwise the strip ends in an unexplained line. */}
@@ -875,6 +1099,7 @@ export function WorkspaceTabStrip({
         </div>
       </div>
 
+      {offEdgeButton('end')}
       {openers}
     </div>
   )

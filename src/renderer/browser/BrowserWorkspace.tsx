@@ -461,7 +461,16 @@ export function BrowserWorkspace({
   const [deviceOpen, setDeviceOpen] = useState(false)
   const [mobileUa, setMobileUa] = useState(false)
 
-  const [sessionOpen, setSessionOpen] = useState(false)
+  /*
+   * The cookies dialog, and *whose* cookies.
+   *
+   * `null` is closed; a string is the profile id whose jar it is showing. It
+   * used to be a boolean, because there was only ever one jar it could show —
+   * the active one — which is the same limitation that made the profile menu a
+   * list of names. Every row can open its own now.
+   */
+  const [sessionFor, setSessionFor] = useState<string | null>(null)
+  const sessionOpen = sessionFor !== null
   const [shot, setShot] = useState<ScreenshotResult | null>(null)
   /*
    * Draw mode, as one nullable object plus what is on it.
@@ -526,6 +535,13 @@ export function BrowserWorkspace({
    */
   const [profileOpen, setProfileOpen] = useState(false)
   const [profileName, setProfileName] = useState('')
+  /*
+   * Every profile's name by id, so a dialog opened from a row can be titled
+   * with the row it was opened from. Read in the same pass as the active name —
+   * one invoke, two answers — rather than a second round trip when the dialog
+   * opens, which would leave its header blank for a frame.
+   */
+  const [profileNames, setProfileNames] = useState<Record<string, string>>({})
   const [flowOpen, setFlowOpen] = useState(false)
   const [trouble, setTrouble] = useState<SignInTrouble | null>(null)
   const [troubleFor, setTroubleFor] = useState('')
@@ -1698,6 +1714,7 @@ export function BrowserWorkspace({
       if (!state) return
       const active = state.profiles.find((entry) => entry.id === state.activeId)
       setProfileName(active ? active.name : '')
+      setProfileNames(Object.fromEntries(state.profiles.map((entry) => [entry.id, entry.name])))
     })
   }, [accounts])
 
@@ -1913,13 +1930,19 @@ export function BrowserWorkspace({
     const current = active?.url ?? ''
     const plan = moveFor(next, current, opened)
     setMachineId(next)
-    if (plan.kind === 'already') return
+    // `choose` is a tab with no page in it: the picker is only saying where the
+    // next address opens, which is what it did before it could move anything.
+    if (plan.kind === 'already' || plan.kind === 'choose') return
     if (plan.kind === 'refused') {
-      // Back to the machine the page is really on, and a line saying why. A
+      // Back to the machine the page is really on, and three words for why. A
       // picker left naming a machine the page never reached is the untruth this
-      // whole change is about.
+      // whole change is about — but the reason was a full sentence with its own
+      // consequence clause bolted on ("…, so it cannot be moved"), which is the
+      // habit he struck out: *"don't put any single statement in anywhere."*
+      // The snap-back already says it could not be moved. What it cannot say is
+      // why, and that is a noun phrase.
       setMachineId(plan.at)
-      setNotice('That page is not served by a machine, so it cannot be moved.')
+      setNotice('Not a machine’s page.')
       return
     }
     if (plan.kind === 'here') {
@@ -2127,10 +2150,13 @@ export function BrowserWorkspace({
 
            - picker on this machine, page on this machine → nothing. The field is
              only the link, exactly as he asked.
-           - picker and page on the same other machine → `Office PC:5199`, which
-             is what he explicitly asked to keep: *"in this kind of situation, we
-             will need to keep this so we know actually where it is running."*
-             The port is the part the picker cannot say.
+           - picker and page on the same other machine → nothing, unless the
+             tunnel had to take a different number, in which case the origin port
+             alone: `:5199`. He asked to keep this — *"in this kind of situation,
+             we will need to keep this so we know actually where it is
+             running"* — and in the same minute he struck out drawing a machine's
+             name twice a centimetre apart, so what is kept is the remainder.
+             See `served-mark.ts`.
            - picker naming one machine, page served by another (or by this one)
              → the page's own machine, by name. The disagreement is the whole
              point, and there is no port when the answer is this computer,
@@ -2143,10 +2169,14 @@ export function BrowserWorkspace({
                 port: served.port,
                 localPort: served.localPort,
                 sameNumber: served.sameNumber,
+                // Whether the picker beside the field is already saying this
+                // machine's name. `served-mark.ts` subtracts what it says from
+                // what is drawn, which is the whole of E13's second half.
+                agrees: served.machineId === machineId,
               }
             : machineId === THIS_MACHINE
               ? null
-              : { name: 'This machine', port: null, localPort: 0, sameNumber: true }
+              : { name: 'This machine', port: null, localPort: 0, sameNumber: true, agrees: false }
         }
       />
 
@@ -2476,7 +2506,7 @@ export function BrowserWorkspace({
           /* Only when there is no profile button to hold it — see `onCookies`
              in `BrowserMenu`. Site data belongs to a profile, and a build that
              cannot switch profiles still has to be able to clear its cookies. */
-          onCookies={profilesAvailable(accounts) ? undefined : () => setSessionOpen(true)}
+          onCookies={profilesAvailable(accounts) ? undefined : () => setSessionFor('')}
           onClose={() => setMenuOpen(false)}
         />
       )}
@@ -2485,15 +2515,15 @@ export function BrowserWorkspace({
         <ProfileMenu
           api={accounts}
           anchor={menuAnchor}
-          /* How many sites have data in the profile that is on. Only the active
-             partition can be enumerated at all — `guestSession()` resolves to
-             it — which is why the menu prints this against one row and not the
-             list. Absent when the bridge is not resolved and the panel is
-             already refusing to draw a page. */
+          /* How many sites have data in a *named* profile. Every partition can
+             be enumerated now — `browser-session.ts` takes the id and resolves
+             it — which is what lets the menu answer for every row instead of
+             the one that happens to be switched on. Absent when the bridge is
+             not resolved and the panel is already refusing to draw a page. */
           countSites={
-            api ? async () => (await api.browserCookies()).length : undefined
+            api ? async (profileId: string) => (await api.browserCookies(profileId)).length : undefined
           }
-          onSiteData={() => setSessionOpen(true)}
+          onSiteData={(profileId: string) => setSessionFor(profileId)}
           onReopen={reopenInActiveProfile}
           onClose={() => {
             setProfileOpen(false)
@@ -2505,8 +2535,10 @@ export function BrowserWorkspace({
       <SessionModal
         open={sessionOpen}
         bridge={api}
+        profileId={sessionFor ?? ''}
+        profileName={sessionFor ? (profileNames[sessionFor] ?? profileName) : profileName}
         isolated={active?.isolated === true}
-        onClose={() => setSessionOpen(false)}
+        onClose={() => setSessionFor(null)}
       />
     </div>
   )

@@ -100,6 +100,27 @@ struct StoredCredential: Equatable, Codable {
      */
     var nickname: String?
 
+    /**
+     * What the machine calls **itself** — its hostname, off `welcome.hostName`.
+     *
+     * Not a nickname and must not be confused with one: a nickname is the
+     * person's word and always wins; this is the machine's own and is only ever
+     * a default. It exists because the fallback below is `endpoint.shortName`,
+     * which for a relay pairing is the relay slot code — `2JJGF8`, `9ZA6K3` —
+     * and those name nothing anybody owns.
+     *
+     * Written on **every** connection rather than at pairing, which is the whole
+     * point: a machine paired before this field existed has nil here, and the
+     * pairing link that would have supplied a name is read once, at the desk. So
+     * the name arrives on the next socket instead of the next pairing.
+     *
+     * Optional with a default so a record written before this field existed
+     * still decodes — the same rule `nickname` above states, and for the same
+     * reason: a `StoredCredential` that fails to decode is a host that has
+     * vanished from the phone.
+     */
+    var hostName: String?
+
     /*
      * **`copilotCredential` used to be here, and is deliberately not any more.**
      *
@@ -125,9 +146,11 @@ struct StoredCredential: Equatable, Codable {
     /// Which machine this is. Stable across re-pairings with the same host.
     var hostId: String { endpoint.hostId }
 
-    /// What the switcher shows. The user's name for it, or the endpoint's own.
+    /// What the switcher shows: the user's name for it, then the machine's own,
+    /// then the endpoint's — which for a relay pairing is a slot code.
     var label: String {
         if let nickname, !nickname.trimmingCharacters(in: .whitespaces).isEmpty { return nickname }
+        if let hostName, !hostName.trimmingCharacters(in: .whitespaces).isEmpty { return hostName }
         return endpoint.shortName
     }
 
@@ -138,13 +161,20 @@ struct StoredCredential: Equatable, Codable {
     func redeemed(token: String, deviceId: String, deviceName: String) -> StoredCredential {
         StoredCredential(endpoint: endpoint, token: token, kind: .device,
                          deviceId: deviceId, deviceName: deviceName, pairedAt: Date(),
-                         nickname: nickname)
+                         nickname: nickname, hostName: hostName)
     }
 
     func renamed(_ name: String?) -> StoredCredential {
         StoredCredential(endpoint: endpoint, token: token, kind: kind,
                          deviceId: deviceId, deviceName: deviceName, pairedAt: pairedAt,
-                         nickname: name)
+                         nickname: name, hostName: hostName)
+    }
+
+    /// The machine said what it calls itself. The person's nickname is untouched.
+    func hostNamed(_ name: String) -> StoredCredential {
+        StoredCredential(endpoint: endpoint, token: token, kind: kind,
+                         deviceId: deviceId, deviceName: deviceName, pairedAt: pairedAt,
+                         nickname: nickname, hostName: name)
     }
 }
 

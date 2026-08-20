@@ -333,6 +333,8 @@ export interface DeckApi {
   onPreferencesChanged(cb: (preferences: unknown) => void): () => void
   onSettingsChanged(cb: (settings: unknown) => void): () => void
   pickProjectFolder(): Promise<string | null>
+  /** The home directory, for the one path that needs a folder and has none. */
+  homeFolder(): Promise<string | null>
   createSession(input: CreateSessionInput): Promise<SessionMeta>
   writeToSession(id: string, data: string): void
   resizeSession(id: string, cols: number, rows: number): void
@@ -490,7 +492,8 @@ export interface DeckApi {
     name: string
     promoted: boolean
     promoteBlocked?: string | null
-    close?: string | null
+    /** Whether this row can be deleted at all. The menu writes the word. */
+    close?: boolean
     copilotTurn?: boolean
     browser?: boolean
   }): Promise<string | null>
@@ -578,8 +581,8 @@ export interface DeckApi {
   openNotificationSettings(): Promise<unknown>
   notificationDelivery(sinceMs: number): Promise<unknown>
 
-  browserSessionInfo(): Promise<unknown>
-  browserCookies(filter?: unknown): Promise<unknown>
+  browserSessionInfo(profileId?: unknown): Promise<unknown>
+  browserCookies(profileId?: unknown): Promise<unknown>
 
   loadDashboard(projectPath: string): Promise<unknown>
   saveDashboard(projectPath: string, layout: unknown): Promise<void>

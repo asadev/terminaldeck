@@ -189,6 +189,17 @@ export function isUsableTitle(text: string): boolean {
  * the same folder, this is the fact that separates them, and it is the same
  * eight characters the Inspector and the debug panel already print for that
  * session. `NewSessionDialog.tsx` re-exports it so its callers did not move.
+ *
+ * ## What must never be passed to it
+ *
+ * A **browser window's** id. `App.tsx` mints those as `browser:<epoch-ms>:<seq>`
+ * — no hyphen — so this returns the whole string, and two blank windows both
+ * called `New tab` sent the qualifier ladder down to exactly that: a tab reading
+ * **browser:1787199912** beside a name cut short to make room for it. The guard
+ * is in `tabQualifiers` (`mayPrintId`), where the decision to print an id is
+ * made, rather than here, where all this could do is return a shorter piece of a
+ * string that should not have been asked about. A browser window's human name is
+ * its slot — `B1` — and it has no other.
  */
 export function shortSessionId(id: string): string {
   return id.split('-')[0] ?? id

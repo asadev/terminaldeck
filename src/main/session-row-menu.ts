@@ -67,13 +67,17 @@ export interface SessionRowMenuRequest {
    * *"Close session one and end session, both are the same thing, two times. So
    * only give the delete button here. It should call only delete."*
    *
-   * So the caller still decides **whether**, because only the row knows that,
-   * and the word is settled here — one word, in one place, matching the word the
-   * confirmation uses. A non-empty string is still accepted so the renderer did
-   * not have to change with this; anything truthy means "this row can be
-   * deleted".
+   * So the caller decides **whether**, because only the row knows that, and the
+   * word is settled here — one word, in one place, matching the word the
+   * confirmation uses.
+   *
+   * A boolean, and it used to be `string | null` "so the renderer did not have
+   * to change with this". The renderer duly did not change, and went on
+   * composing three sentences per row for a field nothing reads — which is
+   * exactly the dead prose this round is removing. The type is the boolean it
+   * has always been read as, so the next reader cannot mistake it for a label.
    */
-  close?: string | null
+  close?: boolean
   /** Whether the copilot started this session and its turn can still be opened. */
   copilotTurn?: boolean
   /**
@@ -215,7 +219,7 @@ export function registerSessionRowMenuIpc(ipcMain: IpcMain, deps: BindingIpcDeps
       name: str(input.name),
       promoted: input.promoted === true,
       promoteBlocked: str(input.promoteBlocked) || null,
-      close: str(input.close) || null,
+      close: input.close === true,
       copilotTurn: input.copilotTurn === true,
       browser: input.browser === true,
     })

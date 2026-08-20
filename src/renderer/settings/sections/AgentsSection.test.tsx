@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   AddAgentMenu,
-  AgentList,
   AgentsSection,
   ScopeSwitch,
   ServerAgents,
@@ -115,30 +114,28 @@ describe('an agent that is not installed is not on the page', () => {
     expect(agentsPresent(null)).toEqual([])
   })
 
-  it('draws no row and no install link for a missing agent', () => {
-    const html = renderToStaticMarkup(
-      <AgentList agents={agentsPresent(CLAUDE_ONLY)} loading={false} />,
-    )
-    expect(html).toContain('Claude Code')
-    expect(html).not.toContain('Codex CLI')
-    expect(html).not.toContain('Gemini CLI')
-    // "Get it" was the link on the greyed-out row. It moved into the menu with
-    // the agent it belonged to.
-    expect(html).not.toContain('Get it')
-    expect(html).not.toContain('Not installed')
-  })
-
-  it('says the machine has none, rather than that nothing was reported', () => {
-    // Two different states wearing one sentence: the probe has not answered, and
-    // the probe answered that there is nothing. The first draws a placeholder
-    // shaped like the rows so the panel does not jump; the second is an answer.
-    const waiting = renderToStaticMarkup(<AgentList agents={[]} loading />)
-    expect(waiting).toContain('settings-tool-ghost')
-    expect(waiting).not.toContain('No agent installed yet')
-
-    const answered = renderToStaticMarkup(<AgentList agents={[]} loading={false} />)
-    expect(answered).toContain('No agent installed yet')
-    expect(answered).not.toContain('settings-tool-ghost')
+  /**
+   * And the standing list of them is gone off the page altogether, which is the
+   * second half of the same sentence:
+   *
+   *   > *"We might have 100 things, so we cannot show all of them here. So we
+   *   > will show only mostly accounts here."*
+   *
+   * The pane drew "Claude Code 2.1.237 Ready / Codex CLI … Ready / Gemini CLI …
+   * Ready" above the account list, with a two-line paragraph under Codex. What
+   * only that list said — the version, and the caveat — is in the Add-agent
+   * menu; **which** agents are on the machine is what the account groups under
+   * it say, one heading per agent.
+   */
+  it('has no standing list of installed agents on the page', () => {
+    const html = pane({
+      checkPrerequisites: async () => ({ tools: [...CLAUDE_ONLY.tools] }),
+      listProfiles: async () => ({ profiles: [], defaultProfileId: null }),
+    })
+    expect(html).not.toContain('settings-tools')
+    expect(html).not.toContain('settings-tool-ghost')
+    expect(html).not.toContain('>Ready<')
+    expect(html).not.toContain('No agent installed yet')
   })
 
   /**
@@ -237,6 +234,65 @@ describe('the Add-agent menu', () => {
     const html = renderToStaticMarkup(<AddAgentMenu present={new Set(['claude'])} />)
     expect(html).toContain('>Installed</span>')
     expect(html).not.toContain('class="settings-addmenu-row"')
+  })
+
+  /**
+   * What came into the menu when the standing list went out of the pane.
+   *
+   *   > *"Why do we have all of this full list? Why not just one drop-down to
+   *   > look at it if we need it?"*
+   *
+   * The version, which nothing else in this window says — and the caveat, behind
+   * the ⓘ he named in the same breath, never printed on the row.
+   */
+  it('carries the version, and the caveat behind an ⓘ', () => {
+    const html = renderToStaticMarkup(
+      <AddAgentMenu
+        present={new Set(['claude', 'codex'])}
+        addable={new Set(['claude', 'codex'])}
+        agents={[
+          { id: 'claude', label: 'Claude Code', state: 'ready', version: '2.1.237', purpose: '', required: true },
+          {
+            id: 'codex',
+            label: 'Codex CLI',
+            state: 'ready',
+            version: 'codex-cli 0.146.0',
+            purpose: '',
+            required: false,
+            note: 'The `codex` on your PATH will not start, so Codex CLI runs from elsewhere.',
+          },
+        ]}
+        onAddAccount={() => {}}
+      />,
+    )
+    expect(html).toContain('2.1.237')
+    expect(html).toContain('codex-cli 0.146.0')
+    // The paragraph is in the ⓘ's hidden text, not on the row.
+    expect(html).toContain('class="hovernote-dot"')
+    expect(html).toContain('class="hovernote-text"')
+    expect(html).not.toMatch(/<span class="settings-tool-note">[^<]*PATH/)
+  })
+
+  /**
+   * And a `HoverNote` is a `<button>`, so it can never be inside the row's own
+   * button. This is the markup rule, asserted because the browsers that disagree
+   * about nested buttons disagree quietly.
+   */
+  it('keeps the ⓘ outside the row button, in a slot every row has', () => {
+    const html = renderToStaticMarkup(
+      <AddAgentMenu
+        present={new Set(['claude', 'codex'])}
+        addable={new Set(['claude', 'codex'])}
+        agents={[
+          { id: 'codex', label: 'Codex CLI', state: 'ready', purpose: '', required: false, note: 'Runs from elsewhere.' },
+        ]}
+        onAddAccount={() => {}}
+      />,
+    )
+    expect(html).not.toMatch(/<button[^>]*settings-addmenu-row[^>]*>(?:(?!<\/button>).)*hovernote-dot/s)
+    // Every row gets the slot, with or without a dot in it, so "Add account"
+    // stays in one column rather than shunting left on the rows that have one.
+    expect((html.match(/class="settings-addmenu-tail"/g) ?? []).length).toBeGreaterThan(1)
   })
 
   it('costs the closed pane nothing to carry', () => {

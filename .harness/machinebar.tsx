@@ -18,8 +18,12 @@
  *
  *  1. picker here, page here — the field is only the link, which is the other
  *     thing he asked for in the same minute.
- *  2. picker there, page there — name and port, which he asked to keep.
- *  3. picker there, page here — the disagreement, said out loud.
+ *  2. picker there, page there, same port — nothing, because the picker says the
+ *     machine and the address says the port; a name in both places a centimetre
+ *     apart is the duplication he struck out for `local`.
+ *  3. picker there, page there, a *different* port — the origin port alone, the
+ *     one fact neither of the other two controls can say.
+ *  4. picker there, page here — the disagreement, said out loud.
  */
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -29,6 +33,7 @@ import '../src/renderer/browser/BrowserWorkspace.css'
 import { Toolbar } from '../src/renderer/browser/Toolbar'
 import { MachinePicker } from '../src/renderer/browser/MachinePicker'
 import { THIS_MACHINE, type MachineChoice } from '../src/renderer/browser/machines-bridge'
+import type { ServedBy } from '../src/renderer/browser/served-mark'
 import { newTab } from '../src/renderer/browser/tabs'
 import { Tooltips } from '../src/renderer/shell/Tooltips'
 import '../src/renderer/shell/tooltip.css'
@@ -48,7 +53,7 @@ interface Row {
   label: string
   url: string
   selected: string
-  served: { name: string; port: number | null; localPort: number; sameNumber: boolean } | null
+  served: ServedBy | null
 }
 
 const ROWS: Row[] = [
@@ -59,16 +64,22 @@ const ROWS: Row[] = [
     served: null,
   },
   {
-    label: 'picker: Office PC · page: Office PC (tunnelled)',
+    label: 'picker: Office PC · page: Office PC (tunnelled, same port)',
     url: 'http://127.0.0.1:5199/orders',
     selected: 'office-pc',
-    served: { name: 'Office PC', port: 5199, localPort: 5199, sameNumber: true },
+    served: { name: 'Office PC', port: 5199, localPort: 5199, sameNumber: true, agrees: true },
+  },
+  {
+    label: 'picker: Office PC · page: Office PC (tunnel took another port)',
+    url: 'http://127.0.0.1:53412/orders',
+    selected: 'office-pc',
+    served: { name: 'Office PC', port: 5199, localPort: 53412, sameNumber: false, agrees: true },
   },
   {
     label: 'picker: Office PC · page: fetched HERE',
     url: 'http://example.com/',
     selected: 'office-pc',
-    served: { name: 'This machine', port: null, localPort: 0, sameNumber: true },
+    served: { name: 'This machine', port: null, localPort: 0, sameNumber: true, agrees: false },
   },
 ]
 

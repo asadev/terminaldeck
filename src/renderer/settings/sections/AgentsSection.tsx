@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { LOOKUP_AGENTS } from '../../../shared/agent-catalog'
 import type { ProviderId } from '@shared/types'
 import { askForAddAccount, profileLoginLabel, useKnownSignIns } from '../../accounts'
+import { HoverNote } from '../../components/HoverNote'
 import {
   closeMenu,
   Group,
@@ -88,19 +89,16 @@ import { SetupSection } from './SetupSection'
 const AGENT_IDS: readonly string[] = LOOKUP_AGENTS.map((entry) => entry.id as string)
 
 /**
- * The states a row can be in, now that `missing` is not one of them.
+ * `STATE_LABEL` was here — Ready / Sign-in needed / Not installed / Unknown,
+ * printed down the right of a standing list of every installed agent.
  *
- * The key is still the full union rather than the three that reach the screen,
- * because it is indexed by whatever the main process said — and a state that
- * has been filtered out upstream is exactly the kind of thing a later edit
- * un-filters.
+ * The list is gone (see `AddAgentMenu`) and the word went with it rather than
+ * moving, because on this pane it was the same fact twice. Whether an agent can
+ * start a session is answered per *login* on every account row below —
+ * "Signed in" / "Not signed in", read from that agent's own `auth status` — and
+ * an agent-level summary of those rows sat above them saying it again in one
+ * word. What is left in the menu is the version, which nothing else says.
  */
-const STATE_LABEL: Record<ToolStatus['state'], string> = {
-  ready: 'Ready',
-  'installed-not-authed': 'Sign-in needed',
-  missing: 'Not installed',
-  unknown: 'Unknown',
-}
 
 /**
  * Suffix for the default-tool picker. Short — it renders inside an `<option>`.
@@ -200,77 +198,31 @@ export function ServerAgents() {
   return <p className="settings-prose">No servers yet.</p>
 }
 
-/**
- * The agents this machine has, as rows.
+/*
+ * `AgentList` was here: a standing list of every installed agent, with its
+ * version, a status word and — under Codex on this machine — a two-line
+ * paragraph about which copy of the binary actually runs.
  *
- * A component of its own because it is the piece the instruction is about — a
- * row here means the CLI is installed, full stop — and because a list that only
- * ever appears after an effect has run is a list no test in this project can
- * read. It takes the answer instead of fetching it.
+ * It is deleted rather than shortened, and the sentence it was deleted for is
+ * the one he repeated most:
  *
- * @param loading true while the probe has not answered at all, which is a
- *   different thing from "answered, and there is nothing": the first draws a
- *   placeholder shaped like the rows so the panel does not jump when a
- *   one-second probe returns, and the second draws the four words that say the
- *   machine has no agent on it.
+ *   > *"Here it's too messy and too difficult to understand… We might have 100
+ *   > things, so we cannot show all of them here. So we will show only mostly
+ *   > accounts here."*
+ *
+ * and, of the paragraph itself:
+ *
+ *   > *"Remove this full shit. I don't want any kind of long descriptions
+ *   > anywhere. Just if somewhere it's very required, give the i icon."*
+ *
+ * Nothing it said is unreachable. **Which** agents this machine has is the same
+ * question the account groups underneath answer — profiles.ts mints one login
+ * per installed agent, so an installed agent always has a heading down there —
+ * and *whether* one can start a session is answered per login on every row of
+ * it. What only this list said is the version and the caveat, and both are in
+ * the Add-agent menu now, which is his own answer to a list that is too long to
+ * stand on a page: *"why not just one drop-down to look at it if we need it?"*
  */
-export function AgentList({ agents, loading }: { agents: readonly ToolStatus[]; loading: boolean }) {
-  return (
-    <>
-      <ul className="settings-tools">
-        {/*
-          One status mark per row, not two.
-
-          Every row carried a coloured dot on the left *and* the same state
-          spelled out on the right — "Ready" said twice, once in a way a
-          colour-blind reader cannot read and once in grey. The word is the one
-          that survives, and it takes the colour.
-
-          The note is shown only when it says something the title has not. A row
-          headed "Claude Code" was explaining itself with "Run Claude Code
-          sessions"; `remedy` — what to do about a tool that is not working — is
-          worth a line, and a restatement is not.
-        */}
-        {agents.map((tool) => (
-          <li key={tool.id} className="settings-tool" data-state={tool.state}>
-            <span className="settings-tool-main">
-              <span className="settings-tool-name">
-                {tool.label}
-                <ToolVersion tool={tool} />
-              </span>
-              {tool.remedy && <span className="settings-tool-note">{tool.remedy}</span>}
-              {/* Not a remedy. Today it says one thing: that this agent is
-                  running from a copy other than the one on your PATH, which is
-                  how Codex works on a machine whose npm launcher cannot spawn
-                  its own vendored binary. A person who is never told that finds
-                  `codex` failing in their terminal and working here, and stops
-                  trusting the row. */}
-              {tool.note && <span className="settings-tool-note">{tool.note}</span>}
-            </span>
-            <span className="settings-tool-state settings-tool-state-lit">
-              {STATE_LABEL[tool.state]}
-            </span>
-          </li>
-        ))}
-        {loading &&
-          agents.length === 0 &&
-          AGENT_IDS.map((id) => (
-            <li key={id} className="settings-tool settings-tool-ghost" aria-hidden="true">
-              <span className="settings-tool-main">
-                <span className="settings-ghost-line" />
-              </span>
-              <span className="settings-ghost-line settings-ghost-short" />
-            </li>
-          ))}
-      </ul>
-      {/* A real state rather than a stall. With missing agents off the page, a
-          machine that has none draws no rows at all, and the menu under this
-          line is where the first one comes from — which is why four words are
-          enough. */}
-      {!loading && agents.length === 0 && <p className="settings-prose">No agent installed yet.</p>}
-    </>
-  )
-}
 
 /* --------------------------------------------------------------- add agent -- */
 
@@ -313,10 +265,19 @@ export function AgentList({ agents, loading }: { agents: readonly ToolStatus[]; 
  * be on the page at all"*. A per-agent show/hide switch would be a second
  * meaning for "added", stored in a file, controlling a page he asked to have
  * *fewer* controls on.
+ *
+ * ## And what came *into* it, 2026-08-20
+ *
+ * The version, and the one caveat an agent can carry. Both were a standing list
+ * on the pane above this — see the note where `AgentList` used to be — and this
+ * is where he said a list that long belongs: *"why not just one drop-down to
+ * look at it if we need it?"* The caveat is behind an ⓘ rather than printed,
+ * which is the other half of the same instruction.
  */
 export function AddAgentMenu({
   present,
   addable,
+  agents = [],
   onAddAccount,
 }: {
   present: ReadonlySet<string>
@@ -331,6 +292,16 @@ export function AddAgentMenu({
    * promises an account that cannot exist is not.
    */
   addable?: ReadonlySet<string>
+  /**
+   * What the probe found, for the two facts a row can carry beyond its name.
+   *
+   * The version, which nothing else in this window says; and `note`, which
+   * today says exactly one thing — that this agent runs from a copy other than
+   * the one on your PATH — and is the reason it is kept at all: somebody never
+   * told that finds `codex` failing in their own terminal and working here, and
+   * stops trusting the app rather than the install.
+   */
+  agents?: readonly ToolStatus[]
   /** Open the Add-account popup for this agent. Absent draws no action. */
   onAddAccount?(provider: ProviderId): void
 }) {
@@ -338,41 +309,76 @@ export function AddAgentMenu({
     <details className="settings-addmenu">
       <summary>Add agent</summary>
       <ul>
-        {LOOKUP_AGENTS.map((entry) => (
-          <li key={entry.id}>
-            {present.has(entry.id) && addable?.has(entry.id) && onAddAccount ? (
-              /* The whole row is the button, because the whole row is what a
-                 person aims at in a menu — and it is a `<button>` rather than a
-                 clickable `<li>` so that it is reachable by keyboard and
-                 announced as an action, which is exactly what the dead version
-                 was not. */
-              <button
-                type="button"
-                className="settings-addmenu-row"
-                onClick={(event) => {
-                  closeMenu(event)
-                  onAddAccount(entry.id as ProviderId)
-                }}
-              >
-                <span className="settings-addmenu-name">{entry.label}</span>
-                <span className="settings-addmenu-have">Add account</span>
-              </button>
-            ) : (
-              <>
-                <span className="settings-addmenu-name">{entry.label}</span>
-                {present.has(entry.id) ? (
-                  <span className="settings-addmenu-have">Installed</span>
-                ) : (
-                  // An agent with no page to send anybody to is still worth
-                  // listing: its absence from the rows above is the fact, and a
-                  // menu that silently dropped it would be the greyed-out row's
-                  // problem in a smaller box.
-                  entry.url && <LinkOut href={entry.url}>Install</LinkOut>
+        {LOOKUP_AGENTS.map((entry) => {
+          const tool = agents.find((row) => row.id === entry.id)
+          const installed = present.has(entry.id)
+          /* The version sits inside the button on a row that has one and beside
+             the name on a row that does not, so it is in the same column either
+             way. `ToolVersion` draws nothing at all for a tool with no version,
+             which is what a menu rendered before the probe answers looks like. */
+          const version = installed && tool ? <ToolVersion tool={tool} /> : null
+          return (
+            <li key={entry.id}>
+              {installed && addable?.has(entry.id) && onAddAccount ? (
+                /* The whole row is the button, because the whole row is what a
+                   person aims at in a menu — and it is a `<button>` rather than a
+                   clickable `<li>` so that it is reachable by keyboard and
+                   announced as an action, which is exactly what the dead version
+                   was not. */
+                <button
+                  type="button"
+                  className="settings-addmenu-row"
+                  onClick={(event) => {
+                    closeMenu(event)
+                    onAddAccount(entry.id as ProviderId)
+                  }}
+                >
+                  <span className="settings-addmenu-name">
+                    {entry.label}
+                    {version}
+                  </span>
+                  <span className="settings-addmenu-have">Add account</span>
+                </button>
+              ) : (
+                <>
+                  <span className="settings-addmenu-name">
+                    {entry.label}
+                    {version}
+                  </span>
+                  {installed ? (
+                    /* The right of a row is what can be done with it, in one
+                       column down the menu: **Add account**, **Install**, or —
+                       for an agent that is here and keeps one login per machine
+                       — the word that says both why there is no button and that
+                       nothing is missing. */
+                    <span className="settings-addmenu-have">Installed</span>
+                  ) : (
+                    // An agent with no page to send anybody to is still worth
+                    // listing: its absence from the account groups is the fact,
+                    // and a menu that silently dropped it would be the
+                    // greyed-out row's problem in a smaller box.
+                    entry.url && <LinkOut href={entry.url}>Install</LinkOut>
+                  )}
+                </>
+              )}
+              {/* Outside the row's button, never inside it: a `HoverNote` is
+                  itself a `<button>`, and a button inside a button is markup no
+                  browser agrees about.
+
+                  In a slot of its own, and the slot is there whether the dot is
+                  or not — a fixed width holding the dot *and* the hidden span
+                  it puts its text in. Measured without it: the right edge of
+                  "Add account" landed at 692 on the one row with a caveat and
+                  696 on the two without, because the screen-reader span is a
+                  1px child of the row. */}
+              <span className="settings-addmenu-tail">
+                {installed && tool?.note && (
+                  <HoverNote label={entry.label}>{tool.note}</HoverNote>
                 )}
-              </>
-            )}
-          </li>
-        ))}
+              </span>
+            </li>
+          )
+        })}
       </ul>
     </details>
   )
@@ -582,34 +588,46 @@ export function AgentsSection(props: SectionProps) {
               />
             )}
 
-            {!bridge.checkPrerequisites ? (
+            {!bridge.checkPrerequisites && (
               <Notice tone="warn">{missingChannelNote('Checking installed agents')}</Notice>
-            ) : (
-              <>
-                {/* Nothing about the list while the probe has failed: the
-                    notice above says the machine could not be read, and a list
-                    under it saying "no agent installed" would be the same
-                    screen answering its own question two ways. */}
-                {error === null && <AgentList agents={agents} loading={prereq === null} />}
-                {/* The menu's installed rows and the pane's **Add account**
-                    button open the same popup, which is the point: there is one
-                    place an account is added, reachable from wherever somebody
-                    happened to be looking for it. `AccountsSection` below is
-                    what hears this — see `askForAddAccount`. */}
-                <AddAgentMenu
-                  present={present}
-                  addable={addable}
-                  onAddAccount={(id) => askForAddAccount(id)}
-                />
-              </>
             )}
           </Group>
 
           {/*
             The Accounts pane, in place. `head={false}` because this page already
             has a heading and the rail entry that used to carry this one is gone.
+
+            **Add agent** is its foot, and that is the whole of D10. The foot held
+            a primary button called *Add account*, directly under a row carrying a
+            button called *Sign in*, and the two were the pair he collided with:
+
+              > *"And why do we have see sign in here separately, add account
+              > here separately? … Let's try from here, add of sign in. It's also
+              > taking me same place."*
+
+            They did lead to the same place, so one of them goes. The one that
+            survives is the one he described — *"we just give a button drop-down,
+            add app, and they will add app… If we add Claude Code, and then we
+            will have relevant stuff, add account things"* — and it is not a
+            second blue button beside the row's, so nothing on this pane is now
+            two doors to one act. It is passed down rather than rendered here so
+            it lands *inside* the list's own foot; `AccountsSection` cannot import
+            it, because this module already imports `AccountsSection`.
           */}
-          <AccountsSection {...props} head={false} />
+          <AccountsSection
+            {...props}
+            head={false}
+            addAgent={
+              bridge.checkPrerequisites && error === null ? (
+                <AddAgentMenu
+                  present={present}
+                  addable={addable}
+                  agents={agents}
+                  onAddAccount={(id) => askForAddAccount(id)}
+                />
+              ) : null
+            }
+          />
 
           {/*
             And Setup: the coding tools that are not agents. Its own "the agent

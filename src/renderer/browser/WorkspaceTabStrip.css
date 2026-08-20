@@ -916,6 +916,123 @@
   the tab labels without a nudge value that would have to be re-derived every
   time the bar's height changed.
 */
+/*
+  The machine's name over its own run of tabs.
+
+  ## Why the bar has headings at all
+
+  > *"if I open any browser here and if I connect it to, let's say, desktop, now
+  > this is in desktop, it should come under this table, under the desktop
+  > sessions. So all the desktop browser, including session, should be at one
+  > place."*
+
+  He asked for the grouping in the sidebar and then took browser windows out of
+  the sidebar altogether, which leaves this bar as the only surface a browser
+  window is drawn on — so this is where a machine's sessions and its windows come
+  to be one thing. `stripGroups` in `workspace-strip.ts` owns the arrangement and
+  the argument.
+
+  ## Why it is a caption and not a tab
+
+  It is the quietest thing on the row on purpose: muted ink, the caption size, a
+  12px display glyph, and a hairline in front of it that does the actual work of
+  separating one machine's tabs from the next machine's. A heading that competed
+  with the tabs would be a pill you cannot press sitting in a row of pills you
+  can. `--sp-2` of lead-in keeps it off the previous machine's last tab, and the
+  same rule keeps the glyph and the name from touching.
+
+  `align-self: flex-end` and the tab's own height, because the rail sits its tabs
+  on the bar's bottom edge — a caption centred in the bar's height would float
+  above the row it heads. The same alignment `.strip-openers` takes, for the same
+  reason.
+*/
+.strip-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-05);
+  flex-shrink: 0;
+  align-self: flex-end;
+  height: var(--strip-tab-h);
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  margin-left: var(--sp-1);
+  border-left: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  white-space: nowrap;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+/* The first run on the bar is this computer's and has no heading, so a heading
+   that *is* first belongs to a machine whose group leads the row — and a rule
+   drawn against the bar's own edge would read as the end of something. */
+.strip-group:first-child {
+  margin-left: 0;
+  border-left: none;
+  padding-left: var(--sp-1);
+}
+
+.strip-group-name {
+  /* The name gives before the glyph does: the glyph is what says "a computer",
+     and half a display icon says nothing at all. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+  How many windows are off an edge of a bar that has started scrolling.
+
+  The tabs stop giving at `--strip-tab-min` and the rail scrolls, and until this
+  a scrolled-out tab was drawn nowhere and mentioned nowhere — which for a
+  browser window, listed on no other surface, is the same as gone. *"we always
+  need a truth."*
+
+  A number and a chevron, no words, and absent entirely when nothing is off the
+  edge. It sits outside `.strip-rail` because it is the report about the scroll:
+  inside, it would scroll away with the thing it is reporting on, which is the
+  fault the two openers were moved out of the rail for.
+*/
+.strip-off {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  align-self: flex-end;
+  height: var(--strip-tab-h);
+  padding: 0 var(--sp-1);
+  color: var(--text-secondary);
+  -webkit-app-region: no-drag;
+}
+
+/*
+  A hairline between the count and the tabs, and it is not decoration.
+
+  Rendered without one at 700px the bar read **Fix 1 ›** — the count sitting
+  hard against a tab the scroll box had cut through the middle of a word, so the
+  number looked like the end of that tab's name. The same rule `.strip-group`
+  uses one rung up: on a row of pills, the thing that says "a different kind of
+  thing starts here" is a line, not a gap.
+*/
+.strip-off[data-side='end'] {
+  border-left: 1px solid var(--border-subtle);
+  margin-left: var(--sp-1);
+}
+
+.strip-off[data-side='start'] {
+  border-right: 1px solid var(--border-subtle);
+  margin-right: var(--sp-1);
+}
+
+.strip-off:hover {
+  color: var(--text-primary);
+}
+
+.strip-off-count {
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
 .strip-openers {
   display: flex;
   align-items: center;

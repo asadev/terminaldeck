@@ -179,6 +179,13 @@ function rig(options: { online: boolean }): Rig {
         // what puts the reason on screen before anybody presses anything.
         readUsage: (_id: string, want: 'plan' | 'refresh' | 'context') =>
           Promise.resolve(emptyUsageReading(want, 'That machine cannot report its usage from here.')),
+        // Whose login a session over there is on, and running it as another one.
+        // `null` on the read and a sentence on the switch, which is the split the
+        // real link makes: a chip keeps the last account it genuinely had, and a
+        // press must never produce nothing at all.
+        readAccount: (_id: string) => Promise.resolve(null),
+        switchAccount: (_id: string, _accountId: string) =>
+          Promise.resolve({ ok: false, message: 'That machine cannot change an account from here.', session: null }),
       }
     },
   })

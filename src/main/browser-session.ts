@@ -1,6 +1,12 @@
 import { existsSync } from 'node:fs'
 import { app, type Cookie, type IpcMain, type Session } from 'electron'
-import { activeProfile, activeProfileSession } from './browser-profiles'
+import {
+  activeProfile,
+  activeProfileSession,
+  partitionFor,
+  profileState,
+  sessionForPartition,
+} from './browser-profiles'
 
 /**
  * The embedded browser's session: the thing that makes a login survive a
@@ -97,6 +103,44 @@ export function guestSession(): Session {
 /** Which profile the panel is talking about, so a screen can name it. */
 export function guestProfileName(): string {
   return activeProfile(app.getPath('userData')).name
+}
+
+/**
+ * One named profile's session — or the one that is switched on, when unasked.
+ *
+ * This is the whole of E7's mechanism. Asad, with the profile menu open:
+ *
+ *   > *"if I click on profile, there is nothing inside the profile, just the
+ *   > name, not like Chrome. So if we don't have those features, then even
+ *   > profile doesn't make any sense if there is nothing that we can see in each
+ *   > profile."*
+ *
+ * Everything below used to resolve {@link guestSession}, which is the *active*
+ * partition and no other, so a menu row could only ever be answered about if it
+ * happened to be the one switched on. That is why the row he opened was a name
+ * and nothing else: the question "what is in this profile?" had no wire to
+ * travel down. It has one now, and the answer is read from the real store on
+ * disk rather than composed.
+ *
+ * The id is validated before it becomes a partition, in `partitionFor` — an id
+ * arriving over IPC is a string from the renderer, and `fromPartition` will
+ * create a directory for any string it is handed, including one with a path
+ * separator in it. An id that is not one this app minted falls back to the
+ * active profile rather than throwing, because every caller of this is a panel
+ * asking a question, and a panel that explodes on a stale id is worse than one
+ * that answers about the profile in front of it.
+ */
+export function profileSession(profileId?: unknown): { ses: Session; partition: string } {
+  const userData = app.getPath('userData')
+  if (typeof profileId === 'string' && profileId !== '') {
+    const partition = partitionFor(profileId)
+    // Known ids only. `partitionFor` shapes-checks, and this checks the profile
+    // is one that exists, so a deleted profile's id cannot resurrect its jar.
+    if (partition !== null && profileState(userData).profiles.some((one) => one.id === profileId)) {
+      return { ses: sessionForPartition(partition), partition }
+    }
+  }
+  return { ses: activeProfileSession(userData), partition: activeProfile(userData).partition }
 }
 
 /**
@@ -238,21 +282,27 @@ const ALL_STORAGES = [
  *     registerBrowserSessionIpc(ipcMain)
  *
  * Channels:
- * - `browser-session:info`          (invoke)                 → {@link BrowserSessionInfo}
- * - `browser-session:cookies`       (invoke)                 → {@link CookieDomain}[]
- * - `browser-session:clear-cookies` (invoke, domain?)        → { removed: number }
- * - `browser-session:clear-storage` (invoke, domain?)        → { origins: string[] }
- * - `browser-session:clear-cache`   (invoke)                 → void
+ * Every one of them takes an optional profile id and answers about *that*
+ * profile's partition, falling back to the one that is switched on. See
+ * {@link profileSession} for why, and for what happens to an id that is not one
+ * of ours.
+ *
+ * Channels:
+ * - `browser-session:info`          (invoke, profileId?)          → {@link BrowserSessionInfo}
+ * - `browser-session:cookies`       (invoke, profileId?)          → {@link CookieDomain}[]
+ * - `browser-session:clear-cookies` (invoke, domain?, profileId?) → { removed: number }
+ * - `browser-session:clear-storage` (invoke, domain?, profileId?) → { origins: string[] }
+ * - `browser-session:clear-cache`   (invoke, profileId?)          → void
  */
 export function registerBrowserSessionIpc(ipcMain: IpcMain): void {
   registerRecorderPreload()
 
-  ipcMain.handle('browser-session:info', async (): Promise<BrowserSessionInfo> => {
-    const ses = guestSession()
+  ipcMain.handle('browser-session:info', async (_event, profileId: unknown): Promise<BrowserSessionInfo> => {
+    const { ses, partition } = profileSession(profileId)
     const cookies = await ses.cookies.get({})
     const storagePath = ses.getStoragePath() ?? ''
     return {
-      partition: GUEST_PARTITION,
+      partition,
       persistent: ses.isPersistent(),
       storagePath,
       // A partition directory is created on first use, so "not there yet" is
@@ -264,13 +314,13 @@ export function registerBrowserSessionIpc(ipcMain: IpcMain): void {
     }
   })
 
-  ipcMain.handle('browser-session:cookies', async (): Promise<CookieDomain[]> => {
-    const cookies = await guestSession().cookies.get({})
+  ipcMain.handle('browser-session:cookies', async (_event, profileId: unknown): Promise<CookieDomain[]> => {
+    const cookies = await profileSession(profileId).ses.cookies.get({})
     return groupCookies(cookies.map(summarizeCookie))
   })
 
-  ipcMain.handle('browser-session:clear-cookies', async (_event, domain: unknown) => {
-    const ses = guestSession()
+  ipcMain.handle('browser-session:clear-cookies', async (_event, domain: unknown, profileId: unknown) => {
+    const { ses } = profileSession(profileId)
     const wanted = typeof domain === 'string' && domain.trim() !== '' ? domain.trim() : null
     // `cookies.get({ domain })` also matches subdomains, which is what a user
     // clearing "example.com" means, so the filter is left to Electron.
@@ -293,8 +343,8 @@ export function registerBrowserSessionIpc(ipcMain: IpcMain): void {
     return { removed }
   })
 
-  ipcMain.handle('browser-session:clear-storage', async (_event, domain: unknown) => {
-    const ses = guestSession()
+  ipcMain.handle('browser-session:clear-storage', async (_event, domain: unknown, profileId: unknown) => {
+    const { ses } = profileSession(profileId)
     const origins = storageOrigins(domain)
     // Only a *missing* argument means "everything". Anything else that failed to
     // become an origin — an empty string, a number, an object the bridge did not
@@ -314,7 +364,7 @@ export function registerBrowserSessionIpc(ipcMain: IpcMain): void {
     return { origins }
   })
 
-  ipcMain.handle('browser-session:clear-cache', async () => {
-    await guestSession().clearCache()
+  ipcMain.handle('browser-session:clear-cache', async (_event, profileId: unknown) => {
+    await profileSession(profileId).ses.clearCache()
   })
 }

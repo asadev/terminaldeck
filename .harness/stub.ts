@@ -220,6 +220,17 @@ const deviceFolders: Array<{ deviceId: string; folders: string[] }> = [
 ]
 
 /**
+ * And the second axis, per device: all of the running sessions, or the ticked
+ * ones. Mirrors `DeviceSessionGrant` in `src/main/remote/session-grants.ts`.
+ *
+ * Two rows on purpose, one in each mode, because the panel draws them
+ * differently and a fixture with only `all` in it would never render a tick.
+ */
+const deviceSessionGrants: Array<{ deviceId: string; mode: 'all' | 'selected'; sessions: string[] }> = [
+  { deviceId: 'dev-2', mode: 'selected', sessions: ['s2'] },
+]
+
+/**
  * One other machine this desktop has paired to, and what is running on it.
  *
  * A Linux box, deliberately: the point of the machines section is that remote
@@ -668,6 +679,25 @@ const api: Record<string, unknown> = new Proxy(
     },
     listRemoteDeviceKinds: async () => deviceKinds,
     listDeviceFolders: async () => deviceFolders,
+    listSessionGrants: async () => deviceSessionGrants,
+    // The same shape `SessionAccess.list()` puts on the wire, which is what the
+    // real channel answers with.
+    listRunningSessions: async () =>
+      sessions.map((meta) => ({
+        id: meta.id,
+        title: meta.title,
+        cwd: meta.cwd,
+        provider: meta.provider,
+        status: 'idle',
+        exitCode: meta.exitCode,
+      })),
+    setSessionGrants: async (deviceId: string, mode: 'all' | 'selected', picked: string[]) => {
+      const at = deviceSessionGrants.findIndex((row) => row.deviceId === deviceId)
+      const row = { deviceId, mode, sessions: mode === 'all' ? [] : [...picked] }
+      if (at >= 0) deviceSessionGrants[at] = row
+      else deviceSessionGrants.push(row)
+      return deviceSessionGrants
+    },
     setDeviceFolders: async (deviceId: string, folders: string[]) => {
       const at = deviceFolders.findIndex((row) => row.deviceId === deviceId)
       const row = { deviceId, folders: [...folders] }

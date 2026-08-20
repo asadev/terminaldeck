@@ -36,6 +36,7 @@ import {
   saveBook,
   selectMachine,
   withCredential,
+  withHostName,
   withMachine,
   type MachineBook,
   type StoredMachine,
@@ -114,6 +115,44 @@ describe('what identifies a machine', () => {
     // Shortened at the *front*, because the pairing screen and the desktop both
     // show the full id and the eye compares the beginning.
     expect(MAC.startsWith(machineLabel(mute, 'x'))).toBe(true)
+  })
+
+  it('takes a machine\u2019s own name off a welcome, so an old pairing stops reading "Mac"', () => {
+    /*
+     * The migration, and the reason the fallback above is not the end of it.
+     *
+     * Every machine paired before `hostName` was kept has a null there, and the
+     * pairing offer that would have filled it is read exactly once, at the desk,
+     * when six digits are typed. So his two already-paired machines read "Mac"
+     * and "PC" \u2014 words, not names \u2014 with no way to fix it short of
+     * unpairing both. `welcome.hostName` carries the same string on every
+     * connection, so the name arrives on the next socket.
+     */
+    const stale = { machines: [machine(MAC), machine(PC)], currentId: MAC }
+    expect(machineLabels(stale.machines, 'x')).toEqual([`Mac ${MAC.slice(0, 6)}`, `Mac ${PC.slice(0, 6)}`])
+
+    const named = withHostName(withHostName(stale, MAC, 'Asads-MacBook-Pro'), PC, 'OFFICE-PC')
+    expect(machineLabels(named.machines, 'x')).toEqual(['Asads-MacBook-Pro', 'OFFICE-PC'])
+    // Nothing else about either row moved \u2014 this is not a re-pair.
+    expect(named.currentId).toBe(MAC)
+    expect(named.machines[0].credential.token).toBe(stale.machines[0].credential.token)
+  })
+
+  it('never lets a welcome undo a name a person or a pairing offer already gave', () => {
+    // A desktop older than the field sends no key at all, and writing null over
+    // a name read off a pairing offer would be the migration undoing itself
+    // against exactly the builds it exists for.
+    const known = { machines: [machine(MAC, { hostName: 'MacBookPro' })], currentId: MAC }
+    expect(withHostName(known, MAC, null)).toBe(known)
+    expect(withHostName(known, MAC, '   ')).toBe(known)
+    // The same name twice is not a write, so a reconnect does not churn storage.
+    expect(withHostName(known, MAC, 'MacBookPro')).toBe(known)
+    // A nickname is the person's word and still wins on screen.
+    const nicked = withHostName({ machines: [machine(MAC, { nickname: 'Studio' })], currentId: MAC }, MAC, 'MacBookPro')
+    expect(nicked.machines[0].hostName).toBe('MacBookPro')
+    expect(machineLabel(nicked.machines[0], 'x')).toBe('Studio')
+    // And a machine that is not in the book is not invented.
+    expect(withHostName(known, PC, 'Nope')).toBe(known)
   })
 
   it('breaks a tie between two chips that would read the same', () => {

@@ -168,6 +168,42 @@ describe('SessionFanout', () => {
       expect(f.attach('s1', () => {}, () => {}, () => {})).toBeNull()
     })
 
+    it('will not name its login, or run it as a different one', async () => {
+      /*
+       * The account door, which is the one that also **spawns**. `switch` ends a
+       * process and starts another under a different configuration directory, so
+       * without this line the one session nothing on the network may touch would
+       * be the one session any of the owner's own desktops could restart.
+       *
+       * The empty list rather than this machine's real one: the accounts are a
+       * fact about the machine and not about the session, but naming them in
+       * answer to an id the network is never told exists would confirm the id
+       * names something real.
+       */
+      let asked = 0
+      const f = new SessionFanout(
+        withCopilot({
+          account: {
+            read: async () => {
+              asked += 1
+              return { current: null, accounts: [{ id: 'work', name: 'work@example.com', provider: 'claude', color: null, system: false }] }
+            },
+            switch: async () => {
+              asked += 1
+              return { ok: true, message: '', session: 'replaced' }
+            },
+          },
+        }),
+      )
+      expect(await f.account?.read('cop')).toEqual({ current: null, accounts: [] })
+      expect((await f.account?.switch('cop', 'work'))?.ok).toBe(false)
+      expect(asked, 'the account layer was reached for the copilot’s own session').toBe(0)
+
+      // And an ordinary session is unaffected, which is what says the guard is a
+      // guard rather than the feature being off.
+      expect((await f.account?.read('s1'))?.accounts).toHaveLength(1)
+    })
+
     it('hides nothing when no rule is supplied', () => {
       // A host with no copilot layer — the demo box, `scripts/remote-host.ts` —
       // must not lose its session list to a feature it does not have.

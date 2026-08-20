@@ -36,7 +36,17 @@ function Harness() {
       <Sidebar
         width={264}
         projects={[]}
-        tabs={remote}
+        /*
+          Empty, because that is what the app passes.
+
+          `App.tsx` builds the rail's `tabs` out of this computer's sessions and
+          keeps `machineTabs` in the `machines` prop alone — so a remote session
+          appears once, under its machine. Handing the same list to both put
+          every one of these rows on screen twice here, under *Open* as an
+          orphan and again under the machine, which is a state the app cannot
+          produce and a page nobody could read a verdict off.
+        */
+        tabs={[]}
         machines={[{ machineId: MACHINE.id, name: MACHINE.name, sessions: remote, canClose: true }]}
         activeTabId={active}
         activePanel={null}

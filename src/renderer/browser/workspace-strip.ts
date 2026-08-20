@@ -156,6 +156,170 @@ export function shownTabs(
 }
 
 /**
+ * Where a window is running — the one fact the strip has to arrange by.
+ *
+ * `id` is empty for this computer, and that is the whole vocabulary: a place
+ * with no name is here, and everything else has one. It covers both kinds of
+ * elsewhere, a paired machine and a server, for the same reason
+ * `tabQualifiers` already merges them — a person asking "where is this running"
+ * is asking one question, and two answers with two shapes would be two
+ * groupings on one bar.
+ */
+export interface StripPlace {
+  id: string
+  name: string
+}
+
+/** One machine's run of tabs, in the order they were already in. */
+export interface StripGroup {
+  /** The place's id — empty for this computer. */
+  id: string
+  /**
+   * The heading to draw, or `null` for a run that needs none.
+   *
+   * Null for this computer, always. The asymmetry is deliberate and is the one
+   * `tabQualifiers` states for the same fact: this computer is the default
+   * place, it has no name in this window's vocabulary, and labelling the
+   * ordinary case in order to explain the unusual one puts a word on screen that
+   * carries nothing. Null also for the whole bar when everything on it is in one
+   * place, which is the ordinary machine and the state a heading over the only
+   * group there is would be noise in.
+   */
+  heading: string | null
+  entries: ShownTab[]
+}
+
+/**
+ * The bar, cut into one run per machine — the *one place* he asked for.
+ *
+ * ## His words, and why they land here of all surfaces
+ *
+ * > *"if I open any browser here and if I connect it to, let's say, desktop, now
+ * > this is in desktop, it should come under this table, under the desktop
+ * > sessions. So all the desktop browser, including session, should be at one
+ * > place."*
+ *
+ * He asked for it in the sidebar, and then in the same recording emptied the
+ * sidebar of browser windows: *"Browser windows will not be on the side bar at
+ * all. They will be always only on the top bar."* Both are his, and there is
+ * exactly one arrangement that keeps them both — the top bar has to be the
+ * place, because after the second sentence it is the only surface a browser
+ * window appears on at all.
+ *
+ * Until this, it was not. The two native menus grouped by machine, and the bar
+ * that is always on screen drew a window running on his PC identically to one
+ * running here, with the machine's name reachable only from a 12px glyph's
+ * tooltip. *"Now I don't know if it is actually there or here."*
+ *
+ * ## Why a partition and not a sort
+ *
+ * The promoted order is a hand-made arrangement — see this file's opening note —
+ * so nothing here reorders anything *within* a machine. A group is the tabs of
+ * one place in exactly the order they already had, and the groups themselves are
+ * in the order they were first seen, with this computer first. Two tabs never
+ * swap places except by being in different places, which is the fact the
+ * grouping exists to show.
+ *
+ * ## The ordinary bar has no headings on it
+ *
+ * Everything is here, so there is one group, and its heading is null — the bar
+ * is identical to the one it had before this existed.
+ * `main/browser-binding-ipc.ts` makes the same call for the same reason in its
+ * menus: a heading is *"absent in the one-machine case, where it would be a
+ * heading over the only group there is."*
+ *
+ * What is **not** suppressed is a lone group that is somewhere else. A window
+ * with nothing open on this computer and two pages on his PC is one group, and
+ * the one fact worth having on that bar is whose computer they are on — hiding
+ * the heading because it happens to be the only one would take the answer away
+ * in precisely the state that asks the question hardest.
+ */
+export function stripGroups(
+  shown: readonly ShownTab[],
+  placeOf: (tab: WorkspaceTab) => StripPlace | null,
+): StripGroup[] {
+  const groups: StripGroup[] = []
+  const byId = new Map<string, StripGroup>()
+  for (const entry of shown) {
+    const place = placeOf(entry.tab)
+    const id = place?.id ?? ''
+    const held = byId.get(id)
+    if (held) {
+      held.entries.push(entry)
+      continue
+    }
+    const group: StripGroup = { id, heading: id === '' ? null : place?.name || id, entries: [entry] }
+    byId.set(id, group)
+    groups.push(group)
+  }
+  // This computer leads, wherever its first tab happens to sit. The bar reads
+  // "what is here, then what is elsewhere", which is the order the sidebar
+  // already lists projects and then machines in.
+  const home = groups.findIndex((group) => group.id === '')
+  if (home > 0) groups.unshift(...groups.splice(home, 1))
+  return groups
+}
+
+/** A box, in the only two dimensions this file cares about. */
+export interface Span {
+  left: number
+  right: number
+}
+
+/**
+ * Which windows are wholly off each edge of a bar that has started scrolling.
+ *
+ * Pure, and split out of the component for the reason every measurement in here
+ * is: the numbers come from the DOM, the *rule* about them does not, and a rule
+ * kept in a layout effect can only be checked by looking at a screenshot.
+ *
+ * **Wholly** off. A tab half past the edge is still a tab you can see and press,
+ * and counting it would report windows as missing while somebody is looking at
+ * them. The one-pixel tolerance is for a scroll position that lands on a
+ * fraction, which is ordinary on a trackpad.
+ */
+export function offEdgeNames(
+  rail: Span,
+  tabs: ReadonlyArray<Span & { name: string }>,
+): { start: string[]; end: string[] } {
+  const start: string[] = []
+  const end: string[] = []
+  for (const tab of tabs) {
+    if (tab.right <= rail.left + 1) start.push(tab.name)
+    else if (tab.left >= rail.right - 1) end.push(tab.name)
+  }
+  return { start, end }
+}
+
+/**
+ * The place in the promoted order that a drop at rendered position `at` means.
+ *
+ * The two lists are not the same list and never were: `shown` also holds every
+ * browser window and, when it is not promoted, the tab you are looking at —
+ * none of which are in `order` — and since {@link stripGroups} it is a
+ * *permutation* of the promoted order as well. Handing a rendered index
+ * straight to `promote` therefore counted tabs that have no place in the
+ * arrangement at all, and a drop between the fourth and fifth pills could land
+ * second in the stored order.
+ *
+ * The translation is the only honest one available: count how many of the tabs
+ * *before* the drop are things the order actually holds. A drop at the far end
+ * answers the length, which is what `promote` wants for "last".
+ */
+export function orderIndexForDrop(
+  shown: readonly ShownTab[],
+  order: readonly string[],
+  at: number,
+): number {
+  const held = new Set(order)
+  let index = 0
+  for (let i = 0; i < Math.min(at, shown.length); i += 1) {
+    if (held.has(shown[i].tab.id)) index += 1
+  }
+  return index
+}
+
+/**
  * What taking a tab off the strip does — to the arrangement, and to what the
  * window is showing.
  *

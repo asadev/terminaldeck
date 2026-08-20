@@ -72,6 +72,8 @@ import { detectProviders, loginPath, PROVIDERS } from '../src/main/providers'
 import { CopilotAccess } from '../src/main/remote/copilot-access'
 import { CopilotRuns, type CopilotChatUpdate } from '../src/main/remote/copilot-runs'
 import { asDeviceKind, DeviceKinds, type DeviceKind } from '../src/main/remote/device-kind'
+import { createChatServe } from '../src/main/remote/chat-serve'
+import { typeAndSubmit } from '../src/main/remote/copilot-say'
 import { SessionFanout } from '../src/main/remote/session-fanout'
 import { remoteSessionCreator } from '../src/main/remote/session-create'
 import {
@@ -275,7 +277,111 @@ const fanout = new SessionFanout({
   }),
 })
 
+
+/* --------------------------------------------------- usage and accounts -- */
+
+/**
+ * The two readings and the account chip, as stand-ins — and this one is stated
+ * plainly rather than glossed.
+ *
+ * `host-core.ts` wires the *real* `createUsageServe` and `createAccountServe`
+ * into the same fanout, so the desktop this client actually talks to answers
+ * these frames with `readUsage`, `readContextWindow` and `sessionAccount`.
+ * Neither of those can be reached from here: `profiles.ts` and the usage layer
+ * import `electron` for `app.getPath`, which is the same wall
+ * `remote-host.ts` has always had against agent profiles.
+ *
+ * What is under test on this side of the wire is the **client**. A phone that
+ * never sends `usage.read` or `account.read` draws no ring, no bar and no chip
+ * whatever the far end would have answered — which is exactly the state the
+ * browser client was in — and that is a defect a stand-in can put on a screen.
+ * The shapes below are the app's own records, field for field, so what the
+ * client narrows here is what it will narrow against a Mac.
+ */
+function usageWindow(id: string, label: string, used: number): Record<string, unknown> {
+  return {
+    id,
+    account: { provider: 'claude', id: 'harness', name: 'Harness login', configDir: null },
+    window: id,
+    windowMinutes: null,
+    label,
+    used: { state: 'reported', fraction: used },
+    resets: { state: 'not-reported' },
+    observedAt: Date.now(),
+    reportedAt: Date.now(),
+    source: 'claude-usage-panel',
+  }
+}
+
+const HARNESS_ACCOUNTS = [
+  { id: 'work', name: 'Work', provider: 'claude', color: '--accent', system: true },
+  { id: 'personal', name: 'Personal', provider: 'claude', color: '--status-completed', system: false },
+]
+let harnessAccount = HARNESS_ACCOUNTS[0]
+
+const usage = {
+  plan: async (sessionId: string) => ({
+    sessionId,
+    readings: [usageWindow('five-hour', 'Current session', 0.42), usageWindow('weekly', 'This week', 0.67)],
+    reason: null,
+    account: { provider: 'claude', id: 'harness', name: 'Harness login', configDir: null },
+    assembledAt: Date.now(),
+  }),
+  refresh: async (sessionId: string, force: boolean) => ({
+    ok: true,
+    outcome: force ? 'ok' : 'cached',
+    detail: 'harness',
+    elapsedMs: 12,
+    spawned: false,
+    report: await usage.plan(sessionId),
+  }),
+  context: async () => ({
+    provider: 'claude',
+    state: 'reported',
+    tokens: 34_000,
+    window: 200_000,
+    percent: 17,
+    windowBasis: 'model',
+    model: 'opus-5',
+    modelLabel: 'Opus 5',
+    source: 'transcript',
+    reportedAt: Date.now(),
+    observedAt: Date.now(),
+    detail: null,
+  }),
+}
+
+const accountAccess = {
+  read: async () => ({ current: harnessAccount, accounts: HARNESS_ACCOUNTS }),
+  switch: async (sessionId: string, accountId: string) => {
+    const found = HARNESS_ACCOUNTS.find((row) => row.id === accountId)
+    if (found === undefined) return { ok: false, message: 'No such account.', session: sessionId }
+    harnessAccount = found
+    log(`account      ${sessionId} -> ${found.name}`)
+    return { ok: true, message: '', session: sessionId }
+  },
+}
+
 const sessions: SessionAccess = fanout
+/*
+ * The chat view's reading, and unlike the two above this one is **real**.
+ *
+ * `chat-transcript.ts` and `transcript.ts` import nothing from Electron, so the
+ * same `createChatServe` the desktop wires into its own fanout runs here against
+ * the same files. A session started by this harness is a real `claude` in a real
+ * folder writing a real transcript, so a phone driven against this process is
+ * reading an actual conversation — which is what makes the chat view something
+ * this harness can prove rather than something it can only draw.
+ *
+ * No `configDirFor`: this process has no profiles (`profiles.ts` needs Electron,
+ * which is the difference `remote-host.ts` has always named), so a session here
+ * runs as the default login and its transcript is filed under the default store.
+ */
+Object.assign(sessions, {
+  usage,
+  account: accountAccess,
+  chat: createChatServe({ describeSession: (id) => ptys.list().find((row) => row.id === id) ?? null }),
+})
 
 /* ------------------------------------------------------------- copilot -- */
 
@@ -370,7 +476,25 @@ const copilot = new CopilotRuns({
   },
   isAlive: (id) => ptys.list().some((session) => session.id === id && session.exitCode === null),
   stop: (id) => ptys.kill(id),
-  say: (id, text) => ptys.write(id, `${text}\n`),
+  /*
+   * Through the app's own `typeAndSubmit`, not `write(text + '\n')`.
+   *
+   * This line used to be that write, and it is the exact defect
+   * `copilot-say.ts` exists to fix: a newline is not Return, and one chunk is a
+   * paste. So the harness whose whole job is to exercise the phone's copilot
+   * path was the one place that could never see the bug — a shell echoes
+   * whatever it is handed, so the harness looked fine while a real run sat with
+   * the sentence typed and unsubmitted.
+   */
+  say: (id, text) =>
+    typeAndSubmit((data) => {
+      // Recorded at the point the desktop hands it to the pty, so `/input` shows
+      // the *chunks* rather than what a shell echoed. `⟦⟧` around each write is
+      // the only thing a reader needs: the whole fix is that the Return is alone
+      // in its own read, and an echo cannot show that.
+      recordInput(id, `\u27e6${data}\u27e7`)
+      ptys.write(id, data)
+    }, text),
   interrupt: (id) => ptys.write(id, '\u0003'),
   desk: () => ({
     status: 'stopped',

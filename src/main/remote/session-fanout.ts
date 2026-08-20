@@ -4,6 +4,8 @@ import type {
   CreateOutcome,
   CreateRequest,
   RemoteControlsAccess,
+  RemoteAccountAccess,
+  RemoteChatAccess,
   RemoteUsageAccess,
   SessionAccess,
   SessionHandle,
@@ -128,6 +130,27 @@ export interface PtySource {
    */
   usage?: RemoteUsageAccess
   /**
+   * Whose login a session is on, and running it as a different one. Absent when
+   * this host has no account store or no way to replace a session's process.
+   *
+   * Its absence is what stops the desktop advertising the `account` capability —
+   * see `SessionAccess.account` — so it is optional here for the reason
+   * {@link controls} is. A stub host has terminals and no logins, and a client
+   * told otherwise draws a chip whose every row is refused after the press.
+   */
+  account?: RemoteAccountAccess
+  /**
+   * That session's conversation, as bubbles. Absent when this host has no
+   * transcript reader to ask.
+   *
+   * Its absence is what stops the desktop advertising the `chat` capability —
+   * see `SessionAccess.chat` — so it is optional here for the reason
+   * {@link controls} is. A stub host with a pipe and no agent transcripts
+   * genuinely cannot answer, and a client told otherwise draws a chat toggle
+   * whose every press comes back empty.
+   */
+  chat?: RemoteChatAccess
+  /**
    * Is this session none of the network's business?
    *
    * True for the copilot's own session and for every per-device copilot run.
@@ -164,6 +187,44 @@ export interface PtySource {
    * that can turn the first into the second.
    */
   reach?(deviceId: string): { unrestricted: boolean; folders: string[] }
+  /**
+   * And the second axis: has this device been narrowed to *some* of the sessions
+   * its folders reach?
+   *
+   * `reach` above answers by folder, which is the only axis this subsystem had
+   * and which the header of this file already admits is coarse — a folder grant
+   * is "to grant whatever else happens to be running in it". Asad, 2026-08-20:
+   * *"when we give remote access we should be able to choose between running
+   * sessions which ones to give and which ones not, i mean select vs all type of
+   * options"*. The two sessions he wants told apart are usually in the same
+   * folder, so the folder rule cannot express it.
+   *
+   * ANDed with `reach` rather than replacing it: ticking a session in a folder
+   * this device was never granted must not share it. `session-grants.ts` holds
+   * the store and the argument for what its absence means.
+   *
+   * **Optional, and its absence means no per-session rule at all**, for the
+   * reason {@link reach}'s absence means no per-device rule: a host with a
+   * session layer and no grant stores (`scripts/remote-host.ts`, the public demo
+   * box) must not be read as one that shares nothing.
+   *
+   * It must never throw. It is consulted on the read path of a socket and on
+   * every keystroke; the wrapper below fails closed if it does.
+   */
+  shared?(deviceId: string, sessionId: string): boolean
+  /**
+   * A device just started a session of its own. Tell whatever keeps the ticks.
+   *
+   * Called after a successful {@link create} and nowhere else. Without it, a
+   * device narrowed to *Selected* would get an id back from `create` that it may
+   * not attach to, because a session started after the choice is not in the
+   * choice — which is the right rule for a session somebody else started and a
+   * broken button for one this device asked for by name.
+   *
+   * Optional and absent together with {@link shared}: a host with no per-session
+   * rule has nothing to tick.
+   */
+  noteStarted?(deviceId: string, sessionId: string): void
 }
 
 /**
@@ -252,12 +313,19 @@ export class SessionFanout implements SessionAccess {
   readonly folders?: (deviceId: string) => string[]
 
   /**
-   * Whether one device may see and touch one session, present exactly when the
-   * source knows about device kinds — assigned rather than declared on the
-   * prototype for the same reason {@link create} is, and here it decides more
-   * than an advertisement: `server.ts` reads its presence to know whether this
-   * host enforces per-device reach at all, and a prototype method that always
-   * existed would make a host with no grants look like one that grants nothing.
+   * Whether one device may see and touch one session, present when the source
+   * knows about device kinds **or** about per-session choice — assigned rather
+   * than declared on the prototype for the same reason {@link create} is, and
+   * here it decides more than an advertisement: `server.ts` reads its presence
+   * to know whether this host enforces a per-device rule at all, and a prototype
+   * method that always existed would make a host with no grants look like one
+   * that grants nothing.
+   *
+   * It is the AND of the two axes — the folder rule in `device-reach.ts` and the
+   * per-session choice in `session-grants.ts` — because `server.ts` funnels the
+   * listing and every verb through this one predicate, and a second door for the
+   * second axis would be a second door somebody forgets to lock. A host with
+   * only one of the two is enforced on that one.
    */
   readonly visible?: (deviceId: string, sessionId: string) => boolean
 
@@ -292,9 +360,58 @@ export class SessionFanout implements SessionAccess {
    */
   readonly usage?: RemoteUsageAccess
 
+  /**
+   * Present exactly when the source can answer for a session's login, assigned
+   * for the reason {@link create} is.
+   *
+   * It refuses a hidden session outright, and this is the door where that
+   * matters most: `switch` **ends a process and starts another**, so without
+   * this line the one session nothing on the network may touch would be the one
+   * session any of the owner's desktops could restart under a different login.
+   * The same argument {@link close} makes, at a door that also spawns.
+   */
+  readonly account?: RemoteAccountAccess
+
+  /**
+   * Present exactly when the source can read a session's conversation, assigned
+   * for the reason {@link create} is.
+   *
+   * It refuses a hidden session outright, and here the refusal is guarding the
+   * plainest thing in the whole file: a copilot run's transcript is *what the
+   * owner said to their assistant*, in words, and a device that could read it
+   * would be reading a conversation the network is never even told exists.
+   * Refused with the same "there is no such session" a hidden `attach` gets.
+   */
+  readonly chat?: RemoteChatAccess
+
   constructor(private readonly ptys: PtySource) {
     const start = ptys.create
-    if (start) this.create = (request) => start(request)
+    if (start) {
+      /*
+       * The spawn, and then the tick for the device that asked for it.
+       *
+       * Wrapped here rather than in the host's own `create`, for the reason the
+       * `folders` filter below is wrapped here: this is the class that owns the
+       * per-device rule, and a second copy of "a device may open what it just
+       * started" living in the assembly is a second copy that can disagree.
+       *
+       * `noteStarted` is allowed to fail without failing the spawn. The session
+       * is already running by the time this line is reached — reporting the
+       * create as failed would leave a live shell nobody was told about, which
+       * is strictly worse than a session the device has to tick by hand.
+       */
+      this.create = async (request) => {
+        const outcome = await start(request)
+        if (outcome.ok) {
+          try {
+            ptys.noteStarted?.(request.deviceId, outcome.session.id)
+          } catch (error) {
+            console.error('[remote] could not record the session this device started:', error)
+          }
+        }
+        return outcome
+      }
+    }
     const end = ptys.close
     if (end) {
       this.close = (id) => {
@@ -342,6 +459,40 @@ export class SessionFanout implements SessionAccess {
       }
     }
 
+    const account = ptys.account
+    if (account) {
+      this.account = {
+        /*
+         * A hidden session reads as one that is not there on both, which is the
+         * answer `attach`, `close`, `controls` and `usage` give it and for the
+         * same reason. The empty list rather than this machine's real one: the
+         * accounts are a fact about the machine and not about the session, but
+         * naming them in answer to an id the network is never told exists would
+         * confirm that the id names something real.
+         */
+        read: (id) =>
+          this.isHidden(id) ? Promise.resolve({ current: null, accounts: [] }) : account.read(id),
+        switch: (id, accountId) =>
+          this.isHidden(id)
+            ? Promise.resolve({ ok: false, message: `No session ${id} is running.`, session: null })
+            : account.switch(id, accountId),
+      }
+    }
+
+    const chat = ptys.chat
+    if (chat) {
+      this.chat = {
+        // A hidden session reads as one that is not there, the answer every
+        // other door here gives it. `found: false` rather than an empty
+        // conversation, because "there is no transcript" is the shape a client
+        // draws for a folder it may look at and has nothing in.
+        read: (id, tail, viewer) =>
+          this.isHidden(id)
+            ? Promise.resolve({ rows: [], reset: true, found: false })
+            : chat.read(id, tail, viewer),
+      }
+    }
+
     const offer = ptys.folders
     /*
      * The offered folder list has the hidden sessions taken out of it.
@@ -378,24 +529,48 @@ export class SessionFanout implements SessionAccess {
      * whether it would have been allowed.
      */
     const reach = ptys.reach
-    if (reach) {
+    const shared = ptys.shared
+    if (reach || shared) {
       this.visible = (deviceId, sessionId) => {
         if (this.isHidden(sessionId)) return false
         const session = this.ptys.list().find((s) => s.id === sessionId)
         if (!session) return false
         /*
-         * Fails **closed**, the same way {@link isHidden} does and for the same
-         * reason: this is consulted on the read path of a socket, an exception
-         * here is a main process that dies over a `list` from a phone on a bad
-         * network, and the safe reading of "I do not know whether this device
-         * may see this" is that it may not.
+         * Two axes, ANDed, each fails **closed**.
+         *
+         * The folder axis is the older one and the session axis is the one Asad
+         * asked for on 2026-08-20; a session has to pass both. Neither can widen
+         * the other, which is the property that matters: ticking a session in a
+         * folder this device was never granted shares nothing, and granting a
+         * folder does not un-tick anything inside it.
+         *
+         * Both throw-guards fail closed the same way {@link isHidden} does and
+         * for the same reason: this is consulted on the read path of a socket
+         * and again on every keystroke, an exception here is a main process that
+         * dies over a `list` from a phone on a bad network, and the safe reading
+         * of "I do not know whether this device may see this" is that it may
+         * not.
+         *
+         * A host that supplies only one of the two is enforced on that one and
+         * unchanged on the other — see the two doc comments on `PtySource`.
          */
-        try {
-          return reachesFolder(reach(deviceId), session.cwd)
-        } catch (error) {
-          console.error('[remote] the device-reach rule threw; refusing the session:', error)
-          return false
+        if (reach) {
+          try {
+            if (!reachesFolder(reach(deviceId), session.cwd)) return false
+          } catch (error) {
+            console.error('[remote] the device-reach rule threw; refusing the session:', error)
+            return false
+          }
         }
+        if (shared) {
+          try {
+            if (!shared(deviceId, sessionId)) return false
+          } catch (error) {
+            console.error('[remote] the session-choice rule threw; refusing the session:', error)
+            return false
+          }
+        }
+        return true
       }
     }
   }

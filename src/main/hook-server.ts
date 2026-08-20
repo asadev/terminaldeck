@@ -510,12 +510,10 @@ export function isOpenPath(url: string | undefined): boolean {
  * `hooks.ts` installs `SessionStart` and `UserPromptSubmit` for **Codex** too and
  * `SessionStart` for **Gemini**, so a bare name matched all three and both of
  * them were being handed a `hookSpecificOutput` envelope that is Claude's
- * schema. Claude Code documents that shape and honours it; what the other two do
- * with an object they did not ask for has not been watched on this machine —
- * Codex's binary is not installed here at all, which is the same reason
- * `hooks.ts` gives its entries no `timeout`. The plausible failure is the one
- * this whole channel exists to avoid: a CLI printing a complaint about an
- * unrecognised hook output *into the terminal Asad is looking at*, which is
+ * schema. Claude Code documents that shape and honours it; what the other two
+ * did with an object they had not asked for was unwatched. The plausible failure
+ * is the one this whole channel exists to avoid: a CLI printing a complaint about
+ * an unrecognised hook output *into the terminal Asad is looking at*, which is
  * exactly the visible noise he ruled out.
  *
  * That was survivable while the answer only appeared for a session with a
@@ -523,9 +521,9 @@ export function isOpenPath(url: string | undefined): boolean {
  * every prompt of every session the app started, so an unmeasured schema would
  * be posted at Codex and Gemini thousands of times a day.
  *
- * So Claude gets the context and the other two get the 204 they have always had.
- * Adding a provider here is a one-line change once somebody has actually watched
- * that CLI read the body.
+ * All three are measured now, each against the copy of that CLI installed on
+ * this machine, and each entry below records what was watched rather than what
+ * was hoped. A provider is added here only after that.
  *
  * The hook *command* is deliberately not narrowed to match. `hooks.ts` still
  * drops `-o /dev/null` for those event names on every provider, so Codex and
@@ -572,12 +570,45 @@ const CONTEXT_EVENTS: Readonly<Record<string, ReadonlySet<string>>> = {
    * same first prompt, appended to that prompt and to nothing else, so there is
    * nothing to gain by taking the risk.
    *
-   * **Codex is still absent, and still for the original reason.** Its CLI is a
-   * native binary, its hook output schema could not be read off this machine,
-   * and nobody has watched it meet an envelope it did not ask for. One line
-   * here the day somebody does.
+   * The third provider is the entry below.
    */
   gemini: new Set(['BeforeAgent', 'AfterTool']),
+  /*
+   * Codex, added 2026-08-20, and the entry this whole map was blocked on.
+   *
+   * It was absent because "its hook output schema could not be read off this
+   * machine". It can be read, and then it was driven: `codex` 0.146.0's binary
+   * carries its own generated JSON Schemas, and `session-start.command.output`
+   * and `post-tool-use.command.output` both declare
+   * `hookSpecificOutput.additionalContext` beside a `hookEventName` const, with
+   * `additionalProperties: false` — byte-for-byte the envelope Claude documents.
+   * Then a real `codex` was run in a scratch `CODEX_HOME` with a `SessionStart`
+   * hook returning exactly that envelope, and the model answered out of it.
+   *
+   * ## `UserPromptSubmit` is deliberately not here, and the reason is his
+   *
+   * Codex prints what a hook handed it — `SessionStart hook (completed)` and the
+   * context underneath — in the terminal. `suppressOutput: true` does not hide
+   * it; that was tried in the same run. Once, at the top of a session, that is
+   * Codex being honest about its own hooks and it is the moment he asked for
+   * (*"each session on the boot should have some context"*). The same paragraph
+   * reprinted above every prompt he types is the wall of statements he has
+   * banned, and this channel does not get to spend his screen on itself.
+   *
+   * `PostToolUse` stays because `browser-binding.ts` answers it only in the turn
+   * after an attach or a detach: one short line when a browser window changes
+   * hands, and the empty 204 every other tool call in every other session.
+   *
+   * ## What is still in the way, and it is not this file
+   *
+   * Codex 0.146 will not *run* a new or changed hook until somebody trusts it
+   * inside Codex ("Hooks need review — 1 hook is new or changed"), and it
+   * records the answer as a `trusted_hash` under `[hooks.state]` in
+   * `~/.codex/config.toml`, keyed by `<hooks file>:<event>:<group>:<hook>`. So a
+   * Codex session on his machine stays context-free until he answers that once.
+   * `hooks.ts`'s `requirement` for Codex is where that is said to him.
+   */
+  codex: new Set(['SessionStart', 'PostToolUse']),
 }
 
 /** `/hook/<provider>/<event>` and nothing else. */

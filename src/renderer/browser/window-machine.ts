@@ -122,18 +122,30 @@ function subscribe(listener: () => void): () => void {
 }
 
 /**
- * The machine behind one browser window, or null when it is this computer.
+ * Every window that is somewhere else.
  *
  * A hook rather than a getter because the answer changes under a window that is
  * doing nothing: following a link out of a tunnelled page moves it back onto
- * this machine, and a strip that only re-read this when its own props changed
- * would keep the old machine's name on a tab whose page had left it.
+ * this machine, and a bar that only re-read this when its own props changed
+ * would keep the old machine's name over a tab whose page had left it.
+ *
+ * The whole map rather than one window's answer, because the one consumer left
+ * has to *arrange* by this rather than mark a single tab: the strip cuts its row
+ * into a run per machine, which is one decision about the whole bar and cannot
+ * be assembled out of a hook call inside each child. `useWindowMachine`, the
+ * per-tab reader this replaced, went with the 12px mark it was written for —
+ * see the note where that mark used to live, in `BindChip.tsx`.
+ *
+ * The map is the stored value itself, never a copy: `useSyncExternalStore`
+ * requires an identity-stable snapshot, and a fresh `new Map(current)` here
+ * would be an infinite render loop rather than a slow render. Every writer above
+ * replaces the map instead of mutating it, so a reader holding this reference
+ * holds a value that cannot change underneath it.
  */
-export function useWindowMachine(tabId: string): WindowMachine | null {
-  const map = useSyncExternalStore(
+export function useWindowMachines(): ReadonlyMap<string, WindowMachine> {
+  return useSyncExternalStore(
     subscribe,
     () => current,
     () => current,
   )
-  return map.get(tabId) ?? null
 }

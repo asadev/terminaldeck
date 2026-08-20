@@ -6,6 +6,7 @@ import {
   type ControlReading,
   type ControlsReading,
 } from '../chat/controls/catalog'
+import { readServers, type McpRow } from '../chat/attach/McpServers'
 import {
   applyControlAt,
   controlsWired,
@@ -76,6 +77,17 @@ export interface ControlGate {
 
 export interface SessionReadings extends ControlsReading {
   gate: ControlGate
+  /**
+   * The connectors that session's folder resolves to, when the answer came from
+   * another machine.
+   *
+   * Absent for a session on this computer — `use-connectors.ts` asks `mcp:list`
+   * directly there, and always has — and absent from a paired machine whose
+   * build does not report them. Absent and empty are different answers and the
+   * chip depends on the difference: empty is *"that folder has none"*, absent is
+   * *"nobody said"*, and neither draws a chip but only the first is an answer.
+   */
+  connectors?: McpRow[]
 }
 
 export interface SessionControlsState {
@@ -199,6 +211,19 @@ function asGate(value: unknown): ControlGate {
 
 function asReadings(value: unknown): SessionReadings | null {
   if (!isRecord(value)) return null
+  /*
+   * `readServers` and not a reader of this file's own, because the rows a remote
+   * machine sends are the rows its own `mcp:list` produced — the identical
+   * shape the local chip already parses. A second reader here would be a second
+   * idea of what a connector is, and the visible cost of the two drifting is a
+   * server named on one machine's chip and dropped from the other's.
+   *
+   * Null from `readServers` means "that was not a list at all", which is the
+   * same as the field being absent: nobody said. Spread rather than assigned so
+   * it stays absent rather than becoming an empty list the chip would record as
+   * an answer.
+   */
+  const connectors = value.connectors === undefined ? null : readServers(value.connectors)
   return {
     model: asReading(value.model),
     effort: asReading(value.effort),
@@ -206,6 +231,7 @@ function asReadings(value: unknown): SessionReadings | null {
     permission: asReading(value.permission),
     live: value.live === true,
     gate: asGate(value.gate),
+    ...(connectors === null ? {} : { connectors }),
   }
 }
 

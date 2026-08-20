@@ -62,6 +62,10 @@ import { MAX_FAILED_ATTEMPTS, RemoteAuth, type Device, type PairingToken } from 
 // `registerRemoteIpc`; importing the class here would put a second constructor
 // for the same file in the one module that must not own it.
 import type { DeviceFolderGrant, FolderGrants } from './folder-grants'
+// The second grant store, type-only for the reason `FolderGrants` above is:
+// `host-core.ts` owns the one instance, because the session fanout's predicate
+// closes over it before this function is ever called.
+import type { DeviceSessionGrant, SessionGrants } from './session-grants'
 // `asDeviceKind` is a value because the approve handler has to narrow whatever
 // came across the bridge, and it is three comparisons over a string literal
 // union — importing it pulls in the store's module but not its file, and the
@@ -79,6 +83,7 @@ import {
   CAPABILITIES,
   CAPABILITY,
   CLOSE,
+  MAX_CHAT_ROWS,
   MAX_COPILOT_LOG_ROWS,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
@@ -86,9 +91,11 @@ import {
   parseClientMessage,
   serialize,
   type ClientMessage,
+  type CopilotChatMessage,
   type CopilotLinkWire,
   type ControlName,
   type ControlReadingWire,
+  type AccountWire,
   type ControlsReadingWire,
   type DeviceDescriptor,
   type DevServerReport,
@@ -151,6 +158,7 @@ import { loadHostIdentity } from './host-identity'
 // The rendezvous half of a pairing code. It is imported *here*, into the desk
 // that mints codes, because that is what makes "a code this product shows" and
 // "a code another machine can find" the same thing — see `PairingDesk.show`.
+import { describeThisMachine } from './machines/guest'
 import { offerFrom, startBeacon, type Beacon, type MachineOffer } from './machines/rendezvous'
 import { tailnetStatus, type TailnetStatus } from './tailnet'
 import { serveOff, serveOn } from './tailscale-serve'
@@ -368,6 +376,73 @@ export interface SessionAccess {
    * that should be able to produce that.
    */
   usage?: RemoteUsageAccess
+  /**
+   * That session's conversation, as bubbles.
+   *
+   * **Optional, and its absence is the switch**, exactly as {@link controls}'s
+   * and {@link usage}'s are: a host with no transcript reader — the demo box,
+   * the stub — simply does not have this, `CAPABILITY.chat` is never advertised,
+   * and a client draws a terminal and no chat toggle rather than a toggle whose
+   * every press comes back empty.
+   */
+  chat?: RemoteChatAccess
+  /**
+   * Whose login a session is on, which logins this machine has, and running a
+   * session as a different one. **Optional, and its absence is the switch**,
+   * exactly as {@link controls}'s and {@link usage}'s are.
+   *
+   * Separate from {@link controls} because it is a different act. Those four are
+   * a slash command typed into a session that survives it; this stops the agent
+   * and starts another under a different config directory, so the session it
+   * produces has a **new id** — which is why {@link RemoteAccountAccess.switch}
+   * answers with one and why a host that can read a screen is not automatically
+   * a host that can do this. `scripts/remote-host.ts` has terminals and no
+   * account store; the headless build has an account store and no session
+   * lifecycle to replace one through.
+   *
+   * One object rather than two methods for the reason {@link controls} is one: a
+   * chip that could switch and not read has nothing to put a tick beside, and
+   * one that could read and not switch is a label.
+   */
+  account?: RemoteAccountAccess
+}
+
+/**
+ * The far end of `account.read` and `account.switch`.
+ *
+ * A courier's interface, like {@link RemoteControlsAccess}: it takes a session
+ * id and hands back what this machine's own account store and its own switch
+ * said. The desktop that assembles it wires `switch` to the same operation the
+ * window at that desk performs from its own account chip — one mechanism, two
+ * callers — because two implementations of "run this session as somebody else"
+ * is how one of them comes to skip the conversation guard.
+ *
+ * Neither method may throw for an ordinary refusal. A session that is gone, an
+ * account that has never signed in, an agent that cannot be started at all —
+ * those are answers with sentences in them, and `server.ts` turns a rejected
+ * promise into a bare `unavailable` that says nothing useful.
+ */
+export interface RemoteAccountAccess {
+  /**
+   * Whose login this session is on, and what else this machine has.
+   *
+   * `current` is null when that could not be established — a session this app
+   * did not start, an agent that reported nothing — and null must stay null. A
+   * chip naming the default account over a session that is on a different one
+   * is the defect the whole area exists to remove.
+   */
+  read(sessionId: string): Promise<{ current: AccountWire | null; accounts: AccountWire[] }>
+  /**
+   * Run that session as another of this machine's logins.
+   *
+   * `session` is the id the session has afterwards — the same one on a refusal,
+   * a new one on a success — so the asking client can follow the tab it is
+   * already looking at instead of holding a handle to a process that is gone.
+   */
+  switch(
+    sessionId: string,
+    accountId: string,
+  ): Promise<{ ok: boolean; message: string; session: string | null }>
 }
 
 /**
@@ -389,6 +464,45 @@ export interface SessionAccess {
  * are readings with sentences in them, and `server.ts` turns a rejected promise
  * into a bare `unavailable` that says nothing useful.
  */
+/**
+ * The far end of `chat.read`.
+ *
+ * A courier's interface like {@link RemoteControlsAccess} and, like it, a
+ * *second caller* of an existing reader rather than a second implementation:
+ * `chat-transcript.ts` collapses the JSONL an agent is already writing into
+ * bubbles, and `chat:load`/`chat:tail` is the window at this desk asking the
+ * same two questions. What is new here is only that the questions can be asked
+ * from somewhere else.
+ *
+ * It may not throw for an ordinary absence — a session that is gone, a folder
+ * with no transcript, a conversation nothing has written to yet. `server.ts`
+ * turns a rejected promise into a bare `unavailable` that says nothing useful,
+ * and "there is no transcript" is a state a chat view knows how to draw.
+ */
+export interface RemoteChatAccess {
+  /**
+   * That session's conversation, or what has changed since the last read.
+   *
+   * `tail` false is the whole conversation and answers `reset: true`; true is
+   * the difference since *this viewer's* last read.
+   *
+   * `viewer` is the device id, and it is here rather than left implicit because
+   * a cursor is per reader and a shared one loses messages silently. The local
+   * `chat:tail` keys its readers by transcript path, which is right for one
+   * process drawing its own windows; over a wire it would mean two phones on one
+   * session, or a phone and the Mac's own chat view, consuming each other's new
+   * bubbles — each seeing half a conversation with nothing on screen to say so.
+   *
+   * `found` is false when there is no transcript for the folder at all, which is
+   * a different empty state from a session that has not spoken yet.
+   */
+  read(
+    sessionId: string,
+    tail: boolean,
+    viewer: string,
+  ): Promise<{ rows: CopilotChatMessage[]; reset: boolean; found: boolean }>
+}
+
 export interface RemoteUsageAccess {
   /**
    * What this machine already knows about that session's subscription windows.
@@ -1556,6 +1670,21 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      */
     if (name === CAPABILITY.usage) return options.sessions.usage !== undefined
     /*
+     * And once more for the account chip. Gated on its own member rather than on
+     * `controls`, because the two are genuinely separable: a host can read a
+     * session's screen without having any way to replace that session's process,
+     * and the stub host is exactly that. A chip advertised by a machine that
+     * cannot switch would be a menu whose every row is refused after the press.
+     */
+    if (name === CAPABILITY.account) return options.sessions.account !== undefined
+    /*
+     * And once more for the chat view. Its own member for the same reason the
+     * account chip has one: reading a transcript and reading a *screen* are
+     * different acts against different files, and the headless build has one and
+     * not the other.
+     */
+    if (name === CAPABILITY.chat) return options.sessions.chat !== undefined
+    /*
      * `send` is deliberately not in the list above, and the absence is the
      * decision rather than an omission.
      *
@@ -2093,6 +2222,11 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       sessions: sessionsFor(outcome.deviceId),
       capabilities: capabilitiesFor(outcome.deviceId),
       hostPlatform: currentPlatform(),
+      // The same name a pairing offer carries, from the same function, on the
+      // one frame that arrives on *every* connection. A client that only ever
+      // learned this at pairing time has no name for a machine paired before
+      // the field existed — see `welcome.hostName`.
+      hostName: describeThisMachine().name,
       // Spread rather than sent as `undefined`, so a host that cannot start
       // sessions sends no key at all — the same shape a desktop from before this
       // field sends, which is what an older client is already correct about.
@@ -2947,6 +3081,128 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * Serve one `account.read` or `account.switch`.
+   *
+   * ## The same two doors as `controlsServe`, and the second one matters more
+   *
+   * The capability decides whether this host speaks the frame at all;
+   * {@link mayTouch} decides whether *this device* may ask about *this session*.
+   * It is deliberately the same door `input` goes through and not a weaker one:
+   * `account.switch` ends a running agent on this machine and starts another,
+   * which is strictly more than typing at it, and a device that may not type at
+   * a session must certainly not be able to replace it.
+   *
+   * The refusal for an unauthorised session is `unknown-session`, the same
+   * sentence an unauthorised `attach` gets, because a distinct one would confirm
+   * that the id names something real.
+   */
+  async function accountServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'account.read' | 'account.switch' }>,
+  ): Promise<void> {
+    const account = options.sessions.account
+    if (!account || !advertised.includes(CAPABILITY.account)) {
+      // Refused here as well as withheld from the advertisement, for the reason
+      // `controlsServe` gives: the advertisement decides what a client of ours
+      // draws, and this decides what *any* client gets.
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} cannot change a session’s account from here.`,
+      })
+      return
+    }
+    if (!mayTouch(deviceId, message.id)) {
+      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${message.id} is running.` })
+      return
+    }
+
+    if (message.t === 'account.read') {
+      const state = await account.read(message.id)
+      // The device can be gone by now: this reads a state file and a spawn
+      // record, which is milliseconds but is not nothing.
+      if (!live.has(connection.id)) return
+      send(connection, {
+        t: 'account.state',
+        rid: message.rid,
+        id: message.id,
+        current: state.current,
+        accounts: state.accounts,
+      })
+      return
+    }
+
+    const answer = await account.switch(message.id, message.accountId)
+    if (!live.has(connection.id)) return
+    send(connection, {
+      t: 'account.switched',
+      rid: message.rid,
+      id: message.id,
+      ok: answer.ok,
+      // Passed through as written, for the reason `controls.applied`'s is: this
+      // is this machine's own sentence about its own account — "that account has
+      // never signed in", the CLI's own start failure — and the asking machine
+      // has no way to write a better one about a computer it is not on.
+      message: answer.message,
+      session: answer.session,
+    })
+  }
+
+  /**
+   * Serve one `chat.read`.
+   *
+   * The same two doors as everything above it: the capability decides whether
+   * this host speaks the frame at all, and {@link mayTouch} decides whether
+   * *this device* may ask about *this session* — the same reach every keystroke
+   * goes through, and deliberately not a weaker one. "What was said in that
+   * session" is not a smaller question than "may I type at it"; it is a larger
+   * one, and a chat view is the surface on which reading somebody else's
+   * conversation would be easiest to do by accident.
+   *
+   * Clipped to {@link MAX_CHAT_ROWS} here as well as on the way in, keeping the
+   * **end**: a conversation is read from the bottom, and a client that asked for
+   * the whole of a thousand-turn session must not make this machine serialise it
+   * onto a relay. The client's own parser clips too, and both are deliberate —
+   * this one bounds what leaves the machine, that one bounds what a hostile
+   * frame can make a phone hold.
+   */
+  async function chatServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'chat.read' }>,
+  ): Promise<void> {
+    const chat = options.sessions.chat
+    if (!chat || !advertised.includes(CAPABILITY.chat)) {
+      // Refused here as well as withheld from the advertisement, for the reason
+      // `controlsServe` gives: the advertisement decides what a client of ours
+      // draws, and this decides what *any* client gets.
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} cannot read a session’s conversation.`,
+      })
+      return
+    }
+    if (!mayTouch(deviceId, message.id)) {
+      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${message.id} is running.` })
+      return
+    }
+    const answer = await chat.read(message.id, message.tail, deviceId)
+    // The device can be gone by now: this is a file read, which is milliseconds
+    // and is not nothing.
+    if (!live.has(connection.id)) return
+    send(connection, {
+      t: 'chat.rows',
+      rid: message.rid,
+      id: message.id,
+      rows: answer.rows.slice(-MAX_CHAT_ROWS),
+      reset: answer.reset,
+      found: answer.found,
+    })
+  }
+
+  /**
    * Serve one `usage.read`.
    *
    * ## The same two doors, and the second one is still the one that matters
@@ -3383,7 +3639,12 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           send(connection, {
             t: 'error',
             code: 'unauthorized',
-            message: 'That folder is no longer shared with this device.',
+            // Was "That folder is no longer shared with this device." It named
+            // the folder because the folder was the only axis. It is not any
+            // more — a session can be unticked on its own, in a folder that is
+            // still shared — so the sentence names the thing that stopped being
+            // shared rather than guessing which of two rules did it.
+            message: 'That session is no longer shared with this device.',
           })
           return
         }
@@ -3504,6 +3765,35 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
             t: 'error',
             code: 'unavailable',
             message: 'That session’s usage could not be read.',
+          })
+        })
+        return
+      case 'account.read':
+      case 'account.switch':
+        // Not awaited, for the reason the two above are not, and here the wait is
+        // the longest on this wire: a switch spawns an agent CLI, waits for it to
+        // survive its first seconds and only then kills the session it replaced.
+        void accountServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] an account request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'That session’s account could not be reached.',
+          })
+        })
+        return
+      case 'chat.read':
+        // Not awaited, for the reason the readings above are not: this is a file
+        // read on this machine and a socket that stopped reading would freeze
+        // every session on the connection while one view loaded a conversation.
+        void chatServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] a chat request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'That session’s conversation could not be read.',
           })
         })
         return
@@ -4564,6 +4854,20 @@ export interface RemoteIpcDeps {
    */
   folders: FolderGrants
   /**
+   * Which of the running sessions each device may see — the second axis.
+   *
+   * Passed in for exactly the reason `folders` beside it is: the predicate the
+   * session fanout closes over reads this store, and it is built at assembly,
+   * before this function is called. A second one here would answer the panel
+   * from one copy of the file and every connection from another.
+   *
+   * **Optional, and its absence is the switch.** A host with no per-session
+   * choice — the headless daemon before this is wired, `scripts/remote-host.ts`,
+   * the public demo box — answers the panel's channels with nothing rather than
+   * drawing a control over a store that decides nothing.
+   */
+  sessionGrants?: SessionGrants
+  /**
    * Whether each device is one of the owner's own or a guest.
    *
    * Passed in for exactly the reason `folders` beside it is: `index.ts` needs
@@ -5128,6 +5432,9 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
       // phone pairs again and is issued a *new* device id — so the row left
       // behind could never be reached by anything again.
       deps.folders.forget(id)
+      // And its session ticks, for the same reason and on the same argument:
+      // the id can never be issued again, so the row could never be reached.
+      deps.sessionGrants?.forget(id)
       /*
        * Nothing to forget for the copilot any more, and that is worth a line
        * rather than a silence.
@@ -5187,6 +5494,57 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
       // reconnected it.
       server.foldersChanged(id)
       return deps.folders.list()
+    },
+  )
+
+  /**
+   * Which of the running sessions each device may see, and the one write.
+   *
+   * The second axis, asked for on 2026-08-20: *"when we give remote access we
+   * should be able to choose between running sessions which ones to give and
+   * which ones not, i mean select vs all type of options"*. `session-grants.ts`
+   * holds the store; the enforcement is the same `visible` predicate every verb
+   * already goes through, so there is nothing new to lock here.
+   *
+   * Three channels rather than two, because the panel needs the sessions to draw
+   * ticks against and the renderer has no list of this machine's terminals — the
+   * settings window is a different tree from the one holding the rail.
+   * `deps.sessions.list()` is the same call the wire is answered from, hidden
+   * sessions already removed, so the panel cannot offer a tick for a session no
+   * device could ever be given.
+   *
+   * Devices with no row simply do not appear, the same way the folder channel
+   * leaves them out: "not narrowed" and "narrowed to everything" behave alike
+   * and are not the same fact, and inventing a row here would make the panel
+   * unable to tell them apart.
+   */
+  ipcMain.handle('remote:sessions', (): DeviceSessionGrant[] => deps.sessionGrants?.list() ?? [])
+  ipcMain.handle('remote:sessions:running', (): RemoteSession[] => deps.sessions.list())
+  ipcMain.handle(
+    'remote:sessions:set',
+    (_event, id: unknown, mode: unknown, sessions: unknown): DeviceSessionGrant[] => {
+      const store = deps.sessionGrants
+      if (!store) return []
+      if (typeof id !== 'string' || id === '') return store.list()
+      store.set(id, mode, Array.isArray(sessions) ? sessions : [])
+      /*
+       * Immediately, on a device that is already connected — his fourth
+       * sentence about this feature.
+       *
+       * The *rule* is live without this: `visible` is asked per frame and per
+       * keystroke, so an untick has already taken the keyboard away by the time
+       * this line runs. What this does is take the row off the phone's screen in
+       * the same moment rather than at its next reconnection, which is the
+       * difference between a setting that works and a setting somebody has to be
+       * told to reconnect for.
+       *
+       * `sessionsChanged` rather than a per-device frame, because it already
+       * sends every connection its own `sessionsFor` list — one device's choice
+       * changing cannot alter another's list, and sending each one what it is
+       * entitled to is cheaper than a second code path that has to remember to.
+       */
+      server.sessionsChanged()
+      return store.list()
     },
   )
 

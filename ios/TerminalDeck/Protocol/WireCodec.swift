@@ -83,6 +83,24 @@ enum WireCodec {
                          // "Running on the desktop" rather than guess "Mac",
                          // which is the whole bug. See `HostPlatform`.
                          hostPlatform: HostPlatform(wire: string(object["hostPlatform"])),
+                         /*
+                          * What that machine calls itself.
+                          *
+                          * The switcher chips read the relay slot code — `2JJGF8`,
+                          * `9ZA6K3` — for somebody who owns one Mac and one
+                          * Windows PC, because the only name this phone ever had
+                          * was the one on the pairing link, read once, at the
+                          * desk. A machine paired before that field existed has
+                          * none at all and no way to get one short of pairing
+                          * again. This frame arrives on every connection.
+                          *
+                          * Display text from another machine, so it is cleaned
+                          * the way every other such string here is: control
+                          * characters out, bounded, and empty read as absent —
+                          * a machine that said nothing must not overwrite a name
+                          * with the empty string.
+                          */
+                         hostName: hostName(object["hostName"]),
                          folders: folders(object["folders"]),
                          // Absent is `.silent`, and so is malformed — both mean
                          // "this phone has no copilot on that machine", which is
@@ -852,6 +870,26 @@ enum WireCodec {
     private static func folders(_ value: Any?) -> [String]? {
         guard let rows = value as? [Any] else { return nil }
         return rows.compactMap { string($0) }.filter { !$0.isEmpty }.prefix(100).map { $0 }
+    }
+
+    /**
+     * What a machine calls itself, cleaned.
+     *
+     * Bounded at the same sixty-four the wire bounds it at, and stripped of
+     * control characters for the reason every display string from another
+     * machine is: this lands on a switcher chip beside terminal output, and an
+     * escape sequence in it would repaint the screen around the name.
+     *
+     * Empty reads as **absent**, which is not the same as the empty string: a
+     * machine that sent a name made only of control characters said nothing, and
+     * a phone that stored the result would have written it over a good name.
+     */
+    private static func hostName(_ value: Any?) -> String? {
+        guard let raw = string(value) else { return nil }
+        let cleaned = raw.filter { !$0.unicodeScalars.contains { scalar in scalar.properties.generalCategory == .control } }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty { return nil }
+        return String(cleaned.prefix(64))
     }
 
     private struct DecodedList {

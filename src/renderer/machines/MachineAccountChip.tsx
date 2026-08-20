@@ -1,0 +1,232 @@
+/**
+ * The account chip over a session running on one of his own machines.
+ *
+ *   > *"Then also bring the account selection here for the remote sessions too."*
+ *
+ * ## Why this is not `AccountChip` with a prop
+ *
+ * Because almost nothing that component does can happen from here, and the parts
+ * that cannot are most of it. `AccountChip` probes each account's sign-in state
+ * by spawning that account's CLI, renames accounts on disk, offers to *start* a
+ * session in a folder, arms a switch for the next message, and reads
+ * `useSessionAccount` for a pty in this process. Every one of those is a local
+ * operation on local files: over a session on his PC they would be this Mac's
+ * accounts, this Mac's rename, this Mac's session. Threading a "remote" flag
+ * through it would have left a component whose every branch asks which computer
+ * it is on — and the branch somebody forgets is the one that renames the wrong
+ * machine's account.
+ *
+ * What is shared is what should be: the **stylesheet**. Same `account-chip`,
+ * same `folder-chip-button`, same `folder-menu` and `account-menu-item`, so this
+ * is the same chip to look at and to click, which is the whole of what he asked
+ * for. There is no second palette and no second layout here — only a second, much
+ * smaller set of things a press can mean.
+ *
+ * ## What a press means here
+ *
+ * Exactly one thing: run this session as that login. There is no "start a
+ * session under this account" row, because that is a different verb on a
+ * different wire and offering it beside a switch is how a menu comes to open a
+ * second session when somebody meant to move the one they were reading.
+ *
+ * ## No sentences
+ *
+ * Nothing on this menu explains itself. A row that cannot be pressed is drawn as
+ * a paragraph rather than a button and says nothing about why, which is the rule
+ * he restated most in the review this was built for.
+ */
+
+import { createPortal } from 'react-dom'
+import { ProviderBadge } from '../components/ProviderBadge'
+import { providerOption } from '../components/ProviderPicker'
+import { useChipMenu } from '../shell/chip-menu'
+import type { MachineAccount } from './machine-account'
+import '../shell/AccountChip.css'
+
+const CHEVRON = 'M6.5 9.5 10 13l3.5-3.5'
+const TICK = 'M4.5 10.5 8 14l7.5-8'
+
+/**
+ * The one word this menu is titled with, and the same word the local chip uses.
+ *
+ * `Account`, not "Run this session as" — the local chip settled that argument in
+ * `MENU_HEAD`, and a remote menu with a different heading would read as a
+ * different feature rather than the same one, one machine over.
+ */
+const MENU_HEAD = 'Account'
+
+export interface MachineAccountChipProps {
+  /** The login the far session is on, or null when that machine could not say. */
+  current: MachineAccount | null
+  /** Every login that machine has. */
+  accounts: readonly MachineAccount[]
+  /** Whether a switch can be asked for at all — false while one is in flight. */
+  busy: boolean
+  /** The list is asked for again when this opens, which is when somebody looks. */
+  onOpen(): void
+  /** Run the session as that login. */
+  onPick(accountId: string): void
+}
+
+export function MachineAccountChip({ current, accounts, busy, onOpen, onPick }: MachineAccountChipProps) {
+  // Remeasured on the list, for the reason `useChipMenu` states: rows arriving
+  // after the menu opened change its height and leave it placed for the height
+  // it used to have. Over a relay that arrival is a round trip away, so this is
+  // the case the parameter was written for.
+  const menu = useChipMenu(accounts.length)
+
+  /*
+   * Every open asks again, not only the first.
+   *
+   * This kept a `opened` flag and refreshed once, which is wrong in the case
+   * that matters: the menu closes on Escape and on a click outside, neither of
+   * which comes back through this button — so the flag would still be set and
+   * the second open would draw whatever the list was the first time. An account
+   * added or signed in on the far machine in between would simply not appear.
+   */
+  const toggle = (): void => {
+    if (!menu.open) onOpen()
+    menu.toggle()
+  }
+
+  return (
+    <div className="account-chip" ref={menu.hostRef}>
+      <button
+        type="button"
+        className="folder-chip-button account-chip-button"
+        aria-haspopup="menu"
+        aria-expanded={menu.open}
+        /* One line, and only what was read. No sentence about which computer
+           this is: the machine's name is already on this bar, two chips to the
+           left, and saying it again here is the duplication he objected to for
+           the browser's `local` chip. */
+        title={current === null ? undefined : `Account: ${current.name}.`}
+        onClick={toggle}
+      >
+        {/* The colour belongs to an account, so it is only painted while one is
+            being named — the same rule the local chip follows. */}
+        <span
+          className="account-chip-dot"
+          aria-hidden="true"
+          style={current?.color ? { background: `var(${current.color})` } : undefined}
+        />
+        <ProviderBadge provider={current?.provider ?? null} size={13} label={agentLabel(current)} />
+        <span className="account-chip-name">{current === null ? 'No login' : current.name}</span>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d={CHEVRON} />
+        </svg>
+      </button>
+
+      {menu.open &&
+        createPortal(
+          <div
+            ref={menu.menuRef}
+            className="folder-menu"
+            role="menu"
+            aria-label={MENU_HEAD}
+            style={{ left: menu.at.left, top: menu.at.top }}
+          >
+            <p className="folder-menu-head">{MENU_HEAD}</p>
+            {accounts.map((account) => {
+              const isCurrent = current !== null && account.id === current.id
+              /*
+               * Three states, two of them inert, and neither says why.
+               *
+               * The account already in force: the tick has said everything there
+               * is to say, and a press could only stop a healthy agent and start
+               * it again as itself. And a login of a *different agent*, which the
+               * session's own CLI cannot be handed — the same refusal the local
+               * menu makes, made here from the same two provider ids.
+               *
+               * `busy` makes every row inert while a switch is in flight, because
+               * the far end is mid-replacement and a second request would start a
+               * second one.
+               */
+              const foreign =
+                current?.provider != null && account.provider != null && account.provider !== current.provider
+              const inert = isCurrent || foreign || busy
+              const line = (
+                <>
+                  <span className="account-menu-line">
+                    <span className="account-menu-tick" aria-hidden="true">
+                      {isCurrent && (
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 20 20"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d={TICK} />
+                        </svg>
+                      )}
+                    </span>
+                    <span
+                      className="account-chip-dot"
+                      aria-hidden="true"
+                      style={account.color ? { background: `var(${account.color})` } : undefined}
+                    />
+                    <ProviderBadge provider={account.provider} label={agentLabel(account)} />
+                    <span className="folder-menu-name">{account.name}</span>
+                  </span>
+                </>
+              )
+              return (
+                <div key={account.id} className="account-menu-row">
+                  {inert ? (
+                    <p
+                      className="folder-menu-item account-menu-item is-inert"
+                      data-current={isCurrent || undefined}
+                      aria-current={isCurrent || undefined}
+                    >
+                      {line}
+                    </p>
+                  ) : (
+                    <button
+                      type="button"
+                      /* `menuitemradio`, not `menuitem`: these rows are a choice
+                         of exactly one account and one of them is in force, and
+                         `aria-checked` is how the tick is said out loud. */
+                      role="menuitemradio"
+                      aria-checked={isCurrent}
+                      className="folder-menu-item account-menu-item"
+                      data-current={isCurrent || undefined}
+                      onClick={() => menu.choose(() => onPick(account.id))}
+                    >
+                      {line}
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>,
+          document.body,
+        )}
+    </div>
+  )
+}
+
+/**
+ * The agent's own word, or nothing.
+ *
+ * Undefined rather than a guess, which is what `ProviderBadge` treats as "do not
+ * announce this" — right in both cases that produce it: no agent named by the far
+ * machine, so nothing is drawn, so there is nothing to announce.
+ */
+function agentLabel(account: MachineAccount | null): string | undefined {
+  if (account?.provider == null) return undefined
+  return providerOption(account.provider)?.label
+}

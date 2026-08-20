@@ -229,12 +229,21 @@ export interface BrowserBridge {
   onBrowserRecording(cb: (id: string, state: RecordingState) => void): () => void
 
   /* browser-session.ts */
-  browserSessionInfo(): Promise<BrowserSessionInfo>
-  browserCookies(): Promise<CookieDomain[]>
-  browserClearCookies(domain?: string): Promise<{ removed: number }>
+  /*
+   * All five take the profile to answer about, and all five default to the one
+   * that is switched on when it is left out.
+   *
+   * That argument is E7. Without it only the active partition could be asked
+   * anything, so a profile menu could print a name and a tick and nothing else
+   * — *"there is nothing that we can see in each profile."* See
+   * `profileSession` in `src/main/browser-session.ts`.
+   */
+  browserSessionInfo(profileId?: string): Promise<BrowserSessionInfo>
+  browserCookies(profileId?: string): Promise<CookieDomain[]>
+  browserClearCookies(domain?: string, profileId?: string): Promise<{ removed: number }>
   /** Every origin actually cleared — a bare domain has both an http and an https one. */
-  browserClearStorage(domain?: string): Promise<{ origins: string[] }>
-  browserClearCache(): Promise<void>
+  browserClearStorage(domain?: string, profileId?: string): Promise<{ origins: string[] }>
+  browserClearCache(profileId?: string): Promise<void>
 }
 
 /**

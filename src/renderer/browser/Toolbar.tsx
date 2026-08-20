@@ -1,6 +1,7 @@
 import { useEffect, useRef, type FormEvent, type ReactNode, type RefObject } from 'react'
 import { type OmniboxResolution } from './omnibox'
 import { profileInitial } from './profile-badge'
+import { servedMark, servedTitle, type ServedBy } from './served-mark'
 import type { WorkspaceTab } from './tabs'
 
 interface Props {
@@ -128,7 +129,7 @@ interface Props {
    * band because it is a fact about the address, and the address bar is where
    * somebody looks to find out where they are.
    */
-  servedBy?: { name: string; port: number | null; localPort: number; sameNumber: boolean } | null
+  servedBy?: ServedBy | null
 }
 
 /**
@@ -277,38 +278,25 @@ export function Toolbar({
       */}
       <form className="bw-address" onSubmit={submit}>
         {/*
-          Where this loopback page actually comes from — and the one label in
-          this field that survived the cull, by his own instruction.
+          Where this loopback page actually comes from — and only the part of it
+          that is not already on the bar.
 
           *"Maybe in this kind of situation, we will need to keep this so we know
           actually where it is running right now … because we always need a
-          truth."* Only ever drawn for a page this window opened a tunnel for, so
-          it is never a decoration: the address really does read `127.0.0.1:<n>`
-          and the server really is on another computer.
+          truth."* Kept, then; but a first pass kept it whole, so a window whose
+          picker read `Office PC` drew `Office PC:5199` a centimetre away inside
+          the field — which is *"the same thing in both side"* with a different
+          word in it. `served-mark.ts` is the standing note on what is left over
+          once the picker and the address have had their say, and it is empty
+          exactly when they have said everything.
 
           The hover used to be two sentences of port arithmetic and is now the
           arithmetic itself — `office-pc:3000 → :53412` says the same thing to
           anybody who needs it, in the length the rest of this bar now uses.
         */}
-        {servedBy && (
-          <span
-            className="bw-served"
-            title={
-              /*
-               * A null port is the page being fetched by this computer, which
-               * has no tunnel and so has no pair of numbers to reconcile. The
-               * panel decides when to say that — see `servedBy` on the
-               * `<Toolbar>` in `BrowserWorkspace.tsx`; all this file owes it is
-               * a name with no colon after it.
-               */
-              servedBy.port === null
-                ? servedBy.name
-                : servedBy.sameNumber
-                  ? `${servedBy.name}:${servedBy.port}`
-                  : `${servedBy.name}:${servedBy.port} → :${servedBy.localPort}`
-            }
-          >
-            {servedBy.port === null ? servedBy.name : `${servedBy.name}:${servedBy.port}`}
+        {servedMark(servedBy) !== '' && (
+          <span className="bw-served" title={servedTitle(servedBy)}>
+            {servedMark(servedBy)}
           </span>
         )}
 

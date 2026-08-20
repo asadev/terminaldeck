@@ -825,6 +825,21 @@
   width: min(19rem, calc(100vw - 2 * var(--sp-4)));
 }
 
+/*
+  The profile menu is the one that is wider, and it is wider for a measured
+  reason rather than a stylistic one.
+
+  Its rows carry three things the other menus' rows do not: the profile's name,
+  the two doors into what that profile holds, and a Delete. At the shared 19rem
+  the flexible element — the name — is the one that gives way, so a profile
+  called `Work` rendered as `W…` next to two counts. The name is the row's
+  identity; the counts are what stopped the row being *"just the name"*. Neither
+  can be the part that is dropped, so the popup takes the width instead.
+*/
+.bw-popup:has(.bw-menu-profiles) {
+  width: min(23rem, calc(100vw - 2 * var(--sp-4)));
+}
+
 .bw-menu {
   display: flex;
   flex-direction: column;

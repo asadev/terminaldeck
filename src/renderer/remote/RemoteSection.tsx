@@ -15,6 +15,7 @@ import {
 } from '../machines/MachineLinks'
 import { asView, resolveBridge, type MachinesBridge, type MachinesView } from '../machines/types'
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
+import { DeviceSessions, type SessionDevice } from './DeviceSessions'
 import {
   DeviceApproval,
   nextStep,
@@ -2797,7 +2798,25 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       */
       folders={
         wired && state !== null ? (
-          <DeviceFolders devices={grantableDevices(state.devices, kinds)} />
+          <>
+            <DeviceFolders devices={grantableDevices(state.devices, kinds)} />
+            {/*
+              And the second axis, directly under the first.
+
+              Two panels rather than one, because they answer two questions with
+              two stores and two empty states — where a device may *start* a
+              session, and which of the ones already *running* it may open. They
+              are next to each other because they are read together, and in this
+              order because the folder rule is the outer one: ticking a session
+              in a folder this device was never granted shares nothing.
+
+              Every approved device, not only guests. `grantableDevices` drops
+              one of the owner's own because a folder row for it would change
+              nothing; a session row for it changes plenty, and his own phone is
+              paired as one of his own.
+            */}
+            <DeviceSessions devices={sessionDevices(state.devices)} />
+          </>
         ) : null
       }
     />
@@ -2837,5 +2856,24 @@ export function grantableDevices(
     // A device with no recorded kind is left in: it is read as a guest with
     // nothing, and this panel is where somebody fixes that.
     .filter((device) => kinds === null || kinds.get(device.id) !== 'mine')
+    .map((device) => ({ id: device.id, name: device.name }))
+}
+
+/**
+ * The devices worth choosing sessions for: every approved one.
+ *
+ * Wider than {@link grantableDevices} by exactly one case, and the difference is
+ * the point. A folder row for one of the owner's own machines would be a control
+ * that changes nothing — `device-reach.ts` gives it every folder by
+ * construction — but the session choice is enforced for every kind alike, and
+ * the device he asked about is paired as one of his own.
+ *
+ * Pending and revoked are dropped for the reasons {@link grantableDevices}
+ * gives: one cannot open anything until it is let in, and the other can never be
+ * reached again.
+ */
+export function sessionDevices(devices: readonly RemoteDevice[]): SessionDevice[] {
+  return devices
+    .filter((device) => device.state === 'approved')
     .map((device) => ({ id: device.id, name: device.name }))
 }

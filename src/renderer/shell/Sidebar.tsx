@@ -936,16 +936,30 @@ export function Sidebar({
    * **Session 1**. Two names for one session, twenty pixels apart. Seen on
    * screen, which is the only way this class of thing ever gets found here.
    */
+  /**
+   * `nameFolder` is for a run with **no folder heading above it**.
+   *
+   * A machine's sessions are listed under the machine, not under a project, so
+   * nothing on screen says which folder any of them is in. The audit found what
+   * that produces: five sessions on one paired machine, all untitled, reading
+   * `Session 1 … Session 5` — *"five remote rows still say almost nothing."*
+   * With this, each row names its own folder, which is the fact a person can
+   * act on. It is the same rule `heldRow` above already follows.
+   */
   const rowsFor = (
     run: readonly WorkspaceTab[],
     projectName?: string | ((tab: WorkspaceTab) => string | undefined),
+    options: { nameFolder?: boolean } = {},
   ) => {
     const nameOf = typeof projectName === 'function' ? projectName : () => projectName
     const labels = run.map((tab, index) => labelFor(tab, index, nameOf(tab)))
     // `showAccounts`, not `namesAccounts`: the question is whether the caption
     // is on the line, and on a rail too narrow to carry one it is not — so
     // there the account separates nothing and the id still has to.
-    const qualifiers = tabQualifiers(run, labels, { accountsShown: showAccounts })
+    const qualifiers = tabQualifiers(run, labels, {
+      accountsShown: showAccounts,
+      nameFolder: options.nameFolder,
+    })
     return run.map((tab, index) => tabRow(tab, labels[index], qualifiers[index]))
   }
 
@@ -1182,9 +1196,21 @@ export function Sidebar({
         tab.server
         ? `on ${tab.server.name}`
         : null
+    /*
+     * The qualifier is dropped from the hover when the hover already says it.
+     *
+     * A row under a machine heading now names its folder on the line — there is
+     * no project heading over those rows to say it — and `where` under it prints
+     * the whole path, which ends in that same word. Left in, the hover read
+     * `Fix the parser — site — C:\Users\asad\site on DESKTOP-DDGMNCV`: the same
+     * folder twice, in one line, the second time in full. The line keeps the
+     * short form and the hover keeps the long one.
+     */
+    const folderOnLine =
+      qualifier !== null && tab.projectPath !== undefined && qualifier === folderName(tab.projectPath)
     const rowTitle = [
       label,
-      qualifier,
+      folderOnLine && where !== null ? null : qualifier,
       where,
       namesAccounts && rail ? rail.note : null,
       renameable ? 'double-click or F2 to rename' : null,
@@ -1192,28 +1218,21 @@ export function Sidebar({
       .filter(Boolean)
       .join(' — ')
     /*
-     * What closing costs, in the words of where the session is.
+     * There is no sentence about closing here any more, and that is the fix.
      *
-     * Word for word the sentence the row's ✕ carried in its tooltip, moved to
-     * the menu entry that now does the closing. Both halves matter and the
-     * second one is the half somebody hovering a remote row is actually worried
-     * about: *"it will just close all of the sessions from that PC… it should
-     * not disconnect the remote account."*
+     * Three of them used to be composed on every row — one per kind of place a
+     * session can run — and handed to `showSessionRowMenu` as `close`. The menu
+     * stopped printing them when the entry became the single word **Delete**:
+     * *"Close session one and end session, both are the same thing, two times.
+     * So only give the delete button here. It should call only delete."* Main
+     * has read the field as a **boolean** ever since — anything truthy means the
+     * row can be deleted — so what was left here was three sentences written on
+     * every render, for every row, and read by nothing.
      *
-     * It is also the label now rather than a tooltip on a glyph, which is the
-     * quiet win of the menu: there are two ✕s in this window and only one of
-     * them ends a process, and a person can no longer press this one without
-     * having read which it is.
+     * `tab.closable` is that boolean and is now what crosses the bridge. What
+     * closing costs is said once, in the confirmation the choice opens, which is
+     * where a sentence can be read rather than glimpsed.
      */
-    const closeSentence = tab.machine
-      ? `Close ${label} — ends the session on ${tab.machine.name}. That machine stays connected.`
-      : tab.server
-        ? /* Both halves again. This ends the terminal and touches nothing else
-             on the machine. */
-          `Close ${label} — ends this terminal on ${tab.server.name}. The server itself is left alone.`
-        : tab.kind === 'session'
-          ? `Close ${label} — ends the session`
-          : `Close ${label}`
     return (
       <li key={tab.id}>
         <div
@@ -1379,7 +1398,7 @@ export function Sidebar({
                   // arrow used to show on hover rather than as a boolean the
                   // menu would have to find words for.
                   promoteBlocked: stripFull ? `The top strip is full (${MAX_PROMOTED})` : null,
-                  close: tab.closable ? closeSentence : null,
+                  close: tab.closable,
                   copilotTurn: turn !== null && onOpenCopilot !== undefined,
                   // A page cannot have pages attached to it, so its menu has no
                   // Connect browser — absent rather than drawn and inert.
@@ -1851,7 +1870,20 @@ export function Sidebar({
                   // fill.
                   <p className="sb-empty">Nothing running there.</p>
                 ) : (
-                  <ul className="sb-list sb-sessions">{rowsFor(group.sessions)}</ul>
+                  <ul className="sb-list sb-sessions">
+                    {/* The folder per row, and the folder in the label's own
+                        numbering — see `rowsFor`. There is no project heading
+                        over a machine's sessions, so without both halves a
+                        session still wearing its folder's name reads as
+                        `terminaldeck` while the one beside it reads
+                        `terminaldeck` too, and the only thing separating them is
+                        an ordinal the far machine minted. */}
+                    {rowsFor(
+                      group.sessions,
+                      (tab) => (tab.projectPath ? folderName(tab.projectPath) : undefined),
+                      { nameFolder: true },
+                    )}
+                  </ul>
                 ))}
             </section>
           )

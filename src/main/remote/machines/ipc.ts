@@ -661,6 +661,69 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   )
 
   /**
+   * Whose login one session on another machine is on, and which logins that
+   * machine has.
+   *
+   * `null` when the question could not be asked — not a machine, not paired, a
+   * link that is down, a build over there that predates the capability. The
+   * renderer treats it the way the control chips treat a missed read: it keeps
+   * the last account it genuinely had rather than emptying a menu that had rows
+   * in it a moment ago.
+   */
+  ipcMain.handle(
+    'machines:account:read',
+    async (_event, id: unknown, sessionId: unknown): Promise<unknown> => {
+      if (typeof id !== 'string' || typeof sessionId !== 'string') return null
+      return (await links.get(id)?.readAccount(sessionId)) ?? null
+    },
+  )
+
+  /**
+   * Run one session on another machine as a different login.
+   *
+   * ## Why it is not `machines:controls:apply` with a fifth control name
+   *
+   * Because it is not a control. The four in {@link CONTROL_IDS} are a slash
+   * command typed at a session that survives it; this **ends the agent process
+   * and starts another** under a different configuration directory. The session
+   * that comes back has a new id, which is the field on this answer that has no
+   * counterpart over there: a window that ignored it would stay attached to a pty
+   * that has already been killed.
+   *
+   * Always answers with a sentence, on every path, for the reason
+   * `machines:controls:apply` does: somebody pressed a row, and a press that
+   * produces nothing is indistinguishable from a control that does not work.
+   */
+  ipcMain.handle(
+    'machines:account:switch',
+    async (
+      _event,
+      id: unknown,
+      sessionId: unknown,
+      accountId: unknown,
+    ): Promise<{ ok: boolean; message: string; session: string | null }> => {
+      if (typeof id !== 'string' || typeof sessionId !== 'string') {
+        return { ok: false, message: 'That is not a machine and a session.', session: null }
+      }
+      /*
+       * Shape-checked here as well as on the wire, for the reason
+       * `machines:controls:apply` narrows its control name: everything past this
+       * line selects a configuration directory on somebody else's computer, and an
+       * `ipcMain.handle` argument is whatever the renderer put in it. The parser on
+       * the far end checks it again — that is the check that protects the machine —
+       * and this one exists so a renderer bug is a sentence here rather than a
+       * closed socket there, which would take every terminal on the link with it.
+       */
+      if (typeof accountId !== 'string' || accountId === '') {
+        return { ok: false, message: 'That is not an account.', session: null }
+      }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.', session: null }
+      return link.switchAccount(sessionId, accountId)
+    },
+  )
+
+  /**
    * Put text into a session on another machine, without opening it here.
    *
    * ## Why this is not `machines:input`

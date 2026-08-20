@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useOneMenu } from '../../shell/one-menu'
 import { menuSide, type MenuSide } from './menu-side'
 import type { ControlId, ControlOption, ControlReading } from './catalog'
-import { controlName, describeControl, displayValue, isCurrent, sourceNote } from './catalog'
+import { controlName, displayValue, isCurrent, sourceNote } from './catalog'
 
 /**
  * A control with exactly two states, drawn as the one control it is.
@@ -598,12 +598,29 @@ export function ControlToggleItem({
         >
           <span className="ac-item-text">
             <span className="ac-item-label">{name}</span>
-            {/* The description earns its line *in this menu specifically*: its
-                second half is about the rows directly above it. Turn this on,
-                pick another model, and you have silently turned it off again —
-                and the only moment a person can be told that in time is while
-                both are on screen together. */}
-            <span className="ac-item-hint">{describeControl(control)}</span>
+            {/*
+              A tag, where a three-line description used to be.
+
+              What was here was `describeControl(control)` in full — *"The same
+              model, answering faster. Switching to another model turns it off."*
+              — which wrapped to three lines of grey prose at the foot of the
+              model menu, under a switch, in a panel Asad had already asked to be
+              made clean. *"I don't want any kind of long descriptions
+              anywhere."*
+
+              It is not simply deleted, because half of it is a fact about the
+              rows *directly above this one*: turn fast mode on, pick another
+              model, and you have silently turned it off again, with nothing on
+              screen changing to say so. That half is the only moment it can be
+              read in time, and it fits in four words. The other half — what fast
+              mode is — is the ⓘ in the folded sheet and is not news to anybody
+              who found this row.
+
+              Written to the same rule as every other hint in this cluster: a
+              fact about what pressing the row *does*, not a description of the
+              feature. See {@link ControlOption.hint}.
+            */}
+            {control === 'fast' ? <span className="ac-item-hint">off if you switch model</span> : null}
           </span>
           {busy ? (
             /* A switch mid-flight has no honest position: it is neither where it

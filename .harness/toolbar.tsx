@@ -78,6 +78,12 @@ const ONE = {
   activeId: 'default',
 }
 
+/** Sites with data, per profile — the other store each row now reports on. */
+const SITES: Record<string, number> = {
+  default: 7,
+  '6f1a2b3c-4d5e-4f60-8a71-9b2c3d4e5f60': 1,
+}
+
 const bare = new URLSearchParams(location.search).get('profiles') === 'one'
 const STATE = bare ? ONE : PROFILES
 
@@ -258,7 +264,7 @@ function Live({ width }: { width: number | undefined }) {
         machinePicker={
           <MachinePicker machines={MACHINES} selected={THIS_MACHINE} onSelect={() => {}} />
         }
-        servedBy={{ name: 'office-pc', port: 3000, localPort: 53412, sameNumber: false }}
+        servedBy={{ name: 'office-pc', port: 3000, localPort: 53412, sameNumber: false, agrees: true }}
       />
 
       {menuOpen && (
@@ -277,7 +283,9 @@ function Live({ width }: { width: number | undefined }) {
         <ProfileMenu
           api={ACCOUNTS}
           anchor={anchor}
-          countSites={async () => (bare ? 0 : 7)}
+          /* Per profile, the way the real bridge answers it now. `?profiles=one`
+             is the machine he opens this on: one profile, nothing in it. */
+          countSites={async (profileId: string) => (bare ? 0 : (SITES[profileId] ?? 0))}
           onSiteData={() => {}}
           onReopen={() => {}}
           onClose={() => setProfileOpen(false)}

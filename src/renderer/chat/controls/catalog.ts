@@ -23,7 +23,42 @@ export type ValueSource = 'screen' | 'transcript' | 'settings' | 'env'
 export interface ControlOption {
   id: string
   label: string
-  /** One line under the label. Says what it does, not that it is recommended. */
+  /**
+   * A short tag under the label, for a fact about *this* account or session
+   * that a reader cannot get from the row itself.
+   *
+   * ## It is not a description any more
+   *
+   * It was, on every row of two long lists — `Fable 5` under it *"Most capable
+   * for your hardest and longest-running tasks"*, `High` under it
+   * *"Comprehensive, with testing and docs"*, and eleven models each with a
+   * grey line of their own. Rendered in a 340px sheet most of them wrapped to
+   * two lines, and the panel became a page of prose with the actual choices
+   * buried in it. Asad, in the same recording, looking at a list built the same
+   * way: *"Why do we have all of this full list? … if I have ten like this, how
+   * I will read all of them? It is a lot again, you know."* And the rule he
+   * repeated most: *"don't put any single statement in anywhere… Let the smart
+   * people use it. Smart people knows how it works."*
+   *
+   * `Fable 5` is the name of a model. A person choosing between it and `Sonnet
+   * 5` in a coding agent knows what they are, and the CLI's own one-line gloss
+   * is one keystroke away in the CLI itself.
+   *
+   * ## What survives, and the test it had to pass
+   *
+   * Two tags, and both are facts the row cannot state on its own:
+   *
+   *  - *"your account's default"* on a model — which is the whole of what the
+   *    CLI's `Default (recommended)` row carried, folded onto the model it
+   *    resolves to by `foldDefaultRow`. Delete it and the fold loses the thing
+   *    it was folding.
+   *  - *"this session only"* on `Ultracode` — every other effort can become the
+   *    default for new sessions and that one cannot, which is a difference in
+   *    what pressing the row *does*.
+   *
+   * A hint that would be true of any reader on any machine is a description and
+   * does not belong here.
+   */
   hint?: string
   /**
    * A caption printed above this option, starting a run of rows that are a
@@ -109,16 +144,16 @@ export const DEFAULT_EFFORT = 'xhigh'
  * row that is a *withdrawal* of a choice.
  */
 export const EFFORT_OPTIONS: ControlOption[] = [
-  { id: 'xhigh', label: 'Extra high', hint: 'Deeper reasoning than high · the default here' },
+  { id: 'xhigh', label: 'Extra high', hint: 'the default here' },
   // "this session only" is not a guess: the CLI has no other answer for
   // ultracode — `Set effort level to ultracode (this session only): xhigh +
   // dynamic workflow orchestration` is the whole of it, with no branch.
-  { id: 'ultracode', label: 'Ultracode', hint: 'Extra high plus dynamic workflows · this session only' },
-  { id: 'max', label: 'Max', hint: 'Deepest reasoning available' },
-  { id: 'high', label: 'High', hint: 'Comprehensive, with testing and docs' },
-  { id: 'medium', label: 'Medium', hint: 'Standard implementation and testing' },
-  { id: 'low', label: 'Low', hint: 'Quick, minimal overhead' },
-  { id: 'auto', label: 'Auto', hint: "Clear it, and let the model use its own default" },
+  { id: 'ultracode', label: 'Ultracode', hint: 'this session only' },
+  { id: 'max', label: 'Max' },
+  { id: 'high', label: 'High' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'low', label: 'Low' },
+  { id: 'auto', label: 'Auto' },
 ]
 
 /**
@@ -159,7 +194,14 @@ export function modelOptions(rows: readonly ModelRow[] = FALLBACK_MODELS): Contr
     // they differ — `Opus (1M context)` / `Opus 5 with 1M context` — the model
     // is the more useful of the two, so it wins outright.
     label: row.model,
-    hint: [row.note, row.recommended ? 'your account’s default' : ''].filter(Boolean).join(' · ') || undefined,
+    /*
+     * `row.note` — the CLI's own gloss, *"Best for everyday, complex tasks"* —
+     * is read, kept on the row, and not drawn. Eleven of them down a 340px
+     * panel is the wall of grey this cluster was told to stop printing; see
+     * {@link ControlOption.hint}. What is left is the one thing the row cannot
+     * say about itself, and it is why `foldDefaultRow` exists at all.
+     */
+    hint: row.recommended ? 'your account’s default' : undefined,
   }))
 }
 
@@ -327,8 +369,23 @@ export function controlName(control: ControlId): string {
 }
 
 /**
- * One line saying what the control does, for the folded panel where there is
- * room to say it.
+ * One line saying what the control does.
+ *
+ * ## It is not printed on a panel any more
+ *
+ * It was, above every section of the folded controls sheet, and Asad — the
+ * sentence he repeated more than any other on 2026-08-20 — *"don't put any
+ * single statement in anywhere. Everywhere you are putting a lot of statements.
+ * We don't need to give the statements. We want simplicity. Let the smart
+ * people use it. Smart people knows how it works."*
+ *
+ * `Which model answers in this session.` over a list of models is the exact
+ * shape he was objecting to: a sentence that tells a reader what the heading
+ * already told them. So the sheet prints none of these, and {@link controlNote}
+ * decides which of them is still worth reaching — behind the ⓘ, which is the
+ * one place he allowed an explanation to live: *"if somewhere it's very
+ * required, give the i icon like other ones, information icon in the settings,
+ * same way."*
  *
  * Each describes the *effect on this session*, not the option's merits: the
  * per-option hints already argue for themselves, and a description that also
@@ -364,6 +421,30 @@ export function describeControl(control: ControlId): string {
   if (control === 'fast')
     return 'The same model, answering faster. Switching to another model turns it off.'
   return 'What the agent may do without stopping to ask you first.'
+}
+
+/**
+ * Which controls still owe the reader a sentence, and never on screen.
+ *
+ * The standing ⓘ beside a section's heading, or `null` for no dot at all — and
+ * `null` is the answer for almost everything, which is the point. A dot is a
+ * mark on the line saying *there is more here*, so putting one on every section
+ * is the paragraph coming back one glyph at a time.
+ *
+ * Model and effort get nothing. `Which model answers in this session.` above a
+ * list of model names, and `How much reasoning the model spends before it
+ * answers.` above `Extra high / Max / High / Medium / Low`, are the app telling
+ * a reader what the heading and the rows have already told them twice.
+ *
+ * Fast mode keeps one, and it is the second half of its description that earns
+ * it: *"Switching to another model turns it off."* That is not a definition, it
+ * is a consequence, and it is invisible — turn fast mode on, pick Sonnet from
+ * the section directly above, and you have silently turned it off again with
+ * nothing on screen having changed to say so. A reader cannot deduce it, which
+ * is the test this function applies.
+ */
+export function controlNote(control: ControlId): string | null {
+  return control === 'fast' ? describeControl(control) : null
 }
 
 /**

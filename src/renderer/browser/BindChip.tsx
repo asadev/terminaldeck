@@ -2,7 +2,6 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { readMachineTabId } from '../shell/workspace-tabs'
 import { readSessions, resolveAgentSessions } from './agent-target'
 import { useSessionBinding, useWindowBinding, type BoundWindowView } from './binding-view'
-import { useWindowMachine } from './window-machine'
 
 /**
  * The mark that says a browser window belongs to a session — `B1`, `B2`.
@@ -386,83 +385,26 @@ export function ConnectSessionButton({ browserTabId }: { browserTabId: string })
 }
 
 
-/* ------------------------------------------------------- which computer -- */
+/* ----------------------------------------------- which computer, moved -- */
 
-/**
- * The mark a browser window wears when its page is **not** on this computer.
+/*
+ * `WindowMachineMark` was here and is deleted — 2026-08-20.
  *
- * ## What he asked for, and why this is where it ended up
+ * It was a 12px display glyph on a browser tab whose `title` held the name of
+ * the machine serving the page, and it was this app's answer to:
  *
  * > *"if I open any browser here and if I connect it to, let's say, desktop, now
  * > this is in desktop, it should come under this table, under the desktop
  * > sessions. So all the desktop browser, including session, should be at one
  * > place."*
  *
- * He asked for a grouping in the sidebar, and later in the same recording he
- * emptied the sidebar of browser windows: *"Browser windows will not be on the
- * side bar at all. They will be always only on the top bar."* Both instructions
- * are his, both are load-bearing, and there is exactly one arrangement that
- * honours the pair — the top bar has to carry the machine, because after the
- * second instruction it is the only surface a browser window appears on.
+ * It was not that answer. A tooltip is not a place, and a mark on one tab says
+ * nothing about the session two tabs along that runs on the same machine — so
+ * the audit found the fact still reachable only by hovering, and nothing at all
+ * showing a machine's sessions and its windows together.
  *
- * Without this, it appeared on none. The main process was told which machine
- * every window is on and grouped them under machine headings in its two native
- * menus; the renderer was never told, so the strip drew a page running on his PC
- * identically to one running here and the only way to find out was to open a
- * menu. *"Now I don't know if it is actually there or here."*
- *
- * ## A glyph, and the name on hover — not the name on the tab
- *
- * A strip tab has 22 characters for a title (`STRIP_LABEL_BUDGET`) and is
- * already shedding chips into a count to fit what it has. Spending eight of
- * those characters on `office-pc` would cost the thing that actually tells two
- * tabs apart. So the tab says *not here* in one glyph, and *where* in the hover
- * — which is the same trade the strip already makes for a remote session, whose
- * machine lives only in `tabTooltip`.
- *
- * ## Why a session's pill wears no such mark and this one does
- *
- * `WorkspaceTabStrip` decided deliberately that a remote session's pill looks
- * exactly like a local one, because the complaint it was answering was that
- * remote work looked like a foreign kind of thing. That still holds — and a
- * session has somewhere else to say it: the rail groups sessions under their
- * machine, with a heading. A browser window has nowhere else at all. The
- * asymmetry is not two rules; it is one rule (*the machine is stated exactly
- * once, somewhere you are already looking*) landing in different places for two
- * things that are listed in different places.
- *
- * ## Nothing at all for a window on this computer
- *
- * `useWindowMachine` answers null for it, and null draws nothing — the same
- * bargain as every other mark in this file. A glyph on every tab saying "here"
- * is the placeholder that puts a mark on every row to report that nothing has
- * happened, which is what the refused browser status dot was.
+ * The strip groups its tabs by machine now and draws the name once, as a heading
+ * over the run: `stripGroups` in `workspace-strip.ts` holds the arrangement and
+ * `.strip-group` in `WorkspaceTabStrip.css` holds the look. The store it read
+ * from — `window-machine.ts` — is unchanged, and is what the grouping reads.
  */
-export function WindowMachineMark({ browserTabId }: { browserTabId: string }) {
-  const machine = useWindowMachine(browserTabId)
-  if (!machine) return null
-  const name = machine.name || machine.id
-  return (
-    <span className="tab-machine-mark" title={name} aria-label={`on ${name}`}>
-      {/*
-        A display, and the same one the machine picker and the sidebar's machine
-        rows draw. One idea, one shape — a second glyph for "a computer that is
-        not this one" would be a second thing to learn about the same fact.
-      */}
-      <svg
-        width="12"
-        height="12"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <rect x="3" y="4" width="18" height="12" rx="2" />
-        <path d="M9 20h6M12 16v4" />
-      </svg>
-    </span>
-  )
-}

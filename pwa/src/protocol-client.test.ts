@@ -74,6 +74,37 @@ describe('decoding what the desktop sends', () => {
     }
   })
 
+  it('carries the machine\u2019s own name, cleaned, and leaves the field off when it says nothing', () => {
+    /*
+     * The migration for an already-paired machine. A client that stored the name
+     * at pairing time and nowhere else has none for a machine paired before the
+     * field existed, and no way to get one short of pairing again at the desk \u2014
+     * so those rows read the platform noun, "Mac" and "PC", for two computers
+     * with real names. This frame arrives on every connection.
+     */
+    const named = decodeServerMessage(welcome({ hostName: 'Asads-MacBook-Pro' }))
+    expect(named.ok && named.message.t === 'welcome' && named.message.hostName).toBe('Asads-MacBook-Pro')
+
+    // Display text from the far end of a sealed channel is authenticated, not
+    // trusted: it lands on a chip beside terminal output, so an escape sequence
+    // in it would repaint the screen around the name.
+    const nasty = decodeServerMessage(welcome({ hostName: 'Office\u001b[2JPC' }))
+    expect(nasty.ok && nasty.message.t === 'welcome' && nasty.message.hostName).toBe('Office[2JPC')
+
+    const long = decodeServerMessage(welcome({ hostName: 'n'.repeat(200) }))
+    expect(long.ok && long.message.t === 'welcome' && long.message.hostName).toHaveLength(64)
+
+    // Absent, empty and control-characters-only are one answer: *this machine
+    // said nothing*. A client that stored the empty string would have written it
+    // over a good name.
+    for (const hostName of [undefined, '', '   ', '\u0000\u0001', 7, null, {}]) {
+      const frame = hostName === undefined ? welcome() : welcome({ hostName })
+      const result = decodeServerMessage(frame)
+      expect(result.ok, JSON.stringify(hostName)).toBe(true)
+      if (result.ok && result.message.t === 'welcome') expect(result.message.hostName).toBeUndefined()
+    }
+  })
+
   it('carries the desktop’s platform through raw, and leaves the field off when it is absent', () => {
     // Raw rather than mapped: the noun is presentation and belongs to the
     // screens. What the decoder must not do is *invent* one — the field being

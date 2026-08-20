@@ -383,3 +383,52 @@
   min-height: 0;
   padding: var(--sp-2);
 }
+
+/*
+ * What the far machine said about a switch that did not happen.
+ *
+ * Below the title line beside the account chip, and only after a press. It is
+ * not a caption and must never become one: the standing rule from the
+ * 2026-08-20 review is that nothing on screen explains itself, and the same
+ * review is equally firm that a press must never produce nothing at all. This is
+ * the second of those — an answer, transient, cleared on its own — and the words
+ * in it are the far machine's own about its own account.
+ *
+ * A floating panel rather than a line in the row, and the reason is measured:
+ * inline, at the width a 48px bar can spare, "That account has never signed in
+ * on this computer." drew as "That account has never signed in on this…" — the
+ * half that says what to do about it cut off, with nowhere to read it. This is
+ * `.sc-notice`'s shape, which is the same kind of thing one chip cluster to the
+ * right, so a refusal reads the same wherever on this bar it comes from.
+ *
+ * The host is zero-width on purpose: the panel hangs out of the flow, so the
+ * chips beside it must not move when one appears.
+ */
+.machine-switch-host {
+  position: relative;
+  display: inline-flex;
+  width: 0;
+  align-self: stretch;
+}
+
+.machine-switch-problem {
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: min(360px, calc(100vw - var(--sp-6)));
+  margin: 0;
+  padding: var(--sp-15) var(--sp-2);
+  border-radius: var(--radius-md);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--color-warning);
+}

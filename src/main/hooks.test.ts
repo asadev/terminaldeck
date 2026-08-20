@@ -277,6 +277,13 @@ describe('ownership', () => {
     for (const event of ['Stop', 'PreToolUse', 'Notification']) {
       expect(hookCommand('claude', event, ENDPOINT, 'darwin'), event).toContain('-o /dev/null')
     }
+    // Codex is answered on exactly two of them — see `CONTEXT_EVENTS` in
+    // `hook-server.ts` for what its own generated schemas were measured to
+    // accept. `-o /dev/null` on either would be a hook with nothing to read on
+    // the only events a Codex session is ever told anything at all.
+    for (const event of ['SessionStart', 'PostToolUse']) {
+      expect(hookCommand('codex', event, ENDPOINT, 'darwin'), event).not.toContain('-o /dev/null')
+    }
   })
 
   /**
