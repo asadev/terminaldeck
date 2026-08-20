@@ -106,6 +106,14 @@ export interface ChatViewProps {
    * is what they are.
    */
   provider?: ProviderId
+  /**
+   * Plain text mode for the composer — the box, attach and send, no microphone.
+   *
+   * Passed straight through. It exists for the copilot's side panel, which is
+   * the same conversation in a rail-wide column: *"only one small typing box and
+   * send button… only maybe add file thing can be there."* See `ChatComposer`.
+   */
+  plain?: boolean
 }
 
 /* ------------------------------------------------------------------ markdown */
@@ -781,6 +789,7 @@ export function ChatView({
   refreshMs = 2000,
   bridge,
   provider,
+  plain = false,
 }: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
   const folderSessions = useFolderSessions(cwd)
@@ -1124,6 +1133,9 @@ export function ChatView({
         // any other tab from here — so the composer has to know before it
         // attaches a file the session cannot read.
         sessionId={liveSessionId}
+        // The copilot's rail panel, and only it, asks for the box without the
+        // microphone. See the prop.
+        plain={plain}
       />
     </div>
   )

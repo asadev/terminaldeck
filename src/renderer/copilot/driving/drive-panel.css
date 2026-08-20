@@ -38,7 +38,17 @@
   top: 0;
   bottom: 0;
   left: 0;
-  width: var(--sidebar-width);
+  /*
+    The rail's *live* width, not the token.
+
+    `--rail-width` is published by `useSidebar` on every change to the column;
+    the token is the fallback for a window that has not rendered a rail yet. It
+    used to be the token alone, and on a rail dragged wider than 264 that left a
+    broken sliver of the sidebar — a globe, a ＋, a stray label — showing beside
+    the panel. Asad filmed exactly that beside the browser panel that used to
+    live in this column, and this is the same edge.
+  */
+  width: var(--rail-width, var(--sidebar-width));
   /*
     Above the scrim (40) so the panel stays bright without the overlay needing
     a second hole cut for it — which is why `focus-target.ts` only ever computes

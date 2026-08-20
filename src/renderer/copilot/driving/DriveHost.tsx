@@ -3,8 +3,9 @@ import { DriveLayer } from '../../driving/DriveLayer'
 import type { FocusReport } from '../../driving/FocusOverlay'
 import { ScanField, type Rect } from '../../driving/ScanField'
 import { publishWhere, watchCopilotFrontmost } from '../../driving/where'
-import { BrowserWatch, useBrowserWatch, type WatchBridge } from './BrowserWatch'
+import { driveNowOf, type DriveNow } from './browser-trace'
 import { DrivePanel } from './DrivePanel'
+import { setRailCopilot, setRailDrive } from './rail-panel'
 import { readTour } from './tour'
 import { playTour, type RunningTour, type TourCommand, type TourView } from './tour-player'
 
@@ -34,7 +35,16 @@ import { playTour, type RunningTour, type TourCommand, type TourView } from './t
  *  - **the dot field**, which is what the dulled part carries — *"the
  *    non-focused areas carry the dots treatment; the focus is what stays
  *    clear"*;
- *  - **the panel**, which while driving *is* the copilot.
+ *  - **the scan's panel**, which while a scan is playing *is* the copilot.
+ *
+ * It also **publishes** two things it cannot draw: the browser drive's live
+ * status and the copilot's session id. The panel that shows a scrape used to be
+ * mounted here beside the scan's, and on 2026-08-21 it moved into the sidebar —
+ * it has to be the rail's real width and it has to know what the window is
+ * showing, and neither is answerable from a fixed overlay in this tree. What
+ * stays here is the subscription, because the panel is unmounted for most of the
+ * app's life and a subscription living inside it would miss everything that
+ * happened while it was away. See `rail-panel.ts`.
  *
  * ## The layout rule, enforced here because this is the only place that can
  *
@@ -75,12 +85,22 @@ import { playTour, type RunningTour, type TourCommand, type TourView } from './t
  */
 
 /** The parts of the preload bridge driving mode uses. */
-interface DriveBridge extends WatchBridge {
+interface DriveBridge {
   onTour(handler: (tour: unknown) => void): () => void
   reportTour(report: unknown): Promise<unknown>
   copilotState?(): Promise<unknown>
   writeToSession?(id: string, data: string): void
   setSettings?(patch: Record<string, unknown>): Promise<unknown>
+  /**
+   * The browser drive's own live status.
+   *
+   * Optional, and guarded with `?.` at every call — which is the harness rather
+   * than doubt about the preload: `.harness/stub.ts` mounts this same tree
+   * against a stubbed bridge, and a method it has not grown yet must leave the
+   * window running.
+   */
+  onBrowserDriveState?(cb: (status: unknown) => void): () => void
+  browserDriveStatus?(): Promise<unknown>
 }
 
 function bridge(): DriveBridge | null {
@@ -123,6 +143,11 @@ export function DriveHost({ deck = bridge() }: { deck?: DriveBridge | null }) {
         if (!live) return
         const raw = state as { sessionId?: unknown } | null
         copilotId.current = typeof raw?.sessionId === 'string' ? raw.sessionId : null
+        // And published, because the rail's panel needs it too and cannot read
+        // a ref in another tree. It is the panel's *fallback* subject — the
+        // session bound to the page wins — so a build with no copilot simply
+        // leaves it null. See `rail-panel.ts`.
+        setRailCopilot(copilotId.current)
       })
       .catch(() => {
         // No copilot, or the read failed. The scan then simply ends where it is
@@ -307,12 +332,43 @@ export function DriveHost({ deck = bridge() }: { deck?: DriveBridge | null }) {
    * — and they are never up together, because they would want the same column and
    * the scan is the one somebody asked to watch.
    *
-   * Subscribed here rather than inside the panel, because the panel is unmounted
-   * for most of the app's life and a subscription living inside it would miss
-   * everything that happened while it was away. A drive can begin on the
-   * copilot's own page and end somewhere else entirely.
+   * Subscribed **here** rather than in the panel that draws it, because the
+   * panel is unmounted for most of the app's life — it is only on screen while
+   * the page being driven is in front, and the rail it lives in is unmounted
+   * altogether while the sidebar is collapsed. A subscription living inside it
+   * would miss everything that happened while it was away, and a drive can begin
+   * on the copilot's own page and end somewhere else entirely.
+   *
+   * Asked once as well as subscribed, because a push is not a queue: a window
+   * that reloads in the middle of a drive would otherwise show nothing until the
+   * driver's next step, and a drive parked on a handover makes no steps at all —
+   * it is waiting for the person.
    */
-  const watch = useBrowserWatch(deck)
+  const [now, setNow] = useState<DriveNow | null>(null)
+  useEffect(() => {
+    if (deck === null) return
+    void deck.browserDriveStatus?.().then(
+      (status) => setNow(driveNowOf(status)),
+      () => {
+        // No drive registered in this build. The panel simply never appears,
+        // which is the honest answer rather than an empty one.
+      },
+    )
+    return deck.onBrowserDriveState?.((status) => setNow(driveNowOf(status)))
+  }, [deck])
+
+  /*
+   * Published for the rail, and withheld while a scan is playing.
+   *
+   * The two would want the same column and the scan is the one somebody asked to
+   * watch, so the drive is published as `null` for its duration rather than the
+   * panel growing a second rule about a feature it cannot see. Everything else
+   * about when the panel is drawn — the page in front, the fold — is decided in
+   * `rail-panel.ts`, in one function, so nothing has to agree with anything.
+   */
+  useEffect(() => {
+    setRailDrive(view === null ? now : null)
+  }, [now, view])
 
   return (
     <>
@@ -335,16 +391,17 @@ export function DriveHost({ deck = bridge() }: { deck?: DriveBridge | null }) {
         />
       )}
       {/*
-        The same layout rule, applied to the same column.
+        The scrape's panel is not mounted here any more.
 
-        Not on the copilot's own page — *"it should not make two split views on
-        its own page"* — where its own conversation is already narrating these
-        calls, and not while a scan is playing, which owns this column and this
-        person's attention for as long as it lasts.
+        It used to be a fixed overlay in this tree, beside the scan's, and that
+        placement was the whole of what he objected to on 2026-08-21: it floated
+        over the rail at a token width instead of taking the rail's column, and
+        it was drawn on every page in the app because nothing in this tree knows
+        what the window is showing. It is now a child of the sidebar
+        (`CopilotRailPanel`), which is the only place it can be the rail's real
+        width; this host keeps what only it can have — the subscription, which
+        has to outlive a panel that is unmounted most of the time.
       */}
-      {view !== null || copilotFront ? null : (
-        <BrowserWatch now={watch.now} steps={watch.steps} onPutAway={watch.putAway} />
-      )}
     </>
   )
 }

@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { setRailPanelWidth, useRailPanel } from '../copilot/driving/rail-panel'
 import { isPanelId, type PanelId } from './panels'
+import { RAIL_DEFAULT, readRailWidth, trackRailDrag } from './rail-width'
 
 const WIDTH_KEY = 'deck.sidebar.width'
 const COLLAPSED_KEY = 'deck.sidebar.collapsed'
 const PANEL_KEY = 'deck.sidebar.panel'
-const MIN = 220
-const MAX = 380
-const DEFAULT = 264
 
 /**
  * How long the peeked sidebar waits after the pointer leaves before sliding
@@ -20,11 +19,6 @@ const DEFAULT = 264
  * already a deliberate act, and a delay there would make the panel feel stuck.
  */
 export const PEEK_CLOSE_MS = 160
-
-function readNumber(key: string, fallback: number): number {
-  const raw = Number(localStorage.getItem(key))
-  return Number.isFinite(raw) && raw >= MIN && raw <= MAX ? raw : fallback
-}
 
 /**
  * Which view the window shows after somebody asks for one.
@@ -72,10 +66,9 @@ export function useSidebar() {
     const stored = localStorage.getItem(PANEL_KEY)
     return isPanelId(stored) ? stored : null
   })
-  const [width, setWidth] = useState(() => readNumber(WIDTH_KEY, DEFAULT))
+  const [width, setWidth] = useState(() => readRailWidth(WIDTH_KEY, RAIL_DEFAULT))
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSED_KEY) === '1')
   const [peeking, setPeeking] = useState(false)
-  const dragging = useRef(false)
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -93,6 +86,38 @@ export function useSidebar() {
 
   // A timer that outlives the component fires setState into an unmounted tree.
   useEffect(() => cancelPeekTimer, [cancelPeekTimer])
+
+  /*
+   * Who has the rail's column, and how wide it is.
+   *
+   * Derived rather than pushed. The sidebar asks `useRailPanel` the same
+   * question one tree lower to decide what to draw, so both read one store and
+   * cannot disagree within a render — which they would if the panel wrote "I am
+   * open" into a state this hook holds, because that write lands a frame after
+   * the sidebar has already drawn at the old width.
+   */
+  const rail = useRailPanel()
+  const panelHasColumn = rail.state === 'panel'
+  const effective = panelHasColumn && rail.width !== null ? rail.width : width
+
+  /*
+   * The column's live width, published where CSS can read it.
+   *
+   * For the one panel that genuinely cannot join the layout: the scan's
+   * (`drive-panel.css`), which is `position: fixed` on purpose — a panel that
+   * pushed `.main` narrower would refit every terminal in the window and reflow
+   * the buffers its own highlights are anchored to. It was sized with
+   * `--sidebar-width`, the static 264px token, so on a rail dragged to 338 it
+   * left a strip of the rail showing beside it — the same fault, on the same
+   * edge, that the copilot's panel was moved into the rail to fix. It cannot be
+   * moved, so it is given the number instead.
+   *
+   * On the document element rather than on `.app`, because the panel is a
+   * sibling of `<App/>` rather than a child of it.
+   */
+  useEffect(() => {
+    document.documentElement.style.setProperty('--rail-width', `${effective}px`)
+  }, [effective])
 
   /**
    * Open a view in the window. Asking for the one already open keeps it open.
@@ -171,34 +196,52 @@ export function useSidebar() {
     setCollapsed(true)
   }, [cancelPeekTimer])
 
-  const startResize = useCallback((event: React.MouseEvent) => {
-    event.preventDefault()
-    dragging.current = true
-    const startX = event.clientX
-    const startWidth = readNumber(WIDTH_KEY, DEFAULT)
-
-    const onMove = (e: MouseEvent) => {
-      if (!dragging.current) return
-      setWidth(Math.min(MAX, Math.max(MIN, startWidth + (e.clientX - startX))))
-    }
-    const onUp = () => {
-      dragging.current = false
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      // Text selection is suppressed for the duration of the drag; restore it.
-      document.body.style.userSelect = ''
-    }
-
-    document.body.style.userSelect = 'none'
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }, [])
+  /**
+   * One seam, two numbers behind it.
+   *
+   * The separator on the rail's right edge is where both widths are dragged
+   * from, because it is the *same edge* — while the copilot's panel has the
+   * column there is no second boundary on screen to grab, and inventing one
+   * would put two grips a pixel apart meaning almost the same thing.
+   *
+   * Which number it writes is decided at `mousedown` and not again: the panel
+   * can open or fold under a drag that is already running, and a drag that
+   * changed its mind halfway would leave both widths part-applied. The panel's
+   * width is stored under its own key so that dragging the chat wider does not
+   * quietly rewrite the width the rail opens at — *"we can actually make it
+   * bigger and smaller, which is a great feature"* was said about the rail, and
+   * a number he set there should not be spent by a panel passing through.
+   */
+  const startResize = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault()
+      trackRailDrag(event.clientX, effective, (next) => {
+        if (panelHasColumn) setRailPanelWidth(next)
+        else setWidth(next)
+      })
+    },
+    [effective, panelHasColumn],
+  )
 
   return {
     panel,
     selectPanel,
     clearPanel,
-    width,
+    /**
+     * How wide the rail's column is, whoever is in it.
+     *
+     * The copilot's panel *replaces* the rail rather than floating over it —
+     * *"this should actually replace with this instead of coming in front of
+     * it"* — so while it has the column this is its width, and `.sidebar` is
+     * drawn at exactly that. A panel at a token width over a rail at a saved one
+     * is the gap he filmed: the page starting 32px clear of a panel that had
+     * already ended.
+     *
+     * Falls back to the rail's own width until the panel has been dragged, so
+     * the first drive takes the column at the width he already chose rather than
+     * jumping the seam on the way in.
+     */
+    width: effective,
     collapsed,
     peeking,
     /** On screen right now, pinned or not. This is what the shell renders on. */

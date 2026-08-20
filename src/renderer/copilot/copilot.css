@@ -36,6 +36,29 @@
   margin-left: auto;
 }
 
+/*
+  Where the side panel is, when it is folded in here.
+
+  *"If we collapse, it folds inside here."* Drawn at the trailing edge, in front
+  of the status dot, which keeps the dot in the column every other row's
+  identity mark is in. Muted rather than accented: this is a place, not an
+  alert, and the row is still primarily the way to open the copilot's window.
+*/
+.sb-copilot-parked {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+/* With both on the row, only the first may claim the free space. */
+.sb-copilot-parked + .status-dot {
+  margin-left: var(--sp-1);
+}
+
+.sb-copilot[data-copilot-parked]:hover .sb-copilot-parked {
+  color: var(--text-primary);
+}
+
 /* ------------------------------------------------------------- the window -- */
 
 /*

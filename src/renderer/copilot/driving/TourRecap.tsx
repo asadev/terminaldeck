@@ -102,8 +102,9 @@ import './tour-recap.css'
  *     sends nothing to any window — no navigation, so (1) never fires, and the
  *     answer would sit unread on disk while the copilot's own reply talks about
  *     it. `deck-control:action` carries every tool call as it is written to
- *     `actions.jsonl`; `BrowserWatch` reads the same stream for the scrape trace,
- *     and this reads one tool id off it.
+ *     `actions.jsonl`, and this reads one tool id off it. It is the only reader
+ *     left in the window: the rail's scrape panel used to read the same stream
+ *     for its trace, and became a conversation on 2026-08-21.
  *
  * **`deck.onTour` is deliberately not one of them**, though it is the obvious
  * candidate, it is already bridged, and `DriveHost` already listens to it. It
@@ -148,8 +149,8 @@ const SCAN_TOOL = 'tour.play'
  * Both optional and both called with `?.`, which is the harness rather than
  * doubt about the preload — `.harness/answer.tsx` mounts this component alone
  * against a stubbed bridge, and a page that stopped rendering because a stub has
- * not grown a method is a page nobody looks at again. `BrowserWatch`'s
- * `WatchBridge` takes the same shape for the same reason.
+ * not grown a method is a page nobody looks at again. `DriveHost`'s own
+ * `DriveBridge` takes the same shape for the same reason.
  */
 export interface RecapWatch {
   /** `deck.onCopilotAction` — every tool call, as the log receives it. */

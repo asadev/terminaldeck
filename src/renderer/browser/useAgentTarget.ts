@@ -6,6 +6,7 @@ import {
   readSessions,
   resolveAgentSessions,
   resolveTarget,
+  sendPayload,
   whyDisabled,
   type AgentSession,
   type AgentSessionBridge,
@@ -50,8 +51,16 @@ export interface AgentTarget {
    * The caller has to be able to wait for that answer, or the button says "Sent"
    * about a line nobody received, which is the one thing this whole file exists
    * to prevent.
+   *
+   * `submit` appends the return that makes an agent act on it. It is off by
+   * default because this hook's first caller sends *context* — an element, a
+   * flow, a screenshot's description — into a session for somebody to read and
+   * edit before they press Return themselves, and a `\r` there would fire off a
+   * half-written prompt. The copilot's rail panel is the other kind of caller:
+   * what is typed in a chat box is a message, and a message that lands on the
+   * agent's command line without being sent is a box that silently did nothing.
    */
-  send(text: string): Promise<boolean>
+  send(text: string, options?: { submit?: boolean }): Promise<boolean>
   /**
    * What went wrong with the last send, in the far machine's own words, or
    * empty.
@@ -226,9 +235,11 @@ export function useAgentTarget(bridge?: AgentSessionBridge | null): AgentTarget 
    * saying nothing at all.
    */
   const send = useCallback(
-    async (text: string): Promise<boolean> => {
-      const line = text.trim()
-      if (!api || !line) return false
+    async (text: string, options?: { submit?: boolean }): Promise<boolean> => {
+      // Built once, here, so both routes carry the same bytes. See
+      // {@link sendPayload} for why the return is a caller's choice.
+      const line = sendPayload(text, options?.submit === true)
+      if (!api || line === '') return false
       setProblem('')
       // Resolved again at the moment of sending rather than trusting the value
       // this closure captured. The gap between rendering an enabled button and
