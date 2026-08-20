@@ -1,58 +1,35 @@
-What to test — 0.6.1
+What to test — 0.7.0
 
-Your last build is 0.5.0 from yesterday. The headline is that the copilot no
-longer has a connection of its own, and most of what to test is that absence.
+Your last build was 0.6.0, and that one matters: every build before it still
+asked for a six-digit copilot code and sent a message the desktop no longer
+declares. If the copilot would not connect for you, that is why. There is
+nothing to connect any more — pair the phone as *my device* and the copilot is
+simply there; pair as a guest and it is not, deliberately.
 
-THERE IS NOTHING TO CONNECT ANY MORE
-"Instead of giving mobile app separate connection for copilot, just make it like
-— if we are connecting as my device, copilot automatically comes. If we connect
-as guest then copilot don't come." That is now exactly what happens. The six
-digit copilot code is gone, the Connect screen is gone, the Settings row for it
-is gone, and there is no state where this phone is paired, trusted, and told to
-connect something first.
+THE COPILOT
+Pair as my device. The Copilot tab should be present with nothing pressed, and
+a run should start and answer. Then revoke and pair again as a guest: no
+Copilot tab at all, Sessions and Settings only. That absence is the feature,
+not a fault.
 
-So the test is: pair this phone again as MY DEVICE, and the Copilot tab should
-simply be there, first press, nothing typed. Then pair a second device — an old
-phone, a friend's — as a GUEST, and it should have no Copilot tab at all. Not a
-greyed one, not one that explains itself. Absent.
+OPENING A SESSION
+It should appear already at its latest output. No history scrolling past, no
+part-way scroll positions, no glitch frames — on first open and on every return
+to it. This is the same fault the desktop had and it had the same cause: the
+terminal painting a backlog as it received it.
 
-Worth being hard on: the credential this app used to keep for the copilot is
-deleted from the Keychain the first time you open this build, not merely stopped
-being written. And if you were connected on 0.5.0, this build should carry on
-working with no ceremony — if it asks you for anything, that is a bug.
+THE MACHINE SWITCH
+With two machines paired, Sessions and Copilot both carry the switch at the top.
+Check that picking the other machine actually moves you to its sessions rather
+than relabelling the ones you were looking at.
 
-THE SAME CHANGE ON THE MAC AND IN THE BROWSER
-The desktop's "Connect the copilot" panel is gone with its code and its three
-tier checkboxes; the approval screen is where the whole decision is made now. Try
-app.terminaldeck.dev too — same rule there, and it clears its old stored key on
-every launch.
+WHAT WENT AWAY
+"Resume where you were last time" is gone from the top of the session list.
+Several paragraphs went with it. If a screen now says less than you expected,
+that is the intent — a review of the desktop asked for the same thing
+everywhere and the phone followed.
 
-A SERVER IS A MACHINE LIKE ANY OTHER
-New on the desktop, and you will feel it from here: a rented server gets a group
-in the sidebar, its shells are ordinary sessions with tab pills, and its private
-localhost opens through the same browser window. You add one with an address, a
-username, and a password or a key.
-
-Signing in with a key no longer tells you to open the file in a text editor —
-the app reads your key folder and offers what it finds by name, and never offers
-the .pub sitting next to it.
-
-WINDOWS
-A sweep found sixty-two places where the Windows build behaved differently from
-the Mac, four of them serious, and this build closes the ones that were
-accidents. If you have the PC to hand, the two worth trying are attaching a file
-to a chat message — which did not work on Windows at all — and letting a
-scheduled routine run, which always failed there. Windows now runs the same test
-suite as the Mac on every change, which it never did before.
-
-SESSIONS FROM A PHONE ARE HELD ON WINDOWS NOW, ONCE YOU SWITCH IT ON
-On a Mac a session you start from this phone is held inside the folder you
-granted, and can reach nothing else. On Windows that needed a one-time
-administrator permission and there was no button to ask for it, so it never
-happened. Settings -> Remote -> Folders has the button now: it names the folders
-it would cover and raises the prompt once. Until somebody presses it, a session
-from a phone on that PC still runs unconfined, and the panel says so.
-
-WHAT IS STILL NOT DONE, SO YOU ARE NOT LOOKING FOR IT
-The Windows download is still unsigned, so SmartScreen will stop you on first
-run until there is a certificate.
+WHAT IS NOT HERE YET, AND IS NOT A BUG
+The usage ring and the context bar the desktop grew this week, and per-session
+accounts. Neither travels on the wire yet. They are not missing from the phone
+so much as not yet sent to it, and the desktop half only landed tonight.
