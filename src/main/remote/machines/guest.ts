@@ -50,7 +50,6 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { hostname } from 'node:os'
 import {
   CAPABILITY,
   PROTOCOL_VERSION,
@@ -72,6 +71,7 @@ import {
   type ServerMessage,
   type UsageWant,
 } from '../protocol'
+import { thisMachineName } from '../../platform/host'
 import type { LocalhostMessage } from '../tunnel'
 import { dialMachine, type GuestChannel, type DialRequest } from './dial'
 import { overPasteCap } from '../../../shared/paste-cap'
@@ -586,7 +586,7 @@ export interface MachineLinkOptions {
  * ends and treated as untrusted by both.
  */
 export function describeThisMachine(): { name: string; platform: string } {
-  const name = hostname().replace(/\.local$/i, '').trim()
+  const name = thisMachineName()
   return { name: name === '' ? 'A desktop' : name, platform: process.platform }
 }
 

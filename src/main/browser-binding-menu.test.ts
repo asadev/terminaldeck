@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { hostname } from 'node:os'
 import type { IpcMain, MenuItemConstructorOptions } from 'electron'
 
 /**
@@ -26,6 +27,17 @@ vi.mock('electron', () => ({
   Menu: { buildFromTemplate: () => ({ popup: () => undefined }) },
   ipcMain: { handle: () => undefined, on: () => undefined, removeHandler: () => undefined },
 }))
+
+/**
+ * What this computer's own heading says.
+ *
+ * Its hostname, exactly as the heading beside it says `DESKTOP-DDGMNCV` — the
+ * headings on one menu are all names or the list stops telling machines apart.
+ * Computed here the way `thisMachineName` computes it rather than hard-coded,
+ * because a literal would only pin the machine the suite last ran on; the phrase
+ * is still the fallback for a computer with no readable hostname.
+ */
+const HERE = hostname().replace(/\.local$/i, '').trim() || 'This computer'
 
 const { bindMenuItems, connectMenuItems, registerBrowserBindingIpc, forgetKnownWindows } =
   await import('./browser-binding-ipc')
@@ -186,7 +198,7 @@ describe('a window is grouped under the machine it is really running on', () => 
     })
 
     expect(labels(bindMenuItems(deps, { sessionId: 's1' }))).toEqual([
-      'This computer',
+      HERE,
       'W1   Local page',
       'DESKTOP-DDGMNCV',
       'W2   PC page',
@@ -209,7 +221,7 @@ describe('a window is grouped under the machine it is really running on', () => 
     expect(labels(bindMenuItems(deps, { sessionId: 's9', machineId: 'm-desktop' }))).toEqual([
       'DESKTOP-DDGMNCV',
       'W2   PC page',
-      'This computer',
+      HERE,
       'W1   Local page',
       '—',
       'New window, attached',
@@ -218,7 +230,23 @@ describe('a window is grouped under the machine it is really running on', () => 
 
   it('draws no heading when everything is in one place', () => {
     openWindow('browser:1:1', { title: 'Local page' })
-    expect(labels(bindMenuItems(deps, { sessionId: 's1' }))).not.toContain('This computer')
+    expect(labels(bindMenuItems(deps, { sessionId: 's1' }))).not.toContain(HERE)
+  })
+
+  it('names this computer in the heading, rather than pointing at it', () => {
+    /*
+     * One phrase among names is a heading that can only be resolved by knowing
+     * which menu you opened. Asad, 2026-08-21, about the same shape on the
+     * browser bar, where "This machine" was on screen three times meaning three
+     * different computers: *"I don't know what to trust."*
+     */
+    openWindow('browser:1:1', { title: 'Local page' })
+    openWindow('browser:1:2', { title: 'PC page', machineId: 'm-desktop', machineName: 'DESKTOP-DDGMNCV' })
+    const shown = labels(bindMenuItems(deps, { sessionId: 's1' }))
+    expect(shown).toContain(HERE)
+    expect(shown).not.toContain('This machine')
+    // Only when the hostname is genuinely unreadable — never both.
+    if (HERE !== 'This computer') expect(shown).not.toContain('This computer')
   })
 
   it('carries the machine into the binding, so the truth outlives the menu', () => {
@@ -254,7 +282,7 @@ describe('the same relation, asked from the browser', () => {
     const items = connectMenuItems({ browserTabId: 'browser:1:1', sessions })
 
     expect(labels(items)).toEqual([
-      'This computer',
+      HERE,
       'terminaldeck · Session 1',
       'terminaldeck · Session 2',
       'DESKTOP',
@@ -277,7 +305,7 @@ describe('the same relation, asked from the browser', () => {
     expect(labels(connectMenuItems({ browserTabId: 'browser:1:1', sessions }))).toEqual([
       'DESKTOP',
       'Session 4',
-      'This computer',
+      HERE,
       'terminaldeck \u00b7 Session 1',
       'terminaldeck \u00b7 Session 2',
     ])

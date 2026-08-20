@@ -53,6 +53,14 @@ export interface MachinesRead {
   /** False when this build's preload has no machine channels at all. */
   wired: boolean
   machines: MachineWithLink[]
+  /**
+   * What this computer is called, for the lists that draw it beside the others.
+   *
+   * `''` until the first read lands and on any build whose preload predates the
+   * field, which is why every caller passes it through a fallback rather than
+   * printing it raw — see `hereName` in `browser/machines-bridge.ts`.
+   */
+  here: string
   /** The bridge, for the panes and the dialog. Null when the build has none. */
   bridge: MachinesBridge | null
   /** Ask for the list again. Harmless to call when nothing has changed. */
@@ -155,7 +163,7 @@ const START_TIMEOUT_MS = 12_000
 
 export function useMachines(provided?: MachinesBridge): MachinesRead {
   const bridge = useMemo(() => resolveBridge(provided) ?? null, [provided])
-  const [view, setView] = useState<MachinesView>({ machines: [], links: [], blocked: null })
+  const [view, setView] = useState<MachinesView>({ machines: [], links: [], here: '', blocked: null })
   const alive = useRef(true)
 
   useEffect(() => {
@@ -259,6 +267,7 @@ export function useMachines(provided?: MachinesBridge): MachinesRead {
   return {
     wired: bridge !== null,
     machines: reachableMachines(view),
+    here: view.here,
     bridge,
     reread,
     startSession,

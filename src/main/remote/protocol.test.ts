@@ -717,6 +717,70 @@ describe('the account capability', () => {
     ])
   })
 
+  /**
+   * Who each login is, which is the half that was not on this wire.
+   *
+   * Without it the chip over a remote session had only the account's *name* to
+   * print, and for the machine's own install that name is the key
+   * `systemProfileId` generates — so it printed `Default` over a session whose
+   * own terminal three lines below read `sherzod.davlatov@gmail.com`. Asad:
+   * *"It is saying default, so never default."*
+   */
+  it('carries what the far machine’s CLI said about a login, and only the four fields', () => {
+    const frame = parseServerMessage(
+      JSON.stringify({
+        t: 'account.state',
+        rid: 'acc-1',
+        id: SESSION_ID,
+        current: {
+          id: 'system',
+          name: 'Default',
+          signIn: {
+            state: 'signed-in',
+            account: 'sherzod.davlatov@gmail.com',
+            plan: 'max',
+            detail: 'Signed in as sherzod.davlatov@gmail.com on the max plan.',
+            // Sent by nobody, and dropped here even so: a command line for a
+            // shell on the far machine has no reader on this one.
+            command: 'claude auth status --json',
+          },
+        },
+        accounts: [],
+      }),
+    )
+    expect(frame.ok).toBe(true)
+    if (!frame.ok || frame.message.t !== 'account.state') throw new Error('unreachable')
+    expect(frame.message.current?.signIn).toEqual({
+      state: 'signed-in',
+      account: 'sherzod.davlatov@gmail.com',
+      plan: 'max',
+      detail: 'Signed in as sherzod.davlatov@gmail.com on the max plan.',
+    })
+  })
+
+  it('leaves the login absent when the frame said nothing readable about it', () => {
+    /*
+     * Absent, never a composed "unknown" — the two are different claims. A
+     * machine whose build predates the field does not answer this question; a
+     * machine that ran the probe and could not tell has answered. Composing the
+     * second out of the first is how a build that reports nothing comes to look
+     * like a login nobody can read.
+     */
+    const frame = parseServerMessage(
+      JSON.stringify({
+        t: 'account.state',
+        rid: 'acc-1',
+        id: SESSION_ID,
+        current: { id: 'work', name: 'work@example.com', signIn: { state: '' } },
+        accounts: [{ id: 'other', name: 'other@example.com' }],
+      }),
+    )
+    expect(frame.ok).toBe(true)
+    if (!frame.ok || frame.message.t !== 'account.state') throw new Error('unreachable')
+    expect(frame.message.current?.signIn).toBeUndefined()
+    expect(frame.message.accounts[0]?.signIn).toBeUndefined()
+  })
+
   it('reads a switch that says nothing as a switch that did not happen', () => {
     // `ok` must be the literal `true`. A garbled frame read as success is a
     // window that follows a session id that was never created.

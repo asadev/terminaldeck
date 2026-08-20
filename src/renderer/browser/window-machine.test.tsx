@@ -195,14 +195,19 @@ describe('the chip inside the address field', () => {
     expect(html).toContain('title="Office PC:3000 → :53412"')
   })
 
-  it('names this machine with no colon when the page did not move', () => {
+  it('names this computer with no colon when the page did not move', () => {
     /*
      * The state the whole change is for: the picker says `Office PC` and the
      * page is being fetched here. There is no tunnel and so no port, and a
-     * `This machine:0` would be a number invented to fill a slot.
+     * `Asads-MacBook-Pro:0` would be a number invented to fill a slot.
+     *
+     * By name since 2026-08-21, because "This machine" was on this bar three
+     * times at once meaning three different computers — see `hereName`. Whether
+     * this is drawn *at all* is `barServed`'s decision, held in
+     * `served-mark.test.ts`: over a tab that has been nowhere it is not.
      */
-    const html = bar({ name: 'This machine', port: null, localPort: 0, sameNumber: true, agrees: false })
-    expect(html).toContain('>This machine<')
-    expect(html).not.toContain('This machine:')
+    const html = bar({ name: 'Asads-MacBook-Pro', port: null, localPort: 0, sameNumber: true, agrees: false })
+    expect(html).toContain('>Asads-MacBook-Pro<')
+    expect(html).not.toContain('Asads-MacBook-Pro:')
   })
 })

@@ -14,6 +14,7 @@
  * to check.
  */
 
+import { ThisMachine } from '../platform'
 import type { DeckApi } from '../../shared/types'
 
 /** One machine this desktop has paired to. */
@@ -118,7 +119,49 @@ export interface MachineLinkState {
 export interface MachinesView {
   machines: Machine[]
   links: MachineLinkState[]
+  /**
+   * What this computer calls itself, or `''` when the view did not say.
+   *
+   * Mirrors `MachinesView.here` in `src/main/remote/machines/ipc.ts`, where the
+   * argument for it is written down: every other machine on this view has a name
+   * a person recognises and the one they are sitting at had none, so each list
+   * invented a phrase — and three of those phrases ended up on one bar, all
+   * reading "This machine", each about a different computer.
+   *
+   * Empty is the state a build whose preload predates the field is in, and every
+   * reader falls back to its own phrase there rather than guessing a name.
+   * {@link hereName} below is that fallback, in one place.
+   */
+  here: string
   blocked: string | null
+}
+
+/**
+ * What to call the computer this window is running on.
+ *
+ * Its own name whenever the view carried one — `MachinesView.here`, the
+ * hostname — and the platform phrase only when it did not. Asad, 2026-08-21,
+ * with the picker switched to Office PC and the words "This machine" on the bar
+ * three times over:
+ *
+ *   > *"So I'm confused now what is the truth, because this machine is Office
+ *   > PC, this machine is this machine where I am, and Office PC is the server.
+ *   > So it is showing both, selected one and this one. So I don't know what to
+ *   > trust."*
+ *
+ * Two of those three were the same phrase for two different computers, which is
+ * what a deictic does in a list of three machines: it can only be resolved by
+ * knowing which control you are looking at. A name cannot. So every machine on
+ * this bar is named, including this one, and the phrase is what is left when
+ * there is no name to use — a machine with no hostname at all, or a build whose
+ * preload predates the field.
+ *
+ * The fallback is `ThisMachine`'s, not a second wording: "This Mac" / "This PC"
+ * is what every other surface in the app has always called this computer.
+ */
+export function hereName(view: { here: string } | null | undefined): string {
+  const named = view?.here.trim() ?? ''
+  return named === '' ? ThisMachine() : named
 }
 
 export type PairResult =
@@ -373,7 +416,7 @@ function asMachine(value: unknown): Machine | null {
 
 /** The whole screen's state, narrowed. An unreadable reply is an empty one. */
 export function asView(value: unknown): MachinesView {
-  if (!isRecord(value)) return { machines: [], links: [], blocked: null }
+  if (!isRecord(value)) return { machines: [], links: [], here: '', blocked: null }
   return {
     machines: Array.isArray(value.machines)
       ? value.machines.map(asMachine).filter((machine): machine is Machine => machine !== null)
@@ -381,6 +424,9 @@ export function asView(value: unknown): MachinesView {
     links: Array.isArray(value.links)
       ? value.links.map(asLink).filter((link): link is MachineLinkState => link !== null)
       : [],
+    // Absent in every build older than the field, and a reader must be able to
+    // tell that from a name — hence `''` rather than a phrase invented here.
+    here: typeof value.here === 'string' ? value.here : '',
     blocked: typeof value.blocked === 'string' && value.blocked !== '' ? value.blocked : null,
   }
 }

@@ -31,6 +31,7 @@ import { routeOpen, type OpenedReply, type SteerablePage } from './browser-route
 import { browserTabContents } from './browser-tab'
 import { LINK_TAB_CHANNEL, openSystemUrl } from './link-open'
 import type { OpenAnswer } from './hook-server'
+import { thisMachineName } from './platform/host'
 
 /**
  * Every browser window this renderer has told us about, bound or not.
@@ -349,9 +350,21 @@ function menuRow(lead: string, said: string): string {
   return said === '' ? lead : `${lead}   ${said}`
 }
 
-/** How a machine is named in a menu heading. Empty id means this computer. */
+/**
+ * How a machine is named in a menu heading. Empty id means this computer.
+ *
+ * By its hostname, like every other heading on the same menu. It read "This
+ * computer" above a group whose sibling heading read "DESKTOP-DDGMNCV", which is
+ * one phrase among names in a list whose whole job is telling machines apart —
+ * the same shape that had three different computers all called "This machine" on
+ * the browser bar: *"I don't know what to trust."*
+ *
+ * The phrase survives as the fallback for a computer whose hostname could not be
+ * read, because a heading has to say something and a made-up name is worse than
+ * a true phrase.
+ */
 function machineLabel(machineId: string, machineName: string): string {
-  if (machineId === '') return 'This computer'
+  if (machineId === '') return thisMachineName() || 'This computer'
   return machineName || machineId
 }
 

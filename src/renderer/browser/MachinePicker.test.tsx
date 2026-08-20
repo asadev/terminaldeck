@@ -16,6 +16,15 @@ import { THIS_MACHINE, type MachineChoice } from './machines-bridge'
  * well as in a tooltip.
  */
 
+/**
+ * This computer's own name, as the panel reads it off `MachinesView.here`.
+ *
+ * A hostname rather than a phrase, because that is the whole of the 2026-08-21
+ * change: with three machines in play, "This machine" was on the bar three times
+ * meaning three different computers — *"I don't know what to trust."*
+ */
+const HERE = 'Asads-MacBook-Pro'
+
 const OFFICE: MachineChoice = {
   kind: 'device',
   id: 'mach-1',
@@ -27,12 +36,16 @@ const OFFICE: MachineChoice = {
 }
 
 describe('the machine picker', () => {
-  it('says this machine, and does not wear the accent, until it is pointed elsewhere', () => {
+  it('names this computer, and does not wear the accent, until it is pointed elsewhere', () => {
     const markup = renderToStaticMarkup(
-      <MachinePicker machines={[OFFICE]} selected={THIS_MACHINE} onSelect={() => {}} />,
+      <MachinePicker machines={[OFFICE]} here={HERE} selected={THIS_MACHINE} onSelect={() => {}} />,
     )
-    expect(markup).toContain('This machine')
-    expect(markup).toContain('aria-label="Addresses open on This machine. Choose a machine."')
+    // Its name, exactly as the row beside it carries `office-pc`. The phrase
+    // this used to draw is on no surface of this control any more.
+    expect(markup).toContain(HERE)
+    expect(markup).not.toContain('This machine')
+    expect(markup).toContain(`aria-label="Addresses open on ${HERE}. Choose a machine."`)
+    expect(markup).toContain(`title="Open localhost on ${HERE}"`)
     // The accent is otherwise reserved for selection and focus. It is spent here
     // only while the browser is doing something worth being reminded of.
     expect(markup).not.toContain('data-on')
@@ -40,7 +53,7 @@ describe('the machine picker', () => {
 
   it('names the chosen machine, and lights up while it is chosen', () => {
     const markup = renderToStaticMarkup(
-      <MachinePicker machines={[OFFICE]} selected="mach-1" onSelect={() => {}} />,
+      <MachinePicker machines={[OFFICE]} here={HERE} selected="mach-1" onSelect={() => {}} />,
     )
     expect(markup).toContain('office-pc')
     expect(markup).toContain('data-on="true"')
@@ -49,7 +62,7 @@ describe('the machine picker', () => {
 
   it('says which question it answers, in the words the menu uses', () => {
     const markup = renderToStaticMarkup(
-      <MachinePicker machines={[OFFICE]} selected="mach-1" onSelect={() => {}} />,
+      <MachinePicker machines={[OFFICE]} here={HERE} selected="mach-1" onSelect={() => {}} />,
     )
     /*
      * Only localhost moves, and the hover says so by naming the thing that
@@ -66,7 +79,7 @@ describe('the machine picker', () => {
 
   it('is a real button with a menu behind it, never a label', () => {
     const markup = renderToStaticMarkup(
-      <MachinePicker machines={[OFFICE]} selected={THIS_MACHINE} onSelect={() => {}} />,
+      <MachinePicker machines={[OFFICE]} here={HERE} selected={THIS_MACHINE} onSelect={() => {}} />,
     )
     expect(markup).toContain('aria-haspopup="menu"')
     expect(markup).toContain('aria-expanded="false"')
@@ -86,10 +99,10 @@ describe('the machine picker', () => {
   it('draws a server exactly as it draws a computer somebody sits at', () => {
     const server: MachineChoice = { ...OFFICE, kind: 'server', id: 's1', noun: 'server' }
     const asServer = renderToStaticMarkup(
-      <MachinePicker machines={[server]} selected="s1" onSelect={() => {}} />,
+      <MachinePicker machines={[server]} here={HERE} selected="s1" onSelect={() => {}} />,
     )
     const asDevice = renderToStaticMarkup(
-      <MachinePicker machines={[OFFICE]} selected="mach-1" onSelect={() => {}} />,
+      <MachinePicker machines={[OFFICE]} here={HERE} selected="mach-1" onSelect={() => {}} />,
     )
     expect(asServer).toBe(asDevice)
   })
@@ -101,9 +114,30 @@ describe('the machine picker', () => {
     // what happened.
     const gone: MachineChoice = { ...OFFICE, unreachable: 'Not connected' }
     const markup = renderToStaticMarkup(
-      <MachinePicker machines={[gone]} selected="mach-1" onSelect={() => {}} />,
+      <MachinePicker machines={[gone]} here={HERE} selected="mach-1" onSelect={() => {}} />,
     )
     expect(markup).toContain('office-pc')
+  })
+
+  /**
+   * The menu's first row, which no render in this project can reach.
+   *
+   * The popup is built only once somebody clicks, and there is no DOM here — so
+   * the row that used to read "This machine" is held the way this file already
+   * holds the absent paragraph, by reading the source. It is worth a test of its
+   * own because that row is one of the three places the phrase stood on
+   * 2026-08-21, and it is the one a person opens the control to look at:
+   *
+   *   > *"So I'm confused now what is the truth, because this machine is Office
+   *   > PC, this machine is this machine where I am… I don't know what to
+   *   > trust."*
+   */
+  it('draws no deictic anywhere in the control, menu row included', () => {
+    const source = readFileSync(join(__dirname, 'MachinePicker.tsx'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^[ \t]*\/\/.*$/gm, '')
+    // Case-insensitively, so "this machine" in a title string is caught too.
+    expect(source.toLowerCase()).not.toContain('this machine')
   })
 
   /**
@@ -124,7 +158,7 @@ describe('the machine picker', () => {
       unreachable: 'Cannot connect',
       detail: 'The relay refused the credential.',
     }
-    const markup = renderToStaticMarkup(<MachinePicker machines={[gone]} selected="" onSelect={() => {}} />)
+    const markup = renderToStaticMarkup(<MachinePicker machines={[gone]} here={HERE} selected="" onSelect={() => {}} />)
     // The closed control is all a DOM-less render can show, and the detail must
     // not be in it at all — it is a `title` on a row inside the popup, which is
     // only built when somebody opens it.
