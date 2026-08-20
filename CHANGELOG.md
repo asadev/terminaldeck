@@ -10,6 +10,26 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The update panel printed a stack trace and an entire Atom feed.** A Windows
+  install whose network moved mid-check put this on screen: four `node_modules`
+  stack frames carrying the user's home directory, the Chromium code
+  `net::ERR_NETWORK_CHANGED`, and the whole releases feed with the release notes
+  escaped into it twice — in a box the size of the window. The panel was doing
+  what it was told; `electron-updater` builds that message by appending the feed
+  it just fetched to the sentence. Every update failure now goes through one
+  place that answers with a sentence and nothing else: no stack, no feed, no
+  file paths, capped at 120 characters.
+- **A check that failed because the network moved reported the update as
+  broken.** `ERR_NETWORK_CHANGED` is what Chromium says when a laptop wakes,
+  Wi-Fi hands off, or a VPN comes up mid-request — it means *ask again*. Checks
+  now retry twice before reporting, and a check nobody pressed for — the timer,
+  or coming back to the window — says nothing at all when the network is still
+  moving. A check the user pressed always reports, because there a silent no-op
+  reads as a dead button.
+
+
 ## [0.8.0] — 2026-08-20
 
 ### Added

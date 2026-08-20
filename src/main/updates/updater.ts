@@ -81,6 +81,7 @@
 import { existsSync } from 'node:fs'
 import type { IpcMain } from 'electron'
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater'
+import { describeUpdateError } from './update-error'
 import { appWindowFocus, type FocusSource } from './window-focus'
 
 /* ------------------------------------------------------------------ state -- */
@@ -205,6 +206,14 @@ export interface UpdaterDeps {
   /** Injected so a test can describe a bundle without creating one on disk. */
   fileExists?: (path: string) => boolean
   now?: () => number
+  /**
+   * The pause between retries of a check that failed on a network blip.
+   *
+   * Injected for the same reason `now` is: a test that waited the real ten
+   * seconds would be a test nobody runs. It is never used to fake load — see
+   * the backoff constants for why the ladder is two rungs long.
+   */
+  wait?: (ms: number) => Promise<void>
   /**
    * What counts as "the user came back", and how to stop listening.
    *
@@ -522,10 +531,20 @@ function signature(state: UpdateState): string {
 }
 
 function messageOf(error: unknown): string {
-  if (error instanceof Error && error.message.trim() !== '') return error.message.trim()
-  const text = String(error).trim()
-  return text === '' ? 'The update check failed for an unknown reason.' : text
+  return describeUpdateError(error).text
 }
+
+/**
+ * How many times a check is retried before a network failure is reported.
+ *
+ * Two retries rather than more: the failures this covers are a network moving
+ * under a request — a wake, a Wi-Fi handoff, a VPN coming up — and those settle
+ * in seconds or not at all. A longer ladder only delays the sentence.
+ */
+const TRANSIENT_ATTEMPTS = 3
+
+/** Waits between those attempts, in milliseconds. */
+const TRANSIENT_BACKOFF_MS = [2_000, 8_000]
 
 export interface UpdateController {
   /** The current state. Never throws. */
@@ -559,6 +578,7 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
   // that supplies its own `fileExists` never reaches it.
   const fileExists = deps.fileExists ?? existsSync
   const now = deps.now ?? (() => Date.now())
+  const waitFor = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
 
   const verdict = updateSupport(environment, fileExists)
 
@@ -587,6 +607,13 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
 
   let lastSignature = signature(current)
   let lastCheckStartedAt = 0
+  /**
+   * Whether the check now in flight was a timer's idea or the user's.
+   *
+   * Read by the `error` event handler, which has no other way to know — the
+   * event carries the failure and nothing about who asked for it.
+   */
+  let lastCheckAutomatic = false
   let launchTimer: ReturnType<typeof setTimeout> | null = null
   let unfocus: (() => void) | null = null
 
@@ -675,7 +702,16 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
       // attaches a listener and returns without quitting. Both paths are
       // pinned by tests; if you change one, change the other.
       if (read().phase === 'ready') return
-      set({ phase: 'error', message: messageOf(error) })
+      // Same rule the `check` path applies to a rejected promise, applied to an
+      // error that arrived as an event instead: a network blip during a check
+      // nobody pressed for is not news. Without this the retry loop below is
+      // pointless — the event beats it to the panel and writes the error anyway.
+      const failure = describeUpdateError(error)
+      if (failure.transient && lastCheckAutomatic && read().phase !== 'downloading') {
+        set({ phase: 'idle', checkedAt: now() })
+        return
+      }
+      set({ phase: 'error', message: failure.text })
     })
   }
 
@@ -710,19 +746,52 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
     }
 
     lastCheckStartedAt = now()
+    lastCheckAutomatic = automatic
     // Set here rather than waiting for `checking-for-update`: the emitter fires
     // that event from inside `checkForUpdates`, but a check that throws before
     // reaching it would otherwise leave the panel on its previous state with no
     // sign anything was attempted.
     set({ phase: 'checking' })
 
-    try {
-      await updater.checkForUpdates()
-    } catch (error) {
-      // A failed check is a sentence, not a crash. This is the whole reason
-      // `check` returns a state instead of rejecting: it is called from a
-      // timer with nobody to catch it.
-      return set({ phase: 'error', message: messageOf(error) })
+    /*
+     * A network that moved under the request is not a failed check.
+     *
+     * `ERR_NETWORK_CHANGED` and its neighbours are what Chromium reports when a
+     * laptop wakes, Wi-Fi hands off, or a VPN comes up mid-request. Reporting
+     * one is telling the user their update is broken because they walked
+     * between two access points. So the check is retried, and the retries are
+     * the whole ladder — see TRANSIENT_ATTEMPTS for why it is short.
+     */
+    let failure: ReturnType<typeof describeUpdateError> | null = null
+    for (let attempt = 0; attempt < TRANSIENT_ATTEMPTS; attempt += 1) {
+      try {
+        await updater.checkForUpdates()
+        failure = null
+        break
+      } catch (error) {
+        // A failed check is a sentence, not a crash. This is the whole reason
+        // `check` returns a state instead of rejecting: it is called from a
+        // timer with nobody to catch it.
+        failure = describeUpdateError(error)
+        if (!failure.transient) break
+        const backoff = TRANSIENT_BACKOFF_MS[attempt]
+        if (backoff === undefined) break
+        await waitFor(backoff)
+      }
+    }
+
+    if (failure !== null) {
+      /*
+       * Nobody asked for this one, so nobody is owed the bad news.
+       *
+       * An automatic check runs on a timer and on window focus. If the network
+       * is still moving after the retries, the honest report is that we do not
+       * know yet — and a panel that opens itself to say so is an interruption
+       * the user did not ask for and cannot act on. A check the user pressed
+       * always reports, because there a silent no-op reads as a dead button.
+       */
+      if (automatic && failure.transient) return set({ phase: 'idle', checkedAt: now() })
+      return set({ phase: 'error', message: failure.text })
     }
 
     // The events above have already moved the state to available or idle. If
@@ -737,6 +806,10 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
   const manualInUse = (): boolean => manual !== null && !verdict.supported
 
   async function download(): Promise<UpdateState> {
+    // A download is always the user's doing — the panel only offers the button
+    // in `available`. So a failure here is reported however it arrives, which
+    // means clearing the flag the `error` event handler reads.
+    lastCheckAutomatic = false
     if (manualInUse()) {
       const offered = read()
       if (offered.phase !== 'available') return offered

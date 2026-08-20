@@ -251,6 +251,8 @@ interface Harness {
   controller: ReturnType<typeof createUpdateController>
   clock: { value: number }
   focus: FakeFocus
+  /** Every backoff the retry ladder asked for, in order. Never actually slept. */
+  waits: number[]
 }
 
 function harness(options: { environment?: UpdateEnvironment; files?: Set<string> } = {}): Harness {
@@ -259,6 +261,7 @@ function harness(options: { environment?: UpdateEnvironment; files?: Set<string>
   const clock = { value: 1_000_000 }
   const files = options.files ?? SUPPORTED_FILES
   const { focus, source } = fakeFocus()
+  const waits: number[] = []
   const controller = createUpdateController({
     updater,
     environment: options.environment ?? supportedEnvironment(),
@@ -269,8 +272,13 @@ function harness(options: { environment?: UpdateEnvironment; files?: Set<string>
     fileExists: (path) => files.has(path),
     now: () => clock.value,
     onFocus: source,
+    // Recorded rather than slept: the ladder is ten seconds of real time and
+    // the thing under test is the shape of the ladder, not its duration.
+    wait: async (ms) => {
+      waits.push(ms)
+    },
   })
-  return { updater, pushed, controller, clock, focus }
+  return { updater, pushed, controller, clock, focus, waits }
 }
 
 afterEach(() => {
@@ -639,7 +647,9 @@ describe('a failed check', () => {
 
     const state = await controller.check()
 
-    expect(state).toEqual({ phase: 'error', message: 'net::ERR_INTERNET_DISCONNECTED' })
+    // The Chromium code is the diagnostic, not the message. A user pressed for
+    // this one, so it is reported — as a sentence.
+    expect(state).toEqual({ phase: 'error', message: 'No connection to the update server.' })
   })
 
   it('does not reject even when run from a timer with nobody awaiting it', async () => {
@@ -651,7 +661,10 @@ describe('a failed check', () => {
     // An unhandled rejection here would take the main process down in
     // production; this is the assertion that it cannot happen.
     await expect(vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS + 1)).resolves.toBeDefined()
-    expect(controller.state()).toEqual({ phase: 'error', message: '403 rate limited' })
+    // Rate limiting is transient, and an automatic check swallows those — the
+    // state it lands on is `idle`. What is being proven here is that nothing
+    // rejected, which an unhandled rejection would have turned into a crash.
+    expect(controller.state()).toEqual({ phase: 'idle', checkedAt: 1_000_000 })
     controller.stop()
   })
 
@@ -666,7 +679,7 @@ describe('a failed check', () => {
 
     const state = await controller.check()
 
-    expect(state).toEqual({ phase: 'error', message: 'ENOTFOUND github.com' })
+    expect(state).toEqual({ phase: 'error', message: 'No connection to the update server.' })
   })
 
   it('never leaves the panel stuck on checking', async () => {
@@ -1179,5 +1192,100 @@ describe('registerUpdateIpc', () => {
     await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
     expect(updater.calls.check).toBe(1)
     expect(() => controller?.stop()).not.toThrow()
+  })
+})
+
+/* ------------------------------------------- a network that moved under us -- */
+
+/**
+ * The failure a real user's Windows install showed on 2026-08-20: a check that
+ * hit `ERR_NETWORK_CHANGED` and put the whole Atom feed on screen.
+ */
+const MOVING_NETWORK = new Error(
+  'Cannot parse releases feed: Error: Unable to find latest version on GitHub ' +
+    '(https://github.com/asadev/terminaldeck/releases/latest), please ensure a production ' +
+    'release exists: Error: net::ERR_NETWORK_CHANGED at SimpleURLLoaderWrapper.<anonymous> ' +
+    '(node:electron/js2c/browser_init:2:135010) XML: <?xml version="1.0"?><feed><entry>' +
+    '<content type="html">&lt;h3&gt;Install&lt;/h3&gt;</content></entry></feed>',
+)
+
+describe('a check that failed because the network moved', () => {
+  it('retries before it reports anything', async () => {
+    const { updater, controller, waits } = harness()
+    updater.checkRejectsWith = MOVING_NETWORK
+
+    const state = await controller.check()
+
+    expect(updater.calls.check).toBe(3)
+    expect(waits).toEqual([2_000, 8_000])
+    expect(state).toMatchObject({ phase: 'error', message: 'No connection to the update server.' })
+  })
+
+  it('says nothing at all when nobody pressed for it', async () => {
+    const { updater, controller } = harness()
+    updater.checkRejectsWith = MOVING_NETWORK
+
+    const state = await controller.check({ automatic: true })
+
+    // A timer's check that fails on a blip is not news. The panel stays shut.
+    expect(state.phase).toBe('idle')
+    expect(updater.calls.check).toBe(3)
+  })
+
+  it('stops at the first attempt when the cause will not fix itself', async () => {
+    const { updater, controller, waits } = harness()
+    updater.checkRejectsWith = new Error('The release has no macOS asset.')
+
+    const state = await controller.check()
+
+    expect(updater.calls.check).toBe(1)
+    expect(waits).toEqual([])
+    expect(state).toMatchObject({ phase: 'error', message: 'The release has no macOS asset.' })
+  })
+
+  it('takes the answer when a retry succeeds', async () => {
+    const { updater, controller } = harness()
+    let attempts = 0
+    updater.checkForUpdates = async () => {
+      attempts += 1
+      updater.calls.check = attempts
+      if (attempts < 3) throw MOVING_NETWORK
+      updater.emitNotAvailable({ version: '0.8.0' } as UpdateInfo)
+      return null
+    }
+
+    const state = await controller.check()
+
+    expect(attempts).toBe(3)
+    expect(state.phase).toBe('idle')
+  })
+
+  it('never hands the panel a feed, a stack frame or a file path', async () => {
+    const { updater, pushed, controller } = harness()
+    updater.checkRejectsWith = MOVING_NETWORK
+
+    await controller.check()
+
+    for (const state of pushed) {
+      const message = 'message' in state ? String(state.message ?? '') : ''
+      expect(message).not.toContain('<')
+      expect(message).not.toContain('node_modules')
+      expect(message).not.toContain('XML')
+      expect(message.length).toBeLessThanOrEqual(120)
+    }
+  })
+
+  it('does not let the error event write what the retry loop is suppressing', async () => {
+    const { updater, controller } = harness()
+    updater.checkRejectsWith = MOVING_NETWORK
+
+    // The real emitter reports the same failure twice — through the promise and
+    // through the event. Without the same rule on both, the event wins the race
+    // and the panel opens anyway.
+    const running = controller.check({ automatic: true })
+    updater.emitError(MOVING_NETWORK)
+    const state = await running
+
+    expect(state.phase).toBe('idle')
   })
 })
