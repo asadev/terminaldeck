@@ -750,12 +750,12 @@ export function SettingList({
 /**
  * Shut the `<details>` a menu item was pressed in.
  *
- * The settings window builds its two menus — **Add agent** and a row's ⋯ — out
+ * The settings window builds its two menus — **Add accounts** and a row's ⋯ — out
  * of `<details>` rather than a portal, because this window is asserted through
  * `renderToStaticMarkup` and a portalled menu has no markup a test can read.
  * The cost is that a `<details>` has no idea a button inside it did something:
  * pressing **Remove** left the menu standing open on top of the confirmation it
- * had just raised, and pressing **Claude Code** in Add agent left it open
+ * had just raised, and pressing **Claude Code** in Add accounts left it open
  * behind the popup.
  *
  * A DOM poke rather than state, deliberately. The alternative is one `open`

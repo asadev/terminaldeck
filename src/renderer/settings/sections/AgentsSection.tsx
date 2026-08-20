@@ -3,7 +3,13 @@ import { useCallback, useEffect, useState } from 'react'
 // alias, so a *value* import through it resolves in the app and throws in a test.
 import { LOOKUP_AGENTS } from '../../../shared/agent-catalog'
 import type { ProviderId } from '@shared/types'
-import { askForAddAccount, profileLoginLabel, useKnownSignIns } from '../../accounts'
+import {
+  askForAddAccount,
+  namedLogin,
+  profileLoginLabel,
+  useKnownSignIns,
+} from '../../accounts'
+import { useMachines } from '../../machines/useMachines'
 import { HoverNote } from '../../components/HoverNote'
 import {
   closeMenu,
@@ -28,8 +34,10 @@ import {
   type ToolStatus,
 } from '../settings-bridge'
 import { useAccountProviderRows } from '../../components/ProviderPicker'
-import { AccountsSection } from './AccountsSection'
+import { AccountsSection, RUN_TITLE } from './AccountsSection'
 import { canHaveMore } from './account-agent'
+import { DeviceAccounts } from './DeviceAccounts'
+import { ServerAccounts } from './ServerAccounts'
 import { SetupSection } from './SetupSection'
 
 /**
@@ -60,8 +68,8 @@ import { SetupSection } from './SetupSection'
  * out". That argument lost: a list of three rows where two are dead is a list
  * that has to be read before it can be dismissed, and it does not survive a
  * fourth agent, let alone the hundred he is thinking about. A missing agent is
- * not a row. It is an entry in the Add-agent menu, which is where somebody goes
- * when they want one they do not have.
+ * not a row. It is an entry in the Add-accounts menu, which is where somebody
+ * goes when they want one they do not have.
  *
  * **Nothing on this pane re-probes by hand.** The "Check again" button is gone.
  * `check` runs from an effect on every visit to the pane, so the button re-ran
@@ -92,8 +100,8 @@ const AGENT_IDS: readonly string[] = LOOKUP_AGENTS.map((entry) => entry.id as st
  * `STATE_LABEL` was here — Ready / Sign-in needed / Not installed / Unknown,
  * printed down the right of a standing list of every installed agent.
  *
- * The list is gone (see `AddAgentMenu`) and the word went with it rather than
- * moving, because on this pane it was the same fact twice. Whether an agent can
+ * The list is gone (see `AddAccountsMenu`) and the word went with it rather
+ * than moving, because on this pane it was the same fact twice. Whether an agent can
  * start a session is answered per *login* on every account row below —
  * "Signed in" / "Not signed in", read from that agent's own `auth status` — and
  * an agent-level summary of those rows sat above them saying it again in one
@@ -145,31 +153,60 @@ export function agentsPresent(prereq: Prerequisites | null): ToolStatus[] {
  * therefore "this machine" against "servers" and never "remote", which in this
  * app already means something narrower.
  */
-export type AgentScope = 'this-machine' | 'servers'
+export type AgentScope = 'this-machine' | 'servers' | `device:${string}`
 
+/** The two that are always there. Linked devices are appended to them. */
 const SCOPES: readonly { id: AgentScope; label: string }[] = [
   { id: 'this-machine', label: 'This machine' },
   { id: 'servers', label: 'Servers' },
 ]
 
+/** The scope for one linked device, and the device it names. One spelling. */
+export function deviceScope(id: string): AgentScope {
+  return `device:${id}`
+}
+
+export function deviceOfScope(scope: AgentScope): string | null {
+  return scope.startsWith('device:') ? scope.slice('device:'.length) : null
+}
+
 /**
- * The two buttons, at the top of the pane.
+ * The buttons at the top of the pane: this machine, the servers, and every
+ * device linked to this one.
+ *
+ * The switch had exactly two buttons and the rail behind the dialog was listing
+ * a paired PC with a live session on it at the same moment:
+ *
+ *   > *"And maybe we can also see the other linked device. Whatever new comes
+ *   > here, so we can manage next to them, each of them."*
+ *
+ * So a device is a scope, named as the rail names it, and the list is whatever
+ * `useMachines` is holding — which re-reads on every push and every four
+ * seconds, so a machine linked while this window is open joins the switch
+ * without it being reopened.
  *
  * `aria-pressed` rather than a tab set: these are not tabs in the ARIA sense —
  * there is no tablist in the rail sense here and the rail itself already owns
- * that role for the sections — they are two buttons of which exactly one is on,
+ * that role for the sections — they are buttons of which exactly one is on,
  * which is what a segmented control is everywhere else in this app.
  */
 export function ScopeSwitch({
   scope,
+  devices = [],
   onScope,
 }: {
   scope: AgentScope
+  /** The linked machines, in the order the rail lists them. */
+  devices?: readonly { id: string; name: string }[]
   onScope(next: AgentScope): void
 }) {
+  const entries = [
+    ...SCOPES,
+    ...devices.map((device) => ({ id: deviceScope(device.id), label: device.name })),
+  ]
   return (
     <div className="settings-scope" role="group" aria-label="Where these agents run">
-      {SCOPES.map((entry) => (
+      {entries.map((entry) => (
         <button
           key={entry.id}
           type="button"
@@ -182,20 +219,6 @@ export function ScopeSwitch({
       ))}
     </div>
   )
-}
-
-/**
- * The server half of the switch, which is a seam rather than a feature.
- *
- * Everything a server's agents and logins would need lives behind
- * `src/main/servers/` and is being built in another lane; nothing here reaches
- * for it, because a half-wired panel that lists nothing is indistinguishable
- * from a server with nothing on it. What this is instead is the boundary the
- * other lane replaces — one component, no props yet, and one line on screen so
- * that pressing the button is never a press into nothing.
- */
-export function ServerAgents() {
-  return <p className="settings-prose">No servers yet.</p>
 }
 
 /*
@@ -220,14 +243,123 @@ export function ServerAgents() {
  * per installed agent, so an installed agent always has a heading down there —
  * and *whether* one can start a session is answered per login on every row of
  * it. What only this list said is the version and the caveat, and both are in
- * the Add-agent menu now, which is his own answer to a list that is too long to
+ * the Add-accounts menu now, which is his own answer to a list that is too long to
  * stand on a page: *"why not just one drop-down to look at it if we need it?"*
  */
 
-/* --------------------------------------------------------------- add agent -- */
+/* ------------------------------------------------------------ add accounts -- */
 
 /**
- * "Add agent", as a menu rather than as a page of rows.
+ * What one row of the menu offers, once and for both halves of the row.
+ *
+ * A closed set rather than a pair of booleans, because the rule underneath is
+ * that a row has exactly one action — the state where a row offered two was the
+ * **Sign in** / **Add account** pair the review walked into twice.
+ */
+export type AddAccountsAction = 'add-account' | 'sign-in' | 'install' | 'none'
+
+/** One agent, as the menu draws it. */
+export interface AddAccountsRow {
+  id: string
+  label: string
+  /** Where to get it. Only ever read for an agent this machine does not have. */
+  url: string | null
+  installed: boolean
+  /** Which of the two headed runs this row belongs in. */
+  run: 'signed-in' | 'not-signed-in'
+  /**
+   * The logins this agent holds that anybody has named.
+   *
+   * Empty is the normal answer for two of the three agents: `codex login
+   * status` never prints an address and Gemini has no status command at all, so
+   * a signed-in row there names nothing rather than borrowing the install's
+   * name. See `namedLogin`.
+   */
+  logins: readonly string[]
+  action: AddAccountsAction
+}
+
+/**
+ * The menu's rows, decided in one place.
+ *
+ * Two instructions meet here and they are easy to satisfy separately and lose
+ * together. The separation:
+ *
+ *   > *"Whatever is not install or login should be separate, and all the login
+ *   > ones should be separate. Proper separation I told you."*
+ *
+ * and the dead row, which is what the separation was hiding:
+ *
+ *   > f_0021/f_0022 — "Gemini CLI 0.46.0 — Installed", where **Installed** is a
+ *   > label, not a button.
+ *
+ * So every row that is not signed in carries a live act — **Sign in** for an
+ * agent that is here, **Install** for one that is not — and the word
+ * "Installed" is gone rather than restyled: it was the right-hand column of a
+ * menu whose right-hand column is what can be *done*, and it named a state.
+ *
+ * A pure function because these are the states no screenshot catches: an agent
+ * installed and signed in that cannot hold a second login, and a window with no
+ * way to start a session at all. The caller narrows `addable` and `signInable`
+ * by whether it actually has a handler, so a row can never be given an action
+ * the component then declines to draw.
+ */
+export function addAccountsRows(state: {
+  /** Installed, as the probe found it. */
+  present: ReadonlySet<string>
+  /** Installed, able to take another login, and there is somewhere to add it. */
+  addable: ReadonlySet<string>
+  /** Has at least one login the agent itself reports as signed in. */
+  signedIn: ReadonlySet<string>
+  /** Installed, has an install login, and this window can open a session. */
+  signInable: ReadonlySet<string>
+  /** Agent id → the logins of it that are named. */
+  logins?: Readonly<Record<string, readonly string[]>>
+}): AddAccountsRow[] {
+  return LOOKUP_AGENTS.map((entry) => {
+    const installed = state.present.has(entry.id)
+    const signedIn = state.signedIn.has(entry.id)
+    const action: AddAccountsAction = !installed
+      ? entry.url
+        ? 'install'
+        : 'none'
+      : signedIn
+        ? // Signed in already: the only thing left to add is another login, and
+          // Gemini keeps one per machine — so that row names what is there and
+          // offers nothing, which is honest where **Add account** would open a
+          // popup with its own radio disabled.
+          state.addable.has(entry.id)
+          ? 'add-account'
+          : 'none'
+        : // Here and not signed in. Signing the install's own login in is the
+          // act that matches the row, and it is the same act the account row
+          // below offers; adding a second login is the fallback for an agent
+          // with no install login to sign in.
+          state.signInable.has(entry.id)
+          ? 'sign-in'
+          : state.addable.has(entry.id)
+            ? 'add-account'
+            : 'none'
+    return {
+      id: entry.id,
+      label: entry.label,
+      url: entry.url,
+      installed,
+      run: signedIn ? 'signed-in' : 'not-signed-in',
+      logins: state.logins?.[entry.id] ?? [],
+      action,
+    }
+  })
+}
+
+/** The heading over each run, in the same words the accounts list uses. */
+export const MENU_RUN_TITLE: Record<AddAccountsRow['run'], string> = {
+  'signed-in': RUN_TITLE['signed-in'],
+  'not-signed-in': RUN_TITLE['not-signed-in'],
+}
+
+/**
+ * "Add accounts", as a menu rather than as a page of rows.
  *
  * A `<details>` and not a floating menu, for a reason that outlives the styling:
  * the whole of this window is asserted through `renderToStaticMarkup`, which
@@ -273,12 +405,24 @@ export function ServerAgents() {
  * is where he said a list that long belongs: *"why not just one drop-down to
  * look at it if we need it?"* The caveat is behind an ⓘ rather than printed,
  * which is the other half of the same instruction.
+ *
+ * ## And the two runs, 2026-08-21
+ *
+ * *"Whatever is not install or login should be separate, and all the login ones
+ * should be separate."* The menu was three flat rows naming CLIs and no
+ * accounts. It is two headed runs now, the same two the account list above it
+ * has, and a signed-in row names the logins it holds where the agent named
+ * them. `addAccountsRows` decides both.
  */
-export function AddAgentMenu({
+export function AddAccountsMenu({
   present,
   addable,
+  signedIn = new Set<string>(),
+  signInable = new Set<string>(),
+  logins,
   agents = [],
   onAddAccount,
+  onSignIn,
 }: {
   present: ReadonlySet<string>
   /**
@@ -292,6 +436,12 @@ export function AddAgentMenu({
    * promises an account that cannot exist is not.
    */
   addable?: ReadonlySet<string>
+  /** Which agents hold a login their own CLI reports as signed in. */
+  signedIn?: ReadonlySet<string>
+  /** Which agents have an install login this window could open a sign-in for. */
+  signInable?: ReadonlySet<string>
+  /** Agent id → the logins of it anybody has named, for the signed-in run. */
+  logins?: Readonly<Record<string, readonly string[]>>
   /**
    * What the probe found, for the two facts a row can carry beyond its name.
    *
@@ -304,82 +454,122 @@ export function AddAgentMenu({
   agents?: readonly ToolStatus[]
   /** Open the Add-account popup for this agent. Absent draws no action. */
   onAddAccount?(provider: ProviderId): void
+  /**
+   * Sign the agent's own install login in, which opens a session on it.
+   *
+   * Absent draws no **Sign in**, for the reason every capability in this window
+   * is optional: a settings pane rendered without a way to start a session
+   * cannot sign anything in, and a button that only apologises is worse than no
+   * button.
+   */
+  onSignIn?(provider: ProviderId): void
 }) {
+  const rows = addAccountsRows({
+    present,
+    // Narrowed by whether there is anywhere for the press to go, so the row's
+    // action and what this component draws can never disagree.
+    addable: onAddAccount ? (addable ?? new Set()) : new Set(),
+    signedIn,
+    signInable: onSignIn ? signInable : new Set(),
+    logins,
+  })
+  const runs: AddAccountsRow['run'][] = ['signed-in', 'not-signed-in']
+
   return (
     <details className="settings-addmenu">
-      <summary>Add agent</summary>
-      <ul>
-        {LOOKUP_AGENTS.map((entry) => {
-          const tool = agents.find((row) => row.id === entry.id)
-          const installed = present.has(entry.id)
-          /* The version sits inside the button on a row that has one and beside
-             the name on a row that does not, so it is in the same column either
-             way. `ToolVersion` draws nothing at all for a tool with no version,
-             which is what a menu rendered before the probe answers looks like. */
-          const version = installed && tool ? <ToolVersion tool={tool} /> : null
-          return (
-            <li key={entry.id}>
-              {installed && addable?.has(entry.id) && onAddAccount ? (
-                /* The whole row is the button, because the whole row is what a
-                   person aims at in a menu — and it is a `<button>` rather than a
-                   clickable `<li>` so that it is reachable by keyboard and
-                   announced as an action, which is exactly what the dead version
-                   was not. */
-                <button
-                  type="button"
-                  className="settings-addmenu-row"
-                  onClick={(event) => {
-                    closeMenu(event)
-                    onAddAccount(entry.id as ProviderId)
-                  }}
-                >
+      <summary>Add accounts</summary>
+      {runs.map((run) => {
+        const mine = rows.filter((row) => row.run === run)
+        // No heading over an empty run — the same rule the account list follows,
+        // and on a fresh machine it would otherwise be a heading over nothing
+        // directly under a control called Add.
+        if (mine.length === 0) return null
+        return (
+          <div key={run} className="settings-addmenu-run" data-run={run}>
+            <h5 className="settings-addmenu-run-title">{MENU_RUN_TITLE[run]}</h5>
+            <ul>
+              {mine.map((row) => {
+                const tool = agents.find((entry) => entry.id === row.id)
+                /* The version sits inside the button on a row that has one and
+                   beside the name on a row that does not, so it is in the same
+                   column either way. `ToolVersion` draws nothing at all for a
+                   tool with no version, which is what a menu rendered before the
+                   probe answers looks like. */
+                const name = (
                   <span className="settings-addmenu-name">
-                    {entry.label}
-                    {version}
+                    {row.label}
+                    {row.installed && tool ? <ToolVersion tool={tool} /> : null}
+                    {/* The logins themselves, which is the whole of *"if I have
+                        any account login here, it should be showing that one"*.
+                        Nothing at all where the agent named nobody — a signed-in
+                        row under the **Signed in** heading has already said the
+                        only thing that is true. */}
+                    {row.logins.length > 0 && (
+                      <span className="settings-addmenu-login">{row.logins.join(', ')}</span>
+                    )}
                   </span>
-                  <span className="settings-addmenu-have">Add account</span>
-                </button>
-              ) : (
-                <>
-                  <span className="settings-addmenu-name">
-                    {entry.label}
-                    {version}
-                  </span>
-                  {installed ? (
-                    /* The right of a row is what can be done with it, in one
-                       column down the menu: **Add account**, **Install**, or —
-                       for an agent that is here and keeps one login per machine
-                       — the word that says both why there is no button and that
-                       nothing is missing. */
-                    <span className="settings-addmenu-have">Installed</span>
-                  ) : (
-                    // An agent with no page to send anybody to is still worth
-                    // listing: its absence from the account groups is the fact,
-                    // and a menu that silently dropped it would be the
-                    // greyed-out row's problem in a smaller box.
-                    entry.url && <LinkOut href={entry.url}>Install</LinkOut>
-                  )}
-                </>
-              )}
-              {/* Outside the row's button, never inside it: a `HoverNote` is
-                  itself a `<button>`, and a button inside a button is markup no
-                  browser agrees about.
+                )
+                const press = row.action === 'sign-in' ? onSignIn : onAddAccount
+                return (
+                  <li key={row.id}>
+                    {press && (row.action === 'add-account' || row.action === 'sign-in') ? (
+                      /* The whole row is the button, because the whole row is
+                         what a person aims at in a menu — and it is a `<button>`
+                         rather than a clickable `<li>` so that it is reachable by
+                         keyboard and announced as an action, which is exactly
+                         what the dead version was not. */
+                      <button
+                        type="button"
+                        className="settings-addmenu-row"
+                        onClick={(event) => {
+                          closeMenu(event)
+                          press(row.id as ProviderId)
+                        }}
+                      >
+                        {name}
+                        <span className="settings-addmenu-have">
+                          {row.action === 'sign-in' ? 'Sign in' : 'Add account'}
+                        </span>
+                      </button>
+                    ) : (
+                      <>
+                        {name}
+                        {/* An agent with no page to send anybody to is still
+                            worth listing: its absence from the account groups is
+                            the fact, and a menu that silently dropped it would be
+                            the greyed-out row's problem in a smaller box.
 
-                  In a slot of its own, and the slot is there whether the dot is
-                  or not — a fixed width holding the dot *and* the hidden span
-                  it puts its text in. Measured without it: the right edge of
-                  "Add account" landed at 692 on the one row with a caveat and
-                  696 on the two without, because the screen-reader span is a
-                  1px child of the row. */}
-              <span className="settings-addmenu-tail">
-                {installed && tool?.note && (
-                  <HoverNote label={entry.label}>{tool.note}</HoverNote>
-                )}
-              </span>
-            </li>
-          )
-        })}
-      </ul>
+                            "Installed" was the third thing this column could say
+                            and it is gone: the column is what can be *done* with
+                            a row, and that word named a state. Which agents are
+                            installed is what the two runs and the version say. */}
+                        {row.action === 'install' && row.url && (
+                          <LinkOut href={row.url}>Install</LinkOut>
+                        )}
+                      </>
+                    )}
+                    {/* Outside the row's button, never inside it: a `HoverNote` is
+                        itself a `<button>`, and a button inside a button is markup no
+                        browser agrees about.
+
+                        In a slot of its own, and the slot is there whether the dot is
+                        or not — a fixed width holding the dot *and* the hidden span
+                        it puts its text in. Measured without it: the right edge of
+                        "Add account" landed at 692 on the one row with a caveat and
+                        696 on the two without, because the screen-reader span is a
+                        1px child of the row. */}
+                    <span className="settings-addmenu-tail">
+                      {row.installed && tool?.note && (
+                        <HoverNote label={row.label}>{tool.note}</HoverNote>
+                      )}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )
+      })}
     </details>
   )
 }
@@ -458,6 +648,32 @@ export function AgentsSection(props: SectionProps) {
    */
   const providerRows = useAccountProviderRows(scope === 'this-machine')
 
+  /*
+   * The machines linked to this one, for the switch at the top.
+   *
+   * The window's own hook rather than a read of its own: it re-reads on every
+   * `machines:state` push and every four seconds besides, which is what makes
+   * *"whatever new comes here"* true without this pane owning a subscription of
+   * its own. It dials nothing — connecting is the main process's job — so
+   * having it mounted costs a settings pane a list read.
+   */
+  const machines = useMachines()
+  const devices = machines.machines.map((row) => ({ id: row.machine.id, name: row.machine.name }))
+  const device = machines.machines.find((row) => row.machine.id === deviceOfScope(scope)) ?? null
+
+  /*
+   * A device that was forgotten while its scope was the one on screen.
+   *
+   * Without this the pane would draw nothing at all under a button that is no
+   * longer in the switch — every scope button `ScopeSwitch` draws would read
+   * `aria-pressed="false"`, which is a segmented control with nothing selected.
+   */
+  useEffect(() => {
+    if (deviceOfScope(scope) === null) return
+    if (machines.machines.some((row) => row.machine.id === deviceOfScope(scope))) return
+    setScope('this-machine')
+  }, [scope, machines.machines])
+
   const agents = agentsPresent(prereq)
   const present = new Set(agents.map((tool) => tool.id))
   /*
@@ -491,14 +707,65 @@ export function AgentsSection(props: SectionProps) {
   )
   const defaultProfileId = profiles?.defaultProfileId ?? 'system'
 
+  /*
+   * Which agents hold a login that is signed in, and what those logins are
+   * called — the two facts the menu's own grouping is built from.
+   *
+   * Read from the sign-in store rather than asked for: the account list six
+   * inches below this probes every account on open and publishes each answer,
+   * so this is the same answer that list is drawing, arriving at the same
+   * moment. Nothing here starts a process; an agent nobody has asked about is
+   * simply not in the signed-in run yet, which is the honest state and the one
+   * that resolves on its own.
+   */
+  const signedIn = new Set<string>()
+  const logins: Record<string, string[]> = {}
+  for (const profile of profiles?.profiles ?? []) {
+    if (profile.provider === null) continue
+    if (knownSignIns[profile.id]?.state !== 'signed-in') continue
+    signedIn.add(profile.provider)
+    const named = namedLogin(profile, knownSignIns[profile.id])
+    if (named !== null) (logins[profile.provider] ??= []).push(named)
+  }
+
+  /*
+   * The agents whose own install login this window could sign in.
+   *
+   * Three conditions, and all three are about whether the press can land: the
+   * agent is on the machine, `profiles.ts` has minted a login for it, and this
+   * window can open a session — which is what signing in *is*, because the
+   * agent's own flow runs inside a terminal and this app never touches a
+   * credential.
+   */
+  const signInable = new Set(
+    agents
+      .filter((tool) =>
+        (profiles?.profiles ?? []).some(
+          (profile) => profile.provider === tool.id && profile.system,
+        ),
+      )
+      .map((tool) => tool.id),
+  )
+
+  /** The install login of one agent, which is what **Sign in** opens a session on. */
+  const signInInstall = (provider: ProviderId): void => {
+    const profile = (profiles?.profiles ?? []).find(
+      (entry) => entry.provider === provider && entry.system,
+    )
+    if (!profile) return
+    props.startSession?.({ profileId: profile.id, provider })
+  }
+
   return (
     <>
       <SectionHead title={meta.label} blurb={meta.blurb} />
 
-      <ScopeSwitch scope={scope} onScope={setScope} />
+      <ScopeSwitch scope={scope} devices={devices} onScope={setScope} />
 
       {scope === 'servers' ? (
-        <ServerAgents />
+        <ServerAccounts />
+      ) : device !== null ? (
+        <DeviceAccounts device={device} />
       ) : (
         <>
           {/* Every error this pane can raise is about *this* machine — a probe
@@ -597,7 +864,7 @@ export function AgentsSection(props: SectionProps) {
             The Accounts pane, in place. `head={false}` because this page already
             has a heading and the rail entry that used to carry this one is gone.
 
-            **Add agent** is its foot, and that is the whole of D10. The foot held
+            **Add accounts** is its foot, and that is the whole of D10. The foot held
             a primary button called *Add account*, directly under a row carrying a
             button called *Sign in*, and the two were the pair he collided with:
 
@@ -617,13 +884,17 @@ export function AgentsSection(props: SectionProps) {
           <AccountsSection
             {...props}
             head={false}
-            addAgent={
+            addAccounts={
               bridge.checkPrerequisites && error === null ? (
-                <AddAgentMenu
+                <AddAccountsMenu
                   present={present}
                   addable={addable}
+                  signedIn={signedIn}
+                  signInable={signInable}
+                  logins={logins}
                   agents={agents}
                   onAddAccount={(id) => askForAddAccount(id)}
+                  onSignIn={props.startSession ? signInInstall : undefined}
                 />
               ) : null
             }

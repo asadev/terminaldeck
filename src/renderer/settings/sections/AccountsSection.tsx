@@ -16,12 +16,12 @@ import { AddAccountDialog } from './AddAccountDialog'
 import { agentCanStart, agentProblem, canHaveMore } from './account-agent'
 import {
   accountLabel,
+  accountRowLabel,
   accountsBridge,
   announceAccountsChanged,
   onAddAccountRequested,
   takeAddAccountRequest,
   normalizeAccountName,
-  profileLoginLabel,
   renameAccount,
   useAccountHistory,
   useAccounts,
@@ -229,7 +229,24 @@ export function accountNote(account: AccountView, history: AccountHistoryView | 
  */
 export function accountStateLine(state: SignInView | undefined): string {
   if (!state) return 'Checking with the agent…'
-  if (state.state === 'signed-in') return 'Signed in'
+  if (state.state === 'signed-in') {
+    /*
+     * The method, and only on the row that has nothing else to go on.
+     *
+     * `codex login status` answers `Logged in using ChatGPT` and never an
+     * address, so its row is headed by {@link UNNAMED_LOGIN} — and "Signed in"
+     * under that is the row saying twice that it does not know who. The method
+     * is the one distinguishing thing the CLI actually reported, and it is a
+     * fact about *this* login rather than a description of the agent.
+     *
+     * Withheld the moment there is an address, which is what the name above is
+     * then carrying: "Signed in · max" under `me@example.com` is the plan
+     * printed where a state belongs, and the plan is already in the ⓘ.
+     */
+    return state.account === null && state.plan !== null
+      ? `Signed in using ${state.plan}`
+      : 'Signed in'
+  }
   if (state.state === 'signed-out') return 'Not signed in'
   return state.detail
 }
@@ -291,6 +308,88 @@ export function groupAccountsByProvider(accounts: readonly AccountView[]): Accou
   return groups.sort((a, b) => rank(a) - rank(b))
 }
 
+/* ------------------------------------------------- signed in, or not yet -- */
+
+/**
+ * One headed run of the list: the logins that are in, and the ones that are not.
+ *
+ * `id` is on the markup as `data-run` rather than being derived from the title,
+ * so a test — and the stylesheet — names the state rather than a sentence
+ * somebody will reword.
+ */
+export interface AccountRun {
+  id: 'signed-in' | 'not-signed-in' | 'not-answered'
+  title: string
+  groups: AccountGroup[]
+}
+
+/**
+ * The three things a row's sign-in state can be, in the words over each run.
+ *
+ * The second is his phrasing and it is the criterion for the run rather than a
+ * claim about every row in it — a row lands there because it is not signed in
+ * *or* because its agent will not start, and the row's own line says which.
+ *
+ * The third exists so that the second is never a lie. Sign-in is read one
+ * process per account, so for the first moment of every visit nothing has
+ * answered — and a two-way split would file every account under "not signed in"
+ * on the strength of not having asked yet. It disappears on its own, and on a
+ * machine where a probe genuinely failed it is where that account waits, with
+ * the agent's own reason on it.
+ */
+export const RUN_TITLE: Record<AccountRun['id'], string> = {
+  'signed-in': 'Signed in',
+  'not-signed-in': 'Not signed in or not installed',
+  'not-answered': 'Not answered',
+}
+
+/**
+ * Which run one account belongs in, from what the agent said and nothing else.
+ *
+ * Never inferred from the presence of a directory or from an address left over
+ * on an expired login — `signed-in` here means the CLI was asked and said yes.
+ */
+export function runOfAccount(state: SignInView | undefined): AccountRun['id'] {
+  if (!state) return 'not-answered'
+  if (state.state === 'signed-in') return 'signed-in'
+  if (state.state === 'unknown') return 'not-answered'
+  // `signed-out`, and `unsupported` — an agent with no login to be in or out of,
+  // which is nothing to sign in and so belongs beside the things that are not.
+  return 'not-signed-in'
+}
+
+/**
+ * The accounts, split into visibly separate runs and grouped by agent inside
+ * each one.
+ *
+ * Asad, 2026-08-21, having asked before:
+ *
+ *   > *"Whatever is not install or login should be separate, and all the login
+ *   > ones should be separate. Proper separation I told you. So not just basic
+ *   > ones. So we understand what is what."*
+ *
+ * The list was grouped by agent alone, so a signed-in Codex row and a
+ * signed-out Gemini row sat in one flat run and the only thing separating them
+ * was a small grey line under each name. Sign-in state is the outer grouping
+ * now and the agent is the inner one, which keeps the mark on a heading rather
+ * than putting it back on every row.
+ *
+ * A run with nothing in it is not drawn, for the same reason an agent with no
+ * accounts gets no heading: a heading over nothing is a label for an empty
+ * space.
+ */
+export function runsOfAccounts(
+  accounts: readonly AccountView[],
+  signIn: Readonly<Record<string, SignInView>>,
+): AccountRun[] {
+  const order: AccountRun['id'][] = ['signed-in', 'not-signed-in', 'not-answered']
+  return order.flatMap((id) => {
+    const mine = accounts.filter((account) => runOfAccount(signIn[account.id]) === id)
+    if (mine.length === 0) return []
+    return [{ id, title: RUN_TITLE[id], groups: groupAccountsByProvider(mine) }]
+  })
+}
+
 /* ----------------------------------------------------------------- view -- */
 
 export interface AccountsViewProps {
@@ -315,7 +414,7 @@ export interface AccountsViewProps {
   /**
    * The agent the popup opens on, when something outside this pane named one.
    *
-   * The Add-agent menu names one; the session chip and this pane's own button
+   * The Add-accounts menu names one; the session chip and this pane's own button
    * do not. See `askForAddAccount`.
    */
   addingProvider?: ProviderId | null
@@ -340,19 +439,23 @@ export interface AccountsViewProps {
   /**
    * The one control at the foot of the list, handed in from the pane above.
    *
-   * It is **Add agent** — a disclosure of every agent, where an installed one
+   * It is **Add accounts** — a disclosure of every agent, where an installed one
    * opens this pane's own Add-account popup already pointed at it. What it
    * replaces is a primary button called *Add account* that stood here, one row
    * below a button called *Sign in*, which is the pair the recorded review
    * collided with twice: *"why do we have see sign in here separately, add
    * account here separately?"*
    *
+   * It was called **Add agent** until 2026-08-21 — *"why does it say add agent?
+   * Add accounts, it should say"* — and the label was already disagreeing with
+   * the menu, every row of which does something to an account.
+   *
    * A node rather than a flag because `AgentsSection` owns the probe the menu is
    * built from, and this file cannot import from it — that module imports this
    * one. Absent draws nothing at all, which is what this view is rendered as on
    * its own in a test.
    */
-  addAgent?: ReactNode
+  addAccounts?: ReactNode
   /*
    * `onCheck` was here, behind a "Check again" button in the foot with a line
    * of help under it saying what it asked. The read runs when the pane opens —
@@ -428,7 +531,7 @@ export function AccountsView({
   onRename,
   onRemove,
   onMakeDefault,
-  addAgent,
+  addAccounts,
   history = {},
 }: AccountsViewProps) {
   /*
@@ -459,11 +562,11 @@ export function AccountsView({
    * called *Add or sign in to an account…* which opened this settings pane
    * rather than the popup, dropping somebody in front of the two buttons they
    * had just complained were the same thing. That item is called **Add account**
-   * now and it opens this, and so does every installed row of the Add-agent
+   * now and it opens this, and so does every installed row of the Add-accounts
    * menu, with its own agent already chosen.
    *
    * Both halves are needed and they are not the same half. The listener catches
-   * a request made while this pane is already on screen — the Add-agent menu is
+   * a request made while this pane is already on screen — the Add-accounts menu is
    * six inches above this list. The read-on-mount catches the other order: the
    * chip fires the request and *then* opens the settings window, so this
    * component does not exist yet when the event goes past. `takeAddAccountRequest`
@@ -491,7 +594,7 @@ export function AccountsView({
   }
 
   const accounts = snapshot.accounts
-  const groups = groupAccountsByProvider(accounts)
+  const runs = runsOfAccounts(accounts, signIn)
 
   /**
    * One account, as a row.
@@ -561,7 +664,7 @@ export function AccountsView({
                    because that is the string being edited, but "New name
                    for Default" over a row headed with an address is the
                    slug leaking through the accessibility tree. */
-                aria-label={`New name for ${profileLoginLabel(account, state)}`}
+                aria-label={`New name for ${accountRowLabel(account, state)}`}
                 onChange={(event) => setRenaming({ id: account.id, name: event.target.value })}
               />
               <Button type="submit" tone="primary">
@@ -580,10 +683,17 @@ export function AccountsView({
                     generated keys sitting one above the other, which is
                     also the shape of his complaint that the list gives no
                     way to tell which login is which. This pane probes on
-                    open, so the address is usually already in hand;
-                    `profileLoginLabel` prints it, and says which install
-                    a row is when the agent named nobody. */}
-                {profileLoginLabel(account, state)}
+                    open, so the address is usually already in hand.
+
+                    `accountRowLabel` rather than `profileLoginLabel`, and
+                    that is 2026-08-21's half of the same complaint: with no
+                    address, the second rung was the *install's* name, so a
+                    row that was genuinely signed in answered "as whom?"
+                    with "Your own Codex CLI install". A signed-in row now
+                    names the login or says plainly that the agent will not
+                    — and a row that is not signed in keeps the install's
+                    name, because there is no login there to name. */}
+                {accountRowLabel(account, state)}
                 {/* A badge is a comparison, so it needs something to
                     compare with: on a fresh install there is one account
                     and it is *called* Default, and the badge printed the
@@ -610,7 +720,7 @@ export function AccountsView({
               <span className="settings-account-state" data-state={state?.state ?? 'unknown'}>
                 <span className="settings-account-mark" aria-hidden="true" />
                 <span>{accountStateLine(state)}</span>
-                <HoverNote label={profileLoginLabel(account, state)}>
+                <HoverNote label={accountRowLabel(account, state)}>
                   {accountNote(account, rowHistory)}
                 </HoverNote>
               </span>
@@ -650,7 +760,7 @@ export function AccountsView({
                 **Add account** — and read as the same control offered
                 twice: *"why do we have see sign in here separately, add
                 account here separately?"* The one at the foot is gone (see
-                `addAgent`), so this is what a person presses to sign a
+                `addAccounts`), so this is what a person presses to sign a
                 login in, and there is nothing beside it saying the same
                 thing in different words. */}
             {onSignIn &&
@@ -678,7 +788,7 @@ export function AccountsView({
               subject unambiguous.
 
               A `<details>` rather than a floating menu, for the reason
-              `AddAgentMenu` gives at length: this window is asserted through
+              `AddAccountsMenu` gives at length: this window is asserted through
               `renderToStaticMarkup`, which runs no effects and has no DOM to
               click in, so a portalled menu is a menu no test can read. It is
               also keyboard-operable and dismissable with no JavaScript.
@@ -700,7 +810,7 @@ export function AccountsView({
             */}
             {(!account.system || (!isDefault && canHaveMore(providerRows, account.provider))) && (
               <details className="settings-rowmenu" onToggle={onMenuToggle}>
-                <summary aria-label={`More for ${profileLoginLabel(account, state)}`}>
+                <summary aria-label={`More for ${accountRowLabel(account, state)}`}>
                   <span aria-hidden="true">⋯</span>
                 </summary>
                 <div className="settings-rowmenu-items">
@@ -826,20 +936,34 @@ export function AccountsView({
       <AgentCliUpdate />
 
       {/*
-        One list per agent, and no heading over an agent with nothing under it.
+        Two runs — what is signed in, and what is not — and one list per agent
+        inside each. No heading over a run with nothing in it, and none over an
+        agent with nothing under it.
 
-        The mark that used to sit on every row is on the heading instead: it was
-        answering "which agent is this" once per account, which is the question
-        the heading now answers once per group.
+        The outer split is 2026-08-21's: *"whatever is not install or login
+        should be separate, and all the login ones should be separate. Proper
+        separation I told you."* Before it, a signed-in Codex row and a
+        signed-out Gemini row were adjacent lines of one flat list and the only
+        thing telling them apart was a small grey line under each name.
+
+        The mark that used to sit on every row is on the agent heading instead:
+        it was answering "which agent is this" once per account, which is the
+        question the heading now answers once per group. See `runsOfAccounts`
+        for why there is a third run and why it is usually not there.
       */}
-      {groups.map((group) => (
-        <div key={group.label} className="settings-account-group">
-          <h5 className="settings-account-group-title">
-            <ProviderBadge provider={group.provider} />
-            {group.label}
-          </h5>
-          <ul className="settings-profiles">{group.accounts.map(accountRow)}</ul>
-        </div>
+      {runs.map((run) => (
+        <section key={run.id} className="settings-account-run" data-run={run.id}>
+          <h4 className="settings-account-run-title">{run.title}</h4>
+          {run.groups.map((group) => (
+            <div key={group.label} className="settings-account-group">
+              <h5 className="settings-account-group-title">
+                <ProviderBadge provider={group.provider} />
+                {group.label}
+              </h5>
+              <ul className="settings-profiles">{group.accounts.map(accountRow)}</ul>
+            </div>
+          ))}
+        </section>
       ))}
 
       {accounts.length === 0 && !loading && (
@@ -850,8 +974,8 @@ export function AccountsView({
         One control, and it is the whole of this pane's foot.
 
         It used to be a primary button called **Add account**, and it is now the
-        **Add agent** disclosure handed down from the pane above — see the
-        `addAgent` prop. The change is not cosmetic and it is not a rename: the
+        **Add accounts** disclosure handed down from the pane above — see the
+        `addAccounts` prop. The change is not cosmetic and it is not a rename: the
         button was the second of two doors to one act, standing a row below the
         **Sign in** on every signed-out account, and he walked into the pair of
         them twice in one recording before saying so.
@@ -873,8 +997,8 @@ export function AccountsView({
         that runs when the pane opens, with a line of help under it describing
         that probe.
       */}
-      {addAgent !== undefined && addAgent !== null && (
-        <div className="settings-account-foot">{addAgent}</div>
+      {addAccounts !== undefined && addAccounts !== null && (
+        <div className="settings-account-foot">{addAccounts}</div>
       )}
 
       <AddAccountDialog
@@ -1060,8 +1184,8 @@ export function signInRequest(account: AccountView): {
 export function AccountsSection({
   startSession,
   head,
-  addAgent,
-}: SectionProps & { head?: boolean; addAgent?: ReactNode }) {
+  addAccounts,
+}: SectionProps & { head?: boolean; addAccounts?: ReactNode }) {
   const accounts = useAccounts()
   /*
    * Always on, because this pane is only mounted while it is the one on screen
@@ -1135,7 +1259,7 @@ export function AccountsSection({
   return (
     <AccountsView
       head={head}
-      addAgent={addAgent}
+      addAccounts={addAccounts}
       snapshot={accounts.snapshot}
       signIn={accounts.signIn}
       loading={accounts.loading}

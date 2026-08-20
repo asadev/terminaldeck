@@ -815,6 +815,64 @@ export function profileLoginLabel(
 }
 
 /**
+ * The login itself, when there is one to name, and null when there is not.
+ *
+ * The top two rungs of {@link profileLoginLabel} with the fallback removed, so
+ * a caller can ask "did anybody actually name this login?" and get an answer
+ * rather than a sentence about an install. Two screens need exactly that: the
+ * account row (see {@link accountRowLabel}) and the **Add accounts** menu,
+ * which lists the logins an agent already holds and must print nothing at all
+ * where the agent holds one it will not name.
+ */
+export function namedLogin(account: NamedAccount, signIn: SignInFacts | undefined): string | null {
+  const address = accountLabel(signIn)
+  if (address !== null) return address
+  if (!isGeneratedAccount(account)) return account.name
+  return null
+}
+
+/**
+ * What a signed-in row says when the agent will not say who is signed in.
+ *
+ * A statement about the agent, made once, rather than the install's name
+ * borrowed as if it were a login. It does not name the agent because the
+ * heading over the row already does, and this pane's standing fault is printing
+ * one fact twice eight pixels apart.
+ */
+export const UNNAMED_LOGIN = 'This agent does not name its login'
+
+/**
+ * What an account row in Settings is headed with.
+ *
+ * Asad, 2026-08-21, looking at three rows of which two were installs:
+ *
+ *   > *"So, like, if I have any account login here, it should be showing that
+ *   > one."*
+ *
+ * The rows read "imzapremium@gmail.com", "Your own Codex CLI install · Signed
+ * in" and "Your own Gemini CLI install · Not signed in". The second of those is
+ * the defect: something *is* signed in there, and the row answers "which login?"
+ * with the name of the directory it runs out of.
+ *
+ * So a row that is signed in names the login, and where the agent genuinely
+ * exposes none it says so — `codex login status` prints `Logged in using
+ * ChatGPT` and the address exists only inside `auth.json`'s id token, which
+ * `profiles.ts` deliberately never opens. What the CLI *did* report — the
+ * method — is on the state line under the name, which is where it can be read
+ * without pretending to be a name.
+ *
+ * A row that is **not** signed in keeps {@link profileLoginLabel}'s answer,
+ * and that is not an oversight: there is no login to name there, so naming the
+ * install is the true thing to say about it.
+ */
+export function accountRowLabel(account: NamedAccount, signIn: SignInFacts | undefined): string {
+  const named = namedLogin(account, signIn)
+  if (named !== null) return named
+  if (signIn?.state === 'signed-in') return UNNAMED_LOGIN
+  return profileLoginLabel(account, signIn)
+}
+
+/**
  * The same login, for a column twelve characters wide — **and never an address.**
  *
  * The sidebar is the one list that cannot be given the label above. Its account
@@ -1090,7 +1148,20 @@ export function errorMessage(cause: unknown, fallback: string): string {
 export function useAccounts(enabled = true, probe = enabled): AccountsState {
   const bridge = useMemo(() => accountsBridge(), [])
   const [snapshot, setSnapshot] = useState<AccountsSnapshot>(EMPTY_SNAPSHOT)
-  const [signIn, setSignIn] = useState<Record<string, SignInView>>({})
+  /*
+   * Seeded from the answers this launch has already paid for — see
+   * `rememberSignIn`. Empty was right while a row's state was one line of text
+   * on it; it stopped being right when the Accounts list started *sorting* by
+   * that state, because a list that begins knowing nothing puts every account
+   * under "Not signed in or not installed" for the length of a probe and then
+   * reshuffles itself in front of somebody who has just opened the pane.
+   *
+   * Only real answers are ever in that store — never the "Checking…"
+   * placeholder — and `check` re-asks on mount regardless, so the worst this can
+   * show is an answer that is one probe old. Which is exactly what the chip
+   * beside it is showing at the same moment.
+   */
+  const [signIn, setSignIn] = useState<Record<string, SignInView>>(() => ({ ...knownSignIns() }))
   const [loading, setLoading] = useState(enabled)
   const [error, setError] = useState<string | null>(null)
 
@@ -1611,7 +1682,7 @@ const ADD_ACCOUNT_EVENT = 'deck:add-account'
  * The pending request: which agent it is for, or `null` for "no preference".
  *
  * `undefined` is the third state and it is the one that means *nothing was
- * asked*. Two nullables rather than a boolean and a value because the Add-agent
+ * asked*. Two nullables rather than a boolean and a value because the Add-accounts
  * menu asks for a *named* agent — pressing Claude Code in it must open the
  * popup with Claude Code already chosen, which is the whole of *"If we add
  * Claude Code, and then we will have relevant stuff, add account things"* —

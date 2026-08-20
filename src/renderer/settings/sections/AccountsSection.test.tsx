@@ -12,13 +12,22 @@ import {
   createdAccountId,
   groupAccountsByProvider,
   historyLine,
+  runOfAccount,
+  runsOfAccounts,
   signInRequest,
   signInToNewAccount,
   type AccountsViewProps,
 } from './AccountsSection'
 import { AddAccountSteps } from './AddAccountDialog'
 import { buildAccountProviderRows, type AccountProviderRow } from '../../components/ProviderPicker'
-import { parseAccountHistory, type AccountHistoryView, type AccountsSnapshot, type SignInView } from '../../accounts'
+import {
+  accountRowLabel,
+  parseAccountHistory,
+  UNNAMED_LOGIN,
+  type AccountHistoryView,
+  type AccountsSnapshot,
+  type SignInView,
+} from '../../accounts'
 
 /**
  * The screen a person opens to answer "which of my accounts can I use".
@@ -313,9 +322,9 @@ describe('AccountsView', () => {
   })
 
   it('puts whatever the pane hands down at the foot, and nothing when it hands nothing', () => {
-    const html = render({ addAgent: <button type="button">Add agent</button> })
+    const html = render({ addAccounts: <button type="button">Add accounts</button> })
     expect(html).toContain('settings-account-foot')
-    expect(html).toContain('>Add agent</button>')
+    expect(html).toContain('>Add accounts</button>')
   })
 })
 
@@ -1101,13 +1110,13 @@ describe('the account list after the 2026-08-19 review', () => {
      * press. *"Don't put any single statement in anywhere."* And the button
      * itself went a day later — see `carries no Add account button of its own`.
      */
-    const html = render({ addAgent: <button type="button">Add agent</button> })
+    const html = render({ addAccounts: <button type="button">Add accounts</button> })
     expect(html.match(/settings-account-foot/g) ?? []).toHaveLength(1)
     // The row's Sign in, and this. The ⓘ dots and the ⋯ summaries are not
     // buttons in the sense the sentence is about, and `settings-btn` is what
     // separates the two.
     expect(html.match(/class="settings-btn"/g) ?? []).toHaveLength(1)
-    expect(html).toContain('>Add agent</button>')
+    expect(html).toContain('>Add accounts</button>')
     expect(html).not.toContain('Check again')
     expect(html).not.toContain('Asks the agent, once per account')
   })
@@ -1145,6 +1154,115 @@ describe('the account list after the 2026-08-19 review', () => {
       command: 'claude auth status --json',
     }
     expect(accountStateLine(unknown)).toBe(unknown.detail)
+  })
+
+  /**
+   * The separation, 2026-08-21 — and he had asked before.
+   *
+   *   > *"Whatever is not install or login should be separate, and all the login
+   *   > ones should be separate. Proper separation I told you. So not just basic
+   *   > ones. So we understand what is what. Right now it's a bit difficult, but
+   *   > anyways."*
+   *
+   * f_0025/f_0026: a signed-in Codex row and a not-signed-in Gemini row, adjacent
+   * lines of one flat list, told apart only by a small grey line under each name.
+   */
+  it('splits the list into a signed-in run and a not-signed-in one', () => {
+    const html = render()
+    expect(html).toContain('>Signed in</h4>')
+    expect(html).toContain('>Not signed in or not installed</h4>')
+    // The fixture is Claude signed in and Codex signed out, so the agent
+    // headings land one in each — and signed in comes first.
+    expect(html.indexOf('Signed in')).toBeLessThan(html.indexOf('Not signed in or not installed'))
+    expect(html).toContain('data-run="signed-in"')
+    expect(html).toContain('data-run="not-signed-in"')
+  })
+
+  it('moves a row between the runs on what the agent said, and never both', () => {
+    const both = runsOfAccounts(ACCOUNTS.accounts, { system: signedIn, work: signedOut })
+    expect(both.map((run) => run.id)).toEqual(['signed-in', 'not-signed-in'])
+    expect(both[0].groups[0].accounts.map((account) => account.id)).toEqual(['system'])
+    expect(both[1].groups[0].accounts.map((account) => account.id)).toEqual(['work'])
+
+    // Sign the second one in and it moves up; nothing is in two runs at once.
+    const up = runsOfAccounts(ACCOUNTS.accounts, { system: signedIn, work: signedIn })
+    expect(up.map((run) => run.id)).toEqual(['signed-in'])
+    const ids = up.flatMap((run) => run.groups.flatMap((group) => group.accounts.map((a) => a.id)))
+    expect(ids).toEqual(['system', 'work'])
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  /**
+   * The third run, which exists so the second is never a lie.
+   *
+   * Sign-in is one process per account, so for the first moment of a visit
+   * nothing has answered — and a two-way split would file every account under
+   * "not signed in" on the strength of not having asked yet. An account whose
+   * probe genuinely failed waits there too, with the agent's own reason on it.
+   */
+  it('never files an unanswered account under not signed in', () => {
+    expect(runOfAccount(undefined)).toBe('not-answered')
+    expect(
+      runOfAccount({
+        state: 'unknown',
+        account: null,
+        plan: null,
+        detail: 'Could not read this account’s sign-in state.',
+        command: '',
+      }),
+    ).toBe('not-answered')
+    expect(runOfAccount(signedIn)).toBe('signed-in')
+    expect(runOfAccount(signedOut)).toBe('not-signed-in')
+
+    const runs = runsOfAccounts(ACCOUNTS.accounts, {})
+    expect(runs.map((run) => run.id)).toEqual(['not-answered'])
+  })
+
+  it('draws no heading over a run with nothing in it', () => {
+    // The same rule an agent with no accounts follows, one level out.
+    const html = render({ signIn: { system: signedIn, work: signedIn } })
+    expect(html).toContain('>Signed in</h4>')
+    expect(html).not.toContain('>Not signed in or not installed</h4>')
+    expect(html).not.toContain('>Not answered</h4>')
+  })
+
+  /**
+   * The row's own name, 2026-08-21.
+   *
+   *   > *"So, like, if I have any account login here, it should be showing that
+   *   > one."*
+   *
+   * Two of the three rows in f_0025 were installs rather than accounts: "Your own
+   * Codex CLI install · Signed in" is a row that is genuinely logged in and
+   * answers "as whom?" with the name of a directory.
+   */
+  it('says plainly that an agent will not name its login, instead of naming the install', () => {
+    const codexSignedIn: SignInView = {
+      state: 'signed-in',
+      account: null,
+      plan: 'ChatGPT',
+      detail: 'Signed in using ChatGPT',
+      command: 'codex login status',
+    }
+    const install = { ...ACCOUNTS.accounts[0], id: 'system:codex', provider: 'codex' as const, name: 'Default (Codex CLI)' }
+    expect(accountRowLabel(install, codexSignedIn)).toBe(UNNAMED_LOGIN)
+    expect(accountRowLabel(install, codexSignedIn)).not.toContain('Your own')
+    // And the method it *did* report is on the state line, which is the one
+    // distinguishing fact that came back — said once, under the name.
+    expect(accountStateLine(codexSignedIn)).toBe('Signed in using ChatGPT')
+  })
+
+  it('still names the login wherever there is one, and the install where there is not', () => {
+    // The address, when the CLI gave one.
+    expect(accountRowLabel(ACCOUNTS.accounts[0], signedIn)).toBe('me@example.com')
+    // A name a person chose is an identity; a generated one is a slug.
+    expect(accountRowLabel(ACCOUNTS.accounts[1], signedOut)).toBe('Work')
+    // Not signed in and generated: there is no login to name, so naming the
+    // install is the true thing to say — this is deliberately unchanged.
+    const install = { ...ACCOUNTS.accounts[0], id: 'system:gemini', provider: 'gemini' as const, name: 'Default (Gemini CLI)' }
+    expect(accountRowLabel(install, signedOut)).toBe('Your own Gemini CLI install')
+    // And a row headed with an address does not repeat the plan as its state.
+    expect(accountStateLine(signedIn)).toBe('Signed in')
   })
 
   it('draws no standing prose under any row', () => {

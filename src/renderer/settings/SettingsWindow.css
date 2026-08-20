@@ -1347,7 +1347,7 @@
 
 /* ------------------------------------------------------------- add an agent -- */
 
-/* The Add-agent menu: a disclosure, drawn as the button it behaves like.
+/* The Add-accounts menu: a disclosure, drawn as the button it behaves like.
 
    *"Just give a button drop-down, add an agent, and there will be a list of
    them."* A `<details>` rather than a floating menu because the list has to be
@@ -1403,17 +1403,52 @@
   outline-offset: 1px;
 }
 
-.settings-addmenu > ul {
+/* The list sits inside a run now — signed in, and not — so these are descendant
+   selectors rather than child ones. The runs are what *"whatever is not install
+   or login should be separate, and all the login ones should be separate"* is,
+   inside the menu as well as in the list above it. */
+.settings-addmenu ul {
   margin: var(--sp-2) 0 0;
   padding: 0;
   list-style: none;
 }
 
-.settings-addmenu > ul > li {
+.settings-addmenu li {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
   height: var(--row-h);
+}
+
+/* The second run stands away from the first, because the gap is the separation
+   — a heading alone would be a fourth line of type in a menu that is meant to
+   be scanned. */
+.settings-addmenu-run + .settings-addmenu-run {
+  margin-top: var(--sp-4);
+}
+
+/* The same type as the account-group heading one level down the pane, for the
+   same reason it is not `.settings-group-title`: this is a name for the rows
+   under it, not a second name for the control it is inside. */
+.settings-addmenu-run-title {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--t-caption);
+  font-weight: var(--w-medium);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The logins an agent already holds, on its row in the signed-in run. Quieter
+   than the agent's own name and in the mono face an address belongs in — it is
+   read to be compared with another address, not to be read as a sentence. */
+.settings-addmenu-login {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-addmenu-name {
@@ -1441,9 +1476,11 @@
   width: 1rem;
 }
 
-/* The right-hand half of a row: "Installed" where nothing can be done, "Add
-   account" where something can. Quiet in both, because the name on the left is
-   the subject of the row. */
+/* The right-hand half of a row, and it is always something that can be done:
+   "Add account" or "Sign in". It used to be able to say "Installed", which is a
+   state in a column of acts — *"if there is no tool, why we have this button"*
+   is the same complaint one control along. Quiet, because the name on the left
+   is the subject of the row. */
 .settings-addmenu-have {
   font-size: var(--t-footnote);
   color: var(--text-muted);
@@ -1480,6 +1517,82 @@
 .settings-addmenu-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* ------------------------------------------------- signed in, and not yet -- */
+
+/* The outer run of the account list: everything signed in, then everything that
+   is not.
+
+     > *"Whatever is not install or login should be separate, and all the login
+     > ones should be separate. Proper separation I told you. So not just basic
+     > ones. So we understand what is what."*
+
+   The separation has to survive a glance, which is the half a heading alone does
+   not do — so the runs are pulled apart by more than two agent groups inside one
+   are, and every run after the first carries a rule above it. The gap is the
+   thing that is read; the words are what confirm it. */
+.settings-account-run + .settings-account-run {
+  margin-top: var(--sp-8);
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Above the agent headings and below the pane's own, in weight and in ink. It is
+   the only heading on this pane that is set in caps: it names a *state* rather
+   than a thing, and it has to be distinguishable at a glance from the agent name
+   directly under it — which is the whole complaint it answers. */
+.settings-account-run-title {
+  margin: 0;
+  font-size: var(--t-caption);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The first agent group under a run heading is closer to it than a group is to
+   the group above it — the heading belongs to what follows it. */
+.settings-account-run > .settings-account-group:first-of-type {
+  margin-top: var(--sp-2);
+}
+
+/* --------------------------------------------------------------- servers -- */
+
+/* One connected server, on Coding AI → Servers. A disclosure, because opening it
+   is what buys the SSH round trip that reads its agents — see `ServerAccounts`
+   for why nothing is dialled until somebody looks. */
+.settings-server {
+  margin-top: var(--sp-4);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-server > summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  height: var(--row-h);
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-server > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-server-name {
+  font-size: var(--t-body);
+  color: var(--text-primary);
+}
+
+/* The address, in the face an address belongs in: it is here to be compared with
+   one somebody has elsewhere, which is exactly what a proportional font makes
+   hard. */
+.settings-server-where {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
 }
 
 /* ------------------------------------------------------ accounts, by agent -- */

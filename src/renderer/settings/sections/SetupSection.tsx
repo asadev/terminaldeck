@@ -140,6 +140,38 @@ export const AGENT_TOOL_IDS: readonly string[] = ['claude', 'codex', 'gemini']
 export const MOVED_TOOL_IDS: readonly string[] = ['copilot']
 
 /**
+ * Whether the **Other tools** disclosure is drawn at all.
+ *
+ * Asad, 2026-08-21, at the foot of Coding AI:
+ *
+ *   > *"If there is no tool, why we have this button, you know?"*
+ *
+ * It held git and the GitHub CLI, and on a machine with neither it was a button
+ * that opened onto the sentence "Nothing reported yet." — a control whose whole
+ * content is the news that it has no content. So an empty disclosure is not
+ * drawn, and that sentence is gone with it rather than shortened.
+ *
+ * The second clause is what stops this from lying the other way. Before the
+ * probe answers, `tools` is empty for a reason that has nothing to do with the
+ * machine, and a disclosure that vanished for a beat and then appeared would be
+ * the same flicker the agent list had when it printed "No agent installed yet"
+ * on a paint that predated looking. `snapshot === null && error === null` is
+ * that question asked of the answer itself: nothing has come back and nothing
+ * has failed, so the read is still out.
+ *
+ * A pure function, because the interesting state — *answered, and the answer
+ * was none* — cannot be reached by `renderToStaticMarkup`, which runs no
+ * effects and so leaves the probe forever in flight.
+ */
+export function showsOtherTools(
+  toolCount: number,
+  probe: { checking: boolean; snapshot: SetupSnapshot | null; error: string | null },
+): boolean {
+  if (toolCount > 0) return true
+  return probe.checking || (probe.snapshot === null && probe.error === null)
+}
+
+/**
  * Setup is a pair of groups inside Agents now, not a rail entry.
  *
  *   > "This also needs to be reorganized properly at some better place instead
@@ -249,28 +281,37 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
             > Why do we have all of this full list? Why not just one drop-down
             > to look at it if we need it?"*
 
-          The same `<details>` the Add-agent menu is, for the same two reasons —
-          it is real markup a `renderToStaticMarkup` test can read, and it costs
-          the closed pane nothing. */}
-      <details className="settings-addmenu">
-        <summary>Other tools</summary>
-        <ul className="settings-tools">
-          {tools.map((tool) => (
-            <ToolRow key={tool.id} tool={tool} />
-          ))}
-          {/*
-            One placeholder, shaped like the answer.
+          The same `<details>` the **Add accounts** menu is, for the same two
+          reasons — it is real markup a `renderToStaticMarkup` test can read, and
+          it costs the closed pane nothing.
 
-            There used to be two, stacked: a full-width box reading "Looking at
-            your machine…" with a separate "Checking…" chip directly under it,
-            both saying the same thing about the same read. The button already
-            says the work is in flight — that is what a disabled button with a
-            present-tense label is for — so the list says it by *looking* like
-            the list that is coming, which also stops the panel jumping when
-            three rows land at once.
-          */}
-          {tools.length === 0 &&
-            (checking ? (
+          And it is not drawn at all when it would hold nothing: see
+          `showsOtherTools`, and *"if there is no tool, why we have this
+          button?"* */}
+      {showsOtherTools(tools.length, { checking, snapshot, error }) && (
+        <details className="settings-addmenu">
+          <summary>Other tools</summary>
+          <ul className="settings-tools">
+            {tools.map((tool) => (
+              <ToolRow key={tool.id} tool={tool} />
+            ))}
+            {/*
+              One placeholder, shaped like the answer.
+
+              There used to be two, stacked: a full-width box reading "Looking at
+              your machine…" with a separate "Checking…" chip directly under it,
+              both saying the same thing about the same read. The button already
+              says the work is in flight — that is what a disabled button with a
+              present-tense label is for — so the list says it by *looking* like
+              the list that is coming, which also stops the panel jumping when
+              three rows land at once.
+
+              The other branch of this — a row reading "Nothing reported yet." —
+              is gone rather than moved. It was the *answered and empty* state,
+              and that state now draws no disclosure at all, so the only way to
+              reach the sentence was to open a button that existed to say it.
+            */}
+            {tools.length === 0 &&
               // Two rows, because two is what lands: git and the GitHub CLI.
               // The placeholder has to keep being shaped like the answer, or the
               // panel jumps when the probe returns.
@@ -281,24 +322,18 @@ export function SetupSection({ bridge, head = true }: SectionProps & { head?: bo
                   </span>
                   <span className="settings-ghost-line settings-ghost-short" />
                 </li>
-              ))
-            ) : (
-              <li className="settings-tool" data-state="unknown">
-                <span className="settings-tool-main">
-                  <span className="settings-tool-note">Nothing reported yet.</span>
-                </span>
-              </li>
-            ))}
-        </ul>
-        {/*
-          "Check again" was here, and it is gone for the same reason the one on
-          the agent list above it is: `load` runs from an effect on every visit
-          to this pane, so the button re-ran a probe that had answered a second
-          earlier. It was also the third control on a pane the recorded review of
-          2026-08-19 called *"too messy and too difficult to understand"* — and
-          two of the three did nothing a person had asked for.
-        */}
-      </details>
+              ))}
+          </ul>
+          {/*
+            "Check again" was here, and it is gone for the same reason the one on
+            the agent list above it is: `load` runs from an effect on every visit
+            to this pane, so the button re-ran a probe that had answered a second
+            earlier. It was also the third control on a pane the recorded review of
+            2026-08-19 called *"too messy and too difficult to understand"* — and
+            two of the three did nothing a person had asked for.
+          */}
+        </details>
+      )}
 
       {/*
         The "Session hooks" group was here, and it is gone because it was the
