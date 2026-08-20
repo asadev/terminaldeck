@@ -148,6 +148,46 @@ describe('NewSessionDialog', () => {
     // The other half of the Browse fix — see the Modal describe below.
     expect(html).not.toContain('data-hidden')
   })
+
+  /**
+   * The **Where** list names every computer on it, this one included.
+   *
+   * The first row read "this Mac" while the rows under it read "Office PC" and
+   * "DESKTOP-DDGMNCV" — one phrase among names, in the one list whose whole job
+   * is telling three computers apart. It is the same defect the browser bar had
+   * on 2026-08-21, where the phrase was on screen three times meaning three
+   * different machines: *"I don't know what to trust."*
+   */
+  it('names this computer on the Where list, beside the machines’ own names', () => {
+    const where = renderToStaticMarkup(
+      <NewSessionDialog
+        open
+        projectPath="/Users/apple/Projects/terminaldeck"
+        hereName="Asads-MacBook-Pro"
+        machines={[{ id: 'mach-1', name: 'Office PC', folders: ['/home/asad'] }]}
+        onClose={noop}
+        onStart={noop}
+      />,
+    )
+    expect(where).toContain('>Asads-MacBook-Pro<')
+    expect(where).toContain('>Office PC<')
+    expect(where).not.toContain('this Mac')
+  })
+
+  it('falls back to the phrase when the window has no name to hand it', () => {
+    // A window whose machines view has not landed yet, and a build whose preload
+    // predates the field. Neither may be given a made-up hostname.
+    const where = renderToStaticMarkup(
+      <NewSessionDialog
+        open
+        projectPath="/Users/apple/Projects/terminaldeck"
+        machines={[{ id: 'mach-1', name: 'Office PC', folders: ['/home/asad'] }]}
+        onClose={noop}
+        onStart={noop}
+      />,
+    )
+    expect(where).toMatch(/>This (Mac|PC|computer)</)
+  })
 })
 
 /**

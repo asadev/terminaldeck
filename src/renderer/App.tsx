@@ -4,6 +4,7 @@ import type { ProviderId, SessionMeta, SessionStatus } from '@shared/types'
 import { StoreProvider, useStore, type Session } from './state/store'
 import { TerminalView } from './components/TerminalView'
 import { MachineSessionPane } from './machines/MachineLinks'
+import { hereName } from './machines/types'
 import { useMachines } from './machines/useMachines'
 // The account chip over a session on one of his own machines, and the two calls
 // behind it. See `machines/machine-account.ts` for why the read is here rather
@@ -6254,6 +6255,12 @@ function Workspace() {
               name: row.machine.name,
               folders: row.link?.folders ?? [],
             }))}
+            /* And what to call this computer on that same list. Every other row
+               on it is a machine's own name, and this one was a phrase — the
+               shape that had the browser bar saying "This machine" about two
+               different computers at once. `hereName` keeps the phrase for the
+               case where the view has no name yet. */
+            hereName={hereName(machines)}
             machineId={newSessionMachine}
             /*
           And the servers, which until 2026-08-19 this dialog had never heard

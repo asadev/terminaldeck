@@ -34,6 +34,8 @@
  * every spelling of the key and writes exactly one back.
  */
 
+import { hostname } from 'node:os'
+
 export type Platform = NodeJS.Platform
 
 /** A `process.env`, or anything test-shaped like one. */
@@ -141,5 +143,31 @@ export function withPath<V extends string | undefined>(
 export function machineNoun(platform: Platform = currentPlatform()): string {
   if (isWindows(platform)) return 'PC'
   return platform === 'darwin' ? 'Mac' : 'machine'
+}
+
+/**
+ * What this computer calls **itself** — its hostname, or `''`.
+ *
+ * The other half of {@link machineNoun}, and the more useful half wherever more
+ * than one computer is on screen. A noun tells you what kind of machine it is; a
+ * name tells you *which*, and every list in this app that draws this computer
+ * beside the machines it is paired to needs the second. Asad, 2026-08-21, with
+ * two machines paired and three controls all saying "This machine" about
+ * different ones:
+ *
+ *   > *"So I'm confused now what is the truth, because this machine is Office
+ *   > PC, this machine is this machine where I am, and Office PC is the server.
+ *   > So it is showing both, selected one and this one. So I don't know what to
+ *   > trust."*
+ *
+ * `.local` is stripped because that is Bonjour's suffix rather than part of what
+ * anybody calls their computer, and the empty answer is deliberate: a caller
+ * that gets it substitutes its own phrase — "This Mac", "This computer" — and
+ * never a made-up name. `describeThisMachine` in `remote/machines/guest.ts` is
+ * the one caller that does substitute a noun, because a pairing offer with no
+ * name at all is a row nobody can recognise.
+ */
+export function thisMachineName(): string {
+  return hostname().replace(/\.local$/i, '').trim()
 }
 

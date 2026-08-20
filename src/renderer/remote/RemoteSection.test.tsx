@@ -128,7 +128,7 @@ const STUDIO_LINK: MachineLinkState = {
 function machinesHalf(over: Partial<MachinesHalf> = {}): MachinesHalf {
   return {
     wired: true,
-    view: { machines: [], links: [], blocked: null },
+    view: { machines: [], links: [], here: '', blocked: null },
     reading: false,
     entry: { digits: '', busy: false, error: null, blocked: null },
     open: null,
@@ -911,7 +911,7 @@ describe('the merge', () => {
   const both = render({
     state: { ...RUNNING, devices: [{ ...PHONE, state: 'approved' }] },
     machines: machinesHalf({
-      view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null },
+      view: { machines: [STUDIO], links: [STUDIO_LINK], here: '', blocked: null },
     }),
   })
 
@@ -1023,6 +1023,7 @@ describe('the merge', () => {
         view: {
           machines: [STUDIO],
           links: [{ ...STUDIO_LINK, state: 'awaiting-approval', sessions: [] }],
+          here: '',
           blocked: null,
         },
       }),
@@ -1039,7 +1040,7 @@ describe('the merge', () => {
     const open = render({
       state: RUNNING,
       machines: machinesHalf({
-        view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null },
+        view: { machines: [STUDIO], links: [STUDIO_LINK], here: '', blocked: null },
         open: { machineId: 'MACHINE1', sessionId: 's1' },
         // The real one builds an xterm against a DOM, which is why it arrives
         // as a node rather than being built by the view.
@@ -1112,7 +1113,7 @@ describe('the merge', () => {
         devices: [{ ...PHONE, state: 'approved' }],
         connections: [ATTACHED],
       },
-      machines: machinesHalf({ view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null } }),
+      machines: machinesHalf({ view: { machines: [STUDIO], links: [STUDIO_LINK], here: '', blocked: null } }),
     })
 
     const attached = ordered.indexOf('Attached now')
@@ -1166,7 +1167,7 @@ describe('the merge', () => {
     const ordered = render({
       state: { ...RUNNING, devices: [{ ...PHONE, state: 'approved' }] },
       folders: <div className="folders-stand-in" />,
-      machines: machinesHalf({ view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null } }),
+      machines: machinesHalf({ view: { machines: [STUDIO], links: [STUDIO_LINK], here: '', blocked: null } }),
     })
     expect(ordered.indexOf('Devices')).toBeLessThan(ordered.indexOf('folders-stand-in'))
     expect(ordered.indexOf('folders-stand-in')).toBeLessThan(
@@ -1188,7 +1189,7 @@ describe('the merge', () => {
         secondsLeft={null}
         busy={null}
         machines={machinesHalf({
-          view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null },
+          view: { machines: [STUDIO], links: [STUDIO_LINK], here: '', blocked: null },
         })}
         actions={NOTHING}
         now={NOW}

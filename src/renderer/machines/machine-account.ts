@@ -42,6 +42,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { parseSignIn, type SignInView } from '../accounts'
 import type { ProviderId } from '@shared/types'
 
 /** One login on the far machine, as the chip draws it. Mirrors `AccountWire`. */
@@ -53,6 +54,43 @@ export interface MachineAccount {
   /** A custom-property name from `tokens.css`, wrapped in `var()` at render. */
   color: string | null
   system: boolean
+  /**
+   * What that machine's own CLI said about this login, or null when it did not
+   * say at all.
+   *
+   * Null is a build over there older than `AccountWire.signIn`, and it is kept
+   * apart from every state inside a `SignInView` on purpose: "that machine does
+   * not report this" and "that machine could not tell" are different facts with
+   * different remedies. {@link NOT_REPORTED} is the sentence for the first.
+   */
+  signIn: SignInView | null
+}
+
+/**
+ * What the chip is told when the far machine's build carries no sign-in at all.
+ *
+ * A state, and a sentence that says which machine is the one that cannot answer
+ * — not "Checking…", which is what an absent answer used to resolve to and which
+ * never resolves to anything else. A spinner that runs forever is not even a
+ * claim, so there is nothing for a person to disbelieve; `UNCHECKABLE` in
+ * `accounts.ts` makes the same trade for the same reason, one machine closer.
+ */
+export const NOT_REPORTED: SignInView = {
+  state: 'unknown',
+  account: null,
+  plan: null,
+  detail: 'That machine is running a build that does not say which login it is signed in as.',
+  command: '',
+}
+
+/**
+ * The sign-in facts for one row, or the sentence for a machine that sent none.
+ *
+ * One function so the chip, its tooltip and its menu rows cannot disagree about
+ * which of the two absences they are looking at.
+ */
+export function signInOf(account: MachineAccount | null): SignInView {
+  return account?.signIn ?? NOT_REPORTED
 }
 
 export interface MachineAccountState {
@@ -104,6 +142,15 @@ export function readAccount(value: unknown): MachineAccount | null {
     provider: typeof value.provider === 'string' ? (value.provider as ProviderId) : null,
     color: typeof value.color === 'string' && value.color !== '' ? value.color : null,
     system: value.system === true,
+    /*
+     * Present or absent, never composed.
+     *
+     * `parseSignIn` turns anything unreadable into a state with a sentence,
+     * which is right for the local screen that always asks — and wrong here,
+     * where a *missing* key means the far machine's build never answers this
+     * question. So the key is checked first and only then narrowed.
+     */
+    signIn: isRecord(value.signIn) ? parseSignIn(value.signIn) : null,
   }
 }
 

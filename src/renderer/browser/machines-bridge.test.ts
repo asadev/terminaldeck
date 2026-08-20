@@ -15,7 +15,8 @@ import {
   type MachineChoice,
   type ReachOpened,
 } from './machines-bridge'
-import { STATE_LABEL, type MachinesView } from '../machines/types'
+import { hereName, STATE_LABEL, type MachinesView } from '../machines/types'
+import { ThisMachine } from '../platform'
 
 /**
  * The browser's half of *"I should be able to type and reach the devices which
@@ -61,6 +62,7 @@ function view(over: Partial<MachinesView['links'][number]> = {}): MachinesView {
         ...over,
       },
     ],
+    here: '',
     blocked: null,
   }
 }
@@ -155,7 +157,44 @@ describe('the machines the picker offers', () => {
   })
 
   it('never lists this machine, which has no row to be wrong about', () => {
-    expect(machineChoices({ machines: [], links: [], blocked: null })).toEqual([])
+    expect(machineChoices({ machines: [], links: [], here: '', blocked: null })).toEqual([])
+  })
+})
+
+/**
+ * What this computer is called on a bar that is naming three of them.
+ *
+ * The picker draws this computer itself — it has no row in `machineChoices` and
+ * no id — so until 2026-08-21 it was the one machine on the bar with no name,
+ * and the phrase invented for it was on screen three times at once meaning three
+ * different things:
+ *
+ *   > *"So I'm confused now what is the truth, because this machine is Office
+ *   > PC, this machine is this machine where I am, and Office PC is the server.
+ *   > So it is showing both, selected one and this one. So I don't know what to
+ *   > trust."*
+ */
+describe('what this computer is called', () => {
+  it('uses the name the machines view carried', () => {
+    expect(hereName({ here: 'Asads-MacBook-Pro' })).toBe('Asads-MacBook-Pro')
+  })
+
+  it('falls back to the app’s own phrase rather than inventing a name', () => {
+    /*
+     * Two builds are in this state and neither may be given a made-up hostname: a
+     * preload older than the field, and a computer whose hostname could not be
+     * read at all. "This Mac" is what every other surface in the app has always
+     * called this computer, so the fallback is that phrase and not a second one.
+     */
+    expect(hereName({ here: '' })).toBe(ThisMachine())
+    expect(hereName(null)).toBe(ThisMachine())
+    expect(hereName(undefined)).toBe(ThisMachine())
+    // Whitespace is not a name either — a hostname of spaces would otherwise be
+    // drawn as an empty chip, which reads as a value that failed to load.
+    expect(hereName({ here: '   ' })).toBe(ThisMachine())
+    // And it is a phrase about *this* computer in every case, never a machine
+    // name this file made up.
+    expect(ThisMachine()).toMatch(/^This /)
   })
 })
 

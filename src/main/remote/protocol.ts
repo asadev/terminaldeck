@@ -1425,6 +1425,16 @@ export const MAX_CONNECTORS_REPORTED = 64
 export const MAX_ACCOUNT_NAME_LENGTH = 120
 /** The longest an account or connector id may be. Ids are slugs. */
 export const MAX_ACCOUNT_ID_LENGTH = 200
+/**
+ * The longest sentence a machine may send about one login.
+ *
+ * A sentence rather than a name, so it gets its own cap: `SignInReport.detail`
+ * is one line written for a screen — *"Signed in as … on the max plan"*, or the
+ * CLI's own words for why it could not tell — and it is drawn in a tooltip, not
+ * on the chip. Wide enough for any of the three agents' answers, small enough
+ * that sixty-four accounts still leave room in a `MAX_MESSAGE_BYTES` frame.
+ */
+export const MAX_SIGNIN_DETAIL_LENGTH = 400
 
 /**
  * One login on the far machine, as its own account list holds it.
@@ -1446,6 +1456,53 @@ export interface AccountWire {
   color: string | null
   /** The machine's own install — the login every fallback ends on. */
   system: boolean
+  /**
+   * What that machine's own CLI said about this login, or absent.
+   *
+   * Here because without it the chip over a remote session had nothing to print
+   * but {@link name} — and for the machine's own install that name is a key
+   * `systemProfileId` generates, not an identity. Asad, 2026-08-21, pointing at
+   * a session on his PC whose terminal three lines below read *"Welcome back
+   * Sherzod Davlatov"*:
+   *
+   *   > *"It is saying default, so never default. Whatever is actual account
+   *   > should be visible here, never default."*
+   *
+   * The address exists on the far machine — its own Accounts screen prints it —
+   * and until now no frame carried it, so the chip could not have told the truth
+   * even if it had wanted to.
+   *
+   * Optional, and absent is a real answer meaning *that machine's build does not
+   * report this*. A reader must not collapse it into "signed out": those have
+   * different remedies and only one of them is fixed by logging in again.
+   */
+  signIn?: SignInWire
+}
+
+/**
+ * One machine's answer about one login, as the wire carries it.
+ *
+ * Mirrors the fields of `SignInReport` in `src/main/profiles-signin.ts` that a
+ * chip on another computer can use, and no others. `command` is deliberately not
+ * here: it is a command line for a shell on the *far* machine, so printing it
+ * beside a chip here would be offering somebody something they cannot run, and
+ * it is the one field of that report that names paths on that disk.
+ *
+ * `state` is a bare string rather than a union for the reason
+ * `RemoteSession.provider` is: this file is bundled for clients that predate a
+ * state this machine might add, and a union would turn a new one into a dropped
+ * account. The renderer narrows it — `parseSignIn` in `renderer/accounts.ts` —
+ * and anything it does not recognise becomes `unknown`, which is exactly what an
+ * unrecognised state is.
+ */
+export interface SignInWire {
+  state: string
+  /** The address the CLI named, when it named one. Null is common and honest. */
+  account: string | null
+  /** The plan or auth method, when the CLI said. */
+  plan: string | null
+  /** One sentence for the screen, in the far machine's own words. */
+  detail: string
 }
 
 export type ClientMessage =
@@ -3880,12 +3937,43 @@ function parseAccount(value: unknown): AccountWire | null {
   const name = asString(value.name)
   if (accountId === null || accountId === '' || accountId.length > MAX_ACCOUNT_ID_LENGTH) return null
   if (name === null || name === '') return null
+  const signIn = parseSignIn(value.signIn)
   return {
     id: accountId,
     name: name.slice(0, MAX_ACCOUNT_NAME_LENGTH),
     provider: asString(value.provider),
     color: asString(value.color),
     system: value.system === true,
+    // Spread rather than assigned, so a machine that said nothing about a login
+    // arrives *without* the key. `undefined` there means "that build does not
+    // report this", which is not the same claim as any of the four states.
+    ...(signIn === undefined ? {} : { signIn }),
+  }
+}
+
+/**
+ * What one machine said about one login, or absent.
+ *
+ * Total and defensive like every parser here, and the shape of the defence is
+ * the point: a record with nothing readable in it is **absent**, never a
+ * composed "unknown" state. The chip tells those two apart — one is a machine
+ * that cannot answer, the other is an answer — and inventing the second from the
+ * first is how a build that reports nothing comes to look like a login nobody
+ * can read.
+ */
+function parseSignIn(value: unknown): SignInWire | undefined {
+  if (!isRecord(value)) return undefined
+  const state = asString(value.state)
+  if (state === null || state === '') return undefined
+  const detail = asString(value.detail)
+  return {
+    state: state.slice(0, MAX_CONTROL_VALUE_LENGTH),
+    account: clip(asString(value.account)),
+    plan: clip(asString(value.plan)),
+    // A sentence, so it gets its own cap rather than the name cap above it —
+    // and `''` rather than a stand-in sentence, because a machine that sent no
+    // words has none to be quoted.
+    detail: detail === null ? '' : label(detail, MAX_SIGNIN_DETAIL_LENGTH),
   }
 }
 

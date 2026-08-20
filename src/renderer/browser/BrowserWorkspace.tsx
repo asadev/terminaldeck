@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { hereName } from '../machines/types'
 import { AnchoredPopup } from './AnchoredPopup'
 import { BrowserMenu } from './BrowserMenu'
 import { ProfileMenu } from './ProfileMenu'
@@ -112,6 +113,7 @@ import {
   type ServerPortsState,
   type ServerRow,
 } from './server-machines'
+import { barServed } from './served-mark'
 import { StartPage, type PortSource } from './StartPage'
 import {
   closeTab as closeInList,
@@ -592,6 +594,16 @@ export function BrowserWorkspace({
    */
   const machinesApi = useMemo(() => resolveMachinesApi(), [])
   const [machineView, setMachineView] = useState<MachineChoice[]>([])
+  /**
+   * What this computer is called, off the same push the list arrives on.
+   *
+   * Kept beside the list rather than derived from it because it is not in it —
+   * `machineChoices` deliberately holds only the *other* machines, and this
+   * computer has no row, no id and no link to fail. It still has a name, and
+   * every label on this bar that used to say "This machine" now says it. See
+   * `hereName`.
+   */
+  const [here, setHere] = useState(() => hereName(null))
   const [machineId, setMachineId] = useState(THIS_MACHINE)
   /*
    * The other kind of machine, in the same picker.
@@ -1204,7 +1216,10 @@ export function BrowserWorkspace({
     if (!machinesApi) return
     let alive = true
     const take = (raw: unknown): void => {
-      if (alive) setMachineView(machineChoices(readMachines(raw)))
+      if (!alive) return
+      const view = readMachines(raw)
+      setMachineView(machineChoices(view))
+      setHere(hereName(view))
     }
     // One read for the state that already exists, then the push for everything
     // after it. Without the read a panel opened while a machine was already
@@ -2103,7 +2118,7 @@ export function BrowserWorkspace({
   const connect = tabId ? <ConnectSessionButton browserTabId={tabId} /> : null
   const machinePart =
     machines.length > 0 ? (
-      <MachinePicker machines={machines} selected={machineId} onSelect={moveToMachine} />
+      <MachinePicker machines={machines} here={here} selected={machineId} onSelect={moveToMachine} />
     ) : null
   const picker =
     connect === null && machinePart === null ? undefined : (
@@ -2207,54 +2222,21 @@ export function BrowserWorkspace({
           remove from inside where it is exactly running. So just be sure we
           always be able to see the truth."*
 
-          The chip used to be drawn only for a tunnelled page, which made the
-          ordinary case honest and the interesting one ambiguous: with the
-          picker reading `Office PC` and this chip absent, `example.com` was
-          being fetched by *this* Mac and the only thing saying so was a missing
-          element. A fact you infer from what is not on screen is not a fact you
-          can see, and that is his complaint from earlier in the same minute:
-          *"Now I don't know if it is actually there or here."*
-
-          So the rule is: **draw it whenever it would say something the picker
-          does not.** Both machines named the same means one of them is
-          redundant, and the redundant one is this — which is the other half of
-          what he said, twenty seconds earlier, about the word `Local` that used
-          to live in this field: *"Since we already have here a selection, why do
-          we show inside the link bar also local? … It doesn't make any sense to
-          keep in both side the same thing."*
-
-          Three states fall out of it, and no fourth:
-
-           - picker on this machine, page on this machine → nothing. The field is
-             only the link, exactly as he asked.
-           - picker and page on the same other machine → nothing, unless the
-             tunnel had to take a different number, in which case the origin port
-             alone: `:5199`. He asked to keep this — *"in this kind of situation,
-             we will need to keep this so we know actually where it is
-             running"* — and in the same minute he struck out drawing a machine's
-             name twice a centimetre apart, so what is kept is the remainder.
-             See `served-mark.ts`.
-           - picker naming one machine, page served by another (or by this one)
-             → the page's own machine, by name. The disagreement is the whole
-             point, and there is no port when the answer is this computer,
-             because there is no tunnel to have a port on.
+          The whole rule is `barServed` in `served-mark.ts`, and it is there
+          rather than here because a rule inside a render tree is a rule this
+          project's DOM-less test run cannot hold — which is how the case it was
+          missing survived: with the picker on another machine and a tab that had
+          been nowhere, this asserted a machine for a page that does not exist.
+          The four states, and the two sentences of his they come out of, are
+          written down over that function and in the header of that file.
         */
-        servedBy={
-          served
-            ? {
-                name: served.machineName,
-                port: served.port,
-                localPort: served.localPort,
-                sameNumber: served.sameNumber,
-                // Whether the picker beside the field is already saying this
-                // machine's name. `served-mark.ts` subtracts what it says from
-                // what is drawn, which is the whole of E13's second half.
-                agrees: served.machineId === machineId,
-              }
-            : machineId === THIS_MACHINE
-              ? null
-              : { name: 'This machine', port: null, localPort: 0, sameNumber: true, agrees: false }
-        }
+        servedBy={barServed({
+          page: served,
+          picked: machineId,
+          // A panel with no tab at all is as blank as a tab that has been nowhere.
+          blank: active === null || onStartPage(active),
+          here,
+        })}
       />
 
       {/*

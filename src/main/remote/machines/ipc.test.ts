@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { generateStatic } from '../../../shared/sealed'
@@ -438,6 +438,29 @@ describe('showing a code', () => {
     const view = await rig({ status: offlineStatus }).invoke('machines:list')
     expect(view).toMatchObject({ blocked: expect.stringContaining('relay') })
     expect(await rig().invoke('machines:list')).toMatchObject({ blocked: null })
+  })
+
+  /**
+   * And what this machine calls itself, on the same view.
+   *
+   * Every other machine on it arrives with a name a person recognises and this
+   * one had none, so each list that drew them together invented a phrase for it
+   * — and on 2026-08-21 three of those phrases were on the browser bar at once,
+   * all reading "This machine", each about a different computer:
+   *
+   *   > *"So I'm confused now what is the truth, because this machine is Office
+   *   > PC, this machine is this machine where I am… I don't know what to
+   *   > trust."*
+   *
+   * The hostname rather than a particular string, because a test that pinned one
+   * would only be pinning the machine it ran on.
+   */
+  it('carries this machine’s own name, so no list has to invent a phrase for it', async () => {
+    const view = (await rig().invoke('machines:list')) as { here: unknown }
+    expect(view.here).toBe(hostname().replace(/\.local$/i, '').trim())
+    // Never the stand-in noun the pairing offer uses. "A desktop" beside "Office
+    // PC" would be this app naming his computer something nobody calls it.
+    expect(view.here).not.toBe('A desktop')
   })
 })
 

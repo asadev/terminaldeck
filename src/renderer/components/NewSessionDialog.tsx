@@ -21,7 +21,7 @@ import {
   type StartProvider,
 } from '../session-start'
 import { folderName, shortSessionId } from '../session-title'
-import { detectPlatform, thisMachine } from '../platform'
+import { ThisMachine } from '../platform'
 import { MACHINE_ICON } from '../shell/workspace-tabs'
 import { Modal } from './Modal'
 import { ServerFolderPicker } from '../machines/servers/ServerFolderPicker'
@@ -749,6 +749,20 @@ interface Props {
    */
   machines?: readonly StartMachine[]
   /**
+   * What this computer is called, for the first row of the **Where** list.
+   *
+   * It read "this Mac" while the rows under it read "Office PC" and
+   * "DESKTOP-DDGMNCV" — one phrase among names, in a list whose whole job is
+   * telling three computers apart. Asad, 2026-08-21, on the same shape one
+   * control over: *"I don't know what to trust."*
+   *
+   * Optional, and the platform phrase is what it falls back to, because the name
+   * comes off the machines view and a window that has not read one yet still has
+   * to draw this row. `hereName` in `machines/types.ts` makes that choice; this
+   * prop is already the result of it.
+   */
+  hereName?: string
+  /**
    * Which machine the press already chose, or null for this one.
    *
    * *"New session → pick the machine → pick its folder → continue."* The rail's
@@ -824,6 +838,8 @@ export function NewSessionDialog({
   open,
   projectPath,
   machines = [],
+  // The phrase, when the window had no name to hand down. Never a made-up one.
+  hereName = ThisMachine(),
   machineId = null,
   servers = [],
   serversBridge = null,
@@ -1619,7 +1635,7 @@ export function NewSessionDialog({
                   }}
                 />
                 <span className="ns-mark" aria-hidden="true" />
-                <span className="ns-where-name">{thisMachine(detectPlatform())}</span>
+                <span className="ns-where-name">{hereName}</span>
               </label>
               {machines.map((row) => (
                 <label

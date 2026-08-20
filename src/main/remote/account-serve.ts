@@ -26,10 +26,11 @@
  *
  * The same reason that one is: it exists only because there is a wire. It
  * reaches the functions this machine's own window reaches — `listProfiles` for
- * the list, `sessionAccount` for the running session's login, and the shell's
- * own switch for the change — so a remote chip and a local chip are two callers
- * of one mechanism rather than two implementations of one feature. Nothing about
- * what an account *is* is worked out here.
+ * the list, `readSignIn` for who each login actually is, `sessionAccount` for
+ * the running session's login, and the shell's own switch for the change — so a
+ * remote chip and a local chip are two callers of one mechanism rather than two
+ * implementations of one feature. Nothing about what an account *is* is worked
+ * out here.
  *
  * ## The one thing that is genuinely different from `controls`
  *
@@ -45,11 +46,23 @@
 
 import type { ProviderId, SessionMeta } from '../../shared/types'
 import { listProfiles, type Profile } from '../profiles'
+import { readSignIn, type SignInReport } from '../profiles-signin'
 import { sessionAccount } from '../session-account'
 import type { AccountWire } from './protocol'
 import type { RemoteAccountAccess } from './server'
 
 export interface AccountServeOptions {
+  /**
+   * Ask this machine's own agent CLIs who each login is — the seam, so a unit
+   * test does not spawn `claude auth status` three times.
+   *
+   * Defaults to `readSignIn`, which is the same function this machine's own
+   * Accounts screen calls, memoised for thirty seconds inside itself. That
+   * sharing is the point: a chip a metre away and a chip on another continent
+   * are two readers of one probe, so they cannot come to disagree about who is
+   * signed in here.
+   */
+  readSignIn?: (profile: Profile) => Promise<SignInReport>
   /**
    * The session, as this machine's own list holds it. Null when nothing here has
    * that id.
@@ -80,9 +93,31 @@ export interface AccountServeOptions {
  * readers and this machine's own switch.
  */
 export function createAccountServe(options: AccountServeOptions): RemoteAccountAccess {
+  const probe = options.readSignIn ?? ((profile: Profile) => readSignIn(profile))
   return {
     read: async (sessionId) => {
-      const accounts = listProfiles().map(toWire)
+      /*
+       * Every login, and **who each one is** — not just what it is called.
+       *
+       * The list used to be names alone, which meant the chip over a remote
+       * session had nothing to print for the machine's own install but the key
+       * `systemProfileId` generates for it. Asad, 2026-08-21, on a session whose
+       * terminal three lines below the chip read *"Welcome back Sherzod
+       * Davlatov"*:
+       *
+       *   > *"It is saying default, so never default. Whatever is actual account
+       *   > should be visible here, never default."*
+       *
+       * In parallel because they are independent processes and a person has a
+       * handful of accounts; each one is memoised for thirty seconds inside
+       * `readSignIn`, so the second read — the one that happens when somebody
+       * opens the menu — spawns nothing at all. `readSignIn` never rejects, and
+       * the `catch` is for the seam rather than for it: a probe that threw would
+       * otherwise take the whole answer down and leave the chip with no list.
+       */
+      const accounts = await Promise.all(
+        listProfiles().map(async (profile) => toWire(profile, await probe(profile).catch(() => null))),
+      )
       const session = options.describeSession(sessionId)
       if (session === null) return { current: null, accounts }
       /*
@@ -118,6 +153,10 @@ export function createAccountServe(options: AccountServeOptions): RemoteAccountA
           provider: answer.provider,
           color: null,
           system: false,
+          // No `signIn`: this is a profile the list does not carry, so nothing
+          // here has probed it, and absent is what "not reported" means on this
+          // wire. Composing an "unknown" state would be this machine claiming to
+          // have asked a question it never put.
         },
         accounts,
       }
@@ -133,12 +172,34 @@ export function createAccountServe(options: AccountServeOptions): RemoteAccountA
  * never as a colour value: the palette is one stylesheet on the drawing side,
  * and a machine sending `#c96` would be a second palette arriving over a wire.
  */
-function toWire(profile: Profile): AccountWire {
+function toWire(profile: Profile, signIn: SignInReport | null): AccountWire {
   return {
     id: profile.id,
     name: profile.name,
     provider: profile.provider as ProviderId,
     color: profile.color === '' ? null : profile.color,
     system: profile.system,
+    /*
+     * Four fields of the report and not the fifth.
+     *
+     * `command` stays here: it is a command line for a shell on *this* machine,
+     * and the window reading it is on another one — so it could only be offered
+     * to somebody who cannot run it, and it is the one field of the report that
+     * names paths on this disk.
+     *
+     * Spread, so a probe that could not be made leaves the key off entirely.
+     * Absent means *this machine did not say*, which the drawing side tells apart
+     * from all four states — see `AccountWire.signIn`.
+     */
+    ...(signIn === null
+      ? {}
+      : {
+          signIn: {
+            state: signIn.state,
+            account: signIn.account,
+            plan: signIn.plan,
+            detail: signIn.detail,
+          },
+        }),
   }
 }

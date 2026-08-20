@@ -24,6 +24,32 @@ import { createProfile, resetProfilesCache } from '../profiles'
 import { configureSessionAccounts } from '../session-account'
 import type { SessionMeta } from '../../shared/types'
 import { createAccountServe } from './account-serve'
+import type { SignInReport } from '../profiles-signin'
+
+/**
+ * The probe seam, so no test here spawns `claude auth status`.
+ *
+ * Every construction below passes one. `createAccountServe` defaults to the real
+ * `readSignIn` — which is right in the app and wrong in a unit test, where it
+ * would run three agent CLIs against a temp directory and answer differently on
+ * every machine the suite is run on.
+ */
+function report(over: Partial<SignInReport> = {}): SignInReport {
+  return {
+    profileId: 'system',
+    provider: 'claude',
+    state: 'signed-in',
+    account: 'sherzod.davlatov@gmail.com',
+    plan: 'max',
+    detail: 'Signed in as sherzod.davlatov@gmail.com on the max plan.',
+    command: 'claude auth status --json',
+    checkedAt: 1,
+    ...over,
+  }
+}
+
+const SILENT = (): Promise<SignInReport> =>
+  Promise.resolve(report({ state: 'unknown', account: null, plan: null, detail: 'Could not tell.' }))
 
 const USER_DATA = join(tmpdir(), `terminaldeck-account-serve-${process.pid}`)
 
@@ -74,6 +100,7 @@ describe('what a paired machine is told about a session’s account', () => {
     configureSessionAccounts({ pidOf: () => 1234, describeSession: () => meta })
 
     const serve = createAccountServe({
+      readSignIn: SILENT,
       describeSession: () => meta,
       switchAccount: () => Promise.resolve({ ok: true, message: '', session: null }),
     })
@@ -106,6 +133,7 @@ describe('what a paired machine is told about a session’s account', () => {
     })
 
     const serve = createAccountServe({
+      readSignIn: SILENT,
       describeSession: () => meta,
       switchAccount: () => Promise.resolve({ ok: true, message: '', session: null }),
     })
@@ -121,12 +149,69 @@ describe('what a paired machine is told about a session’s account', () => {
     createProfile('work@example.com')
     configureSessionAccounts({ pidOf: () => null, describeSession: () => null })
     const serve = createAccountServe({
+      readSignIn: SILENT,
       describeSession: () => null,
       switchAccount: () => Promise.resolve({ ok: true, message: '', session: null }),
     })
     const answer = await serve.read('nothing-by-that-id')
     expect(answer.current).toBeNull()
     expect(answer.accounts.length).toBeGreaterThan(0)
+  })
+
+  /**
+   * *"It is saying default, so never default."*
+   *
+   * The list used to be names alone, and for the machine's own install that name
+   * is the key `systemProfileId` generates — so the chip over a session on his
+   * PC printed `Default` while the Claude Code banner three lines below it in
+   * the same pane printed `sherzod.davlatov@gmail.com`. The address exists on
+   * that machine; no frame carried it.
+   */
+  it('sends who each login actually is, so no chip has to fall back to the key', async () => {
+    createProfile('work@example.com')
+    const asked: string[] = []
+    const serve = createAccountServe({
+      readSignIn: (profile) => {
+        asked.push(profile.id)
+        return Promise.resolve(report({ profileId: profile.id }))
+      },
+      describeSession: () => null,
+      switchAccount: () => Promise.resolve({ ok: true, message: '', session: null }),
+    })
+
+    const answer = await serve.read('nothing-by-that-id')
+    // Every row, not only the one a session happens to be on: the menu is a
+    // choice of all of them and each row has to name a login.
+    expect(asked.length).toBe(answer.accounts.length)
+    for (const row of answer.accounts) {
+      expect(row.signIn).toEqual({
+        state: 'signed-in',
+        account: 'sherzod.davlatov@gmail.com',
+        plan: 'max',
+        detail: 'Signed in as sherzod.davlatov@gmail.com on the max plan.',
+      })
+    }
+    // And not the fifth field of the report. `command` is a command line for a
+    // shell on *this* machine, offered to a window that is on another one.
+    expect(answer.accounts.every((row) => !('command' in (row.signIn ?? {})))).toBe(true)
+  })
+
+  it('leaves the login unsaid when the probe could not be made at all', async () => {
+    /*
+     * Absent, never a composed state. "This machine did not answer" and "this
+     * machine answered and could not tell" have different remedies, and the chip
+     * on the other end tells them apart — see `NOT_REPORTED` in
+     * `renderer/machines/machine-account.ts`.
+     */
+    createProfile('work@example.com')
+    const serve = createAccountServe({
+      readSignIn: () => Promise.reject(new Error('the CLI is not installed')),
+      describeSession: () => null,
+      switchAccount: () => Promise.resolve({ ok: true, message: '', session: null }),
+    })
+    const answer = await serve.read('nothing-by-that-id')
+    expect(answer.accounts.length).toBeGreaterThan(0)
+    for (const row of answer.accounts) expect(row.signIn).toBeUndefined()
   })
 
   it('hands the switch straight to the shell’s own, and passes its answer back unchanged', async () => {
@@ -140,6 +225,7 @@ describe('what a paired machine is told about a session’s account', () => {
      */
     const calls: Array<[string, string]> = []
     const serve = createAccountServe({
+      readSignIn: SILENT,
       describeSession: () => null,
       switchAccount: (sessionId, accountId) => {
         calls.push([sessionId, accountId])

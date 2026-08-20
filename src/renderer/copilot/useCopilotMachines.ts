@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { detectPlatform, thisMachine } from '../platform'
-import { asView, type MachineLinkState, type MachinesView } from '../machines/types'
+import { asView, hereName, type MachineLinkState, type MachinesView } from '../machines/types'
 
 /**
  * Which machines' copilots this window can reach — for the switch at the top of
@@ -161,9 +160,18 @@ export function useCopilotMachines(): CopilotMachine[] {
   }, [read])
 
   return useMemo(() => {
-    // This computer, always first and always reachable: its copilot is a process
-    // on this disk, and every other row is measured against it.
-    const here: CopilotMachine = { id: '', name: thisMachine(detectPlatform()), reach: 'ready', open: true }
+    /*
+     * This computer, always first and always reachable: its copilot is a process
+     * on this disk, and every other row is measured against it.
+     *
+     * By **name**, like every other row, since 2026-08-21. It read "this Mac"
+     * while the row under it read "Office PC", which is a switch where one entry
+     * is a phrase and the rest are names — the same shape that had the browser
+     * bar saying "This machine" about two different computers at once: *"I don't
+     * know what to trust."* `hereName` keeps the old phrase for the one case
+     * where there is no name to use.
+     */
+    const here: CopilotMachine = { id: '', name: hereName(view), reach: 'ready', open: true }
     const rest: CopilotMachine[] = []
     if (view) {
       const named = new Map(view.machines.map((machine) => [machine.id, machine.name]))

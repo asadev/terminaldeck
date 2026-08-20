@@ -6,6 +6,16 @@ import type { Box } from './popup-anchor'
 interface Props {
   /** Every machine this desktop is paired to, refusals included. */
   machines: readonly MachineChoice[]
+  /**
+   * What to call the computer this window is on — its own name, normally.
+   *
+   * Handed in rather than composed here, because the same string has to appear
+   * on the chip, in the first row of the menu and on the mark inside the address
+   * field, and three components deciding it separately is how one bar came to
+   * carry three different phrases for three different computers. `hereName` in
+   * `machines/types.ts` is where it is decided; see the note there.
+   */
+  here: string
   /** `THIS_MACHINE`, or the id of one of the above. */
   selected: string
   onSelect(id: string): void
@@ -50,12 +60,21 @@ interface Props {
  * not drawn and the browser is exactly the browser it was. The panel decides
  * that — this component is only ever mounted with somewhere to go.
  */
-export function MachinePicker({ machines, selected, onSelect }: Props) {
+export function MachinePicker({ machines, here, selected, onSelect }: Props) {
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const [anchor, setAnchor] = useState<Box | null>(null)
 
   const current = machines.find((machine) => machine.id === selected) ?? null
-  const label = current === null ? 'This machine' : current.name
+  /*
+   * This computer's own name, exactly as every other row carries its own.
+   *
+   * It read "This machine" until 2026-08-21, and that was the whole complaint:
+   * with a machine chosen, the bar said "Office PC" here and "This machine" a
+   * centimetre away in the address field, and the menu below said "This machine"
+   * again about a third computer — *"I don't know what to trust."* A name is
+   * resolvable by reading it; a phrase meaning "wherever you are" is not.
+   */
+  const label = current === null ? here : current.name
 
   /*
    * Measured at the moment of opening, exactly as the toolbar's own popups are.
@@ -97,7 +116,7 @@ export function MachinePicker({ machines, selected, onSelect }: Props) {
          * words say which question this control answers, and the person who
          * needs the rest opens it and reads the heading over the list.
          */
-        title={`Open localhost on ${current === null ? 'this machine' : current.name}`}
+        title={`Open localhost on ${label}`}
         data-on={current !== null || undefined}
         onClick={() => (anchor === null ? open() : setAnchor(null))}
       >
@@ -156,7 +175,9 @@ export function MachinePicker({ machines, selected, onSelect }: Props) {
                   <span className="bw-menu-tick" aria-hidden="true">
                     {selected === THIS_MACHINE ? '✓' : ''}
                   </span>
-                  This machine
+                  {/* The same name the chip above is wearing, and the same one
+                      the rows below wear for their machines. One vocabulary. */}
+                  <span className="bw-menu-machine">{here}</span>
                 </button>
               </li>
 

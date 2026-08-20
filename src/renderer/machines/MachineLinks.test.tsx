@@ -134,7 +134,7 @@ function row(state: MachineLinkState, overrides: Partial<Machine> = {}): string 
 function half(over: Partial<MachinesHalf> = {}): MachinesHalf {
   return {
     wired: true,
-    view: { machines: [], links: [], blocked: null },
+    view: { machines: [], links: [], here: '', blocked: null },
     reading: false,
     entry: { digits: '', busy: false, error: null, blocked: null },
     open: null,
@@ -371,6 +371,7 @@ describe('the list', () => {
                 ],
               }),
             ],
+            here: '',
             blocked: null,
           },
           open: { machineId: 'MACHINE1', sessionId: 's1' },
@@ -391,7 +392,7 @@ describe('the list', () => {
     const markup = renderToStaticMarkup(
       <MachineLinks
         half={half({
-          view: { machines: [machine()], links: [link()], blocked: null },
+          view: { machines: [machine()], links: [link()], here: '', blocked: null },
           open: { machineId: 'MACHINE1', sessionId: 'gone' },
           pane: <div className="pane-stand-in" />,
         })}
@@ -414,7 +415,7 @@ describe('shortening a path', () => {
 
 describe('the link for a machine', () => {
   it('is the resting state for one nothing has dialled yet', () => {
-    const resting = linkFor({ machines: [], links: [], blocked: null }, 'MACHINE1')
+    const resting = linkFor({ machines: [], links: [], here: '', blocked: null }, 'MACHINE1')
     expect(resting.state).toBe('offline')
     expect(resting.sessions).toEqual([])
     // Null rather than `[]`: "that machine never mentioned folders" is not "no
@@ -465,7 +466,7 @@ function pressing(bridge: MachinesBridge | null, digits = ''): {
 } {
   const state = {
     digits,
-    view: { machines: [], links: [], blocked: null } as MachinesView,
+    view: { machines: [], links: [], here: '', blocked: null } as MachinesView,
     busy: false,
     error: null as string | null,
   }
@@ -507,7 +508,7 @@ describe('typing a code and sending it', () => {
   it('clears the field and re-reads the list when it works', async () => {
     const { bridge, calls } = recorder({
       pairMachine: { ok: true },
-      listMachines: { machines: [machine()], links: [link()], blocked: null },
+      listMachines: { machines: [machine()], links: [link()], here: '', blocked: null },
     })
     const h = pressing(bridge, '482913')
     h.actions.pair()
@@ -567,11 +568,11 @@ describe('the machine buttons', () => {
   it('draw the view that came back rather than the one that was on screen', async () => {
     // The same rule the devices half is built on: what this screen claims about
     // the world comes from an answer, never from the fact that a call returned.
-    const answer = { machines: [machine({ name: 'Studio PC' })], links: [link()], blocked: null }
+    const answer = { machines: [machine({ name: 'Studio PC' })], links: [link()], here: '', blocked: null }
     const { bridge, calls } = recorder({
       connectMachine: answer,
       disconnectMachine: answer,
-      forgetMachine: { machines: [], links: [], blocked: null },
+      forgetMachine: { machines: [], links: [], here: '', blocked: null },
     })
     const h = pressing(bridge)
     h.actions.connect(machine())
@@ -634,9 +635,9 @@ describe('narrowing what crosses the bridge', () => {
     // A captive portal, an older preload, a channel that answered `undefined`.
     // The screen says "no machines" instead of showing a stack trace nobody
     // opens a console to read.
-    expect(asView(undefined)).toEqual({ machines: [], links: [], blocked: null })
-    expect(asView('nope')).toEqual({ machines: [], links: [], blocked: null })
-    expect(asView({ machines: 'no', links: 7 })).toEqual({ machines: [], links: [], blocked: null })
+    expect(asView(undefined)).toEqual({ machines: [], links: [], here: '', blocked: null })
+    expect(asView('nope')).toEqual({ machines: [], links: [], here: '', blocked: null })
+    expect(asView({ machines: 'no', links: 7 })).toEqual({ machines: [], links: [], here: '', blocked: null })
   })
 
   it('refuses a link state it has never heard of rather than printing it', () => {

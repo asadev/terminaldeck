@@ -2503,6 +2503,7 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
   const [machineView, setMachineView] = useState<MachinesView>({
     machines: [],
     links: [],
+    here: '',
     blocked: null,
   })
   const [machinesReading, setMachinesReading] = useState(machineBridge !== null)

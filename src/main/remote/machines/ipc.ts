@@ -36,6 +36,7 @@ import { DEFAULT_RELAY_URL } from '../../../shared/relay-wire'
 import type { InvokeRegistrar } from '../../ipc-seam'
 import type { PairingToken } from '../device-auth'
 import type { PairingDesk, RemoteStatus } from '../server'
+import { thisMachineName } from '../../platform/host'
 import { createMachineLink, type MachineLink, type MachineLinkState } from './guest'
 import { pairWithCode, type PairResult } from './pair'
 import { offerFrom } from './rendezvous'
@@ -97,6 +98,28 @@ export const MACHINES_UPLOAD_CHANNEL = 'machines:upload:progress'
 export interface MachinesView {
   machines: Machine[]
   links: MachineLinkState[]
+  /**
+   * What **this** machine calls itself — its hostname, the same string
+   * `describeThisMachine()` puts on a pairing offer.
+   *
+   * Every other machine on this view arrives with a name a person recognises,
+   * and the computer they are sitting at arrived with none — so every list that
+   * draws them together had to invent a phrase for it. Three of those phrases
+   * were on the browser bar at once, all reading "This machine", each about a
+   * different computer. Asad, 2026-08-21, with the picker on Office PC:
+   *
+   *   > *"So I'm confused now what is the truth, because this machine is Office
+   *   > PC, this machine is this machine where I am, and Office PC is the
+   *   > server. So it is showing both, selected one and this one. So I don't
+   *   > know what to trust."*
+   *
+   * A name cannot be ambiguous the way a deictic can, so this travels on the
+   * view every machine list already reads rather than on a channel of its own.
+   * Empty when the hostname could not be read, and a reader that gets an empty
+   * string falls back to the phrase it used before — never to a guess at what
+   * the computer is called.
+   */
+  here: string
   /**
    * Why no machine can be added right now, or null when one can.
    *
@@ -166,6 +189,11 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     const machines = store.list()
     return {
       machines,
+      // The same hostname the pairing offer introduces this machine with, so the
+      // name on the picker here and the name the *other* machine shows for this
+      // one are one string from one place. Empty rather than a stand-in noun —
+      // see `thisMachineName`.
+      here: thisMachineName(),
       links: machines.map(
         (machine) =>
           links.get(machine.id)?.state() ?? {

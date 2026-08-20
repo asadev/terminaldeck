@@ -1,5 +1,14 @@
+import { hostname } from 'node:os'
 import { describe, expect, it } from 'vitest'
-import { currentPlatform, envPath, isPathKey, isWindows, pathKey, withPath } from './host'
+import {
+  currentPlatform,
+  envPath,
+  isPathKey,
+  isWindows,
+  pathKey,
+  thisMachineName,
+  withPath,
+} from './host'
 
 /**
  * Every case here names both platforms on purpose.
@@ -93,5 +102,29 @@ describe('overriding PATH for a child process', () => {
     const strict: Record<string, string> = { PATH: '/usr/bin', HOME: '/Users/a' }
     const next: Record<string, string> = withPath(strict, '/opt/homebrew/bin', 'darwin')
     expect(next).toEqual({ PATH: '/opt/homebrew/bin', HOME: '/Users/a' })
+  })
+})
+
+/**
+ * The name, which is the half a list of machines needs.
+ *
+ * A noun says what kind of computer this is; a name says which one — and every
+ * surface that draws this computer beside the machines it is paired to was
+ * inventing a phrase for it, three of which ended up on one bar at once: *"I
+ * don't know what to trust."*
+ */
+describe('what this computer calls itself', () => {
+  it('is the hostname, with Bonjour’s suffix off it', () => {
+    expect(thisMachineName()).toBe(hostname().replace(/\.local$/i, '').trim())
+    expect(thisMachineName()).not.toMatch(/\.local$/i)
+  })
+
+  it('is never a phrase or a stand-in noun — those belong to the caller', () => {
+    // Empty is what a computer with no readable hostname answers, and every
+    // caller substitutes its own words there. A name invented in here would be
+    // the app calling somebody's computer something nobody calls it.
+    const name = thisMachineName()
+    expect(name).not.toBe('A desktop')
+    expect(name.toLowerCase()).not.toContain('this ')
   })
 })
