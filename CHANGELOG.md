@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-08-20
+
 ### Fixed
 
 - **The update panel printed a stack trace and an entire Atom feed.** A Windows
@@ -28,7 +30,6 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   or coming back to the window — says nothing at all when the network is still
   moving. A check the user pressed always reports, because there a silent no-op
   reads as a dead button.
-
 
 ## [0.8.0] — 2026-08-20
 
@@ -1700,7 +1701,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.8.1
 [0.8.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.8.0
 [0.7.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.7.0
 [0.6.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.6.1
