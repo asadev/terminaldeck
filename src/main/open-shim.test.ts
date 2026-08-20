@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { prependShim, removeOpenShim, shimDir, shimScript, writeOpenShim } from './open-shim'
 
@@ -94,7 +94,23 @@ afterEach(() => {
   made.length = 0
 })
 
-describe('the script hands everything that is not a http(s) URL straight through', () => {
+/**
+ * Windows has neither half of what these need.
+ *
+ * `writeOpenShim` returns null on win32 — deliberately, and there is a test
+ * below asserting exactly that — so there is no script to execute; and a CI
+ * runner has no `sh` to execute it with either. Running them there fails on the
+ * absence of a feature that was never meant to be present, which is the same
+ * shape as the Mac-only tests that have blocked two releases of this app.
+ *
+ * `skipIf` rather than deleting or rewriting them: on macOS and Linux these are
+ * the only proof that `open .`, `open -a Xcode f.swift` and `open report.pdf`
+ * still behave as though none of this existed, and that is the property the
+ * whole shim lives or dies by.
+ */
+const onWindows = process.platform === 'win32'
+
+describe.skipIf(onWindows)('the script hands everything that is not a http(s) URL straight through', () => {
   /**
    * Rules 1 to 3, which are the entire safety case. A shim that swallows
    * `open .` breaks every session in the app for people who never asked for
@@ -132,7 +148,7 @@ describe('the script hands everything that is not a http(s) URL straight through
   }
 })
 
-describe('a http(s) URL', () => {
+describe.skipIf(onWindows)('a http(s) URL', () => {
   let server: Server | null = null
 
   afterEach(async () => {
@@ -235,7 +251,7 @@ describe('the opener is never resolved through PATH', () => {
     expect(text).not.toMatch(/\$\(\s*(which|type|command)\b/)
   })
 
-  it('does not exec itself when its own directory is first on PATH', async () => {
+  it.skipIf(onWindows)('does not exec itself when its own directory is first on PATH', async () => {
     const dir = scratch()
     const opener = fakeOpener(dir)
     const shim = join(dir, 'shim')
@@ -273,11 +289,15 @@ describe('the directory itself', () => {
   })
 
   it('goes on the front of a PATH exactly once', () => {
-    expect(prependShim('/usr/bin:/bin', '/data/shim')).toBe('/data/shim:/usr/bin:/bin')
+    // `delimiter` rather than a literal ':' — `prependShim` splits on node's
+    // own separator, which is ';' on Windows, so a hard-coded colon made this
+    // assert about a PATH that platform never produces.
+    const d = delimiter
+    expect(prependShim(`/usr/bin${d}/bin`, '/data/shim')).toBe(`/data/shim${d}/usr/bin${d}/bin`)
     // Prepending a PATH that already names it must not produce two entries: the
     // sandbox plan turns every PATH entry into a read+exec root, and a duplicate
     // there is a duplicate rule for the same directory.
-    expect(prependShim('/data/shim:/usr/bin', '/data/shim')).toBe('/data/shim:/usr/bin')
+    expect(prependShim(`/data/shim${d}/usr/bin`, '/data/shim')).toBe(`/data/shim${d}/usr/bin`)
     expect(prependShim('/usr/bin', null)).toBe('/usr/bin')
   })
 })
