@@ -106,7 +106,7 @@ export interface AddAccountDialogProps {
   /**
    * The agent to open with, when whatever opened this named one.
    *
-   * The Add-agent menu does: pressing **Claude Code** there is a request for a
+   * The Add-accounts menu does: pressing **Claude Code** there is a request for a
    * Claude Code login, and re-asking "which agent is this a login for?" on the
    * next screen is the same question twice. Null everywhere else, which leaves
    * `chosenAccountProvider` to pick the first agent that can take an account —

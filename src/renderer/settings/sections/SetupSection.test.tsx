@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { SettingsPanel } from '../SettingsWindow'
-import { TOOL_MARK } from './SetupSection'
+import { TOOL_MARK, showsOtherTools } from './SetupSection'
 import {
   eventState,
   foreignNote,
@@ -199,6 +199,56 @@ describe('the glyph on a tool row', () => {
     expect(TOOL_MARK['installed-not-authed']).not.toBe(TOOL_MARK.missing)
     expect(new Set(Object.values(TOOL_MARK)).size).toBe(Object.keys(TOOL_MARK).length)
     expect(TOOL_MARK.ready).toBe('✓')
+  })
+})
+
+describe('the Other tools disclosure', () => {
+  /**
+   * Asad, 2026-08-21, at the foot of Coding AI:
+   *
+   *   > *"If there is no tool, why we have this button, you know?"*
+   *
+   * It held git and the GitHub CLI, and on a machine with neither it opened onto
+   * one line reading "Nothing reported yet." — a button whose entire content is
+   * the news that it has none. The sentence is gone with the button rather than
+   * shortened.
+   *
+   * A pure function because this is the state `renderToStaticMarkup` cannot
+   * reach: it runs no effects, so the probe never answers and the disclosure is
+   * always mid-read there.
+   */
+  it('is not drawn once the probe has answered with nothing', () => {
+    expect(
+      showsOtherTools(0, { checking: false, snapshot: {
+          tools: [],
+          hooks: [],
+          endpoint: { running: false, address: null },
+          canRunSessions: true,
+          needsLogin: false,
+          checkedAt: 1,
+        }, error: null }),
+    ).toBe(false)
+  })
+
+  it('is drawn while the probe is still out, so it does not blink', () => {
+    // Before anything has answered, `tools` is empty for a reason that has
+    // nothing to do with the machine. A disclosure that vanished for a beat and
+    // came back is the same flicker the agent list had when it printed "No agent
+    // installed yet" on a paint that predated looking at anything.
+    expect(showsOtherTools(0, { checking: true, snapshot: null, error: null })).toBe(true)
+    expect(showsOtherTools(0, { checking: false, snapshot: null, error: null })).toBe(true)
+  })
+
+  it('is not drawn when the read failed and found nothing', () => {
+    // The error is on screen above it. A button offering to show what could not
+    // be read is a second, quieter claim that something is there.
+    expect(showsOtherTools(0, { checking: false, snapshot: null, error: 'Could not check.' })).toBe(
+      false,
+    )
+  })
+
+  it('is drawn whenever there is something in it', () => {
+    expect(showsOtherTools(2, { checking: false, snapshot: null, error: null })).toBe(true)
   })
 })
 

@@ -248,12 +248,12 @@ describe('what the cut was not allowed to take with it', () => {
     // claim this test makes.
     expect(html).toContain('Default coding tool')
     expect(html).toContain('Primary account')
-    expect(html).toContain('Add agent')
+    expect(html).toContain('Add accounts')
     // Accounts — its own heading. The group that used to carry the whole add
     // form here is a popup, and the *button* that opened it is gone too: it
     // stood one row under a **Sign in** on every signed-out account, which is
     // the pair he collided with — *"why do we have see sign in here separately,
-    // add account here separately?"* The **Add agent** menu asserted above is
+    // add account here separately?"* The **Add accounts** menu asserted above is
     // the pane's one door now, and it opens the same popup. Nothing was
     // dropped, which is what this test is for — the steps are asserted in
     // `AccountsSection.test.tsx`, on the panel itself.

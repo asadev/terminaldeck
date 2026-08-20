@@ -1,11 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
-  AddAgentMenu,
+  AddAccountsMenu,
   AgentsSection,
   ScopeSwitch,
-  ServerAgents,
+  addAccountsRows,
   agentsPresent,
+  deviceOfScope,
+  deviceScope,
   optionStateFor,
 } from './AgentsSection'
 import type { Prerequisites, SettingsBridge, ToolStatus } from '../settings-bridge'
@@ -123,7 +125,7 @@ describe('an agent that is not installed is not on the page', () => {
    *
    * The pane drew "Claude Code 2.1.237 Ready / Codex CLI … Ready / Gemini CLI …
    * Ready" above the account list, with a two-line paragraph under Codex. What
-   * only that list said — the version, and the caveat — is in the Add-agent
+   * only that list said — the version, and the caveat — is in the Add-accounts
    * menu; **which** agents are on the machine is what the account groups under
    * it say, one heading per agent.
    */
@@ -150,7 +152,7 @@ describe('an agent that is not installed is not on the page', () => {
   })
 })
 
-describe('the Add-agent menu', () => {
+describe('the Add-accounts menu', () => {
   /**
    *   > "Just give a button drop-down, add an agent, and there will be a list of
    *   > them like Gemini, Claude Code."
@@ -160,8 +162,7 @@ describe('the Add-agent menu', () => {
    * only place an agent this machine does not have is named.
    */
   it('lists every agent the app knows, whatever this machine has', () => {
-    const html = renderToStaticMarkup(<AddAgentMenu present={new Set(['claude'])} />)
-    expect(html).toContain('>Add agent</summary>')
+    const html = renderToStaticMarkup(<AddAccountsMenu present={new Set(['claude'])} />)
     expect(html).toContain('Claude Code')
     expect(html).toContain('Codex CLI')
     expect(html).toContain('Gemini CLI')
@@ -169,11 +170,41 @@ describe('the Add-agent menu', () => {
     expect(html).not.toContain('Plain shell')
   })
 
-  it('offers the install link for what is missing and nothing for what is here', () => {
-    const html = renderToStaticMarkup(<AddAgentMenu present={new Set(['claude'])} />)
-    expect(html).toContain('>Installed</span>')
+  /**
+   * The label, which had been disagreeing with the menu since the menu learned
+   * to do anything:
+   *
+   *   > *"And then add agents. Why does it say add agent? Add accounts, it
+   *   > should say."*
+   *
+   * Every row of it acts on an account — adds one, signs one in — and the one
+   * that does not is an install link for an agent that has no accounts yet.
+   */
+  it('is called Add accounts, and nothing in it says Add agent', () => {
+    const html = renderToStaticMarkup(<AddAccountsMenu present={new Set(['claude'])} />)
+    expect(html).toContain('>Add accounts</summary>')
+    expect(html).not.toContain('Add agent')
+  })
+
+  it('offers the install link for what is missing', () => {
+    const html = renderToStaticMarkup(<AddAccountsMenu present={new Set(['claude'])} />)
     expect(html.match(/>Install</g) ?? []).toHaveLength(2)
     expect(html).toContain('href="https://github.com/openai/codex"')
+  })
+
+  /**
+   * The dead word, gone.
+   *
+   * f_0021/f_0022 caught it: "Gemini CLI 0.46.0 — Installed", where the
+   * right-hand column of every other row is a thing you can press. A column of
+   * acts is not the place to name a state, and which agents are installed is
+   * what the two runs and the version already say.
+   */
+  it('never draws Installed as a row’s action', () => {
+    const html = renderToStaticMarkup(
+      <AddAccountsMenu present={new Set(['claude', 'codex', 'gemini'])} />,
+    )
+    expect(html).not.toContain('>Installed</span>')
   })
 
   /**
@@ -189,12 +220,13 @@ describe('the Add-agent menu', () => {
    * gave in the same sentence — its accounts — so the row opens the Add-account
    * popup with that agent already chosen.
    */
-  it('makes an installed agent a real button that opens its Add account', () => {
+  it('makes a signed-in agent a real button that opens its Add account', () => {
     const asked: string[] = []
     const html = renderToStaticMarkup(
-      <AddAgentMenu
+      <AddAccountsMenu
         present={new Set(['claude', 'codex'])}
         addable={new Set(['claude', 'codex'])}
+        signedIn={new Set(['claude', 'codex'])}
         onAddAccount={(id) => asked.push(id)}
       />,
     )
@@ -206,34 +238,110 @@ describe('the Add-agent menu', () => {
     expect(asked).toEqual([])
   })
 
-  it('gives every installed agent its own row, so each opens its own popup', () => {
+  it('gives every agent that can hold another login its own row', () => {
     // A menu that always opened the popup on the first agent would render
-    // identically to one that does not, so the count is what is checked: one
-    // button per installed agent, none for the rest.
+    // identically to one that does not, so the count is what is checked.
     const html = renderToStaticMarkup(
-      <AddAgentMenu
+      <AddAccountsMenu
         present={new Set(['claude', 'codex', 'gemini'])}
         addable={new Set(['claude', 'codex'])}
+        signedIn={new Set(['claude', 'codex', 'gemini'])}
         onAddAccount={() => {}}
       />,
     )
     expect(html.match(/class="settings-addmenu-row"/g) ?? []).toHaveLength(2)
     expect(html).not.toContain('>Install<')
     /*
-     * Gemini is installed and is *not* a row you can press. It keeps one login
-     * per machine, so **Add account** there would open a popup where its own
-     * radio is disabled — a live-looking control leading to a dead end, which
-     * is the same defect as the dead menu, one screen along.
+     * Gemini is signed in and keeps one login per machine, so there is genuinely
+     * nothing to add: **Add account** there would open a popup where its own
+     * radio is disabled, which is a live-looking control leading to a dead end.
+     * It is listed under the signed-in heading and offers nothing, which is the
+     * one honest answer.
      */
-    expect(html).toContain('>Installed</span>')
+    expect(html).toContain('Gemini CLI')
   })
 
   it('leaves the row inert when nothing can be opened', () => {
-    // No handler — a panel rendered standalone. The row falls back to the
-    // label it always had rather than drawing a button that does nothing.
-    const html = renderToStaticMarkup(<AddAgentMenu present={new Set(['claude'])} />)
-    expect(html).toContain('>Installed</span>')
+    // No handlers — a panel rendered standalone. Nothing on any row is a button
+    // rather than a button that does nothing.
+    const html = renderToStaticMarkup(<AddAccountsMenu present={new Set(['claude'])} />)
     expect(html).not.toContain('class="settings-addmenu-row"')
+  })
+
+  /**
+   * The separation, in the menu as well as in the list.
+   *
+   *   > *"Whatever is not install or login should be separate, and all the login
+   *   > ones should be separate. Proper separation I told you. So not just basic
+   *   > ones. So we understand what is what."*
+   */
+  it('splits the rows into two headed runs, and names the logins in the first', () => {
+    const html = renderToStaticMarkup(
+      <AddAccountsMenu
+        present={new Set(['claude', 'codex'])}
+        addable={new Set(['claude'])}
+        signedIn={new Set(['claude'])}
+        signInable={new Set(['codex'])}
+        logins={{ claude: ['me@example.com'] }}
+        onAddAccount={() => {}}
+        onSignIn={() => {}}
+      />,
+    )
+    expect(html).toContain('>Signed in</h5>')
+    expect(html).toContain('>Not signed in or not installed</h5>')
+    expect(html).toContain('me@example.com')
+    // Claude is in the first run and Codex in the second, in that order.
+    expect(html.indexOf('Claude Code')).toBeLessThan(html.indexOf('Codex CLI'))
+    // And the not-signed-in half of it acts: Codex is here and logged out, so
+    // the row signs its install login in.
+    expect(html).toContain('>Sign in</span>')
+  })
+
+  it('draws no run heading over an empty run', () => {
+    // Nothing is signed in on a fresh machine, and a heading over nothing is the
+    // "control over nothing" fault one step up.
+    const html = renderToStaticMarkup(<AddAccountsMenu present={new Set(['claude'])} />)
+    expect(html).not.toContain('>Signed in</h5>')
+    expect(html).toContain('>Not signed in or not installed</h5>')
+  })
+
+  /**
+   * What each row offers, as the rule rather than as markup — these are the
+   * states no screenshot catches.
+   */
+  it('decides one action per row, and never one it cannot carry out', () => {
+    const rows = addAccountsRows({
+      present: new Set(['claude', 'codex', 'gemini']),
+      addable: new Set(['claude']),
+      signedIn: new Set(['claude']),
+      signInable: new Set(['codex', 'gemini']),
+    })
+    const by = (id: string) => rows.find((row) => row.id === id)
+    expect(by('claude')?.run).toBe('signed-in')
+    expect(by('claude')?.action).toBe('add-account')
+    expect(by('codex')?.run).toBe('not-signed-in')
+    expect(by('codex')?.action).toBe('sign-in')
+    expect(by('gemini')?.action).toBe('sign-in')
+
+    // Nothing installed: every row is an install and none of them claims a login.
+    const fresh = addAccountsRows({
+      present: new Set(),
+      addable: new Set(),
+      signedIn: new Set(),
+      signInable: new Set(),
+    })
+    expect(fresh.every((row) => row.action === 'install')).toBe(true)
+    expect(fresh.every((row) => row.run === 'not-signed-in')).toBe(true)
+
+    // Signed in, and no second login possible: the row says what is there and
+    // offers nothing, rather than offering an account that cannot exist.
+    const gemini = addAccountsRows({
+      present: new Set(['gemini']),
+      addable: new Set(),
+      signedIn: new Set(['gemini']),
+      signInable: new Set(['gemini']),
+    }).find((row) => row.id === 'gemini')
+    expect(gemini?.action).toBe('none')
   })
 
   /**
@@ -247,9 +355,10 @@ describe('the Add-agent menu', () => {
    */
   it('carries the version, and the caveat behind an ⓘ', () => {
     const html = renderToStaticMarkup(
-      <AddAgentMenu
+      <AddAccountsMenu
         present={new Set(['claude', 'codex'])}
         addable={new Set(['claude', 'codex'])}
+        signedIn={new Set(['claude', 'codex'])}
         agents={[
           { id: 'claude', label: 'Claude Code', state: 'ready', version: '2.1.237', purpose: '', required: true },
           {
@@ -280,9 +389,10 @@ describe('the Add-agent menu', () => {
    */
   it('keeps the ⓘ outside the row button, in a slot every row has', () => {
     const html = renderToStaticMarkup(
-      <AddAgentMenu
+      <AddAccountsMenu
         present={new Set(['claude', 'codex'])}
         addable={new Set(['claude', 'codex'])}
+        signedIn={new Set(['claude', 'codex'])}
         agents={[
           { id: 'codex', label: 'Codex CLI', state: 'ready', purpose: '', required: false, note: 'Runs from elsewhere.' },
         ]}
@@ -299,7 +409,7 @@ describe('the Add-agent menu', () => {
     // A `<details>` is closed until it is opened, which is the whole reason it
     // is one: the hundred entries he is thinking about are a hundred entries
     // nobody scrolls past on the way to the account list.
-    const html = renderToStaticMarkup(<AddAgentMenu present={new Set()} />)
+    const html = renderToStaticMarkup(<AddAccountsMenu present={new Set()} />)
     expect(html).toContain('<details')
     expect(html).not.toContain('<details open')
   })
@@ -328,11 +438,53 @@ describe('this machine, or a server', () => {
     expect(html).toMatch(/aria-pressed="false"[^>]*>This machine/)
   })
 
-  it('says one short line on the server side rather than a paragraph', () => {
-    // The seam another lane fills. One line, because an empty state that
-    // explains itself is the thing this whole pass is removing.
-    const html = renderToStaticMarkup(<ServerAgents />)
-    expect(html).toBe('<p class="settings-prose">No servers yet.</p>')
+  /**
+   * And every linked device, beside them.
+   *
+   *   > *"And maybe we can also see the other linked device. Whatever new comes
+   *   > here, so we can manage next to them, each of them."*
+   *
+   * The switch had exactly two buttons while the rail behind the dialog was
+   * listing two machines with live sessions on them.
+   */
+  it('adds a button per linked device, named as the rail names it', () => {
+    const html = renderToStaticMarkup(
+      <ScopeSwitch
+        scope="this-machine"
+        devices={[{ id: 'm1', name: 'DESKTOP-DDGMNCV' }, { id: 'm2', name: 'Studio' }]}
+        onScope={() => {}}
+      />,
+    )
+    expect(html).toContain('>DESKTOP-DDGMNCV</button>')
+    expect(html).toContain('>Studio</button>')
+    // This machine is still the one that is on, and the devices come after the
+    // two that are always there.
+    expect(html.indexOf('This machine')).toBeLessThan(html.indexOf('DESKTOP-DDGMNCV'))
+    expect(html.indexOf('Servers')).toBeLessThan(html.indexOf('DESKTOP-DDGMNCV'))
+  })
+
+  it('puts the on state on the device that is selected', () => {
+    const html = renderToStaticMarkup(
+      <ScopeSwitch
+        scope={deviceScope('m1')}
+        devices={[{ id: 'm1', name: 'DESKTOP-DDGMNCV' }]}
+        onScope={() => {}}
+      />,
+    )
+    expect(html).toMatch(/aria-pressed="true"[^>]*>DESKTOP-DDGMNCV/)
+    expect(html).toMatch(/aria-pressed="false"[^>]*>This machine/)
+  })
+
+  /**
+   * A scope is a string because it is `useState`'s value and a `<button>`'s key,
+   * and a device id can be anything the pairing minted. One spelling of the
+   * prefix, in one pair of functions, so a device called `servers` is still a
+   * device.
+   */
+  it('reads a device back out of its own scope, and nothing else', () => {
+    expect(deviceOfScope(deviceScope('m1'))).toBe('m1')
+    expect(deviceOfScope('this-machine')).toBeNull()
+    expect(deviceOfScope('servers')).toBeNull()
   })
 
   it('opens on this machine, with the switch above everything else', () => {
