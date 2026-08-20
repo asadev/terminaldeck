@@ -383,6 +383,17 @@ const bindingDeps = {
    */
   knowsSession: (sessionId: string): boolean =>
     ptys.list().some((meta) => meta.id === sessionId),
+  /*
+   * Disconnecting a window ends whatever the copilot was doing in it.
+   *
+   * Read through `browserDrive()` rather than captured, because the drive is
+   * created inside `registerIpc` and this object is built at module scope —
+   * null until then, which is the honest answer for a window disconnected
+   * before anything could have been driving it.
+   */
+  endDrive: (browserTabId: string): void => {
+    browserDrive()?.releaseWindow(browserTabId)
+  },
 }
 
 /**

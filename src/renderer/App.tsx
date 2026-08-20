@@ -4396,6 +4396,10 @@ function Workspace() {
                           'browser.startUrl': url,
                         })
                       }}
+                      // The ⋯ menu's Settings row. The section is the one that
+                      // was always there; this is the door into it from the
+                      // panel it governs.
+                      onSettings={() => openSettings('browser')}
                       onTitle={(title) => renameBrowserTab(pageTab.id, title)}
                       onSendToAgent={(context) => {
                         // The store's active session, which while the window is
@@ -5948,6 +5952,8 @@ function Workspace() {
                   applySettings({ ...settings, 'browser.startUrl': url })
                   void window.deck.setSettings({ 'browser.startUrl': url })
                 }}
+                // The other mount site, and the same door. See the split one.
+                onSettings={() => openSettings('browser')}
                 // Otherwise every browser row in the sidebar reads "New tab".
                 onTitle={(title) => renameBrowserTab(tab.id, title)}
                 onSendToAgent={(context) => {

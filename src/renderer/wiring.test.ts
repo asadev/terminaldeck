@@ -928,6 +928,30 @@ describe('the browser panel is hidden per tab, parked per dialog', () => {
     expect(propExpression(flat, 'parkPage')).toMatch(/Modal/)
     expect(propExpression(paned, 'parkPage')).toMatch(/Modal/)
   })
+
+  /**
+   * And gives both of them the door to Settings → Browser.
+   *
+   * *"Then settings we have."* — said over Chrome's own settings page, after
+   * naming downloads, history and passwords. The section exists and is not
+   * touched; what did not exist was any way into it from the browser panel, so
+   * the ⋯ menu draws a `Settings` row when it is handed one. Both mounts,
+   * because a page in a split is the same page and a menu that works in one half
+   * of the window and not the other is the shape of half-feature this round is
+   * about.
+   */
+  it('opens Settings → Browser from the ⋯ menu, in both', () => {
+    for (const [where, tag] of [
+      ['the panel filling the window', flat],
+      ['the panel inside a pane', paned],
+    ] as const) {
+      const open = propExpression(tag, 'onSettings')
+      expect(open, `${where} has no onSettings={...}`).not.toBeNull()
+      expect(open, `${where} opens Settings somewhere other than Browser`).toMatch(
+        /openSettings\('browser'\)/,
+      )
+    }
+  })
 })
 
 /**

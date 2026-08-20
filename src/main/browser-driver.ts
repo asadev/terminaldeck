@@ -3,10 +3,8 @@ import { join } from 'node:path'
 import { app, nativeImage, type WebContents } from 'electron'
 import { screenCommand, type DriveState } from './browser-cdp'
 import {
-  DispatchRing,
   EMPTY_DRIVE_STATUS,
   HANDOVER_WINDOW_MS,
-  isTakeoverCandidate,
   nextDriveState,
   sanitizeHandoverPrompt,
   type DriveStatus,
@@ -260,6 +258,20 @@ export const OWN_TARGET: DriveTarget = Object.freeze({
   name: '',
 })
 
+/**
+ * The slot key an attached window is filed under.
+ *
+ * One spelling, exported, because there are now two callers with no other
+ * connection to each other: the tool layer mints a whole {@link DriveTarget}
+ * from the binding map, and `browser-binding-ipc.ts` has only a shell tab id and
+ * needs to end that window's drive when it is disconnected. Two copies of
+ * `` `bound:${id}` `` is a drive that silently keeps running under a key nobody
+ * matched.
+ */
+export function boundKey(browserTabId: string): string {
+  return `bound:${browserTabId}`
+}
+
 /* -------------------------------------------------------------- the drive -- */
 
 /**
@@ -378,7 +390,6 @@ class Slot {
   state: DriveState = 'idle'
   /** The view id this slot is driving, or null when it holds no page. */
   viewId: string | null = null
-  ring = new DispatchRing()
   step = ''
   prompt = ''
   /** Resolves the tool call that is currently blocked on the person. */
@@ -652,7 +663,6 @@ export class BrowserDrive {
       slot.viewId = null
       slot.grantedOrigin = null
       slot.secretSelectors.clear()
-      slot.ring.clear()
       wc = null
     }
     if (!wc) {
@@ -760,7 +770,6 @@ export class BrowserDrive {
     slot.prompt = ''
     slot.grantedOrigin = null
     slot.secretSelectors.clear()
-    slot.ring.clear()
     const waiting = slot.waiting
     slot.waiting = null
     waiting?.('drive-ended')
@@ -769,6 +778,25 @@ export class BrowserDrive {
     // for it to hold. The copilot's own slot stays, because it is the one thing
     // here that is not a window and `open` re-arms it.
     if (slot !== this.own) this.bound.delete(slot.key)
+  }
+
+  /**
+   * Let go of one attached window, named by the shell tab id.
+   *
+   * The other end of Disconnect. He asked for one control that says whether a
+   * browser is connected — *"we should be have a button here to disconnect
+   * also, or it should only this way"* — and one control means the drive stops
+   * when the relation does, not one tool call later when the target can no
+   * longer be minted. Mid-drive that is the difference between a page that
+   * stops and a banner that carries on saying the copilot is driving it.
+   *
+   * Silent when nothing here holds that window, which is the ordinary case:
+   * disconnecting a window no agent has ever driven has nothing to end.
+   */
+  releaseWindow(browserTabId: string): void {
+    const slot = this.bound.get(boundKey(browserTabId))
+    if (!slot) return
+    this.release(this.refOf(slot))
   }
 
   /**
@@ -874,28 +902,52 @@ export class BrowserDrive {
     return typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {}
   }
 
-  /** Announce and send an input event, so the takeover watcher can claim it. */
+  /**
+   * Send an input event.
+   *
+   * A thin wrapper over {@link send} and no longer anything more. It used to
+   * announce each event into a `DispatchRing` first, so that the watcher below
+   * could tell the driver's own clicks from the person's; nothing watches for a
+   * takeover any more, so there is nothing to announce to. See the header of
+   * `browser-drive.ts` for why that whole mechanism went.
+   */
   private async input(
     wc: WebContents,
     slot: Slot,
     method: string,
     params: Record<string, unknown>,
-    observedType: string,
   ): Promise<void> {
-    slot.ring.announce(observedType, this.host.now())
     await this.send(wc, slot, method, params)
   }
 
-  /* --------------------------------------------------------- the takeover -- */
+  /* ------------------------------------------------------- the page's life -- */
 
   /**
-   * Watch a tab for the person putting their hands on it.
+   * Watch a tab for the page underneath it going away.
    *
    * Registered once per WebContents. The teardown goes through
    * `web-contents-teardown.ts` for the reason that module exists: eleven
    * modules each being individually careful still produced a
    * `MaxListenersExceededWarning`, and a twelfth being careful would not have
    * helped.
+   *
+   * ## What this stopped watching for — 2026-08-21
+   *
+   * An `input-event` listener used to sit here and park the drive on any press
+   * or keystroke it could not account for as the driver's own, putting
+   * *"You took over this page. The copilot has stopped."* in the banner with two
+   * buttons under it. He filmed himself clicking inside a page he had given the
+   * copilot and getting exactly that:
+   *
+   *   > *"if I click inside, nothing should happen actually. It should keep
+   *   > giving the access until I click here and I disconnect the browser from
+   *   > any of the session."*
+   *
+   * So clicking, scrolling and typing in a driven page are now what they look
+   * like — a person and an agent on one page — and the only thing that ends the
+   * agent's access is Disconnect on the browser's toolbar. What remains here is
+   * the page's *lifetime*, which is not a preference: a view that has been
+   * destroyed cannot be driven by anybody.
    */
   private watch(wc: WebContents, slot: Slot): void {
     onWebContentsDestroyed(wc, `browser-drive:${slot.key}`, () => {
@@ -903,26 +955,6 @@ export class BrowserDrive {
     })
     if (this.watched.has(wc)) return
     this.watched.add(wc)
-
-    wc.on('input-event', (_event, input: { type: string }) => {
-      if (slot.state !== 'agent') return
-      if (!isTakeoverCandidate(input.type)) return
-      if (slot.ring.claim(input.type, this.host.now())) return
-      /*
-       * Not ours, so it is his — and the direction of that guess is the point.
-       * Mis-reading a synthetic event as human parks the drive and costs a
-       * retry. Mis-reading a keystroke of his as synthetic means the agent
-       * keeps typing into a form while he is filling it in. Park.
-       *
-       * Logged with the event type because this is the one decision in the
-       * feature made by a heuristic, and "the drive keeps stopping for no
-       * reason" is unanswerable without knowing which event did it. It fires
-       * at most once per drive, so it is not noise.
-       */
-      console.log(`[browser-drive] parked: an unclaimed ${input.type} arrived, so the person has the page`)
-      slot.prompt = 'You took over this page. The copilot has stopped.'
-      this.move(slot, 'handover')
-    })
 
     /*
      * A reload of the *app* destroys every browser tab — `hostDocumentReplaced`
@@ -1355,9 +1387,9 @@ export class BrowserDrive {
     const y = Math.round(rect.y + rect.height / 2)
     // A move first, because a page whose button only styles itself on hover
     // will also only bind its handler on hover, and this costs one message.
-    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 }, 'mouseMove')
-    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 }, 'mouseDown')
-    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 }, 'mouseUp')
+    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 })
+    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 })
+    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 })
   }
 
   private async check(
@@ -1433,12 +1465,12 @@ export class BrowserDrive {
      */
     await this.clickAt(wc, slot, target.rect as { x: number; y: number; width: number; height: number })
     const selectAll = process.platform === 'darwin' ? 4 : 2
-    await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, commands: ['selectAll'] }, 'rawKeyDown')
-    await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 }, 'keyUp')
+    await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, commands: ['selectAll'] })
+    await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 })
 
     if (value.length === 0) {
-      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }, 'rawKeyDown')
-      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }, 'keyUp')
+      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 })
+      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 })
       return
     }
 
@@ -1455,12 +1487,12 @@ export class BrowserDrive {
      */
     if (value.length <= PER_KEY_LIMIT) {
       for (const char of value) {
-        await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyDown', text: char, unmodifiedText: char, key: char }, 'keyDown')
-        await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: char }, 'keyUp')
+        await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyDown', text: char, unmodifiedText: char, key: char })
+        await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: char })
       }
       return
     }
-    await this.input(wc, slot, 'Input.insertText', { text: value }, 'char')
+    await this.input(wc, slot, 'Input.insertText', { text: value })
   }
 
   private async select(slot: Slot, selector: string, value: string): Promise<void> {
@@ -1497,11 +1529,11 @@ export class BrowserDrive {
       windowsVirtualKeyCode: spec.vk,
       nativeVirtualKeyCode: spec.vk,
     }
-    await this.input(wc, slot, 'Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' }, 'rawKeyDown')
+    await this.input(wc, slot, 'Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' })
     if (spec.text !== undefined) {
-      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'char', text: spec.text }, 'char')
+      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'char', text: spec.text })
     }
-    await this.input(wc, slot, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' }, 'keyUp')
+    await this.input(wc, slot, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' })
   }
 
   /* ---------------------------------------------------------- screenshots -- */

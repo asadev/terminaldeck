@@ -13,6 +13,13 @@ interface Props {
   startUrl: string
   /** Absent when the panel has no way to write the setting — the row goes then. */
   onStartUrl?: (url: string) => void
+  /**
+   * Open Settings → Browser. Absent when the host has no Settings to open.
+   *
+   * The row it draws is the only door into those settings from inside the
+   * browser — see the note on the row itself.
+   */
+  onSettings?: () => void
   /** Reopen the recorded flow. Absent when nothing has been recorded. */
   onFlow?: () => void
   /**
@@ -70,6 +77,13 @@ interface Props {
  * is read off the bar rather than passed in, so this menu offers exactly what
  * the bar is not showing and never a second copy of a button you can already
  * see: `toolbar-overflow.ts`.
+ *
+ * ## And the one row that is not about the page
+ *
+ * `Settings`, at the foot, which opens Settings → Browser. It is the only door
+ * into those settings from inside the browser, and its absence was the whole of
+ * *"then settings we have"* — a section that exists, holds the start page, the
+ * cookies and the profiles, and could not be reached from the panel it governs.
  */
 export function BrowserMenu({
   api,
@@ -77,6 +91,7 @@ export function BrowserMenu({
   url,
   startUrl,
   onStartUrl,
+  onSettings,
   onFlow,
   onCookies,
   onClose,
@@ -174,6 +189,32 @@ export function BrowserMenu({
             }}
           >
             Recorded flow
+          </button>
+        )}
+
+        {/*
+          The door to Settings → Browser, and last because it is the row that
+          leaves this menu's subject.
+
+          *"Then settings we have."* — said with Chrome's own settings page on
+          screen, after listing downloads, history and passwords. The app already
+          has the section: `settings/sections/BrowserSection` holds the start
+          page, the cookie controls and the profiles, and nothing is removed from
+          it here. What it did not have was any way in from the browser panel,
+          so from inside the thing the settings are about there was no door —
+          which is the same shape of gap as a feature that exists and cannot be
+          found.
+        */}
+        {onSettings && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            onClick={() => {
+              onSettings()
+              onClose()
+            }}
+          >
+            Settings
           </button>
         )}
       </div>

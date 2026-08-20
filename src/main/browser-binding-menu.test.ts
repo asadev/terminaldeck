@@ -47,10 +47,16 @@ function fakeIpc(): { ipc: IpcMain; send(channel: string, payload: unknown): voi
   }
 }
 
+/** Windows whose drive was ended, in the order they were disconnected. */
+const drivesEnded: string[] = []
+
 const deps = {
   send: () => undefined,
   window: () => null,
   knowsSession: () => true,
+  endDrive: (browserTabId: string) => {
+    drivesEnded.push(browserTabId)
+  },
 }
 
 let ipc = fakeIpc()
@@ -58,6 +64,7 @@ let ipc = fakeIpc()
 beforeEach(() => {
   resetForTests()
   forgetKnownWindows()
+  drivesEnded.length = 0
   ipc = fakeIpc()
   registerBrowserBindingIpc(ipc.ipc, deps)
 })
@@ -334,5 +341,94 @@ describe('the same relation, asked from the browser', () => {
     expect(labels(connectMenuItems({ browserTabId: 'browser:1:1', sessions: [] }))).toEqual([
       'No sessions are open.',
     ])
+  })
+})
+
+/**
+ * Disconnect, which had to become a word before it was a control.
+ *
+ *   > *"When we connect any browser, and we should be have a button here to
+ *   > disconnect also, or it should only this way."*
+ *
+ * The only way out was re-clicking a ticked row — a gesture, not an affordance,
+ * and on the window he filmed nothing was ticked at all. These pin the two doors
+ * that exist now and, more importantly, that they are one act: the relation ends
+ * and the drive ends with it, whichever door was used.
+ */
+describe('disconnecting, which is the whole truth of the connection', () => {
+  const sessions = [{ sessionId: 's1', name: 'terminaldeck · Session 1' }]
+
+  function firstRow(): MenuItemConstructorOptions {
+    return connectMenuItems({ browserTabId: 'browser:1:1', sessions })[0]
+  }
+
+  it('leads the menu with the word, naming the slot', () => {
+    openWindow('browser:1:1', { title: 'Stripe' })
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1', title: 'Stripe' })
+
+    const items = connectMenuItems({ browserTabId: 'browser:1:1', sessions })
+    expect(labels(items)).toEqual(['Disconnect B1', '—', 'B1   terminaldeck · Session 1'])
+    // A row, not a ticked checkbox read backwards.
+    expect(items[0].type).toBeUndefined()
+    expect(items[0].enabled).not.toBe(false)
+  })
+
+  it('is not drawn at all while nothing is attached', () => {
+    // A permanently greyed `Disconnect` at the top of every menu is the dead
+    // control this whole round is about.
+    openWindow('browser:1:1')
+    expect(labels(connectMenuItems({ browserTabId: 'browser:1:1', sessions }))).toEqual([
+      'terminaldeck · Session 1',
+    ])
+  })
+
+  it('is still offered when the window is attached to a session that has gone', () => {
+    // The case in the recording: a page attached to nothing choosable. The list
+    // is empty and letting go of it is the only thing left to do.
+    openWindow('browser:1:1', { title: 'Stripe' })
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1', title: 'Stripe' })
+
+    expect(labels(connectMenuItems({ browserTabId: 'browser:1:1', sessions: [] }))).toEqual([
+      'Disconnect B1',
+      '—',
+      'No sessions are open.',
+    ])
+  })
+
+  it('breaks the relation and ends the drive in that window', () => {
+    openWindow('browser:1:1', { title: 'Stripe' })
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1', title: 'Stripe' })
+
+    firstRow().click?.({} as never, undefined as never, {} as never)
+
+    expect(ownerOf('browser:1:1')).toBeNull()
+    expect(bindingFor('s1')?.windows).toEqual([])
+    // Mid-drive this is the difference between a page that stops and a banner
+    // still saying the copilot is driving it.
+    expect(drivesEnded).toEqual(['browser:1:1'])
+  })
+
+  it('does the same amount of work from the toolbar’s own button', () => {
+    // `browser:unbind` is what `ConnectSessionButton` sends. One act, two doors:
+    // if these two ever diverge, one of them leaves a drive running.
+    openWindow('browser:1:1', { title: 'Stripe' })
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1', title: 'Stripe' })
+
+    ipc.send('browser:unbind', 'browser:1:1')
+
+    expect(ownerOf('browser:1:1')).toBeNull()
+    expect(drivesEnded).toEqual(['browser:1:1'])
+  })
+
+  it('ends the drive when the session-side checklist is the door', () => {
+    openWindow('browser:1:1', { title: 'Stripe' })
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1', title: 'Stripe' })
+
+    bindMenuItems(deps, { sessionId: 's1' })
+      .find((item) => String(item.label).includes('Stripe'))
+      ?.click?.({} as never, undefined as never, {} as never)
+
+    expect(ownerOf('browser:1:1')).toBeNull()
+    expect(drivesEnded).toEqual(['browser:1:1'])
   })
 })

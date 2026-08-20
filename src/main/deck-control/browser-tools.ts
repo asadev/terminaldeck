@@ -1,5 +1,6 @@
 import type { BoundWindow } from '../browser-binding'
 import { slotName, windowNamed, windowsOf } from '../browser-binding'
+import { boundKey } from '../browser-driver'
 import type { BrowserDrive, DriveTarget, StepVerb } from '../browser-driver'
 import {
   DEFAULT_OUTLINE_TEXT_CHARS,
@@ -204,7 +205,7 @@ function boundOf(args: Record<string, unknown>): Bound | null {
   }
   return {
     target: {
-      key: `bound:${window.browserTabId}`,
+      key: boundKey(window.browserTabId),
       viewId: window.viewId,
       browserTabId: window.browserTabId,
       name: slotName(window.n),

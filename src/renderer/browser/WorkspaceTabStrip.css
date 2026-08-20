@@ -210,7 +210,30 @@
   the scroll box's own clip.
 */
 .strip-rail {
-  flex: 1;
+  /*
+    As wide as the tabs it holds, and never wider — 2026-08-21.
+
+    It was `flex: 1`, so the rail was the whole bar and the two openers were
+    pushed to the far corner whatever was in it. With three tabs open that is
+    225 pixels of empty bar between the last pill and the globe, which is what
+    he stopped on: *"these two buttons, new tab and new session, should be next
+    to the pill, not like here."*
+
+    `0 1 auto` sizes the rail from its contents and lets it give the room back
+    when there are not enough, so the openers land 6px after the last tab at
+    every count. It does **not** put them back inside the scrolling rail — that
+    is the arrangement of 2026-08-20 that had the globe riding on top of a tab's
+    name, and both conditions have to hold at once. Measured in Chromium at
+    1600px: 3 tabs → 232px each and a 6px gap; 6 tabs at 1000px → 147px each and
+    a 6px gap; 11 tabs at 1000px → the floor, the rail scrolls, and the openers
+    are still in the corner with the rail clipped at their edge.
+
+    The measurement depends on `width` on `.strip-tab`. A shrinkable flex item's
+    intrinsic contribution is its *content*, clamped up by `min-width` — so
+    without that declaration this line alone collapsed every tab to
+    `--strip-tab-min`, at every window size. See the note there.
+  */
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   /* Sitting on the bottom edge, not floating in the middle of the bar: the
@@ -267,11 +290,13 @@
     width anybody chose, and *wider with more tabs open*, which is the giveaway
     that content and not the basis was doing the sizing.
 
-    `flex: 1` takes the row off content sizing entirely: it is the rail's width,
-    the tabs lay out inside that, and a bar with room leaves the spare space
-    after the last tab where it belongs. Past the floor the tabs overflow this
-    row, which has visible overflow, so the rail's scrollable area grows and the
-    rail scrolls — the behaviour every paragraph above describes.
+    `flex: 1` takes the row off content sizing entirely: it is the rail's width
+    and the tabs lay out inside that. Since 2026-08-21 the rail is itself only
+    as wide as the tabs, so "the rail's width" is the tabs' width and there is no
+    spare space in here at all — the room left over in the bar is past the two
+    openers, in the corner, which is where it belongs. Past the floor the tabs
+    overflow this row, which has visible overflow, so the rail's scrollable area
+    grows and the rail scrolls — the behaviour every paragraph above describes.
   */
   flex: 1;
   min-width: 0;
@@ -424,6 +449,24 @@
   flex: 0 1 var(--strip-tab-w);
   min-width: var(--strip-tab-min);
   max-width: var(--strip-tab-w);
+  /*
+    The same number a third time, and this one is what tells the *rail* how wide
+    a tab wants to be — 2026-08-21.
+
+    `flex-basis` answers that question only while something above has already
+    decided the rail's width. Once the rail sizes itself from its contents (see
+    `.strip-rail`), the tabs are measured intrinsically, and a shrinkable flex
+    item's intrinsic contribution is its own content clamped up by `min-width` —
+    not its basis. Measured in Chromium: with the rail at `0 1 auto` and this
+    declaration absent, every tab rendered at `--strip-tab-min` on a 1600px
+    window with three tabs open. With it, they render at 232 and still shrink to
+    147 at six tabs in 1000px, which is the giving the paragraph above is about.
+
+    It changes nothing while the flex algorithm is running: a definite
+    `flex-basis` wins over `width` for the base size, so the used width is the
+    one the paragraphs above describe.
+  */
+  width: var(--strip-tab-w);
   height: var(--strip-tab-h);
   padding: 0 var(--sp-1) 0 var(--sp-2);
   /* Top corners only. The bottom two are where the pane begins, and a radius

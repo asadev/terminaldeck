@@ -82,7 +82,7 @@ import {
   type DriveStatus,
 } from './drive-bridge'
 import { resolveOmnibox } from './omnibox'
-import { browserOverlayDom, isCovered, watchOverlays, type Rect as OverlayRect } from './overlay-watch'
+import { browserOverlayDom, isCovered, watchOverlays, type Overlay } from './overlay-watch'
 import { ConnectSessionButton } from './BindChip'
 import { MachinePicker } from './MachinePicker'
 import { forgetWindowMachine, setWindowMachine } from './window-machine'
@@ -205,6 +205,22 @@ export interface BrowserWorkspaceProps {
   tabId?: string
   /** Persist a new start page — the panel's own "set as start page" button. */
   onStartUrl?: (url: string) => void
+  /**
+   * Open Settings → Browser, for the ⋯ menu's `Settings` row.
+   *
+   * A door rather than a copy. Settings → Browser already holds the start page,
+   * the cookie controls and the profiles (`settings/sections/BrowserSection`),
+   * and the one thing missing was any way to reach it from inside the browser
+   * itself — *"then settings we have"*, said while looking at Chrome's own
+   * `chrome://settings`. The panel does not know how Settings is opened, which
+   * is why this is a prop and not a call: it is the shell's window, and this is
+   * a page inside it.
+   *
+   * Absent on a host with no Settings to open — the harness, an embedder — and
+   * then the row is simply not drawn, which is this panel's standing rule for a
+   * control that could not do anything.
+   */
+  onSettings?: () => void
   /**
    * Kept for hosts that still pass it; nothing in this panel calls it.
    *
@@ -424,6 +440,7 @@ export function BrowserWorkspace({
   startUrl = '',
   initialUrl = '',
   onStartUrl,
+  onSettings,
   bridge,
   sessionBridge,
   isolation,
@@ -867,7 +884,7 @@ export function BrowserWorkspace({
    * The intersection test below is what keeps it to the ones that actually land
    * on the page.
    */
-  const [overlays, setOverlays] = useState<OverlayRect[]>([])
+  const [overlays, setOverlays] = useState<Overlay[]>([])
   useEffect(() => {
     const dom = browserOverlayDom()
     if (!dom) return
@@ -2564,6 +2581,7 @@ export function BrowserWorkspace({
           url={active?.url ?? ''}
           startUrl={startUrl}
           onStartUrl={onStartUrl}
+          onSettings={onSettings}
           onFlow={recording.steps.length > 0 ? () => openAt(null, () => setFlowOpen(true)) : undefined}
           /* Only when there is no profile button to hold it — see `onCookies`
              in `BrowserMenu`. Site data belongs to a profile, and a build that

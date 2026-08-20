@@ -6,6 +6,7 @@ import {
   overlap,
   overlayRects,
   watchOverlays,
+  type Overlay,
   type OverlayDom,
   type OverlayElement,
   type Rect,
@@ -20,7 +21,11 @@ import {
  */
 
 /** A stand-in for a DOM element, with the box a test wants it to have. */
-function element(rect: Rect | null, inside: Record<string, OverlayElement> = {}): OverlayElement {
+function element(
+  rect: Rect | null,
+  inside: Record<string, OverlayElement> = {},
+  role: string | null = null,
+): OverlayElement {
   const box = rect ?? { x: 0, y: 0, width: 0, height: 0 }
   return {
     getBoundingClientRect: () => ({
@@ -30,7 +35,13 @@ function element(rect: Rect | null, inside: Record<string, OverlayElement> = {})
       height: box.height,
     }),
     querySelector: (selector) => inside[selector] ?? null,
+    getAttribute: (name) => (name === 'role' ? role : null),
   }
+}
+
+/** The same element, wearing the one attribute that says "hover hint". */
+function tooltip(rect: Rect): OverlayElement {
+  return element(rect, {}, 'tooltip')
 }
 
 const STAGE: Rect = { x: 264, y: 96, width: 900, height: 700 }
@@ -116,7 +127,9 @@ describe('isCovered, on the real geometry it got wrong', () => {
     // `Cookies and site data`, hanging off the browser toolbar's last button.
     // The toolbar's buttons end 9px above the page and `placeTip` hangs a bubble
     // 6px below its anchor, so it starts 3px clear and reaches 21px in.
-    expect(isCovered(PAGE, [{ x: 1296, y: 179, width: 135.90625, height: 24.375 }])).toBe(false)
+    expect(
+      isCovered(PAGE, [{ x: 1296, y: 179, width: 135.90625, height: 24.375, hint: true }]),
+    ).toBe(false)
   })
 
   it('parks it for a dialog, which arrives as a full-window scrim', () => {
@@ -129,7 +142,9 @@ describe('isCovered, on the real geometry it got wrong', () => {
     // The Shared/Isolated toggle's title is three lines. From the same toolbar
     // row as the Cookies bubble, it reaches 64px in — and a reader who cannot
     // see it has lost something, which is what the 21px bubble had not.
-    expect(isCovered(PAGE, [{ x: 1025, y: 179, width: 320, height: 67.5 }])).toBe(true)
+    expect(isCovered(PAGE, [{ x: 1025, y: 179, width: 320, height: 67.5, hint: true }])).toBe(
+      true,
+    )
   })
 
   it('parks it for a menu opened over the page', () => {
@@ -152,7 +167,7 @@ describe('isCovered, on the real geometry it got wrong', () => {
      * has to park the page. What made the tooltip different was its position,
      * not its size.
      */
-    expect(isCovered(PAGE, [{ x: 845, y: 500, width: 587, height: 24 }])).toBe(true)
+    expect(isCovered(PAGE, [{ x: 845, y: 500, width: 587, height: 24, hint: true }])).toBe(true)
   })
 
   it('treats all four edges the same way', () => {
@@ -161,23 +176,23 @@ describe('isCovered, on the real geometry it got wrong', () => {
     for (const [shallow, deep] of [
       // top
       [
-        { x: 900, y: PAGE.y - 4, width: 200, height: graze + 4 },
-        { x: 900, y: PAGE.y - 4, width: 200, height: land + 4 },
+        { x: 900, y: PAGE.y - 4, width: 200, height: graze + 4, hint: true },
+        { x: 900, y: PAGE.y - 4, width: 200, height: land + 4, hint: true },
       ],
       // bottom
       [
-        { x: 900, y: PAGE.y + PAGE.height - graze, width: 200, height: 80 },
-        { x: 900, y: PAGE.y + PAGE.height - land, width: 200, height: 200 },
+        { x: 900, y: PAGE.y + PAGE.height - graze, width: 200, height: 80, hint: true },
+        { x: 900, y: PAGE.y + PAGE.height - land, width: 200, height: 200, hint: true },
       ],
       // left
       [
-        { x: PAGE.x - 100, y: 300, width: 100 + graze, height: 200 },
-        { x: PAGE.x - 100, y: 300, width: 100 + land, height: 200 },
+        { x: PAGE.x - 100, y: 300, width: 100 + graze, height: 200, hint: true },
+        { x: PAGE.x - 100, y: 300, width: 100 + land, height: 200, hint: true },
       ],
       // right
       [
-        { x: PAGE.x + PAGE.width - graze, y: 300, width: 200, height: 200 },
-        { x: PAGE.x + PAGE.width - land, y: 300, width: 200, height: 200 },
+        { x: PAGE.x + PAGE.width - graze, y: 300, width: 200, height: 200, hint: true },
+        { x: PAGE.x + PAGE.width - land, y: 300, width: 200, height: 200, hint: true },
       ],
     ]) {
       expect(isCovered(PAGE, [shallow])).toBe(false)
@@ -188,11 +203,44 @@ describe('isCovered, on the real geometry it got wrong', () => {
   it('parks it for one real overlay among several grazes', () => {
     expect(
       isCovered(PAGE, [
-        { x: 1296, y: 179, width: 136, height: 24 },
-        { x: 0, y: 400, width: 264, height: 28 },
+        { x: 1296, y: 179, width: 136, height: 24, hint: true },
+        { x: 0, y: 400, width: 264, height: 28, hint: true },
         { x: 0, y: 0, width: 1440, height: 920 },
       ]),
     ).toBe(true)
+  })
+
+  /**
+   * The toolbar's own menus, measured off the recording of 2026-08-21.
+   *
+   * *"if I now click on three dots, the drop-down is coming in the backside,
+   * both of them. They should be the top first layer."* The profile menu opens
+   * from a button 25px above the page and is 61px tall, so it reaches 26px in —
+   * under the 32 this module calls a graze, which is why the page stayed
+   * composited and the menu's second row was painted over. A menu is not a
+   * hint, so the depth is not the question.
+   */
+  describe('the browser toolbar’s menus, which are not hints', () => {
+    /** The stage in that frame: full width of the panel, under a drive banner. */
+    const FRAME: Rect = { x: 252, y: 114, width: 1348, height: 828 }
+    /** `.bw-popup` holding the profile menu, hanging off the `D` button. */
+    const PROFILE_MENU: Overlay = { x: 1266, y: 79, width: 326, height: 61 }
+
+    it('parks the page for a short menu clipping its top edge', () => {
+      expect(isCovered(FRAME, [PROFILE_MENU])).toBe(true)
+    })
+
+    it('would not have, while the rule was written as a depth in pixels', () => {
+      // The same rectangle called a hint is the old answer, and it is kept as
+      // the statement of what changed: 26px of overlap, flush with the top.
+      expect(isCovered(FRAME, [{ ...PROFILE_MENU, hint: true }])).toBe(false)
+    })
+
+    it('parks it for the ⋯ menu beside it, which shares the anchor', () => {
+      // `BrowserMenu` is narrower — 19rem — and taller, because every row is a
+      // verb. Same corner, same top edge.
+      expect(isCovered(FRAME, [{ x: 1288, y: 79, width: 304, height: 148 }])).toBe(true)
+    })
   })
 })
 
@@ -212,11 +260,27 @@ describe('overlayRects', () => {
   it('collects the portals that a menu, a tooltip and a dialog become', () => {
     const app = element({ x: 0, y: 0, width: 1440, height: 900 })
     const menu = element({ x: 300, y: 100, width: 260, height: 300 })
-    const tip = element({ x: 20, y: 400, width: 180, height: 32 })
+    const tip = tooltip({ x: 20, y: 400, width: 180, height: 32 })
     const rects = overlayRects({ children: [app, menu, tip] }, app)
     expect(rects).toEqual([
-      { x: 300, y: 100, width: 260, height: 300 },
-      { x: 20, y: 400, width: 180, height: 32 },
+      { x: 300, y: 100, width: 260, height: 300, hint: false },
+      { x: 20, y: 400, width: 180, height: 32, hint: true },
+    ])
+  })
+
+  it('marks a surface a hint from its role and from nothing else', () => {
+    /*
+     * `role="tooltip"` is written by `Tooltips.tsx` and `HoverNote.tsx` because
+     * a screen reader needs it, so it is a fact that is already maintained. A
+     * rule keyed on a class name would be a second spelling of it, and the next
+     * hint somebody writes is the one that forgets the second spelling.
+     */
+    const app = element({ x: 0, y: 0, width: 1440, height: 900 })
+    const dialog = element({ x: 300, y: 100, width: 260, height: 300 }, {}, 'dialog')
+    const bubble = tooltip({ x: 20, y: 400, width: 180, height: 32 })
+    expect(overlayRects({ children: [app, dialog, bubble] }, app)).toEqual([
+      { x: 300, y: 100, width: 260, height: 300, hint: false },
+      { x: 20, y: 400, width: 180, height: 32, hint: true },
     ])
   })
 
@@ -238,7 +302,7 @@ describe('overlayRects', () => {
     const rail = element({ x: 0, y: 0, width: 264, height: 900 })
     const root = element({ x: 0, y: 0, width: 1440, height: 900 }, { '[data-peek]': rail })
     expect(overlayRects({ children: [root] }, root)).toEqual([
-      { x: 0, y: 0, width: 264, height: 900 },
+      { x: 0, y: 0, width: 264, height: 900, hint: false },
     ])
   })
 
@@ -250,7 +314,7 @@ describe('overlayRects', () => {
   it('survives a body with no app root at all', () => {
     const stray = element({ x: 10, y: 10, width: 40, height: 40 })
     expect(overlayRects({ children: [stray] }, null)).toEqual([
-      { x: 10, y: 10, width: 40, height: 40 },
+      { x: 10, y: 10, width: 40, height: 40, hint: false },
     ])
   })
 })
@@ -381,11 +445,11 @@ describe('watchOverlays', () => {
      * over the sidebar, so the page it is actually covering is never parked.
      */
     const fake = fakeDom()
-    const seen: Rect[][] = []
+    const seen: Overlay[][] = []
     const stop = watchOverlays(fake.dom, (rects) => seen.push(rects))
     expect(seen).toEqual([])
     fake.runFrame()
-    expect(seen).toEqual([[{ x: 300, y: 100, width: 200, height: 200 }]])
+    expect(seen).toEqual([[{ x: 300, y: 100, width: 200, height: 200, hint: false }]])
     stop()
   })
 
@@ -411,7 +475,7 @@ describe('watchOverlays', () => {
      * list each time.
      */
     const fake = fakeDom()
-    const seen: Rect[][] = []
+    const seen: Overlay[][] = []
     const stop = watchOverlays(fake.dom, (rects) => seen.push(rects))
     fake.runFrame()
     expect(seen.length).toBe(1)
@@ -425,7 +489,7 @@ describe('watchOverlays', () => {
 
   it('detaches everything it attached, and reports nothing afterwards', () => {
     const fake = fakeDom()
-    const seen: Rect[][] = []
+    const seen: Overlay[][] = []
     const stop = watchOverlays(fake.dom, (rects) => seen.push(rects))
     stop()
     fake.runFrame()

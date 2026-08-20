@@ -266,6 +266,16 @@ const LINK =
   'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7'
 
 /**
+ * The same link with a stroke through it — the corner-to-corner "off" slash.
+ *
+ * Drawn over {@link LINK} rather than as a separate broken-chain shape, because
+ * the two buttons sit side by side and the pair has to read as one subject: the
+ * link, and the link cancelled. A different chain drawn a different way at 13px
+ * is two glyphs somebody has to compare.
+ */
+const UNLINK_SLASH = 'M4 20L20 4'
+
+/**
  * Which session this browser window belongs to — asked from the browser.
  *
  * ## Why this exists
@@ -298,6 +308,30 @@ const LINK =
  * `B1` when it is attached, because that is the name the agent was given and the
  * name he says out loud; the glyph alone when it is not.
  *
+ * ## Why Disconnect is a second button and not another menu row
+ *
+ *   > *"When we connect any browser, and we should be have a button here to
+ *   > disconnect also, or it should only this way."*
+ *
+ * There was a way out and it was a gesture: re-click the ticked row in the
+ * checklist this button pops. On the window he filmed, nothing was ticked at
+ * all — the page was being driven and attached to no session — so the only exit
+ * was invisible *and* unreachable. A verb that exists only as the second press
+ * of a checkbox is a verb nobody finds.
+ *
+ * So the pair: `B1` opens the relation's menu, and the button beside it ends it,
+ * in one press, from the place he was already looking. It appears only while
+ * something is attached, which is the standing rule on this bar — a control that
+ * cannot do anything is not drawn — and it goes out on `browser:unbind`, which
+ * lands on the same `disconnect` in `browser-binding-ipc.ts` that the menu's own
+ * `Disconnect` row runs, so the two doors do the same amount of work. Ending the relation ends the drive with it,
+ * which is what makes this control the whole answer to "is this browser
+ * connected".
+ *
+ * It wears a one-word hover like every other glyph on this bar and spells the
+ * window out for a screen reader, which is the same bargain `Inspect`, `Record`
+ * and `Shot` make three buttons along.
+ *
  * ## And why the hover is one word
  *
  *   > *"when I hover, it should show the title, like shade, inspect, record.
@@ -315,7 +349,7 @@ export function ConnectSessionButton({ browserTabId }: { browserTabId: string })
   const found = useWindowBinding(browserTabId)
   const slot = found ? `B${found.window.n}` : ''
 
-  return (
+  const connect = (
     <button
       type="button"
       className="bind-button"
@@ -381,6 +415,47 @@ export function ConnectSessionButton({ browserTabId }: { browserTabId: string })
         <path d={LINK} />
       </svg>
     </button>
+  )
+
+  if (slot === '') return connect
+
+  return (
+    <span className="bind-control">
+      {connect}
+      <button
+        type="button"
+        className="bind-button"
+        data-detach=""
+        title="Disconnect"
+        /* The window, for a reader who has neither the glyph nor the `B1`
+           beside it — the same argument the button above makes about its own
+           name. */
+        aria-label={`Disconnect ${slot}`}
+        onClick={() => {
+          const deck = (window as unknown as { deck?: Record<string, unknown> }).deck
+          const unbind = deck?.browserUnbind as ((tabId: string) => void) | undefined
+          // Nothing at all on a preload without the channel, rather than a
+          // button that looks like it worked. The relation is main's, and a
+          // renderer that cannot reach main cannot end one.
+          unbind?.(browserTabId)
+        }}
+      >
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d={LINK} />
+          <path d={UNLINK_SLASH} />
+        </svg>
+      </button>
+    </span>
   )
 }
 
