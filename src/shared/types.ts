@@ -441,6 +441,20 @@ export interface DeckApi {
   }): void
   /** A browser window that has been closed. Its number is not handed out again. */
   browserWindowClosed(tabId: string): void
+  /**
+   * Main asking this window to close one of its browser tabs, by shell tab id.
+   *
+   * Optional, like every method a build may not have: an older preload simply
+   * does not offer it, and the main process's request times out into an honest
+   * "that window could not be closed" rather than a hang.
+   */
+  onBrowserDriveClose?(cb: (request: unknown) => void): () => void
+  /** The answer: true when there was a tab by that id and it was closed. */
+  browserDriveClosed?(id: string, closed: boolean): void
+  /** Main asking this window to bring one of its browser tabs to the front. */
+  onBrowserDriveShow?(cb: (request: unknown) => void): () => void
+  /** The answer: true when there was a tab by that id and it is now on screen. */
+  browserDriveShown?(id: string, shown: boolean): void
   /** Attach a browser window to a session, or move it from the session it is on. */
   browserBind(request: { tabId: string; sessionId: string; machineId?: string }): void
   /** Detach a browser window. The page stays open. */
@@ -689,6 +703,21 @@ export interface DeckApi {
   cancelMachineUpload(id: string): Promise<unknown>
   /** Slice-by-slice progress for the transfer to that machine. */
   onMachineUpload(cb: (progress: unknown) => void): () => void
+  /**
+   * Write bytes this window is holding to a file on **this** machine.
+   *
+   * The one channel in this API that carries file contents, and it carries them
+   * because a paste has no path to carry instead: pixels put on the clipboard by
+   * ⌘⇧⌃4 or by *Copy image* exist nowhere on the disk. Both halves of the rule in
+   * `renderer/session-transfer.ts` need a file — a session here is handed a path,
+   * and the leg to a session elsewhere reads from one by design — so the bytes
+   * become one first and the ordinary rule then runs over the path.
+   *
+   * A **name**, never a location. `local-stage.ts` reduces the name to one path
+   * component and owns the folder, which is the same folder a phone's upload
+   * lands in. Answers with the path it chose, or with a sentence.
+   */
+  stageForSession(name: string, bytes: ArrayBuffer): Promise<unknown>
 }
 
 declare global {

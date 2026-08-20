@@ -695,6 +695,15 @@ export function BrowserWorkspace({
   tabsRef.current = tabs
   const activeRef = useRef('')
   activeRef.current = activeKey
+  /**
+   * `closeTab`, reachable from the drive-open effect above it.
+   *
+   * A ref rather than a dependency because `closeTab` is declared several
+   * hundred lines further down, and a dependency array is evaluated during
+   * render — naming it there is a temporal-dead-zone throw on the first paint,
+   * not a lint warning. The same shape `titleRef` uses, for the same reason.
+   */
+  const closeTabRef = useRef<(key: string) => void>(() => {})
 
   const active = tabs.find((tab) => tab.key === activeKey) ?? null
   const recording = recordings[activeKey] ?? EMPTY_RECORDING
@@ -1050,6 +1059,17 @@ export function BrowserWorkspace({
       const request = readDriveOpen(raw)
       if (!request) return
       /*
+       * The pane it was addressed to answers, and no other one may.
+       *
+       * A drive-open used to be a broadcast that the first mounted panel took,
+       * and with the panel's own tab strip gone that meant a session's window —
+       * often the only browser pane open — answering the copilot's `browser.open`
+       * and covering the page he was looking at with one in no strip anywhere.
+       * Main picks the pane because main is the side that knows which panes are
+       * attached to a session; see `DriveOpenRequest.pane`.
+       */
+      if (request.pane !== null && request.pane !== tabId) return
+      /*
        * One panel answers, and only one.
        *
        * A browser page is a row in the sidebar, so several of these components
@@ -1059,11 +1079,34 @@ export function BrowserWorkspace({
        * nobody asked for, in panels nobody was looking at.
        */
       if (!claimDriveOpen(request.id)) return
-      openNewTab(request.url, false, request.isolate, (tabId) => {
-        driveApi.browserDriveOpened?.(request.id, tabId)
+      /*
+       * A pane holds one page, and the copilot's pane is not an exception.
+       *
+       * This panel's own tab strip is gone — a browser page is a row in the
+       * sidebar now — so a second page opened in here is a page nobody can
+       * reach: no strip lists it, no ✕ closes it, and it goes on running its
+       * timers until the pane itself is closed. The copilot reaches this line
+       * whenever a page has to be *built* rather than navigated, which is every
+       * change of isolation, so leaving the old one would put one unreachable
+       * page in the pane per flip.
+       *
+       * Closed first and reopened, which is the sequence `toggleIsolation`
+       * already uses for exactly the same physics: a partition is fixed when a
+       * view is constructed, so a switch is a new page or it is nothing.
+       *
+       * Only when main addressed the request — an unaddressed one is from a
+       * main process that predates the pane rule, and closing somebody's page
+       * on its say-so is the seizure being fixed, wearing a worse costume.
+       */
+      if (request.pane !== null) {
+        const showing = tabsRef.current.find((entry) => entry.key === activeRef.current)
+        if (showing) closeTabRef.current(showing.key)
+      }
+      openNewTab(request.url, false, request.isolate, (viewId) => {
+        driveApi.browserDriveOpened?.(request.id, viewId)
       })
     })
-  }, [driveApi, openNewTab])
+  }, [driveApi, openNewTab, tabId])
 
   /* -- first tab, and cleanup. */
   useEffect(() => {
@@ -1458,6 +1501,8 @@ export function BrowserWorkspace({
     const key = openNewTab(url, false, false)
     if (key !== '') setTabs((prev) => moveTab(prev, key, index))
   }, [closeTab, openNewTab])
+
+  closeTabRef.current = closeTab
 
   /* -- the extras, all of which need the claimed view. */
   const withId = useCallback(
@@ -2190,7 +2235,24 @@ export function BrowserWorkspace({
         covering it, so the site reflows once when a drive starts and not again
         while it runs.
       */}
-      <DriveBanner status={drive} onResume={(carryOn) => driveApi.browserDriveResume?.(carryOn)} />
+      {/*
+        And only over the page it is actually about.
+
+        The status names the page it describes — `tabId` is the main-process view
+        id, the same one a tab here carries — and until now nothing compared
+        them, because the drive held exactly one page and `idle` was taken to
+        mean "nobody anywhere". A session's agent can now hold several at once,
+        so a banner drawn on whatever tab happened to be in front would read
+        *"Copilot is driving"* over a page nobody is touching. Photographed on
+        2026-08-20, over a window belonging to a different session.
+
+        `IDLE_DRIVE` rather than a conditional render so the banner keeps
+        occupying no space in exactly the way it did when nothing was driving.
+      */}
+      <DriveBanner
+        status={drive.tabId !== null && drive.tabId === active?.id ? drive : IDLE_DRIVE}
+        onResume={(carryOn) => driveApi.browserDriveResume?.(carryOn)}
+      />
 
       {/*
         The two account bands, in the flow for the same reason `DriveBanner` is:

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { BLANK_URL } from './browser-url'
-import { LINK_TAB_CHANNEL } from './link-open'
 import {
   DRIVE_OPEN_CHANNEL,
   DRIVE_OPENED_CHANNEL,
@@ -11,19 +10,24 @@ import {
 } from './browser-drive-ipc'
 
 /**
- * `browser.open` on an app with no browser page open.
+ * Where the copilot's own page goes, and — since 2026-08-20 — where it does not.
  *
- * This is the whole of the reported defect, pinned. Asad asked his copilot to go
- * to a page and it could not — not because the driving was broken, which it is
- * not, but because the request was pushed at a `BrowserWorkspace` component that
- * was not mounted, nobody answered, and the tool refused. Reproduced on
- * 2026-08-18 against the packaged build on the first ask in a fresh window.
+ * The original defect these tests were written for was that `browser.open` on an
+ * app with no browser page open refused: the request was pushed at a
+ * `BrowserWorkspace` that was not mounted, nobody answered, and the copilot fell
+ * back to fetching the URL. That half still holds below.
  *
- * What these tests hold is the *connection*, which is the half this codebase has
- * repeatedly written and then left unwired: that a silent first attempt is
- * followed by a request for a browser page on the channel a window always
- * listens on, and that the retry re-pushes **the same id** so that the repeats
- * cannot each become a tab.
+ * The half that had to change is who may answer. The push is a broadcast and
+ * `claimDriveOpen` is first-come, so the pane that answered was whichever panel
+ * happened to be mounted — and measured in the running app, two calls from a
+ * cold start, that was a **session's own window**. The panel's tab strip is gone,
+ * so its page was not moved aside, it was covered by a page in no strip anywhere,
+ * and the binding map then pointed the session's window at the copilot's page.
+ *
+ * So the copilot now gets a pane of its own, asked for through the same channel
+ * every link uses, and the drive request is *addressed* to it. What these tests
+ * pin is that a pane is asked for before anything is driven, that the request
+ * names it, and that a pane belonging to somebody else is never reused.
  *
  * Fake timers throughout, because the real waits are five and eight seconds and
  * a test that spent thirteen seconds proving a timeout is a test somebody
@@ -57,20 +61,61 @@ function fakeIpcMain(): {
   }
 }
 
-describe('opening a browser page for a copilot that has none', () => {
+/**
+ * A stand-in for the binding wiring: panes that can be opened, are nobody's
+ * until said otherwise, and report a view when told to.
+ */
+function fakePanes() {
+  let seq = 0
+  const opened: { tabId: string; url: string }[] = []
+  const taken = new Set<string>()
+  const closed = new Set<string>()
+  const views = new Map<string, string>()
+  let refuse = false
+  return {
+    opened,
+    /** The person attached this pane to a session, or closed it. */
+    give: (tabId: string) => taken.add(tabId),
+    close: (tabId: string) => closed.add(tabId),
+    /** The renderer reported a view inside this pane. */
+    show: (tabId: string, viewId: string) => views.set(tabId, viewId),
+    refuseNext: () => {
+      refuse = true
+    },
+    api: {
+      open: async (url: string): Promise<string | null> => {
+        if (refuse) {
+          refuse = false
+          return null
+        }
+        seq += 1
+        const tabId = `browser:pane:${seq}`
+        opened.push({ tabId, url })
+        return tabId
+      },
+      free: (tabId: string): boolean => !taken.has(tabId) && !closed.has(tabId),
+      view: async (tabId: string): Promise<string | null> => views.get(tabId) ?? null,
+    },
+  }
+}
+
+describe('the pane the copilot drives', () => {
   let sent: Sent[]
   let fire: (channel: string, ...args: unknown[]) => void
+  let panes: ReturnType<typeof fakePanes>
   let openTab: (input: { url: string; isolate: boolean }) => Promise<string | null>
 
   beforeEach(() => {
     vi.useFakeTimers()
     sent = []
+    panes = fakePanes()
     const ipc = fakeIpcMain()
     fire = ipc.fire
     const drive = registerBrowserDriveIpc(ipc.ipcMain, {
       send: (channel, ...args) => {
         sent.push({ channel, args })
       },
+      pane: panes.api,
     })
     // The drive is the object under test only through its host, which is the
     // closure this module built. Reaching it through the constructed drive is
@@ -85,71 +130,111 @@ describe('opening a browser page for a copilot that has none', () => {
 
   const opens = (): Sent[] => sent.filter((entry) => entry.channel === DRIVE_OPEN_CHANNEL)
   const idOf = (entry: Sent): string => (entry.args[0] as { id: string }).id
+  const paneOf = (entry: Sent): unknown => (entry.args[0] as { pane?: unknown }).pane
 
-  it('answers with the tab when a workspace is already mounted, and asks for nothing else', async () => {
+  it('opens a pane of its own at the address, and drives the view that lands in it', async () => {
+    panes.show('browser:pane:1', 'view-1')
     const promise = openTab({ url: 'https://example.com/', isolate: false })
+
+    await expect(promise).resolves.toBe('view-1')
+    // Its own pane, at the target URL — one page in one pane, so nothing is
+    // covered and no second page is opened over it.
+    expect(panes.opened).toEqual([{ tabId: 'browser:pane:1', url: 'https://example.com/' }])
+    // Nothing was broadcast at all: there was nothing to *create* in a pane that
+    // opens at the address itself.
+    expect(opens()).toHaveLength(0)
+  })
+
+  it('never asks a pane that is somebody else’s — it opens another', async () => {
+    panes.show('browser:pane:1', 'view-1')
+    await expect(openTab({ url: 'https://example.com/', isolate: false })).resolves.toBe('view-1')
+
+    // He attaches the copilot's pane to a session, by hand, in its own menu.
+    // From that moment it is the session's window and the copilot moves out.
+    panes.give('browser:pane:1')
+    panes.show('browser:pane:2', 'view-2')
+    await expect(openTab({ url: 'https://example.org/', isolate: false })).resolves.toBe('view-2')
+
+    expect(panes.opened.map((entry) => entry.tabId)).toEqual(['browser:pane:1', 'browser:pane:2'])
+  })
+
+  it('reuses its own pane rather than opening a row per page', async () => {
+    panes.show('browser:pane:1', 'view-1')
+    await expect(openTab({ url: 'https://example.com/', isolate: false })).resolves.toBe('view-1')
+
+    // The view inside it died — an isolation switch, a crash — but the pane is
+    // still open and still nobody's, so the replacement goes in there.
+    const promise = openTab({ url: 'https://example.org/', isolate: false })
+    await vi.advanceTimersByTimeAsync(1)
     expect(opens()).toHaveLength(1)
-    fire(DRIVE_OPENED_CHANNEL, idOf(opens()[0]), 'browser:1')
+    expect(paneOf(opens()[0])).toBe('browser:pane:1')
+    fire(DRIVE_OPENED_CHANNEL, idOf(opens()[0]), 'view-2')
 
-    await expect(promise).resolves.toBe('browser:1')
-    expect(sent.some((entry) => entry.channel === LINK_TAB_CHANNEL)).toBe(false)
+    await expect(promise).resolves.toBe('view-2')
+    expect(panes.opened).toHaveLength(1)
   })
 
-  it('asks the window for a browser page when nothing answers, then drives the one it gets', async () => {
-    const promise = openTab({ url: 'https://example.com/', isolate: false })
+  it('addresses the request, so no other panel can claim it', async () => {
+    const promise = openTab({ url: 'https://example.com/', isolate: true })
+    await vi.advanceTimersByTimeAsync(1)
 
-    // Nobody is mounted: the first attempt runs out.
-    await vi.advanceTimersByTimeAsync(OPEN_TAB_TIMEOUT_MS)
+    // Isolated: the partition is fixed when the view is constructed, so the
+    // page has to be *created* by the renderer and the pane is opened blank.
+    expect(panes.opened).toEqual([{ tabId: 'browser:pane:1', url: BLANK_URL }])
+    const request = opens().at(-1) as Sent
+    expect(paneOf(request)).toBe('browser:pane:1')
+    expect((request.args[0] as { isolate: boolean }).isolate).toBe(true)
 
-    const install = sent.find((entry) => entry.channel === LINK_TAB_CHANNEL)
-    expect(install).toBeDefined()
-    // `about:blank` and not the target, or the link channel opens the page
-    // itself and the drive then opens a second tab at the same address.
-    expect(install?.args[0]).toEqual({ url: BLANK_URL })
-
-    // React mounts a `BrowserWorkspace`, which subscribes and hears a repeat.
-    await vi.advanceTimersByTimeAsync(INSTALL_REPUSH_MS * 2)
-    const second = opens().at(-1)
-    expect(second).toBeDefined()
-    fire(DRIVE_OPENED_CHANNEL, idOf(second as Sent), 'browser:2')
-
-    await expect(promise).resolves.toBe('browser:2')
+    fire(DRIVE_OPENED_CHANNEL, idOf(request), 'view-iso')
+    await expect(promise).resolves.toBe('view-iso')
   })
 
-  it('repeats the second request under one id, so the repeats cannot become one tab each', async () => {
-    const promise = openTab({ url: 'https://example.com/', isolate: false })
-    await vi.advanceTimersByTimeAsync(OPEN_TAB_TIMEOUT_MS)
-    const before = opens().length
+  it('repeats the request under one id while the pane’s panel mounts', async () => {
+    const promise = openTab({ url: 'https://example.com/', isolate: true })
     await vi.advanceTimersByTimeAsync(INSTALL_REPUSH_MS * 4)
 
-    const repeats = opens().slice(before)
+    const repeats = opens()
     expect(repeats.length).toBeGreaterThan(1)
     // One id across every repeat. `claimDriveOpen` in the renderer dedupes by
-    // id, so this is what stops four pushes producing four browser tabs.
+    // id, so this is what stops four pushes producing four pages.
     expect(new Set(repeats.map(idOf)).size).toBe(1)
 
     await vi.advanceTimersByTimeAsync(INSTALL_BROWSER_TIMEOUT_MS)
     await expect(promise).resolves.toBeNull()
   })
 
-  it('still answers null when the window will not produce a page at all', async () => {
-    const promise = openTab({ url: 'https://example.com/', isolate: false })
-    await vi.advanceTimersByTimeAsync(OPEN_TAB_TIMEOUT_MS + INSTALL_BROWSER_TIMEOUT_MS + 100)
-
+  it('answers null when no window will open a pane at all', async () => {
     // The browser switched off in Features is a real state and the tool has to
-    // be able to say so. A fallback that invented a window instead would be the
-    // "page you cannot see or close" this module refuses to make.
+    // be able to say so. A fallback that drove somebody else's pane instead
+    // would be the seizure this whole arrangement exists to stop.
+    panes.refuseNext()
+    await expect(openTab({ url: 'https://example.com/', isolate: false })).resolves.toBeNull()
+    expect(opens()).toHaveLength(0)
+  })
+
+  it('answers null when the pane opens and never reports a page', async () => {
+    const promise = openTab({ url: 'https://example.com/', isolate: false })
+    await vi.advanceTimersByTimeAsync(INSTALL_BROWSER_TIMEOUT_MS + 100)
     await expect(promise).resolves.toBeNull()
   })
 
   it('stops pushing once an answer arrives', async () => {
-    const promise = openTab({ url: 'https://example.com/', isolate: false })
-    await vi.advanceTimersByTimeAsync(OPEN_TAB_TIMEOUT_MS + INSTALL_REPUSH_MS)
-    fire(DRIVE_OPENED_CHANNEL, idOf(opens().at(-1) as Sent), 'browser:3')
-    await expect(promise).resolves.toBe('browser:3')
+    const promise = openTab({ url: 'https://example.com/', isolate: true })
+    await vi.advanceTimersByTimeAsync(INSTALL_REPUSH_MS)
+    fire(DRIVE_OPENED_CHANNEL, idOf(opens().at(-1) as Sent), 'view-3')
+    await expect(promise).resolves.toBe('view-3')
 
     const settled = opens().length
     await vi.advanceTimersByTimeAsync(INSTALL_REPUSH_MS * 5)
     expect(opens()).toHaveLength(settled)
+  })
+
+  it('waits no longer than the short budget on a pane that is already there', async () => {
+    panes.show('browser:pane:1', 'view-1')
+    await expect(openTab({ url: 'https://example.com/', isolate: false })).resolves.toBe('view-1')
+
+    const promise = openTab({ url: 'https://example.org/', isolate: false })
+    await vi.advanceTimersByTimeAsync(OPEN_TAB_TIMEOUT_MS + 10)
+    await expect(promise).resolves.toBeNull()
   })
 })

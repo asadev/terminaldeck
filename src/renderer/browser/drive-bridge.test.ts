@@ -36,11 +36,24 @@ describe('one panel answers an open request, and only one', () => {
 
 describe('what crosses the bridge is narrowed before anything acts on it', () => {
   it('reads a well-formed open request', () => {
-    expect(readDriveOpen({ id: 'a', url: 'https://x.test', isolate: true })).toEqual({
+    expect(
+      readDriveOpen({ id: 'a', url: 'https://x.test', isolate: true, pane: 'browser:1' }),
+    ).toEqual({
       id: 'a',
       url: 'https://x.test',
       isolate: true,
+      pane: 'browser:1',
     })
+  })
+
+  it('carries no pane when main named none, so an older main still opens a page', () => {
+    // `pane` addresses the request at one panel. A main process that predates
+    // the field names nobody, and the old first-to-answer behaviour is all
+    // there is — a null here must not become the string "null" or a panel that
+    // refuses everything.
+    expect(readDriveOpen({ id: 'a', url: 'https://x.test', isolate: true })?.pane).toBeNull()
+    expect(readDriveOpen({ id: 'a', url: 'https://x.test', pane: '' })?.pane).toBeNull()
+    expect(readDriveOpen({ id: 'a', url: 'https://x.test', pane: 7 })?.pane).toBeNull()
   })
 
   it('refuses a request with nothing to open or nothing to answer', () => {

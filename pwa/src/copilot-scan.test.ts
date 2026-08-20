@@ -81,9 +81,17 @@ describe('what is worth looking at first', () => {
 
   it('says only what the reason does not, and never invents a time', () => {
     const row = session({ status: 'working' })
-    // The wire carries no activity timestamp for a session this browser has
-    // never heard from, so there is nothing true to print.
-    expect(noteOf(row, null, NOW)).toBe('Nothing seen from this browser yet')
+    /*
+     * The wire carries no activity timestamp for a session this browser has
+     * never heard from, so there is nothing true to print — and an absence is
+     * drawn as an absence rather than narrated.
+     *
+     * It used to answer "Nothing seen from this browser yet", which turned up
+     * under a run that had just answered: busy on the machine, silent to *this*
+     * client, which is the common case on a page that was opened a minute ago.
+     * A sentence that is wrong on the row it appears on is worse than no line.
+     */
+    expect(noteOf(row, null, NOW)).toBe('')
     expect(noteOf(row, NOW - 4 * 60_000, NOW)).toBe('Last active 4m ago')
     expect(noteOf(session({ exitCode: 1 }), null, NOW)).toBe('Exit code 1')
   })

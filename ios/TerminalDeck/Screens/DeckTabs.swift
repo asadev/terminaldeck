@@ -306,6 +306,11 @@ struct MachinesView: View {
                 LazyVStack(spacing: 10) {
                     ForEach(model.hosts) { host in
                         MachineRow(host: host,
+                                   // From the model, not the host: two machines
+                                   // reporting one hostname drew two identical
+                                   // rows until the list broke the tie. See
+                                   // `DeckModel.label(for:)`.
+                                   name: model.label(for: host),
                                    isCurrent: host.id == model.current?.id,
                                    select: { model.select(host.id) },
                                    rename: { DispatchQueue.main.async { model.beginRename(host.id) } },
@@ -386,6 +391,8 @@ struct MachinesView: View {
  */
 private struct MachineRow: View {
     let host: HostLink
+    /// What this row is called *in this list* — see `DeckModel.label(for:)`.
+    let name: String
     let isCurrent: Bool
     let select: () -> Void
     let rename: () -> Void
@@ -402,7 +409,7 @@ private struct MachineRow: View {
                         .padding(.top, 2)
 
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(host.label)
+                        Text(name)
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(Theme.primary)
                             .lineLimit(1)
@@ -467,7 +474,7 @@ private struct MachineRow: View {
                 } label: {
                     // Named, because this menu is opened on a row and a phone
                     // paired with three machines is three identical menus.
-                    Label("Forget \(host.label)", systemImage: "minus.circle")
+                    Label("Forget \(name)", systemImage: "minus.circle")
                 }
                 .accessibilityIdentifier("machine.forget")
             } label: {
@@ -477,7 +484,7 @@ private struct MachineRow: View {
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
-            .accessibilityLabel("Actions for \(host.label)")
+            .accessibilityLabel("Actions for \(name)")
             .accessibilityIdentifier("machine.more.\(host.id)")
             .padding(.trailing, 6)
         }

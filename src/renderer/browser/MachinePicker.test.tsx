@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { MachinePicker } from './MachinePicker'
@@ -20,7 +22,8 @@ const OFFICE: MachineChoice = {
   name: 'office-pc',
   noun: 'PC',
   ports: [{ port: 5173, process: 'node', guessed: false, ours: false }],
-  refusal: null,
+  unreachable: null,
+  detail: null,
 }
 
 describe('the machine picker', () => {
@@ -91,14 +94,59 @@ describe('the machine picker', () => {
     expect(asServer).toBe(asDevice)
   })
 
-  it('still points at a machine that has gone, so the sentence can be read', () => {
-    // The selection is given back by the workspace, which also says why in the
-    // notice band. Until it does, the button names what it names — a picker that
-    // silently re-labelled itself would lose the only evidence of what happened.
-    const gone: MachineChoice = { ...OFFICE, refusal: 'This desktop is not connected to office-pc right now.' }
+  it('still points at a machine that has gone, so what happened can be read', () => {
+    // The selection is given back by the workspace, which also names the state
+    // in the notice band. Until it does, the button names what it names — a
+    // picker that silently re-labelled itself would lose the only evidence of
+    // what happened.
+    const gone: MachineChoice = { ...OFFICE, unreachable: 'Not connected' }
     const markup = renderToStaticMarkup(
       <MachinePicker machines={[gone]} selected="mach-1" onSelect={() => {}} />,
     )
     expect(markup).toContain('office-pc')
+  })
+
+  /**
+   * The paragraph that was in `f_125.jpg`, and the ceiling that keeps it out.
+   *
+   * The menu printed three lines under a greyed row — *"DESKTOP-DDGMNCV is not
+   * sharing what it is serving with this desktop. Either it is running an older
+   * version, or this desktop is a guest there…"* — which is the habit he has
+   * struck out more times than any other, and it was defending a refusal that
+   * has since been fixed rather than reworded.
+   *
+   * Pinned as a *shape* rather than as the absence of those particular words,
+   * because a reworded paragraph would pass a string test and fail a person.
+   */
+  it('puts no sentence in the menu, whatever a row has to say', () => {
+    const gone: MachineChoice = {
+      ...OFFICE,
+      unreachable: 'Cannot connect',
+      detail: 'The relay refused the credential.',
+    }
+    const markup = renderToStaticMarkup(<MachinePicker machines={[gone]} selected="" onSelect={() => {}} />)
+    // The closed control is all a DOM-less render can show, and the detail must
+    // not be in it at all — it is a `title` on a row inside the popup, which is
+    // only built when somebody opens it.
+    expect(markup).not.toContain('The relay refused the credential')
+    expect(markup).not.toContain('older version')
+
+    /*
+     * And the popup itself, which no render in this project can reach, held
+     * structurally instead — the same trick `plain-words.test.ts` uses one
+     * folder over, and for the same reason: copy comes back one element at a
+     * time, added by somebody who has a good reason for that one.
+     *
+     * A row is a button and a label at the end of it. A paragraph in this file
+     * is somebody explaining again.
+     */
+    const source = readFileSync(join(__dirname, 'MachinePicker.tsx'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^[ \t]*\/\/.*$/gm, '')
+    // One paragraph in the file, and it is the menu's three-word heading.
+    // Anything else is a row that has started explaining itself.
+    const paragraphs = [...source.matchAll(/<p[\s>][^>]*>/g)].map((match) => match[0])
+    expect(paragraphs).toEqual(['<p className="bw-menu-title">'])
+    expect(source).not.toContain('bw-menu-note')
   })
 })

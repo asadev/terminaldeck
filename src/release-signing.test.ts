@@ -39,9 +39,11 @@ describe('the macOS signing script', () => {
   })
 
   it('only skips notarization when a human typed --signed-only', () => {
-    // Signing without notarizing is a real, defensible mode — right-click > Open
-    // works, where an unsigned build is a dead end that reads as a corrupt
-    // download. It is defensible precisely because it is chosen. A fallback that
+    // Signing without notarizing is a real, defensible mode — System Settings >
+    // Privacy & Security > Open Anyway works, where an unsigned build is a dead
+    // end that reads as a corrupt download. (Right-click > Open stopped being a
+    // way past Gatekeeper in macOS 15; the release notes say Open Anyway.)
+    // It is defensible precisely because it is chosen. A fallback that
     // triggers itself on a failed submission would silently downgrade every
     // release the moment Apple had a bad afternoon, and nobody would notice
     // until a user complained.

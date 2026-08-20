@@ -538,6 +538,29 @@ describe('the screenshot popup', () => {
     // typed into a terminal, and it would be a megabyte of it.
     expect(line).not.toContain('base64')
   })
+
+  /**
+   * The R1 case, and the reason the third argument exists.
+   *
+   * `shot.path` is a path under this Mac's Pictures folder. Sent to a session on
+   * a Windows PC it names a file that session cannot open, which is exactly what
+   * shipped: *"it will send the path of my current PC instead of the server
+   * where actually session is running."* What the message must carry is the path
+   * that machine answered the upload with.
+   */
+  it('names the file by the path the session own machine answered with', () => {
+    const shot = { path: '/Users/apple/Pictures/Terminal Deck/page.png', width: 100, height: 50, preview: '' }
+    const line = composeShot(shot, 'look at this', 'C:\\Users\\asad\\Downloads\\Terminal Deck\\page.png')
+    expect(line).toContain('C:\\Users\\asad\\Downloads\\Terminal Deck\\page.png')
+    expect(line).not.toContain('/Users/apple/Pictures')
+  })
+
+  it('falls back to the local path when nothing had to cross', () => {
+    const shot = { path: '/Users/apple/Pictures/Terminal Deck/page.png', width: 100, height: 50, preview: '' }
+    // A session on this computer: `pathForSession` answers the same path it was
+    // given, so the two strings are identical and nothing looks different.
+    expect(composeShot(shot, '', '')).toContain('/Users/apple/Pictures/Terminal Deck/page.png')
+  })
 })
 
 /**

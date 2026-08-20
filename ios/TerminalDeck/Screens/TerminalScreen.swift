@@ -58,6 +58,19 @@ struct TerminalScreen: View {
     /// Whether the details sheet is up: the folder this session runs in, its
     /// agent, its status and the machine it is on. See `SessionDetailView`.
     @State private var showingDetails = false
+    /**
+     * Whether this session is being read as a conversation rather than as a
+     * terminal.
+     *
+     * The two are the same session and the same socket — chat mode is a
+     * different *view*, not a second channel — so switching costs nothing on
+     * the far machine and a message typed in one appears in the other.
+     *
+     * The terminal is not rebuilt on the way back: `TerminalHostView` hands
+     * back `bridge.container`, a UIView the bridge owns, so taking it out of
+     * the hierarchy and putting it back keeps the emulator and its scrollback.
+     */
+    @State private var chatMode = false
 
     /// The two ways in. Both run out of process; see `FilePickers.swift`.
     private enum Picking: String, Identifiable {
@@ -118,8 +131,14 @@ struct TerminalScreen: View {
              * above the keyboard, and it is also what makes the inset below
              * disappear while somebody is typing.
              */
-            TerminalHostView(bridge: bridge)
-                .ignoresSafeArea(.container, edges: .bottom)
+            if chatMode, let bar = host?.bar {
+                SessionChatView(bar: bar, send: connection.isLive ? { message in
+                    host?.sendChatMessage(message, into: sessionID)
+                } : nil)
+            } else {
+                TerminalHostView(bridge: bridge)
+                    .ignoresSafeArea(.container, edges: .bottom)
+            }
 
             // Over the terminal rather than above it. See `FindBar`: inserting
             // it into the layout would take rows off the session, which is a
@@ -162,6 +181,33 @@ struct TerminalScreen: View {
         .toolbar {
             ToolbarItem(placement: .principal) { header }
             ToolbarItemGroup(placement: .topBarTrailing) {
+                /*
+                 * The glyph is the **destination**, not the current mode.
+                 *
+                 * His correction rather than a preference, and it reverses what
+                 * was built the first time: *"chat icon should be when I am on
+                 * the terminal mode. And when I am on the chat mode, then it
+                 * should show the terminal icon."* So the icon always names
+                 * where the press goes.
+                 *
+                 * Absent — not disabled — when this machine cannot read a
+                 * transcript at all, and absent again when it has looked and
+                 * found none for this folder. Both are real states (a session
+                 * running a shell, a desktop older than the capability) and the
+                 * alternative is a button that opens an empty screen with
+                 * nothing on it to say why.
+                 */
+                if showsModeButton {
+                    Button {
+                        toggleMode()
+                    } label: {
+                        Image(systemName: chatMode ? "terminal" : "bubble.left.and.bubble.right")
+                    }
+                    .accessibilityLabel(chatMode ? "Back to the terminal"
+                                                 : "Read this session as a conversation")
+                    .accessibilityIdentifier("terminal.mode")
+                }
+
                 Menu {
                     /*
                      * Find, at the top, because on a phone it is the thing this
@@ -349,6 +395,21 @@ struct TerminalScreen: View {
                     // reading the session while it runs.
                     UploadRow(upload: upload) { host?.clearUpload() }
                 }
+                /*
+                 * The session's own row: usage, context, account.
+                 *
+                 * Here rather than in the navigation bar because the bar is the
+                 * *machine* and its actions, and these three are about the one
+                 * session on screen. It draws nothing until an answer arrives
+                 * and nothing ever if the machine does not answer `usage` and
+                 * `account`, so a desktop older than those capabilities gets a
+                 * screen that is exactly what it was — not a row explaining
+                 * what it is missing.
+                 *
+                 * Above both modes, because these are facts about the session
+                 * and not about which way it is being read.
+                 */
+                if let bar = host?.bar { SessionBarView(bar: bar) }
             }
         }
         // Out-of-process pickers. Nothing in this app reads the photo library, so
@@ -402,6 +463,9 @@ struct TerminalScreen: View {
             // this tells the model to discount. See `DeckModel.watchedGrace`.
             model.watchingSession(sessionID, on: hostID)
             host?.attach(sessionID)
+            // After the attach, because the three questions it asks are about a
+            // session this socket has been told is on screen.
+            host?.bar.follow(sessionID)
         }
         .onDisappear {
             bridge.onCopy = nil
@@ -413,6 +477,11 @@ struct TerminalScreen: View {
             // held, and a finger would stop driving vim in that session.
             find?.close()
             host?.detach(sessionID)
+            // Nothing about this session is worth holding once its screen has
+            // gone: a ring from a session nobody is looking at is a ring that
+            // will be wrong by the time anybody does.
+            host?.bar.forget()
+            chatMode = false
             // The moment the grace period is measured from: whatever the desktop
             // decides about this session in the next few seconds is the tail of
             // what he was just watching, not news.
@@ -423,6 +492,36 @@ struct TerminalScreen: View {
         // it did nothing: on iOS 26.5 the pill stayed drawn over the bottom rows
         // of a live terminal. `DeckTabs` states it at the `TabView`, which is
         // what owns the floating bar; `DeckChrome` holds the rule.
+    }
+
+    // MARK: - Mode
+
+    /**
+     * Whether the conversation can be reached from here at all.
+     *
+     * Four facts and every one of them load bearing: a live socket, a machine
+     * that said it can read a transcript, and — once it has answered — that it
+     * found one. The fourth is the way back: the button stays while the chat is
+     * on screen even if the answer says there is no transcript, because a screen
+     * with no way off it is worse than a button that does nothing new.
+     */
+    private var showsModeButton: Bool {
+        guard connection.isLive, host?.bar.canReadChat == true else { return false }
+        if chatMode { return true }
+        return host?.bar.transcript != false
+    }
+
+    /// Swap the pane, and ask for the conversation the first time.
+    private func toggleMode() {
+        chatMode.toggle()
+        host?.bar.chatting = chatMode
+        if chatMode {
+            // The keyboard belongs to the terminal it was raised over. Leaving
+            // it up would put the composer under it with the conversation
+            // squeezed into whatever is left.
+            bridge.blur()
+            host?.bar.askChat(tail: false)
+        }
     }
 
     // MARK: - Find, share, size

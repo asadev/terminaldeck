@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { terminalTheme } from '../components/TerminalView'
@@ -10,14 +10,15 @@ import { useTerminalFind } from '../components/TerminalView'
 import { holdUntilFilled, QUIET_MS } from '../components/terminal-backfill'
 import { subscribeTheme } from '../theme'
 import { attachRenderer } from '../terminal-renderer'
-import { PASTE_TOO_BIG, attachClipboardOsc } from '../terminal-clipboard'
+import { PASTE_TOO_BIG, attachClipboardOsc, pasteFilesInto, pastedFiles } from '../terminal-clipboard'
+import { TransferNote, useTransferNote } from '../components/TransferNote'
+import { pathForSession } from '../session-transfer'
 import { overPasteCap } from '../../shared/paste-cap'
 import {
   draggingFiles,
   droppedPaths,
   droppedText,
   promptWord,
-  readUploadOutcome,
   resolveDropBridge,
   transferLine,
 } from '../terminal-drop'
@@ -168,9 +169,6 @@ interface Props {
   fontFamily?: string
 }
 
-/** How long a refusal stays on screen. Long enough to read twice. */
-const NOTE_MS = 6000
-
 export const DEFAULT_REMOTE_FONT_SIZE = 13
 
 export function RemoteTerminal({
@@ -185,33 +183,26 @@ export function RemoteTerminal({
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   /*
-   * The one line this pane may draw over the terminal, and the timer that takes
-   * it away again.
+   * The one line this pane may draw over the terminal.
    *
-   * It exists because of the rule this whole pass is under: **a silent failure
-   * is the worst outcome**. A paste that is refused, a clipboard this window
-   * cannot reach, a file that did not send — every one of those used to be
-   * nothing at all happening, which is indistinguishable from the feature not
-   * existing. It is one line and never a paragraph; his standing rule this round
-   * is that there is no explanatory prose on screen.
-   *
-   * Nothing is ever *typed* here. A note is drawn over the pane, so a session's
-   * transcript still contains only what the person and the agent put in it.
+   * Moved into `components/TransferNote.tsx` so that a local session gets the
+   * identical line for the identical reason — a paste of an image into a session
+   * on this computer can fail too, and a pane that refused silently while the
+   * pane beside it said so would be the app changing shape between local and
+   * remote. Its header carries the whole argument, including why nothing here is
+   * ever a sentence explaining a path.
    */
-  const [note, setNote] = useState('')
-  const noteTimer = useRef<number | null>(null)
-  const say = useCallback((line: string, sticky = false) => {
-    setNote(line)
-    if (noteTimer.current !== null) window.clearTimeout(noteTimer.current)
-    // A progress line is replaced by the next one and cleared when the transfer
-    // ends, so it holds; a refusal is read once and should not sit on somebody's
-    // terminal for the rest of the session.
-    noteTimer.current =
-      line === '' || sticky ? null : window.setTimeout(() => setNote(''), NOTE_MS)
-  }, [])
-  useEffect(() => () => {
-    if (noteTimer.current !== null) window.clearTimeout(noteTimer.current)
-  }, [])
+  const { line: note, say } = useTransferNote()
+  /*
+   * Whether the bytes going into the terminal right now are the far machine's
+   * replayed scrollback rather than the session speaking.
+   *
+   * A ref rather than state: it is read inside a parser callback registered once
+   * for the life of the terminal, and a re-render is neither wanted nor useful.
+   * True to begin with, because the first thing a fresh attach receives *is* the
+   * replay.
+   */
+  const replaying = useRef(true)
   /*
    * Destructured, because the hook hands back a fresh object every render and
    * `attach` is the only half that may go in a dependency list. Holding the
@@ -259,7 +250,17 @@ export function RemoteTerminal({
      * `terminal-clipboard.ts` carries the whole of it, including why the *read*
      * form of the same sequence is refused and never answered.
      */
-    const detachClipboard = attachClipboardOsc(term, (line) => say(line))
+    /*
+     * `replaying` is what keeps this honest across the wire. Every frame the far
+     * machine sends carries the flag; it is set while the scrollback is coming
+     * and cleared by the first frame that is the session speaking now. Without
+     * it, opening a tab on a session where anything had *ever* copied would
+     * overwrite this Mac's clipboard with an hour-old string, silently, with
+     * nobody having pressed a thing.
+     */
+    const detachClipboard = attachClipboardOsc(term, (line) => say(line), {
+      accept: () => !replaying.current,
+    })
 
     /*
      * A paste bigger than this wire will carry, refused where it can be seen.
@@ -270,6 +271,28 @@ export function RemoteTerminal({
      * silent failure again, one layer down.
      */
     const onPaste = (event: ClipboardEvent): void => {
+      /*
+       * A file or an image on the clipboard, pasted at a session on another
+       * computer.
+       *
+       * Exactly a drop, arriving through a different gesture, so it is exactly
+       * the drop's code: the same `pathForSession`, the same `promptWord` typed
+       * at the prompt, the same one line while it crosses. Asad, 2026-08-20:
+       * *"the way we can paste in the mobile terminal — if I paste anything it
+       * quickly uploads and it sends the paste local path from that device in
+       * the session."*
+       *
+       * Checked before the text branch because a paste can carry both — copying
+       * a file in Finder puts the file *and* its name on the clipboard, and
+       * typing the name would be the plausible wrong answer.
+       */
+      const carried = pastedFiles(event.clipboardData, resolveDropBridge())
+      if (carried.length > 0) {
+        event.preventDefault()
+        event.stopPropagation()
+        void pasteFilesInto(carried, { machineId }, () => termRef.current, say)
+        return
+      }
       const text = event.clipboardData?.getData('text') ?? ''
       if (text === '' || !overPasteCap(text)) return
       event.preventDefault()
@@ -299,7 +322,24 @@ export function RemoteTerminal({
     const backfill = holdUntilFilled(term, host, { quiet: QUIET_MS })
     const offData = subscribe((data, replay) => {
       backfill.push(data)
-      if (!replay) backfill.release()
+      if (replay) return
+      /*
+       * The first frame that is not replay ends the hold — and ends the
+       * clipboard suppression, but **not until xterm has parsed what is
+       * already queued**.
+       *
+       * `release` writes the held scrollback and this frame as one `term.write`,
+       * so clearing the flag on this line would leave the whole replay parsing
+       * with the flag already down: every OSC 52 in an hour of history would
+       * land on this Mac's clipboard, which is precisely what the flag exists to
+       * prevent. A zero-length write behind it is the ordering primitive xterm
+       * offers — chunks are parsed in the order they were queued, and this
+       * callback fires after the one in front of it has been consumed.
+       */
+      backfill.release()
+      term.write('', () => {
+        replaying.current = false
+      })
     })
 
     // Fitted before the attach, so the first screen the far machine paints is
@@ -457,7 +497,13 @@ export function RemoteTerminal({
       }
 
       for (const path of paths) {
-        const outcome = readUploadOutcome(await bridge.uploadToMachine(machineId, path))
+        // Through the one module that owns "which machine must this file be on",
+        // rather than calling the upload directly as this handler used to. It is
+        // the same wire — `uploadToMachine`, `machines:upload`, the four
+        // `upload.*` verbs the phone sends — reached through the function the
+        // browser's screenshot and a paste now reach it through as well, so a
+        // fourth entry point cannot answer the question differently.
+        const outcome = await pathForSession({ machineId }, { path })
         // Re-read rather than reused: a transfer takes as long as it takes, and
         // the pane can be closed or the session left while it is running. The
         // terminal captured before the await would be a disposed one, and
@@ -535,48 +581,6 @@ export function RemoteTerminal({
       <div ref={hostRef} className="terminal-surface" />
       {findBar}
       <TransferNote line={note} />
-    </div>
-  )
-}
-
-/**
- * One line over the bottom of the terminal, or nothing.
- *
- * Inline styles rather than a class in `machines.css`, following the decision
- * the wrapper above already made and for the same reason: the stylesheets belong
- * to another lane this pass. It reads its colours from the app's own tokens, so
- * it follows the theme like everything else, and it is `pointer-events: none` so
- * a line that is still fading cannot swallow a click meant for the session
- * underneath it.
- *
- * `aria-live` because this is the only announcement of a refusal: somebody using
- * a screen reader pressed ⌘V and has even less to go on than somebody watching
- * the pane.
- */
-function TransferNote({ line }: { line: string }) {
-  if (line === '') return null
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      style={{
-        position: 'absolute',
-        left: 8,
-        right: 8,
-        bottom: 8,
-        padding: '4px 8px',
-        borderRadius: 6,
-        background: 'var(--chrome-solid, rgba(0,0,0,0.72))',
-        color: 'var(--text, #e6e6e6)',
-        border: '1px solid var(--border, rgba(255,255,255,0.12))',
-        font: '12px/1.4 var(--font-ui, system-ui, sans-serif)',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        pointerEvents: 'none',
-      }}
-    >
-      {line}
     </div>
   )
 }

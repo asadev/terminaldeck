@@ -22,19 +22,32 @@ decisions are recorded in `PLAN-FINAL.md` rather than queued for him.
 
 Holding the release to be safe is the failure mode he named. Do not repeat it.
 
-## Notarization is blocked at Apple, and is not a reason to hold
+## Notarization is refused at Apple, and is not a reason to hold
 
-Re-checked 2026-08-18 00:40. Five submissions still `In Progress`, the oldest
-from 14 August and the newest a **fresh probe from 17 August 12:51** — twelve
-hours and counting on an artifact that is a few hundred bytes. A hold that
-catches a probe is a hold on the account, not on any build this repo produces,
-and no amount of rebuilding clears it. Only Apple Developer Support can.
+Re-checked 2026-08-20 16:23. The earlier reading of this as a queue was wrong:
+nothing was ever `In Progress` for long. Every submission this account has made
+came back **`Rejected`**, statusCode **7000**:
+
+> Team is not yet configured for notarization. Please contact Developer Programs
+> Support at developer.apple.com under the topic Development and Technical.
+
+A fresh probe on 20 August was answered in **fourteen seconds**. So this is a
+provisioning state on the developer account, not a backlog — waiting and
+re-submitting do nothing, and it will not clear on its own. **Only the account
+holder opening a support request with Apple clears it.** Re-check with:
+
+```sh
+xcrun notarytool history --key ~/private_keys/AuthKey_<id>.p8 --key-id <id> --issuer <uuid>
+xcrun notarytool log <submission-id> --key ... --key-id ... --issuer ...
+```
 
 `TD_MAC_SIGNED_ONLY` is `true`, so the release workflow signs, skips
-notarization, and ships an install note telling people to right-click → Open
-once. That is a real Developer ID signature and it is checkable
-(`codesign -dv --verbose=2`) — it is **not** the "app is damaged" state that
-unsigned builds produce. Flip the variable back to `false` the day Apple answers.
+notarization, and ships an install note giving the **System Settings → Privacy
+& Security → Open Anyway** route. (Not right-click → Open: macOS 15 removed that
+bypass, and on macOS 15+ it is the same dead end as a double-click.) That is a
+real Developer ID signature and it is checkable (`codesign -dv --verbose=2`) —
+it is **not** the "app is damaged" state that unsigned builds produce. Flip the
+variable back to `false` the day Apple answers.
 
 ---
 

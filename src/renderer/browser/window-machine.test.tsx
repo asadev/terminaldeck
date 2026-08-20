@@ -38,12 +38,17 @@ beforeEach(() => {
 /**
  * The store's one consumer, which is how it is read here.
  *
- * It used to be probed through `WindowMachineMark` — a 12px glyph on the tab
- * whose tooltip held the machine's name. That mark is gone: the audit's verdict
- * on it was that the fact he asked to see was still on no surface without a
- * hover, and that nothing showed a machine's sessions and its windows together.
- * The name is a **heading over the machine's run of tabs** now, so this file
- * asks the strip, which is where the answer is drawn.
+ * It used to be probed through `WindowMachineMark` — a 12px glyph on the tab —
+ * and then through a **heading over the machine's run of tabs**. The heading is
+ * gone too, and by name: Asad, 2026-08-20, about this bar in particular, *"We
+ * don't need any kind of separation like this for the device on the top with the
+ * name… This was actually for the side panel only, but not for the top bar."*
+ *
+ * So the answer is on the tab's own hover, which is where `tabTooltip` already
+ * puts a *session's* machine — the two kinds of tab now say the same thing in
+ * the same place, which they never did while one of them had a heading. The rail
+ * still groups by machine; this file asks the strip, because the strip is the
+ * surface the sentences above are about.
  */
 const TABS: WorkspaceTab[] = [
   { id: 'here', kind: 'session', label: 'Session 1', status: 'idle', closable: true },
@@ -97,24 +102,37 @@ describe('the store', () => {
 
 describe('what the bar says about it', () => {
   it('says nothing at all when every window is on this computer', () => {
-    // Not a greyed glyph, not a heading reading "This computer". A mark on every
+    // Not a greyed glyph, not a chip reading "This computer". A mark on every
     // tab to report that nothing unusual is true is the same defect as the
     // browser status dot the strip refused.
-    expect(strip()).not.toContain('strip-group')
+    const html = strip()
+    expect(html).not.toContain('strip-group')
+    expect(html).not.toContain('on Office PC')
   })
 
-  it('puts the machine’s name over its own run, not inside a tooltip', () => {
+  it('puts the machine in the tab’s own hover, and nothing between the tabs', () => {
     /*
-     * The E11 fix, stated as the difference it makes: the name is *text on the
-     * bar*, and the tabs under it are that machine's — its browser windows and,
-     * when it has any, its sessions. Before this it was a `title` on a 12px
-     * glyph, which is the state the audit called out.
+     * Both halves of the same requirement, which is why they are one test.
+     *
+     * The truth is still said — *"we always need a truth"* — and it is said the
+     * way a session's machine is already said, on the tab's title. What is not
+     * on the bar any more is a heading, a chip, or anything else standing
+     * between two tabs: *"All the sessions should be all together without any
+     * separation and any extra tab which is telling this belongs to that."*
      */
     setWindowMachine('b1', { id: 'mach-1', name: 'Office PC' })
     const html = strip()
-    expect(html).toContain('class="strip-group-name">Office PC<')
-    // And the tab itself carries no machine mark any more.
+    expect(html).toContain('title="New tab\non Office PC"')
+    expect(html).not.toContain('strip-group')
+    // And the tab itself still carries no machine mark.
     expect(html).not.toContain('tab-machine-mark')
+  })
+
+  it('leaves a session’s tab alone — its machine is already on its own title', () => {
+    // `tabTooltip` answers for a session, off the tab itself. Two answers to one
+    // question is how a bar ends up saying the machine twice.
+    setWindowMachine('b1', { id: 'mach-1', name: 'Office PC' })
+    expect(strip()).toContain('title="Session 1"')
   })
 })
 

@@ -200,7 +200,12 @@ export function serverChoices(
       name: server.name,
       noun: 'server',
       ports: state?.state === 'ready' ? state.ports : [],
-      refusal: state?.state === 'refused' ? state.message : null,
+      // A label, because a server writes its own refusal and this row cannot
+      // know how long it will be. The server's sentence is kept as the row's
+      // `title` — see `MachineChoice.detail` — so nothing is lost and nothing
+      // arbitrary is printed into a 19rem menu.
+      unreachable: state?.state === 'refused' ? 'Refused' : null,
+      detail: state?.state === 'refused' ? state.message : null,
     }
   })
 }

@@ -11,8 +11,11 @@ import {
   resolve,
   sessionExited,
   sessionRemoved,
+  slotNumber,
   view,
   windowClosed,
+  windowNamed,
+  windowsOf,
 } from './browser-binding'
 import { BRAND } from '../shared/brand'
 
@@ -244,5 +247,56 @@ describe('lifecycle', () => {
     attach({ sessionId: 's2', browserTabId: 'b' })
     hostReset()
     expect(view().sessions).toEqual([])
+  })
+})
+
+describe('a name a session says out loud, resolved', () => {
+  it('reads B2, b2 and 2 as the same window, and nothing else as any window', () => {
+    expect(slotNumber('B2')).toBe(2)
+    expect(slotNumber('b2')).toBe(2)
+    expect(slotNumber(' 2 ')).toBe(2)
+    expect(slotNumber('B0')).toBe(null)
+    expect(slotNumber('W2')).toBe(null)
+    expect(slotNumber('B2 (Stripe)')).toBe(null)
+    // The id underneath a window is never a name. An agent that had somehow
+    // seen one must not be able to use it as one.
+    expect(slotNumber('browser:1755000000000:3')).toBe(null)
+  })
+
+  it('resolves a name inside the session that holds it', () => {
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1', viewId: 'v1' })
+    attach({ sessionId: 's1', browserTabId: 'browser:1:2', viewId: 'v2' })
+
+    expect(windowNamed('s1', 'B2')?.browserTabId).toBe('browser:1:2')
+    expect(windowsOf('s1').map((window) => window.n)).toEqual([1, 2])
+  })
+
+  /**
+   * The whole permission check, stated as the sentence it protects.
+   *
+   * Two sessions each have a `B1`. If a name resolved against the map rather
+   * than against one session's own list, an agent could reach the page in the
+   * window next door by asking for `B1` with a neighbour's id — and worse,
+   * could learn *that it exists* by the refusal changing shape.
+   */
+  it('will not resolve another session’s window, by any name', () => {
+    attach({ sessionId: 'mine', browserTabId: 'browser:1:1', viewId: 'v1' })
+    attach({ sessionId: 'theirs', browserTabId: 'browser:2:1', viewId: 'v2' })
+
+    expect(windowNamed('mine', 'B1')?.browserTabId).toBe('browser:1:1')
+    // `theirs` has a B1 and `mine` does not have a B2. Both answer the same
+    // way, which is what makes one refusal sentence honest for both.
+    expect(windowNamed('mine', 'B2')).toBe(null)
+    expect(windowNamed('nobody', 'B1')).toBe(null)
+  })
+
+  it('forgets a window the moment it is detached', () => {
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1', viewId: 'v1' })
+    expect(windowNamed('s1', 'B1')).not.toBe(null)
+
+    detach('browser:1:1')
+
+    expect(windowNamed('s1', 'B1')).toBe(null)
+    expect(windowsOf('s1')).toEqual([])
   })
 })

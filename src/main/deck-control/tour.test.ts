@@ -36,6 +36,7 @@ function sessionView(over: Partial<SessionView> = {}): SessionView {
     title: 'api',
     provider: 'shell',
     status: 'idle',
+    windows: [],
     statusSince: 1_000,
     attention: 'quiet',
     attentionReason: 'no-output',

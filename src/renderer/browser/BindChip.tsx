@@ -403,8 +403,11 @@ export function ConnectSessionButton({ browserTabId }: { browserTabId: string })
  * the audit found the fact still reachable only by hovering, and nothing at all
  * showing a machine's sessions and its windows together.
  *
- * The strip groups its tabs by machine now and draws the name once, as a heading
- * over the run: `stripGroups` in `workspace-strip.ts` holds the arrangement and
- * `.strip-group` in `WorkspaceTabStrip.css` holds the look. The store it read
- * from — `window-machine.ts` — is unchanged, and is what the grouping reads.
+ * The strip grouped its tabs by machine for a few hours and then stopped, by
+ * name: *"We don't need any kind of separation like this for the device on the
+ * top with the name… This was actually for the side panel only, but not for the
+ * top bar."* So the rail keeps the grouping and the strip puts the machine on
+ * each tab's own hover — `whereRuns` in `WorkspaceTabStrip.tsx`, beside the
+ * `tabTooltip` that already answered it for a session. The store it read from —
+ * `window-machine.ts` — is unchanged, and is what that hover reads.
  */

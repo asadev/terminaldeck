@@ -86,11 +86,14 @@ IDENTITY="${TD_MAC_IDENTITY:-Asad Iqbal (6U4VNX5W87)}"
 
 # ## Signing without notarizing, and why that mode has to exist
 #
-# Notarization is Apple's service, and on 2026-08-16 it stopped answering for
-# this team. Four submissions sat `In Progress` — one of them a 330-byte probe
-# submitted through a different auth path, one of them thirty-one hours old — so
-# the hold is on the account, not on any artifact this script produces. Nothing
-# in this repository can clear it.
+# Notarization is Apple's service, and this account is not provisioned to use
+# it. Every submission ever made from it — five between 2026-08-14 and
+# 2026-08-17, plus a fresh probe on 2026-08-20 — came back `Rejected` with
+# statusCode 7000, "Team is not yet configured for notarization. Please contact
+# Developer Programs Support." The submissions were never hanging: the
+# 2026-08-20 probe was answered in fourteen seconds. Nothing in this repository
+# can clear it and no amount of waiting will — it takes a support request from
+# the account holder.
 #
 # The question that leaves is what a release does in the meantime, and the three
 # answers are not equal:
@@ -101,9 +104,13 @@ IDENTITY="${TD_MAC_IDENTITY:-Asad Iqbal (6U4VNX5W87)}"
 #     never learns otherwise. This is the worst outcome and it is the one that
 #     happens by default.
 #   * **Signed but not notarized**, this mode. Gatekeeper says the developer
-#     cannot be verified and offers no button — but right-click → Open does
-#     work, permanently, per app. That is a real instruction that can be written
-#     in the release notes and followed once.
+#     cannot be verified and offers no button on the dialog itself — the way
+#     through is System Settings > Privacy & Security > **Open Anyway**, which
+#     appears only after the app has been opened once and refused. Right-click >
+#     Open has NOT been a way past this since macOS 15; it now produces the same
+#     dead end as a double-click, and release notes that still say otherwise
+#     send the user in a circle. Verified on macOS 27: a quarantined v0.8.1
+#     bundle is `rejected / source=Unnotarized Developer ID`.
 #   * **Signed, notarized, stapled**, which is what this script does whenever
 #     Apple is answering, and remains the default.
 #
@@ -312,9 +319,10 @@ ZIP="release/$SLUG-$VERSION-arm64.zip"
 if [[ "$SIGNED_ONLY" -eq 1 ]]; then
     step "Notarization skipped (--signed-only)"
     printf '  The bundle is Developer ID signed and NOT notarized.\n'
-    printf '  Gatekeeper will say the developer cannot be verified;\n'
-    printf '  right-click > Open gets past it, once, per app.\n'
-    printf '  The release notes must say so.\n'
+    printf '  Gatekeeper will say the developer cannot be verified.\n'
+    printf '  The way through is System Settings > Privacy & Security >\n'
+    printf '  Open Anyway, after one refused launch. NOT right-click > Open,\n'
+    printf '  which macOS 15 removed. The release notes must say so.\n'
 else
     step "Notarize the disk image"
     # `--timeout` is notarytool's own flag, so the wait ends inside the tool with
@@ -325,9 +333,13 @@ else
         --wait --timeout "$NOTARIZE_TIMEOUT" \
         || die "notarization did not complete within $NOTARIZE_TIMEOUT." \
             "" \
-            "If submissions are sitting 'In Progress' for hours, the hold is on the" \
-            "Apple account and nothing here will clear it — check with:" \
+            "Check what Apple actually said — a Rejected submission is not a slow one:" \
             "  xcrun notarytool history --key <p8> --key-id <id> --issuer <uuid>" \
+            "  xcrun notarytool log <submission-id> --key <p8> --key-id <id> --issuer <uuid>" \
+            "" \
+            "statusCode 7000 'Team is not yet configured for notarization' is an account" \
+            "provisioning state, not a queue. It clears only when the account holder files" \
+            "a support request with Apple; retrying and waiting do nothing." \
             "" \
             "To ship signed-but-not-notarized in the meantime:" \
             "  scripts/mac-release-signed.sh --signed-only"
@@ -459,8 +471,9 @@ fi
 
 if [[ "$SIGNED_ONLY" -eq 1 ]]; then
     printf '\n\033[33mSigned, NOT notarized.\033[0m\n'
-    printf 'A stranger can open this, but only via right-click > Open the first time.\n'
-    printf 'Say that in the release notes, or they will think the download is broken.\n'
+    printf 'A stranger can open this, but only via System Settings > Privacy & Security\n'
+    printf '> Open Anyway, after one refused launch. Say that in the release notes, or\n'
+    printf 'they will think the download is broken.\n'
 else
     printf '\n\033[32mSigned, notarized and stapled.\033[0m A stranger can open this.\n'
 fi

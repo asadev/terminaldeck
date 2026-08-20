@@ -143,6 +143,15 @@ describe('the files app.terminaldeck.dev is built from', () => {
       'src/main/remote/protocol.ts',
       'src/renderer/assets/fonts/hanken-grotesk.woff2',
       'src/renderer/assets/fonts/jetbrains-mono.woff2',
+      // The two-write rule for submitting a line to an agent CLI, and the same
+      // argument the backfill below makes. `terminalWrites` is a measurement of
+      // how the CLI classifies a stdin chunk — 57 bytes in one write submits, 64
+      // does not — and the failure of a stale copy is silent: the send button
+      // stops working and the words sit in the agent's input box. The desktop
+      // composer owns the measurement; the phone's composer imports it rather
+      // than keeping a second one to go stale. `mentions.ts` has no imports of
+      // its own, so what crosses is the two functions and nothing else.
+      'src/renderer/chat/attach/mentions.ts',
       // The hold that keeps a session's replay off the screen while it is being
       // written. Written for the desktop, imported here rather than copied, for
       // the reason this fixture exists to make somebody state: the policy is a

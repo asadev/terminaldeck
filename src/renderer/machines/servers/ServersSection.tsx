@@ -23,11 +23,23 @@ import type { Server, ServerState } from './types'
  *
  * ## The words on this screen
  *
- * A person who has never signed in to a server has to be able to read every
- * line here. So: *address*, not host; *sign-in*, not credentials; *add*, not
- * provision. The one place a technical word is allowed is where it names
- * something we actually measured on their machine, and none of those are on
- * this screen — they are on the card that found them.
+ * There are almost none, and that is the second decision. A person who has
+ * never signed in to a server has to be able to read every line, so where a
+ * word is needed it is *address*, not host; *sign-in*, not credentials; *add*,
+ * not provision. But the shortest readable line is the one that is not there:
+ *
+ *   > *"don't put any single statement in anywhere. Everywhere you are putting
+ *   > a lot of statements. We don't need to give the statements. We want
+ *   > simplicity. Let the smart people use it."*
+ *
+ * This section carried the densest prose in the app — a paragraph defining what
+ * a server is, above a list of the reader's own servers, and a second one
+ * listing what the add form was about to ask for. Both are gone. A group called
+ * **Servers** with a list and an **Add a server** button says all of it, and the
+ * form asks its own questions.
+ *
+ * What is left is a `Notice` for a build that cannot do this at all, which is a
+ * failure rather than an explanation, and the rows themselves.
  */
 
 /* The glyph moved to `glyph.ts` when the side rail started drawing it too. See
@@ -63,11 +75,6 @@ export function ServersSection({
 }: Props) {
   return (
     <Group title="Servers">
-      <p className="settings-prose">
-        Computers that run things for other people — a website, an app, the place your information
-        is kept. You do not sit at one; you sign in to it from here.
-      </p>
-
       {!wired && (
         /*
          * Said once, plainly, rather than by drawing an empty list.
@@ -78,17 +85,13 @@ export function ServersSection({
          * no servers" and "this copy of the app has no way to reach one" is the
          * difference between a task and a bug report.
          */
-        <Notice tone="warn">
-          This copy of the app cannot reach servers yet. Nothing here is missing from your account —
-          the part of the app that does the connecting is not in this build.
-        </Notice>
+        <Notice tone="warn">This build cannot reach servers yet.</Notice>
       )}
 
       {wired && missing.length > 0 && (
         // Half-wired is worse than unwired, because it looks like it works.
         <Notice tone="error">
           This build is missing {missing.length} of the server channels ({missing.join(', ')}).
-          Anything that needs one will say so rather than appear to have worked.
         </Notice>
       )}
 
@@ -119,12 +122,15 @@ export function ServersSection({
         </ul>
       )}
 
-      {wired && !reading && problem === null && servers.length === 0 && (
-        <p className="settings-prose">
-          You have not added a server yet. You will need its address, the name you sign in with, and
-          either a password or a key — nothing else, and nothing to set up first.
-        </p>
-      )}
+      {/*
+        No empty state, deliberately.
+
+        There was a paragraph here naming the three things the add form asks
+        for, on the argument that nobody should open a form to find out they
+        have to go and ask somebody for something. That argument survives; the
+        paragraph does not. The form asks for those three things, one field at a
+        time, with the button to reach it directly below this.
+      */}
 
       <div className="servers-add">
         <Button onClick={onAdd} disabled={!wired} tone="primary">

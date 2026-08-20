@@ -35,13 +35,14 @@ interface Props {
  *
  * ## Why a machine that cannot be reached still gets a row
  *
- * Because its sentence is the most useful thing this control can say. A machine
- * that was there this morning and is not now would otherwise simply be missing
- * from a menu, and somebody would go looking for a computer. The row is
- * disabled — never selectable, never a click that does nothing — and carries
- * the reason underneath it, which is either a thing to do (connect it, approve
- * this desktop over there) or a thing to know (it treats this desktop as a
- * guest, so it shares no ports at all).
+ * Because a machine that was there this morning and is not now would otherwise
+ * simply be missing from a menu, and somebody would go looking for a computer.
+ * The row is disabled — never selectable, never a click that does nothing — and
+ * carries its state at the end of it, in the two or three words the Machines
+ * panel uses for the same state. Not a sentence: this menu printed three lines
+ * under a greyed row until tonight, explaining a refusal that has since been
+ * fixed rather than reworded — see `grantedPorts` in
+ * `src/main/remote/server.ts`.
  *
  * ## Why it is absent rather than empty
  *
@@ -160,13 +161,20 @@ export function MachinePicker({ machines, selected, onSelect }: Props) {
               </li>
 
               {machines.map((machine) => (
-                <li key={machine.id} className="bw-menu-row bw-menu-row-stacked">
+                <li
+                  key={machine.id}
+                  className="bw-menu-row"
+                  /* On the row rather than on the button, because Chromium does
+                     not raise a tooltip over a disabled control — and a
+                     disabled row is the only kind that has anything to add. */
+                  title={machine.detail ?? undefined}
+                >
                   <button
                     type="button"
                     className="bw-menu-choice"
                     aria-pressed={machine.id === selected}
                     data-on={machine.id === selected || undefined}
-                    disabled={machine.refusal !== null}
+                    disabled={machine.unreachable !== null}
                     onClick={() => {
                       onSelect(machine.id)
                       setAnchor(null)
@@ -175,18 +183,21 @@ export function MachinePicker({ machines, selected, onSelect }: Props) {
                     <span className="bw-menu-tick" aria-hidden="true">
                       {machine.id === selected ? '✓' : ''}
                     </span>
-                    {machine.name}
-                    {machine.refusal === null && machine.ports.length > 0 && (
-                      <span className="bw-menu-count">
-                        {machine.ports.length} {machine.ports.length === 1 ? 'port' : 'ports'}
-                      </span>
+                    <span className="bw-menu-machine">{machine.name}</span>
+                    {/* One slot at the end of the row, and only ever one thing
+                        in it: what it is offering, or why it is not offering
+                        anything. Both are the same kind of fact about the same
+                        machine and neither is a sentence. */}
+                    {machine.unreachable !== null ? (
+                      <span className="bw-menu-count">{machine.unreachable}</span>
+                    ) : (
+                      machine.ports.length > 0 && (
+                        <span className="bw-menu-count">
+                          {machine.ports.length} {machine.ports.length === 1 ? 'port' : 'ports'}
+                        </span>
+                      )
                     )}
                   </button>
-                  {/* Under the row it is about, not in a tooltip. A greyed row
-                      whose reason is only revealed by hovering is the control
-                      this app keeps deleting — and on a machine that has gone
-                      offline mid-session this sentence is the whole message. */}
-                  {machine.refusal !== null && <p className="bw-menu-note">{machine.refusal}</p>}
                 </li>
               ))}
             </ul>

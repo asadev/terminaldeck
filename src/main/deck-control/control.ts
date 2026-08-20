@@ -4,8 +4,11 @@
  * Six steps, in this order, and the order is the design:
  *
  *  1. **Find the tool.** An unknown name is an error, not a silent no-op.
- *  2. **Check the arguments.** Ours, not the client's — the schema we advertise
- *     is a hint to a language model, and a hint is not a boundary.
+ *  2. **Check the arguments** against the schema the tool advertised, then
+ *     against its own precheck. The schema is a hint to a language model *and*
+ *     a boundary here — the two used to be different documents, which is how a
+ *     `browser_step` carrying `text` instead of `value` typed nothing and
+ *     reported success. See `schema.ts`.
  *  3. **Decide the tier**, taking the higher of the catalogue's declared tier
  *     and whatever the tool's own escalation rule says about *these* arguments.
  *  4. **Spend from a budget**, so a loop cannot become a bill or a flood of
@@ -54,6 +57,7 @@ import {
   type ToolSpec,
 } from './catalogue'
 import { WINDOW_SURFACE, deviceSurface, type ConsentBroker } from './consent'
+import { checkToolArgs } from './schema'
 import {
   LOCAL_CALLER,
   Refused,
@@ -665,6 +669,22 @@ export class DeckControl {
      * minutes. The global budget above still throttles the attempt itself.
      */
     try {
+      /*
+       * The schema the model was handed, enforced before anything reads an
+       * argument.
+       *
+       * Ahead of the precheck rather than inside each one, because the schema
+       * is already the document that says which arguments a tool takes — it
+       * crossed to the model, which is why the model believed it — and a
+       * `precheck` re-stating a fraction of it is how twenty tools come to
+       * enforce nineteen different subsets of their own documentation.
+       *
+       * The call this was written for reported success at doing nothing:
+       * `browser_step` takes `value` and was passed `text`, and every layer
+       * ignored the argument it did not know until the driver typed the empty
+       * string it was left with. See `schema.ts`.
+       */
+      checkToolArgs(spec, args)
       spec.precheck?.(args, context)
     } catch (error) {
       if (error instanceof Refused) {

@@ -59,7 +59,7 @@ import {
   NO_COPILOT,
   SAY_TIMEOUT_MS,
   copilotStep,
-  deskSentence,
+  deskState,
   grantSentence,
   secondsLeft,
   unavailableSentence,
@@ -150,7 +150,8 @@ import {
   type MachineBook,
   type StoredMachine,
 } from './machines'
-import { ChatView } from './chat-view'
+import { ChatComposer, ChatView } from './chat-view'
+import { infoDot } from './info-dot'
 import { SessionBar } from './session-bar'
 import { watchPhysicalKeyboard, type KeyBarFit, type MatchMedia } from './physical-keyboard'
 import {
@@ -474,7 +475,7 @@ function answerAsQuestion(answer: readonly AnswerSession[]): string {
   for (const session of answer) {
     for (const line of session.lines) {
       if (!line.shown) continue
-      lines.push(`- ${session.title}: ${line.why} — ${line.note}`)
+      lines.push(line.note === '' ? `- ${session.title}: ${line.why}` : `- ${session.title}: ${line.why} — ${line.note}`)
     }
   }
   return lines.join('\n')
@@ -696,6 +697,14 @@ class Deck {
    * pane" would mean. Both exist; one is in the document.
    */
   private chatView: ChatView | null = null
+  /**
+   * The box under the conversation.
+   *
+   * Held beside `chatView` rather than inside it for the reason the key bar is
+   * held beside the terminal: it leaves the document every time the mode
+   * changes, and a `querySelector` on the way back finds nothing.
+   */
+  private chatComposer: ChatComposer | null = null
   /** Which of the two is on screen. The terminal is always the one you land on. */
   private chatMode = false
   /** Answers this client is waiting for, by request id. */
@@ -2302,6 +2311,10 @@ class Deck {
     this.back.hidden = this.backTarget() === null
     this.attachButton.hidden = !this.canSendFiles
     this.renderModeButton()
+    // The composer asks the same four facts the toggle does, so it is redrawn
+    // on the same event: a socket that goes while somebody is mid-sentence must
+    // grey the field rather than take the message and drop it.
+    this.chatComposer?.render()
     this.title.textContent = BRAND.name
     if (this.screen === 'terminal' && attached) {
       this.title.textContent = attached.title
@@ -2454,41 +2467,61 @@ class Deck {
     // see the width rules at the foot of styles.css.
     const screen = element('div', 'screen screen--form')
 
-    screen.append(
-      // Neutral on a fresh install and neutral by design: nothing has answered
-      // yet, so nothing here may claim to know what kind of computer is at the
-      // other end. It sharpens to "Mac" or "PC" the moment one does — which for
-      // a re-pair is immediately, because the stored credential remembers.
+    /*
+     * A title, an ⓘ, and the field. Five sentences used to stand between them.
+     *
+     * A lead paragraph, a numbered list of three steps, a label over the field
+     * and a two-sentence footer about codes and sealing — on a screen whose only
+     * act is typing six digits. *"Don't put any single statement in anywhere…
+     * We want simplicity. Let the smart people use it. Smart people knows how it
+     * works."* Nothing is lost: every word of it is behind the ⓘ, which is where
+     * he said an explanation goes — *"just if somewhere it's very required, give
+     * the i icon like other ones, information icon in the settings, same way."*
+     *
+     * The heading stays neutral on a fresh install by design: nothing has
+     * answered yet, so nothing here may claim to know what kind of computer is
+     * at the other end. It sharpens to "Mac" or "PC" the moment one does — which
+     * for a re-pair is immediately, because the stored credential remembers.
+     */
+    const days = Math.round(REMEMBERED_TTL_MS / 86_400_000)
+    const heading = element('div', 'screen__heading')
+    heading.append(
       element('h2', undefined, `Pair with your ${this.noun}`),
-      element(
-        'p',
-        'screen__lead',
-        `${BRAND.name} on the ${this.noun} shows a six-digit code. Type it here — the ${this.noun} does not ` +
-          'need to be on the same network.',
+      infoDot(
+        'pairing',
+        `${BRAND.name} on the ${this.noun} shows a six-digit code; type it here. The ${this.noun} does ` +
+          'not need to be on the same network. A code is good for one minute and one use, and pairing ' +
+          `alone does not grant access — the ${this.noun} still asks somebody to approve this browser. ` +
+          'Everything between the two is sealed end to end; the relay that carries it holds no key and ' +
+          'cannot read a session.' +
+          // The sentence that used to be a paragraph of its own under the field
+          // on a second pairing. It is the same fact — `remember` is one field
+          // and one store, so a second machine cannot be remembered differently
+          // from the first — and Settings is still the one place it changes.
+          (this.book.machines.length === 0
+            ? ''
+            : this.remember === 'this-browser'
+              ? ` This ${this.noun} will be remembered in this browser too, until you unpair it or ` +
+                `${days} days pass without using it. Settings is where that changes.`
+              : ' This pairing will end when you close this tab, like the machine you are already ' +
+                'paired with. Settings is where that changes.'),
       ),
     )
+    screen.append(heading)
 
-    const steps = element('ol', 'steps')
-    for (const step of [
-      `Open ${BRAND.name} on the ${this.noun} and show the pairing code.`,
-      'Type the six digits below.',
-      `Approve this browser on the ${this.noun} when it appears — pairing alone does not grant access.`,
-    ]) {
-      steps.append(element('li', undefined, step))
-    }
-    screen.append(steps)
-
-    const label = element('p', 'screen__lead', 'The six digits on the other screen:')
     // Every attribute, and the reasoning for each, is in `code-field.ts` — where
     // a test can reach it. Nothing in this file can be rendered by the suite, so
     // a keypad decision written here is one that nothing checks.
     const input = asCodeField(element('input'))
+    // The label a screen reader needs, and which the screen does not: a field
+    // this size on a screen with one act on it is not ambiguous to look at.
+    input.setAttribute('aria-label', `The six digits shown on the ${this.noun}`)
     // One class, and the presentation lives in the sheet with the rest of it.
     // It used to borrow `.button--quiet` and then patch three inline styles on
     // top, which meant the one field on the screen wore the *secondary* ink and
     // no stylesheet could be held to it.
     input.className = 'code-field'
-    screen.append(label, input)
+    screen.append(input)
 
     // Asked once per browser, not once per machine.
     //
@@ -2499,7 +2532,10 @@ class Deck {
     // time"; worse, the two answers cannot differ, because `remember` is one field
     // and one store. So the second time it is *stated* instead, with the one place
     // it can be changed named.
-    screen.append(this.book.machines.length === 0 ? this.rememberChoice() : this.lifetimeAlready())
+    // Only the choice, and only the first time. What the answer already is, on a
+    // second pairing, is in the ⓘ above — it was a paragraph on the screen and
+    // it is not a decision, so it is not a thing the screen has to carry.
+    if (this.book.machines.length === 0) screen.append(this.rememberChoice())
 
     const submit = element('button', 'button', this.looking ? 'Looking…' : 'Pair')
     submit.type = 'button'
@@ -2527,14 +2563,9 @@ class Deck {
       if (event.key === 'Enter') void this.startPairing(input.value)
     })
 
-    screen.append(
-      element(
-        'p',
-        'note',
-        'A code is good for one minute and one use. Everything between this browser and the ' +
-          `${this.noun} is sealed end to end — the relay that carries it holds no key and cannot read a session.`,
-      ),
-    )
+    // The footer that stood here — what a code is worth, and what the relay can
+    // and cannot read — is behind the ⓘ above. Same words, one tap away.
+    //
     // Focused after the tree is built, by the caller that puts it on screen —
     // see `renderContent`. Focusing an element that is not in the document does
     // nothing, and doing nothing quietly is how the keypad stopped appearing.
@@ -2575,19 +2606,30 @@ class Deck {
   private rememberChoice(): HTMLElement {
     const days = Math.round(REMEMBERED_TTL_MS / 86_400_000)
     const group = element('fieldset', 'remember')
-    group.append(element('legend', 'remember__legend', 'Is this browser yours?'))
+    const legend = element('legend', 'remember__legend')
+    legend.append(
+      element('span', undefined, 'Is this browser yours?'),
+      /*
+       * The consequence of each answer, behind the ⓘ rather than under each
+       * radio.
+       *
+       * The choice itself stays on the screen because it *is* a decision, and
+       * the two titles are enough to make it: this is the one question on this
+       * screen and it has two answers. What was under them was a paragraph each,
+       * on the screen he counted five sentences on.
+       */
+      infoDot(
+        'this choice',
+        'Just for this visit: the pairing is gone the moment you close this tab — use it on a computer ' +
+          `that is not yours. Remember this browser: it stays paired until you unpair it or ${days} days ` +
+          'pass without using it, and anyone who uses this browser can open your sessions.',
+      ),
+    )
+    group.append(legend)
 
-    const options: Array<{ value: Remember; title: string; note: string }> = [
-      {
-        value: 'this-tab',
-        title: 'Just for this visit',
-        note: 'The pairing is gone the moment you close this tab. Use this on a computer that is not yours.',
-      },
-      {
-        value: 'this-browser',
-        title: 'Remember this browser',
-        note: `Stays paired in this browser until you unpair it, or ${days} days pass without using it. Anyone who uses this browser can open your sessions.`,
-      },
+    const options: Array<{ value: Remember; title: string }> = [
+      { value: 'this-tab', title: 'Just for this visit' },
+      { value: 'this-browser', title: 'Remember this browser' },
     ]
 
     for (const option of options) {
@@ -2602,34 +2644,11 @@ class Deck {
       })
 
       const text = element('span', 'remember__text')
-      text.append(
-        element('span', 'remember__title', option.title),
-        element('span', 'remember__note', option.note),
-      )
+      text.append(element('span', 'remember__title', option.title))
       row.append(radio, text)
       group.append(row)
     }
     return group
-  }
-
-  /**
-   * What this browser has already been told to do with a pairing.
-   *
-   * One line, on the pair screen, when there is already a machine. It is not a
-   * control: the control is in Settings and there must not be two of it — that is
-   * the same rule that keeps the appearance out of Settings and in the header.
-   */
-  private lifetimeAlready(): HTMLElement {
-    const days = Math.round(REMEMBERED_TTL_MS / 86_400_000)
-    return element(
-      'p',
-      'note',
-      this.remember === 'this-browser'
-        ? `This browser is remembered, so this ${this.noun} will be too — until you unpair it, or ${days} days ` +
-            'pass without using it. Settings is where that changes.'
-        : 'This pairing will end when you close this tab, like the machine you are already paired with. ' +
-            'Settings is where that changes.',
-    )
   }
 
   /**
@@ -4308,22 +4327,40 @@ class Deck {
   }
 
   /**
-   * What the copilot is, in two lines that are about two different things.
+   * What the copilot is, as two states that are plainly about two things.
    *
    * `desk` is the copilot at the machine — the conversation the person is having
    * there — and `run` is *this browser's own* run, which is the only thing it can
    * talk to. The protocol keeps them apart and so does this: a screen that showed
    * the desk's state on its own Start button would offer to start something that
    * is already running, or refuse to because something unrelated is.
+   *
+   * ## Why they are chips and not sentences
+   *
+   * They were sentences, and the pair of them read as a contradiction:
+   * *"The copilot is not running at the machine."* in a headline, over
+   * *"This browser has its own run"*. Both true, about different copilots, and
+   * indistinguishable at a glance. A chip carries its subject before it carries
+   * its state — `Machine · stopped`, `This browser · running` — so the two can
+   * never be read as one, and neither of them is a statement on a screen that is
+   * not allowed any.
    */
   private copilotStatus(): HTMLElement {
     const block = element('div', 'copilot-status')
     const report = this.copilot.report
-    block.append(element('p', 'copilot-status__desk', deskSentence(report)))
+
+    const states = element('div', 'copilot-state')
+    states.append(this.stateChip('Machine', deskState(report)))
+    // Only once the machine has answered. Before that there is no such thing as
+    // "this browser's run" to have a state, and a chip reading `none` would be a
+    // claim made out of not having asked yet.
+    if (report !== null) {
+      states.append(this.stateChip('This browser', report.run === null ? 'none' : 'running'))
+    }
+    block.append(states)
 
     const facts: string[] = []
     if (report !== null) {
-      facts.push(report.run === null ? 'No run from this browser yet' : 'This browser has its own run')
       if (report.profile !== null) facts.push(plain(report.profile))
       // Tokens, never money. This client has never shown a price and
       // `tests/no-cost.test.ts` is the latch that keeps it that way; the context
@@ -4336,6 +4373,24 @@ class Deck {
     const why = unavailableSentence(report)
     if (why !== null) block.append(element('p', 'copilot-status__why', plain(why)))
     return block
+  }
+
+  /**
+   * One copilot, and what it is doing.
+   *
+   * The subject is drawn first and in the quieter ink, because the subject is
+   * the whole reason this is a chip rather than a line of prose: two states on
+   * one screen are only readable if each says what it is about.
+   *
+   * `data-state` carries the word to the stylesheet, which is where the dot's
+   * colour is decided — the same three-band vocabulary the session list uses,
+   * so a reader who knows what amber means in one place knows it here.
+   */
+  private stateChip(subject: string, state: string): HTMLElement {
+    const chip = element('span', 'copilot-state__chip')
+    chip.dataset.state = state
+    chip.append(element('i', 'copilot-state__dot'), element('b', undefined, subject), element('span', undefined, state))
+    return chip
   }
 
   /**
@@ -4441,7 +4496,11 @@ class Deck {
       row.append(element('span', 'copilot-fleet__why', stop.why))
       const body = element('div', 'copilot-fleet__body')
       body.append(element('div', 'copilot-fleet__title', plain(stop.sessionTitle)))
-      body.append(element('div', 'copilot-fleet__note', plain(stop.note)))
+      // Only when there is something true to put in it. `noteOf` answers empty
+      // for a session this browser has no activity of its own for, which is
+      // most of them on a fresh page, and the line it used to print there was
+      // both a sentence and wrong. See `noteOf`.
+      if (stop.note !== '') body.append(element('div', 'copilot-fleet__note', plain(stop.note)))
       row.append(body)
       block.append(row)
     }
@@ -4493,7 +4552,7 @@ class Deck {
       for (const line of session.lines) {
         const row = element('div', line.shown ? 'answer__line' : 'answer__line answer__line--missed')
         row.append(element('span', 'answer__why', line.why))
-        row.append(element('span', 'answer__note', plain(line.note)))
+        if (line.note !== '') row.append(element('span', 'answer__note', plain(line.note)))
         // Only when there is one. A stop with no quote is a stop this browser has
         // no line of the machine's own to show, and substituting the folder or
         // the title would produce something that looks like evidence and is not.
@@ -5288,6 +5347,19 @@ class Deck {
      */
     const chat = new ChatView()
     this.chatView = chat
+    /*
+     * And somewhere to answer it.
+     *
+     * The view was read-only when it shipped, which made chat mode a detour:
+     * read the answer here, go back to the terminal to type one line. It writes
+     * into the session's own pty — the same channel the keyboard uses — so
+     * there is one transport and a reply typed here shows up in the terminal
+     * view as well. See `ChatComposer` for why it is two writes and not one.
+     */
+    this.chatComposer = new ChatComposer({
+      write: (data) => this.writeToSession(data),
+      live: () => this.canReadChat,
+    })
     this.chatMode = false
 
     const screen = element('div', 'terminal-screen')
@@ -5365,7 +5437,13 @@ class Deck {
      */
     const bar = this.sessionBar?.element
     if (this.chatMode) {
-      this.terminalScreen.replaceChildren(...(bar ? [bar] : []), chat.element)
+      const composer = this.chatComposer
+      composer?.render()
+      this.terminalScreen.replaceChildren(
+        ...(bar ? [bar] : []),
+        chat.element,
+        ...(composer ? [composer.element] : []),
+      )
     } else {
       /*
        * The dock comes from the field, never from a `querySelector` on the pane.
@@ -5621,8 +5699,23 @@ class Deck {
   private sendInput(data: string): void {
     if (this.attachedId === null) return
     const folded = data.length === 1 && this.keybar !== null ? this.keybar.handleCharacter(data) : data
+    this.writeToSession(folded)
+  }
 
-    for (const chunk of chunkInput(folded)) {
+  /**
+   * Bytes into the session, with no key bar in the way.
+   *
+   * The composer writes through here rather than through `sendInput`, and the
+   * difference is one line: `sendInput` folds a single character through the key
+   * bar's armed modifier, which is right for a keystroke and wrong for the
+   * carriage return that submits a chat message. A Ctrl left armed on the
+   * toolbar would turn that `\r` into something else on its way out — a
+   * modifier the person armed for the terminal, applied to a send button they
+   * pressed in another view.
+   */
+  private writeToSession(data: string): void {
+    if (this.attachedId === null) return
+    for (const chunk of chunkInput(data)) {
       if (!this.connection?.send({ t: 'input', id: this.attachedId, data: chunk })) {
         // Refused rather than queued. Say so where the user is looking instead
         // of letting them believe a keystroke landed.

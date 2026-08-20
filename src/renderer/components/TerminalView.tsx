@@ -6,7 +6,8 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { chordFor, formatChord } from '../keymap'
 import { subscribeTheme } from '../theme'
 import { attachRenderer } from '../terminal-renderer'
-import { attachClipboardOsc } from '../terminal-clipboard'
+import { attachClipboardOsc, pasteFilesInto, pastedFiles } from '../terminal-clipboard'
+import { TransferNote, useTransferNote } from './TransferNote'
 import { draggingFiles, droppedPaths, droppedText, promptWord, resolveDropBridge } from '../terminal-drop'
 import { registerTerminal } from '../driving/terminal-registry'
 import { holdUntilFilled } from './terminal-backfill'
@@ -491,6 +492,17 @@ export function TerminalView({
    */
   const copyRef = useRef(copyOnSelect)
   copyRef.current = copyOnSelect
+  /*
+   * The one line this pane may draw over the terminal.
+   *
+   * New here, and it is the R5 half of the clipboard work: a paste of an image
+   * into a session on **this** computer can fail — the pixels have to become a
+   * file on this disk before anything can be handed a path to them — and a local
+   * pane that refused in silence while the remote pane beside it said so would
+   * be the app changing shape between local and remote. `TransferNote` carries
+   * the argument and is the same component the remote pane draws.
+   */
+  const { line: note, say } = useTransferNote()
 
   useEffect(() => {
     const host = hostRef.current
@@ -581,7 +593,30 @@ export function TerminalView({
      * local session has no line to draw one on — `terminal-clipboard.ts` says
      * what each refusal is.
      */
-    const detachClipboard = attachClipboardOsc(term)
+    const detachClipboard = attachClipboardOsc(term, (line) => say(line))
+
+    /*
+     * A file or an image on the clipboard, pasted at a session on this machine.
+     *
+     * The same handler the remote pane has, running the same function, and that
+     * symmetry is the requirement rather than tidiness: *"it should not matter
+     * which device I am on currently running the session."* A file copied in
+     * Finder already has a path and is typed straight at the prompt; a clipboard
+     * image has no file anywhere, so its bytes are written to one first — see
+     * `main/local-stage.ts` for where and why.
+     *
+     * In the capture phase and on the host element, so this runs before xterm's
+     * own paste handler on the textarea inside it. A plain text paste never
+     * reaches any of this and is untouched.
+     */
+    const onPaste = (event: ClipboardEvent): void => {
+      const carried = pastedFiles(event.clipboardData, resolveDropBridge())
+      if (carried.length === 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      void pasteFilesInto(carried, { machineId: '' }, () => termRef.current, say)
+    }
+    host.addEventListener('paste', onPaste, true)
 
     /**
      * Copy on select, the Unix terminal idiom.
@@ -654,6 +689,7 @@ export function TerminalView({
       offData()
       offExit()
       inputDisposable.dispose()
+      host.removeEventListener('paste', onPaste, true)
       detachClipboard()
       selectionDisposable.dispose()
       ro.disconnect()
@@ -758,6 +794,7 @@ export function TerminalView({
     >
       <div ref={hostRef} className="terminal-surface" />
       {findBar}
+      <TransferNote line={note} />
     </div>
   )
 }

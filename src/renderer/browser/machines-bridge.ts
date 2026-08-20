@@ -49,6 +49,7 @@ import type { DevPort } from './StartPage'
 import {
   asView,
   machineNoun,
+  STATE_LABEL,
   type MachineLinkState,
   type MachinesView,
   type RemotePort,
@@ -132,14 +133,35 @@ export interface MachineChoice {
   /** What it says it is serving, in the shape the start page draws a port in. */
   ports: DevPort[]
   /**
-   * Null when an address can be resolved on it, or one sentence saying why not.
+   * Null when an address can be resolved on it, or the machine's state in the
+   * app's own two or three words for it.
    *
-   * A sentence rather than a boolean because the four reasons are four
-   * different things to do about it — connect the machine, wait, approve this
-   * one over there, or update the build over there — and a greyed row that says
-   * none of them is the control this project keeps deleting.
+   * A **label**, never a sentence. It used to be a sentence, on the argument
+   * that a greyed row saying nothing is worse than one that explains itself —
+   * and the explanation grew to three lines under a row in a dropdown, which is
+   * the habit this project has been deleting all week:
+   *
+   *   > *"don't put any single statement in anywhere … We want simplicity. Let
+   *   > the smart people use it. Smart people knows how it works."*
+   *
+   * The row still says why it is greyed, because *"we always need a truth"* —
+   * it says it in {@link STATE_LABEL}'s words, which is what the Machines panel
+   * has always called the same state, so there is one vocabulary for a machine's
+   * condition rather than two.
    */
-  refusal: string | null
+  unreachable: string | null
+  /**
+   * The longer reason, when there is one that the label cannot carry — the
+   * relay's own words for an `error`, a server's own words for a refusal.
+   *
+   * **Never drawn.** It is the row's `title` and nothing else, which is the same
+   * bargain the toolbar struck when its buttons lost their captions: *"when I
+   * hover, it should show the title … Instead of this line, show only the
+   * name."* A machine that says `Cannot connect` and a person who wants to know
+   * what the relay actually said are two different needs, and only the first of
+   * them belongs on a screen.
+   */
+  detail: string | null
 }
 
 /**
@@ -159,40 +181,33 @@ export function asDevPorts(ports: readonly RemotePort[]): DevPort[] {
 }
 
 /**
- * Why this machine cannot be typed at, or null when it can.
+ * The machine's state, when that state means an address cannot be typed at it —
+ * or null when it can.
  *
- * Every branch names the machine, because this sentence is read in two places —
- * under its row in the picker, and in the notice band when a machine that was
- * chosen goes away underneath somebody — and a sentence that only made sense
- * under its own row would be a mystery in the band.
+ * Read in two places: at the end of its own row in the picker, and in the notice
+ * band when a machine that was chosen goes away underneath somebody. Both are
+ * next to the machine's name, so the label does not repeat it.
+ *
+ * `STATE_LABEL` is the Machines panel's own wording for these five states, not a
+ * second set written for this menu. A machine that says **Connecting** in the
+ * sidebar and something else in a dropdown is two vocabularies for one fact.
  */
-function refusalFor(name: string, link: MachineLinkState | null): string | null {
-  if (link === null || link.state === 'offline') {
-    return `This desktop is not connected to ${name} right now.`
-  }
-  if (link.state === 'connecting') return `This desktop is still connecting to ${name}.`
-  if (link.state === 'awaiting-approval') return `${name} has not approved this desktop yet.`
-  if (link.state === 'error') {
-    return link.reason ?? `This desktop cannot connect to ${name}.`
-  }
+function unreachableFor(link: MachineLinkState | null): string | null {
+  if (link === null) return STATE_LABEL.offline
+  if (link.state !== 'online') return STATE_LABEL[link.state]
   /*
    * Online, and still not offering its ports.
    *
-   * Two causes, one sentence, because from here they are genuinely
-   * indistinguishable and both are true statements about that machine: it is an
-   * older build that never had the capability, or this desktop is a *guest*
-   * there rather than one of its owner's own machines. The second is the rule
-   * `localhostAllowed` in `src/main/remote/server.ts` enforces — a guest is lent
-   * a folder, and a port cannot be attributed to a folder, so a guest is lent no
-   * ports at all — and it is stated here in the words of the person reading it
-   * rather than in the words of the rule.
+   * One cause now, where there used to be two. The other was a **guest**: a
+   * device lent a folder was told nothing was listening anywhere, because a
+   * port could not be attributed to a folder and the safe end of "every port or
+   * none" was none. Asad hit it from his own Mac, connected to his PC as a
+   * guest, and it is fixed on the far side rather than described on this one —
+   * `localhostAllowed` and `grantedPorts` in `src/main/remote/server.ts`. A
+   * guest now reaches the ports its own grant covers, so a machine that reaches
+   * this line is genuinely running a build older than that rule.
    */
-  if (!link.capabilities.includes('localhost')) {
-    return (
-      `${name} is not sharing what it is serving with this desktop. Either it is running an older ` +
-      'version, or this desktop is a guest there rather than one of its own machines.'
-    )
-  }
+  if (!link.capabilities.includes('localhost')) return 'Older build'
   return null
 }
 
@@ -220,7 +235,11 @@ export function machineChoices(view: MachinesView): MachineChoice[] {
       name,
       noun,
       ports: asDevPorts(link?.ports ?? []),
-      refusal: refusalFor(name, link),
+      unreachable: unreachableFor(link),
+      // Only an `error` has anything to add: the other four states are fully
+      // described by their label, and repeating one in a tooltip would be the
+      // sentence coming back through a different door.
+      detail: link?.state === 'error' ? (link.reason ?? null) : null,
     }
   })
 }
@@ -228,11 +247,16 @@ export function machineChoices(view: MachinesView): MachineChoice[] {
 /**
  * Has the chosen machine stopped being one an address can be typed at?
  *
- * Null while the selection is still good. Otherwise the sentence to show, which
- * is the machine's own refusal with what happens next added to it — because a
- * picker that silently reset itself would be a control changing under somebody's
- * hand, and one that stayed pointed at a machine that had gone would refuse
- * every localhost address until they worked out why.
+ * Null while the selection is still good. Otherwise the machine and its state,
+ * because a picker that silently reset itself would be a control changing under
+ * somebody's hand, and one that stayed pointed at a machine that had gone would
+ * refuse every localhost address until they worked out why.
+ *
+ * **A name and a label, not a sentence.** It used to add *"Addresses now open on
+ * this machine"* to the row's own sentence, which is a statement of what the
+ * person can already see happening — the picker in front of them has just
+ * snapped back. `differentPortNote` at the bottom of this file was cut to
+ * `office-pc:3000 → :53412` for the same reason and this is the same shape.
  *
  * A pure function rather than three conditions inside the effect that owns it,
  * for the reason every rule in this file is: this project's test run has no DOM,
@@ -241,11 +265,11 @@ export function machineChoices(view: MachinesView): MachineChoice[] {
 export function lostMachine(machines: readonly MachineChoice[], selected: string): string | null {
   if (selected === THIS_MACHINE) return null
   const chosen = machines.find((machine) => machine.id === selected)
-  if (chosen && chosen.refusal === null) return null
+  if (chosen && chosen.unreachable === null) return null
   // Forgotten, or never in the list at all — a machine this window has no row
-  // for is one it can say nothing else about.
-  const because = chosen?.refusal ?? 'That machine is no longer paired with this one.'
-  return `${because} Addresses now open on this machine.`
+  // for is one it cannot even name.
+  if (!chosen) return 'That machine is no longer paired'
+  return `${chosen.name} — ${chosen.unreachable}`
 }
 
 /** Read the whole view off the bridge. An unreadable answer is an empty one. */

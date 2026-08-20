@@ -166,9 +166,17 @@ import { registerDeckignoreIpc } from './deckignore'
 import { defaultContext, registerHooksIpc, syncInstalledHooks } from './hooks'
 import { hookConfigPath, registerHookServer, stopHookServer } from './hook-server'
 import { registerMcpIpc } from './mcp-client'
+import { registerStageIpc } from './local-stage'
 import { registerBrowserIpc } from './browser-tab'
 import { openAppLink, registerLinkIpc } from './link-open'
-import { registerBrowserBindingIpc, openForSession, forgetKnownWindows } from './browser-binding-ipc'
+import {
+  registerBrowserBindingIpc,
+  openForSession,
+  forgetKnownWindows,
+  openBarePane,
+  paneIsFree,
+  paneView,
+} from './browser-binding-ipc'
 import { registerSessionRowMenuIpc } from './session-row-menu'
 import {
   hookContext,
@@ -2219,6 +2227,12 @@ function registerIpc(): void {
   registerDeckignoreIpc(ipcMain)
   registerHooksIpc(ipcMain)
   registerMcpIpc(ipcMain)
+  /*
+   * Bytes on the clipboard, written to a file on this machine so that the one
+   * rule about handing files to sessions can run over a path like everything
+   * else. Same folder a phone's upload lands in — see `local-stage.ts`.
+   */
+  registerStageIpc(ipcMain, { dir: () => join(app.getPath('downloads'), BRAND.name) })
   registerBrowserIpc(ipcMain)
   // Beside the browser, because that is where a link now lands. The two
   // channels are the explicit way *out* — `link:system` and the context menu —
@@ -2255,6 +2269,28 @@ function registerIpc(): void {
    */
   registerBrowserDriveIpc(ipcMain, {
     send: (channel, ...args) => send(channel, ...args),
+    /*
+     * And the one route a URL from a session takes, so a page the copilot opens
+     * *for* a session lands in that session's numbered windows rather than in
+     * the copilot's own unnamed tab. Bound to the same `bindingDeps` the shim's
+     * `open` uses, which is what makes the `B2` an agent is told about and the
+     * `B2` the pane bar draws the same window.
+     */
+    openForSession: (request) => openForSession(bindingDeps, request),
+    /*
+     * And the copilot's own pane, which is the one thing it may drive that
+     * belongs to nobody.
+     *
+     * Bound to the same three answers the binding wiring already holds, because
+     * "which panes exist" and "which of them are attached" have exactly one
+     * authority in this process and a second opinion is how a session's window
+     * came to be seized by a plain `browser.open`. See `BrowserDriveDeps.pane`.
+     */
+    pane: {
+      open: (url) => openBarePane(bindingDeps.send, url),
+      free: (tabId) => paneIsFree(tabId),
+      view: (tabId, timeoutMs) => paneView(tabId, timeoutMs),
+    },
   })
   registerChromeImportIpc(ipcMain)
   registerPrerequisitesIpc(ipcMain)

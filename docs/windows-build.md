@@ -304,8 +304,8 @@ And unsigned reputation does not accumulate: *"When a file is not signed,
 SmartScreen reputation must build for each new version of your files, starting
 with zero reputation."* Every release starts over.
 
-The macOS story — right-click Open, or `xattr -dr com.apple.quarantine` — has no
-clean Windows equivalent to put in release notes. "Click More info, then Run
+The macOS story — Open Anyway in Privacy & Security, or `xattr -dr
+com.apple.quarantine` — has no clean Windows equivalent to put in release notes. "Click More info, then Run
 anyway" is the instruction, and it is the same instruction malware distributors
 give.
 

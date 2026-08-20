@@ -133,6 +133,7 @@ Sections passing individually has never been sufficient here.
 - [ ] Tag pushed, CI green on both runners
 - [ ] Windows installer downloaded **from the release page** and installed on a
       machine that has never had it
-- [ ] macOS: signed; and if notarization is still held at Apple, the release
-      notes say so and give the right-click → Open step
+- [ ] macOS: signed; and while notarization is refused at Apple, the release
+      notes say so and give the System Settings → Privacy & Security →
+      Open Anyway step (NOT right-click → Open, removed in macOS 15)
 - [ ] The in-app updater offers it to the running copy on his PC

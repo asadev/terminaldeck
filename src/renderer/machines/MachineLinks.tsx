@@ -238,11 +238,15 @@ export function MachineLinks({ half, platform }: { half: MachinesHalf; platform?
 
   return (
     <Group title="Machines you can reach">
-      <p className="settings-prose">
-        Sessions running on another computer you have paired, opened here as if they were local.
-        Pairing goes both ways: this machine has to be approved over there once, under Remote.
-      </p>
+      {/*
+        No paragraph under the heading.
 
+        There was one, defining what a paired machine is and how pairing works,
+        above a list of the reader's own paired machines. *"We don't need to
+        give the statements. We want simplicity. Let the smart people use it."*
+        The code field is directly above this and the list is directly below it;
+        neither needs introducing.
+      */}
       {!half.wired ? (
         <Notice tone="warn">
           This window is running against an older preload, so it cannot reach the machines this
@@ -264,9 +268,10 @@ export function MachineLinks({ half, platform }: { half: MachinesHalf; platform?
           {half.retry && <Button onClick={half.retry}>Try again</Button>}
         </Notice>
       ) : view.machines.length === 0 ? (
-        <p className="settings-prose">
-          No other machine yet. Type its code above and its sessions appear here.
-        </p>
+        // Four words. The instruction that used to follow them — "type its code
+        // above and its sessions appear here" — described the field it is
+        // sitting under.
+        <p className="settings-prose">No other machine yet.</p>
       ) : (
         <ul className="machines-list">
           {view.machines.map((machine) => (
@@ -583,12 +588,14 @@ export function RemotePorts({
         </ul>
       )}
 
-      {!canOpen && link.ports.length > 0 && (
-        <p className="machines-note">
-          That {noun} is not letting this one open pages on it. Pair this machine as one of your own
-          on {machine.name} to change that.
-        </p>
-      )}
+      {/*
+        Nothing where the refusal used to be written out.
+
+        Two sentences explained that the far machine would not open a page for
+        this one and what to do about it. The button is simply not on the rows —
+        which is the same fact, drawn rather than narrated — and this menu spent
+        the week having exactly this shape of paragraph removed from it.
+      */}
     </div>
   )
 }

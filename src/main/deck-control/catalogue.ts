@@ -46,6 +46,7 @@
 
 import { sep } from 'node:path'
 import type { CreateSessionInput, ProviderId } from '../../shared/types'
+import { describeWindow, slotName, windowsOf } from '../browser-binding'
 import { attentionOf, byAttention, statusOf } from './attention'
 import {
   deliverBrief,
@@ -601,6 +602,10 @@ export function viewOf(context: ToolContext, meta: ReturnType<DeckSurface['listS
     resumed: meta.resumed === true,
     profileName: meta.profileName ?? null,
     startedByCopilot: context.startedByCopilot(meta.id),
+    // Read from the binding map rather than carried on `SessionMeta`, because
+    // the map is the single authority on this relation and a copy on the meta
+    // would be a second one to keep in step. See `browser-binding.ts`.
+    windows: windowsOf(meta.id).map((window) => slotName(window.n)),
   }
 }
 
@@ -1107,6 +1112,16 @@ export function buildCatalogue(): ToolSpec[] {
         return {
           value: {
             session,
+            /*
+             * What each of this session's windows is showing, in the words the
+             * hook answer uses.
+             *
+             * `describeWindow` rather than a second spelling of the same line:
+             * the session's own agent is told `B2 — Stripe — https://… — served
+             * by DESKTOP`, and a copilot told something different about the same
+             * window is how two agents come to describe one page two ways.
+             */
+            windows: windowsOf(session.id).map(describeWindow),
             transcriptPath: match.path,
             transcriptBytes,
             /*

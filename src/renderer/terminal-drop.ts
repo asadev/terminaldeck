@@ -32,6 +32,14 @@
  * far machine answers with, which may not be the name the file left with. A
  * second `photo.jpg` lands beside the first rather than over it.
  *
+ * That decision is **no longer made here**. It was, for a day, and it was the
+ * only place in the app that made it — so the browser's screenshot went on
+ * sending a path under this Mac's Pictures folder to a session on a PC, which
+ * could not open it. `session-transfer.ts` owns the question now and this file
+ * is one of its callers; what is left below is the part that is genuinely about
+ * a *drop*: what a drag is carrying, what a path looks like at a prompt, and
+ * what one line about a transfer in flight may say.
+ *
  * ## Why the paths are asked for one at a time
  *
  * A multi-file drop onto a remote session becomes one transfer after another,
@@ -43,6 +51,7 @@
  */
 
 import { shellQuote } from './chat/attach/mentions'
+import type { Handover } from './session-transfer'
 
 /**
  * Whether this drag is carrying files, as opposed to text or nothing.
@@ -129,30 +138,19 @@ export function resolveDropBridge(injected?: DropBridge): DropBridge | null {
   return host && typeof host.pathForDroppedFile === 'function' ? (host as DropBridge) : null
 }
 
-/** What the far machine said about a file this window sent it. */
-export type UploadOutcome = { ok: true; path: string } | { ok: false; message: string }
-
 /**
- * Narrow what came back over IPC, and never answer "it worked" without a path.
+ * What the far machine said about a file this window sent it.
  *
- * The shape is written by `machines:upload` in the main process and could be
- * trusted; it is narrowed anyway, because the one wrong answer this function can
- * give is an `ok` with an empty path — the pane would type two quote marks at
- * the prompt and the person would have no idea why.
+ * The type and the reader both live in `session-transfer.ts` now, which owns the
+ * whole question of *which* machine a session's file has to exist on. They are
+ * re-exported under the names this file gave them so that nothing which already
+ * reads a drop's answer had to change in order to gain a shared one — and so
+ * that the next surface to need it finds it in the module that owns the rule
+ * rather than in the drop handler that happened to implement it first.
  */
-export function readUploadOutcome(response: unknown): UploadOutcome {
-  if (!response || typeof response !== 'object') {
-    return { ok: false, message: 'Sending files is not available in this build.' }
-  }
-  const body = response as { ok?: unknown; path?: unknown; message?: unknown }
-  if (body.ok === true && typeof body.path === 'string' && body.path !== '') {
-    return { ok: true, path: body.path }
-  }
-  return {
-    ok: false,
-    message: typeof body.message === 'string' && body.message !== '' ? body.message : 'That file did not send.',
-  }
-}
+export type UploadOutcome = Handover
+
+export { readHandover as readUploadOutcome } from './session-transfer'
 
 /**
  * One short line about a transfer, or '' when there is nothing to say.

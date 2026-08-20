@@ -726,6 +726,93 @@ export function slotName(n: number): string {
 }
 
 /**
+ * The number inside a name somebody says back: `B2`, `b2`, `2`, ` B2 `.
+ *
+ * The inverse of {@link slotName} and deliberately beside it, so the two
+ * spellings of one convention cannot drift. It is lenient about case and about
+ * the leading letter because an agent that was handed `B2` will sooner or later
+ * say `b2` — and refusing that would be refusing on a technicality something
+ * this map can answer exactly.
+ *
+ * It is *not* lenient about anything else. `B2 (Stripe)`, `window 2` and
+ * `browser:1755…:3` all answer null, which is what makes the caller's refusal a
+ * single sentence rather than a guess: a name this cannot parse is a name no
+ * session has.
+ */
+export function slotNumber(name: string): number | null {
+  const match = /^[bB]?(\d{1,4})$/.exec(name.trim())
+  if (!match) return null
+  const n = Number(match[1])
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
+/**
+ * The window a session calls `name`, or null — the whole of the permission
+ * check for driving one.
+ *
+ * ## Why this is the check and not a step before it
+ *
+ * A verb that can act on a window has to answer one question: *is this window
+ * this session's?* Not "does this window exist", which is a different question
+ * with a more dangerous answer. Two sessions each hold a `B1`; a window
+ * somebody attached to the session next door is a page in **this** app holding
+ * **his** logins, and an agent that could reach it by asking for `B1` with a
+ * neighbour's id would be reading a page nobody gave it.
+ *
+ * So the lookup starts from the session and never from the window: a name is
+ * resolved *inside* one binding's list, so a window bound elsewhere is not
+ * found, is not distinguishable from a window that does not exist, and cannot
+ * be probed for by trying names. `ownerOf` exists for the menu, which is drawn
+ * for a person who can see the windows anyway; nothing on the tool path may use
+ * it.
+ *
+ * ## Why the machine may be omitted
+ *
+ * The key is `<machineId>\0<sessionId>` because two machines can mint the same
+ * session id — see the map's header. A caller naming a session usually has the
+ * id and not the machine, so an omitted `machineId` scans for the id across
+ * machines and answers null when two of them hold it. Null rather than a pick:
+ * an ambiguous id is exactly the case where guessing means driving somebody
+ * else's page, and it cannot happen at all with the uuids every provider mints.
+ */
+export function windowNamed(
+  sessionId: string,
+  name: string,
+  machineId?: string,
+): BoundWindow | null {
+  const n = slotNumber(name)
+  if (n === null) return null
+  const found = windowsOf(sessionId, machineId).filter((window) => window.n === n)
+  return found.length === 1 ? found[0] : null
+}
+
+/**
+ * Every window one session holds, ordered by number.
+ *
+ * Same machine rule as {@link windowNamed}: an omitted `machineId` answers for
+ * the one binding that carries this id, and an empty list when two do.
+ */
+export function windowsOf(sessionId: string, machineId?: string): BoundWindow[] {
+  if (machineId !== undefined) {
+    return bindings.get(keyOf(sessionId, machineId))?.windows ?? []
+  }
+  const matches = [...bindings.values()].filter((binding) => binding.sessionId === sessionId)
+  return matches.length === 1 ? matches[0].windows : []
+}
+
+/**
+ * One window as the line everything that has to name it prints.
+ *
+ * Exported so the tools an agent calls describe a window in exactly the words
+ * the hook answer used, rather than inventing a second spelling of the same
+ * fact. See {@link windowLine} for why each part is omitted rather than filled
+ * in when the window has not reported it.
+ */
+export function describeWindow(window: BoundWindow): string {
+  return windowLine(window)
+}
+
+/**
  * The one instruction in this whole channel, and he asked for it in the same
  * breath as the facts it governs.
  *

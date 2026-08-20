@@ -725,14 +725,21 @@ describe('what the far machine is serving', () => {
     expect(markup).toContain('Nothing is listening on that PC right now')
   })
 
-  it('offers no Open to a machine that withheld `web`, and says why', () => {
-    // A host with no window and a device treated as a guest arrive identically,
-    // as a capability the welcome did not carry. The button is absent rather
-    // than disabled — a disabled control still invites the ask — and the
-    // sentence names the fix, which is on the other machine.
+  it('offers no Open to a machine that withheld `web`, and writes nothing about it', () => {
+    /*
+     * A host with no window and a device treated as a guest arrive identically,
+     * as a capability the welcome did not carry. The button is absent rather
+     * than disabled — a disabled control still invites the ask.
+     *
+     * Two sentences used to be printed under the list saying that the far
+     * machine would not open a page and what to do about it. The rows not
+     * having the button is the same fact, drawn instead of narrated, and the
+     * paragraph is the shape this whole review was about.
+     */
     const markup = row(serving({ capabilities: ['create', 'localhost'] }))
     expect(markup).not.toContain('Open there')
-    expect(markup).toContain('not letting this one open pages on it')
+    expect(markup).not.toContain('not letting this one open pages on it')
+    expect(markup).not.toContain('Pair this machine as one of your own')
   })
 
   it('asks the far machine to open the address, and composes it from the row', async () => {

@@ -738,7 +738,7 @@ describe('the CLI’s permission mode is not this gate', () => {
     dangerouslySkipPermissions: true,
   }
 
-  it('still asks the window, whatever the call claims about permissions', async () => {
+  it('refuses the self-approving fields outright, without asking anybody', async () => {
     approverWindow.answers = true
     await ipc.invoke('deck-control:consent-attach', approverWindow)
 
@@ -746,6 +746,30 @@ describe('the CLI’s permission mode is not this gate', () => {
       scope: 'settings',
       patch: { 'appearance.density': 'compact' },
       ...SELF_APPROVAL,
+    })
+
+    /*
+     * Stronger than the answer this case used to assert.
+     *
+     * It used to let the invented fields through and prove they changed
+     * nothing, which was true and left them looking like arguments the tool
+     * merely ignored. Every tool's schema says `additionalProperties: false`
+     * and that is now enforced at the door — see `schema.ts` — so a call
+     * carrying `bypassPermissions` is not a call this tool takes, and nobody is
+     * asked about it at all.
+     */
+    expect(result.isError).toBe(true)
+    expect(settings['appearance.density']).toBe('comfortable')
+    expect(approverWindow.sent).toEqual([])
+  })
+
+  it('still asks the window for the same call written correctly', async () => {
+    approverWindow.answers = true
+    await ipc.invoke('deck-control:consent-attach', approverWindow)
+
+    const result = await callTool('settings_write', {
+      scope: 'settings',
+      patch: { 'appearance.density': 'compact' },
     })
 
     // It worked — because the window said yes, and for no other reason.

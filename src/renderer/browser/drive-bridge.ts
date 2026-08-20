@@ -41,6 +41,21 @@ export interface DriveOpenRequest {
   id: string
   url: string
   isolate: boolean
+  /**
+   * The shell tab id of the one pane allowed to answer this, or null.
+   *
+   * The push reaches every mounted panel, and until this field existed the
+   * first one to hear it took it. Measured on 2026-08-20: a session's own
+   * window `B1` was the only pane open, so it answered a plain `browser.open`
+   * from the copilot — and with the panel's tab strip gone, the page he was
+   * looking at was covered by a page in no strip anywhere. Main picks the pane
+   * now, because it is the only side that knows which panes are attached to a
+   * session; see `BrowserDriveDeps.pane`.
+   *
+   * Null only from a main process older than this field, where the old
+   * first-to-answer behaviour is all there is.
+   */
+  pane: string | null
 }
 
 /** The preload methods this feature needs, all of which may be absent. */
@@ -106,7 +121,12 @@ export function readDriveOpen(raw: unknown): DriveOpenRequest | null {
   const value = raw as Record<string, unknown>
   if (typeof value.id !== 'string' || value.id === '') return null
   if (typeof value.url !== 'string' || value.url === '') return null
-  return { id: value.id, url: value.url, isolate: value.isolate === true }
+  return {
+    id: value.id,
+    url: value.url,
+    isolate: value.isolate === true,
+    pane: typeof value.pane === 'string' && value.pane !== '' ? value.pane : null,
+  }
 }
 
 /** The same, for the status push. */

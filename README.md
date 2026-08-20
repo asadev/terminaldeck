@@ -79,13 +79,11 @@ already have and inherits whatever authentication that CLI uses.
 Download the `.dmg` from [Releases](https://github.com/asadev/terminaldeck/releases),
 open it, and drag the app to Applications.
 
-The build is **not signed or notarised** — that needs an Apple Developer
-identity. macOS will refuse the first launch. Either right-click the app and
-choose *Open*, or clear the quarantine flag:
+The build is signed with a Developer ID certificate but **not notarised**, so
+macOS refuses the first launch. Open the app, click *Done*, then go to **System
+Settings → Privacy & Security** and click **Open Anyway**. Once, per install.
 
-```sh
-xattr -dr com.apple.quarantine "/Applications/Terminal Deck.app"
-```
+Right-click → *Open* is not a way past this — macOS 15 removed that bypass.
 
 Windows releases carry two files, `…-x64-setup.exe` and `…-x64-portable.exe`.
 The installed one updates itself; the portable one says plainly that it cannot,

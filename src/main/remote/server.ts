@@ -1746,17 +1746,14 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // folder. One eligibility question behind both, so a device cannot be a
     // guest for one and an owner for the other.
     //
-    // And `localhost` goes with those two, which is the newer half of the rule
-    // and the one that needed deciding rather than copying. See
-    // {@link localhostAllowed} for the argument; the short form is that a port
-    // cannot be attributed to a folder, so there is nothing for a folder grant
-    // to be checked against and the only two honest rules are every port or
-    // none. A guest gets none, and is not told the capability exists — because a
-    // client that is told draws the tab, and a tab that refuses on every press
-    // is worse than one that was never there.
-    return advertised.filter(
-      (name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web && name !== CAPABILITY.localhost,
-    )
+    // `localhost` used to be stripped here beside them, on the argument that a
+    // port cannot be attributed to a folder. That argument is true of a *port
+    // scan* and false of the ports this app started itself, and stripping the
+    // capability made the difference invisible — see {@link grantedPorts}. A
+    // guest is told the capability exists and is shown the ports its own grant
+    // covers, which may be none; the narrowing is in the hub, where the same
+    // list decides what is offered and what may be dialled.
+    return advertised.filter((name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web)
   }
 
   /**
@@ -1876,60 +1873,133 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    *
    * ## The rule, stated
    *
-   * **The port list and every tunnel are for a device of your own. A guest gets
-   * neither.**
+   * **A device of your own reaches every port on this machine. A guest reaches
+   * the ports this machine can name a folder for, and only the ones whose
+   * folder it was granted.**
    *
-   * ## Why it is not scoped to the folders a guest was granted
+   * ## What changed, and why the old rule was wrong
    *
-   * Folder enforcement landed on `list`, `attach`, `create` and `close`, and the
-   * obvious next move is to make a port the fifth door with the same key: show a
-   * guest the ports belonging to the projects it may reach. That cannot be
-   * built honestly. A port scan reads the process table — `lsof` here, `netstat`
-   * plus `tasklist` on Windows — and what it can say is *which command holds
-   * :5173*. It cannot say which project that command was started in: the process
-   * may have been launched from a parent directory, may be a proxy in front of
-   * three apps, may be a database or a container's published port with no
-   * project anywhere near it. A filter built on that is a guess wearing the
-   * clothes of a permission, and this app has a standing rule against exactly
-   * that — a control that looks precise and is not is worse than no control.
+   * The old rule was *every port or none*, and a guest got none. The argument
+   * for it is still true as far as it goes: a port **scan** reads the process
+   * table — `lsof` here, `netstat` plus `tasklist` on Windows — and what it can
+   * say is *which command holds :5173*. It cannot say which project that command
+   * was started in. The process may have been launched from a parent directory,
+   * may be a proxy in front of three apps, may be a database or a container's
+   * published port with no project anywhere near it. Filtering *that* by folder
+   * would be a guess wearing the clothes of a permission.
    *
-   * So the two available rules are *every port* or *no port*, and the safe end
-   * of that is the one that does not hand somebody's guest a byte pipe to
-   * whatever else happens to be running on this machine: an admin console, a
-   * staging database's web UI, another service's dev build. None of those is in
-   * a folder, so none of them is covered by the thing a guest was actually
-   * granted.
+   * What the argument missed is that the scan is not the only thing on this
+   * machine that knows about a port. `dev-server.ts` **starts** dev servers, in a
+   * folder it was given, and dials until one answers — so `folder` and `port` on
+   * a `ready` state are two facts about the same process this app spawned, not
+   * an inference drawn from a process table. There is exactly one such source
+   * and {@link grantedPorts} reads it; nothing here ever attributes a scanned
+   * port to a folder.
    *
-   * ## Why it is the same question as `web` and the copilot
+   * That gap was visible as a broken feature rather than as a policy. A guest
+   * granted a folder can already ask this host to **start** the dev server in it
+   * (`dev.start`), is already told the port it came up on (`dev.state`), and
+   * then could not open it. Asad, connected to his PC as a guest:
    *
-   * Because it is the same *kind* of question. A folder grant answers "which
-   * files may this device reach"; these three answer "may this device drive the
-   * machine itself". One eligibility rule behind all three, so a device cannot
-   * be a guest for one and an owner for another — which is also why this reads
-   * `copilotEligible` rather than growing a fourth callback that could one day
-   * disagree with it.
+   *   > *"Now here I cannot even open the browser. As a guest I am connected, I
+   *   > cannot open a browser inside that machine. Maybe because I am connected
+   *   > as a guest, but still as a guest I should be able to open a browser."*
    *
-   * ## What a guest loses, said plainly
+   * ## What a guest still does not get
    *
-   * The localhost tab on a guest's phone. That is a real feature going away for
-   * a real person, and it is the right direction: a guest is somebody being lent
-   * a folder, and until today six typed digits also lent them every port on the
-   * machine.
+   * Everything that is not in one of its folders: an admin console, a staging
+   * database's web UI, another project's dev build, this app's own loopback
+   * ports. The last of those is `reserved` and is not a matter of eligibility —
+   * `own-ports.ts` covers `deck-control`, which is the copilot's whole tool
+   * surface, and `hidden-sessions.ts` covers the ptys behind it.
+   *
+   * ## Where the narrowing lives
+   *
+   * In the hub's `scan`, once, and not at this door. `createTunnelHub` asks
+   * `scan()` both to answer `ports` and to decide whether a `tunnel.open` may be
+   * dialled at all, so a scan that has already been narrowed makes the offer and
+   * the dial agree by construction. Two separate checks would be two chances for
+   * a list and an enforcement to disagree, which is the defect `folder-grants.ts`
+   * exists because of.
    */
-  function localhostAllowed(connection: LiveConnection, deviceId: string): boolean {
-    if (copilotEligible(deviceId)) return true
+  function localhostAllowed(connection: LiveConnection): boolean {
+    // Eligibility is no longer the question — what a guest is *shown* and what
+    // it may dial is decided by {@link grantedPorts}, and an empty list is an
+    // honest answer rather than a refusal. What is left is the host's own
+    // ceiling: `options.offer` can leave `localhost` out, and the public demo
+    // box does exactly that. Read the same way `webOpen` reads its own, so a
+    // client that never saw the welcome is refused rather than served.
+    if (advertised.includes(CAPABILITY.localhost)) return true
     send(connection, {
       t: 'error',
       code: 'unauthorized',
-      message: 'Only your own devices can reach the ports on this machine.',
+      message: `This ${machineNoun(currentPlatform())} does not open its ports to a device.`,
     })
     return false
   }
 
-  function hubFor(connection: LiveConnection): TunnelHub {
+  /**
+   * The ports a guest may be told about, from the only source that can name a
+   * folder for one.
+   *
+   * Re-read on every `ports` frame and every `tunnel.open`, never cached: a
+   * grant edited while a device is connected has to take effect at the next
+   * question, which is the same reason `mayTouch` is asked per keystroke rather
+   * than once at attach.
+   *
+   * Empty whenever this host cannot answer *"may this device use this folder"* —
+   * no dev-server module, no per-device folder list — because the correct
+   * behaviour for a host that cannot ask the question is to offer nothing, not
+   * to answer it optimistically. Same rule as `devserver`'s advertisement.
+   */
+  async function grantedPorts(deviceId: string): Promise<readonly TunnelPort[]> {
+    const servers = options.devServers
+    const folders = options.sessions.folders?.(deviceId) ?? []
+    if (!servers || folders.length === 0) return []
+    const allowed = new Set<number>()
+    for (const folder of folders) {
+      let state: DevServerState
+      try {
+        state = servers.status(folder)
+      } catch (error) {
+        // `status` reads the disk. A folder that has gone away is one fewer
+        // port, never a socket that stops answering.
+        console.error('[remote] could not read a dev server for a guest:', error)
+        continue
+      }
+      // `ready` only, and `port` is set only on `ready` — see `DevServerState`.
+      // A `starting` has no port yet and a `failed` may be carrying one from an
+      // attempt that is over.
+      if (state.status === 'ready' && typeof state.port === 'number') allowed.add(state.port)
+    }
+    if (allowed.size === 0) return []
+    // Still intersected with a live scan, so the guest is offered a port only
+    // while something is really listening on it — and gets the address families
+    // the dial needs, which the dev-server state does not carry.
+    try {
+      return (await scanPorts()).filter((entry) => allowed.has(entry.port))
+    } catch (error) {
+      console.error('[remote] port scan failed while answering a guest:', error)
+      return []
+    }
+  }
+
+  function hubFor(connection: LiveConnection, deviceId: string): TunnelHub {
     if (connection.tunnels) return connection.tunnels
     const hub = createTunnelHub({
-      scan: scanPorts,
+      /*
+       * One seam, two doors.
+       *
+       * `createTunnelHub` asks this both to answer `ports` and to decide whether
+       * a `tunnel.open` may be dialled, so narrowing it here is what makes the
+       * list a guest is offered and the ports it may reach the same list. A
+       * second check at the door would be a list and an enforcement computed
+       * separately, which is the defect `folder-grants.ts` exists because of.
+       *
+       * Read per call rather than resolved once, because a grant is edited while
+       * a device is connected and the hub outlives the edit.
+       */
+      scan: () => (copilotEligible(deviceId) ? scanPorts() : grantedPorts(deviceId)),
       send: (message) => send(connection, message),
       /*
        * The endpoint's own reserved list, plus every other port this app is
@@ -3706,8 +3776,8 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         // without having read the welcome. The refusal is a sentence on a
         // channel that stays open, because a device being told "not you" must
         // not also lose the terminal it is holding.
-        if (!localhostAllowed(connection, connection.deviceId)) return
-        hubFor(connection).handle(message satisfies LocalhostMessage)
+        if (!localhostAllowed(connection)) return
+        hubFor(connection, connection.deviceId).handle(message satisfies LocalhostMessage)
         return
       case 'web.open':
         webOpen(connection, connection.deviceId, message.url)

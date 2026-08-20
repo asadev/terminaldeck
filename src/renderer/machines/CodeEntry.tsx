@@ -270,8 +270,7 @@ export function CodeEntry({ state, wired, onDigits, onSubmit }: CodeEntryProps) 
 
       {!wired && (
         <Notice tone="warn">
-          This build cannot pair with another desktop — the machine channels are not in its preload.
-          Restarting the app usually fixes it.
+          This build cannot pair with another desktop. Restart the app.
         </Notice>
       )}
       {state.blocked !== null && <Notice tone="warn">{state.blocked}</Notice>}

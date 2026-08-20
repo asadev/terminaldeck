@@ -126,38 +126,40 @@ jobs:
           set -euo pipefail
 
           if [ -n "${MACOS_CERTIFICATE_P12:-}" ] && [ "${SIGNED_ONLY:-}" = 'true' ]; then
-            # Apple's notarization service can stop answering for a whole team,
-            # and on 2026-08-16 it did: four submissions sat `In Progress` for
-            # hours, one of them a 330-byte probe sent through a different auth
-            # path, so the hold was on the account and no artifact this job
-            # builds could have cleared it. Without this branch a tag push waits
-            # out the script's two-hour timeout and then fails, and the release
-            # simply does not happen.
+            # This account cannot notarize at all. Every submission ever made
+            # from it — five between 2026-08-14 and 2026-08-17, plus a fresh
+            # probe on 2026-08-20 — came back `Rejected`, statusCode **7000**:
             #
-            # A repository *variable* rather than a code change, because the
-            # condition is Apple's and it will end without warning. Flip
-            # TD_MAC_SIGNED_ONLY back to false and the next tag notarizes again.
-            # It is deliberately not automatic: a notarization that fails for
-            # any other reason is usually the wrong certificate, and that must
-            # stay a hard error rather than silently downgrading every release.
+            #   "Team is not yet configured for notarization. Please contact
+            #    Developer Programs Support."
+            #
+            # That is a provisioning state on the developer account, not a
+            # queue and not an outage. The 2026-08-16 reading of this as "the
+            # service stopped answering" was wrong: the submissions were not
+            # hanging, they were being answered and refused. The 2026-08-20
+            # probe was answered in **fourteen seconds**.
+            #
+            # So this branch does not end on its own and waiting does nothing.
+            # It ends when the account holder opens a support request with Apple
+            # under Development and Technical, and only then. Re-probe with:
+            #
+            #   xcrun notarytool history --key <p8> --key-id <id> --issuer <uuid>
+            #
+            # A repository *variable* rather than a code change so that flipping
+            # TD_MAC_SIGNED_ONLY back to false is a one-click change once Apple
+            # answers. It is deliberately not automatic: a notarization that
+            # fails for any other reason is usually the wrong certificate, and
+            # that must stay a hard error rather than silently downgrading every
+            # release.
             scripts/mac-release-signed.sh --signed-only
             cat > release/mac-install-note.md <<'NOTE'
           macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app to
           Applications. There is no Intel Mac build: macOS 27 runs on no Intel Mac.
 
-          This build **is** signed with a Developer ID certificate, but it is not
-          notarized — Apple's notarization service is not currently completing
-          submissions for this developer account. macOS will therefore say the
-          developer cannot be verified and offer no button on a normal
-          double-click. **Right-click the app and choose *Open*, then confirm.**
-          You only do this once, and the app opens normally afterwards.
-
-          This is not the "app is damaged" message an unsigned build produces —
-          the signature is real and you can check it yourself:
-
-          ```sh
-          codesign -dv --verbose=2 /Applications/Terminal\ Deck.app
-          ```
+          Signed with a Developer ID certificate, not notarized, so macOS refuses
+          the first launch. Open the app, click **Done**, then go to **System
+          Settings › Privacy & Security** and click **Open Anyway**. Once, per
+          install.
           NOTE
             exit 0
           fi
@@ -168,9 +170,8 @@ jobs:
           macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app to
           Applications. It is signed with a Developer ID certificate and notarized
           by Apple, and the notarization ticket is stapled to both the app and the
-          disk image — so it opens the ordinary way, with no right-click, no
-          `xattr`, and no network. There is no Intel Mac build: macOS 27 runs on
-          no Intel Mac.
+          disk image — so it opens on a double-click, with no Gatekeeper detour and
+          no network. There is no Intel Mac build: macOS 27 runs on no Intel Mac.
           NOTE
             exit 0
           fi
@@ -186,10 +187,10 @@ jobs:
           Applications. There is no Intel Mac build: macOS 27 runs on no Intel Mac.
 
           **This build is not signed**, because it was produced by a checkout with
-          no Developer ID certificate. macOS will refuse the first launch and say
-          the app is damaged, which is Gatekeeper's wording for "unsigned", not a
-          corrupt download. Either right-click the app and choose *Open*, or clear
-          the quarantine flag:
+          no Developer ID certificate. macOS will refuse it and say the app is
+          damaged, which is Gatekeeper's wording for "unsigned", not a corrupt
+          download. There is no *Open Anyway* button for an unsigned build; clear
+          the quarantine flag instead:
 
           ```sh
           xattr -dr com.apple.quarantine "/Applications/{{APP}}.app"
@@ -333,9 +334,12 @@ jobs:
 
 
       # `--generate-notes` writes the commit summary; `--notes` is prepended to
-      # it. The install note is not decoration: an unsigned first launch looks
-      # like a broken download on either platform, and saying so is the
-      # difference between a user right-clicking and a user giving up.
+      # it. The install note is not decoration: a first launch that Gatekeeper or
+      # SmartScreen refuses looks like a broken download on either platform, and
+      # naming the exact way through is the difference between a user opening the
+      # app and a user giving up. Naming the WRONG way through is worse than
+      # saying nothing: until 0.8.1 this note said right-click > Open, which
+      # macOS 15 removed, so it sent every current Mac user in a circle.
       #
       # The macOS paragraph is NOT written here. It comes from
       # `mac-install-note.md`, which the macOS job wrote, because only that job

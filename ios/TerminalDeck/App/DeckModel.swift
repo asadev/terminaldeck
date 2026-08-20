@@ -682,6 +682,32 @@ final class DeckModel {
 
     var isPaired: Bool { !hosts.isEmpty }
 
+    /**
+     * What to call a machine **in a list of machines**.
+     *
+     * `StoredCredential.label` answers for one machine and cannot see the
+     * others, which is fine until two of them answer the same word. Two Macs
+     * with the same hostname — a work one and a home one, or the same machine
+     * paired twice — drew two identical rows on this phone: same name, same
+     * icon, nothing to tell them apart. Measured on the simulator against two
+     * live pairings, both reading `Asads-MacBook-Pro-21`.
+     *
+     * So the tie is broken where the list can see itself, with the slot code —
+     * the one thing guaranteed to differ, because it *is* the machine's
+     * identity at the relay. A port of `machineLabels` in `pwa/src/machines.ts`,
+     * which the browser client has done since the switcher was built.
+     *
+     * Only the colliding rows are suffixed. Adding the code to every row would
+     * make the common case — one machine, or two with different names — read
+     * like a list of serial numbers to solve a problem it does not have.
+     */
+    func label(for host: HostLink) -> String {
+        let name = host.label
+        guard hosts.contains(where: { $0.id != host.id && $0.label == name }) else { return name }
+        let code = host.credential.endpoint.shortName
+        return code == name ? name : "\(name) \(code)"
+    }
+
     /// Whether the switcher is worth drawing at all. One machine does not need a
     /// picker, and a picker with one row in it is furniture.
     var hasSeveralHosts: Bool { hosts.count > 1 }

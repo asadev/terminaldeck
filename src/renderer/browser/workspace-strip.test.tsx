@@ -38,7 +38,6 @@ import {
   replaceWindowInStrip,
   orderIndexForDrop,
   shownTabs,
-  stripGroups,
   stripIsPresent,
   stripTabs,
   type ShownTab,
@@ -807,75 +806,17 @@ describe('shownTabs', () => {
 
 /* ------------------------------------------- one place, per machine -- */
 
-/**
- * *"if I open any browser here and if I connect it to, let's say, desktop, now
- * this is in desktop, it should come under this table, under the desktop
- * sessions. So all the desktop browser, including session, should be at one
- * place."*
+/*
+ * The `stripGroups` suite that stood here is gone with the function.
  *
- * With browser windows off the sidebar — *"They will be always only on the top
- * bar"* — this bar is the only place that pair can be shown together at all.
+ * It pinned a real requirement — *"all the desktop browser, including session,
+ * should be at one place"* — and the answer to it moved rather than being
+ * dropped: the rail groups by machine, and each tab's hover names the machine
+ * it runs on. Asad, 2026-08-20, about this bar in particular: *"We don't need
+ * any kind of separation like this for the device on the top with the name…
+ * This was actually for the side panel only, but not for the top bar."* See the
+ * note where the function used to be in `workspace-strip.ts`.
  */
-describe('stripGroups', () => {
-  const here = (id: string): ShownTab => ({ tab: session(id), promoted: true })
-  const away = (id: string, machine: string): ShownTab => ({
-    tab: { ...session(id), machine: { id: machine, name: machine.toUpperCase() } },
-    promoted: true,
-  })
-  const pageOn = (id: string): ShownTab => ({ tab: page(id), promoted: true })
-
-  it('draws no heading at all when everything is on this computer', () => {
-    // The ordinary machine gets exactly the bar it had before this existed.
-    const groups = stripGroups([here('a'), pageOn('b')], () => null)
-    expect(groups).toHaveLength(1)
-    expect(groups[0].heading).toBeNull()
-    expect(groups[0].entries.map((entry) => entry.tab.id)).toEqual(['a', 'b'])
-  })
-
-  it('puts a machine’s session and its browser window in one run', () => {
-    // The whole of E11: the page is served by the PC and the session runs on
-    // the PC, and they arrive from two different sources — the tab for the
-    // session, the window-machine store for the page.
-    const groups = stripGroups(
-      [here('a'), pageOn('page'), away('remote', 'pc')],
-      (tab) => (tab.id === 'page' ? { id: 'pc', name: 'PC' } : (tab.machine ?? null)),
-    )
-    expect(groups.map((group) => group.heading)).toEqual([null, 'PC'])
-    expect(groups[1].entries.map((entry) => entry.tab.id)).toEqual(['page', 'remote'])
-  })
-
-  it('still names the machine when nothing is open on this computer', () => {
-    // One group, and it is not this computer's — which is the state where the
-    // question "whose machine is this" is hardest, so it is the last one that
-    // may go unanswered.
-    const groups = stripGroups([away('r1', 'pc'), away('r2', 'pc')], (tab) => tab.machine ?? null)
-    expect(groups).toHaveLength(1)
-    expect(groups[0].heading).toBe('PC')
-  })
-
-  it('leads with this computer even when its first tab is not first', () => {
-    const groups = stripGroups([away('r', 'pc'), here('a')], (tab) => tab.machine ?? null)
-    expect(groups.map((group) => group.id)).toEqual(['', 'pc'])
-  })
-
-  it('keeps the arrangement inside a machine', () => {
-    // The promoted order is hand-made. Grouping is a partition, never a sort.
-    const groups = stripGroups(
-      [away('r2', 'pc'), here('a'), away('r1', 'pc')],
-      (tab) => tab.machine ?? null,
-    )
-    expect(groups[1].entries.map((entry) => entry.tab.id)).toEqual(['r2', 'r1'])
-  })
-
-  it('names a machine that reported no name by its id', () => {
-    const groups = stripGroups(
-      [here('a'), { tab: { ...session('r'), machine: { id: 'pc', name: '' } }, promoted: true }],
-      (tab) => tab.machine ?? null,
-    )
-    expect(groups[1].heading).toBe('pc')
-  })
-})
-
 describe('offEdgeNames', () => {
   /*
    * *"we always need a truth. So just be sure we always be able to see the

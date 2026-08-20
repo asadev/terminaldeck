@@ -57,14 +57,79 @@
  * A record the CLI does not recognise costs nothing: the modal comes back, which
  * is the state this fixes rather than a new failure. So every error here is
  * swallowed to a boolean and no run is refused over it.
+ *
+ * ## The half that was written into the wrong file, and shipped that way
+ *
+ * The measurement above was taken with `CLAUDE_CONFIG_DIR` **set**, and the
+ * conclusion — "write `<configDir>/.claude.json`" — is true only while it is.
+ * The default account is the case where it is not: `profiles.ts` spawns the
+ * system profile with the variable deliberately *unset*, because setting it to
+ * `~/.claude` makes the CLI read `~/.claude/.claude.json` while a normal
+ * install keeps its config at `~/.claude.json`, one level up. That is the whole
+ * reason `sessionEnv()` returns `{}` for it — and it is exactly what this file
+ * then walked into from the other side: the record went to
+ * `~/.claude/.claude.json`, the CLI read `~/.claude.json`, and the modal came
+ * up on every first run.
+ *
+ * Re-measured 2026-08-20 against 2.1.237 in an isolated `HOME`, onboarded, with
+ * the folder unknown — the state of every machine that installs this app:
+ *
+ * | trust record written to | modal |
+ * |---|---|
+ * | nowhere | **yes** |
+ * | `~/.claude/.claude.json` (as shipped) | **yes** |
+ * | `~/.claude.json` | no |
+ *
+ * So the file is not a function of a config *directory* at all. It is a
+ * function of the environment the session will spawn with, which is what
+ * {@link claudeTrustFile} takes — from `sessionEnv()` itself, so that the two
+ * cannot drift into disagreeing about where that login keeps its record.
+ *
+ * The phone was the surface that showed it: the first message of a fresh run
+ * was typed into the modal, the Return after it answered *Yes, I trust this
+ * folder*, and the person got *"The copilot did not answer."* The second message
+ * then worked, which is why this reads as a flaky copilot rather than as a
+ * missing file. It could not be seen from the desk — Asad's own machine has had
+ * the record under `~/.claude.json` since the first time he opened that folder
+ * himself — and it could not be seen from the harness either, whose sessions are
+ * a plain `zsh` and a shell has no trust modal.
  */
 
+import { homedir } from 'node:os'
 import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** Where the CLI keeps per-folder decisions, inside whichever config dir is in play. */
 export function claudeConfigFile(configDir: string): string {
   return join(configDir, '.claude.json')
+}
+
+/**
+ * The `.claude.json` the CLI will actually read, given the environment a
+ * session is about to spawn with.
+ *
+ * `overrides` is `sessionEnv(profile, 'claude')` — the account's own
+ * contribution and nothing else — and `env` is what it will be merged over.
+ * Asking both is what makes the two cases come out right without this file
+ * knowing anything about profiles:
+ *
+ *  - An account carries `CLAUDE_CONFIG_DIR`, so the record goes inside it.
+ *  - The machine's own login carries nothing, and the CLI falls back to
+ *    `$HOME/.claude.json`. Unless this app was itself launched with the
+ *    variable set, in which case *that* is the user's install and the session
+ *    inherits it — the same rule `systemConfigDir` follows, from the same place.
+ *
+ * An account of a different agent contributes nothing either (`accountEnv`
+ * refuses the mismatch), and lands on the same fallback, which is correct: that
+ * session runs under the machine's own Claude login.
+ */
+export function claudeTrustFile(
+  overrides: Record<string, string>,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const dir = overrides.CLAUDE_CONFIG_DIR ?? env.CLAUDE_CONFIG_DIR
+  const named = typeof dir === 'string' ? dir.trim() : ''
+  return named === '' ? join(homedir(), '.claude.json') : claudeConfigFile(named)
 }
 
 /**
@@ -80,11 +145,17 @@ export type TrustOutcome = 'recorded' | 'already' | 'refused' | 'failed'
 /**
  * Record that the copilot's own folder is trusted, unless something already says.
  *
+ * `file` is the CLI's configuration file itself, from {@link claudeTrustFile},
+ * rather than the directory it might be in. It takes the file because for the
+ * machine's own login it is *not* in that directory, and a parameter that only
+ * looked right on an isolated account is what shipped the defect this
+ * function's header now records.
+ *
  * Returns what it found rather than throwing. A configuration file that cannot
  * be read or written is a copilot that shows a modal — worse, and not worth
  * refusing a run over.
  */
-export function trustCopilotFolder(configDir: string, folder: string): TrustOutcome {
+export function trustCopilotFolder(file: string, folder: string): TrustOutcome {
   let resolved: string
   try {
     // The path as the CLI will file it. See the note above: a `/var` that is
@@ -94,7 +165,6 @@ export function trustCopilotFolder(configDir: string, folder: string): TrustOutc
     resolved = folder
   }
 
-  const file = claudeConfigFile(configDir)
   let config: Record<string, unknown> = {}
   try {
     const raw = readFileSync(file, 'utf8')

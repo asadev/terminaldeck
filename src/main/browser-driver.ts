@@ -23,6 +23,7 @@ import {
   withArgs,
 } from './browser-drive-script'
 import { copilotPaths } from './copilot-home'
+import { navigatePage, type SteerablePage } from './browser-route'
 import { normalizeUrl, shortLabel } from './browser-url'
 import { onWebContentsDestroyed } from './web-contents-teardown'
 
@@ -203,6 +204,62 @@ export interface ProbeResult {
 
 export type StepVerb = 'click' | 'type' | 'select' | 'check' | 'press' | 'submit'
 
+/**
+ * Which page a call is about.
+ *
+ * Absent everywhere until Asad said the thing this whole type exists for:
+ *
+ * > *"sessions still dont have full control to the browser windows and they
+ * > dont know about the ones attached to them specifically and they can only
+ * > open a new browser with whatever the link we ask with then they cant do
+ * > anything"*
+ *
+ * The class header used to argue at length that there is no `tabId` anywhere
+ * and that this is load-bearing. Half of that argument survives and half of it
+ * was answering a question nobody had asked:
+ *
+ *  - **Still true.** An agent may not name an arbitrary tab. There is no id
+ *    here that a model can invent, guess or enumerate: a target is minted by
+ *    the tool layer *from the binding map*, out of a session id the caller
+ *    already holds and a slot name that session was given. A window belonging
+ *    to another session cannot be named, and neither can a window belonging to
+ *    nobody. See `windowNamed` in `browser-binding.ts`, which is the check.
+ *  - **No longer true.** That reading a page the agent did not open would have
+ *    to be `alter` because it might disclose something. Attaching a window to a
+ *    session is a deliberate act, made by hand, in that window's own menu, and
+ *    it is *the* act by which a person says which pages an agent may look at.
+ *    An attached window that the agent may not read is a control that did
+ *    nothing, which is worse than no control.
+ *
+ * `name` is what a refusal and the banner call it — `B2` — and never the id
+ * underneath. That is not decoration: `browser:<epoch>:<seq>` leaking onto a
+ * screen was a defect fixed this afternoon and must not come back through here.
+ */
+export interface DriveTarget {
+  /** The slot's key. `own` for the copilot's tab, `bound:<browserTabId>` else. */
+  key: string
+  /** The main-process view id {@link DriveHost.contentsFor} takes. */
+  viewId: string
+  /**
+   * The renderer's shell tab id, for the two things only the window can do:
+   * bring this page to the front, and close it. Empty for the copilot's tab,
+   * whose shell id never reaches this process.
+   *
+   * Never printed. See {@link name}.
+   */
+  browserTabId: string
+  /** What a person and an agent both call it: `B2`. Empty for the copilot's tab. */
+  name: string
+}
+
+/** The copilot's own tab — the target every call means when it names none. */
+export const OWN_TARGET: DriveTarget = Object.freeze({
+  key: 'own',
+  viewId: '',
+  browserTabId: '',
+  name: '',
+})
+
 /* -------------------------------------------------------------- the drive -- */
 
 /**
@@ -235,42 +292,216 @@ export interface DriveHost {
   publish(status: DriveStatus): void
   /** Epoch ms. Injected so a test can freeze it. */
   now(): number
+  /**
+   * Open a window that belongs to a **session** rather than to the copilot.
+   *
+   * The third thing Asad asked for: a page the agent opens can land in the
+   * session's own numbered windows, where he can see it, name it and hand it
+   * back — instead of in the copilot's single unnamed tab.
+   *
+   * Deliberately the *same* route the `open` shim takes, handed in rather than
+   * called here, so the window an agent opens through a tool and the window it
+   * opens by running `open https://…` are the same window with the same number.
+   * Two paths to this would be two numbering schemes. See `openForSession` in
+   * `browser-binding-ipc.ts`.
+   *
+   * Absent in a build where the binding wiring is not there, and the tool says
+   * so rather than opening something unattached and calling it attached.
+   */
+  openForSession?(input: {
+    url: string
+    sessionId: string
+    machineId: string
+  }): Promise<{ line: string; attached: boolean }>
+  /**
+   * Close a browser window the person can see, by its shell tab id.
+   *
+   * Through the renderer, not by destroying the view here, for the reason
+   * `browser-drive-ipc.ts` gives about opening: a view torn down underneath a
+   * strip that still lists it is the ghost-row failure, and a window that
+   * cannot be found is exactly what this feature must not produce.
+   */
+  closeWindow?(browserTabId: string): Promise<boolean>
+  /**
+   * Bring a browser window to the front of its pane, and say whether it went.
+   *
+   * ## Why this is not a courtesy
+   *
+   * Measured on 2026-08-20 against two windows attached to one session, in the
+   * running app: reading the background one worked, and every click and
+   * keystroke aimed at it was **dropped**. Its `WebContentsView` is laid out by
+   * the workspace only while it is the tab on screen, so a hidden one has a
+   * 0×0 viewport, its elements sit at negative coordinates, and
+   * `capturePage()` answers "no visible surface".
+   *
+   * `Emulation.setDeviceMetricsOverride` was tried first, because a fake
+   * viewport is what a headless driver would use and it needs nothing from the
+   * renderer. It fixed the layout exactly as intended — the button landed at
+   * (48, 129) and `elementFromPoint` returned it — and the click still did
+   * nothing, because input to a non-composited view is dropped whatever the
+   * page thinks its size is. It also did not undo cleanly. So the emulation
+   * route is not a smaller version of this; it is a dead end, written down so
+   * nobody spends the afternoon on it twice.
+   *
+   * What is left is the honest thing, and it is also the better one: a click
+   * the person cannot see is the failure `DRIVING-MODE.md` §8 names, and the
+   * banner over the page exists precisely so that a driven page is a page in
+   * front of him. So acting on a window brings it forward, exactly as
+   * `browser.open` has always done for the copilot's own tab.
+   *
+   * Reading does **not** call this. A read works on a hidden window and pulling
+   * his screen to a page in order to look at it would be the app arguing with
+   * him about which tab he is on.
+   */
+  showWindow?(browserTabId: string): Promise<boolean>
+}
+
+/**
+ * One page the drive is holding, and everything true of that page and no other.
+ *
+ * Every field here was a field on {@link BrowserDrive} while the drive had
+ * exactly one page. They are grouped rather than multiplied because each of
+ * them is a fact about a *document*, and getting that wrong is not a tidiness
+ * problem:
+ *
+ *  - `secretSelectors` is the cache that keeps a password refusal on the right
+ *    side of the confirmation gate. Shared between two pages it would refuse to
+ *    type into a field on B2 because the copilot's tab had a password box with
+ *    the same id — a refusal nobody could explain.
+ *  - `grantedOrigin` is the person's answer about *one* site on *one* page.
+ *    Shared, a yes given for a click in the copilot's tab would silently cover
+ *    a click on the same site in a window he is looking at.
+ *  - `state` is the baton. Shared, handing him B2 would shut the copilot out of
+ *    its own tab, and his "done, carry on" would resume both.
+ */
+class Slot {
+  state: DriveState = 'idle'
+  /** The view id this slot is driving, or null when it holds no page. */
+  viewId: string | null = null
+  ring = new DispatchRing()
+  step = ''
+  prompt = ''
+  /** Resolves the tool call that is currently blocked on the person. */
+  waiting: ((outcome: HandoverOutcome) => void) | null = null
+  /** The origin the person has already agreed the copilot may drive here. */
+  grantedOrigin: string | null = null
+  /** Selectors this page has said are password, one-time-code or file fields. */
+  secretSelectors = new Set<string>()
+  attached = false
+  /**
+   * Is the page in this slot in a throwaway partition?
+   *
+   * Held because `isolate` is decided when a view is *constructed* and cannot
+   * be applied afterwards — so a second `browser.open` asking for isolation on
+   * a slot that already holds an ordinary page has to build a new one or it is
+   * answering a question it did not do anything about. See {@link
+   * BrowserDrive.open}, which is where that used to go quietly wrong.
+   */
+  isolated = false
+  /** When something last happened here. Decides which slot the banner is about. */
+  touchedAt = 0
+  constructor(
+    readonly key: string,
+    /** `B2`, or empty for the copilot's own tab. */
+    readonly name: string,
+  ) {}
 }
 
 export class BrowserDrive {
-  private state: DriveState = 'idle'
-  private tabId: string | null = null
-  private ring = new DispatchRing()
-  private step = ''
-  private prompt = ''
-  /** Resolves the tool call that is currently blocked on the person. */
-  private waiting: ((outcome: HandoverOutcome) => void) | null = null
-  /** The origin the person has already agreed the copilot may drive. */
-  private grantedOrigin: string | null = null
-  /**
-   * Selectors the page has said are password, one-time-code or file fields.
-   *
-   * Read synchronously by `browser.step`'s precheck. See {@link knownSecret}
-   * for why a cache and not a question, and why it is never emptied except
-   * when the tab goes somewhere else.
-   */
-  private secretSelectors = new Set<string>()
-  private attached = false
+  /** The copilot's own tab. Always present; never removed; today's behaviour. */
+  private readonly own = new Slot('own', '')
+  /** A session's attached windows, by slot key, created on first use. */
+  private readonly bound = new Map<string, Slot>()
   private watched = new WeakSet<WebContents>()
 
   constructor(private readonly host: DriveHost) {}
 
+  /* ------------------------------------------------------------- the slot -- */
+
+  /**
+   * The slot a call is about, made on first use.
+   *
+   * A target carries its view id every time rather than the slot remembering
+   * one, because the id underneath an attached window is re-minted when the
+   * isolation switch closes and reopens the view — the same fact
+   * `browser-binding.ts` keys its map around. The slot's identity is the
+   * window; only the handle for steering it rides on the id.
+   */
+  private slotFor(target?: DriveTarget | null): Slot {
+    if (!target || target.key === OWN_TARGET.key) return this.own
+    const found = this.bound.get(target.key)
+    if (found) {
+      found.viewId = target.viewId
+      return found
+    }
+    const made = new Slot(target.key, target.name)
+    made.viewId = target.viewId
+    this.bound.set(target.key, made)
+    return made
+  }
+
+  private slots(): Slot[] {
+    return [this.own, ...this.bound.values()]
+  }
+
+  /**
+   * A slot, addressed as a target again — for the handful of internal callers
+   * that already have the slot and have to go back through the public door.
+   *
+   * `browserTabId` is empty because nothing these callers do needs the window:
+   * releasing is bookkeeping, and a page that has just died is not going to be
+   * brought to the front.
+   */
+  private refOf(slot: Slot): DriveTarget {
+    return { key: slot.key, viewId: slot.viewId ?? '', browserTabId: '', name: slot.name }
+  }
+
+  /**
+   * Which slot the one banner is about.
+   *
+   * There is a single banner per browser panel — `DriveBanner` is drawn above
+   * the page area, not per tab — so a status has to name one page even when two
+   * are held. A question outranks work, always: `human` means somebody is being
+   * asked to type a password, and a banner that disappeared because the agent
+   * started reading another window would leave a blocked tool call with nothing
+   * on screen to answer it. Between two working slots, the newest.
+   */
+  private showing(): Slot {
+    const all = this.slots()
+    const asking = all.find((slot) => slot.state === 'human')
+    if (asking) return asking
+    let best: Slot | null = null
+    for (const slot of all) {
+      if (slot.state !== 'agent') continue
+      if (best === null || slot.touchedAt > best.touchedAt) best = slot
+    }
+    return best ?? this.own
+  }
+
   /* ---------------------------------------------------------- what it is -- */
 
   status(): DriveStatus {
-    const wc = this.contents()
+    const slot = this.showing()
+    const wc = this.contents(slot)
     return {
-      state: this.state,
-      tabId: this.tabId,
-      step: this.step,
-      prompt: this.prompt,
+      state: slot.state,
+      tabId: slot.viewId,
+      step: slot.step,
+      prompt: slot.prompt,
       url: wc ? wc.getURL() : '',
     }
+  }
+
+  /**
+   * The windows this drive is holding, by the names on screen.
+   *
+   * For a tool that has to say what it is doing without naming an id. Empty
+   * when only the copilot's own tab is in play, which is the ordinary state.
+   */
+  driving(): string[] {
+    return [...this.bound.values()]
+      .filter((slot) => slot.state !== 'idle' && slot.name !== '')
+      .map((slot) => slot.name)
   }
 
   /**
@@ -282,8 +513,8 @@ export class BrowserDrive {
    * server redirect, and that is a main-process fact needing nobody's
    * cooperation.
    */
-  origin(): string | null {
-    const wc = this.contents()
+  origin(target?: DriveTarget | null): string | null {
+    const wc = this.contents(this.slotFor(target))
     if (!wc) return null
     try {
       return new URL(wc.getURL()).origin
@@ -292,9 +523,10 @@ export class BrowserDrive {
     }
   }
 
-  /** Has the person already allowed driving on this origin during this drive? */
-  originGranted(origin: string): boolean {
-    return this.grantedOrigin !== null && this.grantedOrigin === origin
+  /** Has the person already allowed driving on this origin, on this page? */
+  originGranted(origin: string, target?: DriveTarget | null): boolean {
+    const slot = this.slotFor(target)
+    return slot.grantedOrigin !== null && slot.grantedOrigin === origin
   }
 
   /**
@@ -325,26 +557,26 @@ export class BrowserDrive {
    * the far side of the gate. This moves the common case to the right side of
    * it.
    */
-  knownSecret(selector: string): boolean {
-    return this.secretSelectors.has(selector.trim())
+  knownSecret(selector: string, target?: DriveTarget | null): boolean {
+    return this.slotFor(target).secretSelectors.has(selector.trim())
   }
 
-  private noteSecret(selector: string, secret: boolean): void {
+  private noteSecret(slot: Slot, selector: string, secret: boolean): void {
     const key = selector.trim()
     if (key === '') return
-    if (secret) this.secretSelectors.add(key)
+    if (secret) slot.secretSelectors.add(key)
     // Never removed on `false`. A page that re-renders a password box as a text
     // input mid-flow is a page doing something strange, and forgetting is the
     // direction that ends with a password typed into it.
   }
 
-  noteOriginGranted(origin: string): void {
-    this.grantedOrigin = origin
+  noteOriginGranted(origin: string, target?: DriveTarget | null): void {
+    this.slotFor(target).grantedOrigin = origin
   }
 
-  private contents(): WebContents | null {
-    if (this.tabId === null) return null
-    const wc = this.host.contentsFor(this.tabId)
+  private contents(slot: Slot): WebContents | null {
+    if (slot.viewId === null || slot.viewId === '') return null
+    const wc = this.host.contentsFor(slot.viewId)
     if (!wc || wc.isDestroyed()) return null
     return wc
   }
@@ -353,37 +585,76 @@ export class BrowserDrive {
     this.host.publish(this.status())
   }
 
-  private move(kind: 'claimed' | 'handover' | 'resumed' | 'released'): void {
-    const before = this.state
-    this.state = nextDriveState(this.state, { kind })
-    if (before !== this.state) this.publish()
+  private move(slot: Slot, kind: 'claimed' | 'handover' | 'resumed' | 'released'): void {
+    const before = slot.state
+    slot.state = nextDriveState(slot.state, { kind })
+    slot.touchedAt = this.host.now()
+    if (before !== slot.state) this.publish()
   }
 
   /* -------------------------------------------------------------- the tab -- */
 
   /**
-   * Point the agent's one tab at a URL, creating it if there is none.
+   * Point a page at a URL: the copilot's own tab by default, an attached window
+   * when one is named.
    *
-   * **There is no `tabId` argument anywhere in this class**, and that is worth
-   * more than it looks. The agent has exactly one tab, the one this gave it,
-   * and calling `open` again navigates that same tab. It removes an entire
-   * class of "drove the wrong tab" failure, it removes "a scrape hijacked the
-   * page I was reading" completely, and it is what makes reading safe at the
-   * `read` tier: the agent can only read pages it navigated to itself, so a
-   * read discloses nothing it did not already know.
+   * With no target this is what it always was — the agent has exactly one tab
+   * of its own, the one this gave it, and calling `open` again navigates that
+   * same tab. There is still no id a model can name: see {@link DriveTarget},
+   * where a target is minted from the binding map rather than from anything the
+   * model said.
+   *
+   * With a target it is a **navigation of a window that already exists**, and
+   * it never creates one. That is the difference that matters: a person's
+   * attached window is a page he is looking at, so the only thing to do with a
+   * dead one is say so.
    */
-  async open(input: { url: string; isolate: boolean; settleMs?: number }): Promise<{
+  async open(
+    input: { url: string; isolate: boolean; settleMs?: number },
+    target?: DriveTarget | null,
+  ): Promise<{
     url: string
     title: string
     settled: boolean
     created: boolean
   }> {
-    this.refuseWhileHuman()
+    const slot = this.slotFor(target)
+    this.refuseWhileHuman(slot)
     const normalized = normalizeUrl(input.url)
     if (!normalized.ok) throw new DriveRefused(normalized.reason)
 
     let created = false
-    let wc = this.contents()
+    let wc = this.contents(slot)
+    if (!wc && slot !== this.own) {
+      throw new DriveRefused(
+        `${slot.name} is not open any more. Read the window list again before naming one.`,
+      )
+    }
+    /*
+     * A page whose isolation is not the isolation that was asked for is not a
+     * page this call may reuse.
+     *
+     * The partition is fixed when a `WebContentsView` is constructed, so
+     * `isolate` on a slot that already holds a page used to do *nothing at
+     * all*: `loadURL` ran, the tool answered `settled: true`, and the model was
+     * told it had a throwaway session with none of the person's cookies while
+     * it sat in the ordinary one. Measured on 2026-08-20 in the running app —
+     * `browser.open { isolate: true }` on the copilot's existing tab came back
+     * `created: false` and shared every cookie.
+     *
+     * It matters in both directions and the rule is one line either way: the
+     * page is dropped and a new one built. Reusing an *isolated* page for an
+     * ordinary open is the same lie backwards — the person's sign-ins are not
+     * there, and the model is told nothing about why the site does not know it.
+     */
+    if (wc && slot === this.own && slot.isolated !== input.isolate) {
+      this.detach(slot)
+      slot.viewId = null
+      slot.grantedOrigin = null
+      slot.secretSelectors.clear()
+      slot.ring.clear()
+      wc = null
+    }
     if (!wc) {
       const id = await this.host.openTab({ url: normalized.url, isolate: input.isolate })
       if (id === null) {
@@ -407,19 +678,40 @@ export class BrowserDrive {
             'let them decide.',
         )
       }
-      this.tabId = id
+      slot.viewId = id
+      slot.isolated = input.isolate
       created = true
-      wc = this.contents()
+      wc = this.contents(slot)
       if (!wc) throw new DriveRefused('the browser tab went away before it could be driven')
-    } else {
+    } else if (slot === this.own) {
       // The tab already exists, so this is a navigation rather than an open.
       // Through `loadURL` and not `Page.navigate`: see the class header.
       await wc.loadURL(normalized.url).catch(() => undefined)
+    } else {
+      /*
+       * An attached window is *his* window, so it gets the courtesy a browser
+       * gives: the page's own `beforeunload` is asked first.
+       *
+       * The same rule the shim's route already follows — `browser-route.ts`
+       * says why at length — and reached through the same function, so a URL
+       * arriving by tool and a URL arriving by `open <url>` cannot treat a
+       * half-written form differently. Nothing here reads the URL, the title or
+       * how long the page has been open; the page's own declaration is the only
+       * signal, because a heuristic would silently navigate over work whose
+       * owner could never find out what decided that.
+       */
+      const outcome = await navigatePage(wc as unknown as SteerablePage, normalized.url)
+      if (outcome === 'unfinished') {
+        throw new DriveRefused(
+          `${slot.name} says it has unfinished work on the page, so it was not navigated. Ask the person, ` +
+            'or open the URL in a new window instead.',
+        )
+      }
     }
 
-    this.watch(wc)
-    this.move('claimed')
-    await this.attach(wc)
+    this.watch(wc, slot)
+    this.move(slot, 'claimed')
+    await this.attach(wc, slot)
 
     const settled = await this.waitForSettled(wc, input.settleMs ?? DEFAULT_SETTLE_MS)
     /*
@@ -431,14 +723,14 @@ export class BrowserDrive {
      * dialog on a site he has already allowed; forgetting to clear it costs a
      * confirmation that was answered about a different website.
      */
-    const origin = this.origin()
-    if (origin !== this.grantedOrigin) this.grantedOrigin = null
+    const origin = this.origin(target)
+    if (origin !== slot.grantedOrigin) slot.grantedOrigin = null
     // Selectors belong to a document. Carrying them across a navigation would
     // mean refusing to type into a field on the new page because the old one
     // had a password box with the same id — which is a refusal nobody could
     // explain.
-    if (created || origin !== null) this.secretSelectors.clear()
-    this.setStep('')
+    if (created || origin !== null) slot.secretSelectors.clear()
+    this.setStep(slot, '')
     /*
      * Publish once the page has settled, whatever the step was.
      *
@@ -458,28 +750,81 @@ export class BrowserDrive {
     return { url: wc.getURL(), title: wc.getTitle(), settled, created }
   }
 
-  /** The person closed the tab, or it died. Ends the drive; never re-arms. */
-  release(): void {
-    this.detach()
-    this.tabId = null
-    this.step = ''
-    this.prompt = ''
-    this.grantedOrigin = null
-    this.secretSelectors.clear()
-    this.ring.clear()
-    const waiting = this.waiting
-    this.waiting = null
+  /** The person closed the page, or it died. Ends that drive; never re-arms. */
+  release(target?: DriveTarget | null): void {
+    const slot = this.slotFor(target)
+    this.detach(slot)
+    slot.viewId = null
+    slot.isolated = false
+    slot.step = ''
+    slot.prompt = ''
+    slot.grantedOrigin = null
+    slot.secretSelectors.clear()
+    slot.ring.clear()
+    const waiting = slot.waiting
+    slot.waiting = null
     waiting?.('drive-ended')
-    this.move('released')
+    this.move(slot, 'released')
+    // A window's slot is the window; with the page gone there is nothing left
+    // for it to hold. The copilot's own slot stays, because it is the one thing
+    // here that is not a window and `open` re-arms it.
+    if (slot !== this.own) this.bound.delete(slot.key)
+  }
+
+  /**
+   * Close an attached window, and let go of it.
+   *
+   * Only ever a window a session holds. The copilot's own tab is not closable
+   * from here and that is not a gap: the id App.tsx knows it by never reaches
+   * this process — the renderer answers `browser:drive-opened` with the *view*
+   * id — so a close would tear down the page and leave the strip listing it.
+   * The person's ✕ is what closes that one, and it already ends the drive.
+   */
+  async close(target: DriveTarget): Promise<boolean> {
+    if (target.key === OWN_TARGET.key || target.browserTabId === '') {
+      throw new DriveRefused(
+        'your own tab is closed by the person, not by you. Name one of the session’s windows instead.',
+      )
+    }
+    if (!this.host.closeWindow) {
+      throw new DriveRefused('this build cannot close a browser window')
+    }
+    const closed = await this.host.closeWindow(target.browserTabId)
+    if (!closed) {
+      throw new DriveRefused(`${target.name} could not be closed; it may already have gone`)
+    }
+    this.release(target)
+    return true
+  }
+
+  /**
+   * Open a window that belongs to a session rather than to the copilot.
+   *
+   * Q3's second half, and a thin pass-through on purpose: the numbering, the
+   * attach and the sentence naming the slot all belong to the route the shim
+   * already uses, and a second implementation of them here is how an agent's
+   * `B2` and a person's `B2` would come to be different windows.
+   */
+  async openForSession(input: {
+    url: string
+    sessionId: string
+    machineId: string
+  }): Promise<{ line: string; attached: boolean }> {
+    if (!this.host.openForSession) {
+      throw new DriveRefused('this build cannot open a window for a session')
+    }
+    const normalized = normalizeUrl(input.url)
+    if (!normalized.ok) throw new DriveRefused(normalized.reason)
+    return this.host.openForSession({ ...input, url: normalized.url })
   }
 
   /* ------------------------------------------------------------- the wire -- */
 
-  private async attach(wc: WebContents): Promise<void> {
-    if (this.attached && wc.debugger.isAttached()) return
+  private async attach(wc: WebContents, slot: Slot): Promise<void> {
+    if (slot.attached && wc.debugger.isAttached()) return
     try {
       if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
-      this.attached = true
+      slot.attached = true
     } catch (error) {
       throw new Error(
         `could not attach to the page: ${error instanceof Error ? error.message : String(error)}`,
@@ -494,13 +839,13 @@ export class BrowserDrive {
      * `catch` stays, because a hang here would look exactly like a slow site
      * and nobody would ever find it.
      */
-    await this.send(wc, 'Page.enable').catch(() => undefined)
-    await this.send(wc, 'Runtime.enable').catch(() => undefined)
+    await this.send(wc, slot, 'Page.enable').catch(() => undefined)
+    await this.send(wc, slot, 'Runtime.enable').catch(() => undefined)
   }
 
-  private detach(): void {
-    const wc = this.contents()
-    this.attached = false
+  private detach(slot: Slot): void {
+    const wc = this.contents(slot)
+    slot.attached = false
     if (!wc) return
     try {
       if (wc.debugger.isAttached()) wc.debugger.detach()
@@ -519,10 +864,11 @@ export class BrowserDrive {
    */
   private async send(
     wc: WebContents,
+    slot: Slot,
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<Record<string, unknown>> {
-    const verdict = screenCommand({ state: this.state, method, params })
+    const verdict = screenCommand({ state: slot.state, method, params })
     if (!verdict.ok) throw new DriveRefused(verdict.reason)
     const result = (await wc.debugger.sendCommand(method, params)) as unknown
     return typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {}
@@ -531,12 +877,13 @@ export class BrowserDrive {
   /** Announce and send an input event, so the takeover watcher can claim it. */
   private async input(
     wc: WebContents,
+    slot: Slot,
     method: string,
     params: Record<string, unknown>,
     observedType: string,
   ): Promise<void> {
-    this.ring.announce(observedType, this.host.now())
-    await this.send(wc, method, params)
+    slot.ring.announce(observedType, this.host.now())
+    await this.send(wc, slot, method, params)
   }
 
   /* --------------------------------------------------------- the takeover -- */
@@ -550,17 +897,17 @@ export class BrowserDrive {
    * `MaxListenersExceededWarning`, and a twelfth being careful would not have
    * helped.
    */
-  private watch(wc: WebContents): void {
-    onWebContentsDestroyed(wc, 'browser-drive', () => {
-      if (this.contents() === null) this.release()
+  private watch(wc: WebContents, slot: Slot): void {
+    onWebContentsDestroyed(wc, `browser-drive:${slot.key}`, () => {
+      if (this.contents(slot) === null) this.release(this.refOf(slot))
     })
     if (this.watched.has(wc)) return
     this.watched.add(wc)
 
     wc.on('input-event', (_event, input: { type: string }) => {
-      if (this.state !== 'agent') return
+      if (slot.state !== 'agent') return
       if (!isTakeoverCandidate(input.type)) return
-      if (this.ring.claim(input.type, this.host.now())) return
+      if (slot.ring.claim(input.type, this.host.now())) return
       /*
        * Not ours, so it is his — and the direction of that guess is the point.
        * Mis-reading a synthetic event as human parks the drive and costs a
@@ -573,8 +920,8 @@ export class BrowserDrive {
        * at most once per drive, so it is not noise.
        */
       console.log(`[browser-drive] parked: an unclaimed ${input.type} arrived, so the person has the page`)
-      this.prompt = 'You took over this page. The copilot has stopped.'
-      this.move('handover')
+      slot.prompt = 'You took over this page. The copilot has stopped.'
+      this.move(slot, 'handover')
     })
 
     /*
@@ -585,9 +932,11 @@ export class BrowserDrive {
      * that starts moving on its own, which `DRIVING-MODE.md` §8 names as the
      * single behaviour that would make somebody uninstall.
      */
-    wc.on('render-process-gone', () => this.release())
+    wc.on('render-process-gone', () =>
+      this.release(this.refOf(slot)),
+    )
     wc.debugger.on('detach', () => {
-      this.attached = false
+      slot.attached = false
     })
   }
 
@@ -600,8 +949,8 @@ export class BrowserDrive {
    * JSON value any tool contributes is a selector string. There is no path from
    * a model's text to a page's JavaScript — see `browser-drive-script.ts`.
    */
-  private async run<T>(script: string, args: unknown): Promise<T> {
-    const wc = this.contents()
+  private async run<T>(script: string, args: unknown, slot: Slot): Promise<T> {
+    const wc = this.contents(slot)
     if (!wc) throw new DriveRefused('the page this was driving has gone')
     /*
      * The baton is checked here as well as in `send`, because reading does not
@@ -610,9 +959,9 @@ export class BrowserDrive {
      * protocol channel would be shut during a handover and the isolated world
      * would still answer.
      */
-    if (this.state !== 'agent') {
+    if (slot.state !== 'agent') {
       throw new DriveRefused(
-        this.state === 'human'
+        slot.state === 'human'
           ? 'the person is using this page right now, so it cannot be read. Wait for them to hand it back.'
           : 'nothing is being driven, so there is no page to read',
       )
@@ -630,9 +979,63 @@ export class BrowserDrive {
    * either direction on its own — a search results page is fifty controls and
    * two sentences, an article is one control and forty thousand characters.
    */
+  /**
+   * Take hold of the page a call names, claiming an attached window the first
+   * time one is used.
+   *
+   * The claim is the part worth reading. The copilot's own tab becomes drivable
+   * by being *opened* — `open` is the only thing that fills that slot, and a
+   * verb on an empty one is refused telling the model to open first. An
+   * attached window is the opposite case: it already exists, the person put it
+   * there, and requiring `browser.open` before reading it would mean navigating
+   * the page he attached in order to be allowed to look at it.
+   *
+   * So the first verb on an attached window claims it — watch, baton, debugger
+   * — and every one after that finds it already held. The refusals a bound slot
+   * can produce are the two real states: the person has the page, or the window
+   * has gone. Neither of them ever says whether some *other* session's window
+   * by that name exists; that answer is settled in `windowNamed` before a target
+   * is minted at all.
+   */
+  private async hold(
+    target?: DriveTarget | null,
+    options: { reveal?: boolean } = {},
+  ): Promise<{ slot: Slot; wc: WebContents }> {
+    const slot = this.slotFor(target)
+    this.refuseWhileHuman(slot)
+    /*
+     * Anything that touches the page brings it to the front first. See
+     * {@link DriveHost.showWindow} for the measurement that makes this a
+     * requirement rather than a manner: a hidden window drops every click.
+     *
+     * Before the contents are read, because the answer changes what the page
+     * is: `waitForActionable` re-probes on a 60ms loop, so the step simply
+     * finds the element once the workspace has given the view a rectangle, with
+     * no sleep here guessing how long that takes.
+     */
+    if (options.reveal === true && target && target.browserTabId !== '' && this.host.showWindow) {
+      await this.host.showWindow(target.browserTabId).catch(() => false)
+    }
+    const wc = this.contents(slot)
+    if (!wc) {
+      throw new DriveRefused(
+        slot === this.own
+          ? 'there is no page being driven; call browser.open first'
+          : `${slot.name} is not open any more. Read the window list again before naming one.`,
+      )
+    }
+    if (slot.state === 'idle') {
+      this.watch(wc, slot)
+      this.move(slot, 'claimed')
+      await this.attach(wc, slot)
+    }
+    return { slot, wc }
+  }
+
   async outline(
     limit: number,
     textLimit = DEFAULT_OUTLINE_TEXT_CHARS,
+    target?: DriveTarget | null,
   ): Promise<{
     url: string
     title: string
@@ -642,6 +1045,7 @@ export class BrowserDrive {
     matched: number
     truncated: boolean
   }> {
+    const { slot } = await this.hold(target)
     const raw = await this.run<{
       url: string
       title: string
@@ -650,13 +1054,13 @@ export class BrowserDrive {
       elements: OutlineElement[]
       matched: number
       truncated: boolean
-    }>(OUTLINE_SCRIPT, { limit, textLimit })
+    }>(OUTLINE_SCRIPT, { limit, textLimit }, slot)
     const elements = (raw.elements ?? []).map((element) =>
       element.secret || looksSecret({ type: element.type })
         ? { ...element, secret: true, value: undefined }
         : element,
     )
-    for (const element of elements) this.noteSecret(element.selector, element.secret)
+    for (const element of elements) this.noteSecret(slot, element.selector, element.secret)
     return {
       url: String(raw.url ?? ''),
       title: String(raw.title ?? ''),
@@ -676,10 +1080,16 @@ export class BrowserDrive {
     }
   }
 
-  async probe(selector: string): Promise<ProbeResult> {
-    const result = await this.run<ProbeResult>(PROBE_SCRIPT, { selector })
+  async probe(selector: string, target?: DriveTarget | null): Promise<ProbeResult> {
+    const { slot } = await this.hold(target)
+    return this.probeIn(slot, selector)
+  }
+
+  /** The same, on a slot already held. Every internal loop uses this one. */
+  private async probeIn(slot: Slot, selector: string): Promise<ProbeResult> {
+    const result = await this.run<ProbeResult>(PROBE_SCRIPT, { selector }, slot)
     if (result.found) {
-      this.noteSecret(selector, result.secret === true || looksSecret({ type: result.type }))
+      this.noteSecret(slot, selector, result.secret === true || looksSecret({ type: result.type }))
     }
     return result
   }
@@ -698,10 +1108,15 @@ export class BrowserDrive {
    * a question about the page arriving and not about a click being safe. The
    * strict version runs inside `act`, where it belongs.
    */
-  async waitFor(selector: string, timeoutMs: number): Promise<ProbeResult> {
+  async waitFor(
+    selector: string,
+    timeoutMs: number,
+    target?: DriveTarget | null,
+  ): Promise<ProbeResult> {
+    const { slot } = await this.hold(target)
     const deadline = this.host.now() + timeoutMs
     for (;;) {
-      const probe = await this.probe(selector)
+      const probe = await this.probeIn(slot, selector)
       if (probe.invalid === true) {
         throw new DriveRefused(`that is not a valid CSS selector: ${selector}`)
       }
@@ -716,18 +1131,23 @@ export class BrowserDrive {
     }
   }
 
-  async textAt(selector: string | null, limit: number): Promise<{
+  async textAt(
+    selector: string | null,
+    limit: number,
+    target?: DriveTarget | null,
+  ): Promise<{
     found: boolean
     secret: boolean
     text: string
     truncated: boolean
   }> {
+    const { slot } = await this.hold(target)
     const raw = await this.run<{
       found: boolean
       secret?: boolean
       text?: string
       truncated?: boolean
-    }>(TEXT_SCRIPT, { selector: selector ?? '', limit })
+    }>(TEXT_SCRIPT, { selector: selector ?? '', limit }, slot)
     return {
       found: raw.found === true,
       secret: raw.secret === true,
@@ -762,6 +1182,7 @@ export class BrowserDrive {
    * returned are read after the movement, not before it.
    */
   private async waitForActionable(
+    slot: Slot,
     selector: string,
     timeoutMs: number,
     options: { needsHit: boolean } = { needsHit: true },
@@ -773,7 +1194,7 @@ export class BrowserDrive {
     let previousAt = 0
 
     for (;;) {
-      const probe = await this.probe(selector)
+      const probe = await this.probeIn(slot, selector)
 
       if (probe.invalid === true) {
         throw new DriveRefused(
@@ -786,7 +1207,7 @@ export class BrowserDrive {
       } else {
         if (!scrolled) {
           scrolled = true
-          await this.run(SCROLL_SCRIPT, { selector }).catch(() => undefined)
+          await this.run(SCROLL_SCRIPT, { selector }, slot).catch(() => undefined)
           previous = null
           continue
         }
@@ -841,21 +1262,48 @@ export class BrowserDrive {
    * translation layer between them, which is what makes replaying a recording
    * a small feature later rather than a second driver.
    */
-  async act(input: {
-    verb: StepVerb
-    selector: string
-    value?: string
-    key?: string
-    timeoutMs?: number
-  }): Promise<{ verb: StepVerb; selector: string; label: string; url: string }> {
-    this.refuseWhileHuman()
-    const wc = this.contents()
-    if (!wc) throw new DriveRefused('there is no page being driven; call browser.open first')
+  async act(
+    input: {
+      verb: StepVerb
+      selector: string
+      value?: string
+      key?: string
+      timeoutMs?: number
+    },
+    target?: DriveTarget | null,
+  ): Promise<{ verb: StepVerb; selector: string; label: string; url: string }> {
+    const { slot, wc } = await this.hold(target, { reveal: true })
 
     const selector = input.selector.trim()
     if (selector.length === 0) throw new DriveRefused('a step needs a selector')
     if (selector.length > MAX_SELECTOR_CHARS) {
       throw new DriveRefused(`that selector is longer than ${MAX_SELECTOR_CHARS} characters`)
+    }
+    /*
+     * A step with nothing to type is not a step, and it used to be a success.
+     *
+     * `value ?? ''` is what stood here, and an empty string is a *real*
+     * instruction — {@link type} clears the field with it, deliberately, and
+     * that is worth keeping. What it must not also mean is "the caller never
+     * sent one", because those two cases then produce the same silent success:
+     * on 2026-08-20 a call passed `text:` instead of `value:`, nothing rejected
+     * the argument it did not know, the field was cleared, and the tool
+     * reported that it had typed. An agent believing it typed is worse than an
+     * agent told no.
+     *
+     * So absent is refused and empty is honoured. Checked here as well as in
+     * `browser-tools.ts` because the two run on opposite sides of the tool
+     * boundary and this one holds for any caller of the drive.
+     */
+    if ((input.verb === 'type' || input.verb === 'select') && input.value === undefined) {
+      throw new DriveRefused(
+        input.verb === 'type'
+          ? 'a type step needs `value` — the text to type. Send an empty string only to clear the field.'
+          : 'a select step needs `value` — the option to choose.',
+      )
+    }
+    if (input.verb === 'select' && input.value === '') {
+      throw new DriveRefused('a select step needs an option to choose; `value` is empty')
     }
     const timeoutMs = Math.min(
       Math.max(input.timeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS, 500),
@@ -865,34 +1313,34 @@ export class BrowserDrive {
     // A `select` sets a value through a script and never dispatches a click, so
     // it does not need the point it would have clicked to be reachable.
     const needsHit = input.verb !== 'select'
-    const target = await this.waitForActionable(selector, timeoutMs, { needsHit })
-    const label = typeof target.label === 'string' ? target.label : ''
-    this.setStep(describeStep(input.verb, label, selector))
+    const found = await this.waitForActionable(slot, selector, timeoutMs, { needsHit })
+    const label = typeof found.label === 'string' ? found.label : ''
+    this.setStep(slot, describeStep(input.verb, label, selector))
 
     try {
       switch (input.verb) {
         case 'click':
-          await this.clickAt(wc, target.rect)
+          await this.clickAt(wc, slot, found.rect)
           break
         case 'check':
-          await this.check(wc, target, input.value)
+          await this.check(wc, slot, found, input.value)
           break
         case 'type':
-          await this.type(wc, target, selector, input.value ?? '')
+          await this.type(wc, slot, found, selector, input.value ?? '')
           break
         case 'select':
-          await this.select(selector, input.value ?? '')
+          await this.select(slot, selector, input.value ?? '')
           break
         case 'press':
-          await this.press(wc, target, input.key ?? 'Enter')
+          await this.press(wc, slot, found, input.key ?? 'Enter')
           break
         case 'submit':
-          await this.clickAt(wc, target.rect)
-          await this.press(wc, target, 'Enter')
+          await this.clickAt(wc, slot, found.rect)
+          await this.press(wc, slot, found, 'Enter')
           break
       }
     } finally {
-      this.setStep('')
+      this.setStep(slot, '')
     }
 
     return { verb: input.verb, selector, label, url: wc.getURL() }
@@ -900,21 +1348,27 @@ export class BrowserDrive {
 
   private async clickAt(
     wc: WebContents,
+    slot: Slot,
     rect: { x: number; y: number; width: number; height: number },
   ): Promise<void> {
     const x = Math.round(rect.x + rect.width / 2)
     const y = Math.round(rect.y + rect.height / 2)
     // A move first, because a page whose button only styles itself on hover
     // will also only bind its handler on hover, and this costs one message.
-    await this.input(wc, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 }, 'mouseMove')
-    await this.input(wc, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 }, 'mouseDown')
-    await this.input(wc, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 }, 'mouseUp')
+    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 }, 'mouseMove')
+    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 }, 'mouseDown')
+    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 }, 'mouseUp')
   }
 
-  private async check(wc: WebContents, target: ProbeResult, value: string | undefined): Promise<void> {
+  private async check(
+    wc: WebContents,
+    slot: Slot,
+    target: ProbeResult,
+    value: string | undefined,
+  ): Promise<void> {
     const wanted = value === undefined || value === '' ? true : value !== 'false'
     if (target.checked === wanted) return
-    await this.clickAt(wc, target.rect as { x: number; y: number; width: number; height: number })
+    await this.clickAt(wc, slot, target.rect as { x: number; y: number; width: number; height: number })
   }
 
   /**
@@ -932,6 +1386,7 @@ export class BrowserDrive {
    */
   private async type(
     wc: WebContents,
+    slot: Slot,
     target: ProbeResult,
     selector: string,
     value: string,
@@ -950,18 +1405,40 @@ export class BrowserDrive {
       throw new DriveRefused(`that is longer than the ${MAX_TYPE_CHARS} characters a step will type`)
     }
 
-    // Focus it, and clear whatever is in it. Select-all then type replaces,
-    // which is what a person does and what a form expects; appending to a
-    // pre-filled field is the commonest way a driven login ends up with the
-    // email address typed twice.
-    await this.clickAt(wc, target.rect as { x: number; y: number; width: number; height: number })
+    /*
+     * Focus it, and clear whatever is in it.
+     *
+     * Select-all then type replaces, which is what a person does and what a form
+     * expects; appending to a pre-filled field is the commonest way a driven
+     * login ends up with the email address typed twice.
+     *
+     * ## `commands`, and why the modifier alone was not enough
+     *
+     * This used to send ⌘A (or ⌃A) as an ordinary modified key event and trust
+     * the editor to interpret it. It does not. Chromium turns a keystroke into
+     * an *editing command* through the platform's key-binding layer, which a
+     * synthesised protocol event does not go through — so the field kept its
+     * value and the new text was appended to it.
+     *
+     * Caught on 2026-08-20 by driving one page twice: `#out` came back reading
+     * `clicked: B1 by nameback to B1`, which is two typed values in one field,
+     * from a step that reported success both times. Exactly the failure the
+     * paragraph above was written about, sitting in the code that was meant to
+     * prevent it.
+     *
+     * `commands: ['selectAll']` is the documented way to ask for the editing
+     * command itself, and it rides *with* the key event rather than replacing
+     * it — so a page listening for `keydown` still sees ⌘A, which is what a
+     * person pressing it would produce.
+     */
+    await this.clickAt(wc, slot, target.rect as { x: number; y: number; width: number; height: number })
     const selectAll = process.platform === 'darwin' ? 4 : 2
-    await this.input(wc, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 }, 'rawKeyDown')
-    await this.input(wc, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 }, 'keyUp')
+    await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, commands: ['selectAll'] }, 'rawKeyDown')
+    await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 }, 'keyUp')
 
     if (value.length === 0) {
-      await this.input(wc, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }, 'rawKeyDown')
-      await this.input(wc, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }, 'keyUp')
+      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }, 'rawKeyDown')
+      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }, 'keyUp')
       return
     }
 
@@ -978,25 +1455,31 @@ export class BrowserDrive {
      */
     if (value.length <= PER_KEY_LIMIT) {
       for (const char of value) {
-        await this.input(wc, 'Input.dispatchKeyEvent', { type: 'keyDown', text: char, unmodifiedText: char, key: char }, 'keyDown')
-        await this.input(wc, 'Input.dispatchKeyEvent', { type: 'keyUp', key: char }, 'keyUp')
+        await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyDown', text: char, unmodifiedText: char, key: char }, 'keyDown')
+        await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: char }, 'keyUp')
       }
       return
     }
-    await this.input(wc, 'Input.insertText', { text: value }, 'char')
+    await this.input(wc, slot, 'Input.insertText', { text: value }, 'char')
   }
 
-  private async select(selector: string, value: string): Promise<void> {
-    const result = await this.run<{ ok: boolean; reason?: string; value?: string }>(SELECT_SCRIPT, {
-      selector,
-      value,
-    })
+  private async select(slot: Slot, selector: string, value: string): Promise<void> {
+    const result = await this.run<{ ok: boolean; reason?: string; value?: string }>(
+      SELECT_SCRIPT,
+      { selector, value },
+      slot,
+    )
     if (result.ok !== true) {
       throw new DriveRefused(result.reason ?? 'that option could not be chosen')
     }
   }
 
-  private async press(wc: WebContents, target: ProbeResult, key: string): Promise<void> {
+  private async press(
+    wc: WebContents,
+    slot: Slot,
+    target: ProbeResult,
+    key: string,
+  ): Promise<void> {
     const spec = PRESS_KEYS[key]
     if (!spec) {
       throw new DriveRefused(
@@ -1006,7 +1489,7 @@ export class BrowserDrive {
     // Aim the key at the element by focusing it first, unless the caller is
     // pressing into whatever already has focus after a `type`.
     if (target.rect && target.editable !== true) {
-      await this.clickAt(wc, target.rect)
+      await this.clickAt(wc, slot, target.rect)
     }
     const base = {
       key: spec.key,
@@ -1014,11 +1497,11 @@ export class BrowserDrive {
       windowsVirtualKeyCode: spec.vk,
       nativeVirtualKeyCode: spec.vk,
     }
-    await this.input(wc, 'Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' }, 'rawKeyDown')
+    await this.input(wc, slot, 'Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' }, 'rawKeyDown')
     if (spec.text !== undefined) {
-      await this.input(wc, 'Input.dispatchKeyEvent', { type: 'char', text: spec.text }, 'char')
+      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'char', text: spec.text }, 'char')
     }
-    await this.input(wc, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' }, 'keyUp')
+    await this.input(wc, slot, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' }, 'keyUp')
   }
 
   /* ---------------------------------------------------------- screenshots -- */
@@ -1038,15 +1521,15 @@ export class BrowserDrive {
    * The path is returned, never the bytes. An image in a tool result is
    * thousands of tokens and this app has a viewer for files.
    */
-  async screenshot(): Promise<{ path: string; width: number; height: number; masked: number }> {
-    this.refuseWhileHuman()
-    const wc = this.contents()
-    if (!wc) throw new DriveRefused('there is no page being driven; call browser.open first')
+  async screenshot(
+    target?: DriveTarget | null,
+  ): Promise<{ path: string; width: number; height: number; masked: number }> {
+    const { slot, wc } = await this.hold(target, { reveal: true })
 
     const secrets = await this.run<{
       rects: Array<{ x: number; y: number; width: number; height: number }>
       viewport: { width: number; height: number }
-    }>(SECRET_RECTS_SCRIPT, {}).catch(() => null)
+    }>(SECRET_RECTS_SCRIPT, {}, slot).catch(() => null)
     if (secrets === null) {
       // The page could not be asked where its password fields are, so there is
       // no way to know whether this picture has one in it. Refusing is the only
@@ -1055,18 +1538,34 @@ export class BrowserDrive {
       throw new Error('the page could not be asked where its password fields are, so no picture was taken')
     }
 
+    /*
+     * Captured with a short retry, because a window that was just brought
+     * forward has not been composited yet.
+     *
+     * `capturePage()` on a view with no surface either throws or hands back a
+     * zero-sized image, and both were reproduced by photographing a background
+     * window. The reveal above fixes it, but not in the same tick — the
+     * workspace has to lay the view out and the compositor has to draw a frame
+     * — so this waits for that rather than reporting "no visible surface" for a
+     * window that is on its way to being visible.
+     */
     let image
-    try {
-      image = await wc.capturePage()
-    } catch (error) {
-      throw new Error(
-        `the page could not be photographed: ${error instanceof Error ? error.message : String(error)}`,
-      )
+    let failure = 'it has no visible surface right now'
+    for (let attempt = 0; attempt < 12; attempt++) {
+      if (attempt > 0) await sleep(80)
+      try {
+        const shot = await wc.capturePage()
+        const shotSize = shot.getSize()
+        if (shotSize.width > 0 && shotSize.height > 0) {
+          image = shot
+          break
+        }
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error)
+      }
     }
+    if (!image) throw new Error(`the page could not be photographed: ${failure}`)
     const size = image.getSize()
-    if (size.width === 0 || size.height === 0) {
-      throw new Error('the page could not be photographed: it has no visible surface right now')
-    }
 
     const masked = maskRects(image, secrets.rects ?? [], secrets.viewport)
     const dir = join(copilotPaths(app.getPath('userData')).root, 'screenshots')
@@ -1092,19 +1591,55 @@ export class BrowserDrive {
    * the tool call is a window onto that. `still-waiting` is not a failure and
    * the tool's description says so in those words.
    */
-  async handover(prompt: string, windowMs = HANDOVER_WINDOW_MS): Promise<{
+  async handover(
+    prompt: string,
+    windowMs = HANDOVER_WINDOW_MS,
+    target?: DriveTarget | null,
+  ): Promise<{
     outcome: HandoverOutcome
     waitedMs: number
     url: string
     title: string
   }> {
-    const wc = this.contents()
-    if (!wc) throw new DriveRefused('there is no page being driven; call browser.open first')
+    const slot = this.slotFor(target)
+    const wc = this.contents(slot)
+    if (!wc) {
+      throw new DriveRefused(
+        slot === this.own
+          ? 'there is no page being driven; call browser.open first'
+          : `${slot.name} is not open any more. Read the window list again before naming one.`,
+      )
+    }
     const startedAt = this.host.now()
 
-    if (this.state !== 'human') {
-      this.prompt = sanitizeHandoverPrompt(prompt) || 'The copilot needs you to do something on this page.'
-      this.move('handover')
+    /*
+     * One question at a time, across every page.
+     *
+     * `DriveBanner` is drawn once per browser panel, so a second handover would
+     * hide the first — and the person answering the visible one would be
+     * answering a question about a page they were not shown. The refusal is
+     * here, at the only door that can create the state, rather than a rule in
+     * `resume` that has to guess which of two batons a click meant.
+     */
+    const asking = this.slots().find((entry) => entry.state === 'human' && entry !== slot)
+    if (asking) {
+      throw new DriveRefused(
+        `the person is already being asked about ${asking.name === '' ? 'another page' : asking.name}. ` +
+          'Wait for that one before asking about this one.',
+      )
+    }
+
+    if (slot.state !== 'human') {
+      // Claimed first when this is the first thing done to an attached window:
+      // the baton can only be handed from `agent`, and a handover on a window
+      // nothing has driven yet is a perfectly ordinary opening move.
+      if (slot.state === 'idle') {
+        this.watch(wc, slot)
+        this.move(slot, 'claimed')
+        await this.attach(wc, slot)
+      }
+      slot.prompt = sanitizeHandoverPrompt(prompt) || 'The copilot needs you to do something on this page.'
+      this.move(slot, 'handover')
     }
 
     /*
@@ -1114,7 +1649,7 @@ export class BrowserDrive {
      * leaving it attached would resolve a promise nobody reads while the live
      * call waited for a second answer that is never coming.
      */
-    this.waiting?.('still-waiting')
+    slot.waiting?.('still-waiting')
 
     const outcome = await new Promise<HandoverOutcome>((resolve) => {
       let settled = false
@@ -1122,17 +1657,17 @@ export class BrowserDrive {
         if (settled) return
         settled = true
         clearTimeout(timer)
-        if (this.waiting === finish) this.waiting = null
+        if (slot.waiting === finish) slot.waiting = null
         resolve(value)
       }
       const timer = setTimeout(() => finish('still-waiting'), windowMs)
       // Vitest holds the loop open for a pending timer, and this one is 90
       // seconds; the same `unref` `consent.ts` uses, for the same reason.
       timer.unref?.()
-      this.waiting = finish
+      slot.waiting = finish
     })
 
-    const live = this.contents()
+    const live = this.contents(slot)
     return {
       outcome,
       waitedMs: this.host.now() - startedAt,
@@ -1154,30 +1689,40 @@ export class BrowserDrive {
    * gets hit by accident in the middle of one.
    */
   resume(carryOn: boolean): void {
-    if (this.state !== 'human') return
-    this.prompt = ''
+    /*
+     * The banner carries no id, so this answers whichever page the question was
+     * asked about — which is the same slot {@link showing} put on screen,
+     * because a `human` slot outranks everything there. One question is
+     * outstanding at a time by construction: `handover` on a second page while
+     * one is unanswered would put a second banner behind the first, so it is
+     * refused there rather than resolved here.
+     */
+    const slot = this.slots().find((entry) => entry.state === 'human')
+    if (!slot) return
+    slot.prompt = ''
     if (carryOn) {
-      this.move('resumed')
-      this.waiting?.('resumed')
-      this.waiting = null
+      this.move(slot, 'resumed')
+      slot.waiting?.('resumed')
+      slot.waiting = null
       return
     }
-    const waiting = this.waiting
-    this.waiting = null
+    const waiting = slot.waiting
+    slot.waiting = null
     waiting?.('stopped')
-    this.release()
+    this.release(this.refOf(slot))
   }
 
   /* --------------------------------------------------------------- shared -- */
 
-  private setStep(step: string): void {
-    if (this.step === step) return
-    this.step = step
+  private setStep(slot: Slot, step: string): void {
+    if (slot.step === step) return
+    slot.step = step
+    slot.touchedAt = this.host.now()
     this.publish()
   }
 
-  private refuseWhileHuman(): void {
-    if (this.state !== 'human') return
+  private refuseWhileHuman(slot: Slot): void {
+    if (slot.state !== 'human') return
     throw new DriveRefused(
       'the person has this page right now. Wait — call browser.handover again to keep waiting, or say ' +
         'something to them. Do not try another way round.',

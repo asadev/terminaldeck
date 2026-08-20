@@ -642,35 +642,23 @@ button {
 
 /* Sentences stop at a readable measure inside a wide screen. The container may
    be a thousand pixels; a paragraph across a thousand pixels is one your eye
-   loses its place in on the way back to the left. */
-.screen__lead,
-.steps,
+   loses its place in on the way back to the left.
+
+   `.screen__lead` and `.steps` used to be on this list and no longer exist:
+   they were the lead paragraph and the three numbered steps on the pair screen,
+   and both are behind the ⓘ now. Their rules went with them rather than being
+   left as dead selectors — a stylesheet that still styles what nothing draws is
+   a stylesheet nobody can read the shape of the app out of. */
 .note,
 .start__note,
 .lifetime__note {
   max-width: var(--prose);
 }
 
-.screen__lead {
-  margin: 0 0 20px;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
 .screen h2 {
   margin: 0 0 6px;
   font-size: 20px;
   font-weight: 600;
-}
-
-.steps {
-  margin: 0 0 20px;
-  padding-left: 20px;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-.steps li {
-  margin-bottom: 8px;
 }
 
 .note {
@@ -814,12 +802,6 @@ input[type='text']:focus-visible {
   color: var(--text-primary);
   font-size: 15px;
   font-weight: 600;
-}
-
-.remember__note {
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.45;
 }
 
 .button {
@@ -2378,10 +2360,48 @@ a.browse__go {
   padding: 14px 16px calc(20px + var(--dock-safe));
 }
 
-.copilot-status__desk {
-  margin: 0;
-  font-size: 15px;
+/* Two states, side by side, each naming its own subject.
+
+   They were two sentences — "The copilot is not running at the machine." over
+   "This browser has its own run" — which were both true, about two different
+   copilots, and read as a contradiction. A chip says what it is about before it
+   says what it is doing, so the pair cannot be read as one. */
+.copilot-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.copilot-state__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.copilot-state__chip b {
   font-weight: 600;
+  color: var(--text-primary);
+}
+
+.copilot-state__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  /* The neutral answer, and the one every unknown state falls back to. */
+  background: var(--text-muted);
+}
+
+.copilot-state__chip[data-state='running'] .copilot-state__dot {
+  background: var(--status-completed);
+}
+
+.copilot-state__chip[data-state='starting'] .copilot-state__dot {
+  background: var(--status-working);
 }
 
 .copilot-status__facts {
@@ -3094,6 +3114,20 @@ a.browse__go {
   background: var(--accent-soft);
 }
 
+/* A login belonging to a different agent than this session runs. It is listed
+   because the menu names every account this machine has, and it is inert
+   because the machine refuses that switch — with a sentence this bar does not
+   draw. Dimmed and not pressable, never removed: a row that vanishes reads as
+   an account that is gone. */
+.sbar__row[data-inert='yes'] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sbar__row[data-inert='yes']:active {
+  background: transparent;
+}
+
 /* ------------------------------------------------------------------------ */
 /* The chat view.                                                            */
 /*                                                                           */
@@ -3180,4 +3214,151 @@ a.browse__go {
    a sentence about something the finger already knows it did. */
 .chatv__copy[data-done='yes'] {
   color: var(--status-completed);
+}
+
+/* ------------------------------------------------------------------------ */
+/* The composer, under the conversation.                                     */
+/*                                                                           */
+/* The chat view shipped read-only, which made chat mode a detour: read the   */
+/* answer here, go back to the terminal to type one line. This is the same    */
+/* channel the key bar writes into — see `ChatComposer`.                     */
+/* ------------------------------------------------------------------------ */
+.chatc {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  /* The home-indicator gap, the same variable the key bar takes and which
+     main.ts zeroes while the keyboard is up — the keyboard already covers that
+     strip and paying for it twice lifts the row off the keys. */
+  padding-bottom: calc(8px + var(--dock-safe));
+}
+
+.chatc__field {
+  flex: 1;
+  min-width: 0;
+  /* One row to start, six at most, then it scrolls. A composer that can grow
+     without limit is a composer that eats the answer it is replying to. */
+  max-height: 132px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.35;
+  resize: none;
+  overflow-y: auto;
+}
+
+/* 16px or iOS Safari zooms the whole page on focus, and a page zoomed to fit a
+   text field is a terminal nobody can read on the way back. The rule is on the
+   coarse pointer only, so a desktop keeps the size the rest of the sheet uses. */
+@media (pointer: coarse) {
+  .chatc__field {
+    font-size: 16px;
+  }
+}
+
+.chatc__field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.chatc__send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.chatc__send:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.chatc__send:not(:disabled):active {
+  background: var(--bg-active);
+}
+
+/* ------------------------------------------------------------------------ */
+/* The ⓘ — the only place an explanation lives.                              */
+/*                                                                           */
+/* "Don't put any single statement in anywhere… just if somewhere it's very   */
+/*  required, give the i icon like other ones." A popup rather than a         */
+/*  disclosure: a disclosure pushes everything under it down the page, so     */
+/*  reading the second explanation moves the third somewhere else.            */
+/* ------------------------------------------------------------------------ */
+.info {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.info__dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* The 44px tap target the rest of this client uses, around a 16px glyph. */
+  width: 44px;
+  height: 44px;
+  margin: -14px;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+/* Safari draws its own triangle from a pseudo-element the `list-style` above
+   does not reach, which put a disclosure arrow beside every ⓘ in this client. */
+.info__dot::-webkit-details-marker {
+  display: none;
+}
+
+.info__dot:hover,
+.info[open] .info__dot {
+  color: var(--text-primary);
+}
+
+.info__body {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  /* Anchored to the dot's left edge and capped, then pulled back inside the
+     frame by the viewport clamp below. A popup that leaves the screen on a
+     390px phone is a popup nobody can read the end of. */
+  left: 0;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+/* The heading a dot sits beside: the title and the ⓘ on one baseline. */
+.screen__heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.screen__heading h2 {
+  margin: 0;
 }

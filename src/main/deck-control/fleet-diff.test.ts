@@ -26,6 +26,7 @@ function session(id: string, createdAt: number, cwd = ROOT): SessionView {
     title: id,
     provider: 'claude',
     status: 'working',
+    windows: [],
     statusSince: createdAt,
     createdAt,
     exitCode: null,

@@ -1230,10 +1230,29 @@ describe('reaching the other machine’s copilot', () => {
      */
     expect(link.state().copilot).toBeNull()
     expect(link.state().capabilities).not.toContain('copilot')
-    // `web` and `localhost` go with it. One eligibility question behind all
-    // three, so a device cannot be a guest for one and an owner for another.
+    // `web` goes with it — opening a page puts a window on the owner's screen,
+    // which is driving the machine rather than reaching a folder. One
+    // eligibility question behind both, so a device cannot be a guest for one
+    // and an owner for the other.
     expect(link.state().capabilities).not.toContain('web')
-    expect(link.state().capabilities).not.toContain('localhost')
+    /*
+     * `localhost` does **not** go with them, and the split is deliberate.
+     *
+     * It used to be stripped here on the argument that a port cannot be
+     * attributed to a folder — true of a port *scan*, false of the dev servers
+     * this app started itself in a folder it was given. Stripping the capability
+     * made that difference invisible and left a feature half-built: a guest
+     * granted a folder could already ask this host to start its dev server and
+     * be told the port, and then could not open it.
+     *
+     * So the capability is advertised and the narrowing moved into the hub,
+     * where one list decides both what is offered and what may be dialled. A
+     * guest with no granted folder is offered an empty list, which is an honest
+     * answer rather than a refusal — pinned at the socket in
+     * `src/main/remote/server.test.ts` ("what a guest may reach on the
+     * loopback"), which is where the ports plumbing lives.
+     */
+    expect(link.state().capabilities).toContain('localhost')
 
     // Nothing said hello, because nothing had a copilot key to say it about.
     expect(far.copilot.opened).toEqual([])

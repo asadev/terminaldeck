@@ -91,21 +91,35 @@ struct PairingView: View {
         .onAppear { typing = true }
     }
 
+    /**
+     * The title, and one ⓘ carrying everything this screen used to say out loud.
+     *
+     * Five paragraphs stood on this screen — where the code comes from, what a
+     * code is worth, what the two device kinds mean, that the kind is fixed, and
+     * what the fingerprint is for. Every one of them is now behind an ⓘ beside
+     * the thing it is about. *"Don't put any single statement in anywhere… Let
+     * the smart people use it."*
+     *
+     * "Machine", not "Mac", in the note: the protocol is OS-agnostic and a phone
+     * genuinely cannot tell one from the other, so telling somebody with a
+     * Windows PC to open it on their Mac is this app being wrong about its own
+     * capabilities.
+     */
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(adding ? "Pair another machine" : "Pair with your Mac")
                 .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(Theme.primary)
-            Text(adding
-                 // "Machine", not "Mac". The protocol is OS-agnostic and a phone
-                 // genuinely cannot tell one from the other — telling somebody
-                 // with a Windows PC to open it on their Mac is this app being
-                 // wrong about its own capabilities.
-                 ? "Open \(Brand.name) on the other Mac or Windows PC and show its pairing code. "
-                    + "The machines you already have stay paired."
-                 : "Open \(Brand.name) on the Mac and show the pairing code. Type the six digits below.")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.secondary)
+            InfoDot(about: "pairing",
+                    text: adding
+                        ? "Open \(Brand.name) on the other Mac or Windows PC and show its pairing code. "
+                            + "The machines you already have stay paired. A code is good for one minute "
+                            + "and one use, and pairing alone does not grant access — the machine still "
+                            + "asks somebody to approve this device."
+                        : "Open \(Brand.name) on the machine and show the pairing code. A code is good "
+                            + "for one minute and one use, and pairing alone does not grant access — the "
+                            + "machine still asks somebody to approve this device.")
+            Spacer(minLength: 0)
         }
     }
 
@@ -213,11 +227,10 @@ struct PairingView: View {
             .foregroundStyle(typed.isEmpty ? Theme.secondary : Theme.onAccent)
             .accessibilityIdentifier("pairing.submit")
             .disabled(typed.isEmpty || model.isPairing)
-
-            Text("A code is good for one minute and one use. Pairing alone does not grant access — "
-                 + "the machine still asks somebody to approve this device.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
+            // The paragraph that stood here — what a code is worth, and that
+            // pairing is not access — is behind the ⓘ in `header`. It is the
+            // same fact and it is one tap away, which is where an explanation
+            // goes on this product now.
         }
     }
 
@@ -262,24 +275,21 @@ struct PairingView: View {
      */
     private var deviceKind: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("What the machine will ask")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Theme.faint)
-                .textCase(.uppercase)
+            HStack(spacing: 6) {
+                Text("What the machine will ask")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.faint)
+                    .textCase(.uppercase)
+                InfoDot(about: "device kinds",
+                        text: "My device is full access — it’s you at another keyboard. A guest reaches "
+                            + "only the folders that are chosen for it, and the copilot is never shared. "
+                            + "Whoever approves this device picks one, and it is fixed once they do: "
+                            + "changing it means pairing again.")
+                Spacer(minLength: 0)
+            }
 
-            kindCard(name: "My device",
-                     note: "Full access. It’s you at another keyboard.",
-                     symbol: "person.fill",
-                     identifier: "pairing.kind.mine")
-            kindCard(name: "Guest",
-                     note: "You choose what they can reach. The copilot is never shared.",
-                     symbol: "person.2",
-                     identifier: "pairing.kind.guest")
-
-            Text("Whoever approves this device picks one, and it is fixed once they do. "
-                 + "Changing it means pairing again.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
+            kindCard(name: "My device", symbol: "person.fill", identifier: "pairing.kind.mine")
+            kindCard(name: "Guest", symbol: "person.2", identifier: "pairing.kind.guest")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -294,8 +304,8 @@ struct PairingView: View {
      * and no tap target — a card that looked pressable and did nothing would be
      * the exact failure this review is about, one step before it happens.
      */
-    private func kindCard(name: String, note: String, symbol: String, identifier: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+    private func kindCard(name: String, symbol: String, identifier: String) -> some View {
+        HStack(alignment: .center, spacing: 10) {
             Image(systemName: symbol)
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.secondary)
@@ -303,15 +313,9 @@ struct PairingView: View {
                 // glyphs are different widths and a ragged left edge on two
                 // stacked cards reads as a mistake.
                 .frame(width: 18, alignment: .center)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Theme.primary)
-                Text(note)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(name)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.primary)
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
@@ -323,20 +327,22 @@ struct PairingView: View {
     /// only compare two things if they can see both.
     private var identity: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("This device")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Theme.faint)
-                .textCase(.uppercase)
+            HStack(spacing: 6) {
+                Text("This device")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.faint)
+                    .textCase(.uppercase)
+                InfoDot(about: "this fingerprint",
+                        text: "The machine shows this fingerprint when it asks you to approve the "
+                            + "device. If the two do not match, something else is answering.")
+                Spacer(minLength: 0)
+            }
             Text(model.deviceName)
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.primary)
             Text(model.deviceFingerprint)
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(Theme.secondary)
-            Text("The Mac shows this fingerprint when it asks you to approve the device. "
-                 + "If the two do not match, something else is answering.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)

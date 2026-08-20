@@ -9,10 +9,10 @@
  */
 
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { claudeConfigFile, trustCopilotFolder } from './copilot-trust'
+import { claudeConfigFile, claudeTrustFile, trustCopilotFolder } from './copilot-trust'
 
 function scratch(): { configDir: string; folder: string } {
   // Resolved, and that is the point of half of this module: `os.tmpdir()`
@@ -34,7 +34,7 @@ function read(configDir: string): Record<string, any> {
 describe('recording that the copilot’s own folder is trusted', () => {
   it('writes the flag under the resolved path, into a config that does not exist yet', () => {
     const { configDir, folder } = scratch()
-    expect(trustCopilotFolder(configDir, folder)).toBe('recorded')
+    expect(trustCopilotFolder(claudeConfigFile(configDir), folder)).toBe('recorded')
     expect(read(configDir).projects[folder].hasTrustDialogAccepted).toBe(true)
   })
 
@@ -48,7 +48,7 @@ describe('recording that the copilot’s own folder is trusted', () => {
     const { configDir, folder } = scratch()
     const viaLink = folder.replace(/^\/private\//, '/')
     if (viaLink === folder) return // Not a Mac layout; nothing to prove here.
-    expect(trustCopilotFolder(configDir, viaLink)).toBe('recorded')
+    expect(trustCopilotFolder(claudeConfigFile(configDir), viaLink)).toBe('recorded')
     expect(Object.keys(read(configDir).projects)).toEqual([folder])
   })
 
@@ -64,7 +64,7 @@ describe('recording that the copilot’s own folder is trusted', () => {
         projects: { '/Users/me/work': { hasTrustDialogAccepted: true, allowedTools: ['Bash'] } },
       }),
     )
-    expect(trustCopilotFolder(configDir, folder)).toBe('recorded')
+    expect(trustCopilotFolder(claudeConfigFile(configDir), folder)).toBe('recorded')
     const after = read(configDir)
     expect(after.userID).toBe('u-1')
     expect(after.hasCompletedOnboarding).toBe(true)
@@ -78,7 +78,7 @@ describe('recording that the copilot’s own folder is trusted', () => {
       claudeConfigFile(configDir),
       JSON.stringify({ projects: { [folder]: { hasTrustDialogAccepted: true, allowedTools: ['Read'] } } }),
     )
-    expect(trustCopilotFolder(configDir, folder)).toBe('already')
+    expect(trustCopilotFolder(claudeConfigFile(configDir), folder)).toBe('already')
     expect(read(configDir).projects[folder].allowedTools).toEqual(['Read'])
   })
 
@@ -91,25 +91,66 @@ describe('recording that the copilot’s own folder is trusted', () => {
      */
     const { configDir, folder } = scratch()
     writeFileSync(claudeConfigFile(configDir), JSON.stringify({ projects: { [folder]: { hasTrustDialogAccepted: false } } }))
-    expect(trustCopilotFolder(configDir, folder)).toBe('refused')
+    expect(trustCopilotFolder(claudeConfigFile(configDir), folder)).toBe('refused')
     expect(read(configDir).projects[folder].hasTrustDialogAccepted).toBe(false)
   })
 
   it('refuses a config file it cannot understand rather than writing over it', () => {
     const { configDir, folder } = scratch()
     writeFileSync(claudeConfigFile(configDir), '{ this is not json')
-    expect(trustCopilotFolder(configDir, folder)).toBe('failed')
+    expect(trustCopilotFolder(claudeConfigFile(configDir), folder)).toBe('failed')
     expect(readFileSync(claudeConfigFile(configDir), 'utf8')).toBe('{ this is not json')
 
     writeFileSync(claudeConfigFile(configDir), '["an array"]')
-    expect(trustCopilotFolder(configDir, folder)).toBe('failed')
+    expect(trustCopilotFolder(claudeConfigFile(configDir), folder)).toBe('failed')
     expect(readFileSync(claudeConfigFile(configDir), 'utf8')).toBe('["an array"]')
   })
 
   it('survives a projects key that is the wrong shape entirely', () => {
     const { configDir, folder } = scratch()
     writeFileSync(claudeConfigFile(configDir), JSON.stringify({ projects: 'nonsense' }))
-    expect(trustCopilotFolder(configDir, folder)).toBe('recorded')
+    expect(trustCopilotFolder(claudeConfigFile(configDir), folder)).toBe('recorded')
     expect(read(configDir).projects[folder].hasTrustDialogAccepted).toBe(true)
+  })
+})
+
+/**
+ * The half that decided which file, and got it wrong for the one account most
+ * people run under.
+ *
+ * Measured against `claude 2.1.237` in an isolated `HOME`, already onboarded,
+ * with the copilot folder unknown — the state of every machine that installs
+ * this app. A record under `~/.claude/.claude.json` left the trust modal on
+ * screen; the same record under `~/.claude.json` did not. `profiles.ts` spawns
+ * the machine's own login with `CLAUDE_CONFIG_DIR` unset precisely so the CLI
+ * reads the second one, and this is the other side of that decision.
+ */
+describe('which config file the CLI will actually read', () => {
+  it('puts an isolated account’s record inside its own config directory', () => {
+    expect(claudeTrustFile({ CLAUDE_CONFIG_DIR: '/accounts/second' }, {})).toBe(
+      join('/accounts/second', '.claude.json'),
+    )
+  })
+
+  it('puts the machine’s own login one level above its config directory', () => {
+    expect(claudeTrustFile({}, {})).toBe(join(homedir(), '.claude.json'))
+  })
+
+  it('follows a CLAUDE_CONFIG_DIR this app was itself launched with', () => {
+    // `systemConfigDir` calls that the user's install, and the session inherits
+    // the variable, so the record belongs inside it.
+    expect(claudeTrustFile({}, { CLAUDE_CONFIG_DIR: '/elsewhere/claude' })).toBe(
+      join('/elsewhere/claude', '.claude.json'),
+    )
+  })
+
+  it('reads an empty or blank variable as unset, the way the CLI does', () => {
+    expect(claudeTrustFile({}, { CLAUDE_CONFIG_DIR: '   ' })).toBe(join(homedir(), '.claude.json'))
+  })
+
+  it('lets the account override what this app was launched with', () => {
+    expect(
+      claudeTrustFile({ CLAUDE_CONFIG_DIR: '/accounts/second' }, { CLAUDE_CONFIG_DIR: '/elsewhere/claude' }),
+    ).toBe(join('/accounts/second', '.claude.json'))
   })
 })

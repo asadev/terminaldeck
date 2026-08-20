@@ -4,8 +4,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BrowserDrive } from '../browser-driver'
 import { ActionLog } from './action-log'
+import { attach, resetForTests } from '../browser-binding'
 import { browserTools, isPrivateOrigin } from './browser-tools'
-import { buildCatalogue, catalogueCost, MAX_CATALOGUE_TOKENS, MAX_CATALOGUE_TOOLS } from './catalogue'
+import { buildCatalogue, catalogueCost } from './catalogue'
 import { ConsentBroker, WINDOW_SURFACE } from './consent'
 import { DeckControl } from './control'
 import { NO_TIERS, type Caller, type DeckSurface } from './surface'
@@ -59,12 +60,19 @@ function fakeDrive(origin: string | null): BrowserDrive & { calls: unknown[] } {
     }),
     textAt: async () => ({ found: true, secret: false, text: 'hello', truncated: false }),
     waitFor: async () => ({ found: true, count: 1 }),
-    act: async (input: unknown) => {
-      calls.push(['act', input])
+    act: async (input: unknown, target: unknown) => {
+      calls.push(['act', input, target])
       return { verb: 'type', selector: '#user', label: 'Username', url: 'https://example.com/' }
     },
-    screenshot: async () => ({ path: '/tmp/x.png', width: 100, height: 100, masked: 1 }),
+    screenshot: async (target: unknown) => {
+      calls.push(['screenshot', target])
+      return { path: '/tmp/x.png', width: 100, height: 100, masked: 1 }
+    },
     handover: async () => ({ outcome: 'resumed' as const, waitedMs: 10, url: '', title: '' }),
+    close: async (target: unknown) => {
+      calls.push(['close', target])
+      return true
+    },
   }
   return drive as unknown as BrowserDrive & { calls: unknown[] }
 }
@@ -104,6 +112,7 @@ let dir = ''
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'deck-browser-tools-'))
+  resetForTests()
 })
 
 afterEach(() => {
@@ -186,6 +195,24 @@ describe('what a page text never reaches', () => {
 describe('who may drive', () => {
   const remote: Caller = { kind: 'remote', deviceId: 'phone-1', tiers: { read: true, act: true, alter: true } }
 
+  /*
+   * Each tool's own arguments, rather than one object carrying every field any
+   * of them takes.
+   *
+   * That object used to work because nothing checked; `additionalProperties:
+   * false` is enforced at the door now — see `schema.ts` — so `browser_read`
+   * handed a `verb` is refused for the wrong reason and these cases would stop
+   * testing the thing they are named after.
+   */
+  const ARGS: Record<string, Record<string, unknown>> = {
+    browser_open: { url: 'https://x.test' },
+    browser_read: {},
+    browser_step: { verb: 'click', selector: '#a' },
+    browser_screenshot: {},
+    browser_handover: { prompt: 'hi' },
+    browser_close: { sessionId: 's1', window: 'B1' },
+  }
+
   it.each(['browser_open', 'browser_read', 'browser_step', 'browser_screenshot', 'browser_handover'])(
     'refuses %s from a paired device, at every tier it holds',
     async (tool) => {
@@ -197,7 +224,7 @@ describe('who may drive', () => {
        * might hand out.
        */
       const deck = control(fakeDrive('https://example.com'), dir)
-      const result = await deck.call(tool, { url: 'https://x.test', selector: '#a', verb: 'click', prompt: 'hi' }, { caller: remote })
+      const result = await deck.call(tool, ARGS[tool], { caller: remote })
       expect(result.ok).toBe(false)
       expect(result.refusal).toBe('not-granted')
     },
@@ -207,11 +234,7 @@ describe('who may drive', () => {
     'refuses %s from a run with nobody at the machine',
     async (tool) => {
       const deck = control(fakeDrive('https://example.com'), dir)
-      const result = await deck.call(
-        tool,
-        { url: 'https://x.test', selector: '#a', verb: 'click', prompt: 'hi' },
-        { attended: false },
-      )
+      const result = await deck.call(tool, ARGS[tool], { attended: false })
       expect(result.ok).toBe(false)
       expect(result.refusal).toBe('not-permitted-unattended')
       // The sentence has to stop a retry loop rather than describe a state.
@@ -282,7 +305,7 @@ describe('when a click has to be asked about', () => {
 })
 
 describe('the shape of the surface', () => {
-  it('is five tools with wire names the API will accept', () => {
+  it('is six tools with wire names the API will accept', () => {
     const tools = browserTools(fakeDrive(null))
     expect(tools.map((tool) => tool.id)).toEqual([
       'browser.open',
@@ -290,6 +313,7 @@ describe('the shape of the surface', () => {
       'browser.step',
       'browser.screenshot',
       'browser.handover',
+      'browser.close',
     ])
     for (const tool of tools) {
       // A dot is rejected by the Anthropic API, not by this app, which is the
@@ -393,33 +417,262 @@ describe('a password field is refused before anybody is asked', () => {
   })
 })
 
-describe('what these five cost the copilot on every turn', () => {
-  it('leaves the assembled catalogue inside its budget', () => {
-    /*
-     * A tool definition is not free and it is not paid once: its name,
-     * description and schema sit in the context of *every* request the copilot
-     * makes, including the ones that will never call it. `catalogue.ts`
-     * measures the built-ins; this measures what actually reaches the model,
-     * which is the built-ins plus everything contributed through `extraTools` —
-     * the growth path nobody is watching.
-     *
-     * If this fails, the instruction on `MAX_CATALOGUE_TOKENS` stands and it is
-     * not "raise the number": add a `tools.describe` meta-tool and move the
-     * rarely-used definitions behind it.
-     */
-    const cost = catalogueCost([...buildCatalogue(), ...browserTools(fakeDrive(null))])
-    expect(cost.overBudget).toBe(false)
-    expect(cost.tools).toBeLessThanOrEqual(MAX_CATALOGUE_TOOLS)
-    expect(cost.tokens).toBeLessThanOrEqual(MAX_CATALOGUE_TOKENS)
-  })
-
-  it('records what the five actually add, so a rewrite that doubles it is visible', () => {
+describe('what these six cost the copilot on every turn', () => {
+  /*
+   * **The budget is not measured here, and it used to be — wrongly.**
+   *
+   * What stood here measured `buildCatalogue()` plus these six, called the
+   * result "the assembled catalogue", asserted it was inside both ceilings, and
+   * concluded that the tool count was "now exactly `MAX_CATALOGUE_TOOLS`". The
+   * app assembles five sources: `tour.play`, `app.where` and the three
+   * `servers.*` verbs were outside the measurement, and with them the shipped
+   * list is 25 tools against a cap of 20 — over the ceiling before tonight, and
+   * green here the whole time.
+   *
+   * The whole list is measured in `catalogue-cost.test.ts`, which is the file
+   * to change when a tool is added. What is left here is the one figure this
+   * file is the right place for: what these six add on their own.
+   */
+  it('records what the six actually add, so a rewrite that doubles it is visible', () => {
     // Measured, not asserted at a round number: the point of writing it down is
     // that somebody expanding a description sees the figure move.
     const base = catalogueCost(buildCatalogue())
     const withBrowser = catalogueCost([...buildCatalogue(), ...browserTools(fakeDrive(null))])
-    expect(withBrowser.tools - base.tools).toBe(5)
-    // 4,151 characters and ~1,187 estimated tokens when this was written.
-    expect(withBrowser.chars - base.chars).toBeLessThan(5_500)
+    expect(withBrowser.tools - base.tools).toBe(6)
+    /*
+     * 4,151 characters over five tools when this was first measured; 6,312 over
+     * six once every verb grew `sessionId` and `window` and `browser.close`
+     * arrived. Per tool that is 830 → 1,052, which is the figure to watch: the
+     * jump is a sixth tool and two fields on five schemas, not descriptions
+     * getting longer.
+     */
+    expect(withBrowser.chars - base.chars).toBeLessThan(7_000)
+  })
+})
+
+/**
+ * Q2 and the boundary under it: a verb may name a window, and only one the
+ * session it names actually holds.
+ *
+ * These are about the *tool* layer rather than the driver — that a target is
+ * built from the binding map and from nothing the model said, and that the
+ * three ways a name can fail are one sentence.
+ */
+describe('naming a session’s window', () => {
+  it('sends the call to the window the session holds, by its name', async () => {
+    attach({ sessionId: 'mine', browserTabId: 'browser:1:2', viewId: 'view-2' })
+    // `B1` first so the numbering is not accidentally the identity under test.
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_screenshot', { sessionId: 'mine', window: 'B1' })
+
+    expect(result.ok).toBe(true)
+    expect(drive.calls).toContainEqual([
+      'screenshot',
+      { key: 'bound:browser:1:2', viewId: 'view-2', browserTabId: 'browser:1:2', name: 'B1' },
+    ])
+  })
+
+  /**
+   * The one that matters. `theirs` has a `B1`; `mine` does not. Both refusals
+   * have to be the same sentence, or an agent can find out which pages exist in
+   * the app by trying names.
+   */
+  it('refuses another session’s window in the same words as one that never existed', async () => {
+    attach({ sessionId: 'theirs', browserTabId: 'browser:2:1', viewId: 'view-9' })
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const somebodyElses = await deck.call('browser_read', { sessionId: 'mine', window: 'B1' })
+    const neverExisted = await deck.call('browser_read', { sessionId: 'nobody', window: 'B7' })
+
+    expect(somebodyElses.ok).toBe(false)
+    expect(neverExisted.ok).toBe(false)
+    expect(somebodyElses.error).toBe(neverExisted.error)
+    // And nothing was driven on the way to being refused.
+    expect(drive.calls).toEqual([])
+  })
+
+  it('will not take a window with no session to resolve it against', async () => {
+    const deck = control(fakeDrive('https://example.com'), dir)
+    const result = await deck.call('browser_read', { window: 'B1' })
+    expect(result.ok).toBe(false)
+  })
+
+  it('closes a window by name, and hands the driver the id it never printed', async () => {
+    attach({ sessionId: 'mine', browserTabId: 'browser:1:1', viewId: 'view-1' })
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_close', { sessionId: 'mine', window: 'B1' })
+
+    expect(result.ok).toBe(true)
+    expect(drive.calls).toContainEqual([
+      'close',
+      { key: 'bound:browser:1:1', viewId: 'view-1', browserTabId: 'browser:1:1', name: 'B1' },
+    ])
+    // The summary a person reads names the window and not the id under it.
+    const written = readFileSync(join(dir, 'actions.jsonl'), 'utf8')
+    expect(written).toContain('Close B1')
+    expect(written).not.toContain('browser:1:1')
+  })
+
+  it('refuses every one of them for a paired device, target or no target', async () => {
+    attach({ sessionId: 'mine', browserTabId: 'browser:1:1', viewId: 'view-1' })
+    const deck = control(fakeDrive('https://example.com'), dir)
+    const phone: Caller = { kind: 'remote', deviceId: 'phone', tiers: { read: true, act: true, alter: false } }
+
+    for (const wire of ['browser_read', 'browser_screenshot', 'browser_close']) {
+      const result = await deck.call(wire, { sessionId: 'mine', window: 'B1' }, { caller: phone })
+      expect(result.ok).toBe(false)
+      // Refused for being remote, not for the target: a window it may not reach
+      // and a window that does not exist must not be told apart from a phone.
+      expect(result.error).toContain('person at this machine')
+    }
+  })
+})
+
+/**
+ * The call that reported success at doing nothing.
+ *
+ * Reproduced on 2026-08-20 against the running app: `browser_step` takes
+ * `value`, the call passed `text`, and nothing rejected the argument it did not
+ * know. `browser-driver.ts` typed `input.value ?? ''` — which clears the field,
+ * on purpose — and the tool answered `ok`. The agent had every reason to
+ * believe it had typed and to carry on: click search, read the results, explain
+ * why the results were odd.
+ *
+ * Two rules close it, and they close it separately because either one alone
+ * leaves a way through: the schema is enforced at the dispatcher for *every*
+ * tool, and a `type` with no `value` is a refusal rather than a clear.
+ */
+describe('a step with nothing to type', () => {
+  it('refuses the argument the tool does not take, and names the one it does', async () => {
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_step', { verb: 'type', selector: '#q', text: 'hello' })
+
+    expect(result.ok).toBe(false)
+    expect(result.refusal).toBe('not-permitted')
+    expect(result.error).toContain('text')
+    expect(result.error).toContain('value')
+    // Nothing reached the page. A refusal that arrives after the act is not a
+    // refusal, and this one is the whole point.
+    expect(drive.calls).toEqual([])
+  })
+
+  it('refuses a type with no value at all', async () => {
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_step', { verb: 'type', selector: '#q' })
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('value')
+    expect(drive.calls).toEqual([])
+  })
+
+  it('still lets an empty string through, because clearing a field is a real thing to want', async () => {
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_step', { verb: 'type', selector: '#q', value: '' })
+
+    expect(result.ok).toBe(true)
+    expect(drive.calls).toHaveLength(1)
+  })
+
+  it('refuses a select with nothing to choose', async () => {
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    expect((await deck.call('browser_step', { verb: 'select', selector: '#s' })).ok).toBe(false)
+    expect((await deck.call('browser_step', { verb: 'select', selector: '#s', value: '' })).ok).toBe(
+      false,
+    )
+    expect(drive.calls).toEqual([])
+  })
+
+  it('refuses a verb that is not one of the six', async () => {
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_step', { verb: 'hover', selector: '#q' })
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('click')
+    expect(drive.calls).toEqual([])
+  })
+
+  it('refuses a window named without the session it belongs to', async () => {
+    // Not a schema rule — both fields are declared — so this is the precheck
+    // still running behind the schema check rather than being replaced by it.
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_read', { window: 'B1' })
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('sessionId')
+  })
+})
+
+/**
+ * `isolate`, which used to be accepted and ignored.
+ *
+ * The schema says *"Open in a throwaway session with none of the person's
+ * cookies"*, and a partition is fixed when a view is constructed. So on a page
+ * that already exists there was nothing the flag could do, and it did nothing —
+ * `browser.open { isolate: true }` on the copilot's existing tab came back
+ * `settled: true` in the ordinary session, sharing every cookie. Measured in the
+ * running app on 2026-08-20.
+ *
+ * The driver's half is that the page is rebuilt when the isolation asked for is
+ * not the isolation it has. This half is the two callers that could never have
+ * acted on it at all.
+ */
+describe('isolation, asked for where it cannot apply', () => {
+  it('is refused on a session’s window rather than accepted and ignored', async () => {
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+    attach({ sessionId: 's1', machineId: '', browserTabId: 'browser:1' })
+
+    const result = await deck.call('browser_open', {
+      url: 'https://x.test',
+      sessionId: 's1',
+      window: 'B1',
+      isolate: true,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('isolate')
+    expect(drive.calls).toEqual([])
+  })
+
+  it('is refused on a new window for a session', async () => {
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_open', {
+      url: 'https://x.test',
+      sessionId: 's1',
+      newWindow: true,
+      isolate: true,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('isolate')
+  })
+
+  it('is still allowed on the copilot’s own tab, which is the one that can be built', async () => {
+    const drive = fakeDrive('https://example.com')
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_open', { url: 'https://x.test', isolate: true })
+
+    expect(result.ok).toBe(true)
+    expect(drive.calls).toEqual([['open', { url: 'https://x.test', isolate: true }]])
   })
 })

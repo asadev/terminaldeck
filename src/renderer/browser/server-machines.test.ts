@@ -97,22 +97,25 @@ describe('a server in the picker', () => {
      * behind a dropdown — and a server is not dialled until somebody chooses
      * it, which is §5.4's rule rather than a shortcut.
      */
-    expect(server.refusal).toBeNull()
+    expect(server.unreachable).toBeNull()
     expect(server.ports).toEqual([])
   })
 
-  it('carries the server’s own sentence and stops being selectable once it refuses', () => {
+  it('keeps the server’s own sentence out of the row, and stops being selectable', () => {
     const refused: Record<string, ServerPortsState> = {
       s1: { state: 'refused', message: 'This server is set up to refuse this.' },
     }
     const [server] = serverChoices(SERVERS, refused)
-    expect(server.refusal).toBe('This server is set up to refuse this.')
-    // And the same helper the paired path uses gives the picker back, with the
-    // reason, rather than leaving somebody pointed at a machine that refuses
-    // every address they type.
-    expect(lostMachine(serverChoices(SERVERS, refused), 's1')).toBe(
-      'This server is set up to refuse this. Addresses now open on this machine.',
-    )
+    // A word on the row; the server's sentence only as the row's `title`. A
+    // server writes its own refusal and this menu cannot know how long it will
+    // be, which is the whole reason the label is fixed here rather than passed
+    // through.
+    expect(server.unreachable).toBe('Refused')
+    expect(server.detail).toBe('This server is set up to refuse this.')
+    // And the same helper the paired path uses gives the picker back, naming
+    // the server and its state, rather than leaving somebody pointed at a
+    // machine that refuses every address they type.
+    expect(lostMachine(serverChoices(SERVERS, refused), 's1')).toBe('the box — Refused')
     expect(lostMachine(serverChoices(SERVERS, refused), THIS_MACHINE)).toBeNull()
   })
 

@@ -46,6 +46,7 @@ import {
   focusedTabId,
   moveFocus,
   primaryPane,
+  tabIds,
   type PaneLayout,
 } from './layout/pane-tree'
 import {
@@ -2443,6 +2444,7 @@ function Workspace() {
     [features, newBrowserTab],
   )
 
+
   /**
    * A session this window did not close, and that is not there any more.
    *
@@ -2512,6 +2514,62 @@ function Workspace() {
       setSelection(showTabSelection(following))
     },
     [tabs, removeSession, unread, notifier, titler],
+  )
+
+  /**
+   * The main process asking for one of these browser windows to be closed.
+   *
+   * The mirror of `onOpenLinkTab`, and it exists for the same reason that one
+   * does: the relation and the drive live in main, the *rows* live here, and a
+   * view torn down without its row leaves a strip entry that cannot be opened,
+   * attached or got rid of. So the close goes through `closeTabNow`, which is
+   * the exact path the tab's own ✕ takes — the binding map is told, the number
+   * is not handed out again, and the selection moves as it would have.
+   *
+   * Answered on every path, including the one where there is no such tab: the
+   * caller is a tool call somebody is waiting on, and `false` is a real answer
+   * — the window has already gone — rather than a five-second silence.
+   */
+  useEffect(
+    () =>
+      window.deck.onBrowserDriveClose?.((raw) => {
+        const request = raw as { id?: unknown; tabId?: unknown }
+        if (typeof request?.id !== 'string' || request.id === '') return
+        const tabId = typeof request.tabId === 'string' ? request.tabId : ''
+        const tab = tabs.find((entry) => entry.id === tabId && entry.kind === 'browser')
+        if (tab) closeTabNow(tabId)
+        window.deck.browserDriveClosed?.(request.id, tab !== undefined)
+      }),
+    [tabs, closeTabNow],
+  )
+
+  /**
+   * The main process asking for one of these browser windows to be shown.
+   *
+   * Not a courtesy. A `WebContentsView` is laid out by the pane only while it is
+   * the tab on screen, so a background one has a 0×0 viewport: every driven
+   * click aimed at it is dropped and `capturePage()` answers that it has no
+   * visible surface. Both were measured against two windows attached to one
+   * session. So a driven click brings its window forward first, which is also
+   * the only arrangement in which the drive banner is doing its job.
+   */
+  useEffect(
+    () =>
+      window.deck.onBrowserDriveShow?.((raw) => {
+        const request = raw as { id?: unknown; tabId?: unknown }
+        if (typeof request?.id !== 'string' || request.id === '') return
+        const tabId = typeof request.tabId === 'string' ? request.tabId : ''
+        const tab = tabs.find((entry) => entry.id === tabId && entry.kind === 'browser')
+        /*
+         * Already in front is already done, and saying so costs nothing while
+         * doing it again costs something real: `showTab` clears whatever
+         * sidebar panel is open, so a re-show on every driven click would close
+         * a panel the person opened, over and over, for no change on screen.
+         */
+        if (tab && activeTab?.id !== tabId) showTab(tabId)
+        window.deck.browserDriveShown?.(request.id, tab !== undefined)
+      }),
+    [tabs, showTab, activeTab],
   )
 
   /**
@@ -4411,41 +4469,35 @@ function Workspace() {
       )
     }
 
-    // Every browser and terminal stays mounted and is shown or hidden, so a
-    // page keeps its scroll position and a terminal keeps its scrollback when
-    // you switch away and come back.
+    /*
+     * Every terminal stays mounted and is shown or hidden, so a session keeps
+     * its scrollback when you switch away and come back.
+     *
+     * The browser pages used to be mounted here too, and that placement is the
+     * whole of what he filmed on 2026-08-20: *"if this link is loaded, page is
+     * loaded, I go to session. If I come back, this is all gone, so it
+     * refreshes."* This function returns **one** thing, and half a dozen
+     * branches above return before this one — a session on a paired machine, a
+     * terminal on a server, a sidebar view, a split, the swarm grid — so
+     * whichever of them took the frame unmounted every page in the window at
+     * once, and unmounting a `BrowserWorkspace` closes its `WebContentsView`
+     * for real (see the cleanup effect in that file). Coming back mounted a new
+     * component, which opened a new blank tab.
+     *
+     * Measured before it was moved, on a machine with nothing remote paired to
+     * it at all: with `http://example.com/` loaded in a page, clicking **Files**
+     * in the rail took the guest target out of `/json/list` entirely, and
+     * clicking the page's own tab again brought back `about:blank` and an empty
+     * address bar. Switching to a *local* session, which falls through to this
+     * branch, left the target alive. So the remote session he was looking at is
+     * a trigger and not the cause — the cause is being drawn from a function
+     * that draws one thing.
+     *
+     * They are mounted beside the pane now, in `.panes`, exactly as the server
+     * shells and the remote sessions already are and for the identical reason.
+     */
     return (
       <>
-        {tabs
-          .filter((tab) => tab.kind === 'browser')
-          .map((tab) => (
-            <BrowserWorkspace
-              key={tab.id}
-              // Which page is on screen, and nothing else. Folding the modal
-              // flag in here would blank the workspace behind every dialog —
-              // parking the native pages is what a dialog needs, and that is
-              // what `parkPage` is.
-              visible={tab.id === activeTab.id && !showingPanel}
-              parkPage={anyModalOpen}
-              // Settings owns where a page opens; the panel's own button
-              // writes the same setting rather than a copy of it.
-              startUrl={stringSetting(settings, 'browser.startUrl')}
-              // Where a *link* asked this page to open, when one did. Empty for
-              // the globe, which goes to the start page.
-              initialUrl={tab.url}
-              // The other mount site. See the note beside the split one.
-              tabId={tab.id}
-              onStartUrl={(url) => {
-                applySettings({ ...settings, 'browser.startUrl': url })
-                void window.deck.setSettings({ 'browser.startUrl': url })
-              }}
-              // Otherwise every browser row in the sidebar reads "New tab".
-              onTitle={(title) => renameBrowserTab(tab.id, title)}
-              onSendToAgent={(context) => {
-                if (activeSessionId) window.deck.writeToSession(activeSessionId, context)
-              }}
-            />
-          ))}
         {sessions.map((session) => {
           const active = session.id === activeTab.id
           const mode = sessionView[session.id] ?? 'terminal'
@@ -5102,6 +5154,36 @@ function Workspace() {
     !hasStrip ||
     (headingTab !== null && headingTab.kind !== 'browser') ||
     copilotPending
+
+  /**
+   * The pages a *pane* is holding, which the always-mounted list must not
+   * mount a second time.
+   *
+   * Empty whenever the window is not split, and that is not a shortcut: a
+   * layout left over from a closed split still names tabs, and skipping them
+   * would leave those pages mounted nowhere at all.
+   */
+  const splitHeldTabIds = new Set<string>(splitting ? tabIds(panes) : [])
+
+  /**
+   * The one browser page that is genuinely on screen, or null.
+   *
+   * Every branch that used to take the frame *by unmounting the pages* is
+   * spelled out here instead, because that is what the move into `.panes` costs:
+   * the pages no longer disappear when something covers them, so each of them
+   * has to be told it is covered. Getting this wrong does not lose a page any
+   * more — it paints one over Files.
+   */
+  const visiblePageId =
+    activeTab?.kind === 'browser' &&
+    !showingPanel &&
+    !splitting &&
+    !swarm &&
+    openMachineSession === null &&
+    openServerSession === null &&
+    !(copilotPending && copilotSession === null)
+      ? activeTab.id
+      : null
 
   return (
     /*
@@ -5820,6 +5902,59 @@ function Workspace() {
               split whose host pane is still empty, where "Split view" describes
               the arrangement rather than pretending to name a session in it. */}
           <ErrorBoundary label={heading.title ?? 'Split view'}>{mainView()}</ErrorBoundary>
+          {/*
+            The browser pages — every one of them, always, hidden unless the one
+            in front is this page.
+
+            Here rather than inside `mainView` for the reason the server shells
+            and the remote sessions are here, and the reason is his: *"if this
+            link is loaded, page is loaded, I go to session. If I come back, this
+            is all gone, so it refreshes."* `mainView` draws one thing and
+            returns early for a remote session, a server shell, a sidebar view, a
+            split and the swarm grid — so any of those unmounted every page in
+            the window, and an unmounted `BrowserWorkspace` closes its
+            `WebContentsView` rather than parking it. See the long note at the
+            single-session branch of `mainView` for what was measured.
+
+            `visible` is now the whole answer to "is this page the thing on
+            screen", which it has to be: a hidden mount that still thought it was
+            visible would composite a native page over Files.
+
+            A page a *pane* is holding is skipped, because the split branch
+            mounts that one itself and two components with the same `tabId` would
+            open two native views onto one tab.
+          */}
+          {tabs
+            .filter((tab) => tab.kind === 'browser')
+            .filter((tab) => !splitHeldTabIds.has(tab.id))
+            .map((tab) => (
+              <BrowserWorkspace
+                key={tab.id}
+                // Which page is on screen, and nothing else. Folding the modal
+                // flag in here would blank the workspace behind every dialog —
+                // parking the native pages is what a dialog needs, and that is
+                // what `parkPage` is.
+                visible={tab.id === visiblePageId}
+                parkPage={anyModalOpen}
+                // Settings owns where a page opens; the panel's own button
+                // writes the same setting rather than a copy of it.
+                startUrl={stringSetting(settings, 'browser.startUrl')}
+                // Where a *link* asked this page to open, when one did. Empty
+                // for the globe, which goes to the start page.
+                initialUrl={tab.url}
+                // The other mount site. See the note beside the split one.
+                tabId={tab.id}
+                onStartUrl={(url) => {
+                  applySettings({ ...settings, 'browser.startUrl': url })
+                  void window.deck.setSettings({ 'browser.startUrl': url })
+                }}
+                // Otherwise every browser row in the sidebar reads "New tab".
+                onTitle={(title) => renameBrowserTab(tab.id, title)}
+                onSendToAgent={(context) => {
+                  if (activeSessionId) window.deck.writeToSession(activeSessionId, context)
+                }}
+              />
+            ))}
           {/*
             The terminals open on servers — every one of them, always, hidden
             unless it is the one in front.

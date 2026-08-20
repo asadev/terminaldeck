@@ -1,5 +1,4 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -18,7 +17,6 @@ import {
   middleEllipsis,
   readTabDrag,
   startTabDrag,
-  MACHINE_ICON,
   STRIP_LABEL_BUDGET,
   tabIcon,
   machineTabId,
@@ -36,10 +34,8 @@ import {
   pruneOrder,
   removeFromStrip,
   shownTabs,
-  stripGroups,
   usePromotedOrder,
   type ShownTab,
-  type StripPlace,
 } from './workspace-strip'
 import { useWindowMachines } from './window-machine'
 import './WorkspaceTabStrip.css'
@@ -137,10 +133,34 @@ import './WorkspaceTabStrip.css'
  * toggle that puts a window here and takes it back without a drag at all — see
  * `usePromotedOrder`, which is how the two ends share one list.
  *
- * A browser window takes part in none of it. It is not promoted, it cannot be
- * folded away, and dropping it outside the bar leaves it exactly where it was:
- * the rail no longer lists pages, so the only thing "out of the strip" could
+ * ## A page and a session are the same kind of tab to drag — 2026-08-20
+ *
+ * > *"browser is here. I want to talk about anything inside this browser, and
+ * > session is too far away because in between there is something, and I cannot
+ * > bring this next to it, so I cannot move them anything next to where whatever
+ * > I want to move."*
+ *
+ * *"in between there is something"* was the machine heading, and it was not in
+ * the way — it was a **partition**. The bar was cut into a run per machine, so a
+ * page served on this computer and a session running on his PC were in two
+ * different runs and no arrangement of the promoted order could have put them
+ * side by side. That is why the heading had to go for the drag to mean anything;
+ * see `whereRuns` for where the fact it carried went.
+ *
+ * With one flat row, both kinds move the same way and past each other: a page is
+ * in the promoted order like a session (`keepNewWindowInStrip` puts it there the
+ * moment it is opened), the drop translates through {@link orderIndexForDrop}
+ * whatever kinds it crossed, and ⌥←/⌥→ do the same without a mouse.
+ *
+ * The one asymmetry left is *out* of the bar. A session dropped outside folds
+ * back into the rail; a page dropped outside stays exactly where it was, because
+ * the rail no longer lists pages and the only thing "out of the strip" could
  * mean for one is *nowhere*. See {@link shownTabs}.
+ *
+ * The arrangement survives a renderer reload and not an app restart, and that is
+ * the storage's own lifetime rather than a rule — see `defaultStorage`. After a
+ * restart every id in it names nothing: the ptys are gone, restore-on-launch
+ * starts *new* ones, and a browser window's id is minted per run.
  */
 
 export interface WorkspaceTabStripProps {
@@ -306,35 +326,47 @@ export function WorkspaceTabStrip({
   )
 
   /**
-   * Where each tab is running, from the two places that know.
+   * Which machine is serving a browser window's page, when this window knows.
    *
-   * A **session** carries its machine (or its server) on the tab itself, because
-   * `App.tsx` builds it from the machines view. A **browser window** does not and
-   * cannot: which machine is serving the page is resolved inside
-   * `BrowserWorkspace`, against the tunnels that window itself opened — the
-   * address cannot answer it, since a tunnelled page wears a `127.0.0.1` address
-   * on *this* machine — so it arrives through the module store `window-machine.ts`
-   * publishes. Two sources, one question, and they meet here so that a session on
-   * his PC and a page served by his PC land in the same run.
+   * ## The heading this replaced, and why it is gone
+   *
+   * The bar used to be cut into a run per machine, with the machine's name drawn
+   * between the runs. Asad, 2026-08-20: *"why do we have something like this up
+   * there? We don't need any kind of separation like this for the device on the
+   * top with the name. All the sessions should be all together without any
+   * separation and any extra tab which is telling this belongs to that. **This
+   * was actually for the side panel only, but not for the top bar.**"*
+   *
+   * So the grouping went back to the rail, where he put it, and the strip is one
+   * flat row again. That is not only a tidier bar — the partition was also what
+   * made the *next* sentence in the same recording impossible: *"browser is
+   * here… session is too far away because in between there is something, and I
+   * cannot bring this next to it."* A page served here and a session on his PC
+   * were in two different runs, so no drag could ever put them side by side. One
+   * row is the precondition for the drag being able to do what he asked.
+   *
+   * What the heading was carrying is not dropped, it moves to the hover, which
+   * is the same trade `tabTooltip` already makes for a remote session's machine
+   * and the rail makes for a session's account. A **session** carries its machine
+   * (or server) on the tab itself, so `tabTooltip` answers for it. A **browser
+   * window** cannot: which machine is serving the page is resolved inside
+   * `BrowserWorkspace` against the tunnels that window opened — a tunnelled page
+   * wears a `127.0.0.1` address on *this* machine — so it arrives through the
+   * module store `window-machine.ts` publishes, and is appended here.
    */
   const windowMachines = useWindowMachines()
-  const placeOf = useCallback(
-    (tab: WorkspaceTab): StripPlace | null => {
-      if (tab.kind === 'browser') return windowMachines.get(tab.id) ?? null
-      return tab.machine ?? tab.server ?? null
+  const whereRuns = useCallback(
+    (tab: WorkspaceTab): string | null => {
+      if (tab.kind !== 'browser') return null
+      const place = windowMachines.get(tab.id)
+      if (!place) return null
+      // A machine that is paired but has not reported a name yet is still a
+      // machine, and saying nothing would be the absence this answers. The id
+      // is what the main process's menus substitute, for the same reason.
+      return place.name || place.id
     },
     [windowMachines],
   )
-  const groups = stripGroups(shown, placeOf)
-  /**
-   * Each tab's position in the whole row, by id.
-   *
-   * The drop caret and ⌥←/⌥→ count pills across the entire bar; the groups are a
-   * *drawing* order. Recovering the index from the inner map would restart the
-   * count at every heading, which would put the caret in the wrong gap the moment
-   * a second machine had anything open.
-   */
-  const positions = new Map(shown.map((entry, index) => [entry.tab.id, index]))
 
   /**
    * What to call the session a browser window is attached to, or null.
@@ -740,11 +772,9 @@ export function WorkspaceTabStrip({
   /**
    * One tab, drawn.
    *
-   * A function rather than an inline callback because the row is no longer one
-   * flat `map`: {@link stripGroups} cuts the bar into a run per machine, and the
-   * tabs are drawn a group at a time. `index` is still the position in the whole
-   * row — the drop caret and ⌥←/⌥→ both count pills across the entire bar, not
-   * within a group — so it is passed in rather than taken from the inner map.
+   * `index` is the position in the row, which is what the drop caret and ⌥←/⌥→
+   * count in. A named function rather than an inline callback because the body
+   * is long enough that the `.map` reads better with it lifted out.
    */
   const renderTab = ({ tab, promoted }: ShownTab, index: number) => {
     /*
@@ -761,6 +791,17 @@ export function WorkspaceTabStrip({
     }
     const label = middleEllipsis(full, STRIP_LABEL_BUDGET)
     const spoken = qualifier ? `${full} — ${qualifier}` : full
+    /*
+     * Where this window is really running, for a page, in its hover.
+     *
+     * *"We always need a truth."* `tabTooltip` already answers it for a session
+     * — the machine or the server is on the tab itself — and cannot answer it
+     * for a page, which is why the machine's name is joined on here. See
+     * `whereRuns` for where this used to be drawn and why it is not drawn any
+     * more.
+     */
+    const runsOn = whereRuns(tab)
+    const tooltip = runsOn ? `${tabTooltip(tab, spoken)}\non ${runsOn}` : tabTooltip(tab, spoken)
     return (
       <div
         key={tab.id}
@@ -817,10 +858,10 @@ export function WorkspaceTabStrip({
           role="tab"
           aria-selected={tab.id === selectedId}
           className="strip-tab-face"
-          /* The whole title and the folder it runs in — the two things a
-             24-character tab cannot say for itself, and the pair that tells
-             three sessions in one project apart. */
-          title={tabTooltip(tab, spoken)}
+          /* The whole title, the folder it runs in, and the machine it runs
+             on — the three things a 24-character tab cannot say for itself,
+             and what tells three sessions in one project apart. */
+          title={tooltip}
           onClick={() => onSelect(tab.id)}
         >
           <svg
@@ -1048,50 +1089,18 @@ export function WorkspaceTabStrip({
         onDrop={onDrop}
       >
         <div className="strip-list" role="tablist" aria-label="Open tabs" ref={listRef}>
-          {groups.map((group) => (
-            <Fragment key={group.id || '.'}>
-              {/*
-                The machine's name, once, over its own run of tabs — the *one
-                place* his sentence asked for.
+          {/*
+            One flat row — no machine headings, no runs, no chip between the
+            tabs.
 
-                Not on each tab: a 232px pill has a 28-character budget for a
-                title (`STRIP_LABEL_BUDGET`) and is already shedding chips into a
-                count to fit, so eight of those characters spent on `Office PC`
-                would cost the thing that actually tells two tabs apart, on every
-                tab, to state a fact that is the same for all of them. Once, over
-                the run, is the same trade the sidebar makes with a project
-                heading and the same one `browser-binding-ipc.ts` makes in its
-                menus — and it is what makes a machine's sessions and its browser
-                windows read as one thing rather than as two kinds of tab that
-                happen to be adjacent.
-
-                A label and not a sentence, so it stands with the standing rule
-                about prose on screen. `role="presentation"` because the tablist
-                may promise a screen reader nothing but tabs; the machine is on
-                each tab's own hover and accessible name already — see
-                `tabTooltip`.
-              */}
-              {group.heading !== null && (
-                <span className="strip-group" role="presentation">
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d={MACHINE_ICON} />
-                  </svg>
-                  <span className="strip-group-name">{group.heading}</span>
-                </span>
-              )}
-              {group.entries.map((entry) => renderTab(entry, positions.get(entry.tab.id) ?? 0))}
-            </Fragment>
-          ))}
+            *"All the sessions should be all together without any separation and
+            any extra tab which is telling this belongs to that. This was
+            actually for the side panel only, but not for the top bar."* The rail
+            still groups by machine; see `whereRuns` above for where the fact
+            that used to be drawn here went, and why the partition had to go for
+            the drag to be able to put a page beside a session at all.
+          */}
+          {shown.map((entry, index) => renderTab(entry, index))}
 
           {/* The gap at the end, drawn only while something is being dragged past
               the last tab — otherwise the strip ends in an unexplained line. */}

@@ -9,7 +9,8 @@
 
 import { describe, expect, it } from 'vitest'
 import type { CopilotChatMessage } from '../../src/main/remote/protocol'
-import { bubbleTime, mergeRows } from './chat-view'
+import { SUBMIT_GAP_MS } from '../../src/renderer/chat/attach/mentions'
+import { bubbleTime, ChatComposer, mergeRows } from './chat-view'
 
 function row(id: string, text: string, role: 'you' | 'agent' = 'agent'): CopilotChatMessage {
   return { id, role, text, at: 0 }
@@ -72,5 +73,124 @@ describe('the time on a bubble', () => {
     expect(printed).not.toBe('')
     expect(printed).toMatch(/\d/)
     expect(printed).not.toMatch(/2026|Aug|20\//)
+  })
+})
+
+/**
+ * The one rule in the composer that is wrong silently.
+ *
+ * A single write of `text + '\r'` looks correct, typechecks, and does nothing at
+ * all for any message past about half a line: the CLI reads a chunk of 64 bytes
+ * or more as *pasted text*, where a carriage return is a newline rather than
+ * submit. The words appear in the agent's input box and sit there. So what is
+ * pinned here is that the return leaves as its **own** write, after the gap, and
+ * that a message carrying an `@` keeps the trailing space that closes the
+ * completion popup — without which the Enter is eaten by the popup instead.
+ *
+ * Exercised through a stub DOM rather than a real one, because this client has
+ * no DOM in the suite. It is the smallest surface that runs the class: the
+ * builder touches `createElement`, and `send()` is what is being measured.
+ */
+describe('the composer’s writes', () => {
+  interface Stub {
+    written: string[]
+    waits: number[]
+    field: { value: string }
+    press: () => Promise<void>
+  }
+
+  function composer(live = true): Stub {
+    const written: string[] = []
+    const waits: number[] = []
+    // A textarea and a button are the only two elements built, and both are only
+    // ever read for `value`, `disabled` and their listeners.
+    const made: Record<string, unknown>[] = []
+    const document = {
+      createElement(): Record<string, unknown> {
+        const node: Record<string, unknown> = {
+          value: '',
+          rows: 0,
+          disabled: false,
+          className: '',
+          type: '',
+          title: '',
+          style: {},
+          scrollHeight: 20,
+          listeners: {} as Record<string, (event: unknown) => void>,
+          setAttribute() {},
+          append() {},
+          focus() {},
+        }
+        node.addEventListener = (name: string, handler: (event: unknown) => void) => {
+          ;(node.listeners as Record<string, (event: unknown) => void>)[name] = handler
+        }
+        made.push(node)
+        return node
+      },
+      createElementNS(): Record<string, unknown> {
+        return { setAttribute() {}, append() {} }
+      },
+    }
+    const held = globalThis.document
+    ;(globalThis as { document?: unknown }).document = document
+    const built = new ChatComposer({
+      write: (data) => written.push(data),
+      live: () => live,
+      wait: async (ms) => {
+        waits.push(ms)
+      },
+    })
+    void built
+    ;(globalThis as { document?: unknown }).document = held
+    // element, field, button — in construction order.
+    const field = made[1] as unknown as { value: string }
+    const button = made[2] as unknown as {
+      listeners: Record<string, () => Promise<void> | void>
+    }
+    return {
+      written,
+      waits,
+      field,
+      press: async () => {
+        await button.listeners.click?.()
+        // The click handler is `void this.send()`, so the promise it starts is
+        // not the one awaited above. One turn of the microtask queue is what the
+        // two `await`s inside `send` need.
+        await Promise.resolve()
+        await Promise.resolve()
+      },
+    }
+  }
+
+  it('sends the line and the return as two writes, a gap apart', async () => {
+    const stub = composer()
+    stub.field.value = 'run the tests'
+    await stub.press()
+    expect(stub.written).toEqual(['run the tests', '\r'])
+    expect(stub.waits).toEqual([SUBMIT_GAP_MS])
+  })
+
+  it('keeps the space that closes the completion popup', async () => {
+    const stub = composer()
+    stub.field.value = 'look at @"src/main.ts"'
+    await stub.press()
+    expect(stub.written[0]).toBe('look at @"src/main.ts" ')
+  })
+
+  it('sends nothing at all over a dead socket', async () => {
+    const stub = composer(false)
+    stub.field.value = 'anybody there'
+    await stub.press()
+    expect(stub.written).toEqual([])
+  })
+
+  it('trims, and refuses a message that is only whitespace', async () => {
+    const stub = composer()
+    stub.field.value = '   \n  '
+    await stub.press()
+    expect(stub.written).toEqual([])
+    stub.field.value = '  hello  '
+    await stub.press()
+    expect(stub.written).toEqual(['hello', '\r'])
   })
 })

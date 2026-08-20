@@ -43,11 +43,11 @@ import type { ActionRow } from '../deck-control/action-log'
 import type { CreateSessionInput, SessionMeta } from '../../shared/types'
 import { buildRecordsFence } from '../confine/records'
 import { copilotPaths } from '../copilot-home'
-import { trustCopilotFolder } from '../copilot-trust'
+import { claudeTrustFile, trustCopilotFolder } from '../copilot-trust'
 import { copilotLayerArgs, writeCopilotLayer, type LayerTool } from '../copilot-layer'
 import type { SpawnFence } from '../copilot-session'
 import { currentPlatform } from '../platform/host'
-import { getState as profilesState, resolveProfile } from '../profiles'
+import { getState as profilesState, resolveProfile, sessionEnv } from '../profiles'
 import { ChatReader, newestChatTranscript } from '../chat-transcript'
 import { transcriptDirs } from '../transcript'
 import { MAX_COPILOT_LOG_ROWS, type CopilotActionRow, type CopilotChatMessage, type CopilotSessionRow } from './protocol'
@@ -292,8 +292,18 @@ export async function startCopilotRun(
    * The outcome is logged rather than acted on: `refused` is a person's own
    * answer and `failed` leaves the modal exactly where it already was, so
    * neither is a reason to keep a run from starting.
+   *
+   * `sessionEnv` is asked rather than `profile.configDir` read, and that is the
+   * whole of the fix for a run whose first message was eaten on every fresh
+   * install. The two are the same file for an isolated account and *different
+   * files* for the machine's own login, which spawns with `CLAUDE_CONFIG_DIR`
+   * unset and reads `~/.claude.json` rather than `~/.claude/.claude.json`. The
+   * record went to the second one and the modal came up in front of it. Since
+   * the default account is what a copilot run resolves to unless somebody has
+   * chosen otherwise, that was every first run, on every machine but the one
+   * this was written on. Measurement in `copilot-trust.ts`.
    */
-  const trust = trustCopilotFolder(profile.configDir, request.cwd)
+  const trust = trustCopilotFolder(claudeTrustFile(sessionEnv(profile, 'claude')), request.cwd)
   if (trust === 'refused') {
     console.warn(`[copilot] ${request.cwd} is recorded as not trusted, so this run will stop at the CLI’s prompt`)
   }

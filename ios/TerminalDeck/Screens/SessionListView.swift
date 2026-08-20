@@ -1105,7 +1105,10 @@ struct HostSwitcher: View {
                             // Two lines: the name, and what it is doing. The
                             // second is the reason to look.
                             Label {
-                                Text(verbatim: "\(host.label) — \(summary(host))")
+                                // `model.label(for:)` and not `host.label`:
+                                // two machines with one hostname put two
+                                // identical rows in this menu.
+                                Text(verbatim: "\(model.label(for: host)) — \(summary(host))")
                             } icon: {
                                 Image(systemName: host.id == model.current?.id
                                       ? "checkmark.circle.fill"

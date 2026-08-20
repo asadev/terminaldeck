@@ -115,15 +115,108 @@ export interface BindingIpcDeps {
 }
 
 /**
- * Ask the renderer for a browser window, and hear back either way.
+ * Every caller waiting for a window to report the view inside it.
  *
- * The timeout answers `refused` with a sentence rather than resolving to
- * nothing, because the caller is going to print whatever comes back: silence
- * here would reach a person as a link that vanished.
+ * A shell tab id exists the moment the renderer mints it — that is what makes
+ * the answer to `open <url>` fast — and the `WebContentsView` inside it arrives
+ * a beat later on `browser:window-opened`. Anything that needs to *steer* the
+ * page has to wait for the second event, and until now the only way to do that
+ * was to poll {@link windowsOf}, which `browser-tools.ts` does on a 60ms timer.
+ *
+ * A waiter rather than a second poller because this one is on the path of
+ * `browser.open`, which is a tool call somebody's turn is blocked on.
  */
-function askForWindow(
-  deps: BindingIpcDeps,
-  request: { url: string; sessionId: string; machineId: string },
+const viewWaiters = new Map<string, Set<(viewId: string) => void>>()
+
+/**
+ * A browser pane belonging to nobody — the pane the copilot's own tab lives in.
+ *
+ * ## Why the copilot may not be given any pane that happens to be open
+ *
+ * Measured on 2026-08-20, two calls from a cold start: a session was given a
+ * window, `B1`, which is a **pane** in the shell — one row in the sidebar, one
+ * page. A plain `browser.open` from the copilot then went out on
+ * `browser:drive-open`, which is a broadcast, and the only mounted
+ * `BrowserWorkspace` was `B1`'s. It claimed the request, opened a page inside
+ * itself, made that page the active one, and reported the new view upward as
+ * `B1`'s view — so the page the person was looking at was replaced by the
+ * copilot's, was in no strip anywhere, and the binding map now pointed the
+ * session's own window at the copilot's page. Two slots, one page.
+ *
+ * The panel's own tab strip is gone (see `BrowserWorkspace`'s `onTitle`), so
+ * "the copilot opens a tab in the panel" is not a thing that can happen any
+ * more: a pane is one page, and putting a second one in it hides the first.
+ *
+ * So the copilot gets a pane **of its own**, opened through the same channel
+ * the globe and every link use, appearing in the sidebar where it can be seen
+ * and closed. It is never a pane somebody else opened — not a session's, and
+ * not one the person is reading — because the only pane it will use is one it
+ * asked for.
+ *
+ * Null when no window would open one: the browser switched off in Features is a
+ * real state, `App.tsx` answers it with a sentence, and the tool says so rather
+ * than inventing a page.
+ */
+export function openBarePane(
+  send: (channel: string, payload: unknown) => void,
+  url: string,
+): Promise<string | null> {
+  return askRenderer(send, { url }).then((reply) => ('tabId' in reply ? reply.tabId : null))
+}
+
+/**
+ * Is this pane still open, and still nobody's?
+ *
+ * Two questions in one answer because the caller does the same thing either
+ * way: a pane that has been closed and a pane the person has attached to a
+ * session are both panes the copilot must stop using, and it stops using them
+ * by asking for a new one. Attaching is a deliberate act made by hand in the
+ * window's own menu; if he does it to the copilot's pane, that pane is the
+ * session's from that moment and the copilot moves out.
+ */
+export function paneIsFree(tabId: string): boolean {
+  return known.has(tabId) && ownerOf(tabId) === null
+}
+
+/**
+ * The view inside a pane, waiting up to `timeoutMs` for one to appear.
+ *
+ * Answers straight away when the window has already reported one. Null on the
+ * deadline, which is a real state and is reported rather than guessed at — a
+ * pane whose renderer never mounted has no page to drive and saying otherwise
+ * would hand an agent a handle to nothing.
+ */
+export function paneView(tabId: string, timeoutMs: number): Promise<string | null> {
+  const now = known.get(tabId)?.viewId ?? null
+  if (now !== null) return Promise.resolve(now)
+  return new Promise<string | null>((resolve) => {
+    let settled = false
+    const finish = (viewId: string | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      viewWaiters.get(tabId)?.delete(finish)
+      resolve(viewId)
+    }
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    timer.unref?.()
+    const waiting = viewWaiters.get(tabId) ?? new Set()
+    waiting.add(finish)
+    viewWaiters.set(tabId, waiting)
+  })
+}
+
+/**
+ * One request out on {@link LINK_TAB_CHANNEL}, and the one answer to it.
+ *
+ * Shared by {@link askForWindow} and {@link openBarePane} so that a window for a
+ * session and a pane for the copilot are opened by the same handshake with the
+ * same timeout — two copies of this is how one of them would end up waiting
+ * forever on a renderer that had already answered.
+ */
+function askRenderer(
+  send: (channel: string, payload: unknown) => void,
+  request: { url: string; sessionId?: string; machineId?: string },
 ): Promise<OpenedReply> {
   requestSeq += 1
   const requestId = `open:${Date.now()}:${requestSeq}`
@@ -149,12 +242,26 @@ function askForWindow(
 
     const payload: LinkTabRequest = {
       url: request.url,
-      sessionId: request.sessionId,
       requestId,
+      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
       ...(request.machineId ? { machineId: request.machineId } : {}),
     }
-    deps.send(LINK_TAB_CHANNEL, payload)
+    send(LINK_TAB_CHANNEL, payload)
   })
+}
+
+/**
+ * Ask the renderer for a browser window, and hear back either way.
+ *
+ * The timeout answers `refused` with a sentence rather than resolving to
+ * nothing, because the caller is going to print whatever comes back: silence
+ * here would reach a person as a link that vanished.
+ */
+function askForWindow(
+  deps: BindingIpcDeps,
+  request: { url: string; sessionId: string; machineId: string },
+): Promise<OpenedReply> {
+  return askRenderer((channel, payload) => deps.send(channel, payload), request)
 }
 
 /**
@@ -574,6 +681,20 @@ export function registerBrowserBindingIpc(ipcMain: IpcMain, deps: BindingIpcDeps
       w: before?.w ?? windowSeq,
     }
     known.set(tabId, entry)
+    /*
+     * Anything blocked on this pane having a page can go now.
+     *
+     * Fired here rather than after `windowMoved` because a waiter is asking
+     * about the *window*, and a window that is nobody's — the copilot's own
+     * pane — is not in the binding map at all and never will be.
+     */
+    if (entry.viewId !== null) {
+      const waiting = viewWaiters.get(tabId)
+      if (waiting) {
+        viewWaiters.delete(tabId)
+        for (const resolve of waiting) resolve(entry.viewId)
+      }
+    }
     // Only what the window reported is passed on. A field the renderer left out
     // must not become an empty string in a hook answer an agent will read as
     // fact.
@@ -711,6 +832,7 @@ export function registerBrowserBindingIpc(ipcMain: IpcMain, deps: BindingIpcDeps
 export function forgetKnownWindows(): void {
   known.clear()
   pending.clear()
+  viewWaiters.clear()
   /*
    * `windowSeq` too, and for the same reason `SessionBinding.next` restarts on
    * an empty session.

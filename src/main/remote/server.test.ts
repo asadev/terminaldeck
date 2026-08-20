@@ -3729,60 +3729,143 @@ describe('the account capability', () => {
   })
 })
 
-describe('a guest gets no port list and no tunnel', () => {
+/**
+ * The fifth door, and what a guest is actually given at it.
+ *
+ * Folder enforcement landed on `list`, `attach`, `create` and `close` — the four
+ * verbs that reach files. A port is the fifth thing a paired device can ask this
+ * machine for, and it was never behind any of it: six typed digits and an
+ * approval once bought a byte pipe to everything listening on the loopback,
+ * whatever folders the person approving had chosen.
+ *
+ * The first fix was *every port or none*, and a guest got none. That was too
+ * blunt in a way that showed up as a broken feature: a guest can already ask
+ * this host to **start** the dev server in a folder it was granted, and is
+ * already told the port it came up on, and then could not open it. Asad,
+ * connected to his own PC as a guest — *"still as a guest I should be able to
+ * open a browser."*
+ *
+ * So the rule is now the one the grant already implies. `localhostAllowed` and
+ * `grantedPorts` in `server.ts` carry the argument; what is pinned here is the
+ * behaviour, in all three halves: a guest is told the capability exists, is
+ * offered only the ports this machine can name one of its folders for, and is
+ * refused a tunnel to anything else with the same answer an absent port gets.
+ */
+describe('what a guest may reach on the loopback', () => {
   /** Every connection is a guest: `device-1` is the only device this file knows. */
   const everyoneIsAGuest = (): boolean => false
 
-  it('does not tell a guest that this machine serves localhost at all', async () => {
-    const harness = await serve({ copilotEligible: everyoneIsAGuest })
+  /** A dev-server module with one folder up on one port. */
+  function devServersReady(folder: string, port: number): DevServers {
+    return {
+      ...fakeDevServers(),
+      status(asked: string): DevServerState {
+        return asked === folder
+          ? { folder, status: 'ready', script: 'dev', command: 'pnpm run dev', port, url: `http://localhost:${port}` }
+          : { folder: asked, status: 'idle', script: 'dev', command: 'pnpm run dev' }
+      },
+    }
+  }
+
+  const twoPorts = async (): Promise<{ port: number; process: string; guessed: boolean }[]> => [
+    { port: 4321, process: 'node', guessed: false },
+    { port: 9999, process: 'postgres', guessed: false },
+  ]
+
+  it('tells a guest this machine serves localhost, because now it does', async () => {
+    const harness = await serve(
+      { copilotEligible: everyoneIsAGuest, devServers: devServersReady('/tmp/allowed', 4321) },
+      creatingSessions(['/tmp/allowed']),
+    )
     const client = await connect(harness.port)
     client.send(HELLO)
 
     const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
-    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.localhost)
+    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.localhost)
   })
 
-  it('refuses a guest the port list, and keeps the connection it is holding', async () => {
-    const harness = await serve({
-      copilotEligible: everyoneIsAGuest,
-      scanPorts: async () => [{ port: 4321, process: 'node', guessed: false }],
-    })
+  it('offers a guest only the port its own folder grant covers', async () => {
+    // 9999 is listening and is nobody's project as far as this machine can say —
+    // a database, another service, somebody else's dev build. It is exactly what
+    // the old *every port* rule handed over.
+    const harness = await serve(
+      {
+        copilotEligible: everyoneIsAGuest,
+        devServers: devServersReady('/tmp/allowed', 4321),
+        scanPorts: twoPorts,
+      },
+      creatingSessions(['/tmp/allowed']),
+    )
     const client = await connect(harness.port)
     client.send(HELLO)
     await client.until((m) => m.t === 'welcome', 'the welcome')
 
     client.send({ t: 'ports' })
-    const error = await client.until((m) => m.t === 'error', 'the refusal')
-    expect(error.t === 'error' && error.code).toBe('unauthorized')
-    expect(client.received.some((m) => m.t === 'ports')).toBe(false)
-
-    // The connection survives. A device being told "not you" about one feature
-    // must not also lose the terminal session it is attached to — that is the
-    // difference between a refused request and a refused connection, and this
-    // file's `error` frame is deliberately used for both.
-    client.send({ t: 'ping' })
-    await client.until((m) => m.t === 'pong', 'the pong')
+    const ports = await client.until((m) => m.t === 'ports', 'the port list')
+    expect(ports.t === 'ports' && ports.ports).toEqual([{ port: 4321, process: 'node', guessed: false }])
   })
 
-  it('refuses a guest a tunnel to a port that really is listening', async () => {
-    const harness = await serve({
-      copilotEligible: everyoneIsAGuest,
-      scanPorts: async () => [{ port: 4321, process: 'node', guessed: false }],
-    })
+  it('refuses a guest a tunnel to a port outside its grant, and says nothing about it', async () => {
+    const harness = await serve(
+      {
+        copilotEligible: everyoneIsAGuest,
+        devServers: devServersReady('/tmp/allowed', 4321),
+        scanPorts: twoPorts,
+      },
+      creatingSessions(['/tmp/allowed']),
+    )
     const client = await connect(harness.port)
     client.send(HELLO)
     await client.until((m) => m.t === 'welcome', 'the welcome')
 
-    // Not a port that is missing from the scan — the refusal for that one
-    // already existed and would pass whatever this rule said. This is the one a
-    // guest would otherwise have got.
-    client.send({ t: 'tunnel.open', id: 'tun-1', port: 4321 })
-    const error = await client.until((m) => m.t === 'error', 'the refusal')
-    expect(error.t === 'error' && error.code).toBe('unauthorized')
+    client.send({ t: 'tunnel.open', id: 'tun-1', port: 9999 })
+    const closed = await client.until((m) => m.t === 'tunnel.closed', 'the refusal')
+    // The same answer a port nothing is listening on gets. A distinct one would
+    // confirm that 9999 names something real, which is the fact being withheld.
+    expect(closed.t === 'tunnel.closed' && closed.message).toContain('9999')
     expect(client.received.some((m) => m.t === 'tunnel.opened')).toBe(false)
+
+    // And the connection survives, as it did when this was a flat refusal: a
+    // device told "not that one" must not lose the terminal it is holding.
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
   })
 
-  it('still serves one of the owner’s own machines', async () => {
+  it('gives a guest nothing when this host cannot say whose folder a port is in', async () => {
+    // No dev-server module, so there is no source on this machine that can name
+    // a folder for a port. The correct answer for a host that cannot ask the
+    // question is to offer nothing, which is the same rule `devserver`'s own
+    // advertisement follows.
+    const harness = await serve(
+      { copilotEligible: everyoneIsAGuest, scanPorts: twoPorts },
+      creatingSessions(['/tmp/allowed']),
+    )
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'ports' })
+    const ports = await client.until((m) => m.t === 'ports', 'the port list')
+    expect(ports.t === 'ports' && ports.ports).toEqual([])
+  })
+
+  it('gives a guest nothing for a folder whose dev server is not up yet', async () => {
+    // `port` is set only on `ready` — a `starting` has none and a `failed` may
+    // be carrying one from an attempt that is over.
+    const harness = await serve(
+      { copilotEligible: everyoneIsAGuest, devServers: fakeDevServers(), scanPorts: twoPorts },
+      creatingSessions(['/tmp/allowed']),
+    )
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'ports' })
+    const ports = await client.until((m) => m.t === 'ports', 'the port list')
+    expect(ports.t === 'ports' && ports.ports).toEqual([])
+  })
+
+  it('still gives one of the owner’s own machines everything', async () => {
     const harness = await serve({
       copilotEligible: (deviceId) => deviceId === 'device-1',
       scanPorts: async () => [{ port: 4321, process: 'node', guessed: false }],
@@ -3794,6 +3877,26 @@ describe('a guest gets no port list and no tunnel', () => {
     expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.localhost)
     client.send({ t: 'ports' })
     const ports = await client.until((m) => m.t === 'ports', 'the port list')
+    // No dev-server module anywhere in this harness, and the whole scan arrives:
+    // the narrowing is a guest's, and one of your own is not narrowed at all.
     expect(ports.t === 'ports' && ports.ports).toEqual([{ port: 4321, process: 'node', guessed: false }])
+  })
+
+  it('refuses these verbs outright on a host that never offered localhost', async () => {
+    // `options.offer` is the host's own ceiling and the public demo box uses it.
+    // Checked at the door as well as in the advertisement, because a client that
+    // never read the welcome still sends the frame.
+    const harness = await serve({ offer: [CAPABILITY.create], scanPorts: twoPorts })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'ports' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unauthorized')
+    expect(client.received.some((m) => m.t === 'ports')).toBe(false)
+
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
   })
 })

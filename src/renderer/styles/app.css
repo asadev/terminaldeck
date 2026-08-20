@@ -348,10 +348,12 @@ kbd {
   `.tab-machine-mark` was here and is deleted — 2026-08-20.
 
   It painted a 12px display glyph on a browser tab whose page was being served by
-  another computer, with the machine's name in the `title`. The name lives on the
-  bar itself now, as a heading over that machine's whole run of tabs — see
-  `.strip-group` in `WorkspaceTabStrip.css`, and `stripGroups` for why a tooltip
-  was not the *one place* he asked for.
+  another computer, with the machine's name in the `title`. The name became a
+  heading over that machine's run of tabs, and then — *"we don't need any kind of
+  separation like this for the device on the top with the name"* — the heading
+  went too. It is on the tab's own hover now, beside the folder, which is where
+  a *session* has always said which machine it runs on: see `whereRuns` in
+  `WorkspaceTabStrip.tsx`.
 */
 
 /*

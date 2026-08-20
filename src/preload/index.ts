@@ -674,6 +674,24 @@ const api = {
    */
   uploadToMachine: (id: string, filePath: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:upload', id, filePath),
+
+  /*
+   * Bytes with no file behind them, written to a file on **this** machine.
+   *
+   * The counterpart to `pathForDroppedFile` above, for the gesture that has no
+   * path to find: a paste. ⌘⇧⌃4 on a Mac and *Copy image* in a web page both put
+   * pixels on the clipboard and nothing on the disk, and both halves of the rule
+   * in `renderer/session-transfer.ts` need a file — a local session is handed a
+   * path, and the cross-machine leg reads from one by design.
+   *
+   * An ArrayBuffer here rather than a path, obviously, because there is no path
+   * yet; that is the whole reason this channel exists and is why it is the only
+   * one in this file that carries file *contents*. The renderer sends a name and
+   * never a location: `local-stage.ts` reduces the name to one path component and
+   * owns the folder.
+   */
+  stageForSession: (name: string, bytes: ArrayBuffer): Promise<unknown> =>
+    ipcRenderer.invoke('transfer:stage', name, bytes),
   cancelMachineUpload: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:upload:cancel', id),
   onMachineUpload: (cb: (progress: unknown) => void): (() => void) => {
@@ -1620,6 +1638,37 @@ const api = {
   // what gets hit by accident in the middle of one.
   browserDriveResume: (carryOn: boolean): void => {
     ipcRenderer.send('browser:drive-resume', carryOn)
+  },
+  /*
+   * The close half of the same bargain as `onBrowserDriveOpen`.
+   *
+   * The main process owns the native view and this window owns the row in the
+   * strip, so a close it did here would leave a row pointing at nothing — the
+   * ghost id `workspace-strip.ts` documents. The request comes in, the window
+   * closes the tab through the same path its own ✕ takes, and the answer says
+   * whether there was a tab to close. A `send` and not a return value for the
+   * reason `browserDriveOpened` gives: the request came *from* main.
+   */
+  onBrowserDriveClose: (cb: (request: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, request: unknown) => cb(request)
+    ipcRenderer.on('browser:drive-close', handler)
+    return () => ipcRenderer.off('browser:drive-close', handler)
+  },
+  browserDriveClosed: (id: string, closed: boolean): void => {
+    ipcRenderer.send('browser:drive-closed', id, closed)
+  },
+  /*
+   * And the same round trip for "bring this one to the front", which the drive
+   * needs before it clicks: a browser window that is not the tab on screen has
+   * no rectangle, so its clicks are dropped and it cannot be photographed.
+   */
+  onBrowserDriveShow: (cb: (request: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, request: unknown) => cb(request)
+    ipcRenderer.on('browser:drive-show', handler)
+    return () => ipcRenderer.off('browser:drive-show', handler)
+  },
+  browserDriveShown: (id: string, shown: boolean): void => {
+    ipcRenderer.send('browser:drive-shown', id, shown)
   },
 
   /* --------------------------------------------------- chrome import -- */

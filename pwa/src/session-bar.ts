@@ -187,6 +187,32 @@ export function accountDotColor(color: string | null): string | null {
   return `var(${color})`
 }
 
+/**
+ * Is this a login of a *different* agent than the session is running?
+ *
+ * `account.read` answers with every login the machine has, across agents —
+ * `listProfiles()` is not filtered by provider and should not be, because the
+ * chip has to be able to name whatever the current account is. Which of them can
+ * be *pressed* is the client's decision, and it is the same one
+ * `MachineAccountChip` makes at the desk from the same two fields.
+ *
+ * It matters because the far side already refuses the switch:
+ * `session-switch.ts` answers *"… is a Codex CLI login and this session is
+ * running Claude Code"* and stops. Nothing on this bar draws that sentence — and
+ * nothing should, per *"don't put any single statement in anywhere"* — so a
+ * pressable row was a press that spun the chip and then changed nothing at all.
+ * Measured on 2026-08-20 from a phone against a real Claude session on this Mac:
+ * pressing *Default (Codex CLI)* did nothing, said nothing and left no trace.
+ *
+ * Both providers have to be *known* before two of them can be said to differ. A
+ * row whose own provider is null stays pressable rather than being greyed out
+ * because an older machine did not name its agent.
+ */
+export function foreignAccount(current: AccountWire | null, account: AccountWire): boolean {
+  if (current === null || current.provider === null || account.provider === null) return false
+  return account.provider !== current.provider
+}
+
 export class SessionBar {
   readonly element = document.createElement('div')
 
@@ -425,18 +451,32 @@ export class SessionBar {
     return button
   }
 
+  /** See {@link foreignAccount}, which owns the rule. */
+  private foreign(account: AccountWire): boolean {
+    return foreignAccount(this.state.account, account)
+  }
+
   private sheet(): HTMLElement {
     const list = document.createElement('div')
     list.className = 'sbar__sheet'
     list.setAttribute('role', 'menu')
     for (const account of this.state.accounts) {
-      const row = document.createElement('button')
-      row.className = 'sbar__row'
-      row.type = 'button'
-      row.setAttribute('role', 'menuitemradio')
       const chosen = this.state.account !== null && account.id === this.state.account.id
+      const foreign = this.foreign(account)
+      // A `div` rather than a disabled `button`, which is what the desktop's own
+      // menu does: a row that cannot be pressed should not look like something
+      // that is merely unavailable right now, and a screen reader is told with
+      // `aria-disabled` rather than by the row vanishing.
+      const row = document.createElement(foreign ? 'div' : 'button')
+      row.className = 'sbar__row'
+      if (row instanceof HTMLButtonElement) row.type = 'button'
+      row.setAttribute('role', 'menuitemradio')
       row.setAttribute('aria-checked', chosen ? 'true' : 'false')
       if (chosen) row.dataset.chosen = 'yes'
+      if (foreign) {
+        row.dataset.inert = 'yes'
+        row.setAttribute('aria-disabled', 'true')
+      }
       const dot = document.createElement('i')
       dot.className = 'sbar__dot'
       const tint = accountDotColor(account.color)
@@ -444,11 +484,13 @@ export class SessionBar {
       const name = document.createElement('span')
       name.textContent = account.name
       row.append(dot, name)
-      row.addEventListener('click', () => {
-        this.state.picking = false
-        if (!chosen) this.switchTo(account.id)
-        else this.render()
-      })
+      if (!foreign) {
+        row.addEventListener('click', () => {
+          this.state.picking = false
+          if (!chosen) this.switchTo(account.id)
+          else this.render()
+        })
+      }
       list.append(row)
     }
     return list

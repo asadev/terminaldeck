@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { accountDotColor, contextFraction, percentText, planFraction } from './session-bar'
+import { accountDotColor, contextFraction, foreignAccount, percentText, planFraction } from './session-bar'
 
 function window(id: string, used: number | null): Record<string, unknown> {
   return {
@@ -117,5 +117,29 @@ describe('the account dot', () => {
     for (const value of [null, '', 'accent', '#c96', '--a) ; background: url(x', '--' + 'x'.repeat(60)]) {
       expect(accountDotColor(value), String(value)).toBeNull()
     }
+  })
+})
+
+describe('which logins the sheet lets you press', () => {
+  const wire = (id: string, provider: string | null) => ({ id, name: id, provider, color: null, system: false })
+
+  it('refuses a login of a different agent than the session runs', () => {
+    /*
+     * Measured on 2026-08-20 from a phone against a real Claude session on this
+     * Mac: the sheet listed *Default (Codex CLI)* as a pressable row, the press
+     * spun the chip, and nothing happened — `session-switch.ts` refuses the
+     * switch with a sentence this bar deliberately does not draw. Inert here is
+     * what the desktop's own remote chip already does with the same two fields.
+     */
+    expect(foreignAccount(wire('system', 'claude'), wire('system:codex', 'codex'))).toBe(true)
+    expect(foreignAccount(wire('system', 'claude'), wire('work', 'claude'))).toBe(false)
+  })
+
+  it('stays pressable when either provider is unknown', () => {
+    // Two of them cannot be said to differ until both are known. An older
+    // machine that does not name the agent must not grey out every login.
+    expect(foreignAccount(wire('system', null), wire('system:codex', 'codex'))).toBe(false)
+    expect(foreignAccount(wire('system', 'claude'), wire('other', null))).toBe(false)
+    expect(foreignAccount(null, wire('system:codex', 'codex'))).toBe(false)
   })
 })

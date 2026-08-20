@@ -69,7 +69,16 @@ export function shortenPath(path: string, max = 52): string {
  * The one line an agent gets about a screenshot.
  *
  * The *path*, because that is the only part an agent can act on: it can open
- * the file. The size, because "3072 x 1496" tells it the shot is a Retina
+ * the file — and therefore the path has to be one **that** agent can open, which
+ * is the whole of the change on 2026-08-20. `shot.path` is a path under this
+ * computer's Pictures folder; a session on a paired PC cannot open it, and for a
+ * day that is exactly what it was sent. So this takes `handed` — the path the
+ * chosen session's own machine knows the file by, produced by
+ * `session-transfer.ts` at the moment of the press — and falls back to
+ * `shot.path` only when there is none, which is the case in a test and in any
+ * caller composing a preview rather than a message. The two strings are the same
+ * whenever the session is on this computer, which is why nothing looks different
+ * until it has to. The size, because "3072 x 1496" tells it the shot is a Retina
  * capture of a wide window. Single line by construction, like every other
  * string this app types into a PTY — a newline there submits the prompt.
  *
@@ -82,10 +91,10 @@ export function shortenPath(path: string, max = 52): string {
  * of a broken header somewhere. A plain capture carries neither, because nothing
  * has been claimed about it — it is a photograph of whatever was on screen.
  */
-export function composeShot(shot: ScreenshotResult, instruction: string): string {
+export function composeShot(shot: ScreenshotResult, instruction: string, handed = ''): string {
   const marks = shot.marks && shot.marks > 0 ? ` with ${shot.marks} mark${shot.marks === 1 ? '' : 's'} on it` : ''
   const where = shot.url ? ` of ${oneLine(shot.url)}` : ''
-  const context = `[browser screenshot${marks}${where}: ${shot.path} (${shot.width} x ${shot.height})]`
+  const context = `[browser screenshot${marks}${where}: ${handed || shot.path} (${shot.width} x ${shot.height})]`
   const lead = oneLine(instruction)
   return lead ? `${lead} ${context}` : context
 }
@@ -155,7 +164,15 @@ export function ScreenshotPopup({ shot, anchor, agent, onReveal, onClose }: Prop
 
       <SendToAgent
         agent={agent}
-        compose={(instruction) => composeShot(shot, instruction)}
+        /*
+         * The file goes wherever the session is, and the message names it by
+         * the path that machine answered with. Nothing on this popup changes:
+         * the path under the picture is still this machine's, because that is
+         * where Reveal will open it, and that is the point — *"the user never
+         * sees the difference."*
+         */
+        attach={{ path: shot.path }}
+        compose={(instruction, handed) => composeShot(shot, instruction, handed)}
         placeholder="What should the agent look at?"
         action="Send"
         onSent={onClose}

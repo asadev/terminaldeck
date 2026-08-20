@@ -151,10 +151,12 @@ describe('the layout decisions that cannot be seen from a test', () => {
       '.banner',
       '.body',
       '.chat',
-      // `.chatv` is the *session's* conversation — the copilot's is `.chat` — and
-      // it is swapped in and out of the pane rather than hidden in place, so it
-      // needs no attribute rule. Both halves of the mode toggle exist for the
-      // life of the pane; only one is in the document.
+      // `.chatv` is the *session's* conversation — the copilot's is `.chat` —
+      // and `.chatc` is the composer under it. Both are swapped in and out of
+      // the pane rather than hidden in place, so neither needs an attribute
+      // rule: both halves of the mode toggle exist for the life of the pane and
+      // only one of them is in the document.
+      '.chatc',
       '.chatv',
       '.composer',
       '.content',
@@ -162,6 +164,10 @@ describe('the layout decisions that cannot be seen from a test', () => {
       '.copilot-fleet',
       '.copilot-playhead',
       '.copilot-scan',
+      // The two state chips at the head of the copilot screen — the machine's
+      // copilot and this browser's run. Drawn or not drawn by the builder that
+      // assembles the panel, never hidden by an attribute.
+      '.copilot-state',
       '.copilot-toggle',
       '.header',
       '.keybar',

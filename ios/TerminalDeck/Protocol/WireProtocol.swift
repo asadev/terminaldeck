@@ -355,6 +355,25 @@ enum WireCapability {
      * `credential` is a frame the desktop will only send once it has been told
      * somebody is listening for it.
      */
+    /**
+     * The desktop will report a plan window's usage and a session's context.
+     *
+     * Shipped on the desktop since 2026-08-18 and asked for by nothing on this
+     * client until now, which is the whole of why *"the phone gained a usage
+     * ring and a context bar"* was true of the browser page and false of the app
+     * on his phone. Nothing new was needed on the wire; there was simply nobody
+     * asking.
+     */
+    static let usage = "usage"
+
+    /// The desktop will say which login a session runs as, and move it to
+    /// another. Its own name rather than part of `usage`, because a machine can
+    /// answer one and not the other and the chip is drawn per answer.
+    static let account = "account"
+
+    /// The desktop will read a session's transcript back as a conversation.
+    static let chat = "chat"
+
     static let claimed: [String] = [credential]
 }
 
@@ -858,6 +877,46 @@ enum ClientMessage: Equatable {
     /// runs are keyed by device, and a phone that could stop the run somebody is
     /// working in would be a phone holding a power its grant does not name.
     case copilotStop
+
+    /*
+     * The session's own bar, and the conversation behind it. See
+     * `SessionWire.swift` for what each answer carries and why the reading is
+     * narrowed on arrival.
+     *
+     * `rid` on all four because one socket can have a terminal, a copilot and
+     * this bar asking three questions at once, and the request id is the only
+     * thing that tells three answers apart.
+     */
+
+    /**
+     * How full a plan window is, or a session's context, or go and find out.
+     *
+     * `force` is the same flag `want == .refresh` implies and is written anyway,
+     * because it is the field the desktop actually reads and a client that let
+     * the two disagree would ask for a cheap reading and be charged for the
+     * expensive one. See `UsageWant` for what each costs over there.
+     */
+    case usageRead(rid: String, id: String, want: UsageWant, force: Bool)
+    /// Which login this session runs as, and which others this machine has.
+    case accountRead(rid: String, id: String)
+    /**
+     * Move this session onto another login.
+     *
+     * The far end decides whether it takes and answers `account.switched` either
+     * way — including for a login belonging to a different agent, which it
+     * refuses with a sentence this app does not draw. That is why the sheet
+     * makes such a row unpressable rather than pressable-and-futile; see
+     * `foreignAccount`.
+     */
+    case accountSwitch(rid: String, id: String, accountId: String)
+    /**
+     * The session as a conversation.
+     *
+     * `tail` false is what opening the view asks for; true is what a session
+     * going quiet asks for. One verb with a flag rather than two, because both
+     * are the same read of the same file the agent is already writing.
+     */
+    case chatRead(rid: String, id: String, tail: Bool)
 }
 
 enum ServerMessage: Equatable {
@@ -1139,6 +1198,39 @@ enum ServerMessage: Equatable {
      * things behind their back.
      */
     case copilotSettled(CopilotSettlement)
+
+    /**
+     * The answer to one `usage.read`, and only ever to one.
+     *
+     * The figures are narrowed on arrival rather than carried raw — see
+     * `SessionWire.swift`. `nil` figures are drawn as **nothing at all**: no
+     * chip, no placeholder, no sentence saying a machine did not report.
+     */
+    case usageReading(rid: String, id: String, want: UsageWant, figures: UsageFigures)
+    /// The answer to one `account.read`. `current` is nil when the far end had
+    /// none to give, which draws the chip's neutral dot rather than no chip.
+    case accountState(rid: String, id: String, current: WireAccount?, accounts: [WireAccount])
+    /**
+     * What happened to one `account.switch`.
+     *
+     * The far end's sentence is deliberately **not** on this case. Whether it
+     * took is what this screen acts on — it asks again rather than renaming the
+     * chip itself — and the sentence would only ever become a line of prose on a
+     * bar that has none.
+     */
+    case accountSwitched(rid: String, id: String, ok: Bool)
+    /**
+     * The answer to one `chat.read`.
+     *
+     * `reset` means the far side's document is not the one this view holds a
+     * prefix of — a rolled-over transcript, an account switch, a compaction —
+     * and a client that appended through one would draw the conversation twice.
+     *
+     * `found` is a *different* empty from a session that has not spoken yet: it
+     * means the folder has no transcript at all, and it is why the toggle that
+     * opens the view is simply absent rather than opening an empty screen.
+     */
+    case chatRows(rid: String, id: String, rows: [CopilotChatMessage], reset: Bool, found: Bool)
 }
 
 enum ProtocolErrorCode: String, CaseIterable, Equatable {

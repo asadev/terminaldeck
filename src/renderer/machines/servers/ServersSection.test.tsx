@@ -99,7 +99,10 @@ describe('a build that cannot do this says so', () => {
      */
     const html = render({ wired: false })
     expect(html).toContain('cannot reach servers yet')
-    expect(html).not.toContain('You have not added a server yet')
+    // One clause. The two sentences that used to follow it explained the
+    // difference between "you have no servers" and "this build cannot reach
+    // one" — which the notice's own presence is already making.
+    expect(html).not.toContain('Nothing here is missing from your account')
   })
 
   it('names the missing channels when only some of them are there, because half-wired looks like working', () => {
@@ -121,9 +124,22 @@ describe('adding one', () => {
     expect(render({ wired: false })).toContain('disabled')
   })
 
-  it('says what will be needed before anybody presses it', () => {
-    // Three things, named on the list screen, so nobody opens the form to find
-    // out they have to go and ask somebody for something.
-    expect(render()).toContain('either a password or a key')
+  it('is the whole of the empty state, with nothing written around it', () => {
+    /*
+     * A paragraph used to stand here naming the three things the form asks for.
+     * It is the shape he struck out more than any other — *"we don't need to
+     * give the statements … let the smart people use it"* — and the form asks
+     * those three questions itself, one field at a time, a click away.
+     *
+     * Pinned as a *length* rather than as the absence of that particular
+     * sentence, because a reworded paragraph would pass a string test and fail
+     * a person.
+     */
+    const html = render()
+    const prose = [...html.matchAll(/>([^<>]+)</g)]
+      .map((match) => match[1].trim())
+      .filter((text) => text.split(/\s+/).length > 4)
+    expect(prose).toEqual([])
+    expect(html).toContain('Add a server')
   })
 })

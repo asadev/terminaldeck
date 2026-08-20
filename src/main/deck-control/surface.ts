@@ -265,6 +265,22 @@ export interface SessionView extends AttentionView {
    * has no such field yet. See `COPILOT-DESIGN.md`, phase 3.
    */
   startedByCopilot: boolean
+  /**
+   * The browser windows attached to this session, by the names on screen:
+   * `['B1', 'B2']`.
+   *
+   * Q1, for the caller that is not the session itself. A session's own agent is
+   * told this at the top of every turn — `hookContext` in `browser-binding.ts`
+   * composes it — but the copilot is told nothing, so an agent that can now
+   * *drive* `B2` had no way to discover that `B2` exists. Announcing a
+   * capability the caller cannot find is the same dead end from the other side.
+   *
+   * Names, never ids: `browser:<epoch>:<seq>` on a screen was a defect fixed
+   * this afternoon and it does not come back through a tool result. What each
+   * window is *showing* is in `sessions.get`, where a line per window is
+   * affordable; a fleet listing gets the names alone.
+   */
+  windows: string[]
 }
 
 /** Where the last-good copy of the settings was written, and when. */

@@ -565,23 +565,28 @@ export function settledSentence(settled: { granted: boolean; by: string | null; 
 }
 
 /**
- * What the desk is doing, in a word somebody reads rather than a status code.
+ * What the desk is doing, as a state rather than as a sentence.
+ *
+ * It **was** a sentence — *"The copilot is not running at the machine."* — in
+ * 15px semibold across the top of the screen, with *"This browser has its own
+ * run"* on the line underneath it. Both were true and about two different
+ * things, and read together they contradicted each other. Reported as exactly
+ * that, and it is two failures at once: the headline was prose on a screen that
+ * is not allowed any (*"don't put any single statement in anywhere"*), and the
+ * prose was what made two facts look like one confused one.
+ *
+ * So they are drawn as two labelled states side by side — see `copilotStatus`
+ * in `main.ts`. A label naming *which* copilot, and a word for what it is
+ * doing. Two chips cannot contradict each other, because each one says what it
+ * is about before it says anything else.
  *
  * `desk` is the copilot pinned at the machine — the conversation the person is
  * having there — and it is deliberately not the same thing as this device's own
  * run. A screen that showed one on the other's Start button would offer to start
  * something that is already running, or refuse to because something unrelated is.
  */
-export function deskSentence(report: CopilotStateReport | null): string {
-  if (report === null) return 'Asking the machine…'
-  switch (report.desk) {
-    case 'running':
-      return 'The copilot is running at the machine.'
-    case 'starting':
-      return 'The copilot is starting at the machine.'
-    case 'stopped':
-      return 'The copilot is not running at the machine.'
-  }
+export function deskState(report: CopilotStateReport | null): 'running' | 'starting' | 'stopped' | 'asking' {
+  return report === null ? 'asking' : report.desk
 }
 
 /**

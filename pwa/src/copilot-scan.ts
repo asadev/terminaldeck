@@ -184,16 +184,28 @@ export function whyOf(session: RemoteSession): string {
  *
  * Deliberately **not** the status again. `formatSince` returns null when nothing
  * true is known — the wire carries no activity timestamp for a session this
- * browser has never heard from — and the honest thing to print then is that
- * nothing has been seen, rather than the moment the list arrived dressed up as
- * the moment the session last did something.
+ * browser has never heard from — and printing the moment the list arrived,
+ * dressed up as the moment the session last did something, would be inventing
+ * the one fact this line exists to carry.
+ *
+ * ## Empty, where it used to say so
+ *
+ * It printed *"Nothing seen from this browser yet"*, and that sentence turned up
+ * under a run that had **just answered** — because a session that has never sent
+ * an `output` frame to *this* client carries no timestamp here, however busy it
+ * has been. So the sentence was both prose on a screen that is not allowed any
+ * and, read on that row, plainly false.
+ *
+ * The answer is the rule the rest of this client already follows: an absence is
+ * drawn as an absence. The empty string means the caller draws no line at all —
+ * `''` rather than null so that every caller keeps one type and a template
+ * cannot print `null`.
  */
 export function noteOf(session: RemoteSession, lastActivityAt: number | null, now: number): string {
   const parts: string[] = []
   if (session.exitCode !== null && session.exitCode !== 0) parts.push(`Exit code ${session.exitCode}`)
   const since = formatSince(now, lastActivityAt)
   if (since !== null) parts.push(`Last active ${since}`)
-  if (parts.length === 0) parts.push('Nothing seen from this browser yet')
   return parts.join(' · ')
 }
 

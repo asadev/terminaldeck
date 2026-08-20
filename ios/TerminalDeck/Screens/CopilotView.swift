@@ -506,21 +506,32 @@ struct CopilotView: View {
     private var stateCard: some View {
         if let state = link?.state {
             HStack(alignment: .top, spacing: 12) {
-                Circle()
-                    .fill(state.deskIsRunning ? Theme.positive : Theme.secondary)
-                    .frame(width: 8, height: 8)
-                    .padding(.top, 6)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(deskLine(state))
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Theme.primary)
-                        .accessibilityIdentifier("copilot.status")
-
-                    Text(runLine(state))
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.secondary)
-                        .accessibilityIdentifier("copilot.run")
+                VStack(alignment: .leading, spacing: 8) {
+                    /*
+                     * Two states, side by side, each naming its own subject.
+                     *
+                     * They were two sentences stacked — *"Not running at the
+                     * Mac"* in 15pt semibold over *"This phone has a copilot of
+                     * its own running"* — and photographed together they read as
+                     * a contradiction. Both were true and about two different
+                     * copilots: the one pinned at the machine, and this device's
+                     * own run, which is the only one it can speak to.
+                     *
+                     * A chip says what it is about before it says what it is
+                     * doing, so the pair cannot be read as one thing — and
+                     * neither of them is a sentence, on a screen that is not
+                     * allowed any.
+                     */
+                    HStack(spacing: 8) {
+                        StateChip(subject: hostNoun.capitalized, state: deskWord(state),
+                                  tone: state.deskIsRunning ? Theme.positive
+                                      : state.deskIsStarting ? Theme.accent : Theme.faint)
+                            .accessibilityIdentifier("copilot.status")
+                        StateChip(subject: "This phone", state: state.hasRun ? "running" : "none",
+                                  tone: state.hasRun ? Theme.positive : Theme.faint)
+                            .accessibilityIdentifier("copilot.run")
+                        Spacer(minLength: 0)
+                    }
 
                     // Only what the machine actually said. Each of these is
                     // absent on a desktop that did not mention it, and a line
@@ -557,22 +568,14 @@ struct CopilotView: View {
         }
     }
 
-    /// The copilot at the machine. `deskIsStopped` rather than `!deskIsRunning`,
-    /// because an unrecognised word from a newer desktop is neither, and
-    /// printing it is more honest than calling it stopped.
-    private func deskLine(_ state: CopilotState) -> String {
-        if state.deskIsRunning { return "Running at the \(hostNoun)" }
-        if state.deskIsStarting { return "Starting at the \(hostNoun)…" }
-        if state.deskIsStopped { return "Not running at the \(hostNoun)" }
+    /// The copilot at the machine, in one word. `deskIsStopped` rather than
+    /// `!deskIsRunning`, because an unrecognised word from a newer desktop is
+    /// neither, and printing it is more honest than calling it stopped.
+    private func deskWord(_ state: CopilotState) -> String {
+        if state.deskIsRunning { return "running" }
+        if state.deskIsStarting { return "starting" }
+        if state.deskIsStopped { return "stopped" }
         return state.desk
-    }
-
-    /// And this phone's own, which is the only one it can speak to. Said even
-    /// when there is none, because "you have no run" is the fact the composer's
-    /// absence is explained by.
-    private func runLine(_ state: CopilotState) -> String {
-        state.hasRun ? "This phone has a copilot of its own running"
-                     : "No copilot running for this phone"
     }
 
     /**
@@ -1082,5 +1085,38 @@ private struct CopilotActionRow: View {
         if action.wasRefused { return Theme.warning }
         if action.failed { return Theme.critical }
         return Theme.positive
+    }
+}
+
+/**
+ * One copilot, and what it is doing.
+ *
+ * The subject is drawn first, in the quieter ink, because the subject is the
+ * whole reason this is a chip rather than a line of prose: two states on one
+ * screen are only readable if each says what it is about. Two sentences stacked
+ * here — *"Not running at the Mac"* over *"This phone has a copilot of its own
+ * running"* — were both true, about two different copilots, and read as a
+ * contradiction on the screen he was looking at.
+ */
+private struct StateChip: View {
+    let subject: String
+    let state: String
+    let tone: Color
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(tone).frame(width: 7, height: 7)
+            Text(subject)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.primary)
+            Text(state)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.secondary)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(Theme.surfaceHigh, in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(subject): \(state)")
     }
 }

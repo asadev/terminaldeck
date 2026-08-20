@@ -15,7 +15,7 @@ import {
   type MachineChoice,
   type ReachOpened,
 } from './machines-bridge'
-import type { MachinesView } from '../machines/types'
+import { STATE_LABEL, type MachinesView } from '../machines/types'
 
 /**
  * The browser's half of *"I should be able to type and reach the devices which
@@ -26,7 +26,8 @@ import type { MachinesView } from '../machines/types'
  * a click handler would be a rule nothing could hold. What is pinned here is the
  * behaviour somebody would notice going away — `localhost` moving to the chosen
  * machine, `example.com` staying where it is, a refusal arriving as a sentence,
- * and a machine that cannot be reached keeping its row and its reason.
+ * and a machine that cannot be reached keeping its row and a two-word state
+ * rather than the paragraph that used to sit under it.
  */
 
 function view(over: Partial<MachinesView['links'][number]> = {}): MachinesView {
@@ -69,53 +70,88 @@ describe('the machines the picker offers', () => {
     const [machine] = machineChoices(view())
     expect(machine.name).toBe('office-pc')
     expect(machine.noun).toBe('PC')
-    expect(machine.refusal).toBeNull()
+    expect(machine.unreachable).toBeNull()
     expect(machine.ports.map((port) => port.port)).toEqual([5173, 8080])
   })
 
-  it('keeps a machine that has gone offline, and says so under its row', () => {
+  it('keeps a machine that has gone offline, and labels it', () => {
     // Dropped, this would simply be a computer missing from a menu — which is
     // the state somebody goes looking for a machine in.
     const [machine] = machineChoices(view({ state: 'offline' }))
-    expect(machine.refusal).toBe('This desktop is not connected to office-pc right now.')
-  })
-
-  it('names the machine in every refusal, because the sentence is read twice', () => {
-    // Once under the row in the picker, and once in the notice band when a
-    // machine that was chosen goes away underneath somebody. A sentence that
-    // only worked under its own row would be a mystery in the band.
-    for (const link of [
-      { state: 'connecting' as const },
-      { state: 'awaiting-approval' as const },
-      { state: 'error' as const, reason: null },
-    ]) {
-      const [machine] = machineChoices(view(link))
-      expect(machine.refusal).toContain('office-pc')
-    }
-  })
-
-  it('prefers the far machine’s own words when it said why it failed', () => {
-    const [machine] = machineChoices(view({ state: 'error', reason: 'The relay refused the credential.' }))
-    expect(machine.refusal).toBe('The relay refused the credential.')
+    expect(machine.unreachable).toBe('Not connected')
   })
 
   /**
-   * The fifth door, seen from the guest's side.
+   * The rule he repeated more than any other, held here rather than in a review.
    *
-   * `localhostAllowed` in `src/main/remote/server.ts` decides this on the far
-   * machine: the port list and every tunnel are for a device of its owner's own,
-   * and a guest gets neither — because a port cannot be attributed to a folder,
-   * so a folder grant has nothing to check it against. A guest never hears the
-   * capability at all, which is what arrives here as its absence.
+   *   > *"here you have a very long description… Remove this full shit. I don't
+   *   > want any kind of long descriptions anywhere."*
    *
-   * The window's job is to say that in a sentence rather than to draw a picker
-   * entry that refuses on every press.
+   * This menu printed three lines under a greyed row. A ceiling on the label is
+   * the only thing that stops the next person writing a fourth: a word is a
+   * state, and everything past a word is somebody explaining.
    */
-  it('refuses a machine that does not advertise localhost, and says both reasons', () => {
+  it('never puts a sentence on a row', () => {
+    for (const link of [
+      { state: 'offline' as const },
+      { state: 'connecting' as const },
+      { state: 'awaiting-approval' as const },
+      { state: 'error' as const, reason: null },
+      { capabilities: ['create'] },
+    ]) {
+      const [machine] = machineChoices(view(link))
+      const label = machine.unreachable ?? ''
+      expect(label).not.toBe('')
+      expect(label.split(' ').length).toBeLessThanOrEqual(4)
+      expect(label).not.toContain('.')
+      // The name is beside it on the row and in the band, so a label that named
+      // the machine would say it twice.
+      expect(label).not.toContain('office-pc')
+    }
+  })
+
+  it('uses the same words for a state that the Machines panel uses', () => {
+    // One vocabulary for a machine's condition. A machine reading `Connecting`
+    // in the sidebar and something else in a dropdown is two.
+    expect(machineChoices(view({ state: 'connecting' }))[0].unreachable).toBe(STATE_LABEL.connecting)
+    expect(machineChoices(view({ state: 'awaiting-approval' }))[0].unreachable).toBe(
+      STATE_LABEL['awaiting-approval'],
+    )
+    expect(machineChoices(view({ state: 'error', reason: null }))[0].unreachable).toBe(STATE_LABEL.error)
+  })
+
+  it('keeps the far machine’s own words for a failure, out of sight', () => {
+    const [machine] = machineChoices(view({ state: 'error', reason: 'The relay refused the credential.' }))
+    // A label on the row; the relay's sentence only as the row's `title`.
+    expect(machine.unreachable).toBe('Cannot connect')
+    expect(machine.detail).toBe('The relay refused the credential.')
+  })
+
+  it('adds nothing to a state its label already describes', () => {
+    for (const link of [
+      { state: 'offline' as const },
+      { state: 'connecting' as const },
+      { state: 'awaiting-approval' as const },
+      { capabilities: ['create'] },
+    ]) {
+      expect(machineChoices(view(link))[0].detail).toBeNull()
+    }
+  })
+
+  /**
+   * The fifth door, seen from the guest's side — and what is left of it.
+   *
+   * This used to be the guest case as well as the old-build one, and the row
+   * carried three lines saying so. `localhostAllowed` and `grantedPorts` in
+   * `src/main/remote/server.ts` fixed the guest half: a guest is now told the
+   * capability exists and is offered the ports its own folder grant covers,
+   * which is what Asad asked for — *"still as a guest I should be able to open a
+   * browser."* A machine that reaches this line is genuinely older than that
+   * rule, which is one fact and two words.
+   */
+  it('labels a machine that does not advertise localhost as an old build', () => {
     const [machine] = machineChoices(view({ capabilities: ['create'] }))
-    expect(machine.refusal).toContain('office-pc is not sharing what it is serving')
-    expect(machine.refusal).toContain('older version')
-    expect(machine.refusal).toContain('guest')
+    expect(machine.unreachable).toBe('Older build')
   })
 
   it('never lists this machine, which has no row to be wrong about', () => {
@@ -340,7 +376,8 @@ describe('when the chosen machine goes', () => {
     name: 'office-pc',
     noun: 'PC',
     ports: [],
-    refusal: null,
+    unreachable: null,
+    detail: null,
   }
 
   it('leaves a good selection alone', () => {
@@ -352,20 +389,18 @@ describe('when the chosen machine goes', () => {
     expect(lostMachine([good], THIS_MACHINE)).toBeNull()
   })
 
-  it('gives the machine\u2019s own reason, and says what happens next', () => {
-    const gone: MachineChoice = { ...good, refusal: 'That machine closed the connection.' }
-    expect(lostMachine([gone], 'mach-1')).toBe(
-      'That machine closed the connection. Addresses now open on this machine.',
-    )
+  it('names the machine and its state, and nothing else', () => {
+    const gone: MachineChoice = { ...good, unreachable: STATE_LABEL.offline }
+    // Not "\u2026 Addresses now open on this machine": the picker has just
+    // snapped back in front of them, so that half was narrating the screen.
+    expect(lostMachine([gone], 'mach-1')).toBe('office-pc \u2014 Not connected')
   })
 
   it('still says something when the machine has left the list entirely', () => {
     // Forgotten on this side, or revoked and dropped. There is no row left to
-    // borrow a sentence from, and silence would be a picker resetting itself
-    // under somebody's hand.
-    expect(lostMachine([], 'mach-1')).toBe(
-      'That machine is no longer paired with this one. Addresses now open on this machine.',
-    )
+    // borrow a name from, and silence would be a picker resetting itself under
+    // somebody's hand.
+    expect(lostMachine([], 'mach-1')).toBe('That machine is no longer paired')
   })
 })
 

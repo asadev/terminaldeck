@@ -184,6 +184,22 @@ final class HostLink: Identifiable {
         return link
     }()
 
+    /**
+     * The bar over whichever session is on screen, and the conversation behind
+     * it.
+     *
+     * Lazily built, unlike `copilot` above, and the difference is what each one
+     * is: the copilot's access is a standing fact about the machine that the
+     * session list needs before it draws a row, while this is state about one
+     * session that does not exist until a terminal is opened. See
+     * `SessionBarLink`, which also says why it holds one session rather than a
+     * table.
+     */
+    @ObservationIgnored
+    private(set) lazy var bar: SessionBarLink = SessionBarLink(wire: WireProxy { [weak self] message in
+        self?.transport?.send(message) ?? false
+    })
+
     private var bridges: [String: TerminalBridge] = [:]
     /// Confirmed by the host.
     private var attached: Set<String> = []
@@ -914,6 +930,45 @@ final class HostLink: Identifiable {
         }
     }
 
+    /**
+     * A message typed in chat mode, written into the session's own pty.
+     *
+     * Chat mode is a different *view* of one session, not a second channel, so
+     * this is the same door the keyboard uses and an answer typed here shows up
+     * in the terminal view as well. There is no second transport to keep in
+     * step and no message this app holds that the machine does not.
+     *
+     * ## Why it is two writes and not `text + "\r"`
+     *
+     * The CLI classifies each stdin chunk *before* it looks at the keys in it,
+     * and a chunk of 64 bytes or more is **pasted text**, where a carriage
+     * return is a newline rather than submit. Measured through a real pty
+     * against 2.1.228 by the desktop's own composer: 57 bytes in one write
+     * submits, 64 does not. A single write is therefore a send button that
+     * silently does nothing for every message longer than about half a line —
+     * the words appear in the agent's input box and sit there. So the return
+     * travels as its own write, after a gap; 30 ms was the measured floor and
+     * 50 leaves room for a slower machine while staying below anything a person
+     * notices. `src/renderer/chat/attach/mentions.ts` holds the measurement.
+     *
+     * ## And why a trailing space when there is an `@` in it
+     *
+     * A mention at the end of the line leaves the CLI's completion popup open,
+     * and the Enter that follows is swallowed by it — the popup accepts the
+     * highlighted suggestion and replaces the whole line with a bare path.
+     * Watched happen; the message was never sent. One trailing space closes it,
+     * and it is free, because the CLI trims the line before it stores it.
+     */
+    func sendChatMessage(_ text: String, into id: String) {
+        let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty, connection.isLive else { return }
+        sendInput(id, message.contains("@") ? message + " " : message)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            self?.sendInput(id, "\r")
+        }
+    }
+
     private func sendResize(_ id: String, cols: Int, rows: Int) {
         guard attached.contains(id), TerminalSize(cols: cols, rows: rows) != nil else { return }
         transport?.send(.resize(id: id, cols: cols, rows: rows))
@@ -952,12 +1007,26 @@ final class HostLink: Identifiable {
                 // drop because it happened; a countdown over a dead channel is a
                 // lie with a clock on it.
                 copilot.connectionLost()
+                /*
+                 * The figures go, the conversation stays.
+                 *
+                 * A ring and a context bar are claims about *now* and nothing
+                 * over a dead socket will correct them; the bubbles are things
+                 * that were said, which a dropped connection does not unsay.
+                 * `dropped()` is that split — the same one `CopilotLink` makes
+                 * between a countdown and a transcript.
+                 */
+                bar.dropped()
             }
             if state.isLive && !wasLive {
                 for id in wanted {
                     bridges[id]?.note("reconnected — replaying")
                     attach(id)
                 }
+                // Whatever the bar was showing was measured before the drop.
+                // The re-attach above replays the terminal; this re-asks the
+                // three questions behind the row over it.
+                if let id = bar.sessionID { bar.follow(id) }
             }
 
         case let .credential(stored):
@@ -1036,6 +1105,12 @@ final class HostLink: Identifiable {
              * capability list claims. See `CopilotConnection`.
              */
             copilot.welcomed(capabilities: capabilities, connection: copilotConnection)
+            // The same list, to the one other object that gates itself on it.
+            // Replaced rather than merged on every welcome, because a device
+            // that reconnects as a guest is handed a shorter one and a bar that
+            // kept yesterday's names would ask questions this socket will not
+            // answer.
+            bar.welcomed(capabilities: capabilities)
             // After `granted` is set, because the folders this asks about are
             // read from it — and on every welcome, because the desktop's
             // subscription belongs to the connection this welcome arrived on.
@@ -1138,6 +1213,16 @@ final class HostLink: Identifiable {
 
         case let .output(id, data, replay):
             bridges[id]?.feed(data, replay: replay)
+            /*
+             * The session is printing, so its context window is moving and its
+             * transcript is growing.
+             *
+             * Not the replay: a backlog is history arriving, not the agent
+             * writing, and asking after every frame of it would be one round
+             * trip per screenful of scrollback for a figure that was already
+             * true when the attach went out.
+             */
+            if !replay, id == bar.sessionID { bar.noteOutput() }
 
         case let .status(id, status):
             guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
@@ -1255,6 +1340,13 @@ final class HostLink: Identifiable {
 
         case let .copilotSettled(settled):
             copilot.apply(settled: settled)
+
+        case .usageReading, .accountState, .accountSwitched, .chatRows:
+            // Everything about which answer belongs to which question is the
+            // bar's, because `rid` is minted there. It drops an answer to a
+            // question it did not ask, and an answer about a session that is no
+            // longer on screen.
+            bar.receive(message)
 
         case .pong:
             break

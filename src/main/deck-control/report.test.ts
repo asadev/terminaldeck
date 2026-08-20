@@ -48,6 +48,7 @@ function view(over: Partial<SessionView> = {}): SessionView {
     title: 'api',
     provider: 'claude',
     status: 'working',
+    windows: [],
     statusSince: 10_000,
     createdAt: 1_000,
     exitCode: null,

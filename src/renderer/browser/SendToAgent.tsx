@@ -1,10 +1,36 @@
 import { useState } from 'react'
+import { pathForSession } from '../session-transfer'
 import type { AgentTarget } from './useAgentTarget'
 
 interface Props {
   agent: AgentTarget
-  /** Turn what was typed into the one line the agent receives. */
-  compose(instruction: string): string
+  /**
+   * Turn what was typed into the one line the agent receives.
+   *
+   * `handed` is the path the *chosen session's own machine* knows the attached
+   * file by, and it is empty for a sender with nothing attached. A composer must
+   * use it rather than the path it started from: they are the same string only
+   * when the session happens to be running on this computer, and the day they
+   * differ is the day this whole change is about. See {@link Props.attach}.
+   */
+  compose(instruction: string, handed: string): string
+  /**
+   * A file on **this** machine that has to reach the chosen session with it.
+   *
+   * Optional, and most senders have none — an inspected element and a recorded
+   * flow are text. A screenshot is not: it is a file in this computer's Pictures
+   * folder, and a session on a paired PC cannot open a path in it. Asad,
+   * 2026-08-20: *"it will send the path of my current PC instead of the server
+   * where actually session is running… so session will not be able to see the
+   * things that I have sent."*
+   *
+   * So it is handed over here, at the press, rather than composed into the
+   * message by the popup — because only at the press is it known **which**
+   * session was chosen, and the session is the only thing that decides whether
+   * anything has to cross a wire at all. `session-transfer.ts` owns that
+   * decision for every surface in the app; this is one of its callers.
+   */
+  attach?: { path: string }
   placeholder: string
   /** The word on the button before anything has been sent. */
   action: string
@@ -31,10 +57,19 @@ interface Props {
  * moment the field is touched again — a button that says Sent about a line
  * nobody has sent is the same lie as one that says nothing at all.
  */
-export function SendToAgent({ agent, compose, placeholder, action, onSent }: Props) {
+export function SendToAgent({ agent, compose, attach, placeholder, action, onSent }: Props) {
   const [instruction, setInstruction] = useState('')
   const [sent, setSent] = useState(false)
   const [sending, setSending] = useState(false)
+  /*
+   * What went wrong getting the attached file to the session's machine.
+   *
+   * Its own state rather than `agent.problem`, which belongs to the *send* and
+   * is cleared by it — a transfer that failed before any line was composed never
+   * reaches that code at all. Both are drawn in the same single slot below, so
+   * the popup still never shows two sentences.
+   */
+  const [trouble, setTrouble] = useState('')
 
   const blocked = agent.target === null
 
@@ -55,15 +90,41 @@ export function SendToAgent({ agent, compose, placeholder, action, onSent }: Pro
   const send = (): void => {
     if (blocked || sending) return
     setSending(true)
-    void agent
-      .send(compose(instruction))
-      .then((landed) => {
-        if (!landed) return
-        setInstruction('')
-        setSent(true)
-        onSent?.()
-      })
-      .finally(() => setSending(false))
+    setTrouble('')
+    /*
+     * The file first, then the line — and never the other way round.
+     *
+     * A message naming a path the session cannot open is worse than no message:
+     * the agent goes and looks, finds nothing, and reports a missing file to
+     * somebody who is looking straight at it on their own screen. So if the
+     * transfer refuses, nothing is sent and what was typed stays in the field.
+     *
+     * The button reads "Sending…" for the whole of it, which is also the only
+     * thing on screen about a transfer that may take a moment. That is a state,
+     * not a sentence about why a path is different from the one in the popup —
+     * the standing rule this round is no explanatory prose, and the transfer is
+     * meant to be invisible.
+     */
+    void (async (): Promise<void> => {
+      let handed = ''
+      if (attach) {
+        // The row the picker is set to *now*, which is what decides whether
+        // anything crosses a wire. Read at the press for the same reason
+        // `useAgentTarget` re-resolves there: the gap between rendering an
+        // enabled button and pressing it is where a choice changes.
+        const outcome = await pathForSession(agent.target, { path: attach.path })
+        if (!outcome.ok) {
+          setTrouble(outcome.message)
+          return
+        }
+        handed = outcome.path
+      }
+      const landed = await agent.send(compose(instruction, handed))
+      if (!landed) return
+      setInstruction('')
+      setSent(true)
+      onSent?.()
+    })().finally(() => setSending(false))
   }
 
   return (
@@ -100,6 +161,7 @@ export function SendToAgent({ agent, compose, placeholder, action, onSent }: Pro
         onChange={(event) => {
           setInstruction(event.target.value)
           setSent(false)
+          setTrouble('')
         }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter') return
@@ -130,9 +192,9 @@ export function SendToAgent({ agent, compose, placeholder, action, onSent }: Pro
         so that a future case where they could be does not stack two sentences
         under a 26rem popup.
       */}
-      {(blocked || agent.problem !== '') && (
+      {(blocked || trouble !== '' || agent.problem !== '') && (
         <p className="bw-send-reason" role="status">
-          {blocked ? agent.reason : agent.problem}
+          {blocked ? agent.reason : trouble !== '' ? trouble : agent.problem}
         </p>
       )}
     </div>

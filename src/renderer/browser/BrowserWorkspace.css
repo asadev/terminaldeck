@@ -931,27 +931,32 @@
   cursor: default;
 }
 
-/*
-  A row that is a choice plus the sentence about why it cannot be chosen.
+/* What a machine is offering at the end of its own row — a port count, or the
+   state that stops it offering anything. The same quiet grammar as the "port
+   only" tag on the start page: a small word at the end of a row, saying a
+   different thing.
 
-  Stacked rather than side by side: the sentence is a sentence — "that machine
-  has not approved this desktop yet" — and squeezing one into the right-hand
-  half of a 19rem menu row would set it four words to a line.
-*/
-.bw-menu-row-stacked {
-  flex-direction: column;
-  align-items: stretch;
-}
-
-/* How many ports that machine is offering, at the end of its own row. The same
-   quiet grammar as the "port only" tag on the start page: a small word at the
-   end of a row, saying a different thing. */
+   There was a stacked variant of `.bw-menu-row` above this, for a row that
+   carried a *sentence* about why it could not be chosen. The sentence is gone
+   and so is the variant. */
 .bw-menu-count {
   margin-left: auto;
+  /* Never the part that gives way. The row's height is fixed, so a label that
+     wrapped would be a label cut in half; the machine's name ellipsises
+     instead, and a truncated name is still a name. */
+  flex-shrink: 0;
   padding-left: var(--sp-2);
   color: var(--text-muted);
   font-size: var(--t-footnote);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The machine's own name, which is the part with room to lose. */
+.bw-menu-machine {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 
 /* A fixed column so the names line up whether or not a row is the active one. A

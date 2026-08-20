@@ -865,10 +865,51 @@ describe('the browser panel is hidden per tab, parked per dialog', () => {
   it('decides visibility from the tab alone, for the panel filling the window', () => {
     const visible = propExpression(flat, 'visible')
     expect(visible, '<BrowserWorkspace> has no visible={...}').not.toBeNull()
-    expect(visible).toMatch(/activeTab/)
+    expect(visible).toMatch(/visiblePageId/)
     expect(visible, 'a dialog is not a tab switch — that belongs in parkPage').not.toMatch(
       /Modal|Open\b/,
     )
+  })
+
+  /**
+   * The panel filling the window is mounted **outside** `mainView`, and every
+   * view that used to take the frame by unmounting it has to be named in
+   * `visiblePageId` instead.
+   *
+   * This is the price of the 2026-08-20 fix for *"if this link is loaded, page
+   * is loaded, I go to session. If I come back, this is all gone, so it
+   * refreshes."* The pages stopped being destroyed when something covered them,
+   * which means nothing hides them for free any more: miss one of these and a
+   * live web page paints over Files, or over a session running on his PC.
+   */
+  it('names every view that covers a page, now that covering it no longer unmounts it', () => {
+    const at = app.indexOf('const visiblePageId =')
+    expect(at, 'App.tsx has no visiblePageId').toBeGreaterThan(-1)
+    const rule = app.slice(at, app.indexOf('\n\n', at))
+    expect(rule).toMatch(/activeTab/)
+    for (const cover of [
+      'showingPanel',
+      'splitting',
+      'swarm',
+      'openMachineSession',
+      'openServerSession',
+      'copilotPending',
+    ]) {
+      expect(rule, `${cover} covers the window and must hide the page`).toContain(cover)
+    }
+  })
+
+  it('mounts the pages beside the pane, not inside the view that draws one thing', () => {
+    // The mount has to be outside `mainView` or the fix is undone: that function
+    // returns early for a remote session, a server shell, a sidebar view, a
+    // split and the swarm grid, and a `BrowserWorkspace` that unmounts closes
+    // its `WebContentsView` for real. Measured: with example.com loaded, opening
+    // Files took the guest target out of the browser's own target list.
+    const start = app.indexOf('const mainView = ')
+    const end = app.indexOf('\n  const splitHeldTabIds')
+    expect(start, 'App.tsx has no mainView').toBeGreaterThan(-1)
+    expect(end, 'App.tsx has no splitHeldTabIds').toBeGreaterThan(start)
+    expect(app.slice(start, end)).not.toContain('<BrowserWorkspace\n              key={tab.id}')
   })
 
   it('decides it from the pane, for the panel inside one', () => {

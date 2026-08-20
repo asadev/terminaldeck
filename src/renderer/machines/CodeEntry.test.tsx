@@ -170,7 +170,11 @@ describe('the field itself', () => {
   it('says so when the build has no machine channels at all', () => {
     const html = render({}, false)
     expect(html).toContain('cannot pair with another desktop')
-    expect(html).toContain('not in its preload')
+    // A clause about what is missing from the preload used to follow it. The
+    // notice is for the one person who can act on it, and "restart the app" is
+    // the whole of what they can do.
+    expect(html).not.toContain('not in its preload')
+    expect(html).toContain('Restart the app')
     expect(html).toMatch(/<input[^>]*disabled/)
   })
 

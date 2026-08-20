@@ -423,6 +423,61 @@ enum WireCodec {
             }
             return .ok(.copilotSettled(settlement), activity: [:])
 
+        /*
+         * The session bar and its conversation. Three answers, one rule: a
+         * figure this build cannot read is an **absence**, drawn as no chip at
+         * all, never as zero and never as a sentence explaining the gap.
+         */
+
+        case "usage.reading":
+            guard let rid = string(object["rid"]),
+                  let id = string(object["id"]),
+                  let want = string(object["want"]).flatMap({ UsageWant(rawValue: $0) }) else {
+                return .failed(reason: "usage.reading without a request, session and reading")
+            }
+            // `answer.reading` is the far machine's own record and may be JSON
+            // null, which is "there is no reading" rather than an empty one.
+            let answer = object["answer"] as? [String: Any]
+            let reading = answer?["reading"]
+            return .ok(.usageReading(rid: rid, id: id, want: want,
+                                     figures: usageFigures(want: want,
+                                                           reading: reading is NSNull ? nil : reading)),
+                       activity: [:])
+
+        case "account.state":
+            guard let rid = string(object["rid"]), let id = string(object["id"]) else {
+                return .failed(reason: "account.state without a request and session")
+            }
+            let current = object["current"]
+            return .ok(.accountState(rid: rid, id: id,
+                                     current: current is NSNull ? nil : account(current),
+                                     accounts: accounts(object["accounts"])),
+                       activity: [:])
+
+        case "account.switched":
+            guard let rid = string(object["rid"]), let id = string(object["id"]) else {
+                return .failed(reason: "account.switched without a request and session")
+            }
+            // The far end's `message` is read and dropped on purpose. Whether it
+            // took is what this client acts on, and the sentence would be the
+            // one piece of prose on a bar that has none.
+            return .ok(.accountSwitched(rid: rid, id: id, ok: object["ok"] as? Bool == true), activity: [:])
+
+        case "chat.rows":
+            guard let rid = string(object["rid"]), let id = string(object["id"]),
+                  let rows = object["rows"] as? [Any] else {
+                return .failed(reason: "chat.rows without a request, session and rows")
+            }
+            // An empty answer is a real frame — it is what a session with a
+            // transcript and no turns in it yet returns — so it is not refused.
+            // One malformed bubble is dropped rather than taking the read with
+            // it, for the reason one bad session row does not discard a list.
+            return .ok(.chatRows(rid: rid, id: id,
+                                 rows: rows.compactMap { copilotMessage($0) },
+                                 reset: object["reset"] as? Bool == true,
+                                 found: object["found"] as? Bool == true),
+                       activity: [:])
+
         default:
             return .failed(reason: "unknown message type")
         }
@@ -733,6 +788,15 @@ enum WireCodec {
             object = ["t": "copilot.cancel"]
         case .copilotStop:
             object = ["t": "copilot.stop"]
+
+        case let .usageRead(rid, id, want, force):
+            object = ["t": "usage.read", "rid": rid, "id": id, "want": want.rawValue, "force": force]
+        case let .accountRead(rid, id):
+            object = ["t": "account.read", "rid": rid, "id": id]
+        case let .accountSwitch(rid, id, accountId):
+            object = ["t": "account.switch", "rid": rid, "id": id, "accountId": accountId]
+        case let .chatRead(rid, id, tail):
+            object = ["t": "chat.read", "rid": rid, "id": id, "tail": tail]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: []),
               let text = String(data: data, encoding: .utf8) else {

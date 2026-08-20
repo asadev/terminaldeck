@@ -67,8 +67,12 @@ describe('the debugger channel is not reachable from anywhere else', () => {
     const driver = source('browser-driver.ts')
     const runs = driver.match(/executeJavaScriptInIsolatedWorld\(/g) ?? []
     expect(runs).toHaveLength(1)
-    const runBody = driver.slice(driver.indexOf('private async run<T>'), driver.indexOf('async outline('))
-    expect(runBody).toContain("this.state !== 'agent'")
+    // Ends at `hold`, the next member, so the assertion cannot be satisfied by
+    // a check belonging to some later method. The state is read off the slot
+    // rather than the driver because a driven page is now one of several, and
+    // the baton is a fact about a document, not about the driver.
+    const runBody = driver.slice(driver.indexOf('private async run<T>'), driver.indexOf('private async hold('))
+    expect(runBody).toContain("slot.state !== 'agent'")
   })
 
   it('has no Electron import in the module that makes the decisions', () => {
