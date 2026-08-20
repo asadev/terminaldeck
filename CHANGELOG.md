@@ -10,6 +10,55 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **A device you grant remote access to can be given all your running sessions,
+  or only the ones you tick.** Access was granted per device *by folder*, and a
+  folder grant hands over whatever happens to be running in it — including
+  sessions you started later and never thought about. There is now an **All /
+  Selected** choice per device and a tick per session. A deselected session
+  refuses `attach`, `input` and `resize`, not merely listing: a list that hides a
+  keyboard you can still type into is worse than no feature at all. Unticking one
+  drops it off a connected phone immediately rather than at its next connect, and
+  a session started *after* you chose Selected is not shared until you tick it —
+  everything in this subsystem fails closed, and the opposite would silently hand
+  a phone a new keyboard.
+- **The phone stops being a terminal with a keyboard bolted on.** It has a chat
+  view, a context bar, a usage ring and the account each session runs as. None of
+  that existed on the wire, so the protocol grew two capabilities — `chat` and
+  `account` — to carry them.
+
+### Fixed
+
+- **Codex sessions booted with no idea they were inside Terminal Deck.** Claude
+  and Gemini were answered with the app's context; every `codex` hook event
+  returned a byte-empty 204. A Codex session could not tell you what was on your
+  own screen. It is also delivered mid-session now: attach a browser window to a
+  running session and the agent's next tool call carries it, rather than the
+  context waiting for a conversation that already started.
+- **A browser profile row showed a name and nothing else.** Only the *active*
+  profile could report what it held, because the cookie lookup resolved whichever
+  partition happened to be on. Every row now reports its own sites and logins, and
+  clearing one site no longer empties the whole jar.
+- **`browser:1787199912` drawn on a tab.** Shortening an id split on `-` and took
+  the first piece — right for a session's UUID, wrong for a browser window, whose
+  id has no hyphens at all, so the "shortened" form was the whole string. A
+  browser window has a human name — B1, B2 — and never reaches that fallback now.
+- **A crowded tab bar silently dropped B2** and showed B1 alone while the sidebar
+  showed both. If it does not fit, it says so.
+- **Explanations removed rather than reworded**, on every surface swept: the
+  notice that spent a full sentence saying a page could not be moved, the folded
+  session controls that narrated what Model and Effort are, the settings pane that
+  listed three agent versions and a two-line caveat nobody asked for. Where an
+  explanation is genuinely needed it is behind an (i).
+- **Switching into an account that is not signed in** replaced your scrollback
+  with the CLI's first-run onboarding, with no error and no way back. Those rows
+  are inert now.
+- **The copilot page described the wrong machine.** Choosing a remote machine left
+  the window bar's Restart, account and Model chips pointing at the local copilot —
+  so Restart on that screen restarted something else.
+
+
 ## [0.7.0] — 2026-08-20
 
 ### Added
