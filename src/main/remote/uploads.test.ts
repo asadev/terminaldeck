@@ -84,8 +84,38 @@ async function upload(id: string, name: string, bytes: Buffer, chunk = 8): Promi
 }
 
 /** A short settle for the cases that are asserting an *absence*. */
+/**
+ * Let the work in flight finish.
+ *
+ * A fixed budget of turns, which is fine for handing control back to a promise
+ * chain and is *not* fine as the only thing standing between a filesystem
+ * operation and an assertion about its result. This spent 40ms, which is
+ * generous on this laptop and not generous on a loaded Windows runner: the
+ * over-size test below failed there on 2026-08-20 — `upload.failed` simply had
+ * not been emitted yet — while its neighbour passed for no better reason than
+ * having three of these instead of two.
+ *
+ * So `settle` still exists for yielding, and anything that asserts on a frame
+ * waits for that frame instead. See {@link awaits}.
+ */
 const settle = async (): Promise<void> => {
   for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+}
+
+/**
+ * Wait until a frame of this kind has been sent, or give up loudly.
+ *
+ * Returns nothing and asserts nothing — the test that called it does that, so a
+ * failure still reads as the assertion it was always about rather than as a
+ * timeout. The cap is two seconds, which is far longer than any of these take
+ * and short enough that a genuinely absent frame still fails the run rather
+ * than hanging it.
+ */
+const awaits = async <T extends ServerMessage['t']>(kind: T): Promise<void> => {
+  for (let turn = 0; turn < 200; turn += 1) {
+    if (of(kind).length > 0) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
 }
 
 describe('a file that arrives', () => {
@@ -105,6 +135,7 @@ describe('a file that arrives', () => {
     await upload('up-1', 'a.bin', bytes)
     // Recomputed from the file on disk. A `done` that echoed the phone's own
     // digest back would pass this test while proving nothing.
+    await awaits('upload.done')
     expect(last('upload.done')?.sha256).toBe(sha(readFileSync(join(dir, 'a.bin'))))
   })
 
@@ -135,6 +166,7 @@ describe('a file that arrives', () => {
     expect(readFileSync(join(dir, 'photo.jpg'))).toEqual(first)
     expect(readFileSync(join(dir, 'photo (2).jpg'))).toEqual(second)
     // The phone types *this* path, so it has to be the one that was written.
+    await awaits('upload.done')
     expect(last('upload.done')?.path).toBe(join(dir, 'photo (2).jpg'))
   })
 
@@ -155,6 +187,7 @@ describe('a file that does not arrive', () => {
     desk.handle({ t: 'upload.cancel', id: 'up-1' })
     await settle()
 
+    await awaits('upload.failed')
     expect(last('upload.failed')?.message).toMatch(/cancel/i)
     expect(readdirSync(dir), 'not even a .part file').toEqual([])
   })
@@ -180,6 +213,7 @@ describe('a file that does not arrive', () => {
     desk.handle({ t: 'upload.end', id: 'up-1', sha256: 'f'.repeat(64) })
     await settle()
 
+    await awaits('upload.failed')
     expect(last('upload.failed')?.message).toMatch(/corrupt/i)
     expect(of('upload.done')).toHaveLength(0)
     expect(readdirSync(dir)).toEqual([])
@@ -191,6 +225,7 @@ describe('a file that does not arrive', () => {
     desk.handle({ t: 'upload.data', id: 'up-1', data: randomBytes(11).toString('base64') })
     await settle()
 
+    await awaits('upload.failed')
     expect(last('upload.failed')?.message).toMatch(/more bytes/i)
     expect(readdirSync(dir)).toEqual([])
   })
@@ -203,6 +238,7 @@ describe('a file that does not arrive', () => {
     desk.handle({ t: 'upload.end', id: 'up-1', sha256: 'a'.repeat(64) })
     await settle()
 
+    await awaits('upload.failed')
     expect(last('upload.failed')?.message).toContain('40 of 100')
     expect(readdirSync(dir)).toEqual([])
   })
@@ -213,6 +249,7 @@ describe('a file that does not arrive', () => {
     desk.handle({ t: 'upload.begin', id: 'up-2', name: 'b.bin', size: 10 })
     await settle()
 
+    await awaits('upload.failed')
     const failure = last('upload.failed')
     expect(failure?.id, 'the refusal names the upload that was refused').toBe('up-2')
     expect(failure?.message).toMatch(/already sending/i)
@@ -238,6 +275,7 @@ describe('a file that does not arrive', () => {
     desk.handle({ t: 'upload.end', id: 'ghost', sha256: 'a'.repeat(64) })
     await settle()
     // Silence here is a progress bar on somebody's phone that never moves again.
+    await awaits('upload.failed')
     expect(last('upload.failed')?.id).toBe('ghost')
   })
 })
