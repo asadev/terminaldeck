@@ -174,44 +174,21 @@ export function resolveOmnibox(input: string, searchTemplate = DEFAULT_SEARCH): 
   return searchFor(trimmed, searchTemplate)
 }
 
-/* -------------------------------------------------------------- indicator -- */
-
-export type Security = 'none' | 'secure' | 'local' | 'insecure'
-
-/** Hosts where plain http is normal rather than a warning. */
-const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)$/i
-
-/**
- * What the padlock should say.
+/*
+ * There is no security indicator here any more, and that is deliberate.
  *
- * `secure` means https and nothing more — Chromium accepted the certificate,
- * and this says that rather than claiming anything about the site. A dev server
- * on `http://localhost` is not "not secure", it is local, and an indicator that
- * cries wolf there gets ignored on the site where it matters.
+ * `securityOf`/`securityLabel` used to classify the page's URL so the address
+ * field could draw a padlock, a monitor or a warning triangle beside it. He
+ * removed the whole indicator by hand:
+ *
+ *   > *"since we already have here a selection, why do we show inside the link
+ *   > bar also local? … It doesn't make any sense to keep in both side the same
+ *   > thing. So from inside the link bar, it should be only the link, not this
+ *   > thing."*
+ *
+ * The classifier went with the drawing rather than being left behind as a
+ * tested, exported, unreferenced function — which is the shape a deleted UI
+ * element comes back from. What it was reading is still visible: the field
+ * prints the whole URL, scheme included, and the machine picker beside it names
+ * the machine.
  */
-export function securityOf(url: string): Security {
-  if (!url) return 'none'
-  try {
-    const parsed = new URL(url)
-    if (parsed.protocol === 'https:') return 'secure'
-    if (parsed.protocol !== 'http:') return 'none'
-    return LOOPBACK.test(parsed.hostname) || parsed.hostname.endsWith('.localhost')
-      ? 'local'
-      : 'insecure'
-  } catch {
-    return 'none'
-  }
-}
-
-export function securityLabel(security: Security): string {
-  switch (security) {
-    case 'secure':
-      return 'HTTPS'
-    case 'local':
-      return 'Local'
-    case 'insecure':
-      return 'Not private'
-    case 'none':
-      return ''
-  }
-}

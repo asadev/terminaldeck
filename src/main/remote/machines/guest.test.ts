@@ -126,6 +126,15 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
+/** Wait until the link has dialled for the nth time. */
+async function waitForFake(rig: ReturnType<typeof harness>, index: number): Promise<void> {
+  const deadline = Date.now() + 2000
+  while (rig.fakes.length <= index) {
+    if (Date.now() > deadline) throw new Error(`no dial ${index + 1} within 2s`)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 describe('coming up', () => {
   it('says hello with the credential and nothing else', async () => {
     const { link, rig } = build()
@@ -206,6 +215,48 @@ describe('being refused', () => {
     expect(link.state().state).toBe('awaiting-approval')
     expect(link.state().reason).toMatch(/approve/i)
     link.disconnect()
+  })
+
+  /**
+   * The wait between dials stays flat while it is a person being asked, and it
+   * is the whole of the seven seconds Asad sat through after pressing *Let it
+   * in*. By the fourth refusal the exponential curve puts the next dial eight to
+   * sixteen seconds out, so the press appeared to do nothing — and the curve is
+   * an answer to a machine that is off, not to a finger on a button.
+   */
+  it('does not back off while it is waiting for a person to approve it', async () => {
+    const rig = harness()
+    const states: MachineLinkState[] = []
+    const link = createMachineLink({
+      id: 'machine-1',
+      secrets: secrets(),
+      onState: (state) => states.push(state),
+      onOutput: () => {},
+      onWelcome: () => {},
+      dial: rig.dial,
+      // A clock that does not move, so `retryAt` *is* the delay.
+      now: () => 0,
+      baseBackoffMs: 20,
+      maxBackoffMs: 5000,
+    })
+
+    link.connect()
+    for (let round = 0; round < 4; round += 1) {
+      await waitForFake(rig, round)
+      rig.fakes[round].say({
+        t: 'error',
+        code: 'unauthorized',
+        message: 'This device is waiting to be approved.',
+      })
+    }
+    link.disconnect()
+
+    const waits = states.map((state) => state.retryAt).filter((at): at is number => at !== null)
+    expect(waits.length).toBeGreaterThanOrEqual(3)
+    // Base is 20 and the jitter runs across the top half of the ceiling, so the
+    // flat schedule can only ever produce 20…40. Exponential would have reached
+    // 160 by the fourth.
+    for (const wait of waits) expect(wait).toBeLessThanOrEqual(40)
   })
 
   it('calls the same refusal an error once that machine has let it in before', async () => {

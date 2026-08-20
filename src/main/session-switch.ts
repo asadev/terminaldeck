@@ -297,6 +297,50 @@ export function startFailed(account: string, said: string | null): string {
   )
 }
 
+/* ------------------------------------------- carrying the conversation -- */
+
+/**
+ * The conversation the replacement is told to continue, by id — or null to let
+ * `--continue` mean what it has always meant.
+ *
+ * ## Why an id rather than the flag
+ *
+ * `--continue` names no conversation. It means *the most recent one in this
+ * folder*, resolved by the CLI at spawn, and on a switch that is a guess which
+ * is right almost always: the session being replaced was written to a moment
+ * ago, so it is the folder's newest. Almost always is not what the sheet says
+ * though. `follows` is a promise about **the conversation on screen**, and this
+ * app knows which one that is — it put the id on the outgoing process's own
+ * command line, and `SessionMeta.agentSessionId` is that id.
+ *
+ * ## Three conditions, and each one is a way of not lying
+ *
+ *  - The plan has to say `follows`. `theirs` is the deliberate case where the
+ *    two accounts keep separate stores and the replacement picks up the *other*
+ *    account's conversation in the same folder; naming this one there would
+ *    reach into a store the plan has just told somebody it would not.
+ *  - There has to be an id. A session this app did not start, or one that
+ *    resumed rather than being named, has none — the honest answer then is the
+ *    folder's newest, which is what it would have got anyway.
+ *  - The transcript has to be readable from the account being switched *to*.
+ *    `--resume` against an id the target's store cannot see is a replacement
+ *    that prints an error and exits, and the switch turns into "nothing
+ *    happened" for the sake of a precision nobody asked for. Falling back
+ *    leaves the behaviour exactly as it was.
+ */
+export function conversationToCarry(input: {
+  plan: SwitchPlan
+  /** The id this app put on the outgoing process, when it put one there. */
+  agentSessionId: string | null | undefined
+  /** Is that transcript readable from the store the replacement will run against? */
+  readableInTarget: boolean
+}): string | null {
+  if (!input.plan.resume || input.plan.conversation !== 'follows') return null
+  const id = input.agentSessionId
+  if (typeof id !== 'string' || id === '') return null
+  return input.readableInTarget ? id : null
+}
+
 /* --------------------------------------------------------------- deciding -- */
 
 /** What this app calls an agent when explaining something about it. */

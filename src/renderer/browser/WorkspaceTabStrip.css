@@ -96,21 +96,44 @@
 
     It used to be a *floor* with a 280px ceiling above it, and a tab took
     whatever it could get in between. That is what produced the row he stopped
-    on: measured off the frame of his recording, six tabs at 155, 110, 110, 140,
-    178 and 109 pixels. *"session tabs and browser tabs should be the same size.
-    I see sometimes inconsistency. Some of them are more wide, some of them are
-    less wide. They should be all at the same size."*
+    on. *"session tabs and browser tabs should be the same size. I see sometimes
+    inconsistency. Some of them are more wide, some of them are less wide. They
+    should be all at the same size."*
 
     So it is a width now, not a range — the floor and the ceiling are the same
     number, and every tab is that number until the bar runs out of room, at
     which point they all give together. Which number is his too, pointed at on
-    screen: *"this one is the perfect size, the one B1 and B2, this tab."* That
-    is the 178px tab in the list above — the one carrying an account, a status
-    dot, a long agent name and two binding chips, i.e. the fullest a tab in this
-    app gets. Five times the tab's own height is 180px, which is that width to
-    within the two pixels a JPEG can be read to, and it keeps the rule the
-    height already follows: a tab is one number tall and a ratio of it wide, so
-    neither has to be re-derived if the bar's height ever changes.
+    screen: *"this one is the perfect size, the one with B1 and B2, this tab."*
+
+    ### Reading the number off his frame, and the scale error that got it wrong
+
+    The first pass at this shipped 180px, and 180px is 22% narrower than the tab
+    he pointed at. The mistake was not the arithmetic, it was the ruler: the
+    frame was read as though it were a 2.6× capture when it is a plain 2×, so
+    every width came out short by the same factor and a ratio was then fitted to
+    the short numbers.
+
+    The scale is checkable twice over, which is why it should never have been
+    guessed. `f_1500.jpg` is 3600 × 2122, i.e. an 1800 × 1061 window at 2×. And
+    the version in the recording still had the old *floor* at
+    `--strip-tab-h * 4` = 144px — three of his six tabs are exactly 288 image
+    pixels wide, which is that floor at 2× and nothing else.
+
+    On that scale his six tabs are 201.5, 144, 144, 182.5, **232** and 144 CSS
+    pixels (edges taken between the 16-image-pixel `--sp-2` gaps at y = 88).
+    232 is the active tab reading `Claude Code v2.1.236 [B1][B2] ✕` — the one
+    carrying an account, a status dot, a long agent name and two binding chips,
+    i.e. the fullest a tab in this app gets, and the one he named.
+
+    So 232px, written as a pixel rather than as a multiple of the height. The
+    height is a proportion of the bar because it has to sit inside it; this is a
+    *measurement of content* — the width at which a full tab stops truncating —
+    and dressing it up as 6.44 × the height would be the same false derivation
+    that produced 180 in the first place.
+
+    `STRIP_LABEL_BUDGET` moves with it — a character budget cut for a 220px cap
+    leaves a 232px tab printing 'Fix the par…the reader' with 77px of empty
+    space beside it, which is the ragged row arriving from the other direction.
 
     ## `--strip-tab-min`, and why the floor is a different number now
 
@@ -126,12 +149,22 @@
     still has to read. Five characters is 33 of those, and 110 fits inside 126
     with room to spare. Set the floor any lower and the furniture stops fitting:
     the children keep their own minimums and spill out over the neighbouring
-    tab, which is a worse-looking failure than a rail that scrolls. The crowded
-    frame in his recording sat at 109px, which is exactly where that spill
-    starts — and it is visible in it, as `B1`/`B2` sitting on top of a ✕.
+    tab, which is a worse-looking failure than a rail that scrolls. His own
+    crowded frame sat at 144px, and the spill is already visible in it as
+    `B1`/`B2` riding up against a ✕ — so 126 is the last width that still holds
+    together, not a comfortable one.
+
+    It stays at 126 now that the ceiling is 232 rather than 180. The floor is
+    about what fits inside a tab, which has not changed; what the wider ceiling
+    changes is *when* the giving starts — six tabs hold their full width down to
+    a 1526px window where they used to hold to 1214, measured by bisection in
+    `.harness/strip.html?tabs=6` — and the giving is the behaviour he asked for
+    either way: *"whenever we start new, these will become smaller."* At eleven
+    tabs in a 1440px window every tab is still 126.0 and the rail scrolls, which
+    is the same place it landed before.
   */
   --strip-tab-h: calc(var(--toolbar-h) - var(--sp-3));
-  --strip-tab-w: calc(var(--strip-tab-h) * 5);
+  --strip-tab-w: 232px;
   --strip-tab-min: calc(var(--strip-tab-h) * 3.5);
   --strip-flare: var(--radius-sm);
   background-color: var(--material-bg);
@@ -220,16 +253,16 @@
     the stylesheet never wrote, on their parent, two rules up.
 
     It matters more since the tabs became one fixed width: without it every tab
-    sits at 180px and the rail scrolls at four of them, which is the row he
-    complained about arriving from the opposite direction.
+    sits at its full `--strip-tab-w` and the rail scrolls early, which is the
+    row he complained about arriving from the opposite direction.
 
     ## And `flex: 1`, which is what actually hands the tabs their width
 
     This row is `flex: 0 1 auto` by default, so its base size is its
     **max-content** — and a flex item's max-content contribution, when it cannot
     grow, is `min(its content size, its flex base size)`. So with tabs asking
-    for 180px and holding words worth 134, this row asked its parent for 134 per
-    tab and the tabs got exactly what the row asked for. Measured in the
+    for their basis and holding words worth 134, this row asked its parent for
+    134 per tab and the tabs got exactly what the row asked for. Measured in the
     harness: four tabs at 134.3px, six at 145.1px — all equal, none of them the
     width anybody chose, and *wider with more tabs open*, which is the giveaway
     that content and not the basis was doing the sizing.
@@ -360,8 +393,8 @@
     basis on every tab, which is what makes them equal: flexbox distributes both
     growth and shrinkage in proportion to the basis, so identical bases shrink
     to identical widths. A tab sized by its content — which is what `auto` gave
-    it, and what the row in his recording was doing — is 110px on "Session 3"
-    and 178px on an agent name with two chips beside it, and no amount of
+    it, and what the row in his recording was doing — is 144px on "Session 3"
+    and 232px on an agent name with two chips beside it, and no amount of
     min/max around that makes the two agree.
 
     **`flex-grow: 0`**, and this is the one that was got wrong first. With grow
@@ -370,7 +403,7 @@
     max-content contribution is derived from its **content**, not from its
     basis, so `.strip-list` asked its parent for the width of the words inside
     the tabs and the basis never got to be the width of anything. Grow at 0
-    makes the contribution the basis itself, and four tabs sit at 180px.
+    makes the contribution the basis itself, and four tabs sit at the basis.
 
     **`max-width`** at the same number is then belt and braces, and cheap: it
     stops any future `flex-grow` from stretching four tabs across a 1600px
@@ -385,8 +418,8 @@
     The shrink factor here is only *permission* to give room back, and the
     parent has to be willing to ask for it: `min-width: 0` on `.strip-list` is
     what makes the paragraph above true, so the two rules move together. Take it
-    off and every tab sits at 180px and the rail scrolls at four of them.
-    `finish.test.ts` fails if it goes.
+    off and every tab sits at its full `--strip-tab-w` and the rail scrolls
+    early. `finish.test.ts` fails if it goes.
   */
   flex: 0 1 var(--strip-tab-w);
   min-width: var(--strip-tab-min);
@@ -646,8 +679,8 @@
   *"The close button on the most right side of the pill, not next to the text —
   it should be just at the end of the pill inside."* The ✕ is the last child of
   the tab, so where it lands is decided by how much of the tab everything before
-  it uses up — and before this, nothing in a tab grew. A tab is at least 144px
-  wide whatever is written on it (see `--strip-tab-w`), so on "Session 1" the
+  it uses up — and before this, nothing in a tab grew. A tab is `--strip-tab-w`
+  wide whatever is written on it, so on "Session 1" the
   content ran out 30 pixels early and the ✕ stopped there: measured at 30.6px in
   from the tab's right edge on an unselected tab and 29.0px on the selected one,
   because its label is `--w-medium` and a pixel and a half wider. Two identical
@@ -724,7 +757,7 @@
 
      Five characters rather than the rail's eight, and the difference is
      arithmetic rather than a second opinion about legibility: a tab is now a
-     fixed 180px that gives down to 126 (see `--strip-tab-min`), and 8ch of name
+     fixed 232px that gives down to 126 (see `--strip-tab-min`), and 8ch of name
      plus a chip plus a ✕ does not fit in 126. The rail's rows have a whole
      panel's width and no such collision, so `.sb-label` keeps its eight. */
   flex: 0 1 auto;

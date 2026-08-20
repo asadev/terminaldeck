@@ -79,9 +79,16 @@ describe('the control is called Delete wherever it is spelled', () => {
     expect(restRule).toContain('color: var(--color-critical)')
 
     const hover = css.slice(css.indexOf('.modal-btn.danger:hover'))
-    const hoverRule = hover.slice(0, hover.indexOf('}'))
-    expect(hoverRule).toContain('background: var(--color-critical)')
-    expect(hoverRule).toContain('color: var(--text-onaccent)')
+    // Declarations only. The rule carries a comment naming the token this state
+    // used to use, and a sweep that reads comments as code would fail on the
+    // note explaining the fix.
+    const hoverRule = hover.slice(0, hover.indexOf('}')).replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(hoverRule).toContain('background: var(--critical-fill)')
+    // White in **both** appearances. `--text-onaccent` is not: it is near-black
+    // in the dark theme, because it follows a fill that white cannot be read
+    // on, and using it here rendered a coral button with black letters.
+    expect(hoverRule).toContain('color: var(--critical-fill-ink)')
+    expect(hoverRule).not.toContain('--text-onaccent')
     // A keyboard reaches the same state a pointer does.
     expect(css).toContain('.modal-btn.danger:focus-visible:not(:disabled)')
   })

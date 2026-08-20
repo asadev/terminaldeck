@@ -156,6 +156,21 @@
   --color-critical: #bd3a2c;
   --color-positive: #19714a;
 
+  /* The destructive button's *fill*, and the ink that sits on it.
+
+     Two tokens rather than reuse, because `--color-critical` has to be two
+     incompatible things: readable **as text** on this theme's surfaces, and
+     dark enough to carry **white** underneath a pointer. In the light theme one
+     value does both and these are that value; in the dark theme it cannot, and
+     that is the whole reason the pair exists — see the dark block.
+
+     Asad said the pointer state twice and both times the same way: *"when I
+     hover on the delete it will have the white text and red color"*, and
+     *"background should be red and text should be white"*. White is the ink, so
+     the fill is whatever red carries it. */
+  --critical-fill: #bd3a2c;
+  --critical-fill-ink: #ffffff;
+
   /*
      The selected tab — and, through it, every band that belongs to the thing
      that tab opened.
@@ -528,6 +543,26 @@
   --color-warning: #ddb04a;
   --color-critical: #ff6f60;
   --color-positive: #5fbf95;
+
+  /* The destructive fill, and why it is not `--color-critical` here.
+
+     `--color-critical` in this theme is a light coral, chosen so the word
+     `Delete` can be *read* on a dark panel. White on that coral measures
+     2.7:1 — so hovering the button either kept the red and turned the label
+     near-black, which is what shipped and is not what he asked for, or kept
+     white and made it unreadable.
+
+     Neither, then: the fill is its own colour. #cf3d2c is the same red the
+     light theme fills with, opened up one step so it still reads as a lit
+     shape against a dark panel — 3.6:1 on the canvas — and it carries white at
+     4.8:1. So the pointer state is exactly the sentence he said twice: red
+     background, white text, in both appearances.
+
+     The *rest* state is unchanged and still `--color-critical`: there the word
+     is ink on the panel, not on a fill, and this red would be too dark to read
+     there. Two states, two jobs, two colours. */
+  --critical-fill: #cf3d2c;
+  --critical-fill-ink: #ffffff;
 
   /* The surface the selected tab opens onto — see the light theme's note for
      what reads it and why. Here it is the canvas, the terminal's paper and the

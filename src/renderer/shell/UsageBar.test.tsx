@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { footNote, nextPanelState, opensPlan, planStatus, retryOffered, UsageBarView } from './UsageBar'
+import { nextPanelState, opensPlan, panelNote, planStatus, retryOffered, UsageBarView } from './UsageBar'
 import {
   contextFigure,
   contextLevel,
@@ -552,29 +552,69 @@ describe('opening the dropdown is the refresh, and nothing else is', () => {
     expect(ipc).not.toContain('accountHasLiveReading')
   })
 
-  it('has no paragraph inside the panel explaining how it fetches', () => {
+  it('has no paragraph inside the panel at all — every state, including the empty one', () => {
     /*
-     * *"i dont want this inside"*, quoted back word for word. Every clause of it
-     * is true and was expensive to establish, and none of it changes what a
-     * reader would do — each row already says when it was read. It moved to the
-     * call it describes, which is where the next person to change the mechanism
-     * will look.
+     * Asad, 2026-08-20, looking at this exact cluster: *"I said to you, don't
+     * put any single statement in anywhere. Everywhere you are putting a lot of
+     * statements… We are not making this for the dumb people."*
+     *
+     * The review before this one deleted one line out of this panel and left
+     * nine behind it: an empty-state paragraph, a running line, a failure line,
+     * a Codex provenance line, and two states that stacked two paragraphs each.
+     * The default state of a freshly opened session was one of them — so the
+     * first thing this panel ever showed anybody was a paragraph.
+     *
+     * Every element that could hold prose is named here, so the habit cannot
+     * come back under a new class name.
      */
-    // The literal, not the prose: the comment below `footNote` quotes the
-    // deleted paragraph on purpose, so what is asserted is that no string
-    // literal in this file still puts it on screen.
+    for (const gone of ['ub-empty', 'ub-running', 'ub-failed', 'ub-foot', 'footNote']) {
+      expect(SOURCE, `${gone} puts a sentence back inside the panel`).not.toContain(gone)
+    }
     expect(SOURCE).not.toContain("'Fetched by Claude Code itself")
     const hook = readFileSync(join(__dirname, 'useUsageBar.ts'), 'utf8')
     expect(hook).toContain('no session is typed into')
     expect(hook).toContain('Opening the panel is what asks, so there is nothing to press')
-    // The ordinary state prints nothing at all now; the two that have stopped
-    // keep their sentence, because the control that acts on it is beside them.
-    expect(footNote({ provider: 'claude', noLimits: false, blocked: null })).toBeNull()
-    expect(footNote({ provider: 'claude', noLimits: true, blocked: 'x' })).toContain('Remembered')
-    expect(footNote({ provider: 'claude', noLimits: false, blocked: 'x' })).toContain(
-      'Nothing was read',
+  })
+
+  it('puts the one explanation that survives behind the ⓘ, and only where there is no figure', () => {
+    /*
+     * *"Just if somewhere it's very required, give the i icon like other ones,
+     * information icon in the settings, same way."* `HoverNote` is that dot —
+     * the same component every Settings pane wears — and this panel had not used
+     * it once.
+     *
+     * The rule it is held to: a dot **only** where the panel has no number in
+     * it. Beside a working reading it would be an explanation attached to
+     * something that needs none, which is the habit rather than the fix.
+     */
+    expect(SOURCE).toContain("from '../components/HoverNote'")
+    expect(SOURCE).toContain('<HoverNote label="these plan limits">{note}</HoverNote>')
+
+    const base = { unwired: false, withheld: null, blocked: null, failed: false, detail: null }
+    // Figures on screen: no dot, whatever else is true.
+    expect(panelNote({ ...base, reason: 'anything', rows: 2 })).toBeNull()
+    // And no dot for a provenance sentence either — Codex's source line is gone
+    // rather than moved, because it used to print under correct numbers.
+    expect(SOURCE).not.toContain('sourceSentence')
+
+    // The states with nothing to show keep exactly one string between them.
+    expect(panelNote({ ...base, unwired: true, reason: null, rows: 0 })).toBe(
+      'Usage is not wired into this build.',
     )
-    expect(footNote({ provider: 'codex', noLimits: false, blocked: null })).toContain('rollout')
+    expect(panelNote({ ...base, withheld: 'On his PC.', blocked: 'x', reason: 'y', rows: 0 })).toBe(
+      'On his PC.',
+    )
+    expect(panelNote({ ...base, blocked: 'No subscription limits.', reason: 'y', rows: 0 })).toBe(
+      'No subscription limits.',
+    )
+    expect(panelNote({ ...base, failed: true, detail: 'It timed out.', reason: 'y', rows: 2 })).toBe(
+      'It timed out.',
+    )
+    expect(panelNote({ ...base, reason: 'Nothing printed yet.', rows: 0 })).toBe(
+      'Nothing printed yet.',
+    )
+    // Nothing to say, nothing to draw.
+    expect(panelNote({ ...base, reason: null, rows: 0 })).toBeNull()
   })
 
   it('bounds the wait, so the panel can never sit on a spinner for ever', () => {
@@ -590,15 +630,24 @@ describe('opening the dropdown is the refresh, and nothing else is', () => {
     expect(probe).toContain('PROBE_TIMEOUT_MS = 15_000')
   })
 
-  it('says a check is running, and keeps the old figures with their ages when one fails', () => {
+  it('shows a check is running on the ring, not in words, and keeps the old figures', () => {
     /*
-     * Nobody pressed a button to start it — opening the panel did — so a panel
-     * that said nothing while it ran would be read as finished. And a failed
-     * check does not clear the rows: a reading that was true twenty minutes ago,
-     * labelled with its age, is worth more than a blank.
+     * The state is real and the sentence was a duplicate of it: `planStatus`
+     * returns `reading`, the icon wears it as `data-status`, and the stylesheet
+     * pulses it. So the words go and the signal stays.
+     *
+     * What pixels cannot do is announce themselves, so the running state keeps a
+     * live region clipped to nothing — in the document for a screen reader, zero
+     * pixels on the panel. And a failed check still does not clear the rows: a
+     * reading that was true twenty minutes ago, labelled with its age, is worth
+     * more than a blank; its sentence is now the ⓘ beside them.
      */
-    expect(SOURCE).toContain('Checking with Claude Code…')
-    expect(SOURCE).toContain('failed && detail !== null')
+    expect(planStatus({ unwired: false, noLimits: false, blocked: null, fetching: true, reported: true })).toBe('reading')
+    const css = readFileSync(join(__dirname, 'UsageBar.css'), 'utf8')
+    expect(css).toContain("[data-status='reading']")
+    expect(css).toContain('ub-plan-pulse')
+    expect(SOURCE).toContain('className="ub-live" role="status"')
+    expect(css).toContain('clip-path: inset(50%)')
     expect(SOURCE).toContain('read ${readout.age}')
   })
 
@@ -674,19 +723,16 @@ describe('nobody presses anything until the app gives up', () => {
      * exist, under the one state whose whole point is that there is nothing to
      * read.
      *
-     * The sheet is only in the markup while it is open and this project's render
-     * tests cannot open it, so the branch is pinned at the source. Delete it and
-     * the false sentence comes straight back.
+     * That whole class of mistake is now structural rather than guarded: there
+     * is one string in this panel and it is the reason there is no figure. A
+     * provenance line cannot be printed under a missing reading because
+     * provenance is not printed at all, and `panelNote` answers null the moment
+     * a row exists, so the dot cannot appear beside a number either.
      */
-    expect(SOURCE).toContain('if (input.noLimits) return')
-    expect(SOURCE).toContain('Remembered for this account, so nothing is started to ask again.')
-    /*
-     * And the same mistake in its second form, caught the same day. The first
-     * fix branched on `noLimits`, which left the *signed-out* account printing
-     * a provenance line about a fetch that never happened. So the branch is on
-     * "is there a reading" rather than on which reason there is not.
-     */
-    expect(SOURCE).toContain('Nothing was read, so there is no figure here')
+    expect(panelNote({
+      unwired: false, withheld: null, blocked: 'Billed through the API.',
+      failed: false, detail: null, reason: 'Nothing printed yet.', rows: 0,
+    })).toBe('Billed through the API.')
     expect(SOURCE).not.toContain("? sourceSentence('claude-usage-api')")
   })
 
@@ -833,5 +879,106 @@ describe('a session that is not on this computer', () => {
     expect(hook.match(/if \(withheld !== null\) return/g)?.length).toBe(3)
     // And the flag that stops the view offering an open at all.
     expect(hook).toContain('canCheck: withheld === null')
+  })
+})
+
+/**
+ * The ring, and the two ways it had stopped being one.
+ *
+ * Asad named this mark himself — *"give it a maybe ring icon will be better,
+ * just like cloud, like this ring. So it's much more better than this thing, the
+ * one you gave"* — meaning the circular progress mark Claude's own product
+ * wears. Rendered on 2026-08-20 it was the right *shape* and none of the rest:
+ * monochrome at every level, because both colour rules named custom properties
+ * that do not exist anywhere in this app, and absent altogether at the narrowest
+ * width, where the context bar had been made the control in its place.
+ */
+describe('the ring he picked, at every width and every level', () => {
+  it('is still drawn when the cluster folds, with the context bar inside it', () => {
+    /*
+     * The earlier answer dropped the ring and kept the figure. That made the one
+     * mark he chose for this reading the only thing on the bar that disappears
+     * when a pane is narrow — and the plan limits reachable only through an
+     * element that says nothing about them.
+     */
+    const html = render({ fit: 'tight' })
+    expect(html).toContain('ub-plan-glyph')
+    expect(html).toContain('ub-cx-strip')
+    // One control carrying both, not two elements and not one of them missing.
+    expect(html).toContain('cc-chip ub-plan ub-plan-figure')
+    expect(html.match(/ub-plan-glyph/g)?.length).toBe(1)
+  })
+
+  it('paints the arc and leaves the track alone, so a level is legible', () => {
+    /*
+     * Both circles were `currentColor` with the track at 0.32 of it, so the
+     * chip's level tinted the whole ring and the arc had nothing to be read
+     * against. Claude's is a coloured arc on a neutral circle.
+     */
+    const html = render()
+    expect(html).toContain('ub-plan-track')
+    expect(html).toContain('ub-plan-arc')
+    // And no `stroke` on the `<svg>` for the two to inherit from.
+    expect(SOURCE).not.toContain('stroke="currentColor"\n      strokeWidth="3.4"')
+  })
+
+  it('names colours this app actually defines, for every level', () => {
+    /*
+     * The defect, exactly: `--accent-warning` and `--accent-danger` were written
+     * in this stylesheet and defined nowhere, so both resolved to the empty
+     * string, both levels inherited plain body text, and warning and critical
+     * drew identically — a ring that cannot say "you are near a limit", which is
+     * the one job it is on the bar for.
+     *
+     * Asserted against `tokens.css` rather than against a list here, so the next
+     * invented token fails on the day it is written instead of on the day
+     * somebody screenshots it.
+     */
+    const css = readFileSync(join(__dirname, 'UsageBar.css'), 'utf8')
+    const tokens = readFileSync(join(__dirname, '..', 'styles', 'tokens.css'), 'utf8')
+    const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]))
+    /* Published by `sheet-room.ts` at run time, so it is deliberately not in the
+       token file and is always written with a fallback. */
+    used.delete('--sheet-room')
+    const undefined_ = [...used].filter((name) => !tokens.includes(`${name}:`))
+    expect(undefined_).toEqual([])
+    // And the two that were wrong, pinned by name so a revert is visible. The
+    // names survive in the comment above the rule; what may not come back is a
+    // `var()` reaching for either.
+    expect(css).not.toContain('var(--accent-warning')
+    expect(css).not.toContain('var(--accent-danger')
+    expect(css).toContain("ub-plan[data-level='warning'] {\n  color: var(--color-warning);")
+    expect(css).toContain("ub-plan[data-level='critical'] {\n  color: var(--color-critical);")
+  })
+})
+
+/**
+ * *"Now, see this window is going out of the frame. This one also going out of
+ * the frame."*
+ *
+ * Both sheets on that header row carried a clamp that could not work: `100%` in
+ * a `max-height` resolves against the containing block's *height*, so the
+ * formula subtracted the chip row the panel hangs off and nothing at all for the
+ * chrome above it. `sheet-room.ts` measures the number CSS cannot name.
+ */
+describe('the panel stays inside the window', () => {
+  it('clamps to the room measured under it, in both sheets on the row', () => {
+    const mine = readFileSync(join(__dirname, 'UsageBar.css'), 'utf8')
+    const theirs = readFileSync(join(__dirname, 'SessionControls.css'), 'utf8')
+    expect(mine).toContain('max-height: min(460px, var(--sheet-room,')
+    expect(theirs).toContain('max-height: min(560px, var(--sheet-room,')
+    // Both still scroll, so what the clamp cuts off is reachable rather than lost.
+    expect(mine).toContain('overflow-y: auto')
+    expect(theirs).toContain('overflow-y: auto')
+  })
+
+  it('measures it when the panel opens, and only then', () => {
+    const room = readFileSync(join(__dirname, 'sheet-room.ts'), 'utf8')
+    expect(SOURCE).toContain("import { useSheetRoom } from './sheet-room'")
+    // The sheet's own top, not its anchor's: the exact number, one measurement.
+    expect(room).toContain('el.getBoundingClientRect().top')
+    // No timer, no observer — the app's standing rule against scheduled callbacks.
+    expect(room).not.toContain('setInterval')
+    expect(room).not.toContain('setTimeout')
   })
 })

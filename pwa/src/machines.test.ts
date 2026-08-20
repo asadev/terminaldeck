@@ -30,6 +30,7 @@ import {
   machineById,
   machineId,
   machineLabel,
+  machineLabels,
   readBook,
   renameMachine,
   saveBook,
@@ -74,7 +75,7 @@ function credential(endpoint: DeckEndpoint, over: Partial<StoredCredential> = {}
 }
 
 function machine(hostId: string, over: Partial<StoredMachine> = {}): StoredMachine {
-  return { id: hostId, nickname: null, credential: credential(relay(hostId)), ...over }
+  return { id: hostId, nickname: null, hostName: null, credential: credential(relay(hostId)), ...over }
 }
 
 describe('what identifies a machine', () => {
@@ -89,19 +90,52 @@ describe('what identifies a machine', () => {
     expect(machineId(DIRECT)).toBe(DIRECT_MACHINE_ID)
   })
 
-  it('names a machine by its nickname, or by the head of its host id', () => {
-    expect(machineLabel(machine(MAC), 'app.terminaldeck.dev')).toBe(MAC.slice(0, 6))
+  it('names a machine by its nickname, then by the name the machine gave itself', () => {
     expect(machineLabel(machine(MAC, { nickname: 'Studio Mac' }), 'x')).toBe('Studio Mac')
+    expect(machineLabel(machine(MAC, { hostName: 'MacBookPro' }), 'x')).toBe('MacBookPro')
+    // The person's word always wins over the machine's own.
+    expect(machineLabel(machine(MAC, { nickname: 'Studio Mac', hostName: 'MacBookPro' }), 'x')).toBe('Studio Mac')
+  })
+
+  it('falls back to the platform noun before the slot code', () => {
+    /*
+     * The regression: two chips reading `2JJGF8` and `9ZA6K3` for somebody who
+     * owns one Mac and one Windows PC. Those are relay slot codes and they name
+     * nothing anybody owns. A machine paired before the name was kept has no
+     * `hostName`, but it does have `hostPlatform`, which it stored from the
+     * `welcome` frame — so the fallback is a word rather than a code.
+     */
+    expect(machineLabel(machine(MAC), 'x')).toBe('Mac')
+    expect(machineLabel(machine(MAC, { credential: credential(relay(MAC), { hostPlatform: 'windows' }) }), 'x')).toBe('PC')
+    // Except when the machine never said what it was — every chip reading
+    // "desktop" would be worse than every chip reading a code.
+    const mute = machine(MAC, { credential: credential(relay(MAC), { hostPlatform: 'unknown' }) })
+    expect(machineLabel(mute, 'x')).toBe(MAC.slice(0, 6))
     // Shortened at the *front*, because the pairing screen and the desktop both
     // show the full id and the eye compares the beginning.
-    expect(MAC.startsWith(machineLabel(machine(MAC), 'x'))).toBe(true)
+    expect(MAC.startsWith(machineLabel(mute, 'x'))).toBe(true)
+  })
+
+  it('breaks a tie between two chips that would read the same', () => {
+    // `machineLabel` cannot see the other machines, so two Macs paired before
+    // names were kept would both read "Mac" — the same defect wearing a
+    // different mask. The list-level function is where the tie is broken.
+    const two = [machine(MAC), machine(PC)]
+    expect(machineLabels(two, 'x')).toEqual([`Mac ${MAC.slice(0, 6)}`, `Mac ${PC.slice(0, 6)}`])
+    // Nothing is appended when the labels already differ.
+    expect(machineLabels([machine(MAC, { hostName: 'MacBookPro' }), machine(PC, { hostName: 'Office' })], 'x')).toEqual([
+      'MacBookPro',
+      'Office',
+    ])
   })
 
   it('says where a machine is and who can read the session', () => {
     // The last clause is the point rather than decoration: it is the difference
     // between the two routes.
     expect(endpointSummary(machine(MAC), 'x')).toBe(`${MAC} via relay.terminaldeck.dev — end-to-end sealed`)
-    expect(endpointSummary({ id: 'direct', nickname: null, credential: credential(DIRECT) }, 'mac.ts.net')).toBe(
+    expect(
+      endpointSummary({ id: 'direct', nickname: null, hostName: null, credential: credential(DIRECT) }, 'mac.ts.net'),
+    ).toBe(
       'mac.ts.net — direct, over your own network',
     )
   })

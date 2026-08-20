@@ -20,12 +20,14 @@ import { argsForSpawn, conversationIsHeld, type SessionInFolder } from './one-co
  *    that matter are the ones pinning that this cannot happen.
  */
 
+let counter = 0
+
 function live(cwd: string, provider = 'claude'): SessionInFolder {
-  return { cwd, provider, exitCode: null }
+  return { id: `s${++counter}`, cwd, provider, exitCode: null }
 }
 
 function dead(cwd: string, provider = 'claude'): SessionInFolder {
-  return { cwd, provider, exitCode: 0 }
+  return { id: `s${++counter}`, cwd, provider, exitCode: 0 }
 }
 
 describe('whether a folder is already held', () => {
@@ -111,5 +113,67 @@ describe('the arguments a spawn actually gets', () => {
 
   it('still starts fresh when the held folder is a different string for the same path', () => {
     expect(argsForSpawn({ ...base, resume: true, live: [live('/w/app/')] })).toEqual([])
+  })
+})
+
+/*
+ * The switch, which is the one spawn that is not a second session.
+ *
+ * `performSwitch` starts the replacement before it stops the session it
+ * replaces, so that a spawn which cannot start leaves a working agent alone.
+ * That order put a live session of the same provider in the same folder in
+ * front of this guard on **every** account switch, and the guard did the thing
+ * it is built to do: dropped `--continue`. Which is the whole of the defect
+ * Asad reported twice — *"it is not going to keep it… It's not keeping the
+ * conversation history."*
+ */
+describe('the session being replaced', () => {
+  it('does not hold the conversation against its own replacement', () => {
+    const outgoing = live('/w/app')
+    expect(conversationIsHeld([outgoing], '/w/app', 'claude', outgoing.id)).toBe(false)
+  })
+
+  it('still lets any other live session hold it', () => {
+    // The exemption is one id, not a switch that turns the guard off: a third
+    // tab open in the folder must still force a fresh conversation.
+    const outgoing = live('/w/app')
+    const other = live('/w/app')
+    expect(conversationIsHeld([outgoing, other], '/w/app', 'claude', outgoing.id)).toBe(true)
+  })
+
+  it('hands the replacement the continue flag', () => {
+    const outgoing = live('/w/app')
+    expect(
+      argsForSpawn({
+        resume: true,
+        resumeArgs: ['--continue'],
+        args: [],
+        live: [outgoing],
+        cwd: '/w/app',
+        provider: 'claude',
+        replaces: outgoing.id,
+      }),
+    ).toEqual(['--continue'])
+  })
+
+  it('does not hand it over when a different tab is also in the folder', () => {
+    const outgoing = live('/w/app')
+    expect(
+      argsForSpawn({
+        resume: true,
+        resumeArgs: ['--continue'],
+        args: [],
+        live: [outgoing, live('/w/app')],
+        cwd: '/w/app',
+        provider: 'claude',
+        replaces: outgoing.id,
+      }),
+    ).toEqual([])
+  })
+
+  it('is unchanged for every spawn that replaces nothing', () => {
+    // No id passed is the ordinary case, and it must behave exactly as it did.
+    expect(conversationIsHeld([live('/w/app')], '/w/app', 'claude')).toBe(true)
+    expect(conversationIsHeld([live('/w/app')], '/w/app', 'claude', null)).toBe(true)
   })
 })

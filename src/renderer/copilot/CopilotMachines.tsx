@@ -27,6 +27,22 @@ import './copilot.css'
  * which is the failure this project keeps finding. So every paired machine is
  * here, and the ones that cannot answer are disabled with the reason on hover.
  *
+ * ## Why servers are on it, and why they cannot be pressed
+ *
+ * Asad, looking at this switch: *"here icon not still choose the local connected
+ * server, by the way, I think. Maybe server is not connected, I don't know."*
+ * The switch listed paired devices only, so a server he had signed into was not
+ * on it at all — and the sentence says exactly what that costs: he could not
+ * tell *not connected* from *not shown*, and had to guess about his own machine.
+ *
+ * They are drawn and not pressable, which is the same treatment an unreachable
+ * device gets and for a harder reason: a server does not run this app, so there
+ * is no copilot over there to switch to. The copilot that works on a server is
+ * this one, and whether it may act is a grant that lives on that server's page
+ * — `SERVERS-DESIGN.md` §6.2, in as many words: *"not in Settings, and not in
+ * the copilot's window."* Building the grant here would have put the largest
+ * permission in the product on the screen the design forbids it on.
+ *
  * The reason is on hover and not on the page, deliberately, and that is his
  * standing rule rather than a judgement made here: *"don't put any single
  * statement in anywhere… We want simplicity. Let the smart people use it."* A
@@ -53,6 +69,12 @@ function why(machine: CopilotMachine): string {
       // something at the other keyboard, and "guest devices do not get the
       // copilot" tells them a rule without telling them the move.
       return `${machine.name} paired this computer as a guest. Pair it again as your own to use its copilot.`
+    case 'server':
+      // Also the remedy rather than the mechanism, and the move is on a
+      // different page on purpose — `SERVERS-DESIGN.md` §6.2: the grant is asked
+      // for on that server's own page, *"not in Settings, and not in the
+      // copilot's window."*
+      return `${machine.name} is a server. This copilot works on it — allow that on the server's page.`
   }
 }
 

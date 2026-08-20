@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 // Relative, not '@shared/agent-catalog': vitest runs without the electron-vite
 // alias, so a *value* import through it resolves in the app and throws in a test.
 import { LOOKUP_AGENTS } from '../../../shared/agent-catalog'
-import { profileLoginLabel, useKnownSignIns } from '../../accounts'
+import type { ProviderId } from '@shared/types'
+import { askForAddAccount, profileLoginLabel, useKnownSignIns } from '../../accounts'
 import {
+  closeMenu,
   Group,
   LinkOut,
   Notice,
@@ -24,7 +26,9 @@ import {
   type SectionProps,
   type ToolStatus,
 } from '../settings-bridge'
+import { useAccountProviderRows } from '../../components/ProviderPicker'
 import { AccountsSection } from './AccountsSection'
+import { canHaveMore } from './account-agent'
 import { SetupSection } from './SetupSection'
 
 /**
@@ -280,28 +284,92 @@ export function AgentList({ agents, loading }: { agents: readonly ToolStatus[]; 
  * markup either way, is keyboard-operable and dismissable without a line of
  * JavaScript, and — the part that matters here — costs the closed pane nothing.
  *
- * What "adding" an agent means is installing its CLI, so that is what the menu
- * offers. An agent already on the machine says so and offers nothing, because
- * the row for it is a few pixels above; the rest carry the install link that
- * used to sit on a dead row in the list itself. The catalogue is the source, not
- * the probe, so the menu is complete before anything has answered.
+ * ## Every row does something, which it did not
+ *
+ * The rows were `<li><span>name</span><span>Installed</span></li>`. No button,
+ * no handler, `cursor: auto` — a menu you could open and could not use, which
+ * on a machine with all three agents on it was three dead lines behind a control
+ * called **Add**. Measured on 2026-08-20: clicking a row left the disclosure
+ * open and changed nothing.
+ *
+ * The fix is not to hide the rows. It is that an installed agent has an answer
+ * to "add this", and he said what it is in the same breath as asking for the
+ * menu:
+ *
+ *   > *"If we add Claude Code, and then we will have relevant stuff, add
+ *   > account things and all of this."*
+ *
+ * So an installed agent opens the Add-account popup with that agent already
+ * chosen, and an agent that is not installed keeps its install link, which was
+ * always a real action. Both halves of the menu are live in every state, and no
+ * state of this machine can produce a row that does nothing.
+ *
+ * ## What is deliberately *not* here
+ *
+ * There is no "added agents" list to be on or off, and no Remove. Adding and
+ * installing are the same act in his words — *"if we want to install from the
+ * drop-down, we will add it"* — and the page already draws only what the probe
+ * found, which is the whole of *"if we don't have installed Codex, it should not
+ * be on the page at all"*. A per-agent show/hide switch would be a second
+ * meaning for "added", stored in a file, controlling a page he asked to have
+ * *fewer* controls on.
  */
-export function AddAgentMenu({ present }: { present: ReadonlySet<string> }) {
+export function AddAgentMenu({
+  present,
+  addable,
+  onAddAccount,
+}: {
+  present: ReadonlySet<string>
+  /**
+   * Which of the installed agents can actually take another login.
+   *
+   * Gemini cannot — it keeps one per machine, measured in
+   * `main/provider-accounts.ts` — so its row offers nothing rather than
+   * offering **Add account** and landing somebody in a popup where its own
+   * radio is disabled. Absent means "not answered yet", which reads the same
+   * way as "no": a row that says nothing is always honest, and a row that
+   * promises an account that cannot exist is not.
+   */
+  addable?: ReadonlySet<string>
+  /** Open the Add-account popup for this agent. Absent draws no action. */
+  onAddAccount?(provider: ProviderId): void
+}) {
   return (
     <details className="settings-addmenu">
       <summary>Add agent</summary>
       <ul>
         {LOOKUP_AGENTS.map((entry) => (
           <li key={entry.id}>
-            <span className="settings-addmenu-name">{entry.label}</span>
-            {present.has(entry.id) ? (
-              <span className="settings-addmenu-have">Installed</span>
+            {present.has(entry.id) && addable?.has(entry.id) && onAddAccount ? (
+              /* The whole row is the button, because the whole row is what a
+                 person aims at in a menu — and it is a `<button>` rather than a
+                 clickable `<li>` so that it is reachable by keyboard and
+                 announced as an action, which is exactly what the dead version
+                 was not. */
+              <button
+                type="button"
+                className="settings-addmenu-row"
+                onClick={(event) => {
+                  closeMenu(event)
+                  onAddAccount(entry.id as ProviderId)
+                }}
+              >
+                <span className="settings-addmenu-name">{entry.label}</span>
+                <span className="settings-addmenu-have">Add account</span>
+              </button>
             ) : (
-              // An agent with no page to send anybody to is still worth listing:
-              // its absence from the rows above is the fact, and a menu that
-              // silently dropped it would be the greyed-out row's problem in a
-              // smaller box.
-              entry.url && <LinkOut href={entry.url}>Install</LinkOut>
+              <>
+                <span className="settings-addmenu-name">{entry.label}</span>
+                {present.has(entry.id) ? (
+                  <span className="settings-addmenu-have">Installed</span>
+                ) : (
+                  // An agent with no page to send anybody to is still worth
+                  // listing: its absence from the rows above is the fact, and a
+                  // menu that silently dropped it would be the greyed-out row's
+                  // problem in a smaller box.
+                  entry.url && <LinkOut href={entry.url}>Install</LinkOut>
+                )}
+              </>
             )}
           </li>
         ))}
@@ -374,11 +442,47 @@ export function AgentsSection(props: SectionProps) {
    */
   const knownSignIns = useKnownSignIns()
 
+  /*
+   * Which agents can hold more than one login, measured rather than assumed.
+   *
+   * The same rows the Accounts pane below and the Add-account popup read, so
+   * the picker cannot come to offer an account the row underneath calls
+   * one-login-only. Gated on the pane being on screen, like every other probe
+   * here.
+   */
+  const providerRows = useAccountProviderRows(scope === 'this-machine')
+
   const agents = agentsPresent(prereq)
   const present = new Set(agents.map((tool) => tool.id))
+  /*
+   * Installed *and* measured able to hold another login.
+   *
+   * `canHaveMore` alone is not enough here, because it answers *true* for a row
+   * it has never heard of — the right reading where an unknown agent must not
+   * be blocked, and the wrong one on the first paint, where no row has arrived
+   * yet and every agent would briefly offer **Add account** before Gemini's
+   * flipped back to Installed. A row has to exist and say yes.
+   */
+  const addable = new Set(
+    agents
+      .filter((tool) => providerRows.some((row) => row.id === tool.id && row.canAdd))
+      .map((tool) => tool.id),
+  )
   // profiles.ts synthesises the user's own install as `system`, so this is
   // never empty once the list has loaded.
-  const profileList = profiles?.profiles ?? []
+  /*
+   * The accounts this picker may offer, which is not all of them.
+   *
+   * It listed every account of every agent, including **Your own Gemini CLI
+   * install** — and Gemini keeps one login per machine, so choosing it changes
+   * which login exactly nothing uses. That is an option over nothing, in a
+   * picker whose own ⓘ then had to explain that some of its options are
+   * ignored. `canHaveMore` is the same reading the Accounts rows use for "is
+   * there a choice to be made here at all", so the two cannot come to disagree.
+   */
+  const profileList = (profiles?.profiles ?? []).filter(
+    (profile) => profile.provider === null || canHaveMore(providerRows, profile.provider),
+  )
   const defaultProfileId = profiles?.defaultProfileId ?? 'system'
 
   return (
@@ -430,7 +534,19 @@ export function AgentsSection(props: SectionProps) {
                  * description, stays behind the ⓘ.
                  */
                 label="Primary account"
-                more="Claude Code only. Other agents ignore this and use whichever login they already have on this machine."
+                /*
+                 * The limit, said accurately.
+                 *
+                 * It read *"Claude Code only. Other agents ignore this…"*,
+                 * which was false in one direction and contradicted by the
+                 * picker in the other: `resolveProfileId` skips a stored default
+                 * whose agent is not the one starting, so a Codex account here
+                 * really is used by Codex sessions — while the list underneath
+                 * offered Codex and Gemini rows the sentence said were ignored.
+                 * One default is stored, so what it cannot do is be two things
+                 * at once, and that is what an ⓘ is for.
+                 */
+                more="One account, and only sessions of the agent it is a login of use it. Choosing an account of another agent replaces this one rather than sitting beside it."
                 htmlFor="settings-default-profile"
                 control={
                   <span className="settings-select-wrap">
@@ -475,7 +591,16 @@ export function AgentsSection(props: SectionProps) {
                     under it saying "no agent installed" would be the same
                     screen answering its own question two ways. */}
                 {error === null && <AgentList agents={agents} loading={prereq === null} />}
-                <AddAgentMenu present={present} />
+                {/* The menu's installed rows and the pane's **Add account**
+                    button open the same popup, which is the point: there is one
+                    place an account is added, reachable from wherever somebody
+                    happened to be looking for it. `AccountsSection` below is
+                    what hears this — see `askForAddAccount`. */}
+                <AddAgentMenu
+                  present={present}
+                  addable={addable}
+                  onAddAccount={(id) => askForAddAccount(id)}
+                />
               </>
             )}
           </Group>

@@ -40,15 +40,49 @@ describe('numbers are facts about a session, not positions in a list', () => {
     expect(bindingFor('s1')?.windows.map((w) => w.n)).toEqual([2])
   })
 
-  it('a number is never handed out twice', () => {
+  it('a number is never reused while the session still holds a window', () => {
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1' })
+    attach({ sessionId: 's1', browserTabId: 'browser:1:2' })
+    detach('browser:1:1')
+
+    // B3, not a second B1. `B2` is still on screen, so a reissued `B1` would
+    // silently redirect an agent to a page it was never told about — and it
+    // would do it *within* a turn, before anything restates the list.
+    expect(attach({ sessionId: 's1', browserTabId: 'browser:1:3' }).n).toBe(3)
+  })
+
+  it('an empty session starts again at B1', () => {
     attach({ sessionId: 's1', browserTabId: 'browser:1:1' })
     detach('browser:1:1')
-    const second = attach({ sessionId: 's1', browserTabId: 'browser:1:2' })
 
-    // B2, not a second B1. Reuse is only ever corrected *between* turns; within
-    // one turn a reissued B1 silently redirects an agent to a page it was never
-    // told about.
-    expect(second.n).toBe(2)
+    // Nothing left to collide with: every window this session held is gone, so
+    // there is no live `B1` for a stale reference to point at. Asad asked for a
+    // vocabulary he can say out loud — *"check B2, B1"* — and calling the first
+    // window of an empty session `B2` is not conservative, it is a wrong name.
+    expect(attach({ sessionId: 's1', browserTabId: 'browser:1:2' }).n).toBe(1)
+  })
+
+  it('four ordinary presses still leave him with B1 and B2', () => {
+    // His own sequence, and the one that produced `B4`/`B5` in 0.7.0: attach,
+    // detach, attach again, attach a second.
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1' })
+    detach('browser:1:1')
+    attach({ sessionId: 's1', browserTabId: 'browser:1:1' })
+    attach({ sessionId: 's1', browserTabId: 'browser:1:2' })
+
+    expect(bindingFor('s1')?.windows.map((w) => w.n)).toEqual([1, 2])
+  })
+
+  it('does not restart onto a number already printed at an agent', () => {
+    // The gap `reserve` opens: the shim has told the agent `B1` and the window
+    // it names has not arrived yet, so the list is empty and the number is
+    // spoken for. Restarting here would hand `B1` to something else.
+    const n = reserve('s1')
+    expect(n).toBe(1)
+    expect(attach({ sessionId: 's1', browserTabId: 'browser:1:9' }).n).toBe(2)
+
+    // And the reserved window still lands on the number it was promised.
+    expect(attachReserved({ sessionId: 's1', browserTabId: 'browser:1:8', n })?.n).toBe(1)
   })
 
   it('two sessions may each have a B1', () => {

@@ -81,10 +81,11 @@ import {
   resolveDriveApi,
   type DriveStatus,
 } from './drive-bridge'
-import { resolveOmnibox, securityOf } from './omnibox'
+import { resolveOmnibox } from './omnibox'
 import { browserOverlayDom, isCovered, watchOverlays, type Rect as OverlayRect } from './overlay-watch'
 import { ConnectSessionButton } from './BindChip'
 import { MachinePicker } from './MachinePicker'
+import { forgetWindowMachine, setWindowMachine } from './window-machine'
 import {
   destinationFor,
   differentPortNote,
@@ -748,7 +749,39 @@ export function BrowserWorkspace({
       machineName: boundMachineName,
       visible,
     })
+    /*
+     * And tell the *renderer* the same thing, which until now it was not.
+     *
+     * Main was told so its two native menus could group windows under machine
+     * headings — and they do. Nothing else in the window knew, so the top bar,
+     * which after this round is the only place a browser window is listed at
+     * all, drew a page running on his PC identically to one running here. Asad:
+     * *"Now I don't know if it is actually there or here… we always need a
+     * truth."*
+     *
+     * One line rather than a second effect, because the two facts must never
+     * disagree: a menu that says Office PC over a tab that says nothing is the
+     * same defect in a smaller costume. See `window-machine.ts`.
+     */
+    setWindowMachine(
+      tabId,
+      boundMachineId === '' ? null : { id: boundMachineId, name: boundMachineName },
+    )
   }, [tabId, boundViewId, boundUrl, pageTitle, boundMachineId, boundMachineName, visible])
+
+  /*
+   * And take it away when the window goes.
+   *
+   * Its own effect, keyed on the tab id alone, so it fires on unmount and on a
+   * tab id changing under a mounted panel — and *not* on every navigation, which
+   * is what a cleanup inside the effect above would have done: it would clear
+   * the machine on the way into every url change and set it again immediately
+   * after, which is a tab whose machine mark blinks on every link.
+   */
+  useEffect(() => {
+    if (!tabId) return
+    return () => forgetWindowMachine(tabId)
+  }, [tabId])
 
   /* -- the device rectangle, recomputed on every layout pass. */
   const deviceSize = useMemo((): Size | null => {
@@ -1831,7 +1864,6 @@ export function BrowserWorkspace({
   }
 
   const resolution = resolveOmnibox(active?.draft ?? '')
-  const security = securityOf(active?.url ?? '')
 
   /*
    * The chosen machine, the page's own machine, and the list the start page draws.
@@ -2013,7 +2045,6 @@ export function BrowserWorkspace({
     <div className="bw" ref={rootRef} data-visible={visible} onKeyDown={onKeyDown}>
       <Toolbar
         tab={active}
-        security={security}
         progress={active?.progress ?? 0}
         resolution={resolution}
         focusToken={focusToken}
@@ -2069,13 +2100,53 @@ export function BrowserWorkspace({
         profileName={profileName}
         steps={recording.steps.length}
         machinePicker={picker}
+        /*
+          Where this page is actually being fetched from — never an absence.
+
+          Asad: *"we always need a truth. So we will not know the truth if we
+          remove from inside where it is exactly running. So just be sure we
+          always be able to see the truth."*
+
+          The chip used to be drawn only for a tunnelled page, which made the
+          ordinary case honest and the interesting one ambiguous: with the
+          picker reading `Office PC` and this chip absent, `example.com` was
+          being fetched by *this* Mac and the only thing saying so was a missing
+          element. A fact you infer from what is not on screen is not a fact you
+          can see, and that is his complaint from earlier in the same minute:
+          *"Now I don't know if it is actually there or here."*
+
+          So the rule is: **draw it whenever it would say something the picker
+          does not.** Both machines named the same means one of them is
+          redundant, and the redundant one is this — which is the other half of
+          what he said, twenty seconds earlier, about the word `Local` that used
+          to live in this field: *"Since we already have here a selection, why do
+          we show inside the link bar also local? … It doesn't make any sense to
+          keep in both side the same thing."*
+
+          Three states fall out of it, and no fourth:
+
+           - picker on this machine, page on this machine → nothing. The field is
+             only the link, exactly as he asked.
+           - picker and page on the same other machine → `Office PC:5199`, which
+             is what he explicitly asked to keep: *"in this kind of situation, we
+             will need to keep this so we know actually where it is running."*
+             The port is the part the picker cannot say.
+           - picker naming one machine, page served by another (or by this one)
+             → the page's own machine, by name. The disagreement is the whole
+             point, and there is no port when the answer is this computer,
+             because there is no tunnel to have a port on.
+        */
         servedBy={
-          served && {
-            name: served.machineName,
-            port: served.port,
-            localPort: served.localPort,
-            sameNumber: served.sameNumber,
-          }
+          served
+            ? {
+                name: served.machineName,
+                port: served.port,
+                localPort: served.localPort,
+                sameNumber: served.sameNumber,
+              }
+            : machineId === THIS_MACHINE
+              ? null
+              : { name: 'This machine', port: null, localPort: 0, sameNumber: true }
         }
       />
 

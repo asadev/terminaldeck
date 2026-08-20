@@ -241,6 +241,27 @@ interface RowProps {
   disabledReason?: string | null
   /** The word in the pill on the right. Absent draws no pill. */
   tag?: string | null
+  /**
+   * Draw the name and the pill, and no line of explanation under either.
+   *
+   * The Add-account popup sets it. That list carried a sentence per row —
+   * *"Anthropic's agentic CLI. Writes transcripts, so token and context
+   * tracking work."*, *"OpenAI's coding agent…"*, and for Gemini a six-line
+   * paragraph about keychain entries being shared across configuration
+   * directories — under a heading asking which agent a login is for. His words,
+   * of this exact popup:
+   *
+   *   > *"If we want to add account, this big description again here also, big
+   *   > description. They are not stupid to give this much."*
+   *
+   * The pill keeps the only part that is a fact rather than a description —
+   * `Not installed`, `One login only` — and the install command stays, because
+   * a command is a thing to do. The New-session picker does **not** set this:
+   * there the description is what somebody is choosing *between*, and it is the
+   * one list in the app where the agents are the subject rather than the
+   * account is.
+   */
+  quiet?: boolean
 }
 
 /**
@@ -252,7 +273,7 @@ interface RowProps {
  * said so was a paragraph in the Accounts screen, which is exactly the sort of
  * fact that is true in one list and forgotten in the next.
  */
-function AgentRow({ row, group, selected, onSelect, hint, disabledReason, tag }: RowProps) {
+function AgentRow({ row, group, selected, onSelect, hint, disabledReason, tag, quiet }: RowProps) {
   const blocked = disabledReason ?? null
   const available = row.available && blocked === null
 
@@ -277,7 +298,7 @@ function AgentRow({ row, group, selected, onSelect, hint, disabledReason, tag }:
           {tag !== undefined && tag !== null && <span className="picker-tag">{tag}</span>}
           {tag === undefined && !row.available && <span className="picker-tag">Not installed</span>}
         </span>
-        <span className="picker-hint">{hint ?? row.reason ?? row.description}</span>
+        {!quiet && <span className="picker-hint">{hint ?? row.reason ?? row.description}</span>}
         {!row.available && row.install && <code className="picker-install">{row.install}</code>}
       </span>
     </label>
@@ -628,12 +649,19 @@ interface AccountListProps {
  * A component rather than a loop written twice, because the two places that ask
  * it — the Accounts pane's Add form and the dialog below — must give the same
  * answer, and the row that matters most is the one nobody clicks. Gemini is
- * *listed*, disabled, with the measured reason beside it: a missing row is
- * indistinguishable from an oversight, and Gemini is the agent somebody will
- * most reasonably assume was forgotten, because it does have a
- * config-directory variable. What it does not have is a way to keep two logins
- * apart — `provider-accounts.ts` holds the measurement — so signing into a
- * second Gemini account would overwrite the first rather than sit beside it.
+ * *listed*, disabled: a missing row is indistinguishable from an oversight, and
+ * Gemini is the agent somebody will most reasonably assume was forgotten,
+ * because it does have a config-directory variable. What it does not have is a
+ * way to keep two logins apart — `provider-accounts.ts` holds the measurement —
+ * so signing into a second Gemini account would overwrite the first rather than
+ * sit beside it.
+ *
+ * The measured reason used to be *beside* the row, and on Gemini that is six
+ * lines about a keychain entry shared across configuration directories — the
+ * longest single block of prose on any account surface, spent explaining why an
+ * option nobody can pick is grey. `quiet` is what takes it off: the pill says
+ * **One login only**, which is the fact, and the paragraph is not replaced by a
+ * shorter paragraph.
  */
 export function AccountProviderList({ group, rows, selected, onSelect }: AccountListProps) {
   return (
@@ -648,7 +676,7 @@ export function AccountProviderList({ group, rows, selected, onSelect }: Account
           // An agent that is not installed keeps its own "not installed"
           // reason and install line; one that is installed but cannot hold
           // a second login gets the sentence explaining that instead.
-          hint={row.available ? row.note : null}
+          quiet
           disabledReason={row.canAdd ? null : (row.note ?? 'Not available.')}
           tag={row.available && !row.canAdd ? 'One login only' : undefined}
         />

@@ -121,13 +121,32 @@ describe('the offer a machine answers with', () => {
     platform: 'darwin',
   }
 
-  it('reads the three facts that make an endpoint', () => {
+  it('reads the three facts that make an endpoint, and the machine’s own name', () => {
     expect(parseOffer(JSON.stringify(offer))).toEqual({
-      kind: 'relay',
-      url: offer.relayUrl,
-      hostId: offer.hostId,
-      hostKey: offer.publicKey,
+      endpoint: {
+        kind: 'relay',
+        url: offer.relayUrl,
+        hostId: offer.hostId,
+        hostKey: offer.publicKey,
+      },
+      name: 'Asad’s MacBook Pro',
     })
+  })
+
+  it('keeps the name, because nothing else on the wire carries it', () => {
+    /*
+     * The regression. This field used to be dropped here on the grounds that
+     * "the machine names itself in `welcome` a second later" — it does not.
+     * `welcome.deviceName` is the name the machine has for *this device*, echoed
+     * back, so a phone that dropped this had no name for the machine at all and
+     * drew the relay slot code on its switcher chips.
+     */
+    expect(parseOffer(JSON.stringify({ ...offer, name: undefined }))?.name).toBe('')
+    // Display text off a machine this browser has never spoken to before.
+    expect(parseOffer(JSON.stringify({ ...offer, name: 'Mac\u001b[2Jgone' }))?.name).toBe('Mac[2Jgone')
+    expect(parseOffer(JSON.stringify({ ...offer, name: 'x'.repeat(200) }))?.name).toHaveLength(24)
+    // A hostile name is not a reason to refuse a machine; it is a reason to cap it.
+    expect(parseOffer(JSON.stringify({ ...offer, name: 42 }))).not.toBeNull()
   })
 
   it('accepts a key in standard base64, which is what the desktop sends', () => {
@@ -212,7 +231,7 @@ describe('looking a code up', () => {
     const relay = beacon(identity.keys, offer)
 
     const found = await lookupMachine({ code: CODE, relayUrl: 'wss://relay.example', open: relay.open })
-    expect(found?.hostId).toBe('UAFTGU2WS5MN5GYUKF48KJG5SK')
+    expect(found?.endpoint.hostId).toBe('UAFTGU2WS5MN5GYUKF48KJG5SK')
     expect(relay.urls).toEqual(['wss://relay.example/v1/join?host=' + identity.hostId])
   }, 30_000)
 

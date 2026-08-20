@@ -289,6 +289,29 @@ describe('ArtifactsPanel', () => {
     expect(html).toContain('Every session')
     expect(html.indexOf('This project’s sessions')).toBeLessThan(html.indexOf('Every session'))
   })
+
+  it('opens on every session that wrote here, not only the ones started here', () => {
+    /*
+     * Asad, on this row: *"on the sessions here, would be better if you show
+     * the other ones also, not the local only."*
+     *
+     * The narrow scope reads the transcripts filed under this folder, and
+     * `src/main/artifacts.ts` measured what that leaves out on this very
+     * repository: 16 transcripts with zero writes in them, against 193 real
+     * writes filed under the parent workspace the agents were launched from.
+     * A default that hides the sessions which did the work is the defect; the
+     * chip is still there for the visit where this folder's own history is the
+     * question.
+     */
+    const html = renderToStaticMarkup(
+      <ArtifactsPanel projectPath="/p" bridge={bridge} now={NOW} />,
+    )
+    const every = html.indexOf('Every session')
+    const own = html.indexOf('This project’s sessions')
+    // The pressed one is the widened one.
+    expect(html.slice(every - 220, every)).toContain('aria-pressed="true"')
+    expect(html.slice(own - 220, own)).toContain('aria-pressed="false"')
+  })
 })
 
 /* ------------------------------------------- what the word Artifacts means -- */

@@ -1602,6 +1602,17 @@ a.browse__go {
   min-height: 0;
 }
 
+/* A file is over the session and this pane will take it.
+
+   An inset ring and nothing else — no overlay, no word, no icon. The rule this
+   round is that nothing explains itself on screen, and a drop target that says
+   "Drop files here" is the clearest example of the thing being removed
+   everywhere else. `inset` so the ring is drawn inside the pane rather than
+   growing it, which would reflow the terminal under the cursor mid-drag. */
+.terminal-screen[data-drop='on'] {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 /* The terminal's paper is `--terminal-bg`, not the page's canvas, and the
    difference only exists in the light theme: there the emulator sits a step
    below the chrome so the session reads as a panel let into the window rather

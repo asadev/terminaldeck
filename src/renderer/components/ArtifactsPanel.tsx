@@ -3,6 +3,7 @@ import { readFailure, withDeadline } from '../deadline'
 import { recall, remember } from '../panel-cache'
 import { renderMarkdown } from './ChatView'
 import { PageEmpty, PageNote } from './PageEmpty'
+import { HoverNote } from './HoverNote'
 import { formatBytes, relativeTime } from './relative-time'
 import './ArtifactsPanel.css'
 
@@ -797,7 +798,27 @@ export function ArtifactsPanel({
   fs,
   renderDocument = renderMarkdown,
 }: ArtifactsPanelProps) {
-  const [scope, setScope] = useState<ArtifactScope>('project')
+  /*
+   * Every session that wrote into this folder, not only the ones started in it.
+   *
+   * Asad, walking this page: *"on the sessions here, would be better if you
+   * show the other ones also, not the local only."*
+   *
+   * The narrow scope reads the transcripts filed under *this* folder. On this
+   * repository that is 16 transcripts holding **zero** file writes, while 193
+   * real writes into the same folder are filed under the parent workspace the
+   * orchestrator was launched from — `src/main/artifacts.ts` measured it and
+   * wrote the numbers down. So the default was a session row that listed the
+   * sessions local to the folder and left out the ones that did the work, with
+   * nothing on screen saying a chip would widen it.
+   *
+   * `main/artifacts.ts` calls the wide scan the expensive one, which is why it
+   * was not the default. It is bounded — a session cap, an age cap and a time
+   * budget — and he asked to see the other ones. The narrow scope keeps its
+   * chip, one press away, for the visit where this folder's own history is the
+   * question.
+   */
+  const [scope, setScope] = useState<ArtifactScope>('all')
   /** Made or changed. See the header comment — this is the fix that has to hold. */
   const [made, setMade] = useState<ArtifactScopeKind>('made')
   /** Whether the pane is showing the artifact or how it got that way. */
@@ -1171,9 +1192,16 @@ export function ArtifactsPanel({
               : undefined
           }
         >
-          {scope === 'project'
-            ? 'No agent has written or edited a file in this project from a session started here. If you run your agents from a parent folder, read every session instead.'
-            : 'No session on this machine has written or edited a file inside this folder.'}
+          {/* Three words and a dot. Two sentences stood here explaining what a
+              scope is and where agents get launched from — the shape of thing
+              he asked to be rid of everywhere: *"I don't want any kind of long
+              descriptions anywhere. Just if somewhere it's very required, give
+              the i icon."* */}
+          <HoverNote label="What was read">
+            {scope === 'project'
+              ? 'Only the sessions started in this folder were read. Read every session to include agents launched from a parent folder.'
+              : 'No session on this machine has written or edited a file inside this folder.'}
+          </HoverNote>
         </PageEmpty>
       ) : (
         <div className="artifacts-body">

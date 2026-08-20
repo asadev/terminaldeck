@@ -152,6 +152,14 @@ export interface SessionMeta {
    *
    * Carried because it changes which transcript belongs to this session: a
    * fresh run writes a new file, a continued one appends to an older one.
+   *
+   * **What the process got, never what was asked for.** Those two came apart
+   * once and nothing on screen could see it: `one-conversation.ts` can refuse a
+   * resume that was requested — a second tab in a folder that already has a
+   * live session, and, until it learnt to recognise a replacement, every single
+   * account switch — and while this was read off the request those sessions
+   * reported having continued a conversation they had just started fresh.
+   * `host-core.ts` sets it from the argument list it spawned.
    */
   resumed?: boolean
   /**
@@ -222,6 +230,28 @@ export interface CreateSessionInput {
   provider?: ProviderId
   /** Continue the most recent session in this folder instead of starting fresh. */
   resume?: boolean
+  /**
+   * The conversation to continue, by id, instead of "the folder's most recent".
+   *
+   * Only meaningful beside `resume`, and only for Claude Code, which is the one
+   * agent whose conversations this app names (`SessionMeta.agentSessionId`). It
+   * exists for the account switch: the sheet promises that the conversation
+   * *on screen* follows, and `--continue` promises the folder's newest, which
+   * are the same thing right up until they are not.
+   */
+  resumeConversationId?: string
+  /**
+   * The session this one replaces, when it is a replacement rather than a
+   * second session.
+   *
+   * Set only by an account switch. `one-conversation.ts` refuses `--continue`
+   * to a spawn that would join a folder another live session is already in —
+   * correctly, because two sessions resolving one `--continue` fork the
+   * transcript — and a switch starts the replacement before it stops the
+   * outgoing process, so without this it tripped that guard on every switch and
+   * lost the conversation it had just promised to keep.
+   */
+  replaces?: string
   /** Which agent profile (isolated login) to run as. Null uses the default. */
   profileId?: string | null
   /**

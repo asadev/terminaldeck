@@ -130,6 +130,78 @@
 }
 
 /*
+  Who you are while you browse, drawn as the profile's own initial.
+
+  A circle rather than a stroked glyph because that is the one shape on this bar
+  that is allowed to mean "a person": every other button here is a 14px outline
+  and reads as a verb, and an avatar has to read as a noun or the row is nine
+  identical marks. Sized to sit inside the same 24px button as its neighbours, so
+  the group's width does not move.
+*/
+.bw-avatar {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--fill-secondary);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: var(--w-semibold);
+  line-height: 1;
+  /* The badge is one character of somebody's own name, and a name can be as
+     long as they like — this keeps a long one from ever pushing the circle. */
+  overflow: hidden;
+}
+
+.bw-icon:hover:not(:disabled) .bw-avatar {
+  color: var(--text-primary);
+}
+
+/* Menu open. `.bw-icon[data-on]` tints the button in the accent, and a badge
+   left on `--fill-secondary` inside an accent-soft square reads as a hole. */
+.bw-icon[data-on] .bw-avatar {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+/*
+  The page actions come off the bar when the panel is narrow, and go into the ⋯.
+
+  *"So we can have a bigger link bar because when it is smaller, then it becomes
+  too small, the link bar. So I want more space for link bar."*
+
+  Taking the captions off and the glyphs from 26 to 24 answered that at a wide
+  window and barely at all at the width he was describing, because the old bar
+  had already dropped its captions below 940 to survive. Measured on the running
+  app, before this rule:
+
+    panel 1176   address 472 → 764   (+292)
+    panel  916   address 497 → 504   (+7)
+    panel  792   address 373 → 380   (+7)
+    panel  592   address 173 → 180   (+7)
+
+  At 592 the action group was 240 pixels against an address field of 180: the
+  icons were wider than the link bar. Five of them fold — Record, Shot, Draw,
+  Size, Devtools — which is 240 → 110 and puts 130 pixels into the field at
+  exactly the width he was complaining about. They are not lost: `BrowserMenu`
+  reads this bar and offers whatever is not on it.
+
+  820 and not 940: unfolded, the field gets `panel − 412` pixels (a little less
+  with a machine picker beside it), so 820 is where a typical `localhost` URL
+  stops fitting. Above it nothing folds and the bar is the bar.
+
+  `:not([data-on])` is the other half. A pressed control stays on the bar however
+  narrow the panel — a recording with nowhere to show its Stop button, or a
+  device frame with no way back out of it, is a mode you cannot leave.
+*/
+@container (max-width: 820px) {
+  .bw-actions .bw-icon[data-fold]:not([data-on]) {
+    display: none;
+  }
+}
+
+/*
  * The Shared / Isolated switch, which is a `.bw-icon` now and needs one thing
  * of its own: a gap.
  *
@@ -273,34 +345,16 @@
   outline-offset: 1px;
 }
 
-.bw-security {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  flex-shrink: 0;
-  color: var(--text-muted);
-}
-
-.bw-security svg {
-  display: block;
-}
-
-.bw-security[data-level='secure'] {
-  color: var(--status-completed);
-}
-
-.bw-security[data-level='insecure'] {
-  color: var(--color-warning);
-}
-
 /*
-  Where a loopback page actually came from.
+  Where a loopback page actually came from — and the only thing left in this
+  field that is not the link.
 
-  Beside the padlock and before the address, because it qualifies the address in
-  exactly the way the padlock does: `127.0.0.1:53412` is the truth and it is not
-  the whole truth. Quiet — a tint and a radius, no icon — since it is a label
-  rather than a control, and it is only ever on screen for a page this window
-  opened a tunnel for.
+  *"from inside the link bar, it should be only the link, not this thing."* The
+  security indicator that used to sit here is gone; this stayed because he asked
+  for it to in the same breath — *"we will need to keep this so we know actually
+  where it is running right now … because we always need a truth."* Quiet — a
+  tint and a radius, no icon — since it is a label rather than a control, and it
+  is only ever on screen for a page this window opened a tunnel for.
 */
 .bw-served {
   /*
@@ -811,6 +865,28 @@
   min-width: 0;
 }
 
+/*
+  A list whose rows carry controls on their right-hand end, clearing the popup's
+  own ✕.
+
+  `.bw-popup-close` is absolutely positioned in the top-right corner, so the
+  first row of any list that puts something at its right edge runs underneath it
+  — which is precisely the fault he named on the tab strip: *"B1, B2 over the
+  cross button and all of this stuff on the windows up there. This layout issues,
+  this UI issues should not be there."* It was hidden until this round only
+  because a heading used to occupy that first line.
+
+  The gutter is on the whole list rather than on the first row, so every row's
+  right edge still lines up with every other's. Items below the list are
+  left-aligned and keep the full width.
+
+  22px = the close button's 22 plus its 8 of offset, less the popup's own 12 of
+  padding, plus 4 of air.
+*/
+.bw-menu-gutter {
+  padding-right: 22px;
+}
+
 .bw-menu-item,
 .bw-menu-choice {
   display: flex;
@@ -979,6 +1055,41 @@
   color: var(--text-muted);
   opacity: 0.5;
   cursor: default;
+}
+
+/*
+  An armed Delete inside a menu row — the profile confirmation.
+
+  Same shape as `.bw-text-button` beside it so the row does not resize when it
+  arms, and the same two states Asad specified out loud for the session dialog:
+  *"when I hover on the delete, it will have the white text and red color …
+  And when it's not hover, it will have red text only."* `--critical-fill` and
+  `--critical-fill-ink` rather than `--color-critical`/`--text-onaccent`, for the
+  reason spelled out in `CloseSessionConfirm.css`: the dark theme's critical is a
+  coral that white cannot be read on, so the *fill* is the token that carries its
+  own ink.
+
+  Focus is included with hover. Tabbing to the one control here that destroys
+  something has to reach the state that says so.
+*/
+.bw-menu-danger {
+  flex-shrink: 0;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-critical);
+  font: inherit;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.bw-menu-danger:hover,
+.bw-menu-danger:focus-visible {
+  background: var(--critical-fill);
+  color: var(--critical-fill-ink);
 }
 
 .bw-capture-label,

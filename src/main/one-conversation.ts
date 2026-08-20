@@ -75,8 +75,35 @@
  * not lose to a guard aimed at something else.
  */
 
+/**
+ * ## The one live session that is not a second session
+ *
+ * An account switch replaces the process inside a tab: `performSwitch` starts
+ * the replacement *first* and stops the outgoing one a moment later, so that a
+ * spawn which cannot start leaves a working session alone. For those few
+ * hundred milliseconds there are two live sessions in one folder on one
+ * provider — and this guard, reading nothing but that, refused the replacement
+ * its `--continue` on every switch that has ever been made.
+ *
+ * Asad, of exactly that:
+ *
+ *   > *"See, it is not going to keep it… It's not keeping the conversation
+ *   > history… It should at least keep the conversation there, history there,
+ *   > memory there when I switch between the accounts."*
+ *
+ * The guard was not wrong about what it saw; it was answering a question it was
+ * not asked. Its subject is *two conversations diverging*, and a replacement is
+ * not a second writer — it is the same tab, and the session it is measured
+ * against is being killed by the same function that started it. So the switch
+ * names the session it is replacing and this ignores it. Nothing else may:
+ * `ignore` is a session id, handed down from the one call site that is entitled
+ * to say "that one is on its way out", and every other spawn passes nothing and
+ * gets the old behaviour unchanged.
+ */
+
 /** The fields of a live session this guard reads. A subset of `SessionMeta`. */
 export interface SessionInFolder {
+  id: string
   cwd: string
   provider: string
   /** `null` while the process is alive; a number once it has exited. */
@@ -109,12 +136,17 @@ export function conversationIsHeld(
   live: readonly SessionInFolder[],
   cwd: string,
   provider: string,
+  /** The session this spawn replaces, when it replaces one. See the note above. */
+  ignore?: string | null,
 ): boolean {
   return live.some(
     (session) =>
       session.exitCode === null &&
       session.provider === provider &&
-      sameFolder(session.cwd, cwd),
+      sameFolder(session.cwd, cwd) &&
+      // A falsy `ignore` can never match an id, so this is the ordinary case
+      // spelled the same way as the exemption rather than branched around it.
+      session.id !== ignore,
   )
 }
 
@@ -132,8 +164,10 @@ export function argsForSpawn(input: {
   live: readonly SessionInFolder[]
   cwd: string
   provider: string
+  /** The session being replaced, when this spawn is a replacement. */
+  replaces?: string | null
 }): readonly string[] {
   if (!input.resume || input.resumeArgs.length === 0) return input.args
-  if (conversationIsHeld(input.live, input.cwd, input.provider)) return input.args
+  if (conversationIsHeld(input.live, input.cwd, input.provider, input.replaces)) return input.args
   return input.resumeArgs
 }

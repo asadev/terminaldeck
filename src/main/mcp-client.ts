@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { BRAND } from '../shared/brand'
-import { addMcpServer } from './mcp-add'
+import { addMcpServer, removeMcpServer } from './mcp-add'
 import { currentPlatform, envPath, isPathKey, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
 import { onWebContentsDestroyed } from './web-contents-teardown'
@@ -1161,6 +1161,7 @@ function stringArgs(value: unknown): Record<string, string> {
  * Channels:
  *  - `mcp:list`          (projectPath?)                    -> McpServerStatus[]
  *  - `mcp:add`           (McpAddRequest)                   -> McpAddResult
+ *  - `mcp:remove`        (McpRemoveRequest)                -> McpAddResult
  *  - `mcp:connect`       (serverId, projectPath?)          -> McpServerStatus
  *  - `mcp:disconnect`    (serverId)                        -> McpServerStatus | null
  *  - `mcp:inventory`     (serverId, projectPath?)          -> McpInventory
@@ -1191,6 +1192,12 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain): void {
   // to read-modify-write from over here. The request is validated on that side,
   // so `unknown` is the honest parameter type.
   ipcMain.handle('mcp:add', (_e, request: unknown) => addMcpServer(request))
+
+  // The other write, and it exists because the panel used to point at a
+  // terminal instead of doing it: *"To remove one, run `claude mcp remove` in a
+  // terminal."* Same delegation as the add — the CLI owns the file — so the
+  // same validation on the far side and the same `unknown` here.
+  ipcMain.handle('mcp:remove', (_e, request: unknown) => removeMcpServer(request))
 
   ipcMain.handle('mcp:connect', (_e, id: unknown, projectPath?: unknown) =>
     pool.connect(findServer(id, optionalProjectPath(projectPath))),

@@ -3,6 +3,7 @@ import { useWhenActive } from '../schedule'
 import { linkProps, openLinkExternally } from '../link'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty, PageNote } from './PageEmpty'
+import { HoverNote } from './HoverNote'
 import { toSetupSnapshot, TOOL_STATE_LABEL, type SetupTool } from '../settings/setup-status'
 import './GitHubPanel.css'
 
@@ -29,6 +30,7 @@ export type GitHubErrorKind =
   | 'git-missing'
   | 'repo-not-found'
   | 'no-access'
+  | 'issues-disabled'
   | 'rate-limited'
   | 'network-down'
   | 'timeout'
@@ -364,6 +366,7 @@ const FAILURE_TITLE: Record<GitHubErrorKind, string> = {
   'git-missing': 'git not installed',
   'repo-not-found': 'Repository not found',
   'no-access': 'No access to this repository',
+  'issues-disabled': 'Issues are off',
   'rate-limited': 'GitHub rate limit reached',
   'network-down': 'Cannot reach GitHub',
   timeout: 'GitHub timed out',
@@ -497,6 +500,34 @@ export function FailureBlock({
     </details>
   ) : null
 
+  /*
+    The sentence, and the command, behind the dot.
+
+    Both used to stand on the page. Asad opened this view on a folder with no
+    remote and read a heading, then *"This repository has no remotes yet."*,
+    then *"Run `git remote add origin <url>` in a terminal, then refresh."* —
+    two sentences of instruction and a shell command printed at him, on the very
+    page he had just said was *"still like the same old thing… it's not being
+    resolved."* His rule for exactly this, said in the same recording:
+
+      > *"I don't want any kind of long descriptions anywhere. Just if somewhere
+      > it's very required, give the i icon like other ones, information icon in
+      > the settings, same way."*
+
+    So the heading stays — it is the fact, in three words — the button stays,
+    and the explanation goes behind the same `HoverNote` dot Settings and the
+    MCP page already use. Nothing is lost: the dot holds the message and the
+    command verbatim, for the visit where somebody wants them.
+
+    There is no button that adds a remote, and one is not invented here: a
+    remote is a URL this app has not been given, so a control that claimed to do
+    it would either guess or open a form nobody asked for. `git`'s own stderr is
+    still one press away in `Details`.
+  */
+  const explanation = showsAction(failure)
+    ? `${failure.message} Run ${failure.action} in a terminal, then refresh.`
+    : failure.message
+
   if (page) {
     return (
       <PageEmpty
@@ -505,26 +536,17 @@ export function FailureBlock({
         action={retry ? { label: 'Retry', onClick: onRetry } : undefined}
         extra={details}
       >
-        {failure.message}
-        {showsAction(failure) && (
-          <>
-            {' '}
-            Run <code>{failure.action}</code> in a terminal, then refresh.
-          </>
-        )}
+        <HoverNote label={title}>{explanation}</HoverNote>
       </PageEmpty>
     )
   }
 
   return (
     <div className="gh-failure" role="status">
-      <p className="gh-failure-title">{title}</p>
-      <p className="gh-failure-message">{failure.message}</p>
-      {showsAction(failure) && (
-        <p className="gh-failure-action">
-          Run <code>{failure.action}</code> in a terminal, then refresh.
-        </p>
-      )}
+      <p className="gh-failure-title">
+        {title}
+        <HoverNote label={title}>{explanation}</HoverNote>
+      </p>
       {details}
       {retry && (
         <button type="button" className="gh-retry" onClick={onRetry}>
@@ -547,6 +569,28 @@ export function FailureBlock({
  * the source is spelled out on screen at all times, never left as an enum the
  * user has to infer.
  */
+/**
+ * The same fact in two words, which is what actually goes on the card.
+ *
+ * His rule this round, about this page among others: *"I don't want any kind of
+ * long descriptions anywhere. Just if somewhere it's very required, give the i
+ * icon like other ones."* The sentence below is required — see its own note —
+ * so it moved behind the dot, and what stays on the line is the word that
+ * distinguishes the three credentials from each other.
+ */
+export function sourceWord(source: AuthSource | null): string {
+  switch (source) {
+    case 'device-flow':
+      return 'signed in here'
+    case 'gh-cli':
+      return 'GitHub CLI'
+    case 'environment':
+      return 'GH_TOKEN'
+    default:
+      return 'not signed in'
+  }
+}
+
 export function sourceSentence(source: AuthSource | null, host: string): string {
   switch (source) {
     case 'device-flow':
@@ -685,7 +729,12 @@ export function ConnectionBar({
           </button>
           {state.identity?.name && <span className="gh-conn-name">{state.identity.name}</span>}
         </p>
-        <p className="gh-conn-source">{sourceSentence(state.source, state.host)}</p>
+        <p className="gh-conn-source">
+          {sourceWord(state.source)}
+          <HoverNote label="Where this sign-in comes from">
+            {sourceSentence(state.source, state.host)}
+          </HoverNote>
+        </p>
 
         {state.scopesReported ? (
           /*
@@ -713,18 +762,16 @@ export function ConnectionBar({
               ))
             )}
           </p>
-        ) : (
-          /* A fine-grained token or a GitHub App installation sends no
-             `X-OAuth-Scopes` header at all — which is what a sign-in from this
-             app now always produces. That is not the same fact as a token with
-             no permissions, and printing "Granted: nothing" for a credential
-             that works perfectly would send the user to fix something that is
-             not broken. */
-          <p className="gh-conn-source">
-            GitHub did not report a permission list for this credential, which is normal for a
-            GitHub App sign-in. Whether a list loads is the real test.
-          </p>
-        )}
+        ) : null
+        /* A fine-grained token or a GitHub App installation sends no
+           `X-OAuth-Scopes` header at all — which is what a sign-in from this app
+           now always produces. It used to print two sentences saying that was
+           normal; nothing is drawn now. "Granted: nothing" would have been a
+           lie about a working credential, and a paragraph explaining why a row
+           is absent is the standing prose he has banned — the row is simply
+           absent, which is what every other panel here does with a fact it does
+           not have. */
+        }
       </div>
 
       {confirming ? (
@@ -1731,7 +1778,14 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
   const issues = overview?.issues ?? null
   const limit = overview?.limit ?? 0
   const pullCount = countLabel(pulls?.ok ? pulls.value.length : null, limit)
-  const issueCount = countLabel(issues?.ok ? issues.value.length : null, limit)
+  /*
+   * A repository with its issue tracker switched off has no number, and the
+   * dash says so. Blank read as "still loading" beside a Pull requests count
+   * that had already landed — the state he was looking at when the tab under it
+   * was a red GitHub-request-failed with a Retry on it.
+   */
+  const issuesOff = issues !== null && isFailure(issues) && issues.kind === 'issues-disabled'
+  const issueCount = issuesOff ? '—' : countLabel(issues?.ok ? issues.value.length : null, limit)
   const repoCount = access && access.ok ? (access.truncated ? `${access.atLeast}+` : String(access.repos.length)) : null
 
   /**
@@ -1772,6 +1826,18 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
   ) => {
     if (loading && !section) return <PageNote busy>Reading GitHub…</PageNote>
     if (!section) return <PageNote busy>Reading GitHub…</PageNote>
+    /*
+     * Issues switched off on GitHub is a setting, not a failure.
+     *
+     * It arrived here as `error` — the generic arm — so the tab drew "GitHub
+     * request failed", a dot blaming "The GitHub CLI", a Details disclosure and
+     * a Retry that could not ever succeed, which is the *"same old thing"* he
+     * has now named twice. There is nothing to retry and nothing went wrong, so
+     * it renders exactly like the other nothing-to-show case one line down.
+     */
+    if (isFailure(section) && section.kind === 'issues-disabled') {
+      return <PageNote>{section.message}</PageNote>
+    }
     if (isFailure(section)) return <FailureBlock failure={section} onRetry={refresh} />
     if (section.value.length === 0) {
       return <PageNote>{kind === 'pulls' ? 'No open pull requests.' : 'No open issues.'}</PageNote>

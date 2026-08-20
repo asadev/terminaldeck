@@ -44,14 +44,21 @@ describe('the machine picker', () => {
     expect(markup).toContain('aria-label="Addresses open on office-pc. Choose a machine."')
   })
 
-  it('says what choosing a machine changes, rather than leaving it to be discovered', () => {
+  it('says which question it answers, in the words the menu uses', () => {
     const markup = renderToStaticMarkup(
       <MachinePicker machines={[OFFICE]} selected="mach-1" onSelect={() => {}} />,
     )
-    // Only localhost moves. Every other address is the same site from either
-    // computer, and a picker that quietly tunnelled all of them would cost every
-    // page its real origin.
-    expect(markup).toContain('localhost in the address bar means office-pc')
+    /*
+     * Only localhost moves, and the hover says so by naming the thing that
+     * moves. It used to say it in two sentences — *"localhost in the address bar
+     * means office-pc. Its ports are opened here, in this window."* — on a bar
+     * where Asad had just had every hover cut to its name: *"when I hover, it
+     * should show the title, like shade, inspect, record. Instead of this line,
+     * show only the name."* Four words, and they are the menu's own heading, so
+     * opening the control confirms the hover rather than restating it.
+     */
+    expect(markup).toContain('title="Open localhost on office-pc"')
+    expect(markup).not.toContain('Its ports are opened here')
   })
 
   it('is a real button with a menu behind it, never a label', () => {

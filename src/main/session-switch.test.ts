@@ -5,6 +5,7 @@ import type { ProviderId, SessionMeta } from '../shared/types'
 import type { Profile } from './profiles'
 import type { RestoreDecision, SavedSession } from './session-restore'
 import {
+  conversationToCarry,
   lastLine,
   planSwitch,
   SESSION_SWITCH_CHANNEL,
@@ -428,5 +429,124 @@ describe('a shared conversation history changes what may be said, not what happe
     // Occupancy is decided first and for a different reason: two terminals on
     // one transcript fork it silently, whoever owns the two accounts.
     expect(plan({ sharedStore: true, occupied: true }).conversation).toBe('taken')
+  })
+})
+
+/**
+ * Naming the conversation instead of describing it.
+ *
+ * `--continue` means "the folder's most recent", and the sheet promises
+ * something narrower — the conversation *on screen*. Every condition below is a
+ * way of not saying more than is known.
+ */
+describe('the conversation carried across a switch', () => {
+  const carrying = plan({ decision: decision({ outcome: 'resume', conversation: 'found' }), sharedStore: true })
+
+  it('names the id when the two accounts read one history and the file is there', () => {
+    expect(carrying.conversation).toBe('follows')
+    expect(
+      conversationToCarry({ plan: carrying, agentSessionId: 'abc', readableInTarget: true }),
+    ).toBe('abc')
+  })
+
+  it('says nothing when the transcript is not readable from the other account', () => {
+    // `--resume` against an id that store cannot see is a replacement that
+    // prints an error and exits — worse than the folder-newest guess it
+    // replaces. Falling back leaves the old behaviour exactly as it was.
+    expect(
+      conversationToCarry({ plan: carrying, agentSessionId: 'abc', readableInTarget: false }),
+    ).toBe(null)
+  })
+
+  it('says nothing when this app never named the conversation', () => {
+    // A session this app did not start, or one that resumed rather than being
+    // given an id, has none to carry.
+    expect(
+      conversationToCarry({ plan: carrying, agentSessionId: undefined, readableInTarget: true }),
+    ).toBe(null)
+    expect(conversationToCarry({ plan: carrying, agentSessionId: '', readableInTarget: true })).toBe(
+      null,
+    )
+  })
+
+  it('says nothing when the plan is picking up the other account\'s own conversation', () => {
+    // `theirs` is the deliberate separate-stores case. Naming this session's
+    // conversation there would reach into a store the sheet has just said it
+    // would leave alone.
+    const theirs = plan({ decision: decision({ outcome: 'resume', conversation: 'found' }) })
+    expect(theirs.conversation).toBe('theirs')
+    expect(conversationToCarry({ plan: theirs, agentSessionId: 'abc', readableInTarget: true })).toBe(
+      null,
+    )
+  })
+
+  it('says nothing when nothing is being resumed at all', () => {
+    const fresh = plan({ decision: decision({ outcome: 'fresh', conversation: 'none' }) })
+    expect(fresh.resume).toBe(false)
+    expect(conversationToCarry({ plan: fresh, agentSessionId: 'abc', readableInTarget: true })).toBe(
+      null,
+    )
+  })
+})
+
+/* ------------------------------------------- the flag the CLI would refuse -- */
+
+/**
+ * `--resume` on a switch, and never `--session-id`.
+ *
+ * ## The measurement, on this Mac, 2026-08-20
+ *
+ * Claude Code 2.1.237, a real conversation named by this app, and a second real
+ * account whose `projects/` is linked to the first's:
+ *
+ *     $ cd /private/tmp/td-d1/proj
+ *     $ claude --session-id aa4603b5-… -p 'Remember this codeword: PINEAPPLE-7731…'
+ *     noted
+ *     $ CLAUDE_CONFIG_DIR=…/acct2 claude --session-id aa4603b5-… -p 'What codeword…'
+ *     Error: Session ID aa4603b5-922a-4695-ab24-38a45e702bed is already in use.
+ *     $ CLAUDE_CONFIG_DIR=…/imzapremium-gmail-com claude --resume aa4603b5-… -p 'What codeword…'
+ *     PINEAPPLE-7731
+ *
+ * Same binary, same folder, same conversation, two flags: one refuses and one
+ * carries the conversation into the other login. `--session-id` *declares* an
+ * id and the CLI will not declare one whose transcript exists; `--resume`
+ * *joins* it.
+ *
+ * ## Why this is asserted against the source
+ *
+ * `startSession` composes the argument list inline and spawns a real pty with
+ * it. There is no seam to hand a spy, and the thing that refused is the CLI —
+ * which a unit test cannot ask. What can be pinned is the shape of the
+ * decision, and the shape is the whole of the bug: `wanted` read
+ * `agentSessionId === null ? chosen : […'--session-id', agentSessionId]`, and
+ * `agentSessionId` is set on **both** paths — a fresh id on one, the id being
+ * resumed on the other. So the resume path built `--session-id <the id it was
+ * resuming>` and threw away the `--resume` arguments that had just been chosen
+ * for it. Every account switch that carried a conversation died on start with
+ * an empty terminal, which is the headline complaint the whole module exists
+ * for, reintroduced by the fix for it.
+ *
+ * `declaredId` is null on every path but the fresh one, so the branch cannot be
+ * reached from a resume at all. That is what is checked here.
+ */
+describe('the arguments a switch actually spawns', () => {
+  const source = readFileSync(join(__dirname, 'host-core.ts'), 'utf8')
+
+  it('builds the --session-id list only from a freshly minted id', () => {
+    expect(source).toContain('const declaredId = namesConversation ? randomUUID() : null')
+    expect(source).toMatch(/const wanted =\s*\n\s*declaredId === null\s*\n\s*\? chosen/)
+    expect(source).toContain("'--session-id', declaredId")
+    // The exact expression that shipped, which put the resumed id on the flag.
+    expect(source).not.toContain("'--session-id', agentSessionId")
+    expect(source).not.toMatch(/const wanted =\s*\n\s*agentSessionId === null/)
+  })
+
+  it('still records the resumed conversation on the session, without declaring it', () => {
+    // `SessionMeta.agentSessionId` is what every reader downstream — the
+    // context-window bar above all — uses to find *this* session's transcript.
+    // A resume by name knows it; it simply must not put it on `--session-id`.
+    expect(source).toMatch(
+      /const agentSessionId =\s*\n\s*declaredId \?\? \(named && chosen === resumeArgs/,
+    )
   })
 })

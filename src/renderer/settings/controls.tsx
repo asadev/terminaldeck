@@ -484,6 +484,21 @@ export interface OptionState {
   disabled?: boolean
   /** Appended to the option label — 'not installed', 'unverified'. */
   suffix?: string
+  /**
+   * Take the option off the list entirely.
+   *
+   * Stronger than `disabled`, and it exists because *"if we don't have
+   * installed Codex, it should not be on the page at all"* is a rule about a
+   * whole pane rather than about one list. A greyed-out option is still a line
+   * to read and dismiss, and the argument that a missing row is a worse bug
+   * report than a greyed one has already been heard and lost once — the agents
+   * list acted on it and the pickers beside it did not, so the same machine
+   * showed Codex as absent in one control and present-but-dead in two others.
+   *
+   * The select falls back to drawing a plain value when hiding leaves one
+   * option, which is the same rule a one-option picker already lives by.
+   */
+  hidden?: boolean
 }
 
 export interface SettingControlProps {
@@ -539,8 +554,12 @@ export function SettingControl({
    * screen reader a label attached to nothing, which is a quieter version of
    * the same "control over nothing" this window is being cleared of.
    */
+  const visibleOptions =
+    setting.kind === 'select'
+      ? setting.options.filter((option) => optionState?.(option.value)?.hidden !== true)
+      : []
   const labellable =
-    setting.kind !== 'toggle' && !(setting.kind === 'select' && setting.options.length === 1)
+    setting.kind !== 'toggle' && !(setting.kind === 'select' && visibleOptions.length === 1)
 
   const control = ((): ReactNode => {
     switch (setting.kind) {
@@ -573,7 +592,14 @@ export function SettingControl({
          * the schema gains an option and the control comes back, with nobody
          * having to remember that a section file was hiding it.
          */
-        const only = setting.options.length === 1 ? setting.options[0] : null
+        /*
+         * Options the app has decided are not on this machine, gone rather than
+         * greyed. See `OptionState.hidden` — and note this runs *before* the
+         * one-option rule below, so a machine with a single agent installed
+         * draws the answer instead of a dropdown that cannot be changed.
+         */
+        const options = visibleOptions
+        const only = options.length === 1 ? options[0] : null
         if (only) {
           return (
             <span className="settings-value" id={controlId}>
@@ -591,7 +617,7 @@ export function SettingControl({
               aria-describedby={helpId}
               onChange={(event) => save({ [setting.id]: event.target.value })}
             >
-              {setting.options.map((option) => {
+              {options.map((option) => {
                 const state = optionState?.(option.value) ?? {}
                 return (
                   <option key={option.value} value={option.value} disabled={state.disabled}>
@@ -719,4 +745,24 @@ export function SettingList({
         ))}
     </>
   )
+}
+
+/**
+ * Shut the `<details>` a menu item was pressed in.
+ *
+ * The settings window builds its two menus — **Add agent** and a row's ⋯ — out
+ * of `<details>` rather than a portal, because this window is asserted through
+ * `renderToStaticMarkup` and a portalled menu has no markup a test can read.
+ * The cost is that a `<details>` has no idea a button inside it did something:
+ * pressing **Remove** left the menu standing open on top of the confirmation it
+ * had just raised, and pressing **Claude Code** in Add agent left it open
+ * behind the popup.
+ *
+ * A DOM poke rather than state, deliberately. The alternative is one `open`
+ * flag per menu, controlled, plus the click-outside handling a native
+ * disclosure already does for free — which is how a `<details>` turns back into
+ * the portal it was chosen over.
+ */
+export function closeMenu(event: { currentTarget: HTMLElement }): void {
+  event.currentTarget.closest('details')?.removeAttribute('open')
 }

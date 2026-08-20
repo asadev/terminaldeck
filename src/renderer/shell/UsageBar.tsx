@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ProviderId } from '@shared/types'
 import { accountIdentity, useAccountIdentity } from '../accounts'
 import { useFeatures } from '../features/FeaturesProvider'
+import { HoverNote } from '../components/HoverNote'
 import { ProviderBadge } from '../components/ProviderBadge'
 import { providerOption } from '../components/ProviderPicker'
 import { useOneMenu } from './one-menu'
+import { useSheetRoom } from './sheet-room'
 import {
   contextFigure,
   contextLevel,
@@ -12,7 +14,6 @@ import {
   contextShare,
   contextSummary,
   primaryReading,
-  sourceSentence,
   usageReadout,
   type ContextPanel,
   type ContextReading,
@@ -421,54 +422,78 @@ export function planStatus(input: {
 }
 
 /**
- * The sentence under the rows, in the two states that have one — and nothing in
- * the ordinary state, which is the change he asked for.
+ * The one thing this panel is allowed to say in words, and it is behind a dot.
  *
- * ## What was deleted, and where it went
+ * ## What was deleted, and why the wording is not the point
  *
- * This used to end with a paragraph, and Asad quoted it back verbatim with
- * *"i dont want this inside"*:
+ * Asad, 2026-08-20, looking at this cluster:
  *
- *   > *"Fetched by Claude Code itself, in this app's own process — no session is
- *   > typed into. Opening this panel is what asks, so there is nothing to press;
- *   > the CLI will not fetch its own figure more than once every five minutes,
- *   > which is why each row says when it was read."*
+ *   > *"Every single time you bring some card, you put something new… I said to
+ *   > you, don't put any single statement in anywhere. Everywhere you are
+ *   > putting a lot of statements. We don't need to give the statements. We want
+ *   > simplicity. Let the smart people use it. Smart people knows how it works.
+ *   > We are not making this for the dumb people."*
  *
- * Every clause of it is true and was expensive to establish, and none of it is
- * something a person reading their own usage needs on screen: each row already
- * says when it was read, which is the only part of it that changes what a reader
- * would do. The mechanism it described now lives beside the code that performs
- * it — `check` in `useUsageBar.ts`, at the call that starts the fetch — which is
- * where the next person to change the mechanism will actually look.
+ * And, in the same breath, where the exception goes:
  *
- * ## Why the other two survive
+ *   > *"here you have a very long description… Remove this full shit. I don't
+ *   > want any kind of long descriptions anywhere. Just if somewhere it's very
+ *   > required, give the i icon like other ones, information icon in the
+ *   > settings, same way."*
  *
- * Because they are not provenance, they are the account of a figure that is
- * missing. A reader who can see nothing where a number should be will look for
- * something to press, and in these two states there *is* something to press,
- * immediately below — so the sentence and the control belong together. The
- * branch is on "is there a reading", not on which reason there is not:
- * screenshotted on 2026-08-18, an API-billed login printed *"This account is
- * billed through the Claude API"* and then a provenance line four lines under
- * it, about a figure that does not exist; the second form of the same mistake
- * was caught the same day on an account that was merely signed out.
+ * The last review deleted one sentence out of this cluster and left nine behind
+ * it — an empty-state paragraph, a running line, a failure line, a provenance
+ * line for Codex, and two states that printed two paragraphs stacked. The
+ * default state of every freshly opened session was one of them, so the first
+ * thing this panel ever showed anybody was a paragraph. That is the habit rather
+ * than the sentence, and this function is what is left of all nine: **one**
+ * string, drawn nowhere on the panel, reachable through the ⓘ in its header —
+ * the same `HoverNote` every Settings pane already uses, which is the control he
+ * named.
  *
- * A non-Claude session keeps its source sentence. Codex's figure is read out of
- * a rollout it writes as it works, which is a genuinely different mechanism from
- * anything else on this bar, and there is one line of it.
+ * ## Why anything survives at all
+ *
+ * Because two of the states are not latency, they are settled answers, and they
+ * want opposite things done about them: a login with no subscription limits will
+ * never have a figure, and a login that has simply not printed one yet will.
+ * Both draw the same empty panel, and the ring beside them carries the same
+ * `data-status` distinction it always has. The dot is where the difference is
+ * spelled for whoever wonders — and only for whoever wonders.
+ *
+ * ## What is deliberately *not* here
+ *
+ * *Provenance.* A Codex session used to print "Read from the rollout Codex
+ * writes as it works" in every state including the ones with figures in them,
+ * which is a sentence about a mechanism under numbers that are already correct.
+ * It is gone rather than moved: the ⓘ appears only where there is no figure, so
+ * putting provenance in it would make a dot appear next to a working reading.
+ *
+ * *A running line.* "Checking with Claude Code…" was words for a state the ring
+ * already animates — `data-status="reading"` pulses it — and it was also the
+ * second half of the two-paragraph states. Nothing replaces it.
  */
-export function footNote(input: {
-  provider: ProviderId | undefined
-  noLimits: boolean
+export function panelNote(input: {
+  unwired: boolean
+  withheld: string | null
   blocked: string | null
+  failed: boolean
+  detail: string | null
+  reason: string | null
+  rows: number
 }): string | null {
-  if (input.provider !== 'claude') {
-    return sourceSentence(input.provider === 'codex' ? 'codex-rollout' : 'claude-usage-api')
-  }
-  if (input.noLimits) return 'Remembered for this account, so nothing is started to ask again.'
-  if (input.blocked !== null) {
-    return 'Nothing was read, so there is no figure here — and nothing is started for this session again on its own.'
-  }
+  if (input.unwired) return 'Usage is not wired into this build.'
+  /* Outranks every reason below it for the reason `planStatus` gives: those are
+     all statements about this computer's login, and this bar has stopped
+     claiming to be about it. */
+  if (input.withheld !== null && input.withheld !== '') return input.withheld
+  if (input.blocked !== null) return input.blocked
+  /* A check that failed, with true figures still above it wearing their ages.
+     Only when there is something to say — a failure with no sentence is not
+     worth a dot. */
+  if (input.failed && input.detail !== null) return input.detail
+  /* And the ordinary nothing: no rows yet. The tracker's own sentence when it
+     has one, and nothing at all once there are figures on screen. */
+  if (input.rows === 0) return input.reason
   return null
 }
 
@@ -614,19 +639,20 @@ function MeterIcon({ percent }: { percent: number | null }) {
       height="13"
       viewBox="0 0 24 24"
       fill="none"
-      stroke="currentColor"
       strokeWidth="3.4"
       aria-hidden="true"
     >
-      {/* The track. Same stroke as the arc so the ring has one weight, at a
-          third of the ink so the arc still reads against it. */}
-      <circle cx="12" cy="12" r={radius} opacity="0.32" />
+      {/* The track. Same stroke as the arc so the ring has one weight, in a
+          neutral grey so the arc still reads against it at every level — see
+          `.ub-plan-track`, which is where its colour lives now. */}
+      <circle className="ub-plan-track" cx="12" cy="12" r={radius} />
       {/* And the part that is gone, from twelve o'clock clockwise. The rotation
           is on the element rather than on the path, because a dash offset
           measured from three o'clock is the kind of arithmetic that survives
           exactly until somebody changes the radius. */}
       {filled > 0 ? (
         <circle
+          className="ub-plan-arc"
           cx="12"
           cy="12"
           r={radius}
@@ -1037,13 +1063,23 @@ export function UsageBarView({
   const title = whose === '' ? sentence : `${whose} — ${sentence}`
   const status = planStatus({ unwired, noLimits, blocked, fetching, reported: readouts.length > 0, withheld })
   /*
-   * No provenance line while withholding, and it is the same rule the footnote
-   * already keeps: it is *"not provenance, it is the account of a figure that is
-   * missing"*, and the account of this one is `nothing` above, printed once. A
-   * source sentence here would describe the mechanism by which this app reads a
-   * figure it has just said it is not reading.
+   * The whole of this panel's prose, in one string, behind one ⓘ — and null in
+   * every state that has a figure to show.
+   *
+   * `nothing` above is the same reasoning composed for the *accessible* name,
+   * which is not on screen and is the one place a full sentence still belongs:
+   * a reader who cannot see the ring's colour has nothing else. This is the
+   * sighted half, and it is a dot rather than a paragraph. See {@link panelNote}.
    */
-  const foot = withheld !== null ? null : footNote({ provider, noLimits, blocked })
+  const note = panelNote({
+    unwired,
+    withheld,
+    blocked,
+    failed,
+    detail,
+    reason: report?.reason ?? null,
+    rows: readouts.length,
+  })
 
   /*
    * The context figure, which is the whole of what is outside the dropdown.
@@ -1087,11 +1123,14 @@ export function UsageBarView({
    * figure and a 21 icon with the gap between them — put the row 27 pixels past
    * its own edge. One element fits.
    *
-   * Which one goes is not a toss-up. A permanently visible context reading is
-   * the whole of what Asad asked to keep outside the dropdown, and an icon is
-   * the only part of this that can be folded into something else without being
-   * lost: the figure takes the press, so the plan limits stay one click away at
-   * every width the app can be made. Both accessible names say so.
+   * Neither one goes. That was the earlier answer and it was the wrong half:
+   * the figure took the press and the *ring* was dropped, which made the mark he
+   * picked for the plan limits the only thing on this bar that vanishes when a
+   * pane is narrow. Since the figure became a 28-pixel strip rather than a
+   * six-character number, both fit inside one chip — so the fold now moves the
+   * reading *into* the control instead of replacing the control with it. One
+   * press, both readings, at every width the app can be made; the accessible
+   * name and the panel both say both.
    */
   const figureIsControl = tight && figure !== null
 
@@ -1253,23 +1292,25 @@ export function UsageBarView({
         onFocus={() => send({ kind: 'hover', panel: 'plan' })}
         onClick={() => send({ kind: 'press', panel: 'plan' })}
       >
+        {/* At the narrowest width the context bar is drawn *inside* this
+            control rather than in place of it. It used to replace the ring, and
+            the ring is the mark Asad chose for this reading — *"give it a maybe
+            ring icon will be better"* — so it is the one thing on this bar that
+            may not be what disappears. Two marks, one press, one panel; the
+            accessible name above and the sheet below already say both readings
+            whenever the two are folded. */}
         {figureIsControl ? (
           <span className="ub-context" data-level={figureLevel}>
             <ContextBar share={figureShare} level={figureLevel} figure={figure} />
           </span>
-        ) : (
-          /* The worst window's own fraction, which is what the chip's colour
-             already says in another vocabulary. */
-          <MeterIcon percent={worst?.percent ?? null} />
-        )}
+        ) : null}
+        {/* The worst window's own fraction, which is what the chip's colour
+            already says in another vocabulary. */}
+        <MeterIcon percent={worst?.percent ?? null} />
       </button>
 
       {open === null ? null : (
-        <div
-          className="ub-sheet scroll-fade"
-          role="dialog"
-          aria-label={open === 'context' ? 'Context window' : 'Usage windows'}
-        >
+        <UsageSheet label={open === 'context' ? 'Context window' : 'Usage windows'}>
           {/*
             The context breakdown, above the plan rows or on its own.
 
@@ -1286,11 +1327,22 @@ export function UsageBarView({
             <>
             {/* Whose, before what. The agent's mark and name, then the login as
                 the account chip states it — same function, so the two cannot
-                disagree — and only then the numbers. */}
+                disagree — and only then the numbers.
+
+                And, at the end of the row, the one ⓘ this panel is allowed —
+                only in the states that have no figure. `HoverNote` is the same
+                dot every Settings pane wears, which is the control he named
+                when he asked for the paragraphs to go: *"give the i icon like
+                other ones, information icon in the settings, same way."* */}
             <header className="ub-whose">
               {provider ? <ProviderBadge provider={provider} size={13} /> : null}
               <span className="ub-whose-agent">{agent ?? 'This session'}</span>
               {accountLabel ? <span className="ub-whose-account">{accountLabel}</span> : null}
+              {note === null ? null : (
+                <span className="ub-whose-note">
+                  <HoverNote label="these plan limits">{note}</HoverNote>
+                </span>
+              )}
             </header>
 
             {/*
@@ -1301,45 +1353,38 @@ export function UsageBarView({
               opens inside five minutes cannot produce two different numbers and a
               panel that implied "now" would be wrong four times out of five.
             */}
-            {readouts.length > 0 ? (
-              readouts.map((readout) => <WindowRow key={readout.reading.id} readout={readout} />)
-            ) : (
-              <p className="ub-empty">{nothing}</p>
-            )}
+            {readouts.map((readout) => (
+              <WindowRow key={readout.reading.id} readout={readout} />
+            ))}
 
             {/*
-              A refresh is running, said out loud because nobody pressed a button
-              to start it — opening this panel did. Without it the panel would sit
-              on figures marked `read 2h ago` for the three seconds the check
-              takes, with nothing on screen saying anything was happening, and the
-              reader would close it believing that is all there is.
+              A refresh is running — on the ring, not in the panel.
 
-              Bounded: `useUsageBar` gives up after eighteen seconds and says so,
-              so this cannot become a spinner that never stops. That bound is
-              longer than the main process's own fifteen-second kill on purpose, so
-              a slow probe finishes and reports properly rather than being
-              disowned a second before it answers.
+              This used to be `Checking with Claude Code…` printed under the
+              rows, and it was one of the nine sentences in this cluster he
+              counted: *"Everywhere you are putting a lot of statements."* The
+              state it announced was never carried by those words alone —
+              `planStatus` already returns `reading`, the icon wears it as
+              `data-status`, and `UsageBar.css` pulses it — so deleting the line
+              deletes a duplicate rather than a signal.
+
+              What the words did carry, and pixels cannot, is the announcement
+              for a reader who is not looking at the ring. That is this, and it
+              is clipped to nothing: a live region with no box, no colour and no
+              room, so the panel is figures-only to the eye and unchanged to a
+              screen reader. A failed check has stopped having a line here too —
+              its sentence is the ⓘ in the header, beside the figures it failed
+              to move, which is where every other explanation in this panel now
+              lives.
+
+              Bounded by `useUsageBar`'s eighteen-second cap, so neither the
+              pulse nor this can run for ever.
             */}
             {fetching ? (
-              <p className="ub-running" role="status">
-                Checking with Claude Code…
-              </p>
-            ) : failed && detail !== null ? (
-              /*
-               * And what went wrong, in one plain sentence, with the old figures
-               * still above it wearing their ages. The alternative — clearing the
-               * rows on a failed check — throws away a true reading because a
-               * later look failed, which is a worse answer than an old one that
-               * admits how old it is.
-               */
-              <p className="ub-failed" role="status">
-                {detail}
-              </p>
+              <span className="ub-live" role="status">
+                Checking with {agent ?? 'the agent'}…
+              </span>
             ) : null}
-
-            {/* See {@link footNote}: a sentence only in the states that have
-                stopped, and nothing at all in the ordinary one. */}
-            {foot === null ? null : <p className="ub-foot">{foot}</p>}
 
             {/*
               The one control in this component, and the only state that has one.
@@ -1347,13 +1392,20 @@ export function UsageBarView({
               He deleted `Check now` in as many words — *"usage should appear on
               its own, not need a click"* — and that judgement is honoured
               everywhere the automatic path is still trying: there is nothing to
-              press, and the sentence above says why there is nothing to press.
+              press, because the app is already doing it.
 
               This is the state that judgement did not cover. The app has asked,
-              been answered, and stopped; leaving the reader with a sentence and no
-              way to act on it is the dead end the whole review was about, and it
-              is worse than the button ever was. So the button comes back here and
-              only here — after a stop, next to the reason for the stop.
+              been answered, and stopped; leaving the reader with an empty panel
+              and no way to act on it is the dead end the whole review was about,
+              and it is worse than the button ever was. So the button comes back
+              here and only here — after a stop, under the ⓘ that carries the
+              reason for the stop.
+
+              It is a control and not a statement, which is why it survived the
+              cull of 2026-08-20 that took every sentence out of this panel: he
+              asked for *"Check again"* to go *"if it does nothing useful"*, and
+              this is the one place in the app where it is the only thing that
+              does anything at all.
 
               It is the only thing that reaches past a settled answer:
               `refreshUsage` in the main process remembers "this login has no
@@ -1367,8 +1419,27 @@ export function UsageBarView({
             ) : null}
             </>
           )}
-        </div>
+        </UsageSheet>
       )}
+    </div>
+  )
+}
+
+/**
+ * The panel itself, split out for one reason: it needs a ref, and a ref needs an
+ * element that exists only while the panel is open.
+ *
+ * `useSheetRoom` publishes how much window there is under this element so the
+ * stylesheet's cap can be the smaller of the design height and the room — see
+ * `sheet-room.ts` for the measurement it replaced and why the CSS-only version
+ * of it was wrong on a short window.
+ */
+function UsageSheet({ label, children }: { label: string; children: React.ReactNode }) {
+  const sheet = useRef<HTMLDivElement>(null)
+  useSheetRoom(sheet)
+  return (
+    <div className="ub-sheet scroll-fade" role="dialog" aria-label={label} ref={sheet}>
+      {children}
     </div>
   )
 }

@@ -241,6 +241,30 @@ describe('copying a message', () => {
     expect(source).toContain('onCopy(message.text)')
     expect(source).not.toMatch(/onCopy\((html|renderMarkdown)/)
   })
+
+  it('is on screen without a pointer on it', () => {
+    /*
+     * *"And give the copy button wherever it's possible at the end of maybe
+     * messages. See, it gives everywhere. So give copy button."*
+     *
+     * This shipped at `opacity: 0` until the turn was hovered, which satisfies
+     * every assertion above — the button is in the markup, it is 20px wide, it
+     * copies the right text — and fails the sentence, because on the screen as
+     * it sits there was no copy button anywhere.
+     *
+     * Read out of the stylesheet because that is where the failure lived; there
+     * is no layout engine in this suite, so the resting opacity is only
+     * checkable as text. The number itself is taste and may move; zero is not
+     * taste, it is the control being absent.
+     */
+    const css = readFileSync(join(__dirname, 'ChatView.css'), 'utf8')
+    const rest = /\.cv-copy \{[\s\S]*?\n\}/.exec(css)?.[0] ?? ''
+    expect(rest, '.cv-copy has changed shape').not.toBe('')
+    const opacity = Number(/opacity:\s*([\d.]+);/.exec(rest)?.[1])
+    expect(opacity).toBeGreaterThan(0.3)
+    // And hovering the turn still takes it to full, so the affordance reads.
+    expect(css).toMatch(/\.cv-message:hover \.cv-copy,\n\.cv-copy:focus-visible \{\n {2}opacity: 1;/)
+  })
 })
 
 describe('empty states', () => {

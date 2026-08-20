@@ -84,6 +84,28 @@ export interface McpAddResult {
   message: string
 }
 
+/**
+ * What it takes to unwrite one of these.
+ *
+ * The panel could add a server and not remove one, and said so in a note that
+ * sent the reader to a terminal — *"To remove one, run `claude mcp remove`"*.
+ * Asad, looking at that page: *"On MCP servers did nothing."* A control panel
+ * that can only add is half a control panel, and the reason the write went
+ * through the CLI in the first place (see the header) is exactly the reason the
+ * unwrite does too: `~/.claude.json` is another application's live database.
+ *
+ * The scope is carried rather than left to the CLI's own search, because the
+ * CLI without one removes from *whichever scope it exists in* — so a user-scope
+ * server and a project-scope server of the same name are one press from the
+ * wrong one going. The panel knows which row was pressed and says so.
+ */
+export interface McpRemoveRequest {
+  name: string
+  scope: McpAddScope
+  /** Absolute path of the open project, or null when none is open. */
+  projectPath: string | null
+}
+
 /* ------------------------------------------------------------ validation -- */
 
 const SCOPES: readonly McpAddScope[] = ['user', 'project', 'local']
@@ -294,6 +316,47 @@ export function tokenizeCommand(line: string): string[] {
  * `CLAUDE_CONFIG_DIR` and the resulting `mcpServers` block was read back, so
  * this is measured rather than inferred from `--help`.
  */
+/**
+ * What crossed the bridge, as a removal, or why it is not one.
+ *
+ * The same shape as {@link resolveRequest} and for the same reason — everything
+ * from the renderer is `unknown` on this side. `NAME_PATTERN` matters more here
+ * than it does there: a name beginning `-` would be read by the CLI's own
+ * parser as a flag, and `--scope` typed into a name box would rewrite the scope
+ * of the command being built rather than name a server that does not exist.
+ */
+export function resolveRemoveRequest(raw: unknown): McpRemoveRequest {
+  if (typeof raw !== 'object' || raw === null) throw new Error('Nothing to remove.')
+  const input = raw as Record<string, unknown>
+
+  const name = text(input.name)
+  if (name === '') throw new Error('Name the server to remove.')
+  if (!NAME_PATTERN.test(name)) throw new Error('That is not a server name this app wrote.')
+
+  const scope = SCOPES.find((candidate) => candidate === input.scope)
+  if (!scope) throw new Error('Say which scope the server is in.')
+
+  const projectPath =
+    typeof input.projectPath === 'string' && input.projectPath !== '' && isAbsolute(input.projectPath)
+      ? normalize(input.projectPath)
+      : null
+
+  // Same rule as adding, and the same reason: `local` and `project` are
+  // addressed by the working directory the CLI runs in, so without a project
+  // the command would be aimed at the app's own cwd — `/` for a packaged Mac
+  // app — and would report success having removed nothing.
+  if (scope !== 'user' && !projectPath) {
+    throw new Error('Open the project this server belongs to first.')
+  }
+
+  return { name, scope, projectPath }
+}
+
+/** `claude mcp remove --scope <scope> <name>`, pinned by a test like the add. */
+export function buildRemoveArgs(request: McpRemoveRequest): string[] {
+  return ['mcp', 'remove', '--scope', request.scope, request.name]
+}
+
 export function buildAddArgs(request: McpAddRequest): string[] {
   const args = ['mcp', 'add', '--scope', request.scope]
   if (request.transport !== 'stdio') args.push('--transport', request.transport)
@@ -372,7 +435,43 @@ export async function addMcpServer(raw: unknown, deps: McpAddDeps = {}): Promise
   } catch (cause) {
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) }
   }
+  return runClaudeMcp(args, request.projectPath, `Added ${request.name}.`, deps)
+}
 
+/**
+ * Remove the server, through the tool that owns the file.
+ *
+ * Everything in {@link addMcpServer}'s spawn — the login PATH, the Windows
+ * `cmd.exe` shim, `windowsHide`, the working directory that decides two of the
+ * three scopes — applies here identically, so it is the same call rather than a
+ * second one that will drift from it. See {@link runClaudeMcp}.
+ */
+export async function removeMcpServer(raw: unknown, deps: McpAddDeps = {}): Promise<McpAddResult> {
+  let request: McpRemoveRequest
+  let args: string[]
+  try {
+    request = resolveRemoveRequest(raw)
+    args = buildRemoveArgs(request)
+  } catch (cause) {
+    return { ok: false, message: cause instanceof Error ? cause.message : String(cause) }
+  }
+  return runClaudeMcp(args, request.projectPath, `Removed ${request.name}.`, deps)
+}
+
+/**
+ * One spawn of `claude mcp …`, shared by both writes.
+ *
+ * Every comment that used to sit inside `addMcpServer` about PATH, the Windows
+ * launcher, `windowsHide` and the working directory is here, once, because
+ * there are now two callers and two copies of that reasoning would be two
+ * chances to get the Windows half wrong on the platform nothing here runs on.
+ */
+async function runClaudeMcp(
+  args: string[],
+  projectPath: string | null,
+  quietSuccess: string,
+  deps: McpAddDeps,
+): Promise<McpAddResult> {
   const exec =
     deps.exec ??
     ((file, argv, options) => run(file, argv, options).then(({ stdout, stderr }) => ({
@@ -400,7 +499,7 @@ export async function addMcpServer(raw: unknown, deps: McpAddDeps = {}): Promise
       // `user` scope ignores this; the other two are addressed by it. See the
       // header — this line is the whole reason `resolveRequest` refuses a
       // non-user scope without a project.
-      cwd: request.projectPath ?? homedir(),
+      cwd: projectPath ?? homedir(),
       // Never `{ ...process.env, PATH: path }`. Windows spells the variable
       // `Path`, an object literal is case-sensitive, and spreading then writing
       // `PATH` hands the child two spellings of one variable with no rule about
@@ -422,7 +521,7 @@ export async function addMcpServer(raw: unknown, deps: McpAddDeps = {}): Promise
     const said = [stdout, stderr].map((part) => part.trim()).filter((part) => part !== '').join('\n')
     return {
       ok: true,
-      message: said === '' ? `Added ${request.name}.` : said,
+      message: said === '' ? quietSuccess : said,
     }
   } catch (cause) {
     if (isMissingBinary(cause)) {

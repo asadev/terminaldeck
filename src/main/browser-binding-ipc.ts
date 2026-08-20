@@ -59,13 +59,18 @@ interface KnownWindow {
   /** True while this is the page on screen, so the menu can say which one it is. */
   visible: boolean
   /**
-   * A number for a window nobody has named.
+   * This window's own number — the `5` in `W5`.
    *
    * Four windows on the start page are four rows reading `New tab`, which is
    * what Asad was looking at when he said he could not attach an existing one —
    * the menu was full of windows and none of them was distinguishable from the
    * next. Allocated on first sight and never reused, so the number a window
    * wears does not change under him when another one closes.
+   *
+   * It reaches every menu row rather than only the nameless ones, which is the
+   * half that was missing: a start page is not nameless, it is called `New tab`,
+   * so a number kept as a *fallback* for a window with no title never appeared
+   * on his screen at all. See {@link windowNumber}.
    */
   w: number
 }
@@ -178,16 +183,63 @@ export function openForSession(
 /* ------------------------------------------------------------------ menu -- */
 
 /**
- * What to call a window in a menu.
+ * What the page has said about itself, or nothing at all.
  *
- * Whatever the page said about itself first, because that is what he would
- * recognise. `Window 3` only for a page that has told us nothing — and it is a
- * number rather than a fourth row reading `New tab`, which is the state he was
- * actually in: *"I cannot connect actually this one… I can only start a new
- * one."* Four identical rows are not a list you can choose from.
+ * Deliberately allowed to be empty. Everything that draws a row puts a number
+ * in front of it — see {@link windowNumber} — so a page that has told us nothing
+ * still produces a row that can be told from the next one, and nothing here has
+ * to invent a title no page ever had.
  */
-function windowLabel(entry: KnownWindow): string {
-  return entry.title || entry.url || `Window ${entry.w}`
+function windowSays(entry: KnownWindow): string {
+  return entry.title || entry.url
+}
+
+/**
+ * `W3` — the number a window wears in a menu when the session has no name for
+ * it.
+ *
+ * ## Why every row carries one, and not only the nameless ones
+ *
+ * It used to read `entry.title || entry.url || \`Window ${entry.w}\`` — the
+ * number as a *last* resort, for a page that had told us nothing. Rendered, the
+ * number never appeared once, because a browser window sitting on the start page
+ * does not tell us nothing: it tells us its title is `New tab`. So the fallback
+ * could not fire, and Asad's menu was the same list of identical rows it was
+ * when he filmed it:
+ *
+ * > *"So let's say I connected this one, and I cannot connect actually this one.
+ * > This is also a problem. I can only start a new one. See here."*
+ *
+ * Two windows on the start page are two rows reading `New tab`. He was not
+ * unable to *press* one — either press attaches something — he was unable to
+ * press the one he meant, which is the same thing from where he was sitting.
+ *
+ * So the number leads unconditionally. `W5   New tab` and `W6   New tab` are two
+ * rows; `New tab` and `New tab` are one row written twice.
+ *
+ * ## Why `W` and not `B`
+ *
+ * They are different facts and the app must not spell them the same. `B2` is a
+ * slot **inside one session** — the word he says out loud and the word the agent
+ * was handed — and a window that this session does not hold has no such slot;
+ * printing one would name something the agent has never been told. `W5` is the
+ * window's own identity, allocated on first sight and never reused, so it is
+ * stable while he reads down the list and does not shift when another window
+ * closes. An attached row leads with its `B`, an unattached row with its `W`,
+ * and the two numbers are never the same number wearing two letters.
+ */
+function windowNumber(entry: KnownWindow): string {
+  return `W${entry.w}`
+}
+
+/**
+ * One row: the number, then whatever the page calls itself.
+ *
+ * The gap is three spaces because a native menu has no columns; it is the same
+ * separation `B1   Stripe` already used, so the two kinds of row line up.
+ */
+function menuRow(lead: string, said: string): string {
+  return said === '' ? lead : `${lead}   ${said}`
 }
 
 /** How a machine is named in a menu heading. Empty id means this computer. */
@@ -197,27 +249,52 @@ function machineLabel(machineId: string, machineName: string): string {
 }
 
 /**
- * The windows, in machine order, with a heading per machine — and no heading at
- * all when they are all in one place.
+ * Machine ids in the order their groups should be drawn: the machine this menu
+ * is *about* first, then the rest in the order they were first seen.
+ *
+ * ## Why `home` leads rather than this computer always leading
  *
  * Asad: *"if I open any browser here and if I connect it to, let's say, desktop,
  * now this is in desktop, it should come under this table, under the desktop
  * sessions. So all the desktop browser, including session, should be at one
- * place."* A heading is a label, not a sentence, so it survives the rule about
- * prose on screen; and it is absent in the ordinary one-machine case, where it
- * would be a heading over the only group there is.
+ * place."*
+ *
+ * The grouping already existed; what it did not do was put **his** machine at
+ * the top. Opening *Connect browser* from a session running on his PC listed
+ * this Mac's windows first and the PC's — the ones that belong with that session
+ * — underneath, so the pairing he asked to see was the second thing on the menu.
+ * Read from the other end it is the same sentence: a browser window that is on
+ * the PC, asked which session it belongs to, should offer that machine's
+ * sessions first.
+ *
+ * `home` is the empty string in the ordinary case, which is exactly the rule
+ * this replaced, so nothing moves on a one-machine setup.
+ *
+ * A heading is a label, not a sentence, so it survives the rule about prose on
+ * screen; and it is absent in the one-machine case, where it would be a heading
+ * over the only group there is.
  */
-function byMachine(entries: KnownWindow[]): { label: string; windows: KnownWindow[] }[] {
+function machineOrder(keys: Iterable<string>, home: string): string[] {
+  const ordered = [...keys]
+  const at = ordered.indexOf(home)
+  if (at <= 0) return ordered
+  ordered.splice(at, 1)
+  ordered.unshift(home)
+  return ordered
+}
+
+/** The windows, grouped and ordered by {@link machineOrder}. */
+function byMachine(
+  entries: KnownWindow[],
+  home: string,
+): { label: string; windows: KnownWindow[] }[] {
   const groups = new Map<string, KnownWindow[]>()
   for (const entry of entries) {
     const list = groups.get(entry.machineId)
     if (list) list.push(entry)
     else groups.set(entry.machineId, [entry])
   }
-  // This computer first, then the rest in the order they were first seen —
-  // which is the order the machine list itself is built in.
-  const keys = [...groups.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : 0))
-  return keys.map((machineId) => ({
+  return machineOrder(groups.keys(), home).map((machineId) => ({
     label: machineLabel(machineId, groups.get(machineId)?.[0]?.machineName ?? ''),
     windows: groups.get(machineId) ?? [],
   }))
@@ -287,7 +364,9 @@ export function bindMenuItems(
     items.push({ label: 'No browser windows are open.', enabled: false })
   }
 
-  const groups = byMachine(windows)
+  // The session's own machine leads, so the windows that belong with it are the
+  // first thing on the menu. See {@link machineOrder}.
+  const groups = byMachine(windows, machineId)
   for (const group of groups) {
     if (groups.length > 1) items.push({ label: group.label, enabled: false })
     for (const entry of group.windows) {
@@ -296,12 +375,14 @@ export function bindMenuItems(
         type: 'checkbox',
         checked: bound !== undefined,
         /*
-         * The slot number leads when there is one, because `B2` is the word he
-         * says out loud and the word the agent was told. A window this session
-         * does not hold has no number *for this session* and so wears none —
-         * inventing one here would print a name the agent has never been given.
+         * The slot number leads when this session holds the window, because
+         * `B2` is the word he says out loud and the word the agent was told.
+         * A window it does not hold has no slot *for this session* and wears
+         * its own `W` number instead — inventing a `B` here would print a name
+         * the agent has never been given, and printing nothing is what left him
+         * looking at two rows reading `New tab`. See {@link windowNumber}.
          */
-        label: bound ? `${slotName(bound.n)}   ${windowLabel(entry)}` : windowLabel(entry),
+        label: menuRow(bound ? slotName(bound.n) : windowNumber(entry), windowSays(entry)),
         click: () => {
           if (bound) detach(entry.tabId)
           else
@@ -375,8 +456,13 @@ export interface SessionChoice {
  * is what {@link attach} does and what the session-side menu has always done;
  * unticking the one that is ticked detaches.
  *
- * Sessions are grouped under the machine they run on, which is the other half of
- * *"all the desktop browser, including session, should be at one place"*.
+ * Sessions are grouped under the machine they run on, and the machine **this
+ * window is on** leads — which is the other half of *"if I connect it to, let's
+ * say, desktop, now this is in desktop, it should come under this table, under
+ * the desktop sessions. So all the desktop browser, including session, should be
+ * at one place."* A window on his PC asked which session it belongs to now
+ * offers that PC's sessions first, instead of listing this Mac's and putting the
+ * pairing he described second.
  */
 export function connectMenuItems(
   request: { browserTabId: string; sessions: SessionChoice[] },
@@ -397,7 +483,10 @@ export function connectMenuItems(
     if (list) list.push(session)
     else groups.set(key, [session])
   }
-  const keys = [...groups.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : 0))
+  // The machine this window's page is really served by, first. An unknown
+  // window and a window on this computer both give `''`, which is the order this
+  // menu already had.
+  const keys = machineOrder(groups.keys(), entry?.machineId ?? '')
 
   for (const key of keys) {
     const sessions = groups.get(key) ?? []
@@ -622,7 +711,16 @@ export function registerBrowserBindingIpc(ipcMain: IpcMain, deps: BindingIpcDeps
 export function forgetKnownWindows(): void {
   known.clear()
   pending.clear()
-  // Not `windowSeq`. The numbers are only ever shown beside each other, so
-  // restarting the count would be harmless here and a trap the day anything
-  // outside this file remembers one.
+  /*
+   * `windowSeq` too, and for the same reason `SessionBinding.next` restarts on
+   * an empty session.
+   *
+   * The one caller is a renderer replacement — ⌘R, a dev rebuild — where every
+   * browser window this app had is genuinely gone and `hostReset()` drops every
+   * binding in the same breath. The number is no-reuse so that a row he is
+   * reading cannot be renamed under him by another window closing; with nothing
+   * left open there is no such row, and marching on would put `W47   New tab` in
+   * front of him after a morning of reloads.
+   */
+  windowSeq = 0
 }

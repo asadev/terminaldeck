@@ -107,6 +107,13 @@ export interface McpBridge {
    * alongside it.
    */
   addMcpServer(request: Record<string, unknown>): Promise<McpAddResult>
+  /**
+   * The other write, and the reason this page is a control panel rather than
+   * half of one. Same shape as the add — the scope and the project path are
+   * part of the request, because two of the three scopes are decided by the
+   * directory the CLI is run in.
+   */
+  removeMcpServer(request: Record<string, unknown>): Promise<McpAddResult>
   connectMcpServer(id: string, projectPath?: string | null): Promise<McpServerStatus>
   disconnectMcpServer(id: string): Promise<McpServerStatus | null>
   mcpInventory(id: string, projectPath?: string | null): Promise<McpInventory>
@@ -131,6 +138,7 @@ export interface McpInspectorProps {
 const BRIDGE_METHODS = [
   'listMcpServers',
   'addMcpServer',
+  'removeMcpServer',
   'connectMcpServer',
   'disconnectMcpServer',
   'mcpInventory',
@@ -222,6 +230,27 @@ const INVENTORY_DEADLINE_MS = 45_000
  * and Reload is right there for the moment it does.
  */
 const SERVERS_FRESH_MS = 30_000
+
+/**
+ * The folder this page is reading, in one word.
+ *
+ * ## Why a page about a config file has to name a folder
+ *
+ * Asad, on this view: *"On MCP servers did nothing."* It was not doing nothing
+ * — it was reading a *different* folder from the one he had open in the rail,
+ * and saying "No servers yet" about it. Two of the three MCP scopes are keyed
+ * on a working directory (`mcp-add.ts` spells out which), so "no servers" and
+ * "wrong folder" are the same sentence on this page unless the folder is on it.
+ * Source control puts its branch on the page for the same reason.
+ *
+ * The name, not the path: the path is 60 characters of prose and lives in the
+ * `title`, where it costs nothing until it is wanted.
+ */
+function folderName(path: string | null): string {
+  if (!path) return ''
+  const parts = path.split(/[\\/]/).filter((part) => part !== '')
+  return parts[parts.length - 1] ?? path
+}
 
 function serversKey(projectPath: string | null): string {
   return `mcp:servers:${projectPath ?? ''}`
@@ -354,10 +383,6 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
   const [section, setSection] = useState<SectionKey>('tools')
   const [inventories, setInventories] = useState<Record<string, InventoryState>>({})
   const [adding, setAdding] = useState(false)
-  // Kept after the form closes: the CLI's own "Added X to local config" line is
-  // the only confirmation that the write landed somewhere the user expected,
-  // and closing the form on top of it would throw that away.
-  const [added, setAdded] = useState<string | null>(null)
 
   /**
    * Ticket for the newest list request. Switching projects, or an impatient
@@ -366,6 +391,10 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
    * project would repaint over the new one's servers. Only the latest ticket
    * is allowed to write.
    */
+  /** Which row's Remove is waiting for its second press, and any refusal. */
+  const [removing, setRemoving] = useState<string | null>(null)
+  const [removeError, setRemoveError] = useState<Record<string, string>>({})
+
   const listTicket = useRef(0)
   const inventoryTickets = useRef<Record<string, number>>({})
 
@@ -486,6 +515,34 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
     if (!held?.data && !held?.loading && !server.unsupported) void loadInventory(server.id)
   }
 
+  /**
+   * The row whose Remove is armed, and what the last attempt said.
+   *
+   * Armed rather than immediate, because this deletes a line out of another
+   * application's configuration and there is no undo anywhere in this app. It
+   * is the same two-press shape the GitHub card uses for Disconnect — the
+   * second press is the danger-coloured one — rather than a modal, which would
+   * be a second pattern for the same question.
+   */
+  const remove = async (server: McpServerStatus): Promise<void> => {
+    if (!api) return
+    setRemoving(null)
+    setRemoveError((current) => ({ ...current, [server.id]: '' }))
+    const result = await api.removeMcpServer({
+      name: server.name,
+      scope: server.scope,
+      projectPath: projectPath ?? null,
+    })
+    if (!result.ok) {
+      setRemoveError((current) => ({ ...current, [server.id]: result.message }))
+      return
+    }
+    // The row leaving is the confirmation. Nothing is printed on success.
+    setExpanded((current) => (current === server.id ? null : current))
+    setRemoveError((current) => ({ ...current, [server.id]: '' }))
+    void refresh()
+  }
+
   const disconnect = async (id: string): Promise<void> => {
     if (!api) return
     // Retire any listing in flight, so its result cannot land after the
@@ -547,9 +604,11 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
           {/*
             The sentence that used to stand here is behind the dot now.
 
-            It said where the list comes from and that removing a server has to
-            happen in a terminal — both true, both worth having, and neither
-            worth a standing line of prose above every visit to this page.
+            It said where the list comes from and that removing a server had to
+            happen in a terminal. The first half is still here; the second half
+            is gone because it is no longer true — every row carries a Remove
+            now, and a page that sends its reader to a terminal to undo what its
+            own button just did was the *"did nothing"* he was looking at.
             Asad, this round: *"I don't want any kind of long descriptions
             anywhere. Just if somewhere it's very required, give the i icon
             like other ones, information icon in the settings, same way."*
@@ -557,18 +616,21 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
             uses, so it behaves identically.
           */}
           <HoverNote label="Where these come from">
-            {'These are read from your Claude Code configuration. To remove one, run claude mcp remove in a terminal.'}
+            {'Read from your Claude Code configuration.'}
           </HoverNote>
+          {/* Which folder the list above is about — see `folderName`. */}
+          {projectPath && (
+            <span className="mcp-folder" title={projectPath}>
+              {folderName(projectPath)}
+            </span>
+          )}
         </div>
         <div className="mcp-head-actions">
           {!blank && (
             <button
               type="button"
               className="mcp-add-open"
-              onClick={() => {
-                setAdding((open) => !open)
-                setAdded(null)
-              }}
+              onClick={() => setAdding((open) => !open)}
             >
               {adding ? 'Close' : 'Add server'}
             </button>
@@ -584,16 +646,25 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
         <McpAddForm
           projectPath={projectPath}
           onSubmit={(request) => api.addMcpServer(request)}
-          onAdded={(message) => {
+          onAdded={() => {
             setAdding(false)
-            setAdded(message)
             void refresh()
           }}
           onCancel={() => setAdding(false)}
         />
       )}
 
-      {added && !adding && <p className="mcp-added">{added}</p>}
+      {/*
+        Nothing here any more.
+
+        A green banner used to sit on the page for the rest of the session
+        reading *"Added stdio MCP server auditprobe with command: node … to user
+        config File modified: /Users/apple/.claude.json"* — the CLI's two lines
+        concatenated into one ungrammatical paragraph, never dismissed. The row
+        appearing in the list below is the confirmation, and it is the one that
+        is still true a minute later. A failure still reaches the user: the form
+        prints what the CLI refused with, in the form, where the fields are.
+      */}
 
       {listError && <p className="mcp-error">{listError}</p>}
 
@@ -626,10 +697,7 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
           action={{
             label: 'Add a server',
             primary: true,
-            onClick: () => {
-              setAdding(true)
-              setAdded(null)
-            },
+            onClick: () => setAdding(true),
           }}
           /* The reload the header would have carried, kept where the rest of
              the page is: somebody who has just added a server from a terminal
@@ -638,6 +706,16 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
             <button type="button" className="mcp-refresh" onClick={() => void refresh()} disabled={loading}>
               {loading ? 'Reading…' : 'Reload'}
             </button>
+          }
+          /* The folder it just read and found nothing in. Without it "No
+             servers yet" and "you are looking at the wrong folder" are the same
+             three words — see `folderName`. */
+          hint={
+            projectPath ? (
+              <span className="mcp-folder" title={projectPath}>
+                {folderName(projectPath)}
+              </span>
+            ) : undefined
           }
         />
       )}
@@ -650,6 +728,8 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
           // property read `inventory.data` does not, which is what the cast
           // that used to sit on `countFor` was hiding.
           const data = inventory?.data ?? null
+          /** The one sentence this row has behind its dot, if it has one. */
+          const why = server.disabledReason ?? server.unsupported
           return (
             <li className="mcp-server" key={server.id} data-state={server.state} data-open={open}>
               <div className="mcp-server-head">
@@ -686,15 +766,72 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
                     Disconnect
                   </button>
                 )}
+
+                {/*
+                  Remove, in two presses.
+
+                  The page could add a server and not take one away, and the
+                  note above it sent the reader to a terminal to do it. This app
+                  already writes that file — through the CLI that owns it, which
+                  is exactly how `claude mcp remove` gets run here — so the
+                  control belongs on the row it is about.
+                */}
+                {removing === server.id ? (
+                  <>
+                    <button
+                      type="button"
+                      className="mcp-server-action"
+                      data-danger="true"
+                      onClick={() => void remove(server)}
+                    >
+                      Remove
+                    </button>
+                    <button type="button" className="mcp-server-action" onClick={() => setRemoving(null)}>
+                      Keep
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="mcp-server-action"
+                    title={`Remove ${server.name} from your ${server.scope} configuration`}
+                    onClick={() => setRemoving(server.id)}
+                  >
+                    Remove
+                  </button>
+                )}
               </div>
 
               <p className="mcp-server-command" title={server.source}>
                 {formatCommand(server) || '—'}
               </p>
 
-              {server.disabledReason && <p className="mcp-note">{server.disabledReason}</p>}
-              {server.unsupported && <p className="mcp-note">{server.unsupported}</p>}
+              {/*
+                Two sentences used to hang under every row that had one — *"Not
+                approved for this project yet."* under a `disabled` tag that had
+                already said it, and *"Claude Code dials HTTP servers itself…"*
+                under a row that was already unpressable and already carried
+                that line in its `title`. His rule, this round: *"I don't want
+                any kind of long descriptions anywhere. Just if somewhere it's
+                very required, give the i icon."* The tag is the fact and the
+                dot is the why.
+
+                The error stays on the page. It is not a description of how the
+                app works — it is what this particular server said when it was
+                dialled, it changes from run to run, and a failure nobody can
+                see without hovering is a failure the page is hiding.
+              */}
+              {why !== null && (
+                <p className="mcp-note">
+                  <HoverNote label={server.disabledReason ? 'Why it is off' : 'Why it cannot be opened'}>
+                    {why}
+                  </HoverNote>
+                </p>
+              )}
               {server.error && <p className="mcp-error">{server.error}</p>}
+              {/* Only ever what the CLI refused with. A removal that worked
+                  says nothing — the row is gone. */}
+              {removeError[server.id] && <p className="mcp-error">{removeError[server.id]}</p>}
 
               {open && (
                 <div className="mcp-server-body">

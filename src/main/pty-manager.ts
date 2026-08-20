@@ -55,6 +55,14 @@ export interface SpawnSpec {
    */
   agentSessionId?: string
   /**
+   * Whether the arguments above carry the agent's continue flag.
+   *
+   * Carried onto `SessionMeta` and no further, exactly like the two fields
+   * around it. See `SessionMeta.resumed` for why a request to resume is not
+   * evidence that one happened.
+   */
+  resumed?: boolean
+  /**
    * Where the operating-system process starts, when that is not the session's
    * own folder.
    *
@@ -261,12 +269,24 @@ export class PtyManager {
       provider: spawnSpec.provider,
       exitCode: null,
       createdAt: Date.now(),
-      // Read off the request rather than the spawn spec: `resumeArgs` is empty
-      // for providers with no resume flag, so the spec cannot say whether the
-      // user asked to continue — and a continued session writes into a
-      // transcript older than itself, which is the one case where "started
-      // before this tab did" stops meaning "not this tab's".
-      resumed: input.resume === true,
+      /*
+       * Whether this session actually continues an older conversation, which
+       * matters because a continued one writes into a transcript older than
+       * itself — the one case where "started before this tab did" stops meaning
+       * "not this tab's".
+       *
+       * Off the spawn spec, not off the request, and that distinction is a
+       * fixed defect rather than a preference. `one-conversation.ts` can refuse
+       * a resume the caller asked for — a second tab in a folder that already
+       * has a live session starts fresh, and so did every account switch until
+       * it learnt to say which session it was replacing — and while this read
+       * `input.resume` those sessions claimed to have continued something they
+       * had not. `startSession` reads the flag off the argument list it spawned.
+       *
+       * The fallback keeps the old reading for callers that build a pty
+       * directly and never fill the field in.
+       */
+      resumed: spawnSpec.resumed ?? input.resume === true,
       // Spread rather than assigned so a session with no account carries no
       // key at all: `profileName: undefined` and "this session has no account"
       // are the same thing to a renderer, and only one of them survives JSON.

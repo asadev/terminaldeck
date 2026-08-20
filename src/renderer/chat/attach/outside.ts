@@ -1,4 +1,4 @@
-import { basename, IMAGE_EXTENSIONS, insideRoot } from './mentions'
+import { IMAGE_EXTENSIONS, insideRoot } from './mentions'
 
 /**
  * The three ways a file gets into a message from outside the open project.
@@ -47,6 +47,7 @@ export interface AttachOutsideBridge {
   inspectAttachPaths(paths: string[]): Promise<unknown>
   pasteAttachment(): Promise<unknown>
   sessionAttachBoundary(sessionId: string): Promise<unknown>
+  bringAttachmentsIn(sessionId: string, paths: string[]): Promise<unknown>
   pathForDroppedFile(file: File): string
 }
 
@@ -169,66 +170,81 @@ export function readBoundary(response: unknown): AttachBoundary {
  */
 
 /**
- * Why Browse is refused on a confined session, naming what it actually holds.
+ * What came back from copying files into a confined session.
  *
- * The folder is in the sentence because "this session is confined" is a fact
- * about a feature and "this session can only read <folder>" is a fact about
- * *this tab*, and only the second one tells somebody what to do next — put the
- * file in that folder, or write to a different session.
- *
- * The projects clause is in it because leaving it out would be a wrong
- * explanation, which is a different failure from no explanation and not an
- * obviously smaller one. A copilot session is held inside its own folder *and*
- * granted read access to every project the person has added, so a flat "it
- * cannot read a file from anywhere else" is false for the confined session they
- * are by far the most likely to open.
- *
- * The refusal itself is real rather than defensive. Measured on this machine in
- * `main/session-boundary.test.ts` and `main/confine/escapes.test.ts`: a confined
- * session cannot read a file elsewhere by absolute path, so an attachment from
- * outside would produce a chip, a mention, and an agent reporting that it cannot
- * open the file.
+ * `brought` pairs each original with where it landed; `refused` is a count and
+ * not a list of sentences. See `main/attach-bring-in.ts` for why the count.
  */
-export function confinedRefusal(folder: string, projects: readonly string[] = []): string {
-  /*
-   * The folder's last segment, not the whole path, and that was decided by
-   * looking at it. The copilot's folder is
-   * `/Users/apple/Library/Application Support/terminaldeck/copilot`, and the
-   * whole sentence with the whole path in it wrapped to four lines inside a
-   * 336px popover — a paragraph where a hint goes. The last segment is also the
-   * part that identifies it to a person: `copilot`, or the name of the folder
-   * they granted a phone. Everything before it is where this app keeps things.
-   */
-  const named = folder === '' ? 'its own folder' : basename(folder)
-  const also = projects.length > 0 ? ' and the projects you have open' : ''
-  return `This session is held inside ${named}${also}, so it cannot read a file from anywhere else.`
+export interface BroughtIn {
+  from: string
+  path: string
+}
+
+export function readBringIn(response: unknown): { brought: BroughtIn[]; refused: number } {
+  if (!response || typeof response !== 'object') return { brought: [], refused: 0 }
+  const body = response as { brought?: unknown; refused?: unknown }
+  const brought: BroughtIn[] = []
+  if (Array.isArray(body.brought)) {
+    for (const entry of body.brought) {
+      if (!entry || typeof entry !== 'object') continue
+      const row = entry as { from?: unknown; path?: unknown }
+      if (typeof row.from !== 'string' || typeof row.path !== 'string' || row.path === '') continue
+      brought.push({ from: row.from, path: row.path })
+    }
+  }
+  const refused = typeof body.refused === 'number' && Number.isFinite(body.refused) ? body.refused : 0
+  return { brought, refused }
 }
 
 /**
- * The refusal, with the files it is about named first.
+ * The one short line about files that could not be brought in, or ''.
  *
- * Written after looking at the harness rather than at the code. Picking two
- * files on a confined session — one it can read, one it cannot — produced a
- * chip and, underneath it, a sentence beginning "This session is held inside
- * copilot…". Both halves were true and the pair was unreadable: the chip that
- * *did* attach is itself marked `outside` (outside the *project*, which is a
- * different boundary), so the obvious reading is that the sentence is a
- * complaint about the chip you can see rather than about the file that is
- * missing. His audience is *"mostly non-technical vibe coders"*; asking them to
- * hold two boundaries apart to work out which file was dropped is exactly the
- * kind of inference this review is about.
+ * Where a paragraph used to be. The old sentence — *"<name> was not attached.
+ * This session is held inside <folder>, so it cannot read a file from anywhere
+ * else."* — was true and it was the answer to the wrong question, because the
+ * app can simply put the file where the session can read it, and now does. What
+ * is left is the residue: a folder, something over the size cap, a disk that
+ * would not take it. That is rare, boring, and worth exactly one clause.
  *
- * So the missing file is named first, and the reason follows it. One name for
- * one file, a count beyond that: three filenames in a notice line wrap to three
- * lines and stop being a sentence.
+ * A count rather than names, for the reason `main/attach-bring-in.ts` returns
+ * one: three filenames in a notice line wrap to three lines and stop being a
+ * line.
  */
-export function partialRefusal(refused: readonly OutsidePick[], reason: string): string {
-  if (refused.length === 0) return reason
-  const what =
-    refused.length === 1
-      ? `${basename(refused[0]!.path)} was not attached.`
-      : `${refused.length} of them were not attached.`
-  return `${what} ${reason}`
+export function bringInRefusal(refused: number): string {
+  if (refused <= 0) return ''
+  return refused === 1 ? 'One file did not come in.' : `${refused} files did not come in.`
+}
+
+/**
+ * Copy the picks a confined session cannot read into it, and answer with the
+ * list to attach.
+ *
+ * Order is kept: the batch that comes back is the picks in the order they were
+ * dropped, with the ones that were copied replaced by their new paths and the
+ * ones that could not be copied left out. A drop of three photos should put
+ * three chips up in the order the person dragged them, not the readable ones
+ * first.
+ */
+export async function bringInside(
+  bridge: AttachOutsideBridge,
+  sessionId: string,
+  picks: readonly OutsidePick[],
+): Promise<{ picks: OutsidePick[]; refused: number }> {
+  if (picks.length === 0) return { picks: [], refused: 0 }
+  let answer: { brought: BroughtIn[]; refused: number }
+  try {
+    answer = readBringIn(await bridge.bringAttachmentsIn(sessionId, picks.map((pick) => pick.path)))
+  } catch {
+    return { picks: [], refused: picks.length }
+  }
+  const landed = new Map(answer.brought.map((row) => [row.from, row.path]))
+  const inside: OutsidePick[] = []
+  for (const pick of picks) {
+    const path = landed.get(pick.path)
+    // Only files are ever copied, so anything that made it in is one.
+    if (path !== undefined) inside.push({ path, isDirectory: false })
+  }
+  return { picks: inside, refused: answer.refused }
 }
 
 /**
@@ -236,13 +252,12 @@ export function partialRefusal(refused: readonly OutsidePick[], reason: string):
  *
  * `true` for every path on an unconfined session, which is every session
  * started at this keyboard. On a confined one it is containment in the folder
- * the OS is holding it inside, or in any of the projects it was granted — the
- * same two terms `confinedRefusal` names in its sentence, so the check and the
- * explanation cannot come to disagree about what "anywhere else" means.
+ * the OS is holding it inside, or in any of the projects it was granted.
  *
- * It is a *warning*, not a gate. The operating system enforces the boundary
- * whatever this returns; all this decides is whether the app says so at the
- * click instead of letting the agent say something stranger a minute later.
+ * It is not a gate — the operating system enforces the boundary whatever this
+ * returns. All it decides now is which picks need {@link bringInside} first: a
+ * path already inside is attached where it lies, and a path outside is copied
+ * in rather than refused.
  */
 export function readableOn(boundary: AttachBoundary, path: string): boolean {
   if (!boundary.confined) return true
@@ -253,19 +268,14 @@ export function readableOn(boundary: AttachBoundary, path: string): boolean {
 /**
  * A batch of picks split into the ones this session can read and the rest.
  *
- * This exists because the in-app project list was removed. Until then a
- * confined session still had one working door — a list of its own project's
- * files, every row of which was inside the boundary by construction — and the
- * whole of Browse could be refused with one sentence without taking anything
- * away. Now Browse is the *only* door, so refusing the batch whenever the
- * session is confined would leave a copilot session, or one a phone started,
- * with no way to attach anything at all, including the files sitting in the
- * very folder it is held inside.
+ * The second half used to be the ones that were *dropped*, with a sentence
+ * saying why. It is now the ones that get copied inside first — same split, and
+ * the difference is what happens to the right-hand list. See
+ * `main/attach-bring-in.ts`.
  *
- * So the refusal moved from the button to the pick. The panel opens in the
- * folder the session can read, most picks are therefore fine, and only the ones
- * that genuinely fall outside are dropped — with the reason, once for the batch
- * rather than once per file.
+ * The split still earns its place: a pick already inside the boundary must not
+ * be copied. Copying one would write a second copy of a file the session can
+ * already open, in a folder nobody chose, and hand the agent the duplicate.
  */
 export function splitByBoundary(
   boundary: AttachBoundary,
@@ -303,6 +313,7 @@ export function resolveOutsideBridge(injected?: AttachOutsideBridge): AttachOuts
     'inspectAttachPaths',
     'pasteAttachment',
     'sessionAttachBoundary',
+    'bringAttachmentsIn',
     'pathForDroppedFile',
   ]
   return needed.every((name) => typeof host[name] === 'function')

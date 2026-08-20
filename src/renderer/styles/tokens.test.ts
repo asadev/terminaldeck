@@ -272,6 +272,23 @@ describe('the status ramp clears WCAG AA on every surface of its theme', () => {
       })
     }
 
+    /*
+     * The delete button under a pointer: red fill, white letters, both themes.
+     *
+     * Asad specified it twice and both times the same way — *"when I hover on
+     * the delete it will have the white text and red color"* — and the pair
+     * exists because one token could not be both. Asserted as *white*, not
+     * merely as readable: the shipped bug satisfied the contrast rule with
+     * near-black ink on a coral fill, which is exactly the reading this test
+     * has to be able to fail.
+     */
+    it(`${name} the destructive fill is red under white ink`, () => {
+      expect(get(theme, '--critical-fill-ink')).toBe('#ffffff')
+      expect(
+        contrast(get(theme, '--critical-fill-ink'), get(theme, '--critical-fill')),
+      ).toBeGreaterThanOrEqual(4.5)
+    })
+
     it(`${name} --text-onaccent is readable on the destructive button`, () => {
       // CloseSessionConfirm.css is the only user, and the one it has is the
       // button that throws away a running session.

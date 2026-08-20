@@ -399,18 +399,32 @@ describe('the Add-account popup', () => {
     expect(html).not.toContain('agent-cli')
   })
 
-  it('lists Gemini, disabled, with the reason on the row', () => {
+  it('lists Gemini, disabled, and does not explain it at length', () => {
     /*
      * The row that matters most is the one that cannot be clicked. Gemini has a
      * config-directory variable, so a missing row would read as an oversight —
      * what it does not have is a way to keep two logins apart, and signing into
      * a second one would overwrite the first. Leaving it out would also make
      * this popup silently disagree with the request, which named Gemini.
+     *
+     * What is gone is the six-line paragraph that stood beside it, about a
+     * keychain entry shared across configuration directories — the longest
+     * block of prose on any account surface, spent explaining why an option
+     * nobody can pick is grey. *"If we want to add account, this big
+     * description again here also, big description. They are not stupid to give
+     * this much."* The pill is the fact; the two agents that can take a login
+     * are not described either.
      */
     const html = dialog()
     expect(html).toContain('Gemini CLI')
-    expect(html).toContain('one login per machine')
     expect(html).toMatch(/<input[^>]*disabled[^>]*value="gemini"/)
+    expect(html).toContain('One login only')
+    expect(html).not.toContain('one login per machine')
+    expect(html).not.toContain('keychain')
+    // And the other two rows lost their blurbs with it.
+    expect(html).not.toContain('agentic CLI')
+    expect(html).not.toContain('Sign in with a ChatGPT account')
+    expect(html).not.toContain('picker-hint')
   })
 
   it('no longer claims that separate accounts are Claude-only', () => {
@@ -638,7 +652,7 @@ describe('an agent that will not start', () => {
     // when the button used to appear and open a session that died.
     expect(html).toContain('will not start on this machine')
     expect(html).toContain('npm install -g @openai/codex')
-    expect(html).not.toContain('type="button" class="settings-btn" data-tone="primary">Sign in')
+    expect(html).not.toContain('>Sign in<')
   })
 
   it('still offers Sign in when the agent runs', () => {
@@ -659,7 +673,87 @@ describe('an agent that will not start', () => {
         onMakeDefault={noop}
       />,
     )
-    expect(html).toContain('type="button" class="settings-btn" data-tone="primary">Sign in')
+    /*
+     * Present, and deliberately not the accent.
+     *
+     *   > *"And why do we have see sign in here separately, add account here
+     *   > separately?"*
+     *
+     * Two blue buttons stood one above the other — a row's Sign in and the
+     * pane's Add account — and read as one control offered twice. Add account
+     * is the pane's act and keeps the accent; a row's Sign in does not.
+     */
+    expect(html).toContain('>Sign in<')
+    expect(html).not.toContain('data-tone="primary">Sign in')
+    expect(html).toContain('data-tone="primary">Add account')
+  })
+
+  /**
+   * One button on a row, and the rest behind a dot that belongs to it.
+   *
+   *   > *"Stop sharing history. What is this nonsense? A lot of buttons used by
+   *   > default. This is a lot to give."*
+   *
+   * Half of that was acted on when Share / Stop sharing history came off the
+   * row. The other half — *a lot of buttons* — was not: the strip went from
+   * five to four, on a line of its own under the name, so with two Claude
+   * accounts listed it was not obvious which account **Remove** would delete.
+   */
+  it('keeps at most one button on a row and puts the rest behind its own dot', () => {
+    const html = renderToStaticMarkup(
+      <AccountsView
+        snapshot={ACCOUNTS}
+        signIn={{ system: signedIn, work: signedOut }}
+        loading={false}
+        error={null}
+        available
+        busy={false}
+        providerRows={ALL_RUNNABLE}
+        onSignIn={noop}
+        onSignInNew={noop}
+        onRename={noop}
+        onRemove={noop}
+        onMakeDefault={noop}
+      />,
+    )
+    // The three that are not the row's own act are inside the disclosure.
+    const menu = html.slice(html.indexOf('settings-rowmenu-items'))
+    expect(menu).toContain('Use by default')
+    expect(menu).toContain('Rename')
+    expect(menu).toContain('Remove')
+    // And none of them is standing on the row.
+    const strip = html.slice(
+      html.indexOf('settings-profile-actions'),
+      html.indexOf('settings-rowmenu'),
+    )
+    expect(strip).not.toContain('Rename')
+    expect(strip).not.toContain('Remove')
+    expect(strip).not.toContain('Use by default')
+    // The dot says whose row it is, because the ambiguity was the complaint.
+    expect(html).toContain('aria-label="More for Work"')
+  })
+
+  it('draws no dot at all where it would hold nothing', () => {
+    // The machine's own install that is already the default: nothing to rename,
+    // nothing to remove, nothing to make default. A control over nothing is the
+    // fault one level up from four controls.
+    const html = renderToStaticMarkup(
+      <AccountsView
+        snapshot={{ ...ACCOUNTS, accounts: [ACCOUNTS.accounts[0]!], defaultId: 'system' }}
+        signIn={{ system: signedIn }}
+        loading={false}
+        error={null}
+        available
+        busy={false}
+        providerRows={ALL_RUNNABLE}
+        onSignIn={noop}
+        onSignInNew={noop}
+        onRename={noop}
+        onRemove={noop}
+        onMakeDefault={noop}
+      />,
+    )
+    expect(html).not.toContain('settings-rowmenu')
   })
 
   it('agentCanStart answers per agent, not for the machine', () => {

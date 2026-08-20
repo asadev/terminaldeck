@@ -3,6 +3,7 @@ import type { SignInView } from './accounts'
 import {
   readSwitchPlan,
   switchConversationNote,
+  switchConversationTag,
   switchNames,
   switchProblem,
   SWITCH_KEEPS,
@@ -204,5 +205,50 @@ describe('what the two accounts are called', () => {
     const names = switchNames({ from: null, to: null }, {})
     expect(names.from).toBe('the account it is on')
     expect(names.to).toBe('another account')
+  })
+})
+
+/* ------------------------------------------------- and what the sheet shows -- */
+
+/**
+ * The sentence stays reachable; what the sheet *draws* is two words.
+ *
+ *   > *"See again here you have a very long description… remove this full shit.
+ *   > I don't want any kind of long descriptions anywhere. Just if somewhere
+ *   > it's very required, give the i icon like other ones."*
+ *
+ * The paragraph was moved behind the ⓘ once and half the job was done: the
+ * sheet drew it whenever `conversation !== 'follows'`, which is precisely the
+ * case where something is about to be left behind. So the clean sheet was the
+ * one where nothing was at stake and the three-line block came back for the one
+ * where something was — the habit he named, a sentence written wherever
+ * something is refused.
+ */
+describe('the state the sheet draws instead of the sentence', () => {
+  it('says nothing at all when the conversation comes with you', () => {
+    // The ordinary outcome. A tag saying everything is fine is the statement he
+    // asked to be rid of, printed on every switch this app makes.
+    expect(switchConversationTag({ conversation: 'follows' })).toBeNull()
+  })
+
+  it('is two words wherever there is one', () => {
+    for (const kind of ['stays', 'theirs', 'taken', 'unreadable', 'none'] as const) {
+      const tag = switchConversationTag({ conversation: kind })
+      expect(tag, kind).not.toBeNull()
+      expect(tag!.split(' '), kind).toHaveLength(2)
+      // Shorter than the buttons under it, and never a sentence.
+      expect(tag!, kind).not.toMatch(/[.,]/)
+    }
+  })
+
+  it('separates the one outcome that puts a different conversation on screen', () => {
+    // `theirs` is the surprising one: the replacement picks up the *other*
+    // account's conversation in this folder. Three reasons collapse to "new
+    // conversation" because they have one consequence; this one does not.
+    expect(switchConversationTag({ conversation: 'theirs' })).toBe('their conversation')
+    for (const kind of ['stays', 'taken', 'none'] as const) {
+      expect(switchConversationTag({ conversation: kind })).toBe('new conversation')
+    }
+    expect(switchConversationTag({ conversation: 'unreadable' })).toBe('conversation unknown')
   })
 })

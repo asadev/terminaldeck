@@ -1399,6 +1399,17 @@ const api: Record<string, unknown> = new Proxy(
       detail: 'There is no file or image on the clipboard.',
     }),
     sessionAttachBoundary: async () => ({ confined: false, folder: '', projects: [] }),
+    /*
+     * Nothing to bring in, because nothing here is confined.
+     *
+     * The boundary above answers unconfined, so `splitByBoundary` never refuses a
+     * pick and the composer never calls this. It is present because
+     * `resolveOutsideBridge` checks for every method by name before it will hand
+     * back a bridge at all — a stub missing one makes the whole attach feature
+     * read "not wired into this build" on every route, which is exactly the
+     * "harness disagrees with the app" failure this file exists to avoid.
+     */
+    bringAttachmentsIn: async () => ({ brought: [], refused: 0 }),
     // Not a promise: `webUtils.getPathForFile` is synchronous in the preload,
     // and a stub that returned a promise here would make the drop handler
     // `await` a value the real bridge hands back directly — the exact class of

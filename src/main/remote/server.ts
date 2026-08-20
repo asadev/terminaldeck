@@ -720,6 +720,33 @@ export interface RemoteEndpoint {
    */
   foldersChanged(deviceId: string): number
   /**
+   * The sessions on this machine changed, because somebody at *this* keyboard
+   * started or ended one. Tell every device. Returns how many were told.
+   *
+   * ## Why it did not exist, and what that cost
+   *
+   * A fresh `sessions` frame went out from exactly four places — a device's own
+   * `create`, a device's own `close`, `tellFolders`, and the reply to `list` —
+   * every one of which is a *device* doing something. Nothing fired when a
+   * session was opened at the Mac's own keyboard, which is how nearly all of
+   * them are opened. So the phone's list, a paired laptop's sidebar and its
+   * session picker were a snapshot taken at connect time, and stayed that way
+   * until something reconnected.
+   *
+   * Measured before it was fixed: the far machine went 2 → 5 → 7 sessions, and
+   * the reaching machine said 2 for sixty seconds and through fifteen more of
+   * polling; disconnecting and reconnecting moved it to 5 in under a second.
+   * Asad, on the picker: *"It's not updated right away. Anyways, maybe we need
+   * to refresh."* There is no refresh, and there should not need to be one —
+   * this is the event that already exists, pushed rather than polled.
+   *
+   * Per connection rather than one shared list, for the reason `create` states:
+   * two devices watching one machine are entitled to two different lists, and a
+   * single value computed once and sent to everybody is a leak the moment a
+   * per-device rule exists.
+   */
+  sessionsChanged(): number
+  /**
    * One device's copilot grant changed on the desktop. Take away what it no
    * longer holds, and tell it.
    *
@@ -800,6 +827,11 @@ export interface RemoteServer {
   dropDevice(deviceId: string): number
   /** Re-send one device's folder list. Zero when it is not connected. */
   foldersChanged(deviceId: string): number
+  /**
+   * A session was started or ended **here**, at this machine's own keyboard.
+   * Push the new list to every connected device. Zero when none are connected.
+   */
+  sessionsChanged(): number
   /**
    * One device's copilot grant changed. Take away what it no longer holds, and
    * tell it. Zero when it is not connected.
@@ -2584,6 +2616,28 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * Tell every device the session list changed, without waiting for it to ask.
+   *
+   * The counterpart of the loops inside `create` and `close`, and the same
+   * frame: `sessions` is v1, so a client that has never heard of any capability
+   * still redraws from it. What is new is the trigger — this one fires for a
+   * session started or ended at *this* machine's keyboard, which the wire had no
+   * way to hear about at all. See {@link RemoteEndpoint.sessionsChanged}.
+   *
+   * A connection that has not said hello is skipped rather than sent an empty
+   * list: `sessionsFor` is keyed on the device, and there is no device yet.
+   */
+  function tellSessions(): number {
+    let told = 0
+    for (const connection of live.values()) {
+      if (!connection.deviceId) continue
+      send(connection, { t: 'sessions', sessions: sessionsFor(connection.deviceId) })
+      told += 1
+    }
+    return told
+  }
+
+  /**
    * Open a page on **this** machine because a device asked.
    *
    * ## What it is for
@@ -3787,6 +3841,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       return dropped
     },
     foldersChanged: tellFolders,
+    sessionsChanged: tellSessions,
     copilotGrantChanged: tellCopilotGrant,
     dropConnection(connectionId: string): boolean {
       const connection = live.get(connectionId)
@@ -4435,6 +4490,9 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     // Nothing to tell when the server is not up: the device is not connected,
     // and it reads the new list in its `welcome` the next time it is.
     foldersChanged: (deviceId) => endpoint?.foldersChanged(deviceId) ?? 0,
+    // Nothing to tell with the server down: no device is connected, and each
+    // one reads the list it missed in its `welcome` the next time it is.
+    sessionsChanged: () => endpoint?.sessionsChanged() ?? 0,
     copilotGrantChanged: (deviceId) => endpoint?.copilotGrantChanged(deviceId) ?? 0,
     dropConnection: (connectionId) => endpoint?.dropConnection(connectionId) ?? false,
     stopTunnel: (connectionId, tunnelId) => endpoint?.stopTunnel(connectionId, tunnelId) ?? false,

@@ -71,7 +71,9 @@ describe('readSessions', () => {
     const named = new Map([['b', 'commander']])
     expect(readSessions(LIVE, named).map((session) => session.label)).toEqual([
       'terminaldeck · Session 1',
-      'terminaldeck · commander',
+      // The name and nothing else. It read `copilot · Commander` when he filmed
+      // this, and `copilot` was the word he had just replaced.
+      'commander',
       'science-locus · Session 1',
     ])
   })
@@ -102,7 +104,7 @@ describe('readSessions', () => {
     ]
     const rows = readSessions({ here: [], elsewhere: { ...MACHINES, links } })
     expect(rows.map((session) => session.label)).toEqual([
-      'Studio PC · terminaldeck · deploy the relay',
+      'Studio PC · deploy the relay',
       'Studio PC · terminaldeck · Session 2',
     ])
   })

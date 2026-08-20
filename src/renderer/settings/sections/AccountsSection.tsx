@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ProviderId } from '@shared/types'
-import { Button, Group, Notice, SectionHead } from '../controls'
+import { Button, closeMenu, Group, Notice, SectionHead } from '../controls'
 import { HoverNote } from '../../components/HoverNote'
 import type { SectionProps } from '../settings-bridge'
 import { AgentCliUpdate } from '../../components/AgentCliUpdate'
@@ -16,6 +16,9 @@ import { agentCanStart, agentProblem, canHaveMore } from './account-agent'
 import {
   accountLabel,
   accountsBridge,
+  announceAccountsChanged,
+  onAddAccountRequested,
+  takeAddAccountRequest,
   normalizeAccountName,
   profileLoginLabel,
   renameAccount,
@@ -308,6 +311,13 @@ export interface AccountsViewProps {
    * whole of what this change is about, so they have to be renderable.
    */
   addingInitially?: boolean
+  /**
+   * The agent the popup opens on, when something outside this pane named one.
+   *
+   * The Add-agent menu names one; the session chip and this pane's own button
+   * do not. See `askForAddAccount`.
+   */
+  addingProvider?: ProviderId | null
   snapshot: AccountsSnapshot
   signIn: Readonly<Record<string, SignInView>>
   loading: boolean
@@ -388,6 +398,7 @@ export interface AccountsViewProps {
 export function AccountsView({
   head = true,
   addingInitially = false,
+  addingProvider = null,
   snapshot,
   signIn,
   loading,
@@ -419,6 +430,37 @@ export function AccountsView({
    * to close together, and so a render test can open it by passing `adding`.
    */
   const [adding, setAdding] = useState(addingInitially)
+  /** Which agent the popup opens on, when the request named one. */
+  const [addingFor, setAddingFor] = useState<ProviderId | null>(addingProvider)
+
+  /*
+   * The one door, opened from wherever somebody asked for it.
+   *
+   * Three things used to lead here and only one of them arrived: this pane's
+   * **Add account**, a row's **Sign in**, and — from inside a session — an item
+   * called *Add or sign in to an account…* which opened this settings pane
+   * rather than the popup, dropping somebody in front of the two buttons they
+   * had just complained were the same thing. That item is called **Add account**
+   * now and it opens this, and so does every installed row of the Add-agent
+   * menu, with its own agent already chosen.
+   *
+   * Both halves are needed and they are not the same half. The listener catches
+   * a request made while this pane is already on screen — the Add-agent menu is
+   * six inches above this list. The read-on-mount catches the other order: the
+   * chip fires the request and *then* opens the settings window, so this
+   * component does not exist yet when the event goes past. `takeAddAccountRequest`
+   * consumes what it reads, so returning to Settings later does not spring the
+   * popup on somebody who came in for something else.
+   */
+  useEffect(() => {
+    const open = (provider: ProviderId | null | undefined): void => {
+      if (provider === undefined) return
+      setAddingFor(provider)
+      setAdding(true)
+    }
+    open(takeAddAccountRequest())
+    return onAddAccountRequested(() => open(takeAddAccountRequest()))
+  }, [])
 
   if (!available) {
     return (
@@ -583,43 +625,107 @@ export function AccountsView({
                 And never offered when the agent will not start. That is
                 the button that opened a blank terminal and printed a Node
                 stack trace into it, five times in one recording; the row
-                below says what is wrong and what to type instead. */}
+                below says what is wrong and what to type instead.
+
+                It is the *only* button on the row now, and no longer the
+                primary one. Two blue buttons stood one above the other at
+                the foot of this pane — a row's Sign in and the pane's Add
+                account — and read as the same control offered twice:
+                *"why do we have see sign in here separately, add account
+                here separately?"* Add account is the pane's act and keeps
+                the accent; this is a row's act and does not. */}
             {onSignIn &&
               state &&
               state.state !== 'signed-in' &&
               state.state !== 'unsupported' &&
               agentCanStart(providerRows, account.provider) && (
-                <Button tone="primary" disabled={busy} onClick={() => onSignIn(account)}>
+                <Button disabled={busy} onClick={() => onSignIn(account)}>
                   Sign in
                 </Button>
               )}
-            {/* Meaningless where there is only ever one. Gemini keeps a
-                single login per machine, so "use this one by default"
-                offers a choice between it and itself. */}
-            {!isDefault && canHaveMore(providerRows, account.provider) && (
-              <Button disabled={busy} onClick={() => onMakeDefault(account)}>
-                Use by default
-              </Button>
-            )}
-            {/* Share / Stop sharing history was the fourth button on this
-                row, behind a confirmation. *"This is nonsense"* — of a
-                control that relinks a conversation directory from a
-                settings list, on a row a person is scanning for their own
-                address. The plumbing is untouched; where the
-                conversations are is said behind the ⓘ above, so nothing
-                about this row is a surprise. */}
-            {!account.system && (
-              <>
-                <Button
-                  disabled={busy}
-                  onClick={() => setRenaming({ id: account.id, name: account.name })}
-                >
-                  Rename
-                </Button>
-                <Button tone="danger" disabled={busy} onClick={() => setConfirmRemove(account.id)}>
-                  Remove
-                </Button>
-              </>
+
+            {/*
+              The other three, behind one dot, anchored to the row.
+
+                > *"Stop sharing history. What is this nonsense? A lot of
+                > buttons used by default. This is a lot to give."*
+
+              Half of that was acted on — Share / Stop sharing history is
+              gone — and half was not: the strip went from five buttons to
+              four, on a line of its own under the name, so with two Claude
+              accounts listed it was not obvious which account **Remove**
+              would delete. Now the row carries at most one button and this,
+              and this opens *inside the row*, which is what makes its
+              subject unambiguous.
+
+              A `<details>` rather than a floating menu, for the reason
+              `AddAgentMenu` gives at length: this window is asserted through
+              `renderToStaticMarkup`, which runs no effects and has no DOM to
+              click in, so a portalled menu is a menu no test can read. It is
+              also keyboard-operable and dismissable with no JavaScript.
+
+              Rename and Remove are only ever offered on an account this app
+              made. `Use by default` is only offered where there is more than
+              one login to choose between — Gemini keeps one per machine, so
+              there it would be a choice between an account and itself — and
+              the whole dot disappears when it would hold nothing.
+            */}
+            {(!account.system || (!isDefault && canHaveMore(providerRows, account.provider))) && (
+              <details className="settings-rowmenu">
+                <summary aria-label={`More for ${profileLoginLabel(account, state)}`}>
+                  <span aria-hidden="true">⋯</span>
+                </summary>
+                <div className="settings-rowmenu-items">
+                  {!isDefault && canHaveMore(providerRows, account.provider) && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={(event) => {
+                        closeMenu(event)
+                        onMakeDefault(account)
+                      }}
+                    >
+                      Use by default
+                    </button>
+                  )}
+                  {/* Share / Stop sharing history was the fourth button on
+                      this row, behind a confirmation. *"This is nonsense"* —
+                      of a control that relinks a conversation directory from
+                      a settings list, on a row a person is scanning for their
+                      own address. The plumbing is untouched; where the
+                      conversations are is said behind the ⓘ above, so nothing
+                      about this row is a surprise. */}
+                  {!account.system && (
+                    <>
+                      {/* `closeMenu` on every one of these: a `<details>` has
+                          no idea a button inside it did something, so Remove
+                          used to leave the menu standing open on top of the
+                          confirmation it had just raised. */}
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={(event) => {
+                          closeMenu(event)
+                          setRenaming({ id: account.id, name: account.name })
+                        }}
+                      >
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        className="danger"
+                        disabled={busy}
+                        onClick={(event) => {
+                          closeMenu(event)
+                          setConfirmRemove(account.id)
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </>
+                  )}
+                </div>
+              </details>
             )}
           </span>
         )}
@@ -735,13 +841,21 @@ export function AccountsView({
         here to press.
       */}
       <div className="settings-account-foot">
-        <Button tone="primary" disabled={busy} onClick={() => setAdding(true)}>
+        <Button
+          tone="primary"
+          disabled={busy}
+          onClick={() => {
+            setAddingFor(null)
+            setAdding(true)
+          }}
+        >
           Add account
         </Button>
       </div>
 
       <AddAccountDialog
         open={adding}
+        provider={addingFor}
         providerRows={providerRows}
         busy={busy}
         onSignIn={
@@ -866,6 +980,14 @@ export async function signInToNewAccount(
   }
 
   try {
+    /*
+     * Before the session, not after: `start` closes the settings window, so
+     * anything after it lands while this pane is unmounting. The account chip
+     * inside every open session reads its list on mount and never again — an
+     * account added here was invisible there until the renderer was reloaded,
+     * measured twice on 2026-08-20 — and this is what tells it to read again.
+     */
+    announceAccountsChanged()
     await start({ profileId: id, provider })
     return { ok: true, error: null }
   } catch (cause) {
@@ -874,6 +996,8 @@ export async function signInToNewAccount(
     // passed: `deleteProfile` keeps the directory unless asked, and an empty
     // directory is cheaper to leave than a wrong delete is to undo.
     await bridge?.deleteProfile?.(id).catch(() => undefined)
+    // And unsay it, so no list is left showing an account that was rolled back.
+    announceAccountsChanged()
     return {
       ok: false,
       error:
@@ -937,6 +1061,9 @@ export function AccountsSection({ startSession, head }: SectionProps & { head?: 
         () => {
           setBusy(false)
           accounts.reload()
+          // Remove and Use-by-default land here. Every other list of accounts in
+          // the window — the chip in each open session — reads again too.
+          announceAccountsChanged()
         },
         (cause: unknown) => {
           setBusy(false)
@@ -1025,7 +1152,10 @@ export function AccountsSection({ startSession, head }: SectionProps & { head?: 
         void renameAccount(bridge, account, name).then((problem) => {
           setBusy(false)
           if (problem) setFailure(problem)
-          else accounts.reload()
+          else {
+            accounts.reload()
+            announceAccountsChanged()
+          }
         })
       }}
       onRemove={(account) =>

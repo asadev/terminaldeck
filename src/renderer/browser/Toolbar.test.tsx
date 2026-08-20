@@ -26,7 +26,6 @@ function render(
   return renderToStaticMarkup(
     <Toolbar
       tab={tab}
-      security="local"
       progress={1}
       resolution={{ kind: 'url', url: 'http://localhost:3000/', display: 'localhost:3000' }}
       focusToken={0}
@@ -164,8 +163,7 @@ describe('the top-right corner carries what the bottom used to', () => {
     const markup = renderToStaticMarkup(
       <Toolbar
         tab={newTab('tab-1')}
-        security="local"
-        progress={1}
+          progress={1}
         resolution={{ kind: 'url', url: 'http://localhost:3000/', display: 'localhost:3000' }}
         focusToken={0}
         onDraft={() => {}}
@@ -213,7 +211,6 @@ function withMachines(
   return renderToStaticMarkup(
     <Toolbar
       tab={newTab('tab-1')}
-      security="local"
       progress={1}
       resolution={{ kind: 'url', url: 'http://127.0.0.1:53412/', display: '127.0.0.1:53412' }}
       focusToken={0}
@@ -316,17 +313,23 @@ describe('icons, and the name on the hover', () => {
 
   it('leaves nothing but the address inside the address field', () => {
     /*
-     * *"Since we already have here a selection, why do we show inside the link
-     * bar also local? … from inside the link bar, it should be only the link,
-     * not this thing."*
+     * *"since we already have here a selection, why do we show inside the link
+     * bar also local? … It doesn't make any sense to keep in both side the same
+     * thing. So from inside the link bar, it should be only the link, not this
+     * thing."*
      *
-     * The machine picker outside the field already prints `Local`. The padlock
-     * itself stays — it is a glyph with its name on hover, like the rest of the
-     * bar — and what has gone is the word beside it.
+     * A first pass took the word `Local` off and kept the glyph, which was the
+     * duplicate he was pointing at: the same monitor-with-a-stand the machine
+     * picker draws thirty pixels to its left. So the indicator is gone entirely
+     * — no element, no `data-level`, no hover label — and the field holds the
+     * input and nothing else.
      */
     const markup = render(newTab('tab-1'), () => {})
-    expect(markup).not.toContain('bw-security-text')
-    expect(markup).toContain('class="bw-security" data-level="local" title="Local"')
+    expect(markup).not.toContain('bw-security')
+    expect(markup).not.toContain('data-level')
+    expect(markup).not.toContain('title="Local"')
+    expect(markup).not.toContain('title="HTTPS"')
+    expect(markup).not.toContain('title="Not private"')
   })
 })
 
@@ -337,42 +340,95 @@ describe('icons, and the name on the hover', () => {
  * these profiles over here as icon, so we can switch between profiles also if we
  * want to."*
  */
+function withProfile(profileName: string): string {
+  return renderToStaticMarkup(
+    <Toolbar
+      tab={newTab('tab-1')}
+      progress={1}
+      resolution={{ kind: 'url', url: 'http://localhost:3000/', display: 'localhost:3000' }}
+      focusToken={0}
+      onDraft={() => {}}
+      onEditing={() => {}}
+      onSubmit={() => {}}
+      onBack={() => {}}
+      onForward={() => {}}
+      onReload={() => {}}
+      onStop={() => {}}
+      onHome={() => {}}
+      onInspect={() => {}}
+      onRecord={() => {}}
+      onScreenshot={() => {}}
+      onDevtools={() => {}}
+      devtoolsOpen={false}
+      recording={false}
+      drawing={false}
+      deviceOpen={false}
+      onToggleDevice={() => {}}
+      onMenu={() => {}}
+      menuOpen={false}
+      onProfiles={() => {}}
+      profilesOpen={false}
+      profileName={profileName}
+      steps={0}
+    />,
+  )
+}
+
 describe('the profile button', () => {
   it('is on the bar, named after the profile that is on', () => {
-    const markup = renderToStaticMarkup(
-      <Toolbar
-        tab={newTab('tab-1')}
-        security="local"
-        progress={1}
-        resolution={{ kind: 'url', url: 'http://localhost:3000/', display: 'localhost:3000' }}
-        focusToken={0}
-        onDraft={() => {}}
-        onEditing={() => {}}
-        onSubmit={() => {}}
-        onBack={() => {}}
-        onForward={() => {}}
-        onReload={() => {}}
-        onStop={() => {}}
-        onHome={() => {}}
-        onInspect={() => {}}
-        onRecord={() => {}}
-        onScreenshot={() => {}}
-        onDevtools={() => {}}
-        devtoolsOpen={false}
-        recording={false}
-        drawing={false}
-        deviceOpen={false}
-        onToggleDevice={() => {}}
-        onMenu={() => {}}
-        menuOpen={false}
-        onProfiles={() => {}}
-        profilesOpen={false}
-        profileName="Work"
-        steps={0}
-      />,
-    )
+    const markup = withProfile('Work')
     // The name and not the word "Profile": which profile is on is the fact
     // somebody opens this to check, so it is the fact the hover answers.
     expect(markup).toContain('aria-label="Work"')
+  })
+
+  it('draws the profile’s own initial, so two profiles are two toolbars', () => {
+    /*
+     * The defect this replaces: with `Default` on and with `Work` on, the button
+     * drew the same outline person and the toolbar was pixel-identical — the
+     * only thing that changed was hover text nobody can see. *"we can have these
+     * profiles over here as icon, so we can switch between profiles also if we
+     * want to"* asks to see as well as to switch, and in Chrome that icon is how
+     * you know without clicking.
+     */
+    expect(withProfile('Work')).toContain('>W</span>')
+    expect(withProfile('Default')).toContain('>D</span>')
+    // And no generic person left behind it.
+    expect(withProfile('Work')).not.toContain('M5.5 19.5a6.5 6.5 0 0 1 13 0')
+  })
+
+  it('badges nothing at all until the active profile has been read', () => {
+    const markup = withProfile('')
+    expect(markup).toContain('class="bw-avatar"')
+    expect(markup).not.toContain('?')
+  })
+})
+
+/**
+ * Which buttons may leave the bar when the panel is narrow.
+ *
+ * *"So we can have a bigger link bar because when it is smaller, then it becomes
+ * too small, the link bar."* At panel 592 this group measured 240 pixels against
+ * an address field of 180 — the icons were wider than the link bar. The width at
+ * which they fold is in `BrowserWorkspace.css`, because it is arithmetic about
+ * rectangles; *which* of them fold is a judgement, and it is here.
+ */
+describe('the actions that give way to the address bar', () => {
+  it('marks the page tools and nothing else', () => {
+    const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {} })
+    for (const word of ['Record', 'Shot', 'Draw', 'Size', 'Devtools']) {
+      expect(markup, `${word} folds`).toMatch(
+        new RegExp(`aria-label="${word}"[^>]*data-fold="true"`),
+      )
+    }
+  })
+
+  it('keeps the two that say something about the page you are looking at', () => {
+    // Shared/Isolated is the only sign a tab has its own cookies, and Inspect is
+    // what this browser is for. Neither is an overflow item.
+    const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {} })
+    expect(markup).toMatch(/aria-label="Session: Shared"(?![^>]*data-fold)/)
+    expect(markup).toMatch(/aria-label="Inspect"(?![^>]*data-fold)/)
+    expect(markup).toMatch(/aria-label="More"(?![^>]*data-fold)/)
   })
 })

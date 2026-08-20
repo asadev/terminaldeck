@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { HoverNote } from './HoverNote'
 
 /**
  * The form behind the MCP panel's Add button.
@@ -261,9 +262,9 @@ export function McpAddForm({ projectPath, onSubmit, onAdded, onCancel }: McpAddF
             autoComplete="off"
             disabled={busy}
           />
-          <span className="mcp-field-help">
-            {stdio ? 'As you would type it in a terminal. Quote anything with a space.' : 'Where Claude Code connects.'}
-          </span>
+          {/* The caption that used to be here said what the placeholder in the
+              box already shows. *"Don't put any single statement in anywhere…
+              Let the smart people use it."* */}
         </label>
 
         <label className="mcp-field mcp-field-wide">
@@ -277,13 +278,28 @@ export function McpAddForm({ projectPath, onSubmit, onAdded, onCancel }: McpAddF
             rows={2}
             disabled={busy}
           />
-          <span className="mcp-field-help">
-            Optional, one per line. {stdio ? 'Written KEY=value.' : 'Written Name: value.'}
-          </span>
+          {/* Same: `API_KEY=…` in the box is the format, and a line saying so
+              underneath is the same thing twice. A pasted line in the wrong
+              shape is refused by name — see `resolveRequest`. */}
         </label>
 
         <label className="mcp-field mcp-field-wide">
-          <span className="mcp-field-label">Save it for</span>
+          <span className="mcp-field-label">
+            Save it for
+            {/*
+              The one caption on this form that survives, and it is behind the
+              dot rather than on the page. Three scopes are three different
+              files with three different lifetimes, and the shared one comes
+              back needing an approval — none of which the option labels can
+              carry. His rule, verbatim: *"if somewhere it's very required, give
+              the i icon like other ones."*
+            */}
+            <HoverNote label="Where this gets saved">
+              {`${choices.find((choice) => choice.value === draft.scope)?.help ?? ''}${
+                projectPath ? '' : ' Open a project to save one for that project alone.'
+              }`}
+            </HoverNote>
+          </span>
           <select
             className="mcp-input"
             value={draft.scope}
@@ -299,10 +315,6 @@ export function McpAddForm({ projectPath, onSubmit, onAdded, onCancel }: McpAddF
               </option>
             ))}
           </select>
-          <span className="mcp-field-help">
-            {choices.find((choice) => choice.value === draft.scope)?.help}
-            {!projectPath && ' Open a project to save one for that project alone.'}
-          </span>
         </label>
       </div>
 

@@ -1,6 +1,15 @@
 import { normalize } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { addMcpServer, buildAddArgs, resolveRequest, tokenizeCommand, type McpAddRequest } from './mcp-add'
+import {
+  addMcpServer,
+  buildAddArgs,
+  buildRemoveArgs,
+  removeMcpServer,
+  resolveRemoveRequest,
+  resolveRequest,
+  tokenizeCommand,
+  type McpAddRequest,
+} from './mcp-add'
 
 /**
  * The command this builds is never seen by anyone.
@@ -357,5 +366,76 @@ describe('addMcpServer', () => {
       },
     })
     expect(sawHide).toBe(true)
+  })
+})
+
+
+/**
+ * Removing, which the panel could not do at all until 2026-08-20.
+ *
+ * Asad, looking at that page: *"On MCP servers did nothing."* It could add a
+ * server and then tell him to open a terminal to take it away again.
+ */
+describe('removing a server', () => {
+  const path = async (): Promise<string> => '/usr/bin:/bin'
+
+  it('names the scope, so a same-named server in another scope cannot go instead', () => {
+    expect(buildRemoveArgs({ name: 'files', scope: 'user', projectPath: null })).toEqual([
+      'mcp',
+      'remove',
+      '--scope',
+      'user',
+      'files',
+    ])
+  })
+
+  it('refuses a name that could impersonate a flag', () => {
+    expect(() => resolveRemoveRequest({ name: '--scope', scope: 'user', projectPath: null })).toThrow()
+  })
+
+  /**
+   * The same rule adding has, for the same reason: `local` and `project` are
+   * addressed by the directory the CLI runs in, so without a project the
+   * command would be aimed at the app's own cwd and would report success having
+   * removed nothing.
+   */
+  it('refuses a project scope with no project open', () => {
+    expect(() => resolveRemoveRequest({ name: 'files', scope: 'local', projectPath: null })).toThrow()
+  })
+
+  it('runs the CLI in the project folder and reports what it said', async () => {
+    let sawCwd = ''
+    let sawArgs: string[] = []
+    const result = await removeMcpServer(
+      { name: 'files', scope: 'local', projectPath: '/work/app' },
+      {
+        path,
+        exec: async (_file, args, options) => {
+          sawCwd = options.cwd
+          sawArgs = args
+          return { stdout: 'Removed MCP server "files" from local config', stderr: '' }
+        },
+      },
+    )
+    expect(result.ok).toBe(true)
+    expect(sawCwd).toBe(normalize('/work/app'))
+    expect(sawArgs).toEqual(expect.arrayContaining(['mcp', 'remove', '--scope', 'local', 'files']))
+    expect(result.message).toContain('local config')
+  })
+
+  it('reports a refusal instead of claiming the server is gone', async () => {
+    const result = await removeMcpServer(
+      { name: 'files', scope: 'user', projectPath: null },
+      {
+        path,
+        exec: async () => {
+          throw Object.assign(new Error('Command failed'), {
+            stderr: 'No MCP server found with name: files',
+          })
+        },
+      },
+    )
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('No MCP server found')
   })
 })

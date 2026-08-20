@@ -51,6 +51,7 @@
 
 import { cleanLabel } from './label'
 import type { DeckEndpoint } from './endpoint'
+import { machineNoun } from './host-platform'
 import {
   loadCredential,
   REMEMBERED_TTL_MS,
@@ -92,6 +93,19 @@ export interface StoredMachine {
    * whole of this feature.
    */
   nickname: string | null
+  /**
+   * What the machine calls **itself** — its hostname, off the pairing offer.
+   *
+   * Null for a machine paired before this was kept, and for a direct pairing,
+   * where there is no offer to read. It is not a nickname and must not be
+   * confused with one: a nickname is the person's word and always wins, this is
+   * the machine's own and is only ever a default.
+   *
+   * It exists because the chips read `2JJGF8` and `9ZA6K3` — relay slot codes —
+   * for somebody who owns one Mac and one Windows PC. See `MachineOffer.name`
+   * in `rendezvous.ts` for why the `welcome` frame cannot supply this.
+   */
+  hostName: string | null
   credential: StoredCredential
 }
 
@@ -134,8 +148,41 @@ export function cleanNickname(raw: string | null | undefined): string | null {
  */
 export function machineLabel(machine: StoredMachine, origin: string): string {
   if (machine.nickname !== null && machine.nickname !== '') return machine.nickname
+  if (machine.hostName !== null && machine.hostName !== '') return machine.hostName
   const endpoint = machine.credential.endpoint
-  return endpoint.kind === 'relay' ? endpoint.hostId.slice(0, 6) : origin
+  if (endpoint.kind !== 'relay') return origin
+  /*
+   * The platform noun before the slot code, for machines paired before the name
+   * was kept.
+   *
+   * `2JJGF8` and `9ZA6K3` name nothing a person owns. "Mac" and "PC" are less
+   * than a hostname and are the difference between a switcher he can use and one
+   * he cannot — and they come off `welcome.hostPlatform`, which those pairings
+   * already stored. `unknown` still falls through to the code rather than
+   * drawing "desktop" for everything, because a switcher whose every chip reads
+   * the same word is worse than one made of codes.
+   */
+  const noun = machineNoun(machine.credential.hostPlatform)
+  return machine.credential.hostPlatform === 'unknown' ? endpoint.hostId.slice(0, 6) : noun
+}
+
+/**
+ * The labels for a whole list, with collisions broken by the slot code.
+ *
+ * `machineLabel` answers for one machine and cannot see the others, which is
+ * fine until two of them answer the same word — two Macs, or two machines the
+ * person nicknamed "office". A switcher with two identical chips is the defect
+ * this whole item is about, wearing a different mask, so the list-level function
+ * is where the tie is broken: the label, then the six characters that are the
+ * one thing guaranteed to differ.
+ */
+export function machineLabels(machines: readonly StoredMachine[], origin: string): string[] {
+  const plain = machines.map((machine) => machineLabel(machine, origin))
+  return plain.map((label, at) => {
+    if (plain.every((other, index) => index === at || other !== label)) return label
+    const endpoint = machines[at]!.credential.endpoint
+    return endpoint.kind === 'relay' ? `${label} ${endpoint.hostId.slice(0, 6)}` : label
+  })
 }
 
 /**
@@ -196,7 +243,14 @@ function readMachine(value: unknown, now: number): StoredMachine | null {
   // and the endpoint is the one that decides. A record whose id was edited by
   // hand — or written by a build that keyed them differently — is re-keyed here
   // rather than kept, because the port book and the switcher both index on it.
-  return { id: machineId(loaded.endpoint), nickname: cleanNickname(nickname as string | null), credential: loaded }
+  return {
+    id: machineId(loaded.endpoint),
+    nickname: cleanNickname(nickname as string | null),
+    // Cleaned by the same rule as a nickname, because it lands in the same place
+    // on screen and arrived from a machine rather than from this browser.
+    hostName: cleanNickname(value.hostName as string | null),
+    credential: loaded,
+  }
 }
 
 /**
@@ -275,6 +329,9 @@ export function loadMachines(stores: Stores, now: number): { book: MachineBook; 
   const machine: StoredMachine = {
     id: machineId(legacy.value.endpoint),
     nickname: null,
+    // The single-credential record predates the offer being kept, so there is no
+    // name to migrate. `machineLabel` falls through to the platform noun.
+    hostName: null,
     credential: legacy.value,
   }
   return { book: { machines: [machine], currentId: machine.id }, remember: legacy.remember }
@@ -351,7 +408,13 @@ export function withMachine(book: MachineBook, machine: StoredMachine): MachineB
   const at = book.machines.findIndex((held) => held.id === machine.id)
   if (at < 0) return { machines: [...book.machines, machine], currentId: machine.id }
   const machines = [...book.machines]
-  machines[at] = { ...machine, nickname: machine.nickname ?? machines[at].nickname }
+  // The nickname survives a re-pair; the machine's own name is replaced, because
+  // a computer that has been renamed since should be drawn under the new one.
+  machines[at] = {
+    ...machine,
+    nickname: machine.nickname ?? machines[at].nickname,
+    hostName: machine.hostName ?? machines[at].hostName,
+  }
   return { machines, currentId: machine.id }
 }
 

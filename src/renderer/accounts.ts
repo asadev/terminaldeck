@@ -1195,6 +1195,19 @@ export function useAccounts(enabled = true, probe = enabled): AccountsState {
     check(false)
   }, [enabled, probe, check])
 
+  /*
+   * Somebody added, renamed or removed an account somewhere else in the window.
+   *
+   * Without this, the account chip inside a session read the list once when the
+   * session opened and never again: an account added from Settings was absent
+   * from the chip's menu until the renderer was reloaded. See
+   * `announceAccountsChanged`.
+   */
+  useEffect(() => {
+    if (!enabled) return
+    return onAccountsChanged(reload)
+  }, [enabled, reload])
+
   return {
     snapshot,
     signIn,
@@ -1533,4 +1546,118 @@ export function useAccountHistory(accountIds: readonly string[]): AccountHistori
   )
 
   return { known, moves, refresh: read, set }
+}
+
+/* ------------------------------------------------- one door to Add account -- */
+
+/**
+ * "I want another account", asked from outside the settings window.
+ *
+ * ## Why an event
+ *
+ * There is one place in this app where an account is added — the popup with the
+ * sign-in steps in it — and until now there were three ways to end up looking
+ * for it: the pane's **Add account** button, a signed-out row's **Sign in**, and
+ * an item in the session chip called *Add or sign in to an account…* that
+ * opened the settings pane rather than the popup. His words:
+ *
+ *   > *"And why do we have see sign in here separately, add account here
+ *   > separately? If we want to add account, this big description again here
+ *   > also, big description."*
+ *
+ * Collapsing them means the chip has to reach a popup owned by a pane inside a
+ * sheet the shell opens. The prop route is a field on `SettingsPanelProps`, a
+ * field on the shell's settings state and a branch in `App.tsx` — three files
+ * changed so one button can open a dialog. This is the same act expressed
+ * once: the chip says *somebody asked for this*, and the pane that owns the
+ * popup answers.
+ *
+ * ## Why a flag as well as an event
+ *
+ * The two are not simultaneous. The chip fires this and then opens the settings
+ * window, so `AccountsSection` is mounted *after* the event — a listener alone
+ * would never hear it. The flag is what the pane reads on mount, and it is
+ * cleared as it is read so that opening Settings again by itself does not
+ * reopen the popup.
+ */
+const ADD_ACCOUNT_EVENT = 'deck:add-account'
+
+/**
+ * The pending request: which agent it is for, or `null` for "no preference".
+ *
+ * `undefined` is the third state and it is the one that means *nothing was
+ * asked*. Two nullables rather than a boolean and a value because the Add-agent
+ * menu asks for a *named* agent — pressing Claude Code in it must open the
+ * popup with Claude Code already chosen, which is the whole of *"If we add
+ * Claude Code, and then we will have relevant stuff, add account things"* —
+ * while the chip and the pane's own button ask for no agent in particular.
+ */
+let addAccountPending: ProviderId | null | undefined
+
+/** Ask whichever Accounts pane is or is about to be on screen to open the popup. */
+export function askForAddAccount(provider: ProviderId | null = null): void {
+  addAccountPending = provider
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(ADD_ACCOUNT_EVENT))
+}
+
+/**
+ * The request made since this was last called, or `undefined` for none.
+ * Reading it consumes it.
+ *
+ * Consuming matters: without it a request made once would reopen the popup
+ * every time the pane was mounted afterwards, which is the settings window
+ * springing a dialog on somebody who came in to change something else.
+ */
+export function takeAddAccountRequest(): ProviderId | null | undefined {
+  const asked = addAccountPending
+  addAccountPending = undefined
+  return asked
+}
+
+/** Subscribe to the request. Returns the unsubscribe, for an effect's cleanup. */
+export function onAddAccountRequested(listen: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined
+  window.addEventListener(ADD_ACCOUNT_EVENT, listen)
+  return () => window.removeEventListener(ADD_ACCOUNT_EVENT, listen)
+}
+
+/* ---------------------------------------------- the list changed elsewhere -- */
+
+/**
+ * "The account list is not what it was."
+ *
+ * ## The defect
+ *
+ * Measured 2026-08-20: an account added from Settings did not appear in a
+ * session's account menu until the whole renderer was reloaded — checked twice,
+ * including after the sign-in tab was closed. So the flow he complained about
+ * ends with the account he just made being invisible in the one place he wanted
+ * to use it.
+ *
+ * `useAccounts` reads the list once, on mount. The chip's copy is mounted for
+ * the life of the session; Settings' copy is a different component with a
+ * different list. Neither has any way of knowing the other wrote.
+ *
+ * ## Why an event and not a re-read on open
+ *
+ * The obvious patch is to re-read the list every time the chip's menu opens.
+ * That is polling with extra steps — *"events, not polling"* — and it re-reads
+ * on every open forever to catch a change that happens perhaps twice in a
+ * machine's life. This fires once, when something actually changed, and every
+ * mounted list reloads. `probe` is untouched: opening the menu is still what
+ * decides whether the sign-in state is asked for, because that costs a process
+ * per account and this costs a JSON read.
+ */
+const ACCOUNTS_CHANGED_EVENT = 'deck:accounts-changed'
+
+/** Something added, renamed, removed or made default. Every list re-reads. */
+export function announceAccountsChanged(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(ACCOUNTS_CHANGED_EVENT))
+}
+
+/** Subscribe. Returns the unsubscribe, for an effect's cleanup. */
+export function onAccountsChanged(listen: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined
+  window.addEventListener(ACCOUNTS_CHANGED_EVENT, listen)
+  return () => window.removeEventListener(ACCOUNTS_CHANGED_EVENT, listen)
 }

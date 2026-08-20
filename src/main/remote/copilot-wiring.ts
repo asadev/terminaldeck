@@ -37,7 +37,8 @@
  * So a field reaches a phone only when somebody writes a line here.
  */
 
-import { watch, type FSWatcher } from 'node:fs'
+import { existsSync, watch, type FSWatcher } from 'node:fs'
+import { join, resolve } from 'node:path'
 import type { ActionRow } from '../deck-control/action-log'
 import type { CreateSessionInput, SessionMeta } from '../../shared/types'
 import { buildRecordsFence } from '../confine/records'
@@ -47,6 +48,7 @@ import type { SpawnFence } from '../copilot-session'
 import { currentPlatform } from '../platform/host'
 import { getState as profilesState, resolveProfile } from '../profiles'
 import { ChatReader, newestChatTranscript } from '../chat-transcript'
+import { transcriptDirs } from '../transcript'
 import { MAX_COPILOT_LOG_ROWS, type CopilotActionRow, type CopilotChatMessage, type CopilotSessionRow } from './protocol'
 import type { CopilotChatUpdate } from './copilot-runs'
 
@@ -380,6 +382,31 @@ export async function startCopilotRun(
 export function watchRunChat(
   cwd: string,
   onUpdate: (update: CopilotChatUpdate) => void,
+  /**
+   * The CLI session id this run declared, when it declared one.
+   *
+   * ## Why this argument exists
+   *
+   * Without it this followed *the folder's newest transcript*, and that is the
+   * wrong file more often than not. The copilot's folder holds one conversation
+   * per run: the copilot at the desk has one, and every device that starts a run
+   * has one of its own. `newestChatTranscript` picked whichever had been written
+   * to most recently at the instant the run started — which, for a phone
+   * starting a run beside a desk copilot that had already said something, is the
+   * *desk's* transcript. The run's own file then appeared and was never opened,
+   * because `attach` only re-runs while `reader` is still null.
+   *
+   * Measured on 2026-08-20 against a real run: the phone sent a message, the
+   * agent answered `PONG` into
+   * `~/.claude/projects/-private-tmp-…-copilot/f81c2781….jsonl`, and the phone
+   * showed *"Nothing said yet."* until it was reloaded. Half of "you cannot hold
+   * a conversation from the phone" was the turn never being submitted
+   * (`copilot-say.ts`); this is the other half — the answer never coming back.
+   *
+   * Null keeps the old behaviour, which is still the right answer for a run this
+   * app did not name: a resumed conversation carries no `--session-id`.
+   */
+  agentSessionId: string | null = null,
 ): () => void {
   let stopped = false
   let watcher: FSWatcher | null = null
@@ -426,7 +453,7 @@ export function watchRunChat(
 
   const attach = async (): Promise<void> => {
     if (stopped) return
-    const path = await newestChatTranscript(cwd)
+    const path = agentSessionId === null ? await newestChatTranscript(cwd) : namedTranscript(cwd, agentSessionId)
     if (stopped || path === null) return
     watcher?.close()
     reader = new ChatReader(path)
@@ -439,29 +466,74 @@ export function watchRunChat(
    * Watch the folder first, because the file is not there yet.
    *
    * The CLI creates it on its first written line, which is after the spawn
-   * resolved and typically after the person's first message. Watching the folder
-   * for that moment is one event; the alternative is a poll with a delay chosen
-   * by guessing how long a Claude CLI takes to start.
+   * resolved and typically after the person's first message. Watching for that
+   * moment is one event; the alternative is a poll with a delay chosen by
+   * guessing how long a Claude CLI takes to start.
+   *
+   * **The folder is the transcript directory, not the working directory.** This
+   * watched `cwd` — the folder the agent runs *in* — and the CLI writes its
+   * transcript somewhere else entirely, under `<configDir>/projects/<encoded
+   * cwd>`. So the one event this was waiting for could not fire, and a run whose
+   * transcript did not exist at `attach` time was followed by nothing at all.
+   * There can be more than one such directory (two config stores, two spellings
+   * of a symlinked path — see `transcriptDirs`), so all of them are watched and
+   * a directory that is not there yet is skipped rather than fatal: the CLI
+   * creates the leaf on its first write, and the store above it already exists.
    */
-  let folderWatcher: FSWatcher | null = null
-  try {
-    folderWatcher = watch(cwd, () => {
-      if (reader === null) void attach()
-    })
-    folderWatcher.on('error', (error) => console.error('[remote] a transcript folder watch failed:', error))
-  } catch (error) {
-    console.error('[remote] could not watch a copilot run’s folder:', error)
+  const folderWatchers: FSWatcher[] = []
+  for (const dir of transcriptDirs(resolve(cwd))) {
+    try {
+      const one = watch(dir, () => {
+        if (reader === null) void attach()
+      })
+      one.on('error', (error) => console.error('[remote] a transcript folder watch failed:', error))
+      folderWatchers.push(one)
+    } catch {
+      // Not there yet, or gone. `attach` below and the retry above cover it.
+    }
   }
+  /*
+   * And a slow poll behind the watches, because `fs.watch` on a directory that
+   * did not exist when this ran can never fire.
+   *
+   * A directory watch is the cheap path and it is not sufficient on its own:
+   * the first run in a brand-new folder creates the leaf directory *and* the
+   * file, and there was nothing to attach a watcher to at the moment this was
+   * set up. Two seconds is far below the time it takes a person to read an
+   * answer and it stops the instant a reader is attached.
+   */
+  const poll = setInterval(() => {
+    if (reader === null) void attach()
+    else clearInterval(poll)
+  }, 2000)
+  poll.unref?.()
   void attach()
 
   return () => {
     stopped = true
+    clearInterval(poll)
     watcher?.close()
-    folderWatcher?.close()
+    for (const one of folderWatchers) one.close()
+    folderWatchers.length = 0
     watcher = null
-    folderWatcher = null
     reader = null
   }
+}
+
+/**
+ * Where the CLI files a conversation this app named, or null if it has not yet.
+ *
+ * Synchronous and cheap: the name is known — it is the uuid this process put on
+ * the command line — so this is an existence check across the two or three
+ * directories `transcriptDirs` can produce, not a directory listing sorted by
+ * mtime. That difference is the point of the whole argument above.
+ */
+function namedTranscript(cwd: string, agentSessionId: string): string | null {
+  for (const dir of transcriptDirs(resolve(cwd))) {
+    const path = join(dir, `${agentSessionId}.jsonl`)
+    if (existsSync(path)) return path
+  }
+  return null
 }
 
 /**

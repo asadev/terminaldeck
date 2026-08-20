@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { detectPlatform, thisMachine } from '../platform'
 import { asView, type MachineLinkState, type MachinesView } from '../machines/types'
+import { asServers, type Server } from '../machines/servers/types'
 
 /**
  * Which machines' copilots this window can reach — for the switch at the top of
@@ -53,6 +54,24 @@ export type CopilotReach =
   | 'refused'
   /** Not connected, so the question has not been asked yet. */
   | 'unreachable'
+  /**
+   * A server, which has no copilot of its own and never will.
+   *
+   * Asad, on this switch: *"here icon not still choose the local connected
+   * server, by the way, I think. Maybe server is not connected, I don't know."*
+   * The switch listed paired devices only, so a server he had signed in to was
+   * simply not on it and he could not tell whether that meant *not connected*
+   * or *not shown*. It is shown now.
+   *
+   * It cannot be switched **to**, and that is a fact about servers rather than
+   * a control we declined to build. A server does not run this app — see the
+   * vocabulary note at the top of `machines/servers/types.ts` — so there is no
+   * copilot process there to point at. The copilot that works on a server is
+   * the one on this computer, and whether it may act is a per-server grant that
+   * `SERVERS-DESIGN.md` §6.2 puts on that server's own page in as many words:
+   * *"not in Settings, and not in the copilot's window."*
+   */
+  | 'server'
 
 export interface CopilotMachine {
   /** Empty for this computer, which is always the first row. */
@@ -76,6 +95,16 @@ export interface CopilotMachine {
 interface MachinesReadBridge {
   listMachines(): Promise<unknown>
   onMachinesState(callback: (view: unknown) => void): () => void
+  /**
+   * The stored servers, and nothing more.
+   *
+   * Deliberately not `lookAtServer`, which is the call that would tell us
+   * whether one is up: it opens an SSH connection. A switch at the top of a page
+   * that dialled every server the moment the page was drawn would be this
+   * project's own polling complaint with a worse bill attached — *"events, not
+   * polling"* — for a row that cannot be pressed either way.
+   */
+  listServers?(): Promise<unknown>
 }
 
 function bridge(): MachinesReadBridge | null {
@@ -106,6 +135,7 @@ function reachOf(link: MachineLinkState): CopilotReach {
 
 export function useCopilotMachines(): CopilotMachine[] {
   const [view, setView] = useState<MachinesView | null>(null)
+  const [servers, setServers] = useState<Server[]>([])
 
   const read = useCallback((deck: MachinesReadBridge) => {
     void deck
@@ -122,6 +152,17 @@ export function useCopilotMachines(): CopilotMachine[] {
     const deck = bridge()
     if (!deck) return
     read(deck)
+    // The servers are read once, on mount. The stored list only changes when
+    // somebody adds or forgets one, which is a page away, and re-reading it on
+    // a timer would be a poll for a row that cannot be pressed.
+    if (typeof deck.listServers === 'function') {
+      void deck
+        .listServers()
+        .then((value) => setServers(asServers(value)))
+        .catch(() => {
+          // No servers feature in this build. The rows simply do not appear.
+        })
+    }
     // Every change to any link arrives on this one push — a machine coming up,
     // a copilot grant being revoked at the far keyboard — so there is no timer
     // here and nothing to poll.
@@ -132,18 +173,26 @@ export function useCopilotMachines(): CopilotMachine[] {
     // This computer, always first and always reachable: its copilot is a process
     // on this disk, and every other row is measured against it.
     const here: CopilotMachine = { id: '', name: thisMachine(detectPlatform()), reach: 'ready', open: true }
-    if (!view) return [here]
-    const named = new Map(view.machines.map((machine) => [machine.id, machine.name]))
     const rest: CopilotMachine[] = []
-    for (const link of view.links) {
-      const name = named.get(link.id)
-      // A link whose machine is not in the list is one this window can say
-      // nothing about — forgotten while connected, or the two halves of the view
-      // disagree. A row that cannot be named is not a row; `machines-bridge.ts`
-      // takes the same line about the same gap.
-      if (name === undefined || name === '') continue
-      rest.push({ id: link.id, name, reach: reachOf(link), open: link.copilot?.open === true })
+    if (view) {
+      const named = new Map(view.machines.map((machine) => [machine.id, machine.name]))
+      for (const link of view.links) {
+        const name = named.get(link.id)
+        // A link whose machine is not in the list is one this window can say
+        // nothing about — forgotten while connected, or the two halves of the
+        // view disagree. A row that cannot be named is not a row;
+        // `machines-bridge.ts` takes the same line about the same gap.
+        if (name === undefined || name === '') continue
+        rest.push({ id: link.id, name, reach: reachOf(link), open: link.copilot?.open === true })
+      }
+    }
+    // The servers, last, and never pressable — see `CopilotReach['server']`.
+    // Listed because the switch being silent about a machine he had signed in to
+    // is what he was looking at when he said he could not tell whether it was
+    // connected.
+    for (const server of servers) {
+      rest.push({ id: `server ${server.id}`, name: server.name, reach: 'server', open: false })
     }
     return [here, ...rest]
-  }, [view])
+  }, [view, servers])
 }

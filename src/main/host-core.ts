@@ -915,12 +915,61 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * carries the measured fork and the rule Asad settled: a second session in
      * a folder that already has a live one starts fresh instead of resuming.
      */
+    /*
+     * `--resume <id>`, when the caller can name the conversation.
+     *
+     * `--continue` means *the folder's most recent conversation*, which is a
+     * guess that happens to be right nearly always and is not the claim the
+     * account-switch sheet makes. A switch says the conversation **on screen**
+     * follows, and it knows that conversation's id — this app put it on the
+     * outgoing process's command line — so it names it rather than describing
+     * it. `session-switch.ts` only passes one after checking the transcript is
+     * readable from the account being switched *to*; anything it could not
+     * prove falls through to `spec.spawn.resumeArgs` and the folder-newest
+     * meaning, unchanged.
+     *
+     * Through `withLaunchArgs` for the reason spelled out below `namesConversation`
+     * — inside WSL `spec.spawn.args` is a `wsl.exe` invocation whose last
+     * element is a quoted command line, and appending to it hands the flag to
+     * the login shell instead of to the CLI.
+     *
+     * No `--fork-session` beside it, deliberately. Forking would copy the
+     * conversation into a new id, so switching account and back would leave two
+     * transcripts holding one conversation; without it the CLI reuses the
+     * original id, which is what "the same conversation, under the other
+     * login" has to mean.
+     */
+    const named =
+      provider === 'claude' &&
+      input.resume === true &&
+      typeof input.resumeConversationId === 'string' &&
+      input.resumeConversationId !== ''
+    const resumeArgs = named
+      ? withLaunchArgs(
+          spec,
+          ['--resume', input.resumeConversationId as string],
+          platform,
+          process.env,
+          target,
+        ).spawn.args
+      : spec.spawn.resumeArgs
+
     const chosen = argsForSpawn({
       resume: input.resume === true,
-      resumeArgs: spec.spawn.resumeArgs,
+      resumeArgs,
       args: spec.spawn.args,
       live: ptys.list(),
       cwd: input.cwd,
+      /*
+       * The session this one replaces, when it replaces one.
+       *
+       * Only an account switch passes it, and without it the switch could never
+       * resume: `performSwitch` starts the replacement before it stops the
+       * outgoing process, so the guard saw a live session of the same provider
+       * in the same folder and dropped `--continue` every single time.
+       * `one-conversation.ts` carries the argument.
+       */
+      replaces: typeof input.replaces === 'string' ? input.replaces : null,
       // `provider`, the same value handed to `ptys.create` below and therefore
       // the same one `SessionMeta.provider` carries — so the comparison is
       // like for like. The *requested* provider is not: an agent that is not
@@ -963,14 +1012,59 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * full where `withLaunchArgs` is declared; this calls it rather than
      * repeating the mistake it exists to prevent.
      */
-    const namesConversation = provider === 'claude' && chosen !== spec.spawn.resumeArgs
-    const agentSessionId = namesConversation ? randomUUID() : null
+    const namesConversation = provider === 'claude' && chosen !== resumeArgs
+    /*
+     * Which conversation this session is on, when that is known rather than
+     * inferred — and there are now two ways to know it. A fresh session is
+     * given a new id; a resume that named one is on the id it named, because
+     * the CLI reuses it when `--fork-session` is absent. Both are facts this
+     * process put on the command line itself, which is the standard
+     * `SessionMeta.agentSessionId` is held to.
+     */
+    /*
+     * The id **this** spawn declares, which is only ever a new one.
+     *
+     * Held apart from `agentSessionId` below because the two answer different
+     * questions and conflating them is what broke every account switch that
+     * named a conversation. `--session-id` *declares* an id; `--resume` *joins*
+     * one; the CLI refuses the first against a transcript that already exists —
+     * `Error: Session ID <uuid> is already in use` — and that is precisely the
+     * transcript a switch is resuming. So the flag belongs to the fresh path
+     * alone, and the argument list built for it must not be reachable from the
+     * resume path. A `string | null` typed here rather than re-derived below is
+     * what makes that unreachable rather than merely unintended.
+     */
+    const declaredId = namesConversation ? randomUUID() : null
+    const agentSessionId =
+      declaredId ?? (named && chosen === resumeArgs ? (input.resumeConversationId as string) : null)
+    /**
+     * Did the agent actually get a continue flag?
+     *
+     * Read off the arguments rather than off the request, because those are two
+     * different questions and the switch already shipped a log line that
+     * answered the wrong one: it recorded `continued: true` from the plan while
+     * the guard above was quietly dropping the flag. What a caller asked for is
+     * not evidence of what ran.
+     */
+    const resumed = resumeArgs.length > 0 && chosen === resumeArgs
+    /*
+     * `declaredId`, never `agentSessionId`.
+     *
+     * This read `agentSessionId === null ? chosen : …--session-id…`, and on the
+     * one path where the two differ — a switch resuming the conversation on
+     * screen by name — it threw `chosen` away and rebuilt the command line
+     * with `--session-id <the id being resumed>`. Measured on 2026-08-20: the
+     * terminal printed `Error: Session ID … is already in use`, the agent
+     * exited, and the tab was left empty. That is the whole of *"it's not
+     * keeping the conversation history"* on the path that was supposed to fix
+     * it. A resume keeps the arguments that were chosen for it.
+     */
     const wanted =
-      agentSessionId === null
+      declaredId === null
         ? chosen
         : withLaunchArgs(
             table,
-            [...(extraArgs ?? []), '--session-id', agentSessionId],
+            [...(extraArgs ?? []), '--session-id', declaredId],
             platform,
             process.env,
             target,
@@ -1062,6 +1156,15 @@ export function createHostCore(options: HostCoreOptions): HostCore {
        * same thing to every reader, and only one of the two survives JSON.
        */
       ...(agentSessionId !== null ? { agentSessionId } : {}),
+      /*
+       * What went on the command line, not what was asked for — and passed
+       * unconditionally, which is the whole point of it. Spread conditionally
+       * like the two fields above, a `false` would be an *absent* key, and
+       * `PtyManager.create` reads an absent key as "the caller did not say" and
+       * falls back to `input.resume` — the request, which is exactly the
+       * untruth this exists to replace.
+       */
+      resumed,
       /*
        * The account this session runs as, recorded on the session itself.
        *

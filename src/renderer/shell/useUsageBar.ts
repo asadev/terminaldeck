@@ -260,6 +260,86 @@ export interface UsageBarState {
  * over a session on a paired PC it would answer with this laptop's own login's
  * limits under a bar drawn over somebody else's terminal.
  */
+/**
+ * What each session's bar last genuinely showed, so a switch does not blank it.
+ *
+ * ## The flicker this removes, measured rather than guessed
+ *
+ * Asad, 2026-08-20, clicking through his session list:
+ *
+ *   > *"when I switch … for one second here, something comes in the screen,
+ *   > some third frame with some codes, and then it brings the new actual
+ *   > session that I am clicking on … See, see, see, see, in all of them."*
+ *
+ * Part of that is the terminal and is not this file's. This half is: both hooks
+ * below used to set their reading to `null` the instant `sessionId` changed and
+ * then ask for it again, so every switch emptied the context bar and dropped the
+ * ring to its "nothing reported" state for as long as the round trip took —
+ * 100 ms for a local read, longer over the relay. A control that goes blank and
+ * comes back is read as a control that broke, and it did it on *every* switch,
+ * including switching back to a session whose figures this window had held two
+ * seconds earlier.
+ *
+ * ## Why remembering is honest here, when it usually is not
+ *
+ * The rule this file keeps everywhere else — *"a settled answer belongs to the
+ * login the old pty was running under"* — is about carrying one session's answer
+ * onto **another** session. This does the opposite: it is keyed on the session,
+ * so what comes back is that session's own last reading and nothing else's. And
+ * these readings already say how old they are — every row on the panel carries
+ * `read 8m ago`, and `usage-bar-model.ts` draws a window back once it has aged
+ * past a twelfth of itself — so an old figure cannot pass itself off as a fresh
+ * one. What replaces it is a live read, started in the same effect, exactly as
+ * before.
+ *
+ * A session that is **withheld** is never seeded and never remembered: those
+ * figures are not readings of what the bar is drawn over, which is the whole
+ * argument in `usage-reach.ts`, and a cache of them would be that mistake with a
+ * delay on it.
+ *
+ * ## Keyed on the computer as well as the session
+ *
+ * A session id is a pty on one machine. Two paired machines can hand out ids
+ * from their own sequences, so the key carries which end it came from — the
+ * same three cases `controls-target.ts` routes by.
+ */
+interface PlanMemo {
+  report: UsageReport | null
+  blocked: string | null
+  noLimits: boolean
+}
+
+/**
+ * Bounded, because a window that opens sessions all day would otherwise hold a
+ * report for every one it has ever drawn. Insertion-ordered: re-remembering
+ * moves an entry to the end, so what is dropped is the session nobody has
+ * looked at for longest.
+ */
+const MEMO_CAP = 64
+const LAST_PLAN = new Map<string, PlanMemo>()
+const LAST_CONTEXT = new Map<string, ContextReading>()
+
+function memoKey(sessionId: string, target: Parameters<typeof usageReach>[0]): string {
+  if (target === undefined) return `here\u0000${sessionId}`
+  return target.kind === 'machine'
+    ? `machine\u0000${target.machineId}\u0000${sessionId}`
+    : `server\u0000${sessionId}`
+}
+
+function remember<T>(store: Map<string, T>, key: string, value: T): void {
+  store.delete(key)
+  store.set(key, value)
+  if (store.size <= MEMO_CAP) return
+  const oldest = store.keys().next()
+  if (!oldest.done) store.delete(oldest.value)
+}
+
+/** Test seam: the memo is module state, and a test that seeds one must clear it. */
+export function forgetUsageMemos(): void {
+  LAST_PLAN.clear()
+  LAST_CONTEXT.clear()
+}
+
 export function useUsageBar(
   sessionId: string,
   injected?: UsageBarBridge,
@@ -279,7 +359,11 @@ export function useUsageBar(
    */
   const bridge = useUsageBridge(target, local)
   const withheld = withheldReason(usageReach(target))
-  const [report, setReport] = useState<UsageReport | null>(null)
+  /** Which session on which computer, for {@link LAST_PLAN}. */
+  const memo = memoKey(sessionId, target)
+  const [report, setReport] = useState<UsageReport | null>(
+    () => (withheld === null ? (LAST_PLAN.get(memoKey(sessionId, target))?.report ?? null) : null),
+  )
   const [checking, setChecking] = useState(false)
   const [detail, setDetail] = useState<string | null>(null)
   const [blocked, setBlocked] = useState<string | null>(null)
@@ -295,13 +379,22 @@ export function useUsageBar(
   }, [])
 
   useEffect(() => {
-    setReport(null)
-    // A settled answer belongs to the login the *old* pty was running under.
-    // Carrying it to a new one would have this give up on a session it has
-    // never asked anything.
+    /*
+     * What this session itself last showed, not what the bar was showing a
+     * moment ago — those are different things and only the first may be kept.
+     *
+     * A settled answer belongs to the login *that* pty was running under, so it
+     * travels with the session and never across one: `blocked` and `noLimits`
+     * come back with the report they were established alongside. `detail` and
+     * `failed` deliberately do not — they describe one attempt, not the
+     * session, and a stale failure would put a ⓘ on a bar that is about to
+     * succeed. See {@link LAST_PLAN}.
+     */
+    const kept = withheld === null ? LAST_PLAN.get(memo) : undefined
+    setReport(kept?.report ?? null)
     setDetail(null)
-    setBlocked(null)
-    setNoLimits(false)
+    setBlocked(kept?.blocked ?? null)
+    setNoLimits(kept?.noLimits ?? false)
     setFailed(false)
     if (!bridge?.watchUsage || !bridge.onUsage || sessionId === '') return
     /*
@@ -346,7 +439,24 @@ export function useUsageBar(
     // without unmounting. Without it here the subscription taken for the local
     // session would outlive the switch and go on pushing this login's readings
     // onto a bar that is now drawn over another machine's terminal.
-  }, [bridge, sessionId, withheld])
+  }, [bridge, memo, sessionId, withheld])
+
+  /*
+   * And what it settled on, kept against this session so switching back to it
+   * does not blank the bar for the length of a round trip.
+   *
+   * Written from the rendered values rather than from each setter, so there is
+   * one place that decides what is remembered and it cannot drift from what was
+   * on screen. Nothing is stored for a withheld session — see {@link LAST_PLAN}
+   * — and nothing is stored before there is anything to store, so a session that
+   * has never answered leaves no entry and the next mount starts blank exactly
+   * as it does today.
+   */
+  useEffect(() => {
+    if (withheld !== null || sessionId === '') return
+    if (report === null && blocked === null && !noLimits) return
+    remember(LAST_PLAN, memo, { report, blocked, noLimits })
+  }, [memo, report, blocked, noLimits, sessionId, withheld])
 
   /*
    * Never an endless spinner.
@@ -577,7 +687,11 @@ export function useContextWindow(
   // asking. `usage-target.ts` is the one place that knows.
   const bridge = useUsageBridge(target, local)
   const withheld = withheldReason(usageReach(target))
-  const [reading, setReading] = useState<ContextReading | null>(null)
+  /** Which session on which computer, for {@link LAST_CONTEXT}. */
+  const memo = memoKey(sessionId, target)
+  const [reading, setReading] = useState<ContextReading | null>(
+    () => (withheld === null ? (LAST_CONTEXT.get(memoKey(sessionId, target)) ?? null) : null),
+  )
   const live = useRef(true)
   /** When the last read was *started*, so a burst of output cannot stack them. */
   const lastAt = useRef(0)
@@ -631,16 +745,30 @@ export function useContextWindow(
     [bridge, sessionId, withheld],
   )
 
-  // A new session is a different conversation, so the old figure is not merely
-  // stale — it is about somebody else. Cleared before the first read lands, and
-  // for a withheld session that clearing is the whole of what happens: `read`
-  // returns without asking, so the bar keeps no figure at all rather than the
-  // one it had before the switch.
+  /*
+   * A new session is a different conversation, so the *previous* session's
+   * figure has to go — it is about somebody else. What replaces it is not a
+   * blank but this session's own last figure, if this window has one: keyed on
+   * the session, so nothing crosses between them, and superseded by the read
+   * started on the next line. Before this, every switch emptied the context bar
+   * for the length of a round trip and put it back, which is the flicker he
+   * filmed. See {@link LAST_CONTEXT}.
+   *
+   * For a withheld session the clearing is still the whole of what happens:
+   * `read` returns without asking and nothing was ever remembered, so the bar
+   * keeps no figure at all rather than the one it had before the switch.
+   */
   useEffect(() => {
-    setReading(null)
+    setReading(withheld === null ? (LAST_CONTEXT.get(memo) ?? null) : null)
     lastAt.current = 0
     read(true)
-  }, [read])
+  }, [memo, read, withheld])
+
+  /* And this session's own figure, kept for the next time it is looked at. */
+  useEffect(() => {
+    if (withheld !== null || reading === null) return
+    remember(LAST_CONTEXT, memo, reading)
+  }, [memo, reading, withheld])
 
   useEffect(() => {
     const off = bridge?.onSessionData?.((id) => {

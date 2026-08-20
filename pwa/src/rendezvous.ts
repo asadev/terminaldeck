@@ -123,6 +123,36 @@ export async function rendezvousIdentity(code: string): Promise<RendezvousIdenti
 const MAX_OFFER_BYTES = 4 * 1024
 
 /**
+ * The longest machine name an offer may name itself with.
+ *
+ * The same twenty-four `machines.ts` caps a nickname at, and for the same
+ * reason: this string ends up on a switcher chip beside a connection state. It
+ * is also a bound on untrusted input — the offer is authenticated, not trusted —
+ * so a machine that called itself four kilobytes cannot make a chip that fills
+ * the screen.
+ */
+const MAX_OFFER_NAME_LENGTH = 24
+
+/** What a machine's rendezvous offer says, once it is safe to believe. */
+export interface MachineOffer {
+  endpoint: RelayEndpoint
+  /**
+   * What the machine calls itself — its hostname. Empty when it did not say.
+   *
+   * This used to be thrown away here, on the grounds that *"the machine names
+   * itself in `welcome` a second later"*. It does not. `welcome.deviceName` is
+   * the name the machine has for **this device** — the phone — echoed back to
+   * it, and nothing in the whole protocol tells a client the host's own name.
+   * So the switcher chips read `2JJGF8` and `9ZA6K3`, the relay slot codes, for
+   * a person who owns one Mac and one Windows PC and could not tell them apart.
+   * The desktop's own guest client has always taken the name from right here
+   * (`main/remote/machines/ipc.ts`, at `machines:pair`); this client is the one
+   * that dropped it.
+   */
+  name: string
+}
+
+/**
  * Read an offer, or null.
  *
  * Narrowed field by field rather than cast, and it is the second of two locks
@@ -132,12 +162,11 @@ const MAX_OFFER_BYTES = 4 * 1024
  * frame that is well-formed — and what comes out of this function is dialled and
  * then handed a pairing token.
  *
- * The name and platform in the desktop's version are dropped rather than parsed.
- * This client has nowhere to show them: it pairs with one machine at a time and
- * the machine names itself in `welcome` a second later, which is a name that came
- * through an authenticated channel from the machine rather than off a rendezvous.
+ * `platform` is still dropped, and that one is right: the machine says what kind
+ * of thing it is in `welcome.hostPlatform`, over a channel that is authenticated
+ * *and* current, and `host-platform.ts` already reads it.
  */
-export function parseOffer(raw: string): RelayEndpoint | null {
+export function parseOffer(raw: string): MachineOffer | null {
   if (raw.length > MAX_OFFER_BYTES) return null
   let parsed: unknown
   try {
@@ -167,7 +196,18 @@ export function parseOffer(raw: string): RelayEndpoint | null {
    */
   if (typeof publicKey !== 'string' || hostKeyBytes(publicKey) === null) return null
 
-  return { kind: 'relay', url: relayUrl, hostId, hostKey: publicKey }
+  /*
+   * Stripped of control characters before it is measured, the same cleaning the
+   * desktop applies to the same field. A name is display text from a machine
+   * this browser has never spoken to before, and an escape sequence in one would
+   * be a chip that repaints the page around it.
+   */
+  const name =
+    typeof value.name === 'string'
+      ? value.name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, MAX_OFFER_NAME_LENGTH)
+      : ''
+
+  return { endpoint: { kind: 'relay', url: relayUrl, hostId, hostKey: publicKey }, name }
 }
 
 /* ----------------------------------------------------------------- lookup -- */
@@ -199,14 +239,14 @@ export interface LookupOptions {
  * the same in all of them and telling them apart would mean describing the
  * relay's behaviour to a person who cannot act on it.
  */
-export async function lookupMachine(options: LookupOptions): Promise<RelayEndpoint | null> {
+export async function lookupMachine(options: LookupOptions): Promise<MachineOffer | null> {
   const identity = await rendezvousIdentity(options.code)
   if (identity === null) return null
   const relayUrl = options.relayUrl ?? DEFAULT_RELAY_URL
 
-  return new Promise<RelayEndpoint | null>((resolve) => {
+  return new Promise<MachineOffer | null>((resolve) => {
     let settled = false
-    const finish = (endpoint: RelayEndpoint | null): void => {
+    const finish = (offer: MachineOffer | null): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -215,7 +255,7 @@ export async function lookupMachine(options: LookupOptions): Promise<RelayEndpoi
       } catch {
         // Already gone; there is nothing left to close.
       }
-      resolve(endpoint)
+      resolve(offer)
     }
     const timer = setTimeout(() => finish(null), options.timeoutMs ?? LOOKUP_TIMEOUT_MS)
 

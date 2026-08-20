@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ProviderId, SessionStatus } from '@shared/types'
 import { useSessionBinding } from '../browser/binding-view'
+import { HoverNote } from './HoverNote'
 import { Modal } from './Modal'
 import { PROVIDER_OPTIONS } from './ProviderPicker'
 import './CloseSessionConfirm.css'
@@ -439,6 +440,18 @@ export function CloseSessionConfirm({
    * which server without being the object of the verb.
    */
   const groupTitle = subject === 'server' ? 'Close these terminals?' : `Close this ${noun}?`
+  /*
+   * Everything this dialog knows that is not the headline, as one paragraph
+   * behind one dot.
+   *
+   * The resume fact used to be a fourth line on screen of its own. It is joined
+   * here rather than given a second `ⓘ`, because two dots a centimetre apart,
+   * each holding a sentence about the same press, is the thing he was looking at
+   * in a different costume. One dot, one paragraph, one hover.
+   */
+  const detail = canResumeProvider(provider)
+    ? `${warning.detail} The conversation itself is kept — a new session in this folder can continue it.`
+    : warning.detail
 
   return (
     <Modal
@@ -486,8 +499,28 @@ export function CloseSessionConfirm({
       }
     >
       <div className="close-confirm">
-        <p className="close-confirm-headline">{warning.headline}</p>
-        <p className="close-confirm-detail">{warning.detail}</p>
+        {/*
+          The warning, in one line, with the rest of it behind the dot.
+
+          Asad, in the same minute of the same recording as the button he
+          specified below: *"here you have a very long description… Remove this
+          full shit. I don't want any kind of long descriptions anywhere. Just
+          if somewhere it's very required, give the i icon like other ones,
+          information icon in the settings, same way."*
+
+          So `warning.headline` is what is on screen — it is the sentence that
+          uses the word `Delete`, which is the half he asked to keep — and
+          `warning.detail` moved behind the same `ⓘ` the Settings panes use. The
+          detail is not deleted: what it says (a terminal, its scrollback and
+          anything half-typed goes) is true, is occasionally the thing somebody
+          needs, and is worth exactly one hover. `HoverNote` also keeps it in the
+          document for a screen reader, so nothing that could be read before this
+          became unreadable.
+        */}
+        <p className="close-confirm-headline">
+          {warning.headline}
+          <HoverNote label={warning.headline}>{detail}</HoverNote>
+        </p>
 
         {/*
           The windows this lets go of, and what happens to them.
@@ -497,47 +530,45 @@ export function CloseSessionConfirm({
           there is something to say. `B1, B2` is the vocabulary he already uses
           out loud and the one the agent was given, so the sentence needs no
           explanation of what a `B` is.
+
+          This one stayed on screen while the sentence above it went behind a
+          dot, and the difference is who it is about: everything else on this
+          dialog describes the session being deleted, which is the thing he
+          pressed delete on and already knows about. This names **other windows**
+          — ones that stay open, that he did not act on, and that he cannot see
+          from here. A fact about something else on screen is not a description
+          of the button.
         */}
         <AttachedWindowsLine sessionId={sessionId} machineId={sessionMachineId} />
 
-        {canResumeProvider(provider) && (
-          <p className="close-confirm-detail">
-            The conversation itself is kept — a new session in this folder can continue it.
-          </p>
-        )}
-
-        <label className="close-confirm-suppress">
-          <input
-            type="checkbox"
-            checked={suppress}
-            onChange={(event) => setSuppress(event.target.checked)}
-          />
-          <span className="close-confirm-suppress-text">
+        <div className="close-confirm-suppress-row">
+          <label className="close-confirm-suppress">
+            <input
+              type="checkbox"
+              checked={suppress}
+              onChange={(event) => setSuppress(event.target.checked)}
+            />
             <span className="close-confirm-suppress-label">Don’t ask again</span>
-            {/*
-              Where to turn it back on, said here, on the control that turns it
-              off.
+          </label>
+          {/*
+          Where to turn it back on — behind the dot, and outside the `<label>`.
 
-              Asad, 2026-08-17: *"'Don't ask again' is a one-way door — once
-              ticked there is no way to turn it back on. That has to exist."*
-              It did exist by then — Settings → General carries the switch — but
-              nothing in this dialog said so, and the comment that used to sit
-              here explains why: the row was still unbuilt when this was written,
-              and *"promising a control that is not there yet is the one thing a
-              confirm dialog cannot afford to do."* The row was built and this
-              sentence was never updated, so from where he was sitting the door
-              was one-way.
+          Asad, 2026-08-17: *"'Don't ask again' is a one-way door — once ticked
+          there is no way to turn it back on. That has to exist."* It does exist,
+          in Settings → General, and this is the only place that says so; what
+          changed this round is that it says so in a hover instead of in a second
+          line of grey text under the tick, which is precisely the shape of thing
+          he told us to stop drawing.
 
-              It names the place rather than offering a button. A link out of a
-              confirmation is a second decision in front of the first one, and
-              the person is mid-close; a sentence they can act on afterwards is
-              what a one-way door actually needs.
-            */}
-            <span className="close-confirm-detail">
-              Sessions close straight away from then on. Settings → General turns this back on.
-            </span>
-          </span>
-        </label>
+          Outside the `<label>` deliberately. `HoverNote`'s dot is a real
+          `<button>`, and a button inside a label is a click that toggles the
+          checkbox as well as opening the note — so reading why the tick is safe
+          would have ticked it.
+        */}
+          <HoverNote label="Don’t ask again">
+            Sessions close straight away from then on. Settings → General turns this back on.
+          </HoverNote>
+        </div>
       </div>
     </Modal>
   )

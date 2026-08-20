@@ -228,6 +228,46 @@ export function switchConversationNote(
 }
 
 /**
+ * The same five outcomes as two words, for the sheet to *show*.
+ *
+ * `switchConversationNote` above is a sentence, and a sentence is what he
+ * banned from this screen:
+ *
+ *   > *"See again here you have a very long description… remove this full shit.
+ *   > I don't want any kind of long descriptions anywhere. Just if somewhere
+ *   > it's very required, give the i icon like other ones."*
+ *
+ * The sentence was moved behind the ⓘ once and half the job was done: the case
+ * that draws it is `conversation !== 'follows'`, which is precisely the case
+ * where the conversation is *not* coming with him — so the clean sheet was the
+ * one where nothing was at stake and the paragraph came back for the one that
+ * mattered. This is what the sheet shows instead: a state, beside the arrow,
+ * shorter than the buttons under it. The sentence is not deleted — it is what
+ * the ⓘ on the same line now carries.
+ *
+ * Null for `follows`, and that is not an omission. The conversation coming with
+ * you is the ordinary outcome, and a tag saying so would be the statement he
+ * asked to be rid of, printed on every switch this app makes.
+ *
+ * `taken`, `none` and `stays` collapse to one word deliberately: three
+ * different reasons, one consequence — the session on screen afterwards is on a
+ * conversation that did not exist a moment ago. The reason is in the ⓘ, where a
+ * reason belongs.
+ */
+export function switchConversationTag(plan: Pick<SwitchPlanView, 'conversation'>): string | null {
+  switch (plan.conversation) {
+    case 'follows':
+      return null
+    case 'theirs':
+      return 'their conversation'
+    case 'unreadable':
+      return 'conversation unknown'
+    default:
+      return 'new conversation'
+  }
+}
+
+/**
  * What the switch does to everything that is not the conversation.
  *
  * Kept apart from the sentence above because it is the half that is *reassuring*

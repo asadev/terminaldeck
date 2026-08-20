@@ -1379,6 +1379,39 @@ describe('the folders a device is offered', () => {
     expect(harness.endpoint.foldersChanged('device-1')).toBe(0)
   })
 
+  /**
+   * A session started at the **Mac's own keyboard**, which is how nearly all of
+   * them are started, and which nothing on this wire used to mention.
+   *
+   * A fresh `sessions` frame went out from four places and every one of them was
+   * a device doing something: its own `create`, its own `close`, a folder change,
+   * and the reply to `list`. So a phone's list and a paired laptop's sidebar were
+   * a snapshot from the moment they connected. Measured before the fix: the host
+   * went 2 → 5 → 7 and the reaching machine said 2 for sixty seconds, then moved
+   * to 5 within a second of reconnecting. Asad, on the session picker: *"It's not
+   * updated right away. Anyways, maybe we need to refresh."*
+   */
+  it('pushes the new list when a session is started at this machine’s own keyboard', async () => {
+    const sessions = creatingSessions()
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.sessions.length).toBe(1)
+
+    // Nobody asked over the wire: this is the desktop starting one by itself.
+    sessions.add('made-here', '', '/tmp/allowed')
+    expect(harness.endpoint.sessionsChanged()).toBe(1)
+
+    const pushed = await client.until((m) => m.t === 'sessions', 'the new list')
+    expect(pushed.t === 'sessions' && pushed.sessions.map((row) => row.id)).toContain('made-here')
+  })
+
+  it('tells nobody when nobody is connected, and does not throw', async () => {
+    const harness = await serve({}, creatingSessions())
+    expect(harness.endpoint.sessionsChanged()).toBe(0)
+  })
+
   it('takes the asking device from the connection, never from the frame', async () => {
     // The one that would undo the whole feature: a client naming a device id
     // would be a client choosing whose folders it gets. `parseClientMessage`

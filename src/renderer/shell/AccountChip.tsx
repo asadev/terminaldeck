@@ -6,6 +6,7 @@ import type { ProviderId } from '@shared/types'
 import { AGENT_CATALOG, type AgentEntry } from '../../shared/agent-catalog'
 import { useChipMenu } from './chip-menu'
 import { isolationNotice } from '../components/ProfilePicker'
+import { HoverNote } from '../components/HoverNote'
 import { ProviderBadge } from '../components/ProviderBadge'
 import { providerOption } from '../components/ProviderPicker'
 import { chipMode, useAgentPresence, type ChromeSession } from './agent-presence'
@@ -13,6 +14,8 @@ import {
   accountForFolder,
   accountIdentity,
   accountsBridge,
+  announceAccountsChanged,
+  askForAddAccount,
   isSystemAccountId,
   profileLoginLabel,
   renameAccount,
@@ -387,17 +390,30 @@ export function runAgentCommand(entry: AgentEntry): string {
 }
 
 /**
- * What the menu is called, and it is not the same question in both modes.
+ * What the menu is called: one word, and the same word in both modes.
  *
- * Declared once and read by the heading and the `aria-label` together, because
- * those two must never say different things — a sighted user reading "Run this
- * session as" while a screen reader announces "Start a session as" has been
- * given two different accounts of what pressing a row does, and only one of
- * them is true.
+ * It read `Start a session as` / `Run this session as`, and the second is the
+ * phrasing he rejected outright:
+ *
+ *   > *"So run them as is not the best way. Maybe you can say primary account,
+ *   > choose primary account or this kind of words, or default account. That
+ *   > will be the better words instead of run them as."*
+ *
+ * He was standing on the settings row when he said it, and that row is now
+ * **Primary account** — but the words he rejected were not one label, they were
+ * a phrasing, and it was also the head of this menu and the title of the sheet
+ * this menu opens. `Primary account` cannot be borrowed here: the primary
+ * account is a machine-wide default, and this menu is about *one session*, so
+ * the two would be one name over two different facts. The noun on its own is
+ * what both modes are actually about, and the rows underneath already say what
+ * pressing one does.
+ *
+ * Still declared once and read by the heading and the `aria-label` together,
+ * because those two must never say different things.
  */
 export const MENU_HEAD = {
-  start: 'Start a session as',
-  switch: 'Run this session as',
+  start: 'Account',
+  switch: 'Account',
 } as const
 
 /** The row being renamed, and what has been typed into it so far. */
@@ -484,6 +500,9 @@ export function AccountChip({
       if (!problem) {
         setEditing(null)
         accounts.reload()
+        // And the Settings pane, and every other session's chip: one rename,
+        // one list, wherever it is drawn. See `announceAccountsChanged`.
+        announceAccountsChanged()
       }
     })
   }
@@ -998,7 +1017,27 @@ export function AccountChip({
             aria-label={MENU_HEAD[switching ? 'switch' : 'start']}
             style={{ left: menu.at.left, top: menu.at.top }}
           >
-            <p className="folder-menu-head">{MENU_HEAD[switching ? 'switch' : 'start']}</p>
+            <p className="folder-menu-head">
+              {MENU_HEAD[switching ? 'switch' : 'start']}
+              {/*
+                Why some rows below cannot be picked — behind the dot, not over
+                them.
+
+                It was a sentence at the top of the menu: *"Only a Claude Code
+                account can run this session — an account is a login of one
+                agent."* True, and printed every single time this menu was
+                opened on a machine with more than one agent installed, which is
+                every machine this app is for. *"Don't put any single statement
+                in anywhere… if somewhere it's very required, give the i icon
+                like other ones."* The rows it is about are already visibly not
+                buttons; this is the answer for somebody who wants to know why.
+              */}
+              {foreign && (
+                <HoverNote label="Which accounts can run this session">
+                  {`Only a ${agentLabel(sessionAgent) ?? 'matching'} account can run this session — an account is a login of one agent.`}
+                </HoverNote>
+              )}
+            </p>
 
             {/* Why the rows below cannot be picked, before they are read rather
                 than after one is clicked.
@@ -1011,16 +1050,6 @@ export function AccountChip({
                 session, which is exactly the two-subjects-one-control fault
                 `names` exists to prevent, one level down. */}
             {!switching && blocked && <p className="account-menu-blocked">{blocked}</p>}
-
-            {/* The switch mode's own version of the same courtesy: some of the
-                rows below are logins of another agent and cannot run this
-                session, said once above them rather than repeated on each. */}
-            {foreign && (
-              <p className="account-menu-blocked">
-                Only a {agentLabel(sessionAgent) ?? 'matching'} account can run this session — an
-                account is a login of one agent.
-              </p>
-            )}
 
             {rows.map((account) => {
               const state = accounts.signIn[account.id]
@@ -1342,21 +1371,53 @@ export function AccountChip({
               about it is how a menu that cannot be used reads as one that is
               broken.
             */}
-            {!switching && (
+            {/* `Opens a new session here.` was the other half of this line and
+                it is gone: a menu of accounts under a heading that says
+                Account, whose rows start a session, does not need a sentence
+                saying that rows start a session. What survives is the refusal,
+                which is not a description — it is the one state where the rows
+                do nothing, with the fix in it. */}
+            {!switching && blocked && (
               <p className="account-menu-foot">
-                {blocked
-                  ? 'Change the default coding tool in Settings to start a session under one of these.'
-                  : 'Opens a new session here.'}
+                Change the default coding tool in Settings to start a session under one of these.
               </p>
             )}
 
+            {/*
+              One door, not a third one.
+
+                > *"And why do we have see sign in here separately, add account
+                > here separately?"*
+
+              This item read **Add or sign in to an account…** — both of the two
+              words he was complaining about, in one label — and it opened
+              Settings → Coding AI, which is the screen those two buttons are
+              on. So the menu's answer to "I want another account" was to put
+              him back in front of the pair he had just objected to.
+
+              It is called what the act is called everywhere else now, and it
+              opens the sign-in popup itself. The event is how, and it is a
+              deliberate choice over threading an intent through the window: the
+              settings sheet is opened by the shell, four components up, and the
+              pane that owns the popup is `AccountsSection`. A prop for this
+              would be a new field on two interfaces and a branch in the shell
+              for one button. `AccountsSection` listens for this on `window` and
+              opens the same popup its own button opens — see `ADD_ACCOUNT_EVENT`
+              there — and the ordering is safe in either direction, because it
+              re-checks the flag when it mounts.
+            */}
             <button
               type="button"
               role="menuitem"
               className="folder-menu-item folder-menu-browse"
-              onClick={() => menu.choose(onManage)}
+              onClick={() =>
+                menu.choose(() => {
+                  askForAddAccount()
+                  onManage()
+                })
+              }
             >
-              Add or sign in to an account…
+              Add account
             </button>
           </div>,
           document.body,

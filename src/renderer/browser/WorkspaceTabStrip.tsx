@@ -8,7 +8,7 @@ import {
 } from 'react'
 import { StatusDot } from '../components/StatusDot'
 import { tip } from '../keymap'
-import { bindKey, SessionBindChips, WindowBindChip } from './BindChip'
+import { bindKey, SessionBindChips, WindowBindChip, WindowMachineMark } from './BindChip'
 import {
   dragStartedOnControl,
   isTabDrag,
@@ -740,6 +740,17 @@ export function WorkspaceTabStrip({
                         recognisably one thing. See `tabIcon`. */}
                     <path d={tabIcon(tab)} />
                   </svg>
+                  {/*
+                    And which computer the page is on, when it is not this one.
+
+                    Beside the kind-of-window icon because it is the same kind of
+                    fact, and because the trailing cluster is already shedding
+                    chips to fit. Nothing at all for a window on this machine —
+                    see `WindowMachineMark`, which is also where the argument
+                    lives for why a *session* pill deliberately has no twin of
+                    this and a browser window needs one.
+                  */}
+                  {tab.kind === 'browser' && <WindowMachineMark browserTabId={tab.id} />}
                   {/* The app's own status dot, not a second one drawn here: it owns
                       the colour, the fill and — the part that matters — the words a
                       screen reader says for each state, and a private copy would drift

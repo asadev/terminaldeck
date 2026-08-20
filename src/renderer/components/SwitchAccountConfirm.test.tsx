@@ -60,7 +60,13 @@ const sheet = (
 describe('what the sheet says before anything is stopped', () => {
   it('names both accounts — the one it is on and the one it would move to', () => {
     const html = sheet()
-    expect(html).toContain(`Run this session as ${names.to}?`)
+    /*
+     * "Run this session as X?" was the title, and *"run them as is not the best
+     * way"* was about that phrasing rather than about the one settings row he
+     * happened to be looking at when he said it. The act is a switch.
+     */
+    expect(html).toContain(`Switch to ${names.to}?`)
+    expect(html).not.toContain('Run this session as')
     expect(html).toContain(`${names.from} → ${names.to}`)
   })
 

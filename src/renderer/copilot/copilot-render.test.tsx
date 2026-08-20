@@ -271,6 +271,30 @@ describe('which machine’s copilot', () => {
     expect(html).not.toContain('guest devices do not')
   })
 
+  /**
+   * A server, on the switch that used to be silent about servers.
+   *
+   * *"So here icon not still choose the local connected server, by the way, I
+   * think. Maybe server is not connected, I don't know."* — he could not tell
+   * *not connected* from *not shown*, because it was the second one. It is drawn
+   * now, and it cannot be pressed: a server does not run this app, so there is no
+   * copilot over there. The move is on that server's own page, which is where
+   * `SERVERS-DESIGN.md` §6.2 puts it.
+   */
+  it('lists a server, unpressable, and points at the page the grant lives on', () => {
+    const html = renderToStaticMarkup(
+      <CopilotMachines
+        machines={[here, { id: 'server s1', name: 'web-01', reach: 'server' as const, open: false }]}
+        chosen=""
+        onChoose={noop}
+      />,
+    )
+    expect(html).toContain('web-01')
+    expect(html).toContain('disabled')
+    expect(html).toContain('is a server')
+    expect(html).toContain('on the server')
+  })
+
   it('says wait, not re-pair, about a machine that is merely offline', () => {
     // Two different remedies. Telling somebody to pair a sleeping PC again would
     // send them to the wrong keyboard for the wrong reason.

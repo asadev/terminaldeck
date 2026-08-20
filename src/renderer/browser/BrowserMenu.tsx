@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react'
 import { AnchoredPopup } from './AnchoredPopup'
 import type { AccountsApi } from './accounts-bridge'
 import type { Box } from './popup-anchor'
+import { foldedActions, groupFor, type FoldedAction } from './toolbar-overflow'
 
 interface Props {
   api: AccountsApi
@@ -55,6 +57,19 @@ interface Props {
  * Every row is a verb. The disabled states still carry a short `title`, because
  * a greyed row with no reason is the other complaint from the same review — but
  * a `title` is three or four words now, not a sentence.
+ *
+ * ## And what it took on
+ *
+ *   > *"we can have a bigger link bar because when it is smaller, then it
+ *   > becomes too small … Let's make these icons smaller and make this maybe
+ *   > bigger."*
+ *
+ * On a narrow panel the toolbar's page actions come off the bar and arrive here,
+ * at the top, above the rows about the page — Chrome's answer to the same
+ * problem, and the reason he asked for Chrome's ⋮ in the first place. The list
+ * is read off the bar rather than passed in, so this menu offers exactly what
+ * the bar is not showing and never a second copy of a button you can already
+ * see: `toolbar-overflow.ts`.
  */
 export function BrowserMenu({
   api,
@@ -68,9 +83,43 @@ export function BrowserMenu({
 }: Props) {
   const isStartPage = url !== '' && url === startUrl
 
+  /*
+   * The toolbar buttons this panel's bar could not fit.
+   *
+   * Read once, when the menu opens, off the group the ⋯ that opened it lives in
+   * — the anchor is that button's own rectangle, so it identifies the bar even
+   * with two browser panels side by side. Nothing watches for resizes: the menu
+   * closes on a click and the bar is measured again the next time it is asked
+   * for, which is cheaper and cannot go stale on screen.
+   */
+  const [folded, setFolded] = useState<FoldedAction<HTMLButtonElement>[]>([])
+
+  useEffect(() => {
+    const group = groupFor(document.querySelectorAll<HTMLElement>('.bw-actions'), anchor)
+    setFolded(group === null ? [] : foldedActions(group.querySelectorAll('button[data-fold]')))
+  }, [anchor])
+
   return (
     <AnchoredPopup anchor={anchor} label="Browser menu" onClose={onClose}>
       <div className="bw-menu">
+        {/* The row *is* the button: pressing it presses the one on the bar, so
+            there is no second copy of what Record or Devtools means living in
+            this file to fall out of step with the first. */}
+        {folded.map((action) => (
+          <button
+            key={action.label}
+            type="button"
+            className="bw-menu-item"
+            disabled={action.disabled}
+            onClick={() => {
+              action.button.click()
+              onClose()
+            }}
+          >
+            {action.label}
+          </button>
+        ))}
+
         {/* Disabled with a reason rather than hidden. There is always a page or
             there is not, and a row that disappears when nothing is open reads as
             the menu changing shape at random. */}

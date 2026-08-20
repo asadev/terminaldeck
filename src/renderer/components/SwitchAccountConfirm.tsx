@@ -2,6 +2,7 @@ import { HoverNote } from './HoverNote'
 import { Modal } from './Modal'
 import {
   switchConversationNote,
+  switchConversationTag,
   SWITCH_KEEPS,
   type SwitchNames,
   type SwitchPlanView,
@@ -100,11 +101,20 @@ export function SwitchAccountConfirm({
    */
   const refusal = plan?.refusal ?? null
   const canSwitch = plan !== null && refusal === null
+  /** Two words, or nothing at all when the conversation comes with him. */
+  const tag = plan === null ? null : switchConversationTag(plan)
 
   return (
     <Modal
       open={open}
-      title={`Run this session as ${names.to}?`}
+      /*
+       * "Run this session as X?" was the title, which is the phrasing he
+       * rejected — *"run them as is not the best way"* — arriving on the sheet
+       * the menu opens rather than on the settings row he happened to be
+       * looking at when he said it. The act is a switch; the title says so in
+       * three words.
+       */
+      title={`Switch to ${names.to}?`}
       description={title}
       onClose={onCancel}
       footer={
@@ -185,27 +195,31 @@ export function SwitchAccountConfirm({
               The title says where he is going; this says where he is. Two
               names and an arrow, because that is information rather than prose.
             */}
+            {/*
+              And when the conversation is *not* coming with him, two words on
+              the same line rather than a paragraph under it.
+
+              The paragraph was still here, and it drew in exactly the state
+              that matters most: `conversation !== 'follows'` is the case where
+              something is about to be left behind, so the tidy sheet was the
+              one where nothing was at stake and the three-line block came back
+              for the one where something was. That is the habit he named — a
+              sentence written wherever something is refused — and this is the
+              alternative he named in the same breath: a state on the line, and
+              the ⓘ for the half that has to be sayable.
+
+              One ⓘ, not two. It already carried what a switch keeps; it now
+              carries the reason as well, because two dots eight pixels apart on
+              one line is the "which one is this about" problem the row actions
+              in Settings have.
+            */}
             <p className="switch-confirm-headline">
               {names.from} → {names.to}
-              <HoverNote label="What switching does">{SWITCH_KEEPS}</HoverNote>
+              {tag !== null && <span className="switch-confirm-tag">{tag}</span>}
+              <HoverNote label="What switching does">
+                {tag === null ? SWITCH_KEEPS : `${switchConversationNote(plan, names)} ${SWITCH_KEEPS}`}
+              </HoverNote>
             </p>
-            {/*
-              And the one sentence that is not a description: the conversation
-              is *not* coming with him.
-
-              Silent when it does come, which is now the ordinary case — a line
-              saying everything is fine is exactly the statement he asked to be
-              rid of. It stays for the cases the app cannot fix on his behalf:
-              an account whose folder somebody chose themselves, an agent whose
-              history this app cannot read, another tab already on the
-              conversation. Those are losses, and a loss he was not warned about
-              is the fault this sheet exists for.
-            */}
-            {plan.conversation !== 'follows' && (
-              <p className="switch-confirm-detail" role="alert">
-                {switchConversationNote(plan, names)}
-              </p>
-            )}
           </>
         )}
 

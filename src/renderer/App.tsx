@@ -74,7 +74,6 @@ import { PaneBar } from './shell/PaneBar'
 import { SessionControls } from './shell/SessionControls'
 // What stands in that cluster's place over a session running on one of his
 // other machines, so the space it leaves is explained rather than merely empty.
-import { RemoteControlsNote } from './shell/RemoteControlsNote'
 // Which computer a session's controls have to be asked of. See the module's own
 // note: it is the router that made the model, effort and fast-mode cluster reach
 // a session on a paired machine and on a server.
@@ -3148,7 +3147,19 @@ function Workspace() {
   }, [copilotPending, copilotSessionId, selectTab])
 
   /**
-   * Which half of the copilot the window opens on, seeded once.
+   * Whether the copilot's own window is the thing on screen.
+   *
+   * The same expression the pane is mounted with further down — deliberately,
+   * because the effect under this one turns on it and a second opinion about
+   * "is the copilot in front" is how the seeding would come to fire while he is
+   * looking at the pane it re-seeds.
+   */
+  const copilotOnScreen =
+    copilotSession !== null && activeTab?.id === copilotSession.id && !showingPanel
+
+  /**
+   * Which half of the copilot the window opens on — the terminal, every time
+   * it is opened.
    *
    * `defaultPane` says the terminal, always — *"and always terminal should be
    * the default view"* — and it says so without being told anything, which is
@@ -3160,15 +3171,35 @@ function Workspace() {
    * — so the window's own mode switch reads and writes it, and there is one
    * answer to "how is this drawn" rather than two.
    *
-   * Seeded only where the map has no entry, so the moment somebody presses
-   * Terminal or Chat themselves that decision stands.
+   * ## Why leaving the page forgets the switch
+   *
+   * This used to seed once per app launch and never again, which made *always*
+   * mean *on every cold start*. Press Chat, go to Overview, come back to the
+   * copilot and it opened on Chat — and opening the copilot again is exactly
+   * what that is, from where he is sitting. **"Always"** was filmed as a rule
+   * about opening it, not about launching the app.
+   *
+   * So the entry is dropped the moment the page is left, and the seeding below
+   * puts the terminal back on the next entry. Pressing Chat still stands for as
+   * long as he is on the page — the switch is not being taken away from him,
+   * only the memory of it between visits, which is the thing he called a
+   * default.
    */
   useEffect(() => {
     if (copilotSessionId === null) return
+    if (!copilotOnScreen) {
+      setSessionView((views) => {
+        if (!(copilotSessionId in views)) return views
+        const next = { ...views }
+        delete next[copilotSessionId]
+        return next
+      })
+      return
+    }
     setSessionView((views) =>
       copilotSessionId in views ? views : { ...views, [copilotSessionId]: defaultPane() },
     )
-  }, [copilotSessionId])
+  }, [copilotSessionId, copilotOnScreen])
 
   /** Source control hands a file here; the Files page is what can show it. */
   const showFile = useCallback(
@@ -4401,7 +4432,7 @@ function Workspace() {
           like the others" means here — there is no second switch and no second
           piece of state.
         */}
-        {copilotSession && copilotWindow(activeTab.id === copilotSession.id && !showingPanel)}
+        {copilotSession && copilotWindow(copilotOnScreen)}
       </>
     )
   }
@@ -5290,9 +5321,11 @@ function Workspace() {
                     session this app spawned — start one here, switch this one's
                     login — and which account an agent on another machine was
                     spawned under is not a fact any frame on the wire carries. It
-                    would be a menu of choices that reach the wrong computer. The
-                    sentence saying so is on the bar's other half; see
-                    `RemoteControlsNote`.
+                    would be a menu of choices that reach the wrong computer.
+                    Absent, and *silently* absent since 2026-08-20: the sentence
+                    that used to say so lived on the bar's other half and has been
+                    deleted, because a missing control is not something a toolbar
+                    explains.
                   */}
                       {openMachineSession !== null ? (
                         heading.subtitle !== null ? (
@@ -5443,8 +5476,9 @@ function Workspace() {
               absence.
 
               What is still withheld is the connectors chip and the account chip,
-              and only those. See `RemoteControlsNote` below, which is now down to
-              exactly the two things that genuinely cannot travel.
+              and only those — silently, since the note that used to name them was
+              deleted. See the comment where it stood, below, for the four seams
+              either of them needs.
             */}
             {barControls ? (
               <SessionControls
@@ -5466,31 +5500,25 @@ function Workspace() {
               />
             ) : null}
             {/*
-              And beside the cluster — not in place of it — the two facts that
-              still do not travel.
+              And nothing beside the cluster, where a sentence used to be.
 
-              The note used to stand *instead* of the whole cluster and said so:
-              "Model, effort, connectors and login are set on {machine}." Three
-              quarters of that sentence has stopped being true, because the model,
-              the effort and fast mode now act on the far session. What is left is
-              the connectors chip, whose list is resolved from a folder on this
-              computer, and the account chip, whose every row acts on a session
-              this app spawned — and neither of those has anything on either wire
-              to ride on.
+              `RemoteControlsNote` printed "Connectors and login are set on
+              {machine}." here — a visible `<p>` in a 48-pixel toolbar, narrating
+              which two chips are missing. Asad, 2026-08-20, on exactly this habit:
+              *"I said to you, don't put any single statement in anywhere.
+              Everywhere you are putting a lot of statements. We don't need to
+              give the statements. We want simplicity."* A control that is absent
+              is not something to write a line about; the fix is the chip, and
+              until the chip exists the honest surface is an empty one.
 
-              Drawn only over a paired machine, deliberately, and not over a
-              server terminal. It names a place to go — the window on the far end,
-              which has both of these live — and that is true precisely because a
-              paired machine is one running this app, which is the line
-              `MachinesPanel` draws between a device and a server. The same words
-              over a server would point at nothing.
-
-              `!swarm` with the cluster above it: swarm draws every terminal at
-              once, so there is no single session for a note to be about either.
+              What it is waiting on is written down where the work is, not on
+              screen: `usage-reach.ts` holds the same list for the figures beside
+              it, and the two chips need the same four seams — a want on
+              `CAPABILITY.usage` in `src/main/remote/protocol.ts`, a
+              `SessionAccess` seam gated on `mayTouch`, a method on
+              `machines/guest.ts` with its ipc and preload, and a router beside
+              `controls-target.ts`.
             */}
-            {openMachineSession !== null && openMachine && !swarm ? (
-              <RemoteControlsNote machine={openMachine.machine.name} />
-            ) : null}
             {/*
               And the mode switch, which is now drawn over a remote session too —
               with whichever of its two buttons cannot act on one saying why.

@@ -57,6 +57,7 @@ import { Connection, type ConnectionState, type SocketLike } from './connection'
 import {
   GO_AND_LOOK,
   NO_COPILOT,
+  SAY_TIMEOUT_MS,
   copilotStep,
   deskSentence,
   grantSentence,
@@ -137,6 +138,7 @@ import {
   machineById,
   machineId,
   machineLabel,
+  machineLabels,
   MAX_NICKNAME_LENGTH,
   NO_MACHINES,
   renameMachine,
@@ -206,6 +208,7 @@ import {
   statusLabel,
 } from './sessions'
 import { createTerminal, type TerminalHandle } from './terminal'
+import { Upload, promptWord, transferLine } from './upload'
 import {
   THEME_COLOR,
   THEME_ICON,
@@ -328,6 +331,35 @@ const SVG_NS = 'http://www.w3.org/2000/svg'
  * `aria-hidden` because the button around it already carries the whole name and
  * a second one would have a screen reader say it twice.
  */
+/**
+ * A paperclip, in the same 24-unit frame and the same stroke as the theme glyph.
+ *
+ * A glyph and no word, which is the standing rule this round — *"don't put any
+ * single statement in anywhere… smart people knows how it works"* — and it is
+ * also what the two native clients do: iOS puts *Send Photo or Video* behind an
+ * `ellipsis.circle`, Android behind an icon, and neither writes a sentence on
+ * the terminal explaining that a terminal takes files.
+ */
+function clipIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('width', '16')
+  svg.setAttribute('height', '16')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '1.8')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  const path = document.createElementNS(SVG_NS, 'path')
+  path.setAttribute(
+    'd',
+    'M20.5 11.5 11.9 20a5 5 0 0 1-7.1-7.1l8.6-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.5a1.7 1.7 0 0 1-2.3-2.3l7.9-7.9',
+  )
+  svg.append(path)
+  return svg
+}
+
 function themeIcon(choice: ThemeChoice): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg')
   svg.setAttribute('viewBox', '0 0 24 24')
@@ -442,6 +474,29 @@ class Deck {
    * stylesheet used to delete it at that width to save the session's title.
    */
   private readonly appearanceButton = element('button', 'appearance')
+  /**
+   * Send a file into the session on screen. One glyph, in the header.
+   *
+   * In the header rather than in the key bar, and that is not decoration: the key
+   * bar is deleted outright where there is a real keyboard — `physical-keyboard.ts`
+   * — so a control living there would vanish on the laptop, which is the case
+   * where somebody most obviously has a file to send. The header is the one piece
+   * of chrome a terminal keeps in every configuration.
+   *
+   * Absent rather than disabled when the machine did not advertise `upload`,
+   * following the same rule as New session and the port list: a control whose
+   * only function is to explain that it does not function is a fake feature.
+   */
+  private readonly attachButton = element('button', 'appearance')
+  /**
+   * The picker, and the only reason it is a permanent node.
+   *
+   * A file input has to be in the document when it is clicked or Safari refuses
+   * the gesture, and it must not be replaced between the tap and the `change` or
+   * the event lands on a node nobody is listening to. It is never seen: the tap
+   * target is the button above.
+   */
+  private readonly fileField = element('input')
   /**
    * Where a machine's request for a GitHub login is reported.
    *
@@ -720,6 +775,17 @@ class Deck {
    */
   private pairingAnother = false
 
+  /**
+   * The one file on its way to the machine, or none.
+   *
+   * One rather than a list because the desktop serves one upload per connection
+   * — `MAX_UPLOADS_PER_CONNECTION` — so a queue here would be a second file
+   * whose path appears at the prompt minutes after it was chosen. A second pick
+   * while this is set is refused with one line, which is a thing a person can
+   * act on; a silent queue is not.
+   */
+  private upload: Upload | null = null
+
   /* ------------------------------------------------------------- copilot -- */
 
   /**
@@ -788,6 +854,8 @@ class Deck {
   private readonly sheet = element('div', 'sheet')
   /** Redraws the countdown on a waiting confirmation, once a second. */
   private sheetTimer: number | null = null
+  /** Unlocks the composer if a sent message is never acknowledged. */
+  private sayTimer: number | null = null
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -805,9 +873,40 @@ class Deck {
     this.appearanceButton.type = 'button'
     this.appearanceButton.addEventListener('click', () => this.cycleTheme())
 
+    /*
+     * The picker, wired once and never rebuilt.
+     *
+     * No `accept`, deliberately. On iOS an unrestricted file input opens the
+     * system sheet with *Photo Library*, *Take Photo or Video* and *Choose File*
+     * on it — the three routes iOS gives behind two separate menu items — so one
+     * control here is the same reach as two there, with nothing written on
+     * screen. `multiple` because a person picking four photos meant to send four;
+     * they cross one at a time, because the desktop serves one upload per
+     * connection.
+     *
+     * `value` is cleared on every change so that picking the same file twice in a
+     * row fires a second `change`. Without it the second pick is silent, which is
+     * the exact failure this pass exists to remove.
+     */
+    this.fileField.type = 'file'
+    this.fileField.multiple = true
+    this.fileField.hidden = true
+    this.fileField.addEventListener('change', () => {
+      const picked = Array.from(this.fileField.files ?? [])
+      this.fileField.value = ''
+      void this.sendFiles(picked)
+    })
+
+    this.attachButton.type = 'button'
+    this.attachButton.hidden = true
+    this.attachButton.setAttribute('aria-label', 'Send a file to this session')
+    this.attachButton.title = 'Send a file to this session'
+    this.attachButton.append(clipIcon())
+    this.attachButton.addEventListener('click', () => this.fileField.click())
+
     const titles = element('div', 'header__titles')
     titles.append(this.title, this.subtitle)
-    this.header.append(this.back, titles, this.appearanceButton)
+    this.header.append(this.back, titles, this.attachButton, this.appearanceButton, this.fileField)
 
     this.bannerAction.type = 'button'
     this.bannerAction.addEventListener('click', () => this.connection?.resume())
@@ -928,6 +1027,16 @@ class Deck {
   }
 
   /**
+   * What the machine being paired called itself, until its row exists.
+   *
+   * Set by `startPairing` off the rendezvous offer and read once, by
+   * `putCredential`. Null for a direct pairing and for every reconnect, where
+   * there is no offer and the row already carries whatever it learned the first
+   * time — `withMachine` keeps the older name rather than clearing it.
+   */
+  private dialledName: string | null = null
+
+  /**
    * Put a credential in the book against the machine it is actually for.
    *
    * Adds the machine when it is new — which is what makes "pair another machine" a
@@ -948,7 +1057,7 @@ class Deck {
     // and is allowed: the token is carried over by the caller.
     if (known === null && credential.token === '') return
     this.book = known === null
-      ? withMachine(this.book, { id, nickname: null, credential })
+      ? withMachine(this.book, { id, nickname: null, hostName: this.dialledName, credential })
       : selectMachine(withCredential(this.book, id, credential), id)
     this.keep()
   }
@@ -1233,6 +1342,13 @@ class Deck {
     // server itself may well still be starting on the desktop — which is what
     // the re-ask on reconnect below is for.
     if (state.phase !== 'online') this.devDo({ t: 'offline' })
+    // And a file half-way across. The desktop deletes its own `.part` when the
+    // socket goes, so the only thing left is to stop this end pretending: a
+    // progress line frozen at 38% over a dead connection is the silent failure
+    // this pass exists to remove.
+    if (state.phase !== 'online' && this.upload !== null) {
+      this.upload.connectionLost('The connection dropped before that file landed.')
+    }
     // The copilot connection goes with the socket that carried it, and that is
     // not a client decision — a `copilot.*` verb is refused until this socket has
     // said hello again, so a screen still drawing a composer would be a control
@@ -1481,6 +1597,7 @@ class Deck {
     // so the countdown has to start with it and stop with it — a timer left
     // running is a redraw a second forever on a page nobody is looking at.
     this.armSheetTimer()
+    this.armSayTimer()
     this.render()
   }
 
@@ -1503,6 +1620,32 @@ class Deck {
       return
     }
     this.sheetTimer = window.setInterval(() => this.renderSheet(), 1000)
+  }
+
+  /**
+   * The floor under a message that is never acknowledged.
+   *
+   * Armed exactly while `sending` is true, the same shape as the sheet's
+   * countdown above and for a stricter reason: `sending` disables the Send
+   * button, so a lock that never lifts is a screen with no way forward on it.
+   * That is not hypothetical — see {@link SAY_TIMEOUT_MS}, which was written
+   * after a phone sat on "Sending…" through four messages and a reload.
+   *
+   * A timeout rather than an interval: it fires once and the action it dispatches
+   * clears `sending`, which brings this back through the false branch.
+   */
+  private armSayTimer(): void {
+    const wanted = this.copilot.sending
+    if (wanted === (this.sayTimer !== null)) return
+    if (!wanted) {
+      if (this.sayTimer !== null) window.clearTimeout(this.sayTimer)
+      this.sayTimer = null
+      return
+    }
+    this.sayTimer = window.setTimeout(() => {
+      this.sayTimer = null
+      this.copilotDo({ t: 'say-timeout' })
+    }, SAY_TIMEOUT_MS)
   }
 
   private onCredential(token: string): void {
@@ -1613,6 +1756,15 @@ class Deck {
     // it carries has to be turned into a different action, and `copilotStep`
     // would drop it on the floor if it arrived here as one.
     if (message.t !== 'welcome') this.copilotDo({ t: 'frame', message })
+    /*
+     * And the transfer, which owns four frame types the switch below has a case
+     * for none of.
+     *
+     * Routed by asking the transfer whether the frame was its own rather than by
+     * matching `t` here: nothing above this knows which upload ids are whose,
+     * and a second copy of that in the router is the copy that goes out of step.
+     */
+    if (this.upload?.receive(message)) return
 
     switch (message.t) {
       case 'welcome':
@@ -2031,6 +2183,7 @@ class Deck {
   private renderHeader(): void {
     const attached = this.sessions.find((session) => session.id === this.attachedId)
     this.back.hidden = this.backTarget() === null
+    this.attachButton.hidden = !this.canSendFiles
     this.title.textContent = BRAND.name
     if (this.screen === 'terminal' && attached) {
       this.title.textContent = attached.title
@@ -2413,10 +2566,20 @@ class Deck {
       this.looking = false
     }
     this.renderContent()
+    /*
+     * The name the machine gave itself, held until the credential is written.
+     *
+     * It cannot travel with the endpoint — an endpoint is an address and is
+     * persisted as one — and it cannot be asked for later, because the offer is
+     * a one-frame conversation at a rendezvous slot that is gone by then. So it
+     * waits here for `putCredential`, which is the moment the machine becomes a
+     * row somebody has to be able to identify.
+     */
+    this.dialledName = found?.name ?? null
     // The code is the pairing token as well as the address, which is the whole
     // shape of this scheme: `device-auth.ts` hashes what was typed and never
     // learns where it was looked up.
-    this.connect(code, found ?? DIRECT)
+    this.connect(code, found?.endpoint ?? DIRECT)
   }
 
   /** One sentence on the pair screen, in the banner that is already there. */
@@ -3711,8 +3874,11 @@ class Deck {
     const now = Date.now()
 
     const list = element('ul', 'machines')
-    for (const machine of this.book.machines) {
-      list.append(this.machineRow(machine, now))
+    // The same labels the switcher chips get, so the two screens cannot disagree
+    // about what a machine is called.
+    const labels = machineLabels(this.book.machines, this.origin)
+    for (const [at, machine] of this.book.machines.entries()) {
+      list.append(this.machineRow(machine, now, labels[at] ?? machineLabel(machine, this.origin)))
     }
     screen.append(list)
 
@@ -3741,10 +3907,9 @@ class Deck {
    * forgets it. The two are separated because one of them is a thing people do
    * twenty times a day and the other is a thing they do once and regret.
    */
-  private machineRow(machine: StoredMachine, now: number): HTMLElement {
+  private machineRow(machine: StoredMachine, now: number, label: string): HTMLElement {
     const item = element('li', 'machine')
     const current = machine.id === this.book.currentId
-    const label = machineLabel(machine, this.origin)
 
     const line = element('div', 'machine__line')
     const choose = element('button', 'machine__choose')
@@ -3826,7 +3991,17 @@ class Deck {
   private machineState(machine: StoredMachine, current: boolean, now: number): string {
     if (!current) return lastReachedSentence(machine, now)
     if (this.state.phase !== 'online') return this.state.detail
-    const running = this.sessions.filter((session) => session.exitCode === undefined).length
+    /*
+     * `=== null`, not `=== undefined`.
+     *
+     * `RemoteSession.exitCode` is `number | null` and `parseSession` writes the
+     * field on every row — null while it runs, a number once it has stopped — so
+     * the `undefined` test matched nothing and this row said "nothing running"
+     * over a machine with two live sessions on it. It is the shape of defect this
+     * pass is about: not a feature that is missing, a fact on screen that is
+     * false, with nothing to hint at it.
+     */
+    const running = this.sessions.filter((session) => session.exitCode === null).length
     if (running === 0) return 'nothing running'
     return running === 1 ? '1 session' : `${running} sessions`
   }
@@ -4669,14 +4844,21 @@ class Deck {
    * request, a machine asking for a login — has a surface that stays on screen
    * until it stops being true.
    */
-  private say(message: string): void {
-    this.toastText = message
+  private say(message: string, hold = false): void {
+    this.toastText = message === '' ? null : message
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer)
-    this.toastTimer = window.setTimeout(() => {
-      this.toastTimer = null
-      this.toastText = null
-      this.renderToast()
-    }, 2500)
+    this.toastTimer = null
+    // `hold` is for the one caller with a reason to keep a line up: a transfer
+    // replaces its own line every acknowledgement and clears it when the path
+    // lands, so a two-and-a-half second timer would blank the progress of a file
+    // that is still crossing. Everything else expires.
+    if (!hold && this.toastText !== null) {
+      this.toastTimer = window.setTimeout(() => {
+        this.toastTimer = null
+        this.toastText = null
+        this.renderToast()
+      }, 2500)
+    }
     this.renderToast()
   }
 
@@ -4732,12 +4914,15 @@ class Deck {
     const block = element('div', 'start__switch')
     block.append(element('p', 'start__caption', 'On'))
     const row = element('div', 'start__machines')
-    for (const known of this.book.machines) {
+    // Labelled as a *set*, so two chips can never read the same word. See
+    // `machineLabels`: one machine at a time cannot know it has a twin.
+    const labels = machineLabels(this.book.machines, this.origin)
+    for (const [at, known] of this.book.machines.entries()) {
       const here = known.id === this.book.currentId
       const pick = element(
         'button',
         here ? 'start__machine start__machine--here' : 'start__machine',
-        machineLabel(known, this.origin),
+        labels[at] ?? machineLabel(known, this.origin),
       )
       pick.type = 'button'
       pick.setAttribute('aria-pressed', here ? 'true' : 'false')
@@ -4958,6 +5143,42 @@ class Deck {
     const screen = element('div', 'terminal-screen')
     screen.append(terminal.element, dock)
 
+    /*
+     * A file dragged onto the terminal, in a browser on a computer.
+     *
+     * *"any kind of media dropping from your PC to any session should smoothly
+     * work"* — and this page is one of the surfaces a PC reaches a session
+     * through. It is the same transfer as the picker above it; what a browser
+     * hands over here is a `File` with contents and no path, which is exactly
+     * what the upload needs and never what the desktop's own drop handler could
+     * use.
+     *
+     * `dragover` has to `preventDefault` or `drop` never fires at all, and
+     * without either of them Chromium's default for a dropped file is to
+     * **navigate to it** — the whole client replaced by a picture of the photo.
+     * `data-drop` is the only feedback: a border, no words.
+     */
+    screen.addEventListener('dragover', (event) => {
+      if (!this.canSendFiles || !event.dataTransfer?.types.includes('Files')) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
+      screen.dataset.drop = 'on'
+    })
+    screen.addEventListener('dragleave', (event) => {
+      // Only when the pointer has actually left the pane. `dragleave` also fires
+      // for every child crossed on the way over it, and clearing on those makes
+      // the border strobe under a moving cursor.
+      if (event.target === screen) delete screen.dataset.drop
+    })
+    screen.addEventListener('drop', (event) => {
+      delete screen.dataset.drop
+      if (!this.canSendFiles) return
+      const files = Array.from(event.dataTransfer?.files ?? [])
+      if (files.length === 0) return
+      event.preventDefault()
+      void this.sendFiles(files)
+    })
+
     this.terminal = terminal
     /*
      * Held from the moment the surface exists, before a byte reaches it.
@@ -4981,6 +5202,99 @@ class Deck {
   private showTerminalScreen(): void {
     if (this.terminalScreen === null) return
     this.content.replaceChildren(this.terminalScreen)
+  }
+
+  /* -------------------------------------------------------------- files -- */
+
+  /**
+   * Whether a file can be sent from here, right now.
+   *
+   * Four facts, and every one of them is load bearing: a session on screen, an
+   * attach that went out, a socket, and a machine that said it takes uploads.
+   * They are asked in one place so the button and the drop handler cannot
+   * disagree about whether the gesture will work.
+   */
+  private get canSendFiles(): boolean {
+    return (
+      this.screen === 'terminal' &&
+      this.attachedId !== null &&
+      this.state.phase === 'online' &&
+      this.capabilities.includes('upload')
+    )
+  }
+
+  /**
+   * Send what was picked, and type each path at the prompt as it lands.
+   *
+   * ## Why the path is typed and nothing else
+   *
+   * It is what iOS does with the path the Mac answers with, what the desktop's
+   * own drop handler does, and what every terminal on every platform does with a
+   * dropped file. The gesture was the person's, so typing on the back of it is
+   * their text rather than an announcement; no Return is sent, because what to do
+   * with the file is their decision and the prompt is where they make it.
+   *
+   * ## Why one at a time
+   *
+   * The desktop serves one upload per connection. Four photos therefore cross in
+   * order and fill the prompt as they go, so a failure part way through leaves
+   * the ones that did land on the line — which is true, and more useful than
+   * discarding them to keep the gesture atomic.
+   */
+  private async sendFiles(files: readonly File[]): Promise<void> {
+    if (files.length === 0) return
+    if (!this.canSendFiles) {
+      this.say('That session cannot take a file right now.')
+      return
+    }
+    if (this.upload !== null) {
+      // Refused rather than queued: see the field's own note.
+      this.say('One file at a time — that one is still going.')
+      return
+    }
+    for (const file of files) {
+      const landed = await this.sendOneFile(file)
+      if (!landed) return
+    }
+  }
+
+  /**
+   * One file, from the picker to the prompt.
+   *
+   * Resolves false on every failure — including the ones that never leave this
+   * page — because the caller is a gesture somebody made and the only wrong
+   * answer is silence.
+   */
+  private sendOneFile(file: File): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const finish = (landed: boolean): void => {
+        if (settled) return
+        settled = true
+        this.upload = null
+        resolve(landed)
+      }
+      const upload = new Upload(file, {
+        send: (message) => this.connection?.send(message) === true,
+        onProgress: (progress) => {
+          const line = transferLine(progress)
+          // Held while it is crossing and cleared when it lands: the path
+          // appearing at the prompt is the success signal, and a line saying it
+          // worked would narrate something already on screen.
+          this.say(line, progress.phase !== 'failed' && line !== '')
+          if (progress.phase === 'failed') finish(false)
+        },
+        onLanded: (path) => {
+          // Through the ordinary input path, so an armed Ctrl on the key bar is
+          // spent the way it would be by any other typing, and the chunk cap
+          // applies to a long path exactly as it does to a paste.
+          this.sendInput(promptWord(path))
+          finish(true)
+        },
+      })
+      this.upload = upload
+      upload.start()
+    })
   }
 
   private destroyTerminal(): void {

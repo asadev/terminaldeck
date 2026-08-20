@@ -64,14 +64,31 @@ const LOGINS: Record<string, { profileId: string; origin: string; username: stri
   ],
 }
 
+/**
+ * The state he will actually open this menu in: one profile, nothing saved.
+ *
+ * `?profiles=one` swaps to it. The audit's whole point about the profile menu is
+ * that it read fine on a seeded machine and read as a bare name on his, so the
+ * empty case has to be a screenshot and not an argument.
+ */
+const ONE = {
+  profiles: [
+    { id: 'default', name: 'Default', partition: 'persist:terminaldeck-browser', createdAt: 0, isDefault: true },
+  ],
+  activeId: 'default',
+}
+
+const bare = new URLSearchParams(location.search).get('profiles') === 'one'
+const STATE = bare ? ONE : PROFILES
+
 const ACCOUNTS: AccountsApi = {
-  browserProfiles: async () => PROFILES,
-  browserProfileCreate: async () => PROFILES,
-  browserProfileRename: async () => PROFILES,
-  browserProfileActivate: async (id: string) => ({ ...PROFILES, activeId: id }),
-  browserProfileDelete: async () => PROFILES,
+  browserProfiles: async () => STATE,
+  browserProfileCreate: async () => STATE,
+  browserProfileRename: async () => STATE,
+  browserProfileActivate: async (id: string) => ({ ...STATE, activeId: id }),
+  browserProfileDelete: async () => ONE,
   browserPasswordsAvailable: async () => true,
-  browserPasswords: async (profileId: string) => LOGINS[profileId] ?? [],
+  browserPasswords: async (profileId: string) => (bare ? [] : (LOGINS[profileId] ?? [])),
   browserPasswordForget: async () => ({ ok: true, message: '' }),
   browserPasswordCopy: async () => true,
   browserPasswordAnswer: async () => ({ ok: true, message: '' }),
@@ -126,7 +143,6 @@ function Bar({ width, label }: { width: number; label: string }) {
       <div ref={host} className="bw" style={{ width, height: 'auto' }}>
         <Toolbar
           tab={TAB}
-          security="local"
           progress={1}
           resolution={{ kind: 'url', url: TAB.url, display: TAB.url }}
           focusToken={0}
@@ -199,7 +215,6 @@ function Live({ width }: { width: number | undefined }) {
     <div className="bw" style={{ width, height: 'auto' }}>
       <Toolbar
         tab={TAB}
-        security="local"
         progress={1}
         resolution={{ kind: 'url', url: TAB.url, display: TAB.url }}
         focusToken={0}
@@ -262,7 +277,7 @@ function Live({ width }: { width: number | undefined }) {
         <ProfileMenu
           api={ACCOUNTS}
           anchor={anchor}
-          countSites={async () => 7}
+          countSites={async () => (bare ? 0 : 7)}
           onSiteData={() => {}}
           onReopen={() => {}}
           onClose={() => setProfileOpen(false)}

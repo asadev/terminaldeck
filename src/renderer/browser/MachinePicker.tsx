@@ -85,11 +85,18 @@ export function MachinePicker({ machines, selected, onSelect }: Props) {
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
         aria-label={`Addresses open on ${label}. Choose a machine.`}
-        title={
-          current === null
-            ? 'localhost in the address bar means this machine. Choose another to reach its ports instead.'
-            : `localhost in the address bar means ${current.name}. Its ports are opened here, in this window.`
-        }
+        /*
+         * The menu's own heading, and nothing more.
+         *
+         * It used to be two sentences of explanation — *"localhost in the
+         * address bar means Office PC. Its ports are opened here, in this
+         * window."* — on a bar where he had just had every other hover cut to
+         * its name: *"when I hover, it should show the title, like shade,
+         * inspect, record. Instead of this line, show only the name."* Four
+         * words say which question this control answers, and the person who
+         * needs the rest opens it and reads the heading over the list.
+         */
+        title={`Open localhost on ${current === null ? 'this machine' : current.name}`}
         data-on={current !== null || undefined}
         onClick={() => (anchor === null ? open() : setAnchor(null))}
       >
@@ -184,9 +191,24 @@ export function MachinePicker({ machines, selected, onSelect }: Props) {
               ))}
             </ul>
 
-            <p className="bw-menu-note">
-              Only localhost moves. Every other address opens the same way from either machine.
-            </p>
+            {/*
+              There was a note here, and deleting it fixed two things at once.
+
+              It read *"Only localhost moves. Every other address opens the same
+              way from either machine."* — a two-sentence statement standing at
+              the bottom of a menu, which is the shape of thing he spent this
+              recording deleting: *"I don't want any kind of long descriptions
+              anywhere."*
+
+              And its second sentence was not true. `example.com` resolves the
+              same from either machine; a name on the other machine's LAN, its
+              VPN or its hosts file does not, and that is precisely the case a
+              machine switcher exists for. The heading three lines up — **Open
+              localhost on** — states the scope in three words and states it
+              accurately, which is all the note was for. What happens when a page
+              cannot move is said by the page not moving, and by the one line the
+              panel puts in the notice bar at the moment it refuses.
+            */}
           </div>
         </AnchoredPopup>
       )}

@@ -682,11 +682,25 @@ describe('running this session as somebody else', () => {
     expect(rows.slice(0, 1200)).toMatch(/switching && session && onSwitchAccount/)
   })
 
-  it('says which of the two things a press does, in the heading and out loud', () => {
-    // A sighted user reading "Run this session as" while a screen reader
-    // announces "Start a session as" has been given two accounts of one press.
-    expect(MENU_HEAD.start).toBe('Start a session as')
-    expect(MENU_HEAD.switch).toBe('Run this session as')
+  it('heads the menu with one word, and the same word to a screen reader', () => {
+    /*
+     *   > *"So run them as is not the best way. Maybe you can say primary
+     *   > account, choose primary account or this kind of words, or default
+     *   > account."*
+     *
+     * He was standing on the settings row, and the words he rejected were also
+     * the head of this menu and the title of the sheet it opens. `Primary
+     * account` cannot be borrowed here — that is a machine-wide default and
+     * this menu is about one session — so what is left is the noun both modes
+     * are about, with the rows underneath saying what a press does.
+     *
+     * A sighted user reading one thing while a screen reader announces another
+     * has been given two accounts of one press, so the two still come from one
+     * constant.
+     */
+    expect(MENU_HEAD.start).toBe('Account')
+    expect(MENU_HEAD.switch).toBe('Account')
+    expect(MENU_HEAD.start).not.toMatch(/run|as$/i)
     expect(source).toContain("aria-label={MENU_HEAD[switching ? 'switch' : 'start']}")
     expect(source).toContain("{MENU_HEAD[switching ? 'switch' : 'start']}")
   })
@@ -726,9 +740,31 @@ describe('running this session as somebody else', () => {
     expect(said, 'a description of switching has grown back on the menu').not.toMatch(
       /this tab and this folder|stops and starts again|share a history|before anything stops/,
     )
-    // Drawn only when it is not a switch, so the switch case has no foot at all.
-    expect(source).toMatch(/\{!switching && \(\s*<p className="account-menu-foot">/)
+    // Drawn only when it is not a switch *and* there is a refusal to make, so
+    // the ordinary menu has no foot at all. `Opens a new session here.` was the
+    // other half of this line: a menu of accounts whose rows start a session
+    // does not need a sentence saying that its rows start a session.
+    expect(source).toMatch(/\{!switching && blocked && \(\s*<p className="account-menu-foot">/)
     expect(said).toContain('Change the default coding tool in Settings')
+    expect(said).not.toContain('Opens a new session here')
+  })
+
+  it('puts the why-these-rows-are-dead sentence behind the dot, not over them', () => {
+    /*
+     * It was a paragraph at the top of the menu — *"Only a Claude Code account
+     * can run this session — an account is a login of one agent."* — drawn
+     * every time the menu opened on a machine with more than one agent
+     * installed, which is every machine this app is for. The rows it is about
+     * are already visibly not buttons.
+     *
+     *   > *"Don't put any single statement in anywhere… if somewhere it's very
+     *   > required, give the i icon like other ones, information icon in the
+     *   > settings, same way."*
+     */
+    expect(source).not.toMatch(
+      /<p className="account-menu-blocked">\s*\n\s*Only a \{agentLabel/,
+    )
+    expect(source).toContain('<HoverNote label="Which accounts can run this session">')
   })
 
   it('drops the notice about the *next* session while it is talking about this one', () => {

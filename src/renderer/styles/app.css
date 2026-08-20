@@ -266,7 +266,21 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  flex-shrink: 0;
+  /*
+    It gives, and it gives last.
+
+    `flex-shrink: 0` here is what put `B1 B2` on top of a tab's ✕ — the box
+    simply painted out of its row. Clipping the row instead stopped the overlap
+    and started slicing chips through the middle of a glyph, which is why this
+    is a fraction rather than a 1: flexbox distributes shrink in proportion to
+    factor × width, so `0.02` beside the qualifier's `10` means this box loses
+    nothing at all until the qualifier has given everything it has. When the
+    squeeze finally reaches here, `useChipFit` drops whole chips into the count
+    rather than letting `overflow` cut one in half.
+  */
+  flex-shrink: 0.02;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .bind-chip {
@@ -328,6 +342,30 @@ kbd {
 }
 .bind-chip[data-more][data-bind='4'] {
   box-shadow: inset 0 0 0 1px var(--bind-4);
+}
+
+/*
+  A browser window whose page is on another computer.
+
+  Drawn beside the tab's own icon rather than in the trailing cluster, and that
+  placement is the point: `.bind-chips` is already shrinking and dropping chips
+  into a count to fit, and a mark that competes with it would be the first thing
+  clipped — which is the failure this is meant to prevent, not join. It is a
+  fact about the window's identity, so it sits with the icon that says what kind
+  of window it is.
+
+  Secondary ink and never a colour. The tab already carries a status dot's
+  palette and a bind chip's palette; a third meaning-bearing colour on the same
+  15px row would be the third dot vocabulary `BindChip`'s header refuses.
+*/
+.tab-machine-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  /* It states a fact; the thing you press is the tab under it. */
+  cursor: inherit;
 }
 
 /*

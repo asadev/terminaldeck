@@ -535,6 +535,49 @@ export function isOpenPath(url: string | undefined): boolean {
  */
 const CONTEXT_EVENTS: Readonly<Record<string, ReadonlySet<string>>> = {
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse']),
+  /*
+   * Gemini, added 2026-08-20, and added by measurement rather than by hope.
+   *
+   * Asad asked for this in the plural — *"each session on the board should have
+   * some context of our application"* — and until today exactly one of the three
+   * agents this app launches got any. The paragraph above says what stopped the
+   * other two: their schema was never watched, and a CLI complaining about an
+   * unrecognised hook output *into the terminal he is looking at* is the one
+   * failure this whole channel is shaped to avoid.
+   *
+   * So it was watched, in the only place that can answer it — the CLI that is
+   * actually installed on this machine. `gemini-cli` 0.46.0's bundle reads
+   * `hookSpecificOutput.additionalContext` under exactly two of the events this
+   * app installs, and does the same thing with it Claude does:
+   *
+   *  - `BeforeAgent`, where it is appended to the prompt as
+   *    `<hook_context>…</hook_context>` before the turn runs. This is Gemini's
+   *    `UserPromptSubmit`.
+   *  - `AfterTool`, where it is appended to the tool result. This is its
+   *    `PostToolUse` — the mid-turn door, and the reason a window attached while
+   *    it is working is learned about at its next tool call rather than at his
+   *    next prompt.
+   *
+   * `SessionStart` is deliberately **not** here, and the reason is not the one
+   * first written down. It was recorded here as "nothing in the bundle injects
+   * it"; re-measured against the same install, that is false — `SessionStart`'s
+   * `additionalContext` is read in both entry points, and interactively it is
+   * added to the model's history as a synthesised **user** turn
+   * (`geminiClient.addHistory({ role: 'user', … })`).
+   *
+   * That is exactly why it stays out. A user turn this app wrote, which he never
+   * typed, is the shape of the thing he objected to out loud when an account
+   * switch put a line into his message — *"See, what the fuck is this? This came
+   * in my message automatically."* `BeforeAgent` reaches the same model on the
+   * same first prompt, appended to that prompt and to nothing else, so there is
+   * nothing to gain by taking the risk.
+   *
+   * **Codex is still absent, and still for the original reason.** Its CLI is a
+   * native binary, its hook output schema could not be read off this machine,
+   * and nobody has watched it meet an envelope it did not ask for. One line
+   * here the day somebody does.
+   */
+  gemini: new Set(['BeforeAgent', 'AfterTool']),
 }
 
 /** `/hook/<provider>/<event>` and nothing else. */

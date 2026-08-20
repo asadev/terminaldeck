@@ -35,6 +35,7 @@ import {
   type LayoutNeeds,
 } from './control-room'
 import { useOneMenu } from './one-menu'
+import { useSheetRoom } from './sheet-room'
 import { panelSpec } from './panels'
 import { UsageBar, type UsageFit } from './UsageBar'
 import { rowDetail, useConnectors } from './use-connectors'
@@ -885,6 +886,17 @@ export function SessionControls({
   target,
 }: SessionControlsProps) {
   const host = useRef<HTMLDivElement>(null)
+  /*
+   * The folded panel, so it can be told how much window there is under it.
+   *
+   * Its clamp used to be `calc(100vh - 100% - var(--sp-8))`, which subtracts the
+   * height of the chip row it hangs off and nothing for the chrome above that
+   * row — so on a 560-pixel window it measured 500 tall from a top of 92 and ran
+   * 32 pixels past the bottom edge, with the rows below the fold unreachable
+   * because it believed it was already inside its cap. `sheet-room.ts` measures
+   * the one number CSS cannot name.
+   */
+  const sheet = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   /**
    * Is there an agent in front of this session, whatever it was launched as.
@@ -1052,9 +1064,10 @@ export function SessionControls({
    * a paired desktop or on a server has its own, over there, and nothing on
    * either wire carries them; a chip fed from this machine's list would name
    * servers that session cannot reach and open a view that manages the wrong
-   * computer's. So the chip is absent and the bar says where they really live —
-   * see `RemoteControlsNote`, which is now down to exactly the two things that
-   * genuinely cannot travel.
+   * computer's. So the chip is absent, and since 2026-08-20 it is absent without
+   * a sentence beside it saying so — see `App.tsx` where that note stood, and
+   * `usage-reach.ts` for the four seams the figures beside it needed to travel,
+   * which are the same four this would need.
    *
    * `null` rather than `cwd` on the hook above for the same reason and one more:
    * a remote path that happens to exist on this machine too would otherwise
@@ -1124,6 +1137,9 @@ export function SessionControls({
   // open its own menu across the panel — see `one-menu.ts`, which exists for
   // exactly that overlap in the composer.
   useOneMenu(open, shut)
+
+  /* How much window there is under the folded panel, measured when it opens. */
+  useSheetRoom(sheet, open)
 
   useEffect(() => {
     if (!open) return
@@ -1475,7 +1491,7 @@ export function SessionControls({
           </button>
 
           {open ? (
-            <div className="sc-sheet scroll-fade" role="dialog" aria-label="Session controls">
+            <div className="sc-sheet scroll-fade" role="dialog" aria-label="Session controls" ref={sheet}>
               {/* With the panel up, the answer belongs *in* it. Both hang off
                   the same chip, so a bubble floating below the bar lands on the
                   panel's own first section — seen on screen, covering the word

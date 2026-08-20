@@ -18,7 +18,13 @@
   padding-top: var(--sp-1);
 }
 
+/* The headline and its ⓘ on one line — the dot sits after the sentence the way
+   it does after a settings row's label, and `baseline` rather than `center` so
+   it rides the text instead of the box. */
 .close-confirm-headline {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
   margin: 0;
   font-size: var(--t-body);
   font-weight: var(--w-medium);
@@ -36,9 +42,8 @@
    drawn for the sake of drawing one. */
 .close-confirm-suppress {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--sp-3);
-  margin-top: var(--sp-4);
   cursor: pointer;
 }
 
@@ -48,15 +53,21 @@
   flex-shrink: 0;
   width: var(--close-confirm-check);
   height: var(--close-confirm-check);
-  margin: var(--sp-05) 0 0;
+  margin: 0;
   accent-color: var(--accent);
 }
 
-.close-confirm-suppress-text {
+/* The tick and its ⓘ on one line.
+
+   The dot is a sibling of the `<label>` and not a child of it, because it is a
+   real button and a button inside a label toggles the checkbox on the way to
+   opening the note — so reading why the tick is safe would have ticked it. This
+   row is what puts the two back on the same line without that. */
+.close-confirm-suppress-row {
   display: flex;
-  flex-direction: column;
-  gap: var(--sp-05);
-  min-width: 0;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
 }
 
 .close-confirm-suppress-label {
@@ -95,8 +106,19 @@
    pointer does, or the one control on this screen that destroys something is
    the one control that never says so to somebody not using a mouse. */
 .modal-btn.danger:focus-visible:not(:disabled) {
-  background: var(--color-critical);
-  color: var(--text-onaccent);
+  /* `--critical-fill`, not `--color-critical`, and the ink is white in both
+     appearances — see the pair's note in `tokens.css`.
+
+     It used to fill with `--color-critical` and ink with `--text-onaccent`,
+     which is white in the light theme and **near-black** in the dark one,
+     because the dark theme's critical is a light coral that white cannot be
+     read on. Rendered, that made the dark app's hover a coral block with black
+     letters. Asad specified this state twice and both times the same way —
+     *"when I hover on the delete it will have the white text and red color"* —
+     so the fill moved to a red that carries white rather than the ink moving to
+     whatever the fill could carry. */
+  background: var(--critical-fill);
+  color: var(--critical-fill-ink);
 }
 
 .modal-btn.danger:disabled {

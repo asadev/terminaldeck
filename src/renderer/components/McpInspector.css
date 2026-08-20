@@ -44,7 +44,32 @@
 .mcp-subheading {
   display: flex;
   align-items: center;
+  gap: var(--sp-2);
   min-height: var(--sp-5);
+}
+
+/*
+  The folder this page is reading, in one word.
+
+  Drawn as a fact rather than a control: it is the same shape as the `user` /
+  `project` scope tags on the rows below, because it answers the same kind of
+  question — *which* one of these am I looking at. The full path is in its
+  `title`; see `folderName` for why the path is not on the page.
+*/
+.mcp-folder {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 28ch;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mcp-head > div {
@@ -93,6 +118,27 @@
 .mcp-add-open:hover:not(:disabled),
 .mcp-server-action:hover:not(:disabled) {
   background: var(--fill-secondary);
+}
+
+/* The second press of Remove, in the colour of what it does.
+
+   The same two states `CloseSessionConfirm.css` gives Delete, and for the same
+   reason — Asad specified them twice and both times the same way: *"when I hover
+   on the delete, it will have the white text and red color instead of this blue.
+   And when it's not hover, it will have red text only."* A red block at rest
+   would be the loudest thing on a list whose safe answer is the button beside
+   it. */
+.mcp-server-action[data-danger] {
+  background: transparent;
+  color: var(--color-critical);
+}
+
+.mcp-server-action[data-danger]:hover:not(:disabled),
+/* Keyboard included, or the one control here that destroys something is the one
+   control that says nothing to somebody not using a mouse. */
+.mcp-server-action[data-danger]:focus-visible:not(:disabled) {
+  background: var(--critical-fill);
+  color: var(--critical-fill-ink);
 }
 
 /* The one thing this panel is for, once there is a list to add to. It was a
@@ -800,15 +846,6 @@ button.mcp-item-head:hover {
   grid-column: 1 / -1;
 }
 
-/* The same size Settings gives the same thing. It was --t-footnote here and
-   --t-callout there, which is one point of difference for a line doing exactly
-   the same job in two panes of the same app. */
-.mcp-field-help {
-  font-size: var(--t-callout);
-  line-height: var(--lh-body);
-  color: var(--text-muted);
-}
-
 /* `.mcp-input` fixes a control height, which is right for one line and wrong
    for a box meant to hold several. */
 /* `.mcp-input` fixes a control height, which is right for one line and wrong
@@ -837,13 +874,13 @@ button.mcp-item-head:hover {
   margin-top: var(--sp-4);
 }
 
-/* Deliberately quiet, and deliberately not an error. It outlives the form so
-   the confirmation is still there once the fields have gone. */
-.mcp-added {
-  margin: 0 0 var(--sp-4);
-  padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--status-completed) 12%, transparent);
-  color: var(--text-primary);
-  font-size: var(--t-callout);
-}
+/* `.mcp-field-help` and `.mcp-added` were here.
+
+   The first was three captions under three fields — *"As you would type it in a
+   terminal"*, *"Optional, one per line"*, *"Available everywhere"* — and the
+   second was a green banner that stayed on the page for the rest of the session
+   after an add, carrying the CLI's two lines concatenated into one. Both are the
+   standing prose he has been deleting all week: *"don't put any single statement
+   in anywhere… We want simplicity. Let the smart people use it."* The one caption
+   worth keeping is behind the dot beside **Save it for**, and the confirmation of
+   an add is the row appearing. */

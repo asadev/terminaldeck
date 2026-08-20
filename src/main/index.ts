@@ -37,6 +37,11 @@ import {
  * beside the handler down in this file, which is a fact about
  * `preload/contract.test.ts` as much as about the house rule.
  */
+// `transcriptDir` and `projectPathSpellings`: where a named conversation is
+// filed under one account's store, in both spellings of a folder reached
+// through a symlink. Read by the account switch, to check that the
+// conversation it is about to name is one the other login can actually see.
+import { projectPathSpellings, transcriptDir } from './transcript'
 import { savedFrom, SESSIONS_HELD_CHANNEL } from './session-held'
 import {
   conversationOnDisk,
@@ -75,6 +80,7 @@ import { registerRemoteIpc } from './remote/server'
 import { registerConfineIpc } from './confine/ipc'
 import { CopilotAccess } from './remote/copilot-access'
 import { CopilotRuns } from './remote/copilot-runs'
+import { typeAndSubmit } from './remote/copilot-say'
 import {
   startCopilotRun,
   tailForPhone,
@@ -116,6 +122,7 @@ import {
  * channel registered through an exported constant.
  */
 import {
+  conversationToCarry,
   planSwitch,
   SESSION_SWITCH_CHANNEL,
   SESSION_SWITCH_PLAN_CHANNEL,
@@ -166,6 +173,7 @@ import { registerSessionRowMenuIpc } from './session-row-menu'
 import {
   hookContext,
   hostReset,
+  MID_TURN_EVENTS,
   sessionExited,
   sessionRemoved,
   takeAnnouncement,
@@ -175,6 +183,7 @@ import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
 import { browserTools } from './deck-control/browser-tools'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
+import { registerAttachBringInIpc } from './attach-bring-in'
 import { registerAttachOutsideIpc } from './attach-outside'
 import { boundaryFor } from './session-boundary'
 import {
@@ -379,6 +388,17 @@ const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
 let updates: ReturnType<typeof registerUpdateIpc> | null = null
 
 /**
+ * The remote layer, once it is assembled, for the two session hooks below.
+ *
+ * At module scope for the same reason `copilotRuns` is: the core's callbacks are
+ * written here, at module scope, and the remote server is built inside
+ * `registerIpc`. Null until then — a session restored at launch can exist before
+ * the wire does, and pushing a list to nobody is the correct answer rather than
+ * a race to work around.
+ */
+let remoteLayer: { server: { sessionsChanged(): number } } | null = null
+
+/**
  * The per-device copilot runs, once the remote layer is assembled.
  *
  * At module scope for one reason: `before-quit` has to be able to stop them, and
@@ -558,6 +578,9 @@ const core = createHostCore({
    */
   onSessionRemoved: (id, reason) => {
     if (reason === 'replaced') return
+    // The other end of the same push: a row this Mac dropped has to leave the
+    // phone's list too, not sit there until it reconnects.
+    remoteLayer?.server.sessionsChanged()
     // The other half of the pair above: this is the app letting go of the
     // session entirely, so its rows go and its binding colour is free again.
     sessionRemoved(id)
@@ -574,6 +597,12 @@ const core = createHostCore({
   onSessionStarted: (meta) => {
     routines.engine.noteSessionStarted(meta)
     presence.refresh()
+    // And every device holding a socket, or its list is a snapshot from the
+    // moment it connected. Nothing on the wire fired for a session started at
+    // *this* keyboard until now — see `RemoteEndpoint.sessionsChanged`, which
+    // carries the measurement. Guarded because a session restored at launch can
+    // exist before the remote layer is assembled.
+    remoteLayer?.server.sessionsChanged()
   },
   // The window has to be told, or a session a phone started is running on this
   // Mac and only the phone knows about it.
@@ -1557,12 +1586,17 @@ function registerIpc(): void {
     /*
      * Prose into a pty, on the phone's behalf, by the desktop.
      *
-     * The newline is what submits it, and it is added here rather than expected
-     * on the wire: a `copilot.say` frame carries a *sentence*, and making the
-     * client responsible for a control character would mean a client that forgot
-     * it produced a run that silently never answered.
+     * The submit is added here rather than expected on the wire: a `copilot.say`
+     * frame carries a *sentence*, and making the client responsible for a
+     * control character would mean a client that forgot it produced a run that
+     * silently never answered.
+     *
+     * Which is what this line used to do itself. It wrote `${text}\n` — one
+     * chunk, and a newline rather than a Return — so every message a phone ever
+     * sent was typed into the run's prompt and left there unsubmitted. See
+     * `remote/copilot-say.ts` for the two reasons that fails and the measurement.
      */
-    say: (id, text) => ptys.write(id, `${text}\n`),
+    say: (id, text) => typeAndSubmit((data) => ptys.write(id, data), text),
     // Ctrl-C. The one interrupt an agent CLI understands, and it reaches this
     // device's own run and nothing else.
     interrupt: (id) => ptys.write(id, '\x03'),
@@ -1624,18 +1658,26 @@ function registerIpc(): void {
     /*
      * The run's conversation, read from the transcript rather than the pty.
      *
-     * Watched by folder, not by session id, and that is not laziness: the CLI
-     * decides its transcript path when it starts writing, which is after the
-     * spawn has already returned, so there is nothing to key on at this moment.
-     * `watchRunChat` waits for the file to appear and then follows it — one
-     * subscription that migrates, instead of a retry loop with a guessed delay.
+     * Watched by **this run's own transcript**, which the app can name because
+     * it named it: `host-core.ts` puts `--session-id <uuid>` on the fresh spawn
+     * and records it as `SessionMeta.agentSessionId`, precisely so that nothing
+     * downstream has to guess which of a folder's transcripts belongs to which
+     * session.
      *
-     * The id is unused here for that reason and is still on the signature,
-     * because it is what `CopilotRuns` uses to drop a late update from a run
-     * that has already ended.
+     * The comment that used to be here said there was nothing to key on at this
+     * moment, and it was wrong: the spawn has resolved by the time `CopilotRuns`
+     * calls this, so the meta is in the list. What the folder-newest reading
+     * actually did was follow the *desk copilot's* conversation whenever one had
+     * spoken more recently than the phone's run had — the phone then watched a
+     * conversation it was not having, and its own answer, sitting in a file
+     * beside it, never arrived. Measured on 2026-08-20; see `watchRunChat`.
      */
-    chat: (_sessionId, onUpdate) =>
-      watchRunChat(copilotPaths(app.getPath('userData')).root, onUpdate),
+    chat: (sessionId, onUpdate) =>
+      watchRunChat(
+        copilotPaths(app.getPath('userData')).root,
+        onUpdate,
+        ptys.list().find((meta) => meta.id === sessionId)?.agentSessionId ?? null,
+      ),
   })
   // On unless this Mac has been told otherwise.
   //
@@ -1733,6 +1775,9 @@ function registerIpc(): void {
     uploadsDir: join(app.getPath('downloads'), BRAND.name),
     broadcast: (channel, payload) => send(channel, payload),
   })
+  // Held for the core's session hooks, which are written at module scope and
+  // run long after this. See `remoteLayer`.
+  remoteLayer = remote
   // Re-dial the relay the instant the machine wakes, rather than polling the
   // clock to work out that it did. A socket that slept through a suspend is
   // usually dead and TCP will not admit it for minutes — minutes in which a
@@ -2153,6 +2198,10 @@ function registerIpc(): void {
     home: () => app.getPath('home'),
     boundaryOf: (sessionId) => boundaryFor(sessionId),
   })
+  // The other half of that: a file from outside a confined session is copied
+  // inside rather than refused. See `attach-bring-in.ts` for why the refusal
+  // alone was the wrong whole answer.
+  registerAttachBringInIpc(ipcMain, { boundaryOf: (sessionId) => boundaryFor(sessionId) })
   registerSetupIpc(ipcMain)
   registerCookieImportIpc(ipcMain)
   registerBrowserIsolationIpc(ipcMain)
@@ -2350,7 +2399,13 @@ function registerIpc(): void {
   const switchSubject = async (
     sessionId: unknown,
     profileId: unknown,
-  ): Promise<{ plan: SwitchPlan; saved: SavedSession | null; resume: boolean }> => {
+  ): Promise<{
+    plan: SwitchPlan
+    saved: SavedSession | null
+    resume: boolean
+    /** The conversation to name on the replacement, or null for the folder's newest. */
+    conversationId: string | null
+  }> => {
     const id = typeof sessionId === 'string' ? sessionId : ''
     const wanted = typeof profileId === 'string' ? profileId : ''
     const meta = ptys.list().find((session) => session.id === id) ?? null
@@ -2390,6 +2445,7 @@ function registerIpc(): void {
         }),
         saved,
         resume: false,
+        conversationId: null,
       }
     }
 
@@ -2504,7 +2560,36 @@ function registerIpc(): void {
       occupied,
       sharedStore,
     })
-    return { plan, saved, resume: plan.resume }
+
+    /*
+     * Which conversation the replacement is told to continue.
+     *
+     * `--continue` means "the folder's newest in the target's store", and the
+     * sheet has just promised something narrower than that — the conversation
+     * *on screen*. This app knows its id, because it put it on the outgoing
+     * process's own command line, so the replacement can name it instead of
+     * describing it. The check is the honest half: the transcript has to be
+     * readable from the store the replacement will run against, or `--resume`
+     * is a process that prints an error and exits. `conversationToCarry` holds
+     * the three conditions and is tested on its own.
+     *
+     * Both spellings of the folder, because on this platform everything under
+     * `/tmp` is reached through a symlink and the CLI files a transcript under
+     * whichever spelling it was handed.
+     */
+    const named = meta?.agentSessionId
+    const carried =
+      configDir === null || typeof named !== 'string'
+        ? null
+        : conversationToCarry({
+            plan,
+            agentSessionId: named,
+            readableInTarget: projectPathSpellings(saved.cwd).some((spelling) =>
+              existsSync(join(transcriptDir(spelling, configDir), `${named}.jsonl`)),
+            ),
+          })
+
+    return { plan, saved, resume: plan.resume, conversationId: carried }
   }
 
   /**
@@ -2551,7 +2636,7 @@ function registerIpc(): void {
    * because it is already written for the person who is reading it.
    */
   const performSwitch = async (sessionId: unknown, profileId: unknown): Promise<SessionMeta> => {
-    const { plan, saved } = await switchSubject(sessionId, profileId)
+    const { plan, saved, conversationId } = await switchSubject(sessionId, profileId)
     if (plan.refusal !== null || saved === null || plan.to === null) {
       throw new Error(plan.refusal ?? 'This session cannot be switched.')
     }
@@ -2563,6 +2648,23 @@ function registerIpc(): void {
       provider: saved.provider,
       profileId: plan.to.id,
       resume: plan.resume,
+      /*
+       * The two facts that make the sheet's promise come true, and neither of
+       * them existed while this feature was reported broken twice.
+       *
+       * `replaces` exempts the outgoing session from the one-conversation
+       * guard. The order below is start-then-stop, so at this instant there is
+       * a live session of the same provider in the same folder, and
+       * `one-conversation.ts` — which cannot otherwise tell a replacement from
+       * a second tab — dropped `--continue` on every switch ever made. That is
+       * the whole of *"it's not keeping the conversation history"*.
+       *
+       * `resumeConversationId` then makes the resume mean the conversation on
+       * screen rather than the folder's newest. Null whenever that could not be
+       * established, which falls back to exactly the behaviour above it.
+       */
+      replaces: plan.sessionId,
+      ...(conversationId === null ? {} : { resumeConversationId: conversationId }),
     })
 
     /*
@@ -2614,7 +2716,18 @@ function registerIpc(): void {
       agent: saved.provider,
       from: plan.from?.id ?? null,
       to: plan.to.id,
-      continued: plan.resume,
+      /*
+       * What the process got, not what the plan asked for.
+       *
+       * This read `plan.resume`, and for as long as the guard above was
+       * dropping the flag it logged `continued: true` over a replacement that
+       * had started a brand-new conversation — the one line anybody
+       * investigating would have trusted, agreeing with the sheet and with
+       * nothing else. `SessionMeta.resumed` is read off the argument list that
+       * was actually spawned.
+       */
+      continued: meta.resumed === true,
+      conversation: conversationId,
     })
     return meta
   }
@@ -2948,7 +3061,9 @@ app.whenReady().then(() => {
      * the empty 204 this endpoint has always answered.
      */
     contextFor: ({ event, sessionId }) =>
-      event === 'PostToolUse'
+      // Two spellings of the same moment: Claude's `PostToolUse` and Gemini's
+      // `AfterTool`. See `MID_TURN_EVENTS` in `browser-binding.ts`.
+      MID_TURN_EVENTS.has(event)
         ? sessionId === null
           ? null
           : takeAnnouncement(sessionId)

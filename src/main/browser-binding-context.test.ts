@@ -159,6 +159,50 @@ describe('an attach made mid-turn arrives at the next tool call', () => {
     )
   })
 
+  it('reaches an idle session on his next prompt, before the model sees it', async () => {
+    const endpoint = await serve()
+
+    // The case he actually filmed: nothing is running, he attaches two windows,
+    // then types. A CLI at an empty prompt has no turn to inject into and will
+    // not knock until it is spoken to, so *this* is what "whenever I just
+    // connect, it should get a context" can mean without typing into his
+    // terminal — the facts ride in on the prompt itself, ahead of the model.
+    attach({ sessionId: 's1', browserTabId: 'b:1', title: 'Stripe', url: 'https://stripe.com' })
+    attach({ sessionId: 's1', browserTabId: 'b:2', title: 'Docs', url: 'https://docs.dev' })
+
+    const prompt = await knock(endpoint, 'UserPromptSubmit', 's1')
+    expect(prompt.status).toBe(200)
+    expect(prompt.context).toContain('B1 — Stripe — https://stripe.com')
+    expect(prompt.context).toContain('B2 — Docs — https://docs.dev')
+    expect(prompt.context).toContain('"the browser" means B1.')
+  })
+
+  it('does not then say the same list again at the first tool call of that turn', async () => {
+    const endpoint = await serve()
+    attach({ sessionId: 's1', browserTabId: 'b:1', title: 'Stripe' })
+
+    // The prompt above already carried the whole list, so the mid-turn door has
+    // nothing left to announce. Before this it said it twice inside one turn.
+    expect((await knock(endpoint, 'UserPromptSubmit', 's1')).status).toBe(200)
+    expect((await knock(endpoint, 'PostToolUse', 's1')).status).toBe(204)
+  })
+
+  it('still tells a mid-turn agent that its last window went away', async () => {
+    const endpoint = await serve()
+    attach({ sessionId: 's1', browserTabId: 'b:1', title: 'Stripe' })
+    await knock(endpoint, 'UserPromptSubmit', 's1')
+
+    detach('b:1')
+
+    // The standing answer says nothing about windows when there are none, so it
+    // cannot be the thing that tells an agent still holding `B1` that `B1` is
+    // gone. The empty case is deliberately left for the mid-turn door.
+    expect((await knock(endpoint, 'UserPromptSubmit', 's1')).context).not.toContain('B1')
+    expect((await knock(endpoint, 'PostToolUse', 's1')).context).toBe(
+      'No browser window is attached to this session now.',
+    )
+  })
+
   it('says nothing to a session that had nothing attached to it', async () => {
     const endpoint = await serve()
     attach({ sessionId: 's1', browserTabId: 'b:1', title: 'Stripe' })

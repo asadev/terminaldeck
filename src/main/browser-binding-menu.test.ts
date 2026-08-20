@@ -93,43 +93,53 @@ describe('an existing window can be attached, and can be told from the next one'
     expect(labels(items)).toContain('New window, attached')
   })
 
-  it('gives an unnamed window a number rather than a fourth row reading "New tab"', () => {
-    openWindow('browser:1:1')
-    openWindow('browser:1:2')
-    openWindow('browser:1:3')
+  it('numbers three windows sitting on the start page, which all call themselves "New tab"', () => {
+    // His screen exactly. The start page is not nameless — it reports the title
+    // `New tab` — so a number kept as a *fallback* for a window with no title
+    // never appeared, and the menu was three rows he could not tell apart.
+    openWindow('browser:1:1', { title: 'New tab' })
+    openWindow('browser:1:2', { title: 'New tab' })
+    openWindow('browser:1:3', { title: 'New tab' })
 
     const names = labels(bindMenuItems(deps, { sessionId: 's1' })).filter((label) =>
-      label.startsWith('Window '),
+      label.endsWith('New tab'),
     )
 
-    // Three different names, in the order the windows appeared. The numbers
-    // themselves are not asserted and must not be: they are never reused, so a
-    // run that has already opened windows starts higher — which is the same
-    // promise `B2` makes and the reason a closed window does not renumber the
-    // one beside it.
     expect(names).toHaveLength(3)
+    // Three *different* rows. That is the whole defect: not a throw, not an
+    // empty menu, but a list with no way to choose from it.
     expect(new Set(names).size).toBe(3)
-    const numbers = names.map((name) => Number(name.slice('Window '.length)))
+    // The numbers themselves are not asserted and must not be: they are never
+    // reused, so a run that has already opened windows starts higher — the same
+    // promise `B2` makes. Only that they lead, and that they ascend.
+    const numbers = names.map((name) => Number(/^W(\d+) /.exec(name)?.[1]))
+    expect(numbers.every((n) => Number.isInteger(n))).toBe(true)
     expect(numbers).toEqual([...numbers].sort((a, b) => a - b))
   })
 
-  it('prefers what the page says about itself over the number', () => {
+  it('says what the page says about itself, after the number', () => {
     openWindow('browser:1:1', { title: 'Stripe Dashboard', url: 'https://stripe.com' })
     openWindow('browser:1:2', { url: 'https://example.com' })
 
     expect(labels(bindMenuItems(deps, { sessionId: 's1' }))).toEqual([
-      'Stripe Dashboard',
-      'https://example.com',
+      'W1   Stripe Dashboard',
+      'W2   https://example.com',
       '—',
       'New window, attached',
     ])
+  })
+
+  it('a window with nothing to say is its number alone', () => {
+    openWindow('browser:1:1')
+    expect(labels(bindMenuItems(deps, { sessionId: 's1' }))[0]).toBe('W1')
   })
 
   it('pressing an unattached window attaches it', () => {
     openWindow('browser:1:1', { title: 'Stripe' })
     const items = bindMenuItems(deps, { sessionId: 's1' })
 
-    const row = items.find((item) => item.label === 'Stripe')
+    const row = items.find((item) => String(item.label).endsWith('Stripe'))
+    expect(row?.label).toBe('W1   Stripe')
     expect(row?.checked).toBe(false)
     row?.click?.(
       {} as never,
@@ -155,7 +165,9 @@ describe('an existing window can be attached, and can be told from the next one'
     expect(bindingFor('s1')?.windows).toEqual([])
     // Still open. Detach is not close, and the menu it is offered from again
     // proves the window is still there to re-attach.
-    expect(labels(bindMenuItems(deps, { sessionId: 's1' }))).toContain('Stripe')
+    // And back to its own `W` number, because this session no longer has a name
+    // for it — a detached window wearing `B1` would name a slot nobody holds.
+    expect(labels(bindMenuItems(deps, { sessionId: 's1' }))).toContain('W1   Stripe')
   })
 
   it('says so plainly when there is nothing to list, and still offers a new one', () => {
@@ -175,9 +187,30 @@ describe('a window is grouped under the machine it is really running on', () => 
 
     expect(labels(bindMenuItems(deps, { sessionId: 's1' }))).toEqual([
       'This computer',
-      'Local page',
+      'W1   Local page',
       'DESKTOP-DDGMNCV',
-      'PC page',
+      'W2   PC page',
+      '—',
+      'New window, attached',
+    ])
+  })
+
+  it('puts the session\u2019s own machine first, so its windows are what he reads first', () => {
+    openWindow('browser:1:1', { title: 'Local page' })
+    openWindow('browser:1:2', {
+      title: 'PC page',
+      machineId: 'm-desktop',
+      machineName: 'DESKTOP-DDGMNCV',
+    })
+
+    // Asked from a session running on the PC. *"All the desktop browser,
+    // including session, should be at one place"* — so the desktop's windows
+    // lead, rather than this Mac's being the first thing on the menu.
+    expect(labels(bindMenuItems(deps, { sessionId: 's9', machineId: 'm-desktop' }))).toEqual([
+      'DESKTOP-DDGMNCV',
+      'W2   PC page',
+      'This computer',
+      'W1   Local page',
       '—',
       'New window, attached',
     ])
@@ -195,7 +228,7 @@ describe('a window is grouped under the machine it is really running on', () => 
       machineName: 'DESKTOP-DDGMNCV',
     })
     const items = bindMenuItems(deps, { sessionId: 's1' })
-    items.find((item) => item.label === 'PC page')?.click?.(
+    items.find((item) => String(item.label).endsWith('PC page'))?.click?.(
       {} as never,
       undefined as never,
       {} as never,
@@ -228,6 +261,26 @@ describe('the same relation, asked from the browser', () => {
       'Session 4',
     ])
     expect(items.every((item) => item.checked !== true)).toBe(true)
+  })
+
+  it('a window on his PC offers that PC\u2019s sessions first', () => {
+    openWindow('browser:1:1', {
+      title: 'Orders',
+      machineId: 'm-desktop',
+      machineName: 'DESKTOP',
+    })
+
+    // *"If I connect it to, let's say, desktop, now this is in desktop, it
+    // should come under this table, under the desktop sessions. So all the
+    // desktop browser, including session, should be at one place."* The window
+    // is on the desktop, so the desktop's sessions lead.
+    expect(labels(connectMenuItems({ browserTabId: 'browser:1:1', sessions }))).toEqual([
+      'DESKTOP',
+      'Session 4',
+      'This computer',
+      'terminaldeck \u00b7 Session 1',
+      'terminaldeck \u00b7 Session 2',
+    ])
   })
 
   it('attaching from the browser is the same attach the session-side menu makes', () => {

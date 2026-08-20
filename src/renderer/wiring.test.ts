@@ -1102,25 +1102,35 @@ describe('the composer accepts a file from outside the project', () => {
     expect(composer).toMatch(/sessionBoundary\(/)
   })
 
-  it('applies that answer per pick rather than refusing the session outright', () => {
+  it('brings a pick the session cannot read inside it, rather than refusing', () => {
     /*
-     * This used to be `browseRefusal={outsideRefusal}` — the whole of Browse
-     * disabled whenever the session was confined — and that was fine only
-     * because a confined session still had the in-app project list to fall back
-     * on. The list is gone (*"we should not even have this search bar"*), so a
-     * blanket refusal would now leave those sessions unable to attach anything
-     * at all, including the files inside the folder they are held in.
+     * Two rewrites, and the second is the one that matters.
      *
-     * `splitByBoundary` is what replaced it: attach what this session can read,
-     * refuse the rest with the reason. Losing it silently would take the
-     * warning away, not the boundary — the OS still holds that — which is
-     * exactly the kind of regression nobody notices until an agent says it
-     * cannot open a file.
+     * It was `browseRefusal={outsideRefusal}` — the whole of Browse disabled on
+     * a confined session — which was tolerable only while the in-app project
+     * list existed as a fallback. That list went (*"we should not even have this
+     * search bar"*), so it became `splitByBoundary` plus a sentence naming the
+     * file that did not arrive.
+     *
+     * The sentence is now gone too, because it was a true answer to the wrong
+     * question. A photo lives in `~/Pictures`, never in the project, so
+     * "outside the boundary" is the normal case for this gesture rather than an
+     * edge — and the app can simply copy the file where the session can read it.
+     * The same drag on the terminal two inches away has always done exactly
+     * that. *"any kind of media dropping from your PC to any session should
+     * smoothly work."*
+     *
+     * `splitByBoundary` stays, and losing *it* would be the real regression: it
+     * is what keeps a file already inside the boundary from being copied to a
+     * second place the person never chose.
      */
     expect(composer, 'the boundary is no longer applied to the picks').toMatch(
       /splitByBoundary\(boundary, picks\)/,
     )
-    expect(composer, 'a refused pick no longer says why').toMatch(/outsideRefusal !== null/)
+    expect(composer, 'a pick the session cannot read is no longer brought inside').toMatch(
+      /bringInside\(bridge, sessionId, refused\)/,
+    )
+    expect(composer, 'the paragraph about the boundary is back').not.toMatch(/confinedRefusal/)
     expect(composer, 'the panel no longer opens where the session can read').toMatch(
       /startIn=\{browseStart\(boundary, root\)\}/,
     )

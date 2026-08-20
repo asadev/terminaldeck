@@ -12,8 +12,8 @@ import {
 } from '../chat/attach/mentions'
 import {
   browseStart,
-  confinedRefusal,
-  partialRefusal,
+  bringInRefusal,
+  bringInside,
   pasteAttachment,
   picksFromDrop,
   resolveOutsideBridge,
@@ -259,16 +259,6 @@ export function ChatComposer({
   }, [])
 
   /**
-   * Why a file from outside the project is refused on this session, or null.
-   *
-   * Null on every session started in this window, which is all of them until a
-   * phone or the copilot starts one. See the `sessionId` prop.
-   */
-  const outsideRefusal = boundary.confined
-    ? confinedRefusal(boundary.folder, boundary.projects)
-    : null
-
-  /**
    * What a batch of picks becomes, from any of the three routes into this box.
    *
    * Two answers, because there are two things on the other end. An agent gets
@@ -325,42 +315,55 @@ export function ChatComposer({
   /**
    * The same, for every route — all of which now reach outside the project.
    *
-   * ## Why this stopped being "refuse the batch if the session is confined"
+   * ## Why this stopped refusing a file a confined session cannot read
    *
-   * It used to be exactly that, and it was fine while the in-app project list
-   * existed: a confined session still had one working door, every row of which
-   * was inside the boundary by construction, so refusing the whole of Browse
-   * with one sentence took nothing away. That list is gone — he asked for the
-   * file manager and nothing else — so a flat refusal would now leave a copilot
-   * session, or one a phone started, unable to attach *anything at all*,
-   * including the files sitting in the very folder it is held inside. That is a
-   * control that cannot act, which is the thing this whole pass is about.
+   * Because refusing was a true answer to the wrong question. A session a phone
+   * started, or the copilot's own, is held inside a folder by the OS, so a path
+   * from `~/Pictures` really would fail at the agent — and this used to say so,
+   * in a sentence, and stop. Which meant that dropping a photo on the mode he
+   * actually works in did nothing, while dropping the same photo on the terminal
+   * *two inches away* transferred it and typed the path. His ask was one
+   * sentence: *"any kind of media dropping from your PC to any session should
+   * smoothly work."*
    *
-   * So the boundary is applied to each pick instead: what the session can read
-   * is attached, what it cannot is dropped with the reason — once for the batch,
-   * because it is one fact about one session and four copies of it would be
-   * four copies of the same sentence.
+   * So a pick the session cannot read is now copied inside it and the copy is
+   * attached — `bringInside`, and `main/attach-bring-in.ts` for what lands
+   * where. Nothing is refused that can be moved, and the paragraph that used to
+   * explain the refusal is gone with it.
    *
-   * Nothing here enforces anything. The operating system holds the boundary
-   * whatever this decides; all this buys is that the refusal arrives at the
-   * click rather than a minute later, in the agent's words, as "I cannot open
-   * that file".
+   * Order is preserved across the two halves: the picks the session can already
+   * read are attached where they lie, the rest are attached at their new paths,
+   * and both go in as one batch so three dropped photos make three chips.
    */
   const addPicks = useCallback(
     (picks: readonly OutsidePick[]) => {
       if (picks.length === 0) return
       const { allowed, refused } = splitByBoundary(boundary, picks)
-      if (allowed.length > 0) add(allowed, 'anywhere')
-      // Set after `add`, which writes its own notice — a refusal about what this
-      // session may read outranks a caution about what the CLI does with an
-      // outside folder, and the later `setNotice` is the one that survives.
-      // `partialRefusal` names the file that did *not* arrive; see it for why
-      // the bare reason read as a complaint about the chip that did.
-      if (refused.length > 0 && outsideRefusal !== null) {
-        setNotice(partialRefusal(refused, outsideRefusal))
+      if (refused.length === 0) {
+        add(allowed, 'anywhere')
+        return
       }
+      const bridge = resolveOutsideBridge(outsideBridge)
+      // No session id is the harness and the stand-alone composer, where there
+      // is no boundary to be inside of — `boundary.confined` is false there, so
+      // this branch is unreachable in practice and is still written down.
+      if (bridge === null || !sessionId) {
+        if (allowed.length > 0) add(allowed, 'anywhere')
+        setNotice(bringInRefusal(refused.length))
+        return
+      }
+      void bringInside(bridge, sessionId, refused).then((brought) => {
+        // One `add` for the whole batch. Two would make the second read
+        // `attachmentsRef` a render behind the first — the bug this file's
+        // `add` was rewritten for.
+        add([...allowed, ...brought.picks], 'anywhere')
+        // After `add`, which writes its own notice about what the CLI does with
+        // an outside folder. A file that could not be moved at all outranks it.
+        const line = bringInRefusal(brought.refused)
+        if (line !== '') setNotice(line)
+      })
     },
-    [add, boundary, outsideRefusal],
+    [add, boundary, outsideBridge, sessionId],
   )
 
   /**

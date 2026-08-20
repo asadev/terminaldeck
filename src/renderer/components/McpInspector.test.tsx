@@ -148,6 +148,7 @@ describe('<McpInspector>', () => {
   const bridge: McpBridge = {
     listMcpServers: async () => [server()],
     addMcpServer: async () => ({ ok: true, message: 'Added files.' }),
+    removeMcpServer: async () => ({ ok: true, message: 'Removed files.' }),
     connectMcpServer: async () => server({ state: 'ready' }),
     disconnectMcpServer: async () => null,
     mcpInventory: async () => inventory(),
@@ -185,12 +186,22 @@ describe('<McpInspector>', () => {
     expect(html).toContain('mcp-refresh')
   })
 
-  it('says on screen what it cannot do, so the gap does not read as broken', () => {
+  /**
+   * The gap this used to describe is closed.
+   *
+   * The panel could add a server and not remove one, and said so in a note that
+   * pointed at a terminal. Asad, on that page: *"On MCP servers did nothing."*
+   * A control panel that can only add is half a control panel — so the sentence
+   * is gone and the control is on the row.
+   */
+  it('removes a server here rather than naming a terminal command', () => {
     const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
-    // There is no Remove button and there is not going to be one, so the panel
-    // has to name the thing that removes a server rather than leave a user
-    // hunting for a control that was never built.
-    expect(html).toContain('claude mcp remove')
+    expect(html).not.toContain('claude mcp remove')
+    // The button itself is on a row, and rows need effects to exist — there is
+    // no DOM in this setup (see the header). What the removal *does* is pinned
+    // in `src/main/mcp-add.test.ts`, and the control was rendered and pressed in
+    // the running app.
+    expect(bridge.removeMcpServer).toBeTypeOf('function')
   })
 
   /**
@@ -214,7 +225,8 @@ describe('<McpInspector>', () => {
     expect(sub).not.toContain('<p')
     // And the words are still there to be read, on the dot's description.
     expect(sub).toContain('Claude Code configuration')
-    expect(sub).toContain('claude mcp remove')
+    // And no longer sends anyone to a terminal to undo what the page can do.
+    expect(sub).not.toContain('claude mcp remove')
     expect(sub).not.toMatch(/picks it up too/)
   })
 })

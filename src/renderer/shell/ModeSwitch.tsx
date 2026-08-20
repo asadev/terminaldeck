@@ -184,39 +184,54 @@ const CHAT_GLYPH = (
 )
 
 /**
- * Split: one square frame with a divider down the middle.
+ * Split: one frame, its right half filled.
  *
- * One frame rather than two separate boxes, which was the other candidate and
- * still is not this. Two boxes read as "two apps"; a divided frame reads as one
- * window showing two things, which is what a split actually is — the panes
- * share this window's chrome, and the host pane deliberately has no box of its
- * own.
+ * ## The divider was not enough — 2026-08-20
  *
- * ## Why it is square now, 2026-08-20
+ * *"give a better icon for the… the Split."*
  *
- * *"give a better icon for the… the Split."* The idiom was not the problem; the
- * proportions were. It was 17 × 13 in the 24-unit box, which makes each half
- * 8.5 × 13 — two nearly-square cells, and at the 15 pixels this is actually
- * drawn they close up into a small hatched smudge. Eight candidates were
- * rendered at 13px and magnified against the vocabulary this button sits in
- * (`>_`, the chat bubble, the globe): two panes with a real gutter, a half-
- * filled frame, an inset divider, a divider with a drag handle, two bare bars.
+ * It was answered once by keeping the mark and squaring it: a 17 × 13 frame
+ * with a hairline down the middle became 17 × 17 with the same hairline. That
+ * is not what he asked. Rendered side by side at the 15 pixels this is actually
+ * drawn, the before and after are the same three hairlines in a box — a person
+ * cannot name the difference, which is the only test a *better icon* has to
+ * pass.
  *
- * The frame at 17 × 17 won on two counts. Each half becomes 8.5 × 17, a tall
- * cell — which is what a side-by-side pane *is*, so the shape describes the
- * thing rather than merely dividing a rectangle. And it finally matches the
- * optical size of its neighbours: the globe is 18 units across and the old
- * frame was 13 tall, so this button read as the small one in the row.
+ * So the mark changed rather than its proportions. The frame stays — two
+ * separate boxes read as two apps, and the panes really do share this window's
+ * chrome — but one compartment is now solid. Six candidates were rendered at
+ * the real 15px against the row this button sits in (the chevron and `>_`):
+ * the divided frame at both heights, two panes with a gutter, and the filled
+ * half on either side. The divided frame and the two panes both dissolve —
+ * three 1px hairlines and a 3px gutter respectively — while the filled half
+ * carries mass and survives all the way down.
  *
- * The half-filled frame was the other strong one at 13px — the most legible of
- * the eight, in fact — and was rejected for being the only solid glyph in a
- * toolbar of outlines, which made it read as a state (contrast, a battery)
- * rather than as a layout.
+ * Mass in a toolbar of outlines was the exact objection that got this rejected
+ * the first time, on the grounds it would read as a state (a battery, a
+ * contrast dial). It does not, because those are circles and wide horizontal
+ * cells; this is a near-square divided vertically, which is the mark VS Code,
+ * Xcode and SF Symbols all use for precisely this action, and it is the shape
+ * of the thing it does.
+ *
+ * The right half is the filled one because that is the pane a press produces:
+ * what is in front of you stays where it is and a second pane joins it on the
+ * right. There is no divider stroke — the boundary is the fill's own edge,
+ * which is one less hairline to lose at small sizes.
  */
 const SPLIT_GLYPH = (
   <>
     <rect x="3.5" y="3.5" width="17" height="17" rx="3.5" />
-    <path d="M12 3.5v17" />
+    {/* Filled to the frame's own path rather than inset inside it. An inset
+        pane needs its own corner radius, and two concentric radii 1 unit apart
+        turn into a smudged double edge at 15px; run to the frame and the two
+        merge into one solid corner. `stroke="none"` because the shared <svg>
+        sets a stroke on everything, and a stroked fill would grow the half by
+        0.8 units on three sides and eat the frame. */}
+    <path
+      d="M12 3.5h5A3.5 3.5 0 0 1 20.5 7v10a3.5 3.5 0 0 1-3.5 3.5h-5z"
+      fill="currentColor"
+      stroke="none"
+    />
   </>
 )
 

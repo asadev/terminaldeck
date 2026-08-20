@@ -882,6 +882,16 @@ const api = {
     ipcRenderer.invoke('attach:boundary', sessionId),
 
   /**
+   * Copy files from outside a confined session into it, and say where they went.
+   *
+   * The session id, not a folder, is what this takes — the main process asks its
+   * own boundary registry where the copy may land. A window that could name the
+   * destination would be a window that could write a file anywhere on the disk.
+   */
+  bringAttachmentsIn: (sessionId: string, paths: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('attach:bring-in', sessionId, paths),
+
+  /**
    * The path behind a dropped `File`.
    *
    * `File.path` was Electron's own extension to the web `File` and it was
@@ -1725,6 +1735,7 @@ const api = {
   // because two of the three MCP scopes are addressed by the working directory
   // the CLI runs in — so it is part of what is being asked for, not context.
   addMcpServer: (request: unknown): Promise<unknown> => ipcRenderer.invoke('mcp:add', request),
+  removeMcpServer: (request: unknown): Promise<unknown> => ipcRenderer.invoke('mcp:remove', request),
   /*
    * These three carry the project path, and for a while they did not.
    *

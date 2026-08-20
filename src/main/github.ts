@@ -67,6 +67,14 @@ export type GitHubErrorKind =
   | 'git-missing'
   | 'repo-not-found'
   | 'no-access'
+  /**
+   * The repository has its issue tracker switched off on GitHub. Not a failure:
+   * nothing is broken, nothing can be retried, and there is no error to show.
+   * `gh` reports it as an ordinary command failure — *"the 'o/n' repository has
+   * disabled issues"* — which is how the panel came to dress a settings choice
+   * as a red error with a Retry that could never succeed.
+   */
+  | 'issues-disabled'
   | 'rate-limited'
   | 'network-down'
   | 'timeout'
@@ -383,6 +391,11 @@ export function classifyGhError(error: unknown): GitHubFailure {
       needed ? `gh auth refresh -h github.com -s ${needed.split(/[,\s]+/)[0]}` : 'gh auth refresh',
       text,
     )
+  }
+
+  // Before the 404 branch: `gh` sometimes wraps this one in a Not Found.
+  if (/has disabled issues/i.test(text)) {
+    return fail('issues-disabled', 'Issues are off for this repository.', null, text)
   }
 
   if (/Could not resolve to a Repository|HTTP 404|Not Found/i.test(text)) {

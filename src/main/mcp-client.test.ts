@@ -993,6 +993,9 @@ describe('registerMcpIpc', () => {
       'mcp:inventory',
       'mcp:list',
       'mcp:read-resource',
+      // The panel's second write. It exists because the page could add a server
+      // and then had to tell the reader to open a terminal to remove one.
+      'mcp:remove',
     ])
   })
 
@@ -1000,7 +1003,7 @@ describe('registerMcpIpc', () => {
     const ipc = fakeIpcMain()
     registerMcpIpc(ipc as unknown as Electron.IpcMain)
     expect(() => registerMcpIpc(ipc as unknown as Electron.IpcMain)).not.toThrow()
-    expect(ipc.handlers.size).toBe(8)
+    expect(ipc.handlers.size).toBe(9)
   })
 
   it('refuses a relative project path instead of resolving it against the app cwd', () => {

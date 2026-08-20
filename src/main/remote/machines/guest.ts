@@ -31,6 +31,16 @@
  * presses approve on the other machine, the next dial succeeds. There is no
  * timer watching for approval and nothing to switch off when it never comes.
  *
+ * That schedule is **flat while the wait is on a human**, and only then. The
+ * exponential curve is the right answer to a machine that is off or a relay
+ * that is down; it is the wrong answer to somebody standing at the other
+ * keyboard about to press a button, because by the fourth refusal the next dial
+ * is eight to sixteen seconds away and the press appears to do nothing.
+ * Measured: seven seconds from *Let it in* to the copilot appearing, all of it
+ * the timer. A refusal costs the far end almost nothing — it is rejected at
+ * hello, before anything is attached — so the wait stays at the base delay
+ * until that machine has let this one in once. See {@link schedule}.
+ *
  * ## The one thing this file will not do
  *
  * It never writes to the store. `store.ts` owns what is on disk and `ipc.ts`
@@ -550,6 +560,14 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
   /** Has a `welcome` ever landed from this machine? Decides "waiting" vs "broken". */
   let everWelcomed = false
   /**
+   * The last refusal was *this device is not approved there yet*.
+   *
+   * Held rather than re-derived, because `schedule()` runs from the timer and
+   * has no refusal in hand. Cleared on the first welcome — after that a refusal
+   * means something else and is no longer a person about to press a button.
+   */
+  let awaitingApproval = false
+  /**
    * The last `error` that arrived on a serving connection, kept only until that
    * connection ends.
    *
@@ -731,7 +749,14 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
 
   function schedule(): void {
     if (retry !== null || stopped || dialling || channel !== null) return
-    const ceiling = Math.min(maxBackoffMs, baseBackoffMs * 2 ** Math.min(attempts, 6))
+    /*
+     * Flat while somebody is being asked to approve this machine, exponential
+     * for everything else. See the note at the top of the file: the curve is
+     * for a machine that is off, and this wait is for a person's finger.
+     */
+    const ceiling = awaitingApproval
+      ? baseBackoffMs * 2
+      : Math.min(maxBackoffMs, baseBackoffMs * 2 ** Math.min(attempts, 6))
     // Full jitter across the top half of the window, for the reason at the top
     // of this file: without it every machine redials in the same millisecond.
     const delay = Math.round(ceiling / 2 + Math.random() * (ceiling / 2))
@@ -788,8 +813,9 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       publish({ state: 'offline', reason: null, sessions: [], ports: [], copilot: null, retryAt: null })
       return
     }
+    awaitingApproval = refused === 'unauthorized' && !everWelcomed
     publish({
-      state: refused === 'unauthorized' && !everWelcomed ? 'awaiting-approval' : 'error',
+      state: awaitingApproval ? 'awaiting-approval' : 'error',
       reason,
       // The list belonged to a connection that is over. Keeping it would leave
       // rows on screen that open nothing, which is the same lie as a hover state
@@ -831,6 +857,9 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           return
         }
         everWelcomed = true
+        // Whatever this link waits for next, it is not an approval — this
+        // machine has now let this one in. See `schedule`.
+        awaitingApproval = false
         connectedAt = now()
         attempts = 0
         // A new connection carries none of the old one's refusals.

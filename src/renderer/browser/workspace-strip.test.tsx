@@ -1120,7 +1120,7 @@ describe('a strip tab', () => {
   })
 
   it('carries the whole title and the folder in its tooltip', () => {
-    // The tab is 220px wide; this is where the rest of the answer lives.
+    // The tab is 232px wide; this is where the rest of the answer lives.
     expect(html).toContain('title="Update Claude Code terminal to new API')
     expect(html).toContain('/Users/apple/Projects/terminaldeck"')
   })
@@ -1591,8 +1591,8 @@ describe('every route that opens a window keeps it', () => {
 /**
  * *"session tabs and browser tabs should be the same size. I see sometimes
  * inconsistency. Some of them are more wide, some of them are less wide. They
- * should be all at the same size. … this one is the perfect size, the one B1
- * and B2, this tab."* — 2026-08-20.
+ * should be all at the same size. … this one is the perfect size, the one with
+ * B1 and B2, this tab."* — 2026-08-20.
  *
  * Read out of the stylesheet, which is the only place this exists — there is no
  * layout engine in this test run, so the alternative is nothing at all. What
@@ -1601,7 +1601,7 @@ describe('every route that opens a window keeps it', () => {
  * number so a half-empty bar does not stretch them, and a floor that is *not*
  * that number so a full one can still compress. Delete any one of the three as
  * redundant and the row goes back to being sized by its contents, which is the
- * ragged row in his recording — 155, 110, 110, 140, 178, 109 pixels.
+ * ragged row in his recording — 201.5, 144, 144, 182.5, 232, 144 pixels.
  *
  * The equal-basis half is the one that is easy to lose: `min`/`max` alone
  * cannot make two tabs agree, because between them a tab is still as wide as
@@ -1611,11 +1611,21 @@ describe('the width of a tab', () => {
   const css = readFileSync(join(__dirname, 'WorkspaceTabStrip.css'), 'utf8')
   const rule = /\.strip-tab \{[\s\S]*?\n\}/.exec(css)?.[0] ?? ''
 
-  it('is stated once, as a ratio on the tab’s own height', () => {
-    // Not `180px`. The tab's height is already derived from the bar's, so a
-    // pixel here would be the one measurement in this sheet that stops moving
-    // when `--toolbar-h` does.
-    expect(css).toContain('--strip-tab-w: calc(var(--strip-tab-h) * 5);')
+  it('is the tab he pointed at, 232px, measured off his own frame', () => {
+    /*
+     * A pixel and not a ratio, and that is the correction rather than a lapse.
+     * This shipped as `--strip-tab-h * 5` = 180px, fitted to a reading of his
+     * recording at 2.6× when the frame is a plain 2× — `f_1500.jpg` is
+     * 3600×2122, an 1800×1061 window, and three of his six tabs sit at exactly
+     * 288 image pixels, which is the *old* 144px floor doubled. On the true
+     * scale the tab he named is 232 CSS pixels, so 180 was 22% narrow.
+     *
+     * The floor keeps its ratio because it is a proportion of the furniture
+     * inside a tab; the width does not, because it is a measurement of the
+     * fullest tab's content and calling it 6.44 heights would be the same
+     * invented derivation that produced 180.
+     */
+    expect(css).toContain('--strip-tab-w: 232px;')
     expect(css).toContain('--strip-tab-min: calc(var(--strip-tab-h) * 3.5);')
   })
 

@@ -327,22 +327,31 @@ export type NameSource = ReadonlyMap<string, string>
 const NO_NAMES: NameSource = new Map()
 
 /**
- * `folder · Session 2`, or `folder · commander` once somebody has named it.
+ * The name somebody gave it, or `folder · Session 2` when nobody has.
  *
  * One function because the two lists have to number the same way. A remote
  * session that read `Session 4` while the rail beside it read `Session 2` would
  * be the picker disagreeing with the app about which session it means, which is
  * the failure this labelling scheme exists to avoid in the first place.
  *
- * The name displaces the number rather than joining it. `copilot · commander ·
- * Session 1` is three facts about one row in a dropdown that is 26rem wide, and
- * the number is the least useful of them the moment there is a name: the number
- * exists to tell two sessions in one folder apart, and a name already does.
+ * ## A named session is called by its name and by nothing else
+ *
+ * Asad, naming the copilot and then opening this picker: *"it should call
+ * commander also because I name it as commander, but it is showing copilot."*
+ * It was showing `copilot · Commander` — the name was there, second, behind the
+ * folder the copilot happens to live in, and `copilot` is the word he had just
+ * replaced. A name is the one fact on the row he chose himself, so it is the
+ * whole row.
+ *
+ * The folder stays for every session that has no name, because then there is
+ * nothing else to tell two rows apart. The name displaces the number for the
+ * same reason it displaces the folder: the number exists to tell two sessions
+ * in one folder apart, and a name already does.
  */
 function labelFor(cwd: string, index: number, name: string): string {
+  if (name) return name
   const folder = cwd ? folderName(cwd) : ''
-  const tail = name || `Session ${index}`
-  return folder ? `${folder} · ${tail}` : tail
+  return folder ? `${folder} · Session ${index}` : `Session ${index}`
 }
 
 /** This machine's sessions, in the order the main process listed them. */

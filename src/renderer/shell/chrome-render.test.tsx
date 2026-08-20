@@ -10,6 +10,7 @@ import { placeMenu } from './chip-menu'
 import {
   ACCOUNT_NEEDS_RAIL,
   accountsWorthShowing,
+  machineTabId,
   tabIdentities,
   tabQualifiers,
   type WorkspaceTab,
@@ -589,6 +590,30 @@ describe('tabIdentities', () => {
     expect(tabQualifiers(tabs, labels, { accountsShown: true })).toEqual([null, null])
     // And with the column gone, the id is needed again.
     expect(tabQualifiers(tabs, labels)).toEqual(['7f3c', 'b4e1'])
+  })
+
+  /**
+   * Five sessions on one paired machine, which is where this rung was printing
+   * the wrong identifier entirely.
+   *
+   * A remote tab's id is `machine <ULID> <n>` and `shortSessionId` cuts at the
+   * first hyphen — a ULID has none — so every row under one machine heading got
+   * the same twenty-six-character machine id as its qualifier. It is in his
+   * recording: three rows under DESKTOP-DDGMNCV reading `machine XPUSZ55CRJPKSVQ`,
+   * naming the computer whose heading is three pixels above them. What separates
+   * them is the far machine's own session id.
+   */
+  it('qualifies a remote row with the far machine’s session id, not the machine’s', () => {
+    const onMachine = (session: string): WorkspaceTab => ({
+      ...inProject(machineTabId('Q5JE8FAG53PML2W3VU9V3QTZ2U', session), '/w/app', 'terminaldeck'),
+      machine: { id: 'Q5JE8FAG53PML2W3VU9V3QTZ2U', name: 'MacBookPro' },
+    })
+    const tabs = [onMachine('1'), onMachine('2'), onMachine('3')]
+    const labels = tabs.map(() => 'terminaldeck')
+    const qualifiers = tabQualifiers(tabs, labels)
+
+    expect(qualifiers).toEqual(['1', '2', '3'])
+    for (const qualifier of qualifiers) expect(qualifier).not.toContain('Q5JE8FAG53')
   })
 
   it('still separates a pair on one account, whether or not the column is drawn', () => {

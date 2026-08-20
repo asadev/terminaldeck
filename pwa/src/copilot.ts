@@ -104,6 +104,34 @@ import {
 
 export const NO_GRANT: CopilotGrantWire = { read: false, act: false, alter: false }
 
+/**
+ * How long a sent message may go unacknowledged before the box unlocks itself.
+ *
+ * ## Why there has to be a number here at all
+ *
+ * `sending` locks the composer and it used to have exactly one way out: the
+ * person's own words coming back in a `copilot.chat`. That is the right signal
+ * and it is not a guarantee — measured on 2026-08-20, a phone sent four
+ * messages to a live run and none of them ever echoed, because the desktop was
+ * typing them into the CLI's prompt without submitting them
+ * (`main/remote/copilot-say.ts` is that fix). The composer stayed dead through
+ * all four, through a reload, and through a fresh run. One unanswered message
+ * locked the surface permanently, and nothing on screen said anything.
+ *
+ * The submit bug is fixed. This is the floor under it: whatever goes wrong
+ * between here and a pty — a run that died, a machine that swallowed the frame,
+ * a future version of the same mistake — costs one wait and not the session.
+ *
+ * ## Why thirty seconds
+ *
+ * The echo does not come back when the wire is quiet; it comes back when the
+ * CLI has taken the turn. The first message to a device starts the run, so that
+ * one waits for a cold agent CLI to boot and read an MCP config — several
+ * seconds on this machine, more on a slow one. Thirty is comfortably past that
+ * and is still a wait somebody sits through rather than gives up on.
+ */
+export const SAY_TIMEOUT_MS = 30_000
+
 /** Nothing here, nothing open, nothing granted. */
 export const NO_LINK: CopilotLinkWire = { linked: false, open: false, grant: NO_GRANT }
 
@@ -223,6 +251,13 @@ export type CopilotAction =
   /** Start this device's own run. */
   | { t: 'start' }
   | { t: 'say'; text: string }
+  /**
+   * {@link SAY_TIMEOUT_MS} passed and the message never came back.
+   *
+   * Armed by the surface when `sending` goes true and cancelled when it goes
+   * false, the same shape the confirmation countdown uses.
+   */
+  | { t: 'say-timeout' }
   | { t: 'cancel' }
   | { t: 'stop' }
   | { t: 'answer'; id: string; approved: boolean }
@@ -320,6 +355,24 @@ export function copilotStep(state: CopilotState, action: CopilotAction): Copilot
         return still({ ...state, notice: 'That message is too long to send. Shorten it and try again.' })
       }
       return { state: { ...state, sending: true, notice: null }, send: [{ t: 'copilot.say', text }] }
+    }
+
+    case 'say-timeout': {
+      if (!state.sending) return still(state)
+      /*
+       * Unlock, say one short thing, and **ask the machine what it has**.
+       *
+       * The re-ask is the useful half. A run whose process died is not reported
+       * to anybody until something asks — `CopilotRuns.reap` runs on a read, not
+       * on a clock — so a phone that only unlocked its box would go on offering
+       * Send for a run that no longer exists. `copilot.state` makes the desktop
+       * reap and answer, and a dead run comes back as `run: null`, which is
+       * already the state that draws Start instead of Send.
+       */
+      return {
+        state: { ...state, sending: false, notice: 'The copilot did not answer.' },
+        send: state.link.open && state.link.grant.read ? [{ t: 'copilot.state' }] : [],
+      }
     }
 
     case 'cancel':

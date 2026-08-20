@@ -449,6 +449,18 @@ const EVENTS_THAT_KEEP_THE_BODY: ReadonlySet<string> = new Set([
   // something only in the turn after an attach or a detach; the rest of the
   // time it is the same empty 204 as before, thrown away by curl either way.
   'PostToolUse',
+  /*
+   * Gemini's spellings of the same two doors, added 2026-08-20 with the
+   * provider itself — see `hook-server.ts`'s `CONTEXT_EVENTS` for what was
+   * measured before either name was written here.
+   *
+   * Safe to keep in one flat set rather than splitting it per provider:
+   * `BeforeAgent` and `AfterTool` exist in no other CLI's vocabulary, so
+   * neither name can match a Claude or a Codex entry by accident. `hooks.test.ts`
+   * pins the Claude side of that, event by event.
+   */
+  'BeforeAgent',
+  'AfterTool',
 ])
 export function hookCommand(
   provider: HookProviderId,

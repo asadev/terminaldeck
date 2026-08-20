@@ -204,18 +204,26 @@ describe('what the cut was not allowed to take with it', () => {
   })
 
   /**
-   * An account is two logins, and only one agent honours the *default*. The
-   * original wording explained the config-directory trick that makes it work;
-   * what a person needs is which agents it applies to — and after the regroup
-   * that answer sits on the row it is about, behind its ⓘ, rather than in a
-   * headed paragraph three groups further down.
+   * An account is a login of one agent, and only one *default* is stored. The
+   * original wording explained the config-directory trick that makes accounts
+   * work; what a person needs is what the limit actually is — and after the
+   * regroup that answer sits on the row it is about, behind its ⓘ, rather than
+   * in a headed paragraph three groups further down.
+   *
+   * The sentence itself was wrong until 2026-08-20. It read *"Claude Code only.
+   * Other agents ignore this…"* while the picker under it offered Codex and
+   * Gemini rows — and `resolveProfileId` does honour a Codex default for a
+   * Codex session, so the claim was false in one direction and contradicted by
+   * its own control in the other. What is true is the singular: one default,
+   * used by sessions of its own agent, replaced rather than joined when another
+   * agent's account is chosen.
    */
-  it('still says which agents the default account applies to, without naming a config directory', () => {
+  it('still says what the default account limit is, without naming a config directory', () => {
     const html = render('agents', {
       listProfiles: async () => ({ profiles: [{ id: 'system', name: 'Your install', system: true }], defaultProfileId: 'system' }),
     })
-    expect(html).toContain('Claude Code only')
-    expect(html).toContain('Other agents ignore this')
+    expect(html).toContain('only sessions of the agent it is a login of use it')
+    expect(html).not.toContain('Claude Code only')
     expect(html).not.toContain('config directory')
   })
 

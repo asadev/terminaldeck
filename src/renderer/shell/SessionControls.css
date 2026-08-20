@@ -568,11 +568,19 @@
      against the viewport is enough to keep it on screen, and keeps the panel
      inside the pane it belongs to, which is the more important of the two. */
   max-width: calc(100vw - var(--sp-6));
-  /* Whatever room there is under the bar, less the bar's own offset and a
-     margin at the foot of the window. Four sections are taller than any window
-     worth capping to, so this decides how much is in view before anyone
-     scrolls rather than how much exists. */
-  max-height: min(560px, calc(100vh - 100% - var(--sp-8)));
+  /* Whatever room there is under the bar, less a margin at the foot of the
+     window. Four sections are taller than any window worth capping to, so this
+     decides how much is in view before anyone scrolls rather than how much
+     exists.
+
+     `--sheet-room` is published by `sheet-room.ts` when the panel opens and is
+     the measurement this used to try to make in CSS and could not: `100%` in a
+     `max-height` resolves against the containing block's *height*, so the old
+     formula subtracted the 28-pixel chip row and nothing for the 58 pixels of
+     chrome above it — 32 pixels past the bottom of a 560-pixel window, with the
+     rows below the fold unreachable. The fallback is that old formula, which is
+     correct on any window tall enough for the 560 to bind. */
+  max-height: min(560px, var(--sheet-room, calc(100vh - 100% - var(--sp-8))));
   padding: var(--sp-4) var(--sp-3);
   overflow-y: auto;
   border-radius: var(--radius-lg);

@@ -179,6 +179,66 @@ describe('the Add-agent menu', () => {
     expect(html).toContain('href="https://github.com/openai/codex"')
   })
 
+  /**
+   * The defect an audit found by clicking it: every row was two `<span>`s.
+   *
+   *   > *"We just give a button drop-down, add app, and they will add app…
+   *   > If we add Claude Code, and then we will have relevant stuff, add
+   *   > account things and all of this."*
+   *
+   * Measured 2026-08-20: `getComputedStyle(li).cursor === 'auto'`, clicking a
+   * row left the disclosure open and changed nothing. A menu called **Add**
+   * that could not add. An installed agent's answer to "add this" is the one he
+   * gave in the same sentence — its accounts — so the row opens the Add-account
+   * popup with that agent already chosen.
+   */
+  it('makes an installed agent a real button that opens its Add account', () => {
+    const asked: string[] = []
+    const html = renderToStaticMarkup(
+      <AddAgentMenu
+        present={new Set(['claude', 'codex'])}
+        addable={new Set(['claude', 'codex'])}
+        onAddAccount={(id) => asked.push(id)}
+      />,
+    )
+    expect(html).toContain('class="settings-addmenu-row"')
+    expect(html).toContain('>Add account</span>')
+    // Gemini is not installed here, so it keeps the install link rather than
+    // offering an account for an agent that is not on the machine.
+    expect(html).toContain('>Install<')
+    expect(asked).toEqual([])
+  })
+
+  it('gives every installed agent its own row, so each opens its own popup', () => {
+    // A menu that always opened the popup on the first agent would render
+    // identically to one that does not, so the count is what is checked: one
+    // button per installed agent, none for the rest.
+    const html = renderToStaticMarkup(
+      <AddAgentMenu
+        present={new Set(['claude', 'codex', 'gemini'])}
+        addable={new Set(['claude', 'codex'])}
+        onAddAccount={() => {}}
+      />,
+    )
+    expect(html.match(/class="settings-addmenu-row"/g) ?? []).toHaveLength(2)
+    expect(html).not.toContain('>Install<')
+    /*
+     * Gemini is installed and is *not* a row you can press. It keeps one login
+     * per machine, so **Add account** there would open a popup where its own
+     * radio is disabled — a live-looking control leading to a dead end, which
+     * is the same defect as the dead menu, one screen along.
+     */
+    expect(html).toContain('>Installed</span>')
+  })
+
+  it('leaves the row inert when nothing can be opened', () => {
+    // No handler — a panel rendered standalone. The row falls back to the
+    // label it always had rather than drawing a button that does nothing.
+    const html = renderToStaticMarkup(<AddAgentMenu present={new Set(['claude'])} />)
+    expect(html).toContain('>Installed</span>')
+    expect(html).not.toContain('class="settings-addmenu-row"')
+  })
+
   it('costs the closed pane nothing to carry', () => {
     // A `<details>` is closed until it is opened, which is the whole reason it
     // is one: the hundred entries he is thinking about are a hundred entries
@@ -253,14 +313,20 @@ describe('what the pane stopped saying', () => {
      *
      * And the help line went with the label: a picker of accounts under a label
      * saying which account does not need a sentence saying which account. What
-     * only the ⓘ can say — that one agent honours this and the others do not —
-     * is a limit rather than a description, so it stays, behind the dot.
+     * only the ⓘ can say — what the *limit* is — is a limit rather than a
+     * description, so it stays, behind the dot.
+     *
+     * The limit it states changed with it. *"Claude Code only. Other agents
+     * ignore this…"* was false — `resolveProfileId` honours a Codex default for
+     * a Codex session — and it was contradicted by the picker under it, which
+     * listed the agents the sentence said were ignored.
      */
     const html = pane({ listProfiles: async () => ({ profiles: [], defaultProfileId: null }) })
     expect(html).toContain('Primary account')
     expect(html).not.toContain('Run them as')
     expect(html).not.toContain('Which account, unless a folder or the session says otherwise')
-    expect(html).toContain('Claude Code only')
+    expect(html).not.toContain('Claude Code only')
+    expect(html).toContain('only sessions of the agent it is a login of use it')
   })
 
   it('drops the group headings that made one pane read as three', () => {

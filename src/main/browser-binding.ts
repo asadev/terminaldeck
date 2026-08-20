@@ -132,8 +132,9 @@ export interface SessionBinding {
   /** 0–3, an index into `--bind-1 … --bind-4`. */
   colour: number
   /**
-   * The last number handed out. The next window takes `++next`, and this is
-   * **never decremented**.
+   * The last number handed out. The next window takes `++next`.
+   *
+   * ## Never reused while the session holds a window
    *
    * `renderer/shell/workspace-tabs.ts` already threw ordinals out as identity
    * once — *"an ordinal is not a fact about a session. It is a fact about a
@@ -141,9 +142,30 @@ export interface SessionBinding {
    * That was cosmetic for a sidebar row. Here it is the whole feature: a
    * renumbered window makes an agent point confidently at the wrong page, and
    * it does it *within* a turn, before anything gets a chance to restate the
-   * list. So closing `B1` leaves `B2` called `B2`, and after five open-and-
-   * closes the next window is `B6`. That last part will look odd the first time
-   * he sees it, and it is the honest half of the same rule.
+   * list. So closing `B1` leaves `B2` called `B2`, and while `B2` is still
+   * attached the next window is `B3`.
+   *
+   * ## And back to zero the moment the list is empty
+   *
+   * The rule above used to run unconditionally, and it produced this: attach a
+   * window, detach it, attach it again, attach a second, and the session's two
+   * windows are called `B4` and `B5`. Four ordinary presses. Asad asked for a
+   * vocabulary he can say out loud — *"I open this in your browser and check B2,
+   * B1… So it should know it's B2 and B1s"* — and after his first detach his
+   * vocabulary and the app's disagree for the life of the session.
+   *
+   * Nothing is protected by that. The no-reuse rule exists so a stale `B1` in an
+   * agent's head cannot silently come to mean a different page *while the page
+   * it named is still on screen beside it*. With the list empty there is no such
+   * page: every window this session ever held has been detached or closed, so
+   * there is nothing left for a stale reference to collide with, and calling the
+   * first window of an empty session `B4` is not conservative — it is just a
+   * wrong name.
+   *
+   * So the restart happens at allocation ({@link restartNumbering}) rather than
+   * at detach, which is what makes it safe: a number that has been *printed* to
+   * an agent but whose window has not arrived yet — {@link reserve} — holds the
+   * restart off until it lands or expires.
    */
   next: number
   /**
@@ -216,6 +238,29 @@ const windowOwner = new Map<string, string>()
  * this is the whole reason the mechanism looks like this rather than like a
  * write to the pty.
  *
+ * ## What "right away" can and cannot mean, stated plainly
+ *
+ * A CLI sitting at an empty prompt is not running. It has no turn to inject
+ * into, it will not call a hook until it is spoken to, and the only way to make
+ * it read something *now* is to type into his terminal — which is the one thing
+ * he has ruled out repeatedly, most recently on watching an account switch put a
+ * line into his own message: *"See, what the fuck is this? This came in my
+ * message automatically."*
+ *
+ * So the guarantee this mechanism actually makes is the strongest one available
+ * without typing, and it is worth stating exactly:
+ *
+ *  - **Working when he connects** — the agent is told at its very next tool
+ *    call, which is seconds, mid-turn, through {@link takeAnnouncement}.
+ *  - **Idle when he connects** — the agent is told as part of his next prompt,
+ *    *before* the model sees the prompt, through {@link hookContext}. It cannot
+ *    answer a question about its browser windows without having been told first,
+ *    which is the observable half of what he asked for.
+ *
+ * The gap is the stretch in between, where an idle agent has not been asked
+ * anything: nothing is delivered there, and nothing is delivered there because
+ * nothing is listening.
+ *
  * **Marked on attach and detach only.** Not on navigation: a page moving from
  * one URL to the next is already carried by the standing context on his next
  * prompt, and marking it here would put a paragraph into the agent's turn every
@@ -253,6 +298,55 @@ function nextColour(): number {
   let best = 0
   for (let i = 1; i < BIND_COLOURS; i += 1) if (used[i] < used[best]) best = i
   return best
+}
+
+/**
+ * When each session last had a number handed out by {@link reserve} that no
+ * window has claimed yet, by binding key.
+ *
+ * ## What it is guarding
+ *
+ * `reserve` prints `B2` at an agent *before* the window exists — the shim is
+ * holding a connection open while the renderer builds the tab. In that gap the
+ * session's window list can be empty while a number is already spoken for, and
+ * {@link restartNumbering} must not hand the same number to something else: two
+ * windows called `B2` is the one failure the whole allocation scheme exists to
+ * make impossible.
+ *
+ * ## Why a timestamp and not a count
+ *
+ * A counter incremented here and decremented on the claim leaks the day a
+ * reservation is never claimed — the renderer refused, the window was closed
+ * before it registered — and a leaked counter would silently switch the restart
+ * off for that session forever. A timestamp cannot leak: it simply goes stale.
+ * {@link RESERVATION_TTL_MS} is comfortably past the point the caller has given
+ * up waiting, so a reservation that is still young is one that can still land.
+ */
+const reservedAt = new Map<string, number>()
+
+/**
+ * How long a printed-but-unclaimed number is treated as spoken for.
+ *
+ * `browser-binding-ipc.ts` gives the renderer 2s to open a window and answer,
+ * and `browser-route.ts` claims the number immediately afterwards. Five times
+ * that, so the guard outlives every real round trip and no wedged one outlives
+ * the session.
+ */
+const RESERVATION_TTL_MS = 10_000
+
+/**
+ * Start this session's numbering again at `B1`, when it is safe to.
+ *
+ * Two conditions, both necessary. The window list must be empty — see
+ * {@link SessionBinding.next} for why an empty list is the only moment a
+ * restart takes nothing away from anybody. And no number may be in flight, or
+ * the restart would re-hand a number an agent has already been told.
+ */
+function restartNumbering(binding: SessionBinding, key: string): void {
+  if (binding.windows.length > 0) return
+  const at = reservedAt.get(key)
+  if (at !== undefined && Date.now() - at < RESERVATION_TTL_MS) return
+  binding.next = 0
 }
 
 /** The binding for a session, creating it on first attach and not before. */
@@ -365,6 +459,8 @@ export function attach(input: AttachInput): BoundWindow {
     return existing
   }
 
+  // An empty session starts again at `B1`. See {@link restartNumbering}.
+  restartNumbering(binding, keyOf(input.sessionId, machineId))
   binding.next += 1
   const made: BoundWindow = {
     n: binding.next,
@@ -472,6 +568,7 @@ export function sessionRemoved(sessionId: string, machineId = ''): void {
   bindings.delete(key)
   // Nothing left to tell, and nobody left to tell it to.
   unannounced.delete(key)
+  reservedAt.delete(key)
   publish()
 }
 
@@ -490,6 +587,7 @@ export function hostReset(): void {
   bindings.clear()
   windowOwner.clear()
   unannounced.clear()
+  reservedAt.clear()
   publish()
 }
 
@@ -573,8 +671,14 @@ export function resolve(
  * number that was printed.
  */
 export function reserve(sessionId: string, machineId = ''): number {
+  const key = keyOf(sessionId, machineId)
   const binding = ensure(sessionId, machineId)
+  // The same restart {@link attach} makes, for the same reason: the first `open`
+  // of a session whose windows have all been closed should print `B1`, not `B4`.
+  restartNumbering(binding, key)
   binding.next += 1
+  // Spoken for from here until the window lands or the reservation goes stale.
+  reservedAt.set(key, Date.now())
   return binding.next
 }
 
@@ -588,7 +692,11 @@ export function reserve(sessionId: string, machineId = ''): number {
  */
 export function attachReserved(input: AttachInput & { n: number }): BoundWindow | null {
   const machineId = input.machineId ?? ''
-  const binding = bindings.get(keyOf(input.sessionId, machineId))
+  const key = keyOf(input.sessionId, machineId)
+  const binding = bindings.get(key)
+  // Claimed or refused, the reservation is over either way: the number is about
+  // to be a real window's, or nothing is ever going to arrive for it.
+  reservedAt.delete(key)
   if (!binding) return null
   if (binding.windows.some((window) => window.n === input.n)) return null
 
@@ -616,6 +724,47 @@ export function attachReserved(input: AttachInput & { n: number }): BoundWindow 
 export function slotName(n: number): string {
   return `B${n}`
 }
+
+/**
+ * The one instruction in this whole channel, and he asked for it in the same
+ * breath as the facts it governs.
+ *
+ * Asad, 2026-08-20, having asked a session what it knew about this app and been
+ * told nothing: *"it should be given, like **it should not tell about Terminal
+ * Deck when it is answering**, but it should just keep it with it. So it knows
+ * when we ask about it."*
+ *
+ * Everything else composed here is a statement of fact and deliberately so —
+ * the header above `hookContext` argues that a line earns its place only by
+ * changing what the agent *does*. This line changes what it does not do, which
+ * is the same test. Without it, what an agent makes of a fresh fact about its
+ * own surroundings is left entirely to the model, and the thing models reliably
+ * do with one is mention it: the first reply of every session opening with
+ * "I'm running inside Terminal Deck" is precisely the visible noise he has now
+ * ruled out three times, in the one place he cannot turn off.
+ *
+ * Two clauses, because a flat "never mention this" would be the opposite error.
+ * He asked to be able to *ask* — *"so it knows when we ask about it"* — and an
+ * agent that opens `B2` and then may not say which window it used has been made
+ * useless in order to be quiet.
+ */
+const DISCRETION = 'Do not mention any of this unless it is asked about or you act on it.'
+
+/**
+ * The events that arrive in the **middle** of a turn, in each CLI's spelling.
+ *
+ * One set rather than a comparison against `'PostToolUse'` written at the call
+ * site, because there are now two spellings of the same moment and the caller
+ * had one of them hard-coded: Claude calls it `PostToolUse` and Gemini calls it
+ * `AfterTool`, and both are "the agent has just finished a tool call and is
+ * still working". A mid-turn event answered with the *standing* description
+ * instead of the change would repeat the same paragraph at every tool call of
+ * every turn, which is the one cost this channel was designed around.
+ *
+ * `hook-server.ts` decides whether an event is answered at all; this only says
+ * which of the two answers it gets.
+ */
+export const MID_TURN_EVENTS: ReadonlySet<string> = new Set(['PostToolUse', 'AfterTool'])
 
 /**
  * One window, as a line an agent reads: `B2 — Stripe — https://… — on DESKTOP`.
@@ -666,6 +815,11 @@ export function takeAnnouncement(sessionId: string, machineId = ''): string | nu
     'Browser windows attached to this session (this just changed):',
     ...windows.map(windowLine),
     `"the browser" means ${slotName(windows[0].n)}.`,
+    // Here as well as in the standing answer, and for a sharper reason: this
+    // one lands *mid-turn*, in the middle of work the agent is already
+    // narrating, which is the likeliest moment of all for it to stop and
+    // report that something has changed about its browser windows.
+    DISCRETION,
   ].join('\n')
 }
 
@@ -773,6 +927,26 @@ export function hookContext(
     // the change announcement describe the same windows, and two builders is how
     // one of them comes to name a machine the other does not.
     for (const window of windows) lines.push(windowLine(window))
+    /*
+     * And the pending announcement is settled here, because this **is** the
+     * announcement.
+     *
+     * This function is answered at the top of a turn and {@link takeAnnouncement}
+     * mid-turn, and until now the two did not know about each other. A window
+     * attached to an idle session was marked unannounced, the next prompt got
+     * this list, and then the agent's first tool call got the same list a second
+     * time under *"this just changed"* — one paragraph twice inside one turn, out
+     * of the same context budget he watches in the top bar.
+     *
+     * Only when the list is non-empty, and the asymmetry is the point: a list
+     * printed in full is a complete restatement, so there is nothing left to
+     * announce. The empty case is a *detach*, which this answer says nothing
+     * about — it simply stops mentioning windows — so its announcement is left
+     * standing for the mid-turn door, where "no browser window is attached to
+     * this session now" is the only thing that will ever tell an agent still
+     * holding `B1` that `B1` is gone.
+     */
+    unannounced.delete(keyOf(sessionId, machineId))
     const first = slotName(windows[0].n)
     /*
      * The naming half is worth its words even where the shim is not installed,
@@ -790,6 +964,10 @@ export function hookContext(
     )
   }
 
+  // Last, because everything above it is a fact and this is what to do with
+  // them. See {@link DISCRETION}.
+  lines.push(DISCRETION)
+
   return lines.join('\n')
 }
 
@@ -798,5 +976,6 @@ export function resetForTests(): void {
   bindings.clear()
   windowOwner.clear()
   unannounced.clear()
+  reservedAt.clear()
   listeners.clear()
 }

@@ -1063,16 +1063,116 @@
   margin-top: 7px;
 }
 
-/* An account's buttons take a line of their own, under the three lines they
-   act on.
+/* An account's actions sit at the end of the row they act on.
 
-   They used to sit on the right of the name, and with four of them the row
-   wrapped only sometimes — one account showed its buttons beside the name and
-   the next showed them underneath, in the same list. Same block, two layouts,
-   for no reason a reader could see. One line each, always. */
+   They were on a line of their own underneath, and that was the right answer
+   for *four* buttons — with four, the row wrapped only sometimes, so one
+   account showed its buttons beside the name and the next showed them
+   underneath. It is the wrong answer for one button and a dot: a strip on its
+   own line under a group of two Claude accounts does not say which of the two
+   Remove would delete. Now there is at most `Sign in` and a `⋯`, which fit
+   beside the name, where what they belong to cannot be mistaken. */
 .settings-profile-actions {
+  flex-shrink: 0;
+  margin-inline-start: auto;
+  /* Level with the cap height of the name, like the colour dot opposite: the
+     row is top-aligned because it is three stacked lines. */
+  margin-top: 1px;
+}
+
+/* The three that are not the row's one act — Use by default, Rename, Remove —
+   behind one dot, opening inside the row.
+
+   A `<details>` for the reason `.settings-addmenu` is one: this window is
+   asserted through `renderToStaticMarkup`, so a portalled menu has no markup a
+   test can read, and a disclosure is keyboard-operable and dismissable with no
+   script. Positioned against `.settings-profile`, which is what anchors it to
+   its own account. */
+.settings-rowmenu {
+  position: relative;
+}
+
+.settings-rowmenu > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+  line-height: 1;
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-rowmenu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-rowmenu > summary:hover,
+.settings-rowmenu[open] > summary {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+.settings-rowmenu > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-rowmenu-items {
+  position: absolute;
+  z-index: 3;
+  inset-inline-end: 0;
+  top: calc(var(--control-h) + var(--sp-1));
+  display: flex;
+  flex-direction: column;
+  min-width: 9rem;
+  padding: var(--sp-1);
+  border-radius: var(--radius-md);
+  /* The same glass every other floating surface in this app wears — see
+     `.folder-menu` in `shell.css`. Not `--bg-secondary`: that is the token the
+     sheet and its rail are painted with, and a menu in it would be a menu
+     drawn in the colour of the thing it floats over. `settings-surface.test.ts`
+     counts that declaration for exactly this reason. */
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+}
+
+.settings-rowmenu-items > button {
+  height: var(--row-h);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  text-align: start;
+  cursor: pointer;
+}
+
+.settings-rowmenu-items > button:hover:not(:disabled) {
+  background: var(--fill-tertiary);
+}
+
+.settings-rowmenu-items > button.danger {
+  color: var(--color-critical);
+}
+
+.settings-rowmenu-items > button:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* The confirmation still takes a line of its own: it is a sentence and two
+   buttons, and there is no width beside a name for it. */
+.settings-profile > .settings-confirm {
   flex-basis: 100%;
-  margin-top: var(--sp-2);
 }
 
 .settings-profile-main {
@@ -1305,11 +1405,45 @@
   color: var(--text-primary);
 }
 
-/* Not an action, so not styled as one: this entry is the answer "you already
-   have it", and the row for it is a few pixels above. */
+/* The right-hand half of a row: "Installed" where nothing can be done, "Add
+   account" where something can. Quiet in both, because the name on the left is
+   the subject of the row. */
 .settings-addmenu-have {
   font-size: var(--t-footnote);
   color: var(--text-muted);
+}
+
+/* An installed agent's row, which is a real button now rather than two spans
+   that looked like one. The whole row is the target — that is what a person
+   aims at in a menu — and it is the width of the list so the hover says so. */
+.settings-addmenu-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  height: 100%;
+  margin: 0 calc(var(--sp-2) * -1);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.settings-addmenu-row:hover {
+  background: var(--fill-tertiary);
+}
+
+.settings-addmenu-row:hover .settings-addmenu-have {
+  color: var(--accent);
+}
+
+.settings-addmenu-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* ------------------------------------------------------ accounts, by agent -- */

@@ -452,6 +452,25 @@ describe('classifyGhError', () => {
     expect(failure.action).toContain('install')
   })
 
+  /**
+   * A repository with its issue tracker switched off, which is a setting and
+   * not a failure. `gh` reports it as an ordinary non-zero exit, so it landed
+   * in the generic arm and the Issues tab drew "GitHub request failed", a dot
+   * blaming the GitHub CLI, and a Retry that could never succeed — the *"same
+   * old thing"* Asad has now named twice.
+   *
+   * The text is `gh issue list`'s own, run against
+   * `multica-ai/andrej-karpathy-skills`.
+   */
+  it('reads a repository with issues switched off as a setting, not an error', () => {
+    const failure = classifyGhError(
+      execError("the 'multica-ai/andrej-karpathy-skills' repository has disabled issues"),
+    )
+    expect(failure.kind).toBe('issues-disabled')
+    // Nothing to run, so nothing is offered to run.
+    expect(failure.action).toBeNull()
+  })
+
   it('reports a killed process as a timeout, not a generic failure', () => {
     expect(classifyGhError(execError('', { killed: true, signal: 'SIGTERM' })).kind).toBe('timeout')
     expect(classifyGhError(execError('', { code: 'ETIMEDOUT' })).kind).toBe('timeout')

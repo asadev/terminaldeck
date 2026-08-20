@@ -51,10 +51,19 @@ describe('the first paint of the Add-account agent list', () => {
     expect(html).toContain('Codex CLI')
   })
 
-  it('shows Gemini disabled, with the reason beside it', () => {
+  it('shows Gemini disabled, and does not spend a paragraph on why', () => {
+    /*
+     * The reason used to stand beside the row, and on Gemini that is six lines
+     * about a keychain entry shared across configuration directories — the
+     * longest block of prose on any account surface, spent explaining why an
+     * option nobody can pick is grey. *"If we want to add account, this big
+     * description again here also, big description. They are not stupid to give
+     * this much."* The pill is the fact.
+     */
     const html = markup()
     expect(html).toContain('Gemini CLI')
-    expect(html).toContain('one login per machine')
+    expect(html).not.toContain('one login per machine')
+    expect(html).not.toContain('picker-hint')
     // Disabled and marked as such, not merely styled: the radio itself has to
     // refuse, or a keyboard user reaches it with an arrow key. Matched on the
     // whole `<input>` rather than on an attribute order React does not promise.

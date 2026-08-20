@@ -652,6 +652,32 @@ export function tabIdentities(
  * twice, in one folder, both on the same account. Neither the name, nor the
  * folder, nor the account could separate them, and the app had one fact left.
  */
+/**
+ * The id this rung is allowed to print — the **session's**, never the tab's.
+ *
+ * A local tab's id is the session id, so the two are the same thing and this
+ * changes nothing. A remote one is not: `machineTabId` joins a machine id and a
+ * session id into `machine <ULID> <n>`, and `shortSessionId` cuts at the first
+ * hyphen — which a ULID does not contain — so the qualifier printed for five
+ * sessions on one paired machine was the whole twenty-six-character machine id,
+ * five times, identically. It is on his own screen in the recording: three rows
+ * under DESKTOP-DDGMNCV reading `machine XPUSZ55CRJPKSVQ`, which identifies the
+ * computer he is already looking at the heading of and separates nothing.
+ *
+ * What does separate them is the far machine's own session id, which is what
+ * that machine calls the session, is stable for its life, and is the same string
+ * the Machines page and the far window print. `readMachineTabId` and
+ * `readServerTabId` are the only two functions that know how those ids are
+ * joined, so this asks them rather than parsing anything here.
+ */
+function qualifyingId(tab: WorkspaceTab): string {
+  const remote = readMachineTabId(tab.id)
+  if (remote) return remote.sessionId
+  const server = readServerTabId(tab.id)
+  if (server) return server.shellKey
+  return tab.id
+}
+
 export function tabQualifiers(
   tabs: readonly WorkspaceTab[],
   labels: readonly string[],
@@ -774,12 +800,12 @@ export function tabQualifiers(
    */
   const needsId = tabs.map((_, index) => (byKey.get(key(index)) ?? 0) > 1)
   const idChars = distinguishingIdLength(
-    tabs.filter((_, index) => needsId[index]).map((tab) => tab.id),
+    tabs.filter((_, index) => needsId[index]).map((tab) => qualifyingId(tab)),
   )
 
   return tabs.map((tab, index) => {
     if (!needsId[index]) return placed[index]
-    const id = shortSessionId(tab.id).slice(0, idChars)
+    const id = shortSessionId(qualifyingId(tab)).slice(0, idChars)
     return placed[index] ? `${placed[index]} · ${id}` : id
   })
 }
@@ -817,14 +843,26 @@ export function middleEllipsis(label: string, budget: number): string {
 /**
  * How many characters of a title a tab in the top strip can hold.
  *
- * Measured off the real thing rather than guessed: a strip tab is capped at
- * 220px, and its icon, status dot, two trailing controls and padding take
- * about 80 of them, leaving 138px of 11px UI text. Twenty-four characters
- * rendered 146px into that box and the CSS backstop clipped the last one, so
- * the tab read "…to ne…" — this is the number that lets the middle cut be the
- * only cut, which is the point of making one.
+ * Measured off the real thing rather than guessed, and re-measured when the tab
+ * got wider. A strip tab is `--strip-tab-w` = 232px, and its icon, status dot,
+ * two trailing controls and padding take about 80 of them, leaving ~152px of
+ * 11px UI text. Rendered in `.harness/strip.html`, thirty characters of a
+ * mixed-case title are where the CSS backstop starts clipping, so this is two
+ * short of that — the same margin the first version of this number took — and
+ * the middle cut stays the only cut, which is the point of making one.
+ *
+ * It was 22, fitted to a 220px cap that no longer exists. Left there it undoes
+ * the width he chose: *"this one is the perfect size, the one with B1 and B2,
+ * this tab"* is 232px because that is what a full tab needs, and a tab cutting
+ * "Fix the parser in the reader" with 77px of empty space beside it is the
+ * ragged row arriving from the other direction.
+ *
+ * Tabs compress to `--strip-tab-min` on a crowded bar, where a budget written
+ * for the full width cannot hold and `text-overflow` takes over — that is the
+ * documented failure mode of a generous budget, and it is the old behaviour
+ * rather than an overflowing tab.
  */
-export const STRIP_LABEL_BUDGET = 22
+export const STRIP_LABEL_BUDGET = 28
 
 /**
  * What a strip tab's tooltip should say: the whole title, and the folder under

@@ -109,13 +109,23 @@
 }
 
 /*
-  One control per turn, and it keeps its box whether or not it is showing.
+  One control per turn, and it is *on screen* — not summoned by a pointer.
 
-  Revealed on hover of the turn, and on its own focus — a control that appears
-  only under a pointer cannot be reached from a keyboard, which is the same rule
-  the strip's ✕ is written to. `opacity` rather than `display`, so the footer
-  does not change height as the pointer crosses the column and shuffle every
-  message below it by two pixels.
+  *"And give the copy button wherever it's possible at the end of maybe
+  messages. See, it gives everywhere. So give copy button."* — 2026-08-20, said
+  while looking at Claude, where the control under a turn is simply there.
+
+  It shipped at `opacity: 0` until the turn was hovered, which passes a test for
+  "the button exists" and fails the sentence: on the screen as it sits there was
+  no copy button anywhere. Hover is the app's rule for *what a thing does*, not
+  for whether it is there — everything hoverable in this window is visible
+  first — and a control nobody can see is one nobody presses.
+
+  So it rests at the weight of the timestamp beside it, which is the other thing
+  in this footer and the right company to keep: quiet enough that seven turns in
+  a column do not read as seven buttons, present enough to be found. Hover and
+  focus take it to full, and `opacity` rather than `display` keeps the footer's
+  height constant so the column does not shuffle as the pointer crosses it.
 */
 .cv-copy {
   display: grid;
@@ -124,7 +134,7 @@
   height: 20px;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
-  opacity: 0;
+  opacity: 0.55;
   transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease);
 }

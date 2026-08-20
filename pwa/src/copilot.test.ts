@@ -282,3 +282,54 @@ describe('a dialog never vanishes without saying where it went', () => {
     expect(step.state.notice).toBe('Allowed at the machine.')
   })
 })
+
+/* ------------------------------------------------------------ say timeout -- */
+
+describe('a message that is never acknowledged', () => {
+  /*
+   * The regression: a phone sent four messages to a live run, none of them ever
+   * echoed, and the composer stayed disabled through all four and a reload.
+   * `sending` had exactly one way out and the wire is not obliged to provide it.
+   */
+  const linked: CopilotLinkWire = {
+    linked: true,
+    open: true,
+    grant: { read: true, act: true, alter: true },
+  }
+
+  function sent(): CopilotState {
+    const open = copilotStep(NO_COPILOT, { t: 'welcome', link: linked }).state
+    const granted = copilotStep(open, {
+      t: 'frame',
+      message: { t: 'copilot.grant', link: linked },
+    }).state
+    return copilotStep(granted, { t: 'say', text: 'hello' }).state
+  }
+
+  it('locks the composer when the message goes out', () => {
+    expect(sent().sending).toBe(true)
+  })
+
+  it('unlocks it on the timeout and asks the machine what it has', () => {
+    const step = copilotStep(sent(), { t: 'say-timeout' })
+    expect(step.state.sending).toBe(false)
+    expect(step.state.notice).toBe('The copilot did not answer.')
+    // The re-ask is what makes a run that died show Start instead of a dead
+    // Send: nothing on the desktop reaps a run until something reads its state.
+    expect(step.send).toEqual([{ t: 'copilot.state' }])
+  })
+
+  it('does nothing when no message is in flight', () => {
+    const idle = copilotStep(NO_COPILOT, { t: 'welcome', link: linked }).state
+    const step = copilotStep(idle, { t: 'say-timeout' })
+    expect(step.state).toBe(idle)
+    expect(step.send).toEqual([])
+  })
+
+  it('still unlocks when the link has gone read-less, and asks nothing', () => {
+    const state: CopilotState = { ...sent(), link: { ...linked, grant: { read: false, act: true, alter: false } } }
+    const step = copilotStep(state, { t: 'say-timeout' })
+    expect(step.state.sending).toBe(false)
+    expect(step.send).toEqual([])
+  })
+})

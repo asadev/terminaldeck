@@ -269,6 +269,38 @@ function escapeSequence(state: Composing, params: string, final: string): Compos
   const done = { ...state, pending: '' }
   const end = state.line.length
 
+  /*
+   * The terminal answering the program, which is not somebody typing.
+   *
+   * Measured against Claude Code 2.1.237 on this machine, by spawning it in a
+   * pty and reading the raw bytes back: it turns on `?2004` (bracketed paste)
+   * and **`?1004` — focus reporting**. So every time focus enters or leaves the
+   * terminal, xterm sends `ESC [ I` or `ESC [ O` up the same pipe his
+   * keystrokes go up.
+   *
+   * That is what was really behind *"See, what the fuck is this? This came in my
+   * message automatically."* — or rather, behind the half of it that survived
+   * the rewrite. These fell to `unsure` below, `exact` went false, and the line
+   * was then placed in the replacement's prompt **unsent**. And it was not an
+   * edge case: arming a switch means clicking the account menu, which takes
+   * focus off the terminal and gives it back — so a deferred switch produced a
+   * focus report *every single time*, and the message he pressed Enter on never
+   * went anywhere.
+   *
+   * A focus report and a mouse report cannot change the line. They are not keys;
+   * they carry no text; the program on the far end is being *told* something.
+   * Consumed whole and the certainty kept, which is the difference between his
+   * message being sent and his message sitting in a box waiting for him to
+   * notice it.
+   *
+   * `I`/`O` are focus in and out. `ESC [ < … M` and `… m` are SGR mouse, which
+   * is the form xterm sends whenever a program asks for mouse tracking at all —
+   * no agent here turns it on today, and one that did would otherwise put this
+   * exact fault back.
+   */
+  if ((final === 'I' || final === 'O') && params === '') return done
+  if ((final === 'M' || final === 'm') && params.startsWith('<')) return done
+
   switch (final) {
     case 'D':
       return bare ? { ...done, cursor: Math.max(0, state.cursor - 1) } : unsure(state)

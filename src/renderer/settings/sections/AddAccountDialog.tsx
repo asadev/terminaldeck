@@ -103,6 +103,16 @@ export interface AddAccountDialogProps {
    * into.
    */
   onSignIn: ((email: string, provider: ProviderId) => void) | null
+  /**
+   * The agent to open with, when whatever opened this named one.
+   *
+   * The Add-agent menu does: pressing **Claude Code** there is a request for a
+   * Claude Code login, and re-asking "which agent is this a login for?" on the
+   * next screen is the same question twice. Null everywhere else, which leaves
+   * `chosenAccountProvider` to pick the first agent that can take an account —
+   * unchanged behaviour for the pane's own button and for the session chip.
+   */
+  provider?: ProviderId | null
   onClose(): void
 }
 
@@ -139,6 +149,7 @@ export function AddAccountSteps({
   providerRows,
   busy,
   onSignIn,
+  provider = null,
   onClose,
 }: AddAccountDialogProps) {
   const [draft, setDraft] = useState('')
@@ -181,9 +192,12 @@ export function AddAccountSteps({
   useEffect(() => {
     if (!open) return
     setDraft('')
-    setClicked(null)
+    // Not `null`: the agent the opener named is the answer to step one, and
+    // clearing it here would ask the question again on the screen that was
+    // opened *because* it had been answered.
+    setClicked(provider)
     emailRef.current?.focus()
-  }, [open])
+  }, [open, provider])
 
   const chosen = chosenAccountProvider(providerRows, clicked)
   const problem = agentProblem(providerRows, chosen?.id ?? null)

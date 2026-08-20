@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveOmnibox, securityLabel, securityOf, type OmniboxResolution } from './omnibox'
+import { resolveOmnibox, type OmniboxResolution } from './omnibox'
 
 function url(input: string): string | null {
   const result = resolveOmnibox(input)
@@ -117,32 +117,5 @@ describe('resolveOmnibox — nothing', () => {
       resolveOmnibox('\t\n').kind,
     ]
     expect(empties).toEqual(['empty', 'empty', 'empty'])
-  })
-})
-
-describe('securityOf', () => {
-  it('does not cry wolf about a dev server', () => {
-    // Marking localhost "not secure" trains the user to ignore the indicator on
-    // the one site where it means something.
-    expect(securityOf('http://localhost:3000/')).toBe('local')
-    expect(securityOf('http://127.0.0.1:8080/')).toBe('local')
-    expect(securityOf('http://app.localhost/')).toBe('local')
-  })
-
-  it('says https and nothing more', () => {
-    expect(securityOf('https://example.com/')).toBe('secure')
-    expect(securityLabel(securityOf('https://example.com/'))).toBe('HTTPS')
-  })
-
-  it('flags plain http on a real host', () => {
-    expect(securityOf('http://example.com/')).toBe('insecure')
-    expect(securityLabel(securityOf('http://example.com/'))).toBe('Not private')
-  })
-
-  it('shows nothing for a blank or unparseable tab', () => {
-    expect(securityOf('')).toBe('none')
-    expect(securityOf('about:blank')).toBe('none')
-    expect(securityOf('not a url')).toBe('none')
-    expect(securityLabel('none')).toBe('')
   })
 })

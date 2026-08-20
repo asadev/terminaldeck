@@ -46,3 +46,27 @@
 .switch-confirm-problem .switch-confirm-detail {
   display: inline;
 }
+
+/* The two-word state beside the arrow — "new conversation", "their
+   conversation", "conversation unknown" — where a three-line paragraph used to
+   sit under it.
+
+   Quiet rather than coloured. It is a *state*, not a warning: nothing is
+   destroyed by a switch that starts a new conversation, and the sheet's own
+   header note explains why nothing here is painted as alarm. It reads at
+   caption weight so that the line's subject stays the two account names. */
+.switch-confirm-tag {
+  margin-inline-start: var(--sp-15);
+  padding: 1px var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  font-weight: var(--w-medium);
+  letter-spacing: var(--t-caption-ls);
+  vertical-align: middle;
+  /* Two words, never one and a half: the line above it is two addresses and an
+     arrow, so it wraps, and a pill broken across the wrap reads as two pills. */
+  display: inline-block;
+  white-space: nowrap;
+}

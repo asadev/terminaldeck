@@ -1,10 +1,10 @@
 import { useEffect, useRef, type FormEvent, type ReactNode, type RefObject } from 'react'
-import { securityLabel, type OmniboxResolution, type Security } from './omnibox'
+import { type OmniboxResolution } from './omnibox'
+import { profileInitial } from './profile-badge'
 import type { WorkspaceTab } from './tabs'
 
 interface Props {
   tab: WorkspaceTab | null
-  security: Security
   /** 0 to 1. Anything below 1 draws the bar. */
   progress: number
   resolution: OmniboxResolution
@@ -128,7 +128,7 @@ interface Props {
    * band because it is a fact about the address, and the address bar is where
    * somebody looks to find out where they are.
    */
-  servedBy?: { name: string; port: number; localPort: number; sameNumber: boolean } | null
+  servedBy?: { name: string; port: number | null; localPort: number; sameNumber: boolean } | null
 }
 
 /**
@@ -160,7 +160,6 @@ interface Props {
  */
 export function Toolbar({
   tab,
-  security,
   progress,
   resolution,
   focusToken,
@@ -246,41 +245,37 @@ export function Toolbar({
       {machinePicker}
 
       {/*
-        The word beside the padlock is gone, and the padlock is not.
+        The security indicator is gone. The field is the link.
 
-        *"Since we already have here a selection, why do we show inside the link
-        bar also local? … from inside the link bar, it should be only the link,
-        not this thing."* The machine picker immediately to the left of this
-        field already prints `Local`, so the field was printing the same word a
-        centimetre away from it. The *glyph* stays — three levels of it, tinted
-        — because that is the one thing in a URL bar that is not the URL and is
-        still worth a pixel, and it is now the same bargain as every button on
-        this bar: an icon, with its name on hover.
+        *"since we already have here a selection, why do we show inside the link
+        bar also local? Here we have this, so we know, like here also, then here
+        also. Why? It doesn't make any sense to keep in both side the same thing.
+        So from inside the link bar, it should be only the link, not this
+        thing."*
+
+        A first pass deleted only the word `Local` and kept the glyph beside it.
+        That missed what he was objecting to, because the glyph *was* the
+        duplicate: it is a monitor with a stand, and the machine picker thirty
+        pixels to its left draws the same monitor with the same stand. On his
+        desktop, which has a second machine paired, the bar read as two identical
+        screen icons in a row. The word had gone and the duplication had not.
+
+        The other two levels went with it, for his reason rather than in spite of
+        it. `secure` and `insecure` restate the *scheme*, and this field prints
+        the whole URL — `https://` and `http://` are already the first characters
+        of the thing the indicator was standing next to. That is the same
+        sentence again: the same thing in both side.
+
+        What survives inside the field is `bw-served`, and only that, because it
+        is the one label here that says something nothing else on screen says —
+        which is why he asked for it to stay in the same breath: *"we will need
+        to keep this so we know actually where it is running right now … because
+        we always need a truth."*
+
+        The width this frees goes where he sent it: *"we can have a bigger link
+        bar."*
       */}
       <form className="bw-address" onSubmit={submit}>
-        <span className="bw-security" data-level={security} title={securityLabel(security)}>
-          {security === 'secure' ? (
-            <Glyph>
-              <path d="M7 10V8a5 5 0 0 1 10 0v2" />
-              <rect x="5" y="10" width="14" height="10" rx="2" />
-            </Glyph>
-          ) : security === 'local' ? (
-            <Glyph>
-              <rect x="4" y="5" width="16" height="11" rx="2" />
-              <path d="M9 20h6" />
-            </Glyph>
-          ) : security === 'insecure' ? (
-            <Glyph>
-              <path d="M12 4.5 3 20h18z" />
-              <path d="M12 10v4M12 17h.01" />
-            </Glyph>
-          ) : (
-            <Glyph>
-              <circle cx="12" cy="12" r="8" />
-            </Glyph>
-          )}
-        </span>
-
         {/*
           Where this loopback page actually comes from — and the one label in
           this field that survived the cull, by his own instruction.
@@ -299,12 +294,21 @@ export function Toolbar({
           <span
             className="bw-served"
             title={
-              servedBy.sameNumber
-                ? `${servedBy.name}:${servedBy.port}`
-                : `${servedBy.name}:${servedBy.port} → :${servedBy.localPort}`
+              /*
+               * A null port is the page being fetched by this computer, which
+               * has no tunnel and so has no pair of numbers to reconcile. The
+               * panel decides when to say that — see `servedBy` on the
+               * `<Toolbar>` in `BrowserWorkspace.tsx`; all this file owes it is
+               * a name with no colon after it.
+               */
+              servedBy.port === null
+                ? servedBy.name
+                : servedBy.sameNumber
+                  ? `${servedBy.name}:${servedBy.port}`
+                  : `${servedBy.name}:${servedBy.port} → :${servedBy.localPort}`
             }
           >
-            {servedBy.name}:{servedBy.port}
+            {servedBy.port === null ? servedBy.name : `${servedBy.name}:${servedBy.port}`}
           </span>
         )}
 
@@ -355,6 +359,19 @@ export function Toolbar({
         into the address field, which is the flexible element on this bar:
         *"we can have a bigger link bar … Let's make these icons smaller and make
         this maybe bigger."*
+
+        That much was true only at a wide window. On the narrow panel he was
+        actually describing — *"when it is smaller, then it becomes too small"* —
+        this group was a fixed 240 pixels against an address field of 180, so the
+        icons were wider than the link bar they were making room for. Five of
+        them are now marked `fold` and come off the bar into the ⋯ menu when the
+        panel is narrow; see `toolbar-overflow.ts` for the whole arrangement and
+        `BrowserWorkspace.css` for the width that triggers it.
+
+        Which five: what stays is what tells you something while you look at the
+        page — Shared/Isolated, whose accent is the only sign a tab has its own
+        cookies; Inspect, which is what this browser is for; and Chrome's own
+        last pair, the profile and the ⋮.
       */}
       <div className="bw-actions" ref={actionsRef}>
         <IsolationToggle tab={tab} onToggle={onToggleIsolation} />
@@ -375,10 +392,11 @@ export function Toolbar({
           disabled={!has}
           onClick={onRecord}
           tone={recording ? 'critical' : undefined}
+          fold
         >
           {recording ? <rect x="7" y="7" width="10" height="10" rx="1.5" /> : <circle cx="12" cy="12" r="6" />}
         </IconButton>
-        <IconButton label="Shot" disabled={!has} onClick={onScreenshot}>
+        <IconButton label="Shot" disabled={!has} onClick={onScreenshot} fold>
           <path d="M4 8h3l1.5-2h7L17 8h3v11H4z" />
           <circle cx="12" cy="13" r="3.2" />
         </IconButton>
@@ -398,15 +416,16 @@ export function Toolbar({
           pressed={drawing}
           disabled={!has || !onDraw}
           onClick={() => onDraw?.()}
+          fold
         >
           <path d="M4 20h4l10-10-4-4L4 16z" />
           <path d="M13.5 6.5l4 4" />
         </IconButton>
-        <IconButton label="Size" pressed={deviceOpen} disabled={!has} onClick={onToggleDevice}>
+        <IconButton label="Size" pressed={deviceOpen} disabled={!has} onClick={onToggleDevice} fold>
           <rect x="7" y="3" width="10" height="18" rx="2" />
           <path d="M11 18.5h2" />
         </IconButton>
-        <IconButton label="Devtools" pressed={devtoolsOpen} disabled={!has} onClick={onDevtools}>
+        <IconButton label="Devtools" pressed={devtoolsOpen} disabled={!has} onClick={onDevtools} fold>
           <path d="M9 8l-4 4 4 4M15 8l4 4-4 4" />
         </IconButton>
 
@@ -421,17 +440,29 @@ export function Toolbar({
           The hover says the profile's *name*, not the word "Profile", because
           the name is the fact somebody opens this to check. Absent entirely when
           the preload cannot switch profiles: see `onProfiles`.
+
+          And the button *draws* that name's first letter rather than an outline
+          person — see `profile-badge.ts`. With the person on it, `Default` and
+          `Work` produced an identical toolbar and the only thing that changed
+          between two profiles was invisible until the menu was open, which is
+          the half of *"so we can have these profiles over here as icon"* that
+          was missing.
         */}
         {onProfiles && (
-          <IconButton
-            label={profileName === '' ? 'Profile' : profileName}
-            buttonRef={profileRef}
-            pressed={profilesOpen}
+          <button
+            ref={profileRef}
+            type="button"
+            className="bw-icon bw-profile"
+            title={profileName === '' ? 'Profile' : profileName}
+            aria-label={profileName === '' ? 'Profile' : profileName}
+            aria-pressed={profilesOpen}
+            data-on={profilesOpen || undefined}
             onClick={onProfiles}
           >
-            <circle cx="12" cy="8.5" r="3.5" />
-            <path d="M5.5 19.5a6.5 6.5 0 0 1 13 0" />
-          </IconButton>
+            <span className="bw-avatar" aria-hidden="true">
+              {profileInitial(profileName)}
+            </span>
+          </button>
         )}
 
         {/*
@@ -518,14 +549,6 @@ function IsolationToggle({
   )
 }
 
-function Glyph({ children }: { children: ReactNode }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {children}
-    </svg>
-  )
-}
-
 interface IconButtonProps {
   /**
    * One or two words: the accessible name, and what the hover bubble reads.
@@ -543,6 +566,16 @@ interface IconButtonProps {
   disabled?: boolean
   pressed?: boolean
   tone?: 'critical'
+  /**
+   * May come off the bar on a narrow panel, into the ⋯ menu.
+   *
+   * *"when it is smaller, then it becomes too small, the link bar. So I want
+   * more space for link bar."* Which buttons give way is a judgement and it is
+   * made here; *when* they give way is arithmetic and it is made in
+   * `BrowserWorkspace.css`; and the menu finds out by asking the bar, which is
+   * `toolbar-overflow.ts`. Nothing marked here ever simply disappears.
+   */
+  fold?: boolean
   children: ReactNode
 }
 
@@ -553,6 +586,7 @@ function IconButton({
   disabled,
   pressed,
   tone,
+  fold,
   children,
 }: IconButtonProps) {
   return (
@@ -565,6 +599,7 @@ function IconButton({
       aria-pressed={pressed}
       data-on={pressed || undefined}
       data-tone={tone}
+      data-fold={fold || undefined}
       disabled={disabled}
       onClick={onClick}
     >

@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   browseForAttachment,
   browseStart,
-  confinedRefusal,
+  bringInRefusal,
+  bringInside,
   pasteAttachment,
   picksFromDrop,
   readBoundary,
   readBrowse,
   readPaste,
   readPicks,
-  partialRefusal,
+  readBringIn,
   readableOn,
   resolveOutsideBridge,
   sessionBoundary,
@@ -35,6 +36,7 @@ function bridgeOf(overrides: Partial<AttachOutsideBridge>): AttachOutsideBridge 
     inspectAttachPaths: async () => null,
     pasteAttachment: async () => null,
     sessionAttachBoundary: async () => null,
+    bringAttachmentsIn: async () => null,
     pathForDroppedFile: () => '',
     ...overrides,
   }
@@ -173,33 +175,64 @@ describe('what a confined session may attach', () => {
     expect(refused.map((p) => p.path)).toEqual(['/Users/apple/Desktop/shot.png'])
   })
 
-  it('names the file that did not arrive, not just the rule', () => {
+  it('brings the ones it cannot read inside, rather than refusing them', async () => {
     /*
-     * Found by looking at the harness. A confined session picking two files —
-     * one readable, one not — showed a chip *and* the bare rule, and the chip
-     * that succeeded is itself marked `outside` because it is outside the
-     * project. Two boundaries, one word, and the obvious reading is that the
-     * sentence is complaining about the chip you can see.
+     * The regression this replaces. Dropping a photo from `~/Pictures` on the
+     * chat composer of a confined session used to produce a paragraph and no
+     * attachment, while the same photo on the terminal two inches away
+     * transferred and typed its path. *"any kind of media dropping from your PC
+     * to any session should smoothly work."*
      */
-    const reason = confinedRefusal(boundary.folder, boundary.projects)
-    const one = partialRefusal([{ path: '/Users/apple/Desktop/shot.png', isDirectory: false }], reason)
-    expect(one.startsWith('shot.png was not attached.')).toBe(true)
-    expect(one).toContain(reason)
+    const asked: unknown[] = []
+    const bridge = bridgeOf({
+      bringAttachmentsIn: async (sessionId, paths) => {
+        asked.push([sessionId, paths])
+        return { brought: [{ from: '/Users/apple/Desktop/shot.png', path: `${boundary.folder}/Terminal Deck/shot.png` }], refused: 0 }
+      },
+    })
+    const out = await bringInside(bridge, 'sess-1', [{ path: '/Users/apple/Desktop/shot.png', isDirectory: false }])
+    expect(asked).toEqual([['sess-1', ['/Users/apple/Desktop/shot.png']]])
+    expect(out.picks).toEqual([{ path: `${boundary.folder}/Terminal Deck/shot.png`, isDirectory: false }])
+    expect(out.refused).toBe(0)
+  })
 
-    const many = partialRefusal(
-      [
-        { path: '/a/one.png', isDirectory: false },
-        { path: '/a/two.png', isDirectory: false },
-        { path: '/a/three.png', isDirectory: false },
-      ],
-      reason,
-    )
-    // A count, not three filenames: three names wrap a notice line to three
-    // lines and stop being a sentence.
-    expect(many.startsWith('3 of them were not attached.')).toBe(true)
+  it('keeps the drop order and drops what did not come in', async () => {
+    // Three photos dragged together should make three chips in the order they
+    // were dragged, so the answer is re-ordered against the request rather than
+    // taken as it arrives.
+    const bridge = bridgeOf({
+      bringAttachmentsIn: async () => ({
+        brought: [
+          { from: '/a/three.png', path: '/g/three.png' },
+          { from: '/a/one.png', path: '/g/one.png' },
+        ],
+        refused: 1,
+      }),
+    })
+    const out = await bringInside(bridge, 'sess-1', [
+      { path: '/a/one.png', isDirectory: false },
+      { path: '/a/two.png', isDirectory: false },
+      { path: '/a/three.png', isDirectory: false },
+    ])
+    expect(out.picks.map((p) => p.path)).toEqual(['/g/one.png', '/g/three.png'])
+    expect(out.refused).toBe(1)
+  })
 
-    // Nothing refused, nothing added.
-    expect(partialRefusal([], reason)).toBe(reason)
+  it('answers a sentence rather than throwing when the channel is missing', async () => {
+    // A rejected promise inside a composer callback takes the whole box down
+    // through the error boundary.
+    const bridge = bridgeOf({
+      bringAttachmentsIn: async () => {
+        throw new Error('no such channel')
+      },
+    })
+    const out = await bringInside(bridge, 'sess-1', [{ path: '/a/one.png', isDirectory: false }])
+    expect(out).toEqual({ picks: [], refused: 1 })
+    expect(readBringIn(null)).toEqual({ brought: [], refused: 0 })
+    expect(readBringIn({ brought: [{ from: 1, path: '' }, { from: '/a', path: '/b' }], refused: 'x' })).toEqual({
+      brought: [{ from: '/a', path: '/b' }],
+      refused: 0,
+    })
   })
 
   it('opens the panel somewhere the session can read', () => {
@@ -213,24 +246,22 @@ describe('what a confined session may attach', () => {
 })
 
 describe('the words on screen', () => {
-  it('names the folder in the refusal, so the sentence is about this tab', () => {
-    // The last segment, not the whole path: the copilot's folder is five
-    // directories deep inside Application Support, and the full string wrapped
-    // to four lines inside a 336px popover.
-    expect(confinedRefusal('/Users/apple/granted')).toContain('inside granted')
-    expect(confinedRefusal('/Users/apple/granted')).not.toContain('/Users/apple')
-    // And degrades to something that is still a sentence when it does not know.
-    expect(confinedRefusal('')).toContain('its own folder')
+  it('says nothing at all when everything came in', () => {
+    // The paragraph that used to stand here — "<name> was not attached. This
+    // session is held inside <folder>, so it cannot read a file from anywhere
+    // else." — is gone, because the file now comes in. Silence is the success
+    // signal; the chip is already on screen.
+    expect(bringInRefusal(0)).toBe('')
+    expect(bringInRefusal(-1)).toBe('')
   })
 
-  it('does not tell a copilot session it cannot read the projects it can read', () => {
-    // A wrong explanation is a different failure from no explanation, and not
-    // an obviously smaller one. The copilot is confined to its own folder *and*
-    // granted read access to every project the person has added.
-    const plain = confinedRefusal('/Users/apple/copilot')
-    const copilot = confinedRefusal('/Users/apple/copilot', ['/Users/apple/Projects/thing'])
-    expect(plain).not.toContain('projects you have open')
-    expect(copilot).toContain('projects you have open')
+  it('is one clause when something genuinely could not be moved', () => {
+    // A folder, something over the size cap, a disk that would not take it.
+    // Rare, boring, and worth exactly one clause — never a count of filenames,
+    // which wrap a notice line to three lines and stop being a line.
+    expect(bringInRefusal(1)).toBe('One file did not come in.')
+    expect(bringInRefusal(3)).toBe('3 files did not come in.')
+    expect(bringInRefusal(3).split(' ')).toHaveLength(6)
   })
 })
 
@@ -338,8 +369,7 @@ describe('the calls themselves', () => {
  * exactly why it is checked here as well. The confined session is the one a
  * Windows user is most likely to meet — the copilot's own, and any session a
  * phone started — and with `insideRoot` answering no for every Windows path,
- * `splitByBoundary` refused the entire batch and `partialRefusal` then named the
- * casualty with a whole path where a filename goes.
+ * `splitByBoundary` refused the entire batch outright.
  */
 describe('a confined session on Windows', () => {
   const boundary = {
@@ -370,21 +400,24 @@ describe('a confined session on Windows', () => {
     expect(refused.map((p) => p.path)).toEqual(['C:\\Users\\asad\\Desktop\\shot.png'])
   })
 
-  it('names the folder and the file by their last segment, not by their whole path', () => {
-    /*
-     * Both sentences go through `basename`. With it splitting on `/` only, the
-     * hint under the composer read "This session is held inside
-     * C:\Users\asad\AppData\Roaming\terminaldeck\copilot, so it cannot read…"
-     * — the four-line paragraph the last-segment rule was introduced to avoid,
-     * in a popover 336px wide.
-     */
-    const reason = confinedRefusal(boundary.folder, boundary.projects)
-    expect(reason).toContain('held inside copilot and the projects you have open')
-    const one = partialRefusal(
-      [{ path: 'C:\\Users\\asad\\Desktop\\shot.png', isDirectory: false }],
-      reason,
-    )
-    expect(one.startsWith('shot.png was not attached.')).toBe(true)
+  it('brings a Windows path inside rather than refusing it', async () => {
+    // The Windows half of the same regression. `bringInside` sends paths and
+    // matches answers by string, so it has no separator logic to get wrong —
+    // which is precisely why it is checked on the platform whose paths every
+    // other function here used to mishandle.
+    const bridge = bridgeOf({
+      bringAttachmentsIn: async () => ({
+        brought: [
+          { from: 'C:\\Users\\asad\\Desktop\\shot.png', path: `${boundary.folder}\\Terminal Deck\\shot.png` },
+        ],
+        refused: 0,
+      }),
+    })
+    const out = await bringInside(bridge, 'sess-1', [
+      { path: 'C:\\Users\\asad\\Desktop\\shot.png', isDirectory: false },
+    ])
+    expect(out.picks.map((p) => p.path)).toEqual([`${boundary.folder}\\Terminal Deck\\shot.png`])
+    expect(readableOn(boundary, out.picks[0]!.path)).toBe(true)
   })
 
   it('opens the panel in the project when the session can read it', () => {

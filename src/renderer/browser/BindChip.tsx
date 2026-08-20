@@ -1,6 +1,8 @@
+import { useLayoutEffect, useRef, useState } from 'react'
 import { readMachineTabId } from '../shell/workspace-tabs'
 import { readSessions, resolveAgentSessions } from './agent-target'
 import { useSessionBinding, useWindowBinding, type BoundWindowView } from './binding-view'
+import { useWindowMachine } from './window-machine'
 
 /**
  * The mark that says a browser window belongs to a session — `B1`, `B2`.
@@ -54,6 +56,82 @@ export function bindKey(tab: { id: string }): { sessionId: string; machineId: st
 
 /** How many chips are drawn before the rest become a count. */
 const CHIPS_SHOWN = 2
+
+/**
+ * How many of those chips there is *room* for, on this row, right now.
+ *
+ * ## The defect
+ *
+ * Asad filmed `B1`/`B2` painting over a tab's ✕. That was answered with
+ * `overflow: hidden` on the tab's face, and answering it that way produced the
+ * next thing he would have filmed: the chips stopped overlapping and started
+ * being **sliced**. At ordinary window widths a tab read `Sess… B1 B` with two
+ * pixels of a second chip against the ✕, and on a session with eight windows
+ * the tab showed `B1` and nothing else — the `+7` that is the only mark saying
+ * windows are missing was itself the first thing clipped away. A row that is a
+ * fraction of the truth and does not say so is worse than one that overlaps.
+ *
+ * So a chip is either drawn whole or not drawn, and what it turns into is the
+ * count — which grows to cover whatever was dropped, so the number on screen is
+ * true at every width.
+ *
+ * ## Why it measures rather than guessing
+ *
+ * The room a chip has depends on the tab's width, the length of the session's
+ * name and the qualifier beside it, none of which this component knows. It
+ * reads `scrollWidth > clientWidth` — the browser's own answer to "is this
+ * clipped" — and drops one chip at a time until the answer is no.
+ *
+ * ## Why the parent's width is the reset key, and why this cannot oscillate
+ *
+ * Dropping a chip makes this box narrower, which lets the qualifier beside it
+ * grow back, which changes how much room this box has — a loop, if the loop
+ * were allowed to run both ways. It is not: within one width of the row, the
+ * count only ever goes **down**, so it settles in at most two extra frames. The
+ * only thing that puts the dropped chips back is the row itself changing size,
+ * and the row's width is set by the strip and by the window, neither of which
+ * this box can move. That is the whole reason the observer watches the *parent*
+ * rather than this element.
+ */
+function useChipFit(total: number, floor: number): {
+  ref: React.RefObject<HTMLSpanElement | null>
+  shown: number
+} {
+  const ref = useRef<HTMLSpanElement | null>(null)
+  // The row's width, as a version number. Bumped only when it actually changes,
+  // so a resize that does not move this row costs nothing.
+  const [gauge, setGauge] = useState(0)
+  const [fit, setFit] = useState({ gauge: 0, drop: 0 })
+  const drop = fit.gauge === gauge ? fit.drop : 0
+  const cap = Math.min(total, CHIPS_SHOWN)
+  const shown = Math.max(floor, cap - drop)
+
+  useLayoutEffect(() => {
+    const parent = ref.current?.parentElement
+    if (!parent || typeof ResizeObserver === 'undefined') return
+    let last = -1
+    const observer = new ResizeObserver(() => {
+      const width = parent.clientWidth
+      if (width === last) return
+      last = width
+      setGauge((n) => n + 1)
+    })
+    observer.observe(parent)
+    return () => observer.disconnect()
+  }, [])
+
+  // Deliberately without a dependency list: the question is about the pixels
+  // this render produced, and it has to be asked again after every one of them.
+  // It only ever writes state when something is clipped, so a settled row is a
+  // measurement and nothing else.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || shown <= floor) return
+    if (el.scrollWidth > el.clientWidth + 0.5) setFit({ gauge, drop: drop + 1 })
+  })
+
+  return { ref, shown }
+}
 
 /** What a window is called, using only what it has told us about itself. */
 function windowName(window: BoundWindowView): string {
@@ -109,13 +187,18 @@ interface SessionChipsProps {
 /** Every window attached to one session: `B1 B2 +3`, or nothing at all. */
 export function SessionBindChips({ sessionId, machineId = '', sessionName = null }: SessionChipsProps) {
   const binding = useSessionBinding(sessionId, machineId)
+  // A session with one window has nothing to fall back to: `+1` in place of
+  // `B1` is the same 20 pixels wide and says less, so the last chip stays even
+  // where it has to be tight. Every other case can hand its chips to the count.
+  const total = binding?.windows.length ?? 0
+  const { ref, shown: room } = useChipFit(total, total > 1 ? 0 : 1)
   if (!binding) return null
 
-  const shown = binding.windows.slice(0, CHIPS_SHOWN)
-  const rest = binding.windows.slice(CHIPS_SHOWN)
+  const shown = binding.windows.slice(0, room)
+  const rest = binding.windows.slice(room)
 
   return (
-    <span className="bind-chips">
+    <span className="bind-chips" ref={ref}>
       {shown.map((window) => (
         <Chip
           key={window.browserTabId}
@@ -214,15 +297,24 @@ const LINK =
  * ## Why the label is the slot and not a word
  *
  * `B1` when it is attached, because that is the name the agent was given and the
- * name he says out loud; the glyph alone when it is not. The tooltip carries the
- * verb — there is no room on this bar for a sentence, and none is wanted.
+ * name he says out loud; the glyph alone when it is not.
+ *
+ * ## And why the hover is one word
+ *
+ *   > *"when I hover, it should show the title, like shade, inspect, record.
+ *   > Instead of this line, show only the name … but not these full lines."*
+ *
+ * Said of the bar this button sits on, and every other control on it obeys:
+ * `Inspect`, `Record`, `Shot`, `Draw`, `Size`, `Devtools`, `More`. This one
+ * answered with five words and 191 pixels — four times the widest label beside
+ * it, wide enough to cover the tab title above — which made the newest glyph on
+ * the bar the one most likely to be hovered and the only one that replied with a
+ * sentence. The verb, the slot and the offer to detach are all in the menu it
+ * opens, which is a place a sentence can be read rather than glimpsed.
  */
 export function ConnectSessionButton({ browserTabId }: { browserTabId: string }) {
   const found = useWindowBinding(browserTabId)
   const slot = found ? `B${found.window.n}` : ''
-  const tooltip = slot
-    ? `${slot} — attached to a session. Choose another, or detach.`
-    : 'Attach this window to a session'
 
   return (
     <button
@@ -230,8 +322,11 @@ export function ConnectSessionButton({ browserTabId }: { browserTabId: string })
       className="bind-button"
       data-attached={slot !== '' || undefined}
       data-bind={found ? (found.session.colour % 4) + 1 : undefined}
-      title={tooltip}
-      aria-label={tooltip}
+      title="Session"
+      /* Not the hover text. `Tooltips.tsx` draws the `title`, and a screen
+         reader has neither the glyph nor the `B1` beside it to go on — so the
+         name it computes says which of the two states this is. */
+      aria-label={slot === '' ? 'Attach to a session' : `Attached to ${slot}`}
       onClick={() => {
         const deck = (window as unknown as { deck?: Record<string, unknown> }).deck
         const api = resolveAgentSessions(deck)
@@ -287,5 +382,87 @@ export function ConnectSessionButton({ browserTabId }: { browserTabId: string })
         <path d={LINK} />
       </svg>
     </button>
+  )
+}
+
+
+/* ------------------------------------------------------- which computer -- */
+
+/**
+ * The mark a browser window wears when its page is **not** on this computer.
+ *
+ * ## What he asked for, and why this is where it ended up
+ *
+ * > *"if I open any browser here and if I connect it to, let's say, desktop, now
+ * > this is in desktop, it should come under this table, under the desktop
+ * > sessions. So all the desktop browser, including session, should be at one
+ * > place."*
+ *
+ * He asked for a grouping in the sidebar, and later in the same recording he
+ * emptied the sidebar of browser windows: *"Browser windows will not be on the
+ * side bar at all. They will be always only on the top bar."* Both instructions
+ * are his, both are load-bearing, and there is exactly one arrangement that
+ * honours the pair — the top bar has to carry the machine, because after the
+ * second instruction it is the only surface a browser window appears on.
+ *
+ * Without this, it appeared on none. The main process was told which machine
+ * every window is on and grouped them under machine headings in its two native
+ * menus; the renderer was never told, so the strip drew a page running on his PC
+ * identically to one running here and the only way to find out was to open a
+ * menu. *"Now I don't know if it is actually there or here."*
+ *
+ * ## A glyph, and the name on hover — not the name on the tab
+ *
+ * A strip tab has 22 characters for a title (`STRIP_LABEL_BUDGET`) and is
+ * already shedding chips into a count to fit what it has. Spending eight of
+ * those characters on `office-pc` would cost the thing that actually tells two
+ * tabs apart. So the tab says *not here* in one glyph, and *where* in the hover
+ * — which is the same trade the strip already makes for a remote session, whose
+ * machine lives only in `tabTooltip`.
+ *
+ * ## Why a session's pill wears no such mark and this one does
+ *
+ * `WorkspaceTabStrip` decided deliberately that a remote session's pill looks
+ * exactly like a local one, because the complaint it was answering was that
+ * remote work looked like a foreign kind of thing. That still holds — and a
+ * session has somewhere else to say it: the rail groups sessions under their
+ * machine, with a heading. A browser window has nowhere else at all. The
+ * asymmetry is not two rules; it is one rule (*the machine is stated exactly
+ * once, somewhere you are already looking*) landing in different places for two
+ * things that are listed in different places.
+ *
+ * ## Nothing at all for a window on this computer
+ *
+ * `useWindowMachine` answers null for it, and null draws nothing — the same
+ * bargain as every other mark in this file. A glyph on every tab saying "here"
+ * is the placeholder that puts a mark on every row to report that nothing has
+ * happened, which is what the refused browser status dot was.
+ */
+export function WindowMachineMark({ browserTabId }: { browserTabId: string }) {
+  const machine = useWindowMachine(browserTabId)
+  if (!machine) return null
+  const name = machine.name || machine.id
+  return (
+    <span className="tab-machine-mark" title={name} aria-label={`on ${name}`}>
+      {/*
+        A display, and the same one the machine picker and the sidebar's machine
+        rows draw. One idea, one shape — a second glyph for "a computer that is
+        not this one" would be a second thing to learn about the same fact.
+      */}
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <rect x="3" y="4" width="18" height="12" rx="2" />
+        <path d="M9 20h6M12 16v4" />
+      </svg>
+    </span>
   )
 }

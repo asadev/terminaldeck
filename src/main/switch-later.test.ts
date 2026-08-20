@@ -324,6 +324,50 @@ describe('the line holds nothing he did not type', () => {
   })
 })
 
+/**
+ * The terminal's own reports, which are not keystrokes.
+ *
+ * Claude Code turns focus reporting on (`?1004h`, measured by spawning it in a
+ * pty and reading the raw bytes), so `ESC [ I` and `ESC [ O` arrive up the same
+ * pipe as his typing every time focus enters or leaves the terminal. Arming a
+ * deferred switch *requires* leaving the terminal — the account menu is a
+ * click away — so before this, every armed switch lost its certainty before he
+ * had typed a character, and the message he pressed Enter on was placed in the
+ * new prompt unsent.
+ */
+describe('focus and mouse reports pass straight through', () => {
+  const focusIn = `${ESC}[I`
+  const focusOut = `${ESC}[O`
+
+  it('keeps the line exact across a focus report', () => {
+    const state = compose(EMPTY_LINE, `${focusOut}${focusIn}what is the secret word`)
+    expect(state.line).toBe('what is the secret word')
+    expect(state.exact).toBe(true)
+  })
+
+  it('keeps it exact when focus changes mid-sentence', () => {
+    const state = compose(EMPTY_LINE, `what is ${focusIn}the secret word`)
+    expect(state.line).toBe('what is the secret word')
+    expect(state.exact).toBe(true)
+  })
+
+  it('keeps it exact across an SGR mouse report', () => {
+    // No agent here asks for mouse tracking today. One that did would put the
+    // same fault back, and the report is the same kind of thing: the terminal
+    // telling the program something, which cannot have changed his line.
+    const state = compose(EMPTY_LINE, `run ${ESC}[<0;40;12M${ESC}[<0;40;12mthe tests`)
+    expect(state.line).toBe('run the tests')
+    expect(state.exact).toBe(true)
+  })
+
+  it('still gives up certainty for a real cursor move it cannot model', () => {
+    // The guard rail. Up-arrow recalls history somewhere this process cannot
+    // see, and that must still leave the line offered rather than sent.
+    const state = compose(EMPTY_LINE, `hello${ESC}[A`)
+    expect(state.exact).toBe(false)
+  })
+})
+
 describe('submitAt', () => {
   it('finds the first Enter and nothing else', () => {
     expect(submitAt('hello')).toBe(-1)

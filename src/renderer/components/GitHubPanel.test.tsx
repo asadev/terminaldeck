@@ -447,8 +447,11 @@ describe('ConnectionBar', () => {
    */
   it('does not report an unreported scope list as an empty one', () => {
     const html = bar({ ...CONNECTED, scopes: [], scopesReported: false })
-    expect(html).toContain('GitHub App sign-in')
     expect(html).not.toContain('gh-conn-scopes-label')
+    // And says nothing at all about the absence. The two sentences that used to
+    // explain why the row was missing were the standing prose he has banned.
+    expect(html).not.toContain('GitHub App sign-in')
+    expect(html).not.toContain('nothing')
   })
 
   /**
