@@ -12,11 +12,6 @@ import {
   statedTotal,
   type CoverageCheck,
 } from '../browser-asset-coverage'
-import {
-  emptyReasonFor,
-  fetchAssets,
-  type AssetFetchResult,
-} from '../browser-asset-fetch'
 import { openLedger, type LedgerMode, type LedgerStore } from '../browser-asset-ledger'
 import {
   chooseRendition,
@@ -24,16 +19,15 @@ import {
   type RenditionProbe,
 } from '../browser-asset-rendition'
 import { readBlocks } from '../browser-block-watch'
-import type { AssetOpen } from '../browser-asset-session'
 import { blockShotDir, coveragePath, ledgerPath, runDir } from '../browser-scrape-paths'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
-import { withEmptiness } from './empty-result'
+import { emptySummary, withEmptiness } from './empty-result'
 import { Refused, type Tier } from './surface'
 
 /**
- * Five capabilities a scraping run cannot do without, and no crawler.
+ * Four capabilities a scraping run cannot do without, and no crawler.
  *
- * Asad drew the line himself, and it is the reason this file is five tools
+ * Asad drew the line himself, and it is the reason this file is four tools
  * rather than forty:
  *
  * > *"Don't build a full scraping framework inside a terminal app. The browser
@@ -58,13 +52,28 @@ import { Refused, type Tier } from './surface'
  *    didn't capture"* that a tool can offer. The capturing is not a tool and
  *    must not be: by the time an agent has decided it was blocked, the challenge
  *    has rotated. See `browser-block-watch.ts`.
- *  - **`assets.fetch`** — the one that puts a file on the disk, and the
- *    composition of the first two rather than a fifth thing beside them: the
- *    ledger decides, the rendition rules choose, the bytes land exactly as the
- *    server sent them and the record says which URL produced them. Its absence
- *    is what made the other four advice rather than a pipeline — nothing in this
- *    app fetched an asset, so a run still had to do the one step every loss
- *    happened in, by itself. See `browser-asset-fetch.ts`.
+ *
+ * ## None of the four can answer nothing quietly
+ *
+ * Every result here carries `empty` and `emptyReason` from `empty-result.ts` —
+ * the shape `browser.network` already uses, not a second one — because three of
+ * the four have an answer that is indistinguishable from success while meaning
+ * the opposite:
+ *
+ *  - `assets.ledger` with `op: verify` over a ledger nobody wrote to answers
+ *    `{ total: 0, ok: 0, missing: [], corrupt: [] }`. That is the literal shape
+ *    of a clean run, and it is what *"did this run work?"* returns after a run
+ *    that recorded nothing at all.
+ *  - `assets.coverage` answers `unknown` when no total could be read off the
+ *    page. Its own description already says *"`unknown` is not success"*; now
+ *    the result says it in a field rather than only in prose a caller may not
+ *    have been shown.
+ *  - `assets.rendition` with nothing reachable hands back the original URL
+ *    unverified, by design — but a caller that reads `url` and fetches it must
+ *    be able to tell that from a probed, confirmed upgrade.
+ *  - `assets.blocks` with an empty folder means either that nothing has been
+ *    blocked or that nothing was watching. Those are opposite conclusions and
+ *    an empty array is the same in both.
  *
  * ## Why they come through `extraTools`
  *
@@ -81,7 +90,7 @@ import { Refused, type Tier } from './surface'
  * open pages and cannot tell whether it captured all of them is the dead half of
  * the feature.
  *
- * A **paired device is refused at all five**, which is a narrower rule than it
+ * A **paired device is refused at all four**, which is a narrower rule than it
  * looks. These tools read files by path, write into this app's own folders and
  * make requests out of this machine's browser session; the device that would be
  * calling them is on the far side of a relay and has none of that context. A
@@ -161,18 +170,6 @@ function scrubUrlArgs(args: Record<string, unknown>): Record<string, unknown> {
     const value = out[key]
     if (typeof value === 'string') out[key] = scrubUrl(value)
   }
-  /*
-   * And the list, which is where `assets.fetch` keeps its URLs.
-   *
-   * A redactor that handled every singular key and not the plural one would
-   * write sixty thousand presigned URLs into `actions.jsonl` — each of them a
-   * bearer token with a hostname on the front — while looking, in the diff,
-   * exactly like the redactor that was already there.
-   */
-  const list = out.urls
-  if (Array.isArray(list)) {
-    out.urls = list.map((entry) => (typeof entry === 'string' ? scrubUrl(entry) : entry))
-  }
   return out
 }
 
@@ -189,21 +186,6 @@ export interface AssetToolsDeps {
    * matters, which is what happens when an upgraded URL does *not* answer.
    */
   probe(url: string, options: { profileId?: string }): Promise<RenditionProbe | null>
-  /**
-   * The thing that makes a request, bound to one profile's cookie jar.
-   *
-   * Injected for the same reason `probe` is — this module is exercised against a
-   * real HTTP server with no Electron under it — and it is the *same jar* the
-   * probe uses, which is not a coincidence to be tidied away:
-   * `browser-asset-session.ts` is the single place that answers "which session",
-   * precisely so a `HEAD` that says `200` and a `GET` that says `403` cannot
-   * happen.
-   *
-   * Throws for an id that is not a profile, rather than answering with a
-   * cookie-less request. The prechecks below call it for that reason alone, so
-   * the refusal arrives before anything runs.
-   */
-  open(profileId: string | null): AssetOpen
   now?(): number
 }
 
@@ -315,53 +297,6 @@ const COVERAGE_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-const FETCH_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    runId: { type: 'string', description: 'Names this run\u2019s ledger and folder. The same id resumes it.' },
-    dir: {
-      type: 'string',
-      description: 'An absolute folder to write the files into. It is made if it is not there.',
-    },
-    urls: {
-      type: 'array',
-      items: { type: 'string' },
-      description:
-        'The asset URLs as the page gave them, best first. Each is fetched in turn; the orchestration ' +
-        'of how many batches to run belongs outside this app.',
-    },
-    rules: {
-      type: 'array',
-      items: RULE_SCHEMA,
-      description:
-        'Rewrites to try for a bigger copy. The upgraded URL is fetched first and the original is ' +
-        'always the last candidate and is always tried, so a bad rule costs quality, never the asset.',
-    },
-    mode: {
-      type: 'string',
-      enum: ['resume', 'refetch'],
-      description:
-        'resume skips an asset only when the file is on disk, the right length, and hashes to the ' +
-        'digest recorded for it. refetch does not read the ledger at all. Default resume.',
-    },
-    profileId: {
-      type: 'string',
-      description:
-        'Fetch from this browser profile\u2019s cookie jar \u2014 the same jar the page and the probe use. ' +
-        'Needed for anything behind a login or a signed cookie. Omit for a public CDN.',
-    },
-    minBytes: { type: 'number', description: 'Refuse anything smaller than this many bytes.' },
-    requireLarger: {
-      type: 'boolean',
-      description:
-        'Probe the original too and refuse an upgrade that is not larger. Default true. Turning it ' +
-        'off is how a server quietly re-serving the small copy gets recorded as an upgrade.',
-    },
-  },
-  required: ['runId', 'dir', 'urls'],
-  additionalProperties: false,
-}
-
 const BLOCKS_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -377,7 +312,7 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
   const now = deps.now ?? Date.now
 
   /**
-   * Refused for a paired device, at all five. See the header.
+   * Refused for a paired device, at all four. See the header.
    *
    * Not gated on `attended`, and that is the one difference from the browser
    * verbs. Driving a page needs somebody there because it moves a window on
@@ -390,33 +325,6 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
         'not-granted',
         `${tool} works on files and folders on this machine, so it only runs for something on it. ` +
           'A paired device cannot call it.',
-      )
-    }
-  }
-
-  /**
-   * Refuse a profile id that is not one of ours, before anything runs.
-   *
-   * By asking the very thing that would make the request. `deps.open` throws for
-   * an id that names no partition rather than answering with a cookie-less
-   * client — and a cookie-less request is the one wrong answer here that
-   * *succeeds*: the run fetches the logged-out copy of every asset, writes them
-   * all to disk, and reports success. A precheck that re-implemented the rule
-   * would be a second answer to the question `browser-asset-session.ts` exists
-   * to answer once.
-   *
-   * Both `assets.rendition` and `assets.fetch` call it, because they name the
-   * same jar and a probe that used a different one from the fetch is the
-   * `HEAD 200` / `GET 403` run nobody can diagnose.
-   */
-  const mayFetchAs = (args: Record<string, unknown>): void => {
-    const profileId = optStr(args, 'profileId')
-    try {
-      deps.open(profileId)
-    } catch (error) {
-      throw new Refused(
-        'not-permitted',
-        error instanceof Error ? error.message : 'that profile could not be used',
       )
     }
   }
@@ -453,14 +361,11 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       'instead of a file, or comes back no bigger than the original is refused, and the original URL ' +
       'is always the last candidate and is always tried. A bad rewrite therefore costs you quality, ' +
       'never the asset. `attempts` says what was tried and why each one was refused.',
-    index:
-      'Given the URL a page printed, probe rewrites to find the biggest copy of that image or file that really exists.',
     inputSchema: RENDITION_SCHEMA,
     redactArgs: scrubUrlArgs,
     precheck: (args, context) => {
       mayUse(context, 'assets.rendition')
       httpUrl(args, 'url')
-      mayFetchAs(args)
       try {
         readRenditionRules(args.rules)
       } catch (error) {
@@ -487,13 +392,32 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
         },
       })
       return {
-        value: choice,
+        value: withEmptiness(choice, {
+          /*
+           * Reachability, not the URL, is what this call produced.
+           *
+           * `chooseRendition` never answers "nothing" — the worst case is the
+           * original URL with `reachable: false`, which is deliberate and is
+           * still the right thing to hand back, because a `HEAD` that failed is
+           * not proof the asset is missing. But a caller cannot be left to
+           * notice the difference between *that* URL and one that was probed and
+           * confirmed by reading a boolean four fields down, so it is `empty`
+           * too: nothing here was verified.
+           */
+          produced: choice.reachable ? 1 : 0,
+          whenNone:
+            'no candidate answered — not the rewrites and not the original, so nothing about this URL ' +
+            'has been confirmed. It is still returned and still worth fetching. The host may refuse ' +
+            'HEAD requests, or the asset may be behind a login, in which case pass profileId so the ' +
+            'probe uses that jar. See attempts for what each candidate said.',
+        }),
         summary: {
           upgraded: choice.upgraded,
           fellBack: choice.fellBack,
           reachable: choice.reachable,
           ruleId: choice.ruleId,
           tried: choice.attempts.length,
+          ...emptySummary(choice.reachable ? 1 : 0),
         },
       }
     },
@@ -512,8 +436,6 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       '`record` hashes the file itself; it never takes a digest from you. `mode: refetch` does not ' +
       'read the ledger at all. `verify` checks every recorded file and is what "did this run work?" ' +
       'means.',
-    index:
-      'Ask whether an asset is already downloaded, intact and the right length, and record the ones that are. Resume or verify a download run.',
     inputSchema: LEDGER_SCHEMA,
     redactArgs: scrubUrlArgs,
     /*
@@ -567,11 +489,18 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
           expectDigest === null ? {} : { expectDigest },
         )
         return {
-          value: { ...decision, mode, ledger: store.path },
+          value: withEmptiness(
+            { ...decision, mode, ledger: store.path },
+            // A decision is always produced, and both of its values are a
+            // finding: `skip` is the answer that cost him 48,473 assets, so it
+            // is emphatically not "nothing happened". It carries its own reason.
+            { produced: 1, whenNone: '' },
+          ),
           summary: {
             action: decision.action,
             reason: decision.reason,
             ledgerWasWrong: decision.ledgerWasWrong,
+            ...emptySummary(1),
           },
         }
       }
@@ -617,28 +546,75 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
           path,
         })
         return {
-          value: { entry, ledger: store.path, guarantee: NO_TRANSFORM_GUARANTEE },
-          summary: { url: scrubUrl(url), bytes, digest },
+          value: withEmptiness(
+            { entry, ledger: store.path, guarantee: NO_TRANSFORM_GUARANTEE },
+            // The file was stat'd and hashed above or this line was not reached.
+            { produced: 1, whenNone: '' },
+          ),
+          summary: { url: scrubUrl(url), bytes, digest, ...emptySummary(1) },
         }
       }
 
       if (op === 'verify') {
         const verdict = await store.verify()
         return {
-          value: { ...verdict, ledger: store.path },
+          value: withEmptiness(
+            { ...verdict, ledger: store.path },
+            {
+              /*
+               * The one that matters most in this file.
+               *
+               * `verify` is what *"did this run work?"* means, and over a ledger
+               * with no entries it answers `total: 0, ok: 0, missing: [],
+               * corrupt: []` — which is byte-for-byte the shape of a run where
+               * everything was fine. Three scripts reported success while doing
+               * nothing this week; this is where the fourth would have.
+               */
+              produced: verdict.total,
+              whenNone:
+                'this ledger has no entries, so nothing was checked and this is not a statement about ' +
+                `any file. If assets have been downloaded for run ${runId}, they were never recorded — ` +
+                'call this tool with op record after each fetch, or the resume will re-download ' +
+                'everything and the verify will go on saying nothing.',
+            },
+          ),
           summary: {
             total: verdict.total,
             ok: verdict.ok,
             missing: verdict.missing.length,
             corrupt: verdict.corrupt.length,
+            ...emptySummary(verdict.total),
           },
         }
       }
 
       const tally = store.tally()
+      /*
+       * Everything the ledger knows about, read or written. `known` is what was
+       * on disk at open and `recorded` is what this process has added since, so
+       * a ledger that has just written its first entry is not empty even though
+       * it was when it was opened.
+       */
+      const holds = tally.known + tally.recorded
       return {
-        value: { ...tally, mode, line: store.summary(), ledger: store.path, folder: runDir(deps.userData(), runId) },
-        summary: { ...tally, mode },
+        value: withEmptiness(
+          {
+            ...tally,
+            mode,
+            line: store.summary(),
+            ledger: store.path,
+            folder: runDir(deps.userData(), runId),
+          },
+          {
+            produced: holds,
+            whenNone:
+              `nothing has ever been recorded into the ${runId} ledger, so these counts are not a ` +
+              'picture of a run — they are the picture of a ledger nobody wrote to. A run that is ' +
+              'fetching assets and not calling op record gets exactly this, and will re-download all ' +
+              'of them next time.',
+          },
+        ),
+        summary: { ...tally, mode, ...emptySummary(holds) },
       }
     },
   }
@@ -654,8 +630,6 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       'run so it can be read at the end. `unknown` — nothing on the page stated a total — is not ' +
       'success: it means this page cannot be called complete. Give `pattern` whenever you can; ' +
       'without one only generic shapes are tried and two that disagree deliberately produce no answer.',
-    index:
-      'Compare how many items you captured against the total the page itself states, and record complete, short or unknown.',
     inputSchema: COVERAGE_SCHEMA,
     redactArgs: scrubUrlArgs,
     precheck: (args, context) => {
@@ -693,13 +667,30 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
         const checks = readCoverage(path)
         const summary = coverageSummary(checks)
         return {
-          value: { ...summary, checks, log: path },
+          value: withEmptiness(
+            { ...summary, checks, log: path },
+            {
+              produced: checks.length,
+              /*
+               * `coverageSummary` already answers `ok: false` with this sentence
+               * for an empty run, which is the right verdict and the wrong place
+               * to leave it alone: `ok` is one boolean among five counters that
+               * are all zero, and zero shorts reads like good news.
+               */
+              whenNone:
+                `no coverage check was made in run ${runId}, so nothing here says it captured ` +
+                'everything it should have. Call this tool with op check, the page text and how many ' +
+                'items you got, once per page — a run with no checks is how 7% of a dataset shipped ' +
+                'as a complete one.',
+            },
+          ),
           summary: {
             ok: summary.ok,
             short: summary.short,
             unknown: summary.unknown,
             over: summary.over,
             complete: summary.complete,
+            ...emptySummary(checks.length),
           },
         }
       }
@@ -736,170 +727,38 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
         now: now(),
       })
       const written = recordCoverage(path, check)
+      /*
+       * The comparison is the product, and there is no comparison without a
+       * stated total. `captured` came from the caller; on its own it is a number
+       * this tool was told, not a number it checked.
+       */
+      const compared = check.stated === null ? 0 : 1
       return {
-        value: {
-          ...check,
-          statedFrom: given !== null ? 'given' : read === null ? 'nothing' : 'text',
-          reading: read,
-          recorded: written,
-          log: path,
-        },
+        value: withEmptiness(
+          {
+            ...check,
+            statedFrom: given !== null ? 'given' : read === null ? 'nothing' : 'text',
+            reading: read,
+            recorded: written,
+            log: path,
+          },
+          {
+            produced: compared,
+            whenNone:
+              'nothing on this page stated a total, so there was nothing to compare against and this ' +
+              'page cannot be called complete — the verdict is unknown, which is not a pass. Give ' +
+              'pattern, a regular expression whose first group is the total, or stated when you ' +
+              'already know it from somewhere the page does not print.',
+          },
+        ),
         summary: {
           verdict: check.verdict,
           stated: check.stated,
           captured: check.captured,
           missing: check.missing,
           recorded: written,
+          ...emptySummary(compared),
         },
-      }
-    },
-  }
-
-  /**
-   * How many URLs one call may carry.
-   *
-   * A cap rather than "as many as you like", because the result carries a row
-   * per asset and a caller that handed this sixty thousand would get back a
-   * result nothing can read and a call that runs for an hour with no way to see
-   * inside it. Batches are the unit; *"the orchestration can live outside"*.
-   */
-  const MAX_FETCH_URLS = 200
-
-  const readUrlList = (args: Record<string, unknown>): string[] => {
-    const raw = args.urls
-    if (!Array.isArray(raw)) throw new Refused('not-permitted', 'urls must be a list of addresses')
-    if (raw.length === 0) {
-      throw new Refused('not-permitted', 'urls is empty, so there is nothing to fetch')
-    }
-    if (raw.length > MAX_FETCH_URLS) {
-      throw new Refused(
-        'not-permitted',
-        `that is more than ${MAX_FETCH_URLS} urls in one call — split it into batches, which is what ` +
-          'the run id is for',
-      )
-    }
-    const out: string[] = []
-    for (const entry of raw) {
-      if (typeof entry !== 'string' || !/^https?:\/\//i.test(entry)) {
-        throw new Refused('not-permitted', 'every url must be an http or https address')
-      }
-      out.push(entry)
-    }
-    return out
-  }
-
-  const fetchTool: ToolSpec = {
-    id: 'assets.fetch',
-    wire: 'assets_fetch',
-    tier: 'act',
-    title: 'Fetch assets to disk, byte for byte',
-    description:
-      'Downloads the assets you name into a folder, through the browser profile you name, so the ' +
-      'cookies and the clearance are the ones this browser already has. The bytes on disk are exactly ' +
-      'the bytes the server sent — nothing rewrites them, a body shorter than the length promised is ' +
-      'thrown away, and no partial download is left under a real name. A rewrite rule is tried first ' +
-      'and the original is always the last candidate and is always tried, so a bad rule costs quality ' +
-      'and never the asset; the row says which URL produced the bytes. The ledger skips on the digest ' +
-      'of the file on disk, never on the URL alone. Every asset comes back fetched, fell-back, ' +
-      'skipped or failed, with a reason.',
-    inputSchema: FETCH_SCHEMA,
-    redactArgs: scrubUrlArgs,
-    precheck: (args, context) => {
-      mayUse(context, 'assets.fetch')
-      str(args, 'runId')
-      const dir = str(args, 'dir')
-      if (!isAbsolute(dir)) {
-        throw new Refused(
-          'not-permitted',
-          'dir must be absolute. A relative one would be resolved against a working directory nobody ' +
-            'chose, and sixty thousand files would land somewhere nobody could find them.',
-        )
-      }
-      readUrlList(args)
-      const mode = optStr(args, 'mode')
-      if (mode !== null && mode !== 'resume' && mode !== 'refetch') {
-        throw new Refused('not-permitted', 'mode must be resume or refetch')
-      }
-      try {
-        readRenditionRules(args.rules)
-      } catch (error) {
-        throw new Refused(
-          'not-permitted',
-          error instanceof Error ? error.message : 'those rules could not be read',
-        )
-      }
-      mayFetchAs(args)
-    },
-    summary: (args) => {
-      const urls = Array.isArray(args.urls) ? args.urls.length : 0
-      const mode = optStr(args, 'mode') ?? 'resume'
-      return `Fetch ${urls} asset${urls === 1 ? '' : 's'} into ${optStr(args, 'dir') ?? '?'} (${mode})`
-    },
-    run: async (args): Promise<ToolOutput> => {
-      const runId = str(args, 'runId')
-      const dir = str(args, 'dir')
-      const urls = readUrlList(args)
-      const rules = readRenditionRules(args.rules)
-      const mode: LedgerMode = optStr(args, 'mode') === 'refetch' ? 'refetch' : 'resume'
-      const profileId = optStr(args, 'profileId')
-      const minBytes = optNum(args, 'minBytes')
-      const store = ledgerFor(runId, mode)
-
-      const batch = await fetchAssets({
-        urls,
-        dir,
-        rules,
-        // The same jar for the probe and for the fetch. See `deps.open`.
-        probe: (candidate) => deps.probe(candidate, profileId === null ? {} : { profileId }),
-        open: deps.open(profileId),
-        ledger: store,
-        options: {
-          ...(minBytes === null ? {} : { minBytes: Math.max(0, Math.trunc(minBytes)) }),
-          ...(args.requireLarger === undefined ? {} : { requireLarger: args.requireLarger === true }),
-        },
-      })
-
-      /*
-       * `empty` and `emptyReason`, from `empty-result.ts` rather than a second
-       * shape invented here.
-       *
-       * `produced` is the number of files written, which is what this call is
-       * *for*: a batch where every asset was already on disk and a batch where
-       * every request failed are both `empty: true`, and the reason is what
-       * separates them — one is a finished resume, the other is a run that got
-       * nothing and must not be read as finished. `emptyReasonFor` writes that
-       * sentence, because only the tally knows which it was.
-       */
-      return {
-        value: withEmptiness(
-          {
-            runId,
-            mode,
-            dir: batch.dir,
-            ledger: store.path,
-            folder: runDir(deps.userData(), runId),
-            guarantee: batch.guarantee,
-            line: batch.line,
-            tally: batch.tally,
-            results: batch.results.map((result: AssetFetchResult) => ({
-              url: result.url,
-              outcome: result.outcome,
-              fetchedUrl: result.fetchedUrl,
-              ruleId: result.ruleId,
-              path: result.path,
-              bytes: result.bytes,
-              digest: result.digest,
-              reason: result.reason,
-              line: result.line,
-              ledgerWasWrong: result.ledgerWasWrong,
-              attempts: result.attempts,
-              probed: result.probed,
-            })),
-          },
-          { produced: batch.tally.fetched, whenNone: emptyReasonFor(batch.tally) },
-        ),
-        // Counts only. The log is an audit trail, not a second copy of the run.
-        summary: { ...batch.tally, mode, dir },
       }
     },
   }
@@ -914,8 +773,6 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       'challenge, a navigation that ended somewhere unexpected — because by the time anything could ' +
       'be asked to take that picture the page has changed. This lists what it caught: the address, ' +
       'the status, which signal fired, and the path to the screenshot and to the evidence beside it.',
-    index:
-      'The pages that refused this browser — a 403, a 429, a challenge — with the screenshot taken at the moment it happened.',
     inputSchema: BLOCKS_SCHEMA,
     precheck: (_args, context) => mayUse(context, 'assets.blocks'),
     summary: () => 'List the block pages the browser photographed',
@@ -924,31 +781,55 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       const since = optNum(args, 'since')
       const limitRaw = optNum(args, 'limit')
       const limit = limitRaw === null ? 20 : Math.min(200, Math.max(1, Math.trunc(limitRaw)))
-      const all = readBlocks(dir)
+      const caught = readBlocks(dir)
+      const all = caught
         .filter((shot) => since === null || shot.at >= since)
         .sort((left, right) => right.at - left.at)
       const shots = all.slice(0, limit)
+      /*
+       * Two opposite readings of the same empty array, and the caller has to be
+       * handed both. "Nothing has blocked us" is the good one. "Nothing was
+       * watching" is the one that ends with a run whose failures were never
+       * photographed — and by then the challenge that caused them has rotated
+       * and cannot be photographed at all.
+       *
+       * Composed here, not inside the call below, so `since` narrowing an
+       * otherwise-full folder to nothing says so. `caught` is the read that
+       * already happened; this branch adds no second walk of the directory.
+       */
+      const foundNothing =
+        since === null
+          ? 'no page has been photographed refusing us. Either nothing has been blocked, or nothing ' +
+            'has been driven through this browser since the app started — an empty folder does not ' +
+            'tell the two apart.'
+          : `no page has been photographed refusing us since ${new Date(since).toISOString()}. ` +
+            (caught.length > 0
+              ? `There are ${caught.length} older ones: drop since to see them.`
+              : 'There are none at all in this folder.')
       return {
-        value: {
-          folder: dir,
-          total: all.length,
-          shots: shots.map((shot) => ({
-            at: shot.at,
-            url: scrubUrl(shot.evidence.finalUrl || shot.evidence.requestedUrl),
-            httpStatus: shot.evidence.httpStatus,
-            title: shot.evidence.title,
-            signals: shot.verdict.signals,
-            screenshot: shot.path,
-            evidence: shot.sidecar,
-            note: shot.note,
-          })),
-        },
-        summary: { total: all.length, listed: shots.length },
+        value: withEmptiness(
+          {
+            folder: dir,
+            total: all.length,
+            shots: shots.map((shot) => ({
+              at: shot.at,
+              url: scrubUrl(shot.evidence.finalUrl || shot.evidence.requestedUrl),
+              httpStatus: shot.evidence.httpStatus,
+              title: shot.evidence.title,
+              signals: shot.verdict.signals,
+              screenshot: shot.path,
+              evidence: shot.sidecar,
+              note: shot.note,
+            })),
+          },
+          { produced: all.length, whenNone: foundNothing },
+        ),
+        summary: { total: all.length, listed: shots.length, ...emptySummary(all.length) },
       }
     },
   }
 
-  return [renditionTool, ledgerTool, fetchTool, coverageTool, blocksTool]
+  return [renditionTool, ledgerTool, coverageTool, blocksTool]
 }
 
 export { ASSET_TOOL_NAMES } from './asset-tool-names'
