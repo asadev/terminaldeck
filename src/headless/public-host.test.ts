@@ -501,6 +501,24 @@ describe('what a public host offers', () => {
        * that stops it being advertised.
        */
       CAPABILITY.chat,
+      /*
+       * `windows` is withheld, and on this box it is the least defensible one to
+       * get wrong.
+       *
+       * It lets a session on one machine drive a browser window in the app on
+       * another — read the page, click it, type into it. On a demo box handed to
+       * a stranger for an App Store review, the window it would reach is the
+       * *owner's*, carrying the owner's logins, and the guest-door rule in
+       * `window-owner.ts` is the only thing standing between the two. That rule
+       * is right and this list is not a second copy of it: this is the decision
+       * that the demo host never enters that conversation at all.
+       *
+       * Twice over, like `copilot` and `web`: the demo assembly wires no window
+       * ask desk, and `server.ts` reads this capability off that object rather
+       * than off a constant, so a demo host could not advertise it even if this
+       * list were wrong.
+       */
+      CAPABILITY.windows,
     ])
   })
 })

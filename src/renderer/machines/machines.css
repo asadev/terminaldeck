@@ -449,8 +449,13 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: var(--t-sm, 12px);
-  color: var(--text-2, inherit);
+  /* `--t-sm` has never existed in this app; the fallback was doing all the
+     work and the declaration was decoration. 12px is the footnote rung. */
+  font-size: var(--t-footnote);
+  /* Was `var(--text-2, inherit)`. `--text-2` has never been defined either, so
+     the row took its parent colour and the declaration said nothing. This is a
+     secondary line under a control, which is what `--text-secondary` is for. */
+  color: var(--text-secondary);
   cursor: pointer;
 }
 

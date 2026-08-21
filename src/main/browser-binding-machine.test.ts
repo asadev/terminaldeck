@@ -163,10 +163,14 @@ describe('where the one answer is wired', () => {
     const index = await read('main/index.ts')
     // One resolver, in the one file where all three registries are in scope. A
     // second copy of this is how one of the three quietly stops being consulted.
-    expect(index).toContain('function machineOfSession(sessionId: string): string | null')
-    expect(index).toContain("if (ptys.list().some((meta) => meta.id === sessionId)) return ''")
+    // The parameter is `id`, not `sessionId`, since 2026-08-21: a server shell id
+    // reaches this function too, and calling the parameter `sessionId` was what
+    // made that look like a defect. See `servers/ipc.test.ts`, which pins that a
+    // shell id always carries a space and a pty id never does.
+    expect(index).toContain('function machineOfSession(id: string): string | null')
+    expect(index).toContain("if (ptys.list().some((meta) => meta.id === id)) return ''")
     expect(index).toContain('machinesIpc?.view().links')
-    expect(index).toContain('servers?.serverOfShell(sessionId)')
+    expect(index).toContain('servers?.serverOfShell(id)')
   })
 
   it('compares the machine instead of ignoring it', async () => {
@@ -209,7 +213,16 @@ describe('what a session is handed at launch', () => {
      * password" banner inside the owner's own app chrome is the thing that
      * refusal exists for.
      */
-    expect(core).toContain('guest === undefined &&\n      confine === undefined &&')
+    // Rewritten 2026-08-21. The flat refusal became a question, because a
+    // paired machine running the full app *should* get the verbs — its windows
+    // are served back to it over the wire — while a phone, which advertises no
+    // `windows` capability and holds no window, still must not. So the gate now
+    // asks whether that specific device can serve one, and the thing this test
+    // guards is that a device path is still gated at all rather than waved
+    // through.
+    expect(core).toContain(
+      "(!forDevice || options.sessionTools?.reachesDeviceWindows?.(confine?.deviceId) === true) &&",
+    )
   })
 
   it('is refused for a caller that already composed its own tool surface', async () => {
