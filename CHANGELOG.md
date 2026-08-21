@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-21
+
 His third recorded review — 25 minutes, 2,765 words — turned into 82 numbered
 requirements, each one matched against the frame that was on screen when he said
 it. Fourteen lanes built them. 51 landed whole, 24 landed in part with what is
@@ -115,7 +117,6 @@ missing written down, one could not be built at all and says so here.
 - **A second in-session view** still lives in the Remote panel — title, cwd,
   Close, no controls. It is the drift the one-view work is about and it is
   written down rather than quietly left.
-
 
 ## [0.8.1] — 2026-08-20
 
@@ -1808,7 +1809,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.9.0
 [0.8.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.8.1
 [0.8.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.8.0
 [0.7.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.7.0
