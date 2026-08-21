@@ -185,10 +185,15 @@ function harness(options: Options = {}): { deck: DeckControl; specs: ToolSpec[];
       userData: () => userData,
       probe: async () => null,
       now: () => NOW,
-      // These tests are about what an empty answer says, not about fetching.
-      open: () => {
-        throw new Error('empty-result drives the answer shapes, it does not fetch')
-      },
+      /*
+       * Answers, rather than throws: `assets.rendition` asks for the jar too, so
+       * a stub that refuses everything would turn a test about what an empty
+       * answer *says* into a test about a refusal. Nothing here fetches, so the
+       * request itself never happens.
+       */
+      open: () => (async () => {
+        throw new Error('this file drives answer shapes; it does not fetch')
+      }) as never,
     }),
     ...workerTools(workerDeps),
     ...storeTools({ drive, installed: () => options.installed ?? installedDemo() }),
@@ -268,6 +273,19 @@ function aFile(dir: string, name = 'photo.jpg'): string {
 }
 
 const CASES: Case[] = [
+  {
+    id: 'assets.fetch',
+    mode: '',
+    label: 'a batch where every fetch failed is a failure, not an emptiness',
+    empty: false,
+    why: 'Zero files written has two opposite causes and this is the one that must never read as nothing-to-do: "all of them failed" and "all of them were already here" both produce no files, and filing the first as the second is how a run that saved nothing gets recorded as a resume. So a batch that tried and failed carries empty: false and says so; only a batch the ledger skipped in full is empty, and its sentence names `mode: refetch` as the way to mean it.',
+    run: async () =>
+      harness().deck.call('assets.fetch', {
+        runId: 'r-fetch',
+        dir: '/tmp/empty-result-fetch',
+        urls: ['https://x.test/a.jpg'],
+      }),
+  },
   {
     id: 'assets.rendition',
     mode: '',

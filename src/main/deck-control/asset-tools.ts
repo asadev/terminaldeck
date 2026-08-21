@@ -931,6 +931,16 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       'and never the asset; the row says which URL produced the bytes. The ledger skips on the digest ' +
       'of the file on disk, never on the URL alone. Every asset comes back fetched, fell-back, ' +
       'skipped or failed, with a reason.',
+    /*
+     * Disclosed rather than advertised, and it is the tool that made the
+     * decision necessary again: adding it put the advertised catalogue on
+     * exactly 20, the cap, with no headroom for the next one. It belongs on
+     * the disclosed side by the rule `describe-tool.ts` states — a turn does
+     * not reach for it first. It reaches for `assets.rendition` or
+     * `assets.ledger`, and both of their descriptions end by naming this.
+     */
+    index:
+      'Download the assets you name, through a browser profile, byte for byte — with the rewrite rule, the ledger and the fallback all applied.',
     inputSchema: FETCH_SCHEMA,
     redactArgs: scrubUrlArgs,
     precheck: (args, context) => {
@@ -1025,10 +1035,38 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
               probed: result.probed,
             })),
           },
-          { produced: batch.tally.fetched, whenNone: emptyReasonFor(batch.tally) },
+          {
+            /*
+             * Failures count as produce, and the flag is why.
+             *
+             * `emptyReasonFor` already writes "This is not an empty result, it
+             * is a failed one" for a batch where everything failed — and the
+             * flag beside that sentence was answering `true`, because zero files
+             * were written. A caller reads the flag; the sentence is for a
+             * person. So the two disagreed, and the machine-readable half was
+             * the one saying "nothing to do" about a run that lost every asset
+             * it was given.
+             *
+             * Empty now means only what it should: there was nothing to fetch.
+             * A failure is a finding, and a loud one.
+             */
+            produced: batch.tally.fetched + batch.tally.failed,
+            whenNone: emptyReasonFor(batch.tally),
+          },
         ),
-        // Counts only. The log is an audit trail, not a second copy of the run.
-        summary: { ...batch.tally, mode, dir },
+        /*
+         * Counts only — the log is an audit trail, not a second copy of the run
+         * — plus the same emptiness the caller was handed, so somebody skimming
+         * Activity can tell a run that did nothing from one that worked. The
+         * number is the same one the value carries, for the same reason: a
+         * failure is a finding, so only a batch with nothing to fetch is empty.
+         */
+        summary: {
+          ...batch.tally,
+          mode,
+          dir,
+          ...emptySummary(batch.tally.fetched + batch.tally.failed),
+        },
       }
     },
   }

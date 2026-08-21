@@ -698,7 +698,17 @@ export async function fetchAssets(input: {
     dir: input.dir,
     results,
     tally,
-    line: describeBatch(tally),
+    /*
+     * The count, and then the warning if there is one.
+     *
+     * `emptyReasonFor` used to be reachable only through `empty-result.ts`, which
+     * attaches it when a result produced nothing — and a batch where every fetch
+     * failed does not count as producing nothing any more, because a failure is a
+     * finding. That change would have taken the sentence away from the one case
+     * it was written for. It lives on the line instead, where it reaches a caller
+     * whichever way the flag went.
+     */
+    line: [describeBatch(tally), emptyReasonFor(tally)].filter(Boolean).join(' '),
     guarantee: NO_TRANSFORM_GUARANTEE,
   }
 }

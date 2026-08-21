@@ -434,8 +434,17 @@ describe('assets.fetch', () => {
     })
     const value = answer.value as { empty: boolean; emptyReason: string; tally: { failed: number } }
     expect(value.tally.failed).toBe(1)
-    expect(value.empty).toBe(true)
-    expect(value.emptyReason).toContain('not an empty result')
+    /*
+     * `false`, and this assertion used to say `true` beside a sentence reading
+     * "This is not an empty result, it is a failed one". The name of this test
+     * is the third witness. A caller branches on the flag and a person reads the
+     * sentence, so the flag was the half telling a machine there was nothing to
+     * do about a run that lost every asset it was given.
+     */
+    expect(value.empty).toBe(false)
+    // On the line, not in emptyReason: a failed batch is not an empty one, and
+    // the warning has to reach the caller either way. See describeBatch.
+    expect((value as unknown as { line: string }).line).toContain('not an empty result')
     expect(readdirSync(files)).toEqual([])
   })
 
