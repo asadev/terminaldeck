@@ -2167,9 +2167,10 @@ function registerIpc(): void {
     },
     broadcast: (state: DevServerState) => send(DEV_SERVER_STATE_CHANNEL, state),
   })
-  // PtyManager is the SessionAccess: controls are read off the rendered
-  // screen and applied by typing, exactly as a person would.
-  registerAgentControlsIpc(ipcMain, ptys)
+  // Controls are read off the rendered screen and applied by typing, exactly as
+  // a person would — and resolved against the account that session is running
+  // as rather than this process's. See `HostCore.controlAccess`.
+  registerAgentControlsIpc(ipcMain, core.controlAccess)
   // Dictation's transcription key and the request it is for. `userData` is a
   // thunk rather than a value because `pinUserData` can move the directory, and
   // a path captured at wiring time would outlive the move.

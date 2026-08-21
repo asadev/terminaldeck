@@ -93,8 +93,11 @@
  *                  terminal `session-activity.ts` already keeps per session.
  *   - `transcript` — `message.model` on the newest assistant line, i.e. the
  *                  model that actually served the last reply.
- *   - `settings` — `~/.claude/settings.json`, which is where the CLI itself
- *                  persists `effortLevel`, `ultracode` and `fastMode`.
+ *   - `settings` — `settings.json`, which is where the CLI itself persists
+ *                  `effortLevel`, `ultracode` and `fastMode`. In *this
+ *                  session's* configuration directory, not this app's — see
+ *                  {@link SessionAccess.configDir}, which is the whole of what
+ *                  keeps the cluster describing the account in front of you.
  *   - `env`      — `CLAUDE_CODE_EFFORT_LEVEL`, which the CLI says overrides
  *                  effort for the session.
  *
@@ -304,6 +307,44 @@ export interface SessionAccess {
    * moment the answer has just arrived.
    */
   screen(id: string): Promise<string | null>
+  /**
+   * Which Claude configuration directory *this session's* agent is reading, or
+   * null when nothing has established one.
+   *
+   * ## The fifth surface
+   *
+   * Everything in this file that is not read off the screen is read off a file,
+   * and until this existed every one of those files was found through
+   * `claudeConfigDir()` — the **app process's** `CLAUDE_CONFIG_DIR`, or
+   * `~/.claude`. So `settings.json` (effort, fast mode, the model floor),
+   * `permissions.defaultMode` and this project's transcripts all answered for
+   * one account no matter which account the session in front of you was running
+   * as. A person on two logins read the wrong one's model and the wrong one's
+   * effort off a cluster describing the session they were looking at, which is
+   * the disagreement Asad reported across the account chip, the usage bar and
+   * the limit notice — this is the same fault, one control along:
+   *
+   *   > *"sometimes we are logged in with different account, on top bar it's
+   *   > showing something else … all of them are not about one logged in
+   *   > account, they should be all aligned."*
+   *
+   * ## Why it arrives here rather than being looked up
+   *
+   * Because this module has no session layer of its own and must not grow one.
+   * The answer lives in `main/session-account.ts`, which establishes it from
+   * this app's own spawn record or from the running agent's environment, and
+   * that module reaches Electron, `profiles.json` and the process table — none
+   * of which mean anything to the two callers that hand this module a session
+   * on *another* computer (`servers/ipc.ts` over SSH) or a faked one (its
+   * tests). Optional for exactly those callers: a `SessionAccess` that does not
+   * answer leaves every fallback below on `claudeConfigDir()`, unchanged.
+   *
+   * Null and absent are deliberately the same thing, and both mean "nothing was
+   * established". They must never become a *different* store: an account this
+   * app cannot name is an unknown account, and turning an unknown account into
+   * a wrong one is the bug, not the fix.
+   */
+  configDir?(id: string): string | null
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1242,10 +1283,17 @@ const SETTINGS_PERMISSION_MODES: Readonly<Record<string, PermissionModeId | null
  * `plan` is not partially overridden by a user default of `bypassPermissions`,
  * it replaces it.
  */
-export async function readPermissionDefault(cwd: string | undefined): Promise<ControlReading> {
+export async function readPermissionDefault(
+  cwd: string | undefined,
+  configDir = claudeConfigDir(),
+): Promise<ControlReading> {
   const files = [
     ...(cwd ? [join(cwd, '.claude', 'settings.local.json'), join(cwd, '.claude', 'settings.json')] : []),
-    join(claudeConfigDir(), 'settings.json'),
+    // The *session's* user-level file, not this app process's. The project
+    // files above it are a property of the folder and are the same for every
+    // account; this last one is a property of the login. See
+    // {@link SessionAccess.configDir}.
+    join(configDir, 'settings.json'),
   ]
 
   for (const file of files) {
@@ -1327,12 +1375,20 @@ export function fastFromSettings(settings: Record<string, unknown>): ControlRead
  * then to `settings.json`, the two sources below this one in `readControls`,
  * both of which name a real model.
  */
-export async function readModelFromTranscript(cwd: string): Promise<string | null> {
+export async function readModelFromTranscript(cwd: string, configDir?: string): Promise<string | null> {
   // Every store, because a session started from a paired device runs with a home
   // of its own and writes its transcript there. Reading only the profile's store
   // answered "no model" for a session that was answering, which reads on screen
   // as a control that does not know what it is controlling.
-  const found = await Promise.all(transcriptDirs(cwd).map((dir) => listTranscripts(dir)))
+  //
+  // `configDir` replaces the *primary* store in that list — this session's own,
+  // rather than this app process's — and leaves the paired devices' stores
+  // exactly where they were. Two accounts open on one project each keep their
+  // own conversation under their own store, so without it the newest file
+  // across both wins and the chip names the model of the login you are not on.
+  const found = await Promise.all(
+    transcriptDirs(cwd, configDir === undefined ? {} : { configDir }).map((dir) => listTranscripts(dir)),
+  )
   let file: { path: string; modifiedAt: number } | null = null
   for (const candidate of found.flat()) {
     if (file === null || candidate.modifiedAt > file.modifiedAt) file = candidate
@@ -1509,6 +1565,15 @@ export async function readControls(
   // added later that forgets to ask is the bug it exists to prevent. See
   // {@link ControlScope}.
   const onThisMachine = local(scope)
+  /*
+   * Which login's files this reading is allowed to consult, read once for the
+   * same reason `onThisMachine` is: three fallbacks below open a file, and
+   * three separate lookups is three chances for one of them to answer about a
+   * different account than the other two — which is precisely the fault being
+   * closed. Null keeps every one of them on `claudeConfigDir()`, exactly as
+   * they were. See {@link SessionAccess.configDir}.
+   */
+  const store = (onThisMachine && sessionId ? access.configDir?.(sessionId) : null) ?? undefined
   const screen = sessionId ? await access.screen(sessionId) : null
 
   const saw = screen === null ? null : readAgentFromScreen(screen)
@@ -1561,13 +1626,13 @@ export async function readControls(
     // this the control was `Unknown` for the whole life of any session nobody
     // had pressed shift+tab in — see `readPermissionDefault`. Skipped entirely
     // for a session on another computer: that file is this machine's.
-    return onThisMachine ? readPermissionDefault(cwd) : UNKNOWN
+    return onThisMachine ? readPermissionDefault(cwd, store) : UNKNOWN
   })()
 
   // Empty rather than read for a session that is not on this computer, so every
   // `…FromSettings` fallback below answers "nothing was read" instead of
   // answering with this machine's configuration.
-  const settings = onThisMachine ? await readClaudeSettings() : {}
+  const settings = onThisMachine ? await readClaudeSettings(store) : {}
 
   /*
    * Four sources, newest evidence first, and the fourth is what ends `Unknown`.
@@ -1587,7 +1652,7 @@ export async function readControls(
   const model = await (async (): Promise<ControlReading> => {
     const confirmed = screen === null ? null : readModelFromScreen(screen)
     if (confirmed) return { value: confirmed, label: confirmed, source: 'screen' }
-    const raw = cwd && onThisMachine ? await readModelFromTranscript(cwd) : null
+    const raw = cwd && onThisMachine ? await readModelFromTranscript(cwd, store) : null
     if (raw) return { value: raw, label: labelModelId(raw), source: 'transcript' }
     const welcomed = screen === null ? null : readModelFromWelcome(screen)
     if (welcomed) return { value: welcomed, label: welcomed, source: 'screen' }
@@ -1975,6 +2040,10 @@ export async function applyControl(
   // The same read-once as in `readControls`, and for the same reason: every
   // fallback below has to be asking one question rather than three.
   const onThisMachine = local(scope)
+  // And the same store, for the *failure* readings. A change that could not be
+  // confirmed falls back to a file, and falling back to another account's file
+  // answers a question about this session with a fact about a different one.
+  const store = (onThisMachine ? access.configDir?.(sessionId) : null) ?? undefined
 
   const opening = await access.screen(sessionId)
   if (opening === null) {
@@ -2048,10 +2117,20 @@ export async function applyControl(
       return now ? { ok: true as const, text: now.name, scope: now.scope } : null
     })
     if (!outcome.ok) {
-      return { ok: false, message: outcome.message, reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined) }
+      return {
+        ok: false,
+        message: outcome.message,
+        reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined, store),
+      }
     }
     const answer = outcome.answer
-    if (!answer.ok) return { ok: false, message: answer.text, reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined) }
+    if (!answer.ok) {
+      return {
+        ok: false,
+        message: answer.text,
+        reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined, store),
+      }
+    }
     return {
       ok: true,
       // The scope is quoted from the CLI, not asserted: it decides per call
@@ -2085,10 +2164,10 @@ export async function applyControl(
       return now && now.level === value ? { ok: true as const, text: now.level, scope: now.scope } : null
     })
     if (!outcome.ok) {
-      return { ok: false, message: outcome.message, reading: effortFromSettings(onThisMachine ? await readClaudeSettings() : {}) }
+      return { ok: false, message: outcome.message, reading: effortFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
     }
     const answer = outcome.answer
-    if (!answer.ok) return { ok: false, message: answer.text, reading: effortFromSettings(onThisMachine ? await readClaudeSettings() : {}) }
+    if (!answer.ok) return { ok: false, message: answer.text, reading: effortFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
     return {
       ok: true,
       // Not "and saved as your default" — the CLI prints one of two scopes and
@@ -2106,7 +2185,7 @@ export async function applyControl(
 
     const typed = await typeCommand(access, sessionId, `/fast ${value}`, timings)
     if (!typed.ok) {
-      return { ok: false, message: typed.message, reading: fastFromSettings(onThisMachine ? await readClaudeSettings() : {}) }
+      return { ok: false, message: typed.message, reading: fastFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
     }
 
     /*
@@ -2128,7 +2207,7 @@ export async function applyControl(
       return {
         ok: false,
         message: `Typed /fast ${value} but the session has not shown it taking effect — it is most likely mid-turn, so the command is sitting in its input queue.`,
-        reading: fastFromSettings(onThisMachine ? await readClaudeSettings() : {}),
+        reading: fastFromSettings(onThisMachine ? await readClaudeSettings(store) : {}),
       }
     }
     if (answer.unavailableReason) return { ok: false, message: answer.unavailableReason, reading: answer }
@@ -2218,12 +2297,13 @@ async function currentModel(
   access: SessionAccess,
   sessionId: string,
   cwd: string | undefined,
+  configDir?: string,
 ): Promise<ControlReading> {
   const screen = await access.screen(sessionId)
   const confirmed = screen === null ? null : readModelFromScreen(screen)
   if (confirmed) return { value: confirmed, label: confirmed, source: 'screen' }
   if (!cwd) return UNKNOWN
-  const raw = await readModelFromTranscript(cwd)
+  const raw = await readModelFromTranscript(cwd, configDir)
   return raw ? { value: raw, label: labelModelId(raw), source: 'transcript' } : UNKNOWN
 }
 

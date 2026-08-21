@@ -78,6 +78,7 @@ const ACCOUNTS: AccountsSnapshot = {
   ],
   defaultId: null,
   projectDefaults: {},
+  inherited: [],
 }
 
 const signedIn: SignInView = {
@@ -204,6 +205,7 @@ describe('AccountsView', () => {
       ],
       defaultId: null,
       projectDefaults: {},
+      inherited: [],
     }
     // Nothing has answered about Codex, so it reaches the install rung — which
     // names the agent, and is therefore still different from the row above it.
@@ -615,6 +617,7 @@ describe('what the Accounts pane asks the rest of the app for', () => {
       ],
       defaultId: null,
       projectDefaults: {},
+      inherited: [],
     }
     const html = render({ snapshot: threeSystems, providerRows: ALL_RUNNABLE })
     expect(html.split('settings-badge">Default').length - 1).toBe(1)
@@ -1035,6 +1038,28 @@ describe('shared conversation history', () => {
     const both = accountNote(account, HISTORY.work)
     expect(both.startsWith(`Its own folder is ${account.configDir}.`)).toBe(true)
     expect(both).toContain('shared with your own install')
+  })
+
+  it('adds where the machine’s own install came from, last, and only when it was inherited', () => {
+    /*
+     * The row already prints the directory, so a reader who knows what
+     * `~/.claude` looks like can see that something is different — but
+     * "different" is not an explanation, and the cause is not on this screen at
+     * all: it is a variable in the terminal Deck was launched from. Same
+     * function as the account chip's, so the two surfaces cannot word it
+     * differently, and last in the note because it is the least of the three
+     * facts on an ordinary day and absent on every ordinary machine.
+     */
+    const system = { ...ACCOUNTS.accounts[0], system: true, provider: 'claude' as const }
+    const plain = accountNote(system, null)
+    expect(accountNote(system, null, [])).toBe(plain)
+
+    const adopted = accountNote(system, null, [
+      { provider: 'claude', env: 'CLAUDE_CONFIG_DIR', dir: '/Users/me/.claude-work' },
+    ])
+    expect(adopted.startsWith(plain)).toBe(true)
+    expect(adopted).toContain('/Users/me/.claude-work')
+    expect(adopted).toContain('CLAUDE_CONFIG_DIR')
   })
 
   it('never turns an unreadable answer into a claim that history is shared', () => {

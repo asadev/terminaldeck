@@ -72,7 +72,7 @@ import {
   supportsAccounts,
   unsupportedAccountReason,
 } from './provider-accounts'
-import { claudeConfigDir, transcriptDir } from './transcript'
+import { claudeConfigDirIn, transcriptDir } from './transcript'
 
 /* ---------------------------------------------------------------- model -- */
 
@@ -346,19 +346,88 @@ export function isProtectedDir(configDir: string): boolean {
 /**
  * Where an agent keeps the user's own login, when nothing has been redirected.
  *
- * Claude's comes from `claudeConfigDir()` rather than a hardcoded `~/.claude`:
- * if Deck itself was launched with `CLAUDE_CONFIG_DIR` set, that *is* the
- * user's install, and sessions inherit the same variable. Codex's follows the
- * same rule through `CODEX_HOME`, and falls back to `~/.codex`, which is where
- * the CLI puts `auth.json`, `config.toml` and `sessions/` — observed on this
- * machine rather than assumed.
+ * If Deck itself was launched with the agent's config variable set — from a
+ * terminal that was already inside a session on another profile, which is
+ * routine for this audience — then *that* is the install the user is on, and it
+ * is not a guess: `sessionEnv()` returns `{}` for this profile and
+ * `PtyManager.environmentFor` keeps `CLAUDE_CONFIG_DIR` deliberately (it is the
+ * one name in `session-env.ts`'s `KEEP` set), so every session this app starts
+ * under it inherits the same variable and really does read that directory.
+ * Codex follows the same rule through `CODEX_HOME`, and falls back to
+ * `~/.codex`, which is where the CLI puts `auth.json`, `config.toml` and
+ * `sessions/` — observed on this machine rather than assumed.
+ *
+ * ## Why `env` is now asked for Claude too
+ *
+ * It used to call `claudeConfigDir()`, which reads `process.env` directly and
+ * ignored the argument, so `systemConfigDir('claude', {})` — "where would this
+ * agent keep its login with *nothing* redirected" — answered the inherited
+ * directory anyway. That is a question with a caller: `session-account.ts` asks
+ * it about an agent whose environment it has read and found **no** variable in,
+ * which means that agent is on `$HOME/.claude` whatever this app's own
+ * environment says. It was being told the inherited store instead, and named a
+ * login that session is not on.
+ *
+ * At the default argument the answer is byte-identical to what
+ * `claudeConfigDir()` returned, so nothing that did not pass an environment
+ * moves. {@link inheritedSystemInstalls} is where the *difference* between the
+ * two is turned into something a person can read.
  */
 export function systemConfigDir(provider: ProviderId, env = process.env): string {
-  if (provider === 'claude') return claudeConfigDir()
   const key = ACCOUNT_STRATEGIES[provider]?.configEnv
   const inherited = key ? env[key] : undefined
-  if (typeof inherited === 'string' && inherited.trim() !== '') return inherited
-  return join(homedir(), `.${provider}`)
+  if (typeof inherited === 'string' && inherited.trim() !== '') return inherited.trim()
+  return provider === 'claude' ? claudeConfigDirIn(homedir()) : join(homedir(), `.${provider}`)
+}
+
+/** An agent's own install, redirected by the environment this app was launched in. */
+export interface InheritedInstall {
+  provider: ProviderId
+  /** The variable that named it, so the sentence can quote the cause. */
+  env: string
+  /** The directory it named. Never empty. */
+  dir: string
+}
+
+/**
+ * Every agent whose "your own install" row is a directory this app inherited
+ * from the shell that launched it, rather than the agent's default store.
+ *
+ * ## Why this is reported instead of ignored
+ *
+ * Because ignoring it would make the app lie. Two options were on the table:
+ * pretend the machine's own install is always `~/.claude`, or keep inheriting
+ * and say so. The first is not a display choice — it is a claim about a running
+ * process, and it would be false: `sessionEnv()` returns `{}` for the system
+ * profile *on purpose* (setting `CLAUDE_CONFIG_DIR=$HOME/.claude` is not a
+ * no-op — the CLI would then look for `~/.claude/.claude.json` while a default
+ * install keeps its config one level up, so the user's normal login reads as
+ * unconfigured), and `session-env.ts` keeps the variable rather than stripping
+ * it. So a session started under "Default" from a Deck launched inside a
+ * redirected shell genuinely reads the redirected directory, and a screen
+ * saying `~/.claude` would be naming a store that session is not reading.
+ *
+ * Making it true the other way — stripping the variable out of every spawn —
+ * would silently move the account of every session started that way, which is
+ * the same surprise pointing in the opposite direction, and it would break the
+ * one workflow this behaviour serves: launching Deck from a work-profile shell
+ * and having it be on the work profile.
+ *
+ * What is left is the honest option, and it is the one Asad's standing rule
+ * picks: never a silent surprise. So the inheritance stays, and the screens
+ * that name an account can say where it came from — naming the directory,
+ * because "an inherited config directory" is not something a person can check.
+ */
+export function inheritedSystemInstalls(env = process.env): InheritedInstall[] {
+  const found: InheritedInstall[] = []
+  for (const provider of SIGN_IN_PROVIDERS) {
+    const key = ACCOUNT_STRATEGIES[provider]?.configEnv
+    if (!key) continue
+    const named = env[key]
+    if (typeof named !== 'string' || named.trim() === '') continue
+    found.push({ provider, env: key, dir: named.trim() })
+  }
+  return found
 }
 
 /**
@@ -1201,6 +1270,19 @@ export interface ProfilesSnapshot {
   profiles: Profile[]
   defaultProfileId: string | null
   projectDefaults: Record<string, string>
+  /**
+   * The agents whose "your own install" row is a directory this app inherited
+   * from the shell it was launched in — see {@link inheritedSystemInstalls}.
+   *
+   * On the snapshot rather than on the profile it describes because `Profile`
+   * is the shape written to `profiles.json`, and this is a fact about *this
+   * launch* of the app: persisting it, or letting it look persisted, is how a
+   * note about an environment variable outlives the environment.
+   *
+   * Nearly always empty. When it is not, a screen that names an account has
+   * something true to say about why that account is the one it is naming.
+   */
+  inherited: InheritedInstall[]
 }
 
 /**
@@ -1215,6 +1297,7 @@ function snapshot(provider: ProviderId | null = null): ProfilesSnapshot {
     profiles: provider === null ? listProfiles(state) : listProfilesForProvider(provider, state),
     defaultProfileId: state.defaultProfileId,
     projectDefaults: { ...state.projectDefaults },
+    inherited: inheritedSystemInstalls(),
   }
 }
 

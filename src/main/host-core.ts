@@ -44,7 +44,7 @@ import { PtyManager, type RemovalReason } from './pty-manager'
 // The controls a session's bar is drawn from, imported here so that a *remote*
 // window reaches the same two functions this machine's own window does. See the
 // `controls` seam on the `SessionFanout` below.
-import { applyControl, readControls } from './agent-controls'
+import { applyControl, readControls, type SessionAccess } from './agent-controls'
 // And the three usage readings that bar is drawn from, for the same reason and
 // through the same seam. See the `usage` entry on the `SessionFanout` below.
 import { createUsageServe } from './remote/usage-serve'
@@ -75,6 +75,10 @@ import { isCustomProviderId, type CustomAgent } from '../shared/custom-agents'
 import { currentPlatform, type Platform } from './platform/host'
 import { homeDir } from './platform/paths'
 import { getState as profilesState, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
+// Which login each session's agent is actually running as — the one place that
+// answers it, so that the control cluster names the same account the chip and
+// the usage bar do. See {@link HostCore.controlAccess}.
+import { establishedConfigDir } from './session-account'
 import {
   confineSpawn,
   confinedHomeEnv,
@@ -505,6 +509,24 @@ export interface HostCoreOptions {
 
 export interface HostCore {
   ptys: PtyManager
+  /**
+   * The seam `agent-controls.ts` reads and types through, built once here.
+   *
+   * `PtyManager` was handed straight to it and satisfied the interface on its
+   * own, which is exactly how the fifth account surface came to disagree with
+   * the other four: `readControls` needs a *third* thing a pty cannot answer —
+   * which login the agent in that session is running as — and with nobody to
+   * ask it read `settings.json`, `permissions.defaultMode` and the project's
+   * transcripts out of this app process's own store for every session alike.
+   *
+   * Assembled here rather than in either shell for the reason the `controls`
+   * seam on the fanout below gives about itself: both the window at this desk
+   * and a window on a paired machine reach the same two functions, and a
+   * dependency one shell remembers to wire is one the other forgets — which
+   * would leave the phone reading a different account's model than the desktop
+   * three feet from it.
+   */
+  controlAccess: SessionAccess
   wsl: WslLink
   /** The `SessionAccess` the remote server serves, and the `PtySource` behind it. */
   sessions: SessionFanout
@@ -1797,6 +1819,18 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    * closed by `ptys` being a `const` in the enclosing scope that the arrow
    * functions below only read when called.
    */
+  /*
+   * See {@link HostCore.controlAccess}. `establishedConfigDir` answers null
+   * until the ladder in `session-account.ts` has settled — a probe it kicks off
+   * itself — and null is what leaves every file fallback in `agent-controls.ts`
+   * exactly where it was, so a not-yet-known account never becomes a wrong one.
+   */
+  const controlAccess: SessionAccess = {
+    write: (id, data) => ptys.write(id, data),
+    screen: (id) => ptys.screen(id),
+    configDir: (id) => establishedConfigDir(id),
+  }
+
   const sessions = new SessionFanout({
     list: () => ptys.list(),
     write: (id, data) => ptys.write(id, data),
@@ -1835,7 +1869,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     controls: {
       read: async (id) => {
         const row = ptys.list().find((session) => session.id === id)
-        const reading = await readControls(ptys, id, row?.cwd, row?.provider)
+        const reading = await readControls(controlAccess, id, row?.cwd, row?.provider)
         /*
          * And the connectors, on the same answer.
          *
@@ -1874,7 +1908,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       },
       apply: (id, control, value) => {
         const row = ptys.list().find((session) => session.id === id)
-        return applyControl(ptys, { sessionId: id, cwd: row?.cwd, control, value, provider: row?.provider })
+        return applyControl(controlAccess, { sessionId: id, cwd: row?.cwd, control, value, provider: row?.provider })
       },
     },
     /*
@@ -2301,6 +2335,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
 
   return {
     ptys,
+    controlAccess,
     wsl,
     sessions,
     grants,

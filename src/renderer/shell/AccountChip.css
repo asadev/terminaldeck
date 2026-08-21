@@ -152,6 +152,18 @@
   min-width: 0;
 }
 
+/*
+  The inherited-install note, when there is one — see `inheritedInstallNote`.
+
+  `flex-shrink: 0` because the item beside it is `flex: 1` with `min-width: 0`,
+  and a dot sized in `em` is still a flex item: without this the row would win
+  the width negotiation and squash the ⓘ to nothing on a long login address,
+  which is the one row it is ever drawn on.
+*/
+.account-menu-row > .hovernote-dot {
+  flex-shrink: 0;
+}
+
 .account-menu-rename-button {
   flex-shrink: 0;
   padding: var(--sp-1) var(--sp-2);
