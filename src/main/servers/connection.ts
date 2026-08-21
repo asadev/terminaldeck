@@ -318,6 +318,25 @@ export interface RemoteListing {
   entries: RemoteEntry[]
 }
 
+/**
+ * A slice of one file on a server, and how big that file was when the slice was
+ * taken.
+ *
+ * The size travels with the bytes because the caller is tailing a file that is
+ * being appended to while it reads: without it, "have I reached the end" would
+ * be a second round trip whose answer is already stale, and "the file got
+ * shorter, so it is a different file" — the one case that must reset a reader —
+ * could not be noticed at all.
+ *
+ * `bytes` can be shorter than the length that was asked for even when the file
+ * is not. See {@link ServerConnections.readFileRange}.
+ */
+export interface RemoteBytes {
+  bytes: Buffer
+  /** The file's size at the moment of the read, from the same channel. */
+  size: number
+}
+
 export interface TerminalSize {
   cols: number
   rows: number
@@ -592,6 +611,56 @@ export class ServerConnections {
         // The channel, not the connection. The pool above still owns the socket
         // and still decides when it goes, so a picker that has finished walking
         // does not hang up on the page holding the same server open.
+        sftp.end()
+      }
+    })
+  }
+
+  /**
+   * A range of bytes out of one file on a server, over the same SFTP channel.
+   *
+   * ## Why a range and not a read
+   *
+   * The one caller is the chat view over a server shell, and what it reads is a
+   * transcript the agent on that server is still writing. A whole-file read
+   * would put a file that reaches 154 MB on this machine across an SSH link
+   * every few seconds to find the paragraph on the end of it. So the reader on
+   * this side holds a byte offset and asks only for what has arrived since — the
+   * arrangement `ChatReader` already uses against a local file, with the same
+   * consequence handled the same way: a **shorter** file is a different file,
+   * and the size that comes back beside the bytes is what says so.
+   *
+   * ## What it does not do
+   *
+   * It does not decode. A chunk boundary is free to land in the middle of a
+   * multi-byte character, and turning each slice into a string here would put a
+   * replacement character into somebody's conversation once per read — which is
+   * exactly what {@link exec} above does to its output, and why a transcript
+   * cannot be read through `run` or `runScript`. Buffers go up to
+   * `servers/chat.ts`, which holds one `StringDecoder` across every read.
+   *
+   * It also does not loop. SFTP is free to answer short — fewer bytes than were
+   * asked for, with more still there — and rather than hide that, what came back
+   * is the length of `bytes` and the caller asks again from where it got to. A
+   * loop here would be a second place that has to get the same arithmetic right.
+   */
+  async readFileRange(
+    serverId: string,
+    path: string,
+    from: number,
+    length: number,
+  ): Promise<RemoteBytes> {
+    return this.withConnection(serverId, async (client) => {
+      const sftp = await openSftp(client)
+      try {
+        const size = await fileSize(sftp, path)
+        const start = Math.max(0, Math.trunc(from))
+        const want = Math.max(0, Math.min(Math.trunc(length), size - start))
+        if (want === 0) return { bytes: Buffer.alloc(0), size }
+        return { bytes: await readRange(sftp, path, start, want), size }
+      } finally {
+        // The channel, not the connection — the pool above still owns the
+        // socket, and the page holding this server open is still holding it.
         sftp.end()
       }
     })
@@ -1115,6 +1184,72 @@ async function exists(sftp: SFTPWrapper, path: string): Promise<boolean> {
       reject(sftpProblem(error, path))
     })
   })
+}
+
+/**
+ * How big one file is, in bytes, or a sentence saying why that could not be
+ * asked.
+ *
+ * Its own helper rather than a call inside {@link ServerConnections.readFileRange},
+ * because `exists` above swallows `2` — no such file — and this one must not: a
+ * transcript deleted under a reader is a real answer the reader has to act on,
+ * and reporting it as a size of zero would look like a file nobody had written
+ * to yet.
+ */
+async function fileSize(sftp: SFTPWrapper, path: string): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    sftp.stat(path, (error, stats) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, path))
+        return
+      }
+      resolve(stats.size)
+    })
+  })
+}
+
+/**
+ * `length` bytes from `from`, as they are on the far end.
+ *
+ * One `open`, one `read`, one `close`, and the handle is closed on the failure
+ * path too: an SFTP session holds a bounded number of open handles, and a reader
+ * that leaked one per poll would stop being able to open anything at all after a
+ * few minutes of a conversation.
+ *
+ * The answer is a `subarray` rather than the buffer, because a short read leaves
+ * the rest of it as whatever `allocUnsafe` handed over.
+ */
+async function readRange(
+  sftp: SFTPWrapper,
+  path: string,
+  from: number,
+  length: number,
+): Promise<Buffer> {
+  const handle = await new Promise<Buffer>((resolve, reject) => {
+    sftp.open(path, 'r', (error, opened) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, path))
+        return
+      }
+      resolve(opened)
+    })
+  })
+  try {
+    return await new Promise<Buffer>((resolve, reject) => {
+      const into = Buffer.allocUnsafe(length)
+      sftp.read(handle, into, 0, length, from, (error, bytesRead) => {
+        if (error !== undefined) {
+          reject(sftpProblem(error, path))
+          return
+        }
+        resolve(into.subarray(0, Math.max(0, bytesRead)))
+      })
+    })
+  } finally {
+    await new Promise<void>((resolve) => {
+      sftp.close(handle, () => resolve())
+    })
+  }
 }
 
 /**

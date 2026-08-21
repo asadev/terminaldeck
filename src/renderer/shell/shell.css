@@ -1488,6 +1488,25 @@
   max-width: 56ch;
 }
 
+/* The sign-in of the agent in a server account's home.
+
+   Same muted caption weight as the subtitle beside it, because it is the same
+   kind of statement: a fact about where the session lives, not a control. It is
+   deliberately given **no** hover, no cursor change and no focus ring — on this
+   bar the account is a menu and the folder was one until recently, so anything
+   in that row that lit up under a pointer would read as pressable. There is
+   nothing here to press: which account a server's agent uses is changed on that
+   machine. See `serverSignIn` in `App.tsx`. */
+.toolbar-signin {
+  font-size: var(--t-caption);
+  line-height: 1.3;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 44ch;
+}
+
 /* ---------------------------------------------------------- folder title -- */
 
 /*
@@ -2688,6 +2707,38 @@
 
 .server-pane[data-visible='false'] {
   display: none;
+}
+
+/* The same shell on the same server, drawn as its conversation.
+
+   Same rectangle and the same visibility attribute as `.server-pane`, because
+   it is the same session in the other view and the two swap on the mode switch
+   — see `ServerChatPane`. Deliberately **not** `--terminal-bg`: this pane is
+   prose, and it is the same reading surface a local session's chat is drawn on,
+   so it takes the window's own ground like every other `ChatView` in the app. */
+.server-chat-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.server-chat-pane[data-boxed='true'] {
+  inset: auto;
+}
+
+.server-chat-pane[data-visible='false'] {
+  display: none;
+}
+
+/* The view inside it was written to fill a pane and already does; this only
+   gives it the column to grow in, which `.panes` — a positioned block — does
+   not supply on its own. The same fix `.remote-pane` makes for a terminal. */
+.server-chat-pane .chat-view {
+  flex: 1;
+  min-height: 0;
 }
 
 /* The hole a pane leaves for a terminal that is drawn over it.

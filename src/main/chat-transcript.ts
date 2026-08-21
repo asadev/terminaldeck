@@ -340,6 +340,75 @@ const CHUNK_BYTES = 4 * 1024 * 1024
 const MAX_LINE_BYTES = 8 * 1024 * 1024
 
 /**
+ * Where a reader gets its bytes.
+ *
+ * Two methods, and the only reason they are a seam rather than `node:fs` calls
+ * inline is that the same file is read from two computers now. A transcript on
+ * **this** machine is a path and a file handle; a transcript belonging to a
+ * shell on a **server** is a byte range over SFTP (`servers/chat.ts`), and the
+ * whole of what makes those the same reading is that everything else in this
+ * class — the dedupe set, the collapser, the `StringDecoder` held across chunk
+ * boundaries, the rewind when a file gets shorter — is identical and must stay
+ * identical. A second reader for the far case is a second place for the
+ * compaction-replay rule and the torn-line rule to be got right, and they were
+ * each got wrong once here already.
+ *
+ * Kept tiny for the same reason `agent-controls.ts`'s session seam is: it has to
+ * be trivially faked, and a test that wants to drive a reader over a string
+ * should not need a filesystem.
+ */
+export interface ChatBytes {
+  /**
+   * How big the file is now, or null when there is nothing readable at that
+   * path.
+   *
+   * Null rather than a throw for the ordinary absences — a transcript that has
+   * not been written yet, a path that is a directory — because a reader asked to
+   * tail a file that is not there has simply read nothing, and that is not a
+   * failure to report. A transport that has *broken* is a different thing and
+   * should throw.
+   */
+  size(path: string): Promise<number | null>
+  /**
+   * At most `length` bytes starting at `from`.
+   *
+   * May answer **short**, and the caller believes the length of what came back
+   * rather than the length it asked for. A local `read` answers short at the end
+   * of a file that was truncated between the size and the read; SFTP answers
+   * short whenever it feels like it.
+   */
+  read(path: string, from: number, length: number): Promise<Buffer>
+}
+
+/**
+ * This machine's own files, which is what every caller but one wants.
+ *
+ * `open(dir, 'r')` succeeds on macOS and only fails at the first read, so a
+ * directory named `*.jsonl` inside the store would otherwise escape as a raw
+ * EISDIR — hence `isFile()` rather than a bare `size`.
+ */
+export const LOCAL_BYTES: ChatBytes = {
+  async size(path) {
+    try {
+      const info = await stat(path)
+      return info.isFile() ? info.size : null
+    } catch {
+      return null
+    }
+  },
+  async read(path, from, length) {
+    const buffer = Buffer.allocUnsafe(length)
+    const handle = await open(path, 'r')
+    try {
+      const { bytesRead } = await handle.read(buffer, 0, length, from)
+      return buffer.subarray(0, Math.max(0, bytesRead))
+    } finally {
+      await handle.close()
+    }
+  },
+}
+
+/**
  * Reads only the bytes appended since the last call and reports the messages
  * that moved.
  *
@@ -347,6 +416,11 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024
  * boundary landing inside a multi-byte character cannot corrupt it — the same
  * arrangement `TranscriptTail` uses, which is not reused here because it drops
  * every line without a `usage` block and prose lines have none.
+ *
+ * Where those bytes come from is the constructor's last argument and is the only
+ * thing that differs between a transcript on this machine and one belonging to a
+ * shell on somebody's server. Everything the class holds is about *lines*, and a
+ * line is a line whichever computer wrote it. See {@link ChatBytes}.
  */
 export class ChatReader {
   private offset: number
@@ -385,6 +459,12 @@ export class ChatReader {
     readonly path: string,
     sessionId = basename(path, '.jsonl'),
     startAt = 0,
+    /**
+     * Which computer the bytes come from. This one, unless a caller says
+     * otherwise — see {@link ChatBytes}, and `servers/chat.ts` for the caller
+     * that does.
+     */
+    private readonly bytes: ChatBytes = LOCAL_BYTES,
   ) {
     this.sessionId = sessionId
     this.offset = Math.max(0, Math.trunc(startAt))
@@ -418,16 +498,8 @@ export class ChatReader {
 
   /** One chunk. `complete` is false while bytes remain. */
   async read(): Promise<{ messages: ChatMessage[]; reset: boolean; complete: boolean }> {
-    let size: number
-    try {
-      const info = await stat(this.path)
-      // `open(dir, 'r')` succeeds on macOS and only fails at the first read, so a
-      // directory named `*.jsonl` inside the store would escape as a raw EISDIR.
-      if (!info.isFile()) return { messages: [], reset: false, complete: true }
-      size = info.size
-    } catch {
-      return { messages: [], reset: false, complete: true }
-    }
+    const size = await this.bytes.size(this.path)
+    if (size === null) return { messages: [], reset: false, complete: true }
 
     // A shorter file is a different file: the session was rewritten or its id
     // reused. Re-reading from zero is the only safe response.
@@ -439,19 +511,13 @@ export class ChatReader {
     if (size === this.offset) return { messages: [], reset, complete: true }
 
     const length = Math.min(CHUNK_BYTES, size - this.offset)
-    const buffer = Buffer.allocUnsafe(length)
-    const handle = await open(this.path, 'r')
-    let text: string
-    try {
-      const { bytesRead } = await handle.read(buffer, 0, length, this.offset)
-      // Truncated between the stat and the read. Callers loop on `complete`, so
-      // reporting more work after consuming nothing would spin.
-      if (bytesRead === 0) return { messages: [], reset, complete: true }
-      this.offset += bytesRead
-      text = this.partial + this.decoder.write(buffer.subarray(0, bytesRead))
-    } finally {
-      await handle.close()
-    }
+    const chunk = await this.bytes.read(this.path, this.offset, length)
+    // Truncated between the size and the read, or a source that answered
+    // nothing. Callers loop on `complete`, so reporting more work after
+    // consuming nothing would spin.
+    if (chunk.length === 0) return { messages: [], reset, complete: true }
+    this.offset += chunk.length
+    const text = this.partial + this.decoder.write(chunk)
 
     const lines = text.split('\n')
     // The last element is either '' or a line still being written; neither is

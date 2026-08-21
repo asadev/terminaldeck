@@ -909,6 +909,38 @@ const api = {
     ipcRenderer.invoke('servers:shell:resize', shellId, cols, rows),
   closeServerShell: (shellId: string): Promise<unknown> =>
     ipcRenderer.invoke('servers:shell:close', shellId),
+  /*
+   * The conversation a shell on a server is writing, read from that server.
+   *
+   * Keyed on the *shell*, not on the server and not on a path, because "which
+   * transcript is this terminal's" is a question only the main process can
+   * answer: it holds the moment each shell was opened, and that moment against
+   * a transcript's own first line is the whole of the attribution. The renderer
+   * never names a file on somebody else's disk.
+   *
+   * `loadServerChat` re-reads the conversation; `tailServerChat` answers only
+   * what was appended since. The same pair as `loadChat` / `tailChat` for a
+   * local session, so `ChatView` folds both through one bridge instead of the
+   * app growing a second conversation renderer. `closeServerChat` lets go of the
+   * reader — the *reading*, never the terminal.
+   */
+  loadServerChat: (shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:chat:load', shellId),
+  tailServerChat: (shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:chat:tail', shellId),
+  closeServerChat: (shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:chat:close', shellId),
+  /*
+   * Which login the coding agent in that server account's home is signed in as.
+   *
+   * Deliberately not called `serverAccount`: it is not this session's account
+   * and there is no switch behind it. Nothing on the SSH side records which
+   * login a shell's agent is on, so the bar states the fact that does exist —
+   * the sign-in of the `claude` in the home the shell landed in — as a sentence
+   * rather than as a menu with nothing to act on. See the handler.
+   */
+  serverShellAccount: (shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:shell:account', shellId),
   onServerShellOutput: (cb: (chunk: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, chunk: unknown) => cb(chunk)
     ipcRenderer.on('servers:shell:output', handler)

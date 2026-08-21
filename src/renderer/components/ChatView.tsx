@@ -47,11 +47,42 @@ export interface ChatUpdate {
   found: boolean
   complete: boolean
   updatedAt: number
+  /**
+   * The front of the file was skipped, so the first bubble is not the start of
+   * the conversation.
+   *
+   * Only a reading over a network ever sets it. A transcript reaches 154 MB on
+   * this machine and most of that weight is tool results the chat view discards;
+   * reading one whole is a disk read here and the entire file over SSH there, so
+   * `servers/chat.ts` enters a large one late — and says so, rather than
+   * silently showing a conversation that begins mid-sentence.
+   */
+  startedMidFile?: boolean
+  /**
+   * Several conversations could be this session's and nothing can say which.
+   *
+   * Deliberately not folded into `found: false`: a pane that draws "nothing yet"
+   * over a busy terminal is telling somebody staring at a reply that their
+   * session has said nothing. The local view already draws this state from its
+   * own attribution — see `session-transcript.ts` — and this is the same answer
+   * arriving from a reader on another computer instead.
+   */
+  unattributable?: { candidates: number; competing: number }
 }
 
 export interface ChatRequest {
   cwd?: string
   transcriptPath?: string
+  /**
+   * A conversation this renderer cannot name a path for.
+   *
+   * A shell on a server has its transcript on the server, and which file that is
+   * is decided by the main process out of the moment the shell was opened — so
+   * the renderer holds a handle for the *session* and never a path on somebody
+   * else's disk. The local handlers never receive one; `requestOf` in
+   * `chat-transcript.ts` reads `cwd` and `transcriptPath` and drops the rest.
+   */
+  key?: string
 }
 
 export interface ChatBridge {
@@ -85,6 +116,20 @@ export interface ChatViewProps {
   onSend?: (text: string) => void
   /** A specific transcript. Wins over `cwd`. */
   transcriptPath?: string
+  /**
+   * A conversation the bridge finds for itself, when it is not on this machine.
+   *
+   * The one caller is a terminal on a server: its transcript is on the server,
+   * and which file that is depends on when the shell was opened — a fact only
+   * the main process holds. So the renderer hands over a handle for the session
+   * and the bridge answers with whatever it resolved, path included, rather than
+   * this pane naming a file on somebody else's disk.
+   *
+   * It wins over everything. With one of these there is no folder to attribute
+   * against, no sibling sessions to compare start times with and no directory on
+   * this computer to watch, so all three are switched off below.
+   */
+  conversationKey?: string
   /** Poll interval while the session is live. 0 disables it. Defaults to 2s. */
   refreshMs?: number
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
@@ -106,6 +151,11 @@ export interface ChatViewProps {
    * is what they are.
    */
   provider?: ProviderId
+  /**
+   * Why a file cannot be attached from this pane's composer, or absent when one
+   * can. Passed straight through — see `ChatComposer`.
+   */
+  noAttachReason?: string
   /**
    * Plain text mode for the composer — the box, attach and send, no microphone.
    *
@@ -786,9 +836,11 @@ export function ChatView({
   sessionId,
   onSend,
   transcriptPath,
+  conversationKey,
   refreshMs = 2000,
   bridge,
   provider,
+  noAttachReason,
   plain = false,
 }: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
@@ -808,8 +860,10 @@ export function ChatView({
     sessionId && provider ? { id: sessionId, provider, exited: exitedIn(folderSessions, sessionId) } : null,
   )
   const effectiveProvider = runningProvider(provider, presence.running)
-  // Scoped to the session when there is one. An explicit path always wins.
-  const scoped = session != null && !transcriptPath
+  // Scoped to the session when there is one. An explicit path always wins, and
+  // so does a conversation the bridge resolves for itself — neither of those is
+  // a file this machine's attribution could have anything to say about.
+  const scoped = session != null && !transcriptPath && !conversationKey
   /**
    * Bumped whenever a transcript in this folder is written to, so the
    * attribution below re-runs then rather than on its own slow backstop timer.
@@ -827,6 +881,15 @@ export function ChatView({
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [found, setFound] = useState<boolean | null>(null)
   const [behind, setBehind] = useState(false)
+  /**
+   * The two things only a reading from another computer can report: that it
+   * entered the file late, and that it could not decide which conversation this
+   * session's is. Both default to the local answer — no and no — so a bridge
+   * that never sets them behaves exactly as this pane always has.
+   */
+  const [partial, setPartial] = useState(false)
+  const [unattributable, setUnattributable] =
+    useState<{ candidates: number; competing: number } | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   /** Held in a ref, not state: it changes on every scroll frame. */
@@ -850,10 +913,17 @@ export function ChatView({
    */
   const target = transcriptPath ?? (scoped ? ownPath : null)
   const request = useMemo<ChatRequest>(
-    () => (target ? { transcriptPath: target } : !scoped && cwd ? { cwd } : {}),
-    [cwd, scoped, target],
+    () =>
+      conversationKey
+        ? { key: conversationKey }
+        : target
+          ? { transcriptPath: target }
+          : !scoped && cwd
+            ? { cwd }
+            : {},
+    [cwd, scoped, target, conversationKey],
   )
-  const key = target ?? (scoped ? '' : cwd ?? '')
+  const key = conversationKey ?? target ?? (scoped ? '' : cwd ?? '')
 
   /**
    * Fold an answer in, defensively.
@@ -867,6 +937,8 @@ export function ChatView({
   const apply = useCallback((update: ChatUpdate | null): boolean => {
     if (!update || typeof update !== 'object' || !Array.isArray(update.messages)) return false
     setFound(update.found)
+    setPartial(update.startedMidFile === true)
+    setUnattributable(update.unattributable ?? null)
     pathRef.current = update.transcriptPath
     setMessages((current) =>
       update.reset ? [...update.messages] : mergeMessages(current, update.messages),
@@ -879,6 +951,8 @@ export function ChatView({
     let live = true
     setMessages([])
     setFound(null)
+    setPartial(false)
+    setUnattributable(null)
     stickRef.current = true
     setBehind(false)
 
@@ -1023,6 +1097,11 @@ export function ChatView({
           : 'no-session-transcript'
     : key === '' ? 'no-project'
     : found === null ? 'loading'
+    // Before `found`, and above `silent`, because "I cannot tell which of these
+    // is yours" is a different sentence from both "there is nothing" and "your
+    // session has not spoken". A reader on another computer is the only thing
+    // that sets it; the local attribution reaches the same state two branches up.
+    : unattributable !== null ? 'ambiguous'
     : found === false ? 'no-transcript'
     : messages.length === 0 ? 'silent'
     : null
@@ -1074,7 +1153,20 @@ export function ChatView({
                a hundred times down a long conversation, and a column where some
                turns had a copy button and some did not would be worse than one
                where none did. */
-            <ChatColumn messages={messages} {...(copy ? { onCopy: copy } : {})} />
+            <>
+              {/* The conversation began before the first bubble on screen, and
+                  saying so is the whole difference between a reading and a
+                  claim. Only a transcript read across a network is ever entered
+                  late — see `ChatUpdate.startedMidFile` — and `session-replay.ts`
+                  makes the same promise about the same kind of read. */}
+              {partial ? (
+                <p className="cv-partial" role="status">
+                  Only the end of this conversation was read. It is on the server,
+                  and the earlier part of it was not brought across.
+                </p>
+              ) : null}
+              <ChatColumn messages={messages} {...(copy ? { onCopy: copy } : {})} />
+            </>
           )}
         </div>
         {behind ? (
@@ -1133,6 +1225,9 @@ export function ChatView({
         // any other tab from here — so the composer has to know before it
         // attaches a file the session cannot read.
         sessionId={liveSessionId}
+        // Absent unless this session's agent is on another computer, where a
+        // path picked here names a file it cannot open. See the prop.
+        {...(noAttachReason === undefined ? {} : { noAttachReason })}
         // The copilot's rail panel, and only it, asks for the box without the
         // microphone. See the prop.
         plain={plain}

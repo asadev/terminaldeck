@@ -106,6 +106,8 @@ import {
   type WorkspaceTab,
 } from './shell/workspace-tabs'
 import { ServerSessionPane } from './machines/servers/ServerSessionPane'
+import { ServerChatPane } from './machines/servers/ServerChatPane'
+import { agentLabel, serverChatWired, useServerSignIn } from './machines/servers/server-chat'
 import { MachineSessions } from './machines/new-session-context'
 import { ServerSessions } from './machines/servers/session-context'
 import { asServers, resolveServersBridge } from './machines/servers/types'
@@ -5414,6 +5416,38 @@ function Workspace() {
   const headingFolder = heading.folder
 
   /**
+   * Which login the coding agent in that server account's home is signed in as,
+   * for the bar over a terminal on a server.
+   *
+   * ## It is not this session's account, and the bar says what it is instead
+   *
+   * Every other bar in this app names the account its session runs under because
+   * this app started that session. Nothing on the SSH side carries it. A
+   * transcript line records `cwd`, `gitBranch`, `version` and its own
+   * `sessionId` and says nothing whatever about a login, and this app did not
+   * spawn whatever somebody typed into that terminal. There is no switch to
+   * offer either: changing which account a server's agent uses is `/login` over
+   * there, in a browser on that machine.
+   *
+   * So there is no honest account *chip* here — a menu with nothing to act on is
+   * the one thing this bar must never grow. What there is instead is the fact
+   * that does exist, stated as what it is: the sign-in of the agent installed in
+   * the home the shell landed in, which is what a `claude` started in that
+   * terminal will run as. Drawn as a word, with no menu behind it, in the slot
+   * the account holds for a local session.
+   *
+   * It costs no round trip of its own — `servers:shell:account` reads it out of
+   * the probe the server page already runs, and answers null for a server that
+   * has never been looked at and cannot be reached. Null draws nothing at all,
+   * which is the same silent degrade the connectors chip beside it makes.
+   */
+  const headingServerTabId = openServerTab?.id ?? (headingTab?.server ? headingTab.id : null)
+  const serverSignIn = useServerSignIn(
+    serversBridge,
+    headingServerTabId === null ? null : serverShellIds[headingServerTabId] ?? null,
+  )
+
+  /**
    * The session the window's control cluster acts on, and which computer it is on.
    *
    * ## What this replaces, and why it is one object rather than three mounts
@@ -5491,18 +5525,26 @@ function Workspace() {
    * is that the pane tree stopped being the only thing allowed to say where a
    * rectangle is.
    *
-   * ## Chat, and what is still genuinely missing
+   * ## Chat is no longer one of them either
    *
    * Chat renders a conversation out of the agent's own transcript file. For a
    * session on a **paired machine** that file is read by the machine it is on
    * and the collapsed bubbles travel — `chat.read` / `chat.rows`, the same wire
-   * the phone client already uses — so that segment acts.
+   * the phone client already uses.
    *
-   * For a terminal on a **server** it does not, and the sentence says exactly
-   * what is absent rather than apologising. A server does not run this app:
-   * there is a pty over SSH and nothing that reads the far filesystem for a
-   * conversation, so the transcript would have to be found and tailed over that
-   * channel. See `NEXT-UPDATE.md`.
+   * For a terminal on a **server** the sentence here used to say that there was
+   * a pty over SSH and nothing that read the far filesystem, *"so the transcript
+   * would have to be found and tailed over that channel."* That was an accurate
+   * description of a hole rather than a reason, and it is what has been done:
+   * `servers/chat.ts` finds the file — by matching each transcript's own first
+   * line against the moment this window opened the shell, which is the same
+   * deduction `session-transcript.ts` makes locally out of birth times — and
+   * `connection.ts` reads byte ranges out of it over SFTP as the agent appends.
+   *
+   * Two things still refuse, and both name what is missing rather than a mode:
+   * a preload with no such channel, and a terminal the server has not answered
+   * for yet. Neither is a wording choice — `serverChatWired` is a question about
+   * *this build*, and a shell with no far id has nothing to read from.
    *
    * ## Keyed on what is on screen
    *
@@ -5512,11 +5554,17 @@ function Workspace() {
    * it was refusing to act on and refuse over one it was not showing.
    */
   const shownIsServer = shownTabId !== null && readServerTabId(shownTabId) !== null
-  const modesBlocked: Partial<Record<WorkspaceMode, string>> | undefined = shownIsServer
-    ? {
-        chat: 'Chat reads the agent’s own transcript file, which is on that server’s disk. This app opens a terminal there, not a filesystem it reads conversations out of.',
-      }
-    : undefined
+  /** The far end's id for the terminal on screen, once the server has answered. */
+  const shownServerShellId = shownIsServer && shownTabId !== null ? serverShellIds[shownTabId] ?? null : null
+  const modesBlocked: Partial<Record<WorkspaceMode, string>> | undefined = !shownIsServer
+    ? undefined
+    : !serverChatWired(serversBridge)
+      ? {
+          chat: 'Chat reads the agent’s own transcript file off that server, and this build has no channel for reading one. Updating the app brings it back.',
+        }
+      : shownServerShellId === null
+        ? { chat: 'This terminal is still opening on the server, so there is nothing to read a conversation out of yet.' }
+        : undefined
 
   /**
    * What the mode switch is showing, and what it will not offer.
@@ -6168,6 +6216,43 @@ function Workspace() {
                         </>
                       )}
                     </div>
+                  ) : headingServerTabId !== null && serverSignIn !== null ? (
+                    /*
+                      A terminal on a server, which has no folder chip and no
+                      account menu, and does have one true thing to say in that
+                      row.
+
+                      The folder is genuinely absent — a shell lands wherever
+                      that sign-in lands and a path here would be resolved
+                      against this Mac — so the branch above draws nothing and
+                      this one takes the row. The subtitle comes with it, because
+                      `meta` *replaces* the subtitle rather than joining it and
+                      which computer a session is on is the fact that must never
+                      go missing.
+
+                      Beside it, a word and not a control. Which login *this
+                      session's* agent is on is not a fact the SSH side carries,
+                      and there is nothing here that could switch one — so what
+                      is drawn is the fact that does exist, said as what it is:
+                      the sign-in of the agent in the home this shell landed in.
+                      See `serverSignIn`. It is a `span` with no hover, no
+                      chevron and no handler, deliberately: on this bar anything
+                      that looks pressable is pressable.
+                    */
+                    <div className="toolbar-chips">
+                      {heading.subtitle !== null ? (
+                        <>
+                          <span className="toolbar-subtitle">{heading.subtitle}</span>
+                          <span className="toolbar-chip-sep" aria-hidden="true" />
+                        </>
+                      ) : null}
+                      <span
+                        className="toolbar-signin"
+                        title={`${agentLabel(serverSignIn.agentId)} in this server account’s home is signed in as ${serverSignIn.account}. This app did not start what is running in this terminal, so this is a fact about the account you signed in as — not about this session.`}
+                      >
+                        {agentLabel(serverSignIn.agentId)} signs in as {serverSignIn.account}
+                      </span>
+                    </div>
                   ) : null
                 }
                 /*
@@ -6457,24 +6542,63 @@ function Workspace() {
             row on this list in the first place.
           */}
           {serversBridge !== null &&
-            serverSessions.map((entry) => (
-              <ServerSessionPane
-                key={entry.tabId}
-                serverId={entry.serverId}
-                shellKey={entry.shellKey}
-                startIn={entry.startIn}
-                bridge={serversBridge}
-                /* Where in the pane area to draw, when a pane is holding it. See
-                   `layout/pane-slots.ts`; `undefined` leaves the stylesheet's
-                   `inset: 0`, which is the unsplit window. */
-                box={slotStyle(paneSlots[entry.tabId])}
-                visible={remoteOnScreen(entry.tabId)}
-                onEnded={() => serverShellEnded(entry.tabId)}
-                /* The one thing this pane knows that the bar above it needs.
-                   See `serverShellIds`. */
-                onOpened={(shellId) => serverShellOpened(entry.tabId, shellId)}
-              />
-            ))}
+            serverSessions.map((entry) => {
+              /*
+               * The same session in two views, in one rectangle, and only one of
+               * them on screen at a time.
+               *
+               * `sessionView` is the same map and the same segmented control
+               * every local session is switched with — there is no second piece
+               * of state for a server, which is the whole of what "a session
+               * like the others" means here. The terminal is *hidden* rather
+               * than unmounted while the conversation is up, because its
+               * scrollback exists nowhere else: nothing at the far end is
+               * keeping it and nothing on this side is recording it.
+               *
+               * The conversation is drawn only once the server has answered
+               * with an id for the shell. Before that there is nothing to read a
+               * transcript out of, and the mode switch says so rather than
+               * opening an empty pane — see `modesBlocked`.
+               */
+              const onScreen = remoteOnScreen(entry.tabId)
+              const shellId = serverShellIds[entry.tabId]
+              const chatting =
+                (sessionView[entry.tabId] ?? 'terminal') === 'chat' && shellId !== undefined
+              const box = slotStyle(paneSlots[entry.tabId])
+              return (
+                <Fragment key={entry.tabId}>
+                  <ServerSessionPane
+                    serverId={entry.serverId}
+                    shellKey={entry.shellKey}
+                    startIn={entry.startIn}
+                    bridge={serversBridge}
+                    /* Where in the pane area to draw, when a pane is holding it. See
+                       `layout/pane-slots.ts`; `undefined` leaves the stylesheet's
+                       `inset: 0`, which is the unsplit window. */
+                    box={box}
+                    visible={onScreen && !chatting}
+                    onEnded={() => serverShellEnded(entry.tabId)}
+                    /* The one thing this pane knows that the bar above it needs.
+                       See `serverShellIds`. */
+                    onOpened={(id) => serverShellOpened(entry.tabId, id)}
+                  />
+                  {chatting && shellId !== undefined ? (
+                    <ServerChatPane
+                      shellId={shellId}
+                      bridge={serversBridge}
+                      box={box}
+                      /* Mounted for as long as this session is *in* chat mode,
+                         on screen or not, and told whether it is being looked
+                         at. Unmounting it would drop the reader the main
+                         process holds and make coming back to the tab the whole
+                         tail window over SSH again; being hidden costs a DOM
+                         node and switches its timer off. */
+                      visible={onScreen}
+                    />
+                  ) : null}
+                </Fragment>
+              )
+            })}
           {/*
             The sessions opened on paired machines — every one of them, always,
             hidden unless it is the one in front.

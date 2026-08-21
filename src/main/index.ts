@@ -2562,6 +2562,18 @@ function registerIpc(): void {
     putFile: (serverId, localPath, name) =>
       serverConnections.putFile(serverId, localPath, name, BRAND.name),
     /*
+     * And a range of bytes back off it, over the same SFTP channel.
+     *
+     * The chat view over a server terminal is the caller: a transcript on that
+     * server is found by one script and then tailed by offset as the agent over
+     * there appends to it. A range rather than a file because a transcript
+     * reaches 154 MB on this machine and is being written while it is read —
+     * `connection.ts` carries the argument, and `servers/chat.ts` the rule for
+     * which file belongs to which shell.
+     */
+    readFileRange: (serverId, path, from, length) =>
+      serverConnections.readFileRange(serverId, path, from, length),
+    /*
      * The headless host this app would install on a server, or null.
      *
      * Two roots and no search: a packaged app carries it under `Resources`, and
