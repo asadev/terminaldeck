@@ -121,6 +121,11 @@ function corpus(except: readonly string[] = []): string {
 
 /** Unreachable on purpose, each with the reason it is not a lie. */
 const KNOWN_UNREACHABLE: Record<string, string> = {
+  'src/main/browser-extension-zip.fixture.ts':
+    'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
+    'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +
+    'extension release would contain and that the reader has to refuse. It lives in src/ so tsc ' +
+    'checks it against the reader it feeds, the same reason `servers/test-fixtures.ts` does.',
   'src/main/remote/sealed.electron-probe.ts':
     'unreachable from the app on purpose: it is the body of the Electron-runtime crypto check, ' +
     'bundled and run under ELECTRON_RUN_AS_NODE by scripts/check-electron-crypto.mjs during ' +

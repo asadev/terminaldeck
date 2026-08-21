@@ -166,13 +166,66 @@ function fakeSession(): { fire(item: FetchingItem): void } {
 }
 
 /** Wait for the digest to be filled in; it is computed off the finish on purpose. */
+/**
+ * Everyone waiting for the store to say something changed.
+ *
+ * `installDownloads` already takes a `broadcast`, and the store calls it on
+ * every publish — so a test can be woken by the thing it is waiting for instead
+ * of asking every ten milliseconds whether it has happened yet. Both
+ * `installDownloads` calls in this file feed this, so a test that replaces the
+ * deps mid-run does not go deaf.
+ */
+const watching: (() => void)[] = []
+
+function announce(): void {
+  for (const wake of watching.splice(0)) wake()
+}
+
+/**
+ * The digest, once the store has one.
+ *
+ * This polled on a two-second budget and failed under a full-suite run — 14,000
+ * tests across parallel workers is not the machine the constant was chosen on,
+ * and a budget that is only ever right when nothing else is happening is a test
+ * that will lose an hour at the worst moment. It waits on the publish now. The
+ * budget that remains is a deadline for a hang, not a guess at a duration.
+ */
 async function sealed(id: string): Promise<string> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  const until = Date.now() + 30_000
+  for (;;) {
     const row = downloadsView().items.find((entry) => entry.id === id)
     if (row && row.digest !== '') return row.digest
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    if (Date.now() > until) throw new Error('the download never got a digest')
+    await new Promise<void>((resolve) => {
+      watching.push(resolve)
+      // A publish that has already happened cannot wake anybody, so the loop
+      // still gets a floor to re-read on.
+      setTimeout(resolve, 25)
+    })
   }
-  throw new Error('the download never got a digest')
+}
+
+/**
+ * The row, once it has stopped moving.
+ *
+ * A digest arrives when the bytes land here; a cross-machine delivery carries on
+ * afterwards and rewrites the path to the one the far machine answered with. The
+ * old two-second poll for the digest happened to outlast the delivery too, so
+ * this file asserted a delivered path while only ever waiting for a local one —
+ * true by accident and for a reason nobody had written down. Waiting for the
+ * publish exposed it immediately.
+ */
+async function settled(id: string): Promise<void> {
+  const until = Date.now() + 30_000
+  for (;;) {
+    const row = downloadsView().items.find((entry) => entry.id === id)
+    if (row && row.state !== 'downloading' && row.state !== 'delivering') return
+    if (Date.now() > until) throw new Error(`download ${id} never stopped moving`)
+    await new Promise<void>((resolve) => {
+      watching.push(resolve)
+      setTimeout(resolve, 25)
+    })
+  }
 }
 
 /* ------------------------------------------------------------------ tests -- */
@@ -186,7 +239,7 @@ beforeEach(() => {
   installDownloads({
     userData: () => userData,
     defaultDir: () => downloadsDir,
-    broadcast: () => undefined,
+    broadcast: announce,
   })
 })
 
@@ -260,7 +313,7 @@ describe('a downloaded file is exactly what the server sent', () => {
     installDownloads({
       userData: () => userData,
       defaultDir: () => downloadsDir,
-      broadcast: () => undefined,
+      broadcast: announce,
       deliver: async (_machineId, localPath) => {
         handedOver = readFileSync(localPath)
         return { ok: true, path: '/srv/incoming/floorplan.png' }
@@ -279,6 +332,7 @@ describe('a downloaded file is exactly what the server sent', () => {
     expect((handedOver as unknown as Buffer).equals(bytes)).toBe(true)
     expect(digest).toBe(digestOf(bytes))
 
+    await settled(id)
     const row = downloadsView().items.find((entry) => entry.id === id)
     expect(row?.path).toBe('/srv/incoming/floorplan.png')
     expect(row?.onMachine).toBe('mach-1')
