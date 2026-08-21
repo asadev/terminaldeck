@@ -30,7 +30,7 @@
  * somebody visits its screen is a feature that is off.
  */
 
-import { createRemoteReach, type RemoteReach } from '../../localhost-reach'
+import { createRemoteReach, type ReachAnswer, type RemoteReach } from '../../localhost-reach'
 import { CONTROL_IDS, MAX_URL_LENGTH, USAGE_WANTS, emptyUsageReading } from '../protocol'
 import { DEFAULT_RELAY_URL } from '../../../shared/relay-wire'
 import type { InvokeRegistrar } from '../../ipc-seam'
@@ -149,6 +149,16 @@ export interface MachinesIpcDeps {
   status(): RemoteStatus
   /** Pushes a channel to every window. */
   broadcast(channel: string, payload: unknown): void
+  /**
+   * Every loopback listener this desktop was serving for that machine has just
+   * been closed, by something other than a browser window asking.
+   *
+   * The browser's tunnel ledger keeps the rows a window's address bar reads its
+   * machine chip off, and a row for a listener that is already gone is a chip
+   * naming a machine whose pages have stopped answering - the one thing worse
+   * than no chip. Optional because the headless host has no browser to tell.
+   */
+  tunnelsDropped?(machineId: string): void
   /** The relay this desktop dials when looking a code up. */
   relayUrl?: string
   /** Seam for the tests: nothing in a unit test may dial the public internet. */
@@ -175,6 +185,18 @@ export interface MachinesIpc {
    * sentence on a refusal, which is what the downloads row prints.
    */
   sendFile(machineId: string, filePath: string, dir?: string): Promise<SendFileOutcome>
+  /**
+   * Give a port on that machine an address on this one - the same act
+   * `machines:reach` performs, in process.
+   *
+   * Exposed because the browser's tunnel ledger (`src/main/browser-reach.ts`)
+   * counts the windows reading each listener and has to be able to open and
+   * close one itself. Going back out through `ipcMain` to reach code in this
+   * module would be a second path to the same map.
+   */
+  reach(machineId: string, port: number): Promise<ReachAnswer>
+  /** Hand that port back. True when this desktop is no longer serving it here. */
+  closeReach(machineId: string, port: number): boolean
 }
 
 export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcDeps): MachinesIpc {
@@ -275,6 +297,10 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
          */
         if (state.state !== 'online') {
           reach.closeAll('The connection to that machine dropped, so its pages are no longer being served here.')
+          // And the browser, whose rows are the only place those listeners were
+          // ever named. Told after the close rather than instead of it: this is
+          // bookkeeping catching up with a fact, not a second way to close.
+          deps.tunnelsDropped?.(machine.id)
         }
         announce()
       },
@@ -416,6 +442,7 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
       // this desktop has forgotten must not still be serving pages here.
       reaches.get(id)?.closeAll('That machine was removed.')
       reaches.delete(id)
+      deps.tunnelsDropped?.(id)
       store.forget(id)
     }
     /*
@@ -556,6 +583,30 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     return links.get(id)?.ports() ?? false
   })
 
+  /*
+   * The two halves of remote localhost, as functions rather than as handler
+   * bodies, because they now have two callers each: the channel below, and the
+   * browser's tunnel ledger in `src/main/browser-reach.ts`, which counts the
+   * windows reading a listener so that the last one out is what closes it.
+   */
+  function openReach(id: string, port: number): Promise<ReachAnswer> {
+    const reach = reaches.get(id)
+    if (!reach) {
+      return Promise.resolve({
+        ok: false,
+        message: 'This desktop is not connected to that machine.',
+      })
+    }
+    return reach.open(port)
+  }
+
+  function closeReach(id: string, port: number): boolean {
+    const reach = reaches.get(id)
+    // A machine that has gone took its tunnels with it on the way out, so an
+    // unknown id is `true` - the address is free, which is the whole question.
+    return reach ? reach.close(port) : true
+  }
+
   /**
    * Give a port on that machine an address in this window's browser.
    *
@@ -577,9 +628,7 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     if (typeof id !== 'string' || typeof port !== 'number') {
       return { ok: false, message: 'That is not a machine and a port.' }
     }
-    const reach = reaches.get(id)
-    if (!reach) return { ok: false, message: 'This desktop is not connected to that machine.' }
-    return reach.open(port)
+    return openReach(id, port)
   })
 
   /**
@@ -601,8 +650,7 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
    */
   ipcMain.handle('machines:reach:close', (_event, id: unknown, port: unknown): boolean => {
     if (typeof id !== 'string' || typeof port !== 'number') return false
-    const reach = reaches.get(id)
-    return reach ? reach.close(port) : true
+    return closeReach(id, port)
   })
 
   /**
@@ -1094,6 +1142,8 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     wake(): void {
       for (const link of links.values()) link.wake()
     },
+    reach: openReach,
+    closeReach,
     stop(): void {
       // The code goes with the app. A slot left claimed at the relay by a
       // process that is exiting would answer for a machine that is no longer

@@ -137,6 +137,18 @@ export interface ServerReachDeps {
   withConnection<T>(serverId: string, fn: (client: ForwardingConnection) => Promise<T>): Promise<T>
   /** One probe round trip. Only `listeners` is read out of it. */
   facts(serverId: string): Promise<ServerFacts>
+  /**
+   * Every listener this desktop was serving for that server has just been
+   * closed, by something other than a browser window asking - the connection
+   * died, or the app is going down.
+   *
+   * The browser's tunnel ledger keeps the rows a window's address bar reads its
+   * machine chip off, and a row for a listener that is already gone is a chip
+   * naming a server whose pages have stopped answering. Optional, for the same
+   * reason the paired-machine half's is: a caller with no browser has nothing
+   * to tell.
+   */
+  tunnelsDropped?(serverId: string): void
 }
 
 export interface ServerReachIpc {
@@ -144,6 +156,18 @@ export interface ServerReachIpc {
   stop(): void
   /** Ports currently served for one server. For a test, and for a panel later. */
   openPorts(serverId: string): number[]
+  /**
+   * Give a port on that server an address on this computer - the same act
+   * `servers:reach` performs, in process.
+   *
+   * Exposed for the browser's tunnel ledger (`src/main/browser-reach.ts`),
+   * which counts the windows reading each listener so the last one out is what
+   * closes it. It needs to open and close one itself, and going back out
+   * through `ipcMain` would be a second path into this module's own map.
+   */
+  reach(serverId: string, port: number): Promise<ReachAnswer>
+  /** Hand that port back. True when this desktop is no longer serving it here. */
+  closeReach(serverId: string, port: number): boolean
 }
 
 /**
@@ -317,6 +341,9 @@ export function registerServerReachIpc(
           reach.closeAll('The connection to that server dropped, so its pages are no longer being served here.')
           host?.closeAll()
           release()
+          // And the browser, whose rows are the only place those listeners were
+          // ever named. After the close, not instead of it.
+          deps.tunnelsDropped?.(serverId)
         })
 
         const connection: Held = { reach, host, release }
@@ -390,6 +417,28 @@ export function registerServerReachIpc(
     }
   })
 
+  /*
+   * The two halves of a server's localhost, as functions rather than as handler
+   * bodies, because each now has two callers: the channel below, and the
+   * browser's tunnel ledger in `src/main/browser-reach.ts`, which counts the
+   * windows reading a listener so that the last one out is what closes it.
+   */
+  async function openReach(serverId: string, port: number): Promise<ReachAnswer> {
+    const name = nameOf(serverId)
+    if (name === null) return { ok: false, message: 'This app does not know that server.' }
+    const connection = await holdFor(serverId, name)
+    if ('ok' in connection) return connection
+    return connection.reach.open(port)
+  }
+
+  function closeReach(serverId: string, port: number): boolean {
+    const connection = live.get(serverId)
+    // A server nobody has dialled is `true` for the same reason an unknown
+    // machine is on the relay channel: nothing of this desktop's is standing on
+    // that number, which is the entire question being asked.
+    return connection ? connection.reach.close(port) : true
+  }
+
   /**
    * Give one port on a server an address in this window's browser.
    *
@@ -405,11 +454,7 @@ export function registerServerReachIpc(
       if (typeof id !== 'string' || typeof port !== 'number') {
         return { ok: false, message: 'That is not a server and a port.' }
       }
-      const name = nameOf(id)
-      if (name === null) return { ok: false, message: 'This app does not know that server.' }
-      const connection = await holdFor(id, name)
-      if ('ok' in connection) return connection
-      return connection.reach.open(port)
+      return openReach(id, port)
     },
   )
 
@@ -433,11 +478,12 @@ export function registerServerReachIpc(
    */
   ipcMain.handle('servers:reach:close', (_event, id: unknown, port: unknown): boolean => {
     if (typeof id !== 'string' || typeof port !== 'number') return false
-    const connection = live.get(id)
-    return connection ? connection.reach.close(port) : true
+    return closeReach(id, port)
   })
 
   return {
+    reach: openReach,
+    closeReach,
     stop(): void {
       for (const connection of [...live.values()]) {
         connection.reach.closeAll('This desktop is shutting down.')

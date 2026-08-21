@@ -1674,6 +1674,35 @@ const api = {
   browserWindowClosed: (tabId: string): void => {
     ipcRenderer.send('browser:window-closed', tabId)
   },
+  /*
+   * The one list of loopback tunnels, and this window's holds on them.
+   *
+   * `reachOnMachine` and `reachOnServer` above are the raw verbs and still are:
+   * one machine, one port, open it. What they cannot answer is *who else is
+   * reading it*, and that question had no owner at all - each browser window
+   * kept its own array in React state while the listener was single and shared.
+   * A second window drew no machine chip over a page it was reading through a
+   * tunnel, and a window moving its page home closed the listener under
+   * another. `src/main/browser-reach.ts` holds the whole argument.
+   *
+   * The holder is the shell tab id, which is the same string either side of the
+   * split remount - see both `<BrowserWorkspace>` mounts in App.tsx. A hold is
+   * let go when the browser window is closed, on `browser:window-closed`, and
+   * not when the component unmounts.
+   */
+  listReach: (): Promise<unknown> => ipcRenderer.invoke('browser:reach:list'),
+  holdReach: (
+    holder: string,
+    machine: { id: string; name: string; kind: string },
+    port: number,
+  ): Promise<unknown> => ipcRenderer.invoke('browser:reach:hold', holder, machine, port),
+  releaseReach: (holder: string, machineId: string, port: number): Promise<unknown> =>
+    ipcRenderer.invoke('browser:reach:release', holder, machineId, port),
+  onReachState: (cb: (holds: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, holds: unknown) => cb(holds)
+    ipcRenderer.on('browser:reach:state', handler)
+    return () => ipcRenderer.off('browser:reach:state', handler)
+  },
   browserBind: (request: { tabId: string; sessionId: string; machineId?: string }): void => {
     ipcRenderer.send('browser:bind', request)
   },
