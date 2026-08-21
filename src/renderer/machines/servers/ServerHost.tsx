@@ -251,8 +251,19 @@ export function ServerHost({
 
       {asking === 'install' && (
         <div className="servers-setup-ask-first">
-          {/* Written where the work is implemented, and rendered here unchanged. */}
-          <p className="settings-prose">{offer.consequence}</p>
+          {/*
+            Written where the work is implemented, and rendered here unchanged —
+            one paragraph per blank line. Splitting is not composing: the words
+            and their order are still `host.ts`'s, and before this the whole
+            thing arrived as a single run-on because HTML folds a newline into a
+            space. A sentence somebody has to read twice to find the point of is
+            a sentence that will not be read.
+          */}
+          {offer.consequence.split('\n\n').map((para) => (
+            <p className="settings-prose" key={para.slice(0, 32)}>
+              {para}
+            </p>
+          ))}
           <div className="servers-card-actions">
             <Button
               tone="primary"

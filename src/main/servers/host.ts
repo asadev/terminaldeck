@@ -457,11 +457,22 @@ export function hostConsequence(serverName: string, room: HostRoom): string {
     : 'This server has no Node 22 or newer, so an official Node build is fetched, checked against the ' +
       `checksum Node published for it, and unpacked into ~/.${BRAND.id}/runtime, where nothing else ` +
       'on this server uses it.'
+  /*
+   * Said as a difference, because the old sentence sold something he already
+   * had. It claimed installing this makes the server "a machine you can open a
+   * session on from here" — he has been opening sessions on it from here all
+   * along. What changes is what a session *is*, and that is worth stating in
+   * terms of what ends today: an SSH shell lives inside the connection this app
+   * holds, so it dies when the app quits, and nothing but this Mac can reach it.
+   */
   return (
-    `This puts the host into your own home folder on ${serverName} and starts it, so this server ` +
-    `becomes a machine you can open a session on from here or from your phone. ${runtime} It does not ` +
-    'need administrator access, it writes nothing outside your home folder, and you can remove it ' +
-    'again from here.'
+    `Today a session on ${serverName} is an SSH shell this app holds open. It lives inside that ` +
+    'connection: it ends when this app quits or the link drops, and only this computer can reach it.\n\n' +
+    `Installing the host makes ${serverName} a machine in its own right. Its sessions keep running ` +
+    'when this computer is closed, you can open them from your phone, and it joins the machines list ' +
+    `instead of sitting apart as a server. ${runtime} It needs no administrator access, writes only ` +
+    'inside your home folder, and can be removed again from here.\n\n' +
+    'It has no Copilot. That part of the app needs a window, and this host has none.'
   )
 }
 
@@ -476,7 +487,11 @@ export function hostConsequence(serverName: string, room: HostRoom): string {
  * nothing at all, which is what a half-installed host does.
  */
 export function hostLine(host: HostOnServer): string {
-  if (host.command === '') return 'Nothing on this server can run a session for you yet.'
+  // Not "nothing can run a session here" — that was false and he caught it.
+  // Every session he has ever opened on a server is an SSH shell this app
+  // holds, and he had been using them for weeks. What is missing is the host,
+  // which is a different and smaller claim.
+  if (host.command === '') return 'Sessions here run over SSH. This server is not a machine of its own yet.'
   if (host.version === '') return 'The host is on this server and will not start.'
   if (host.running === 'no') return `The host ${host.version} is here and is not running.`
   if (host.running === 'unknown') {

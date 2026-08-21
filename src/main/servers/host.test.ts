@@ -263,6 +263,27 @@ describe('the sentences, which are written here and never in the renderer', () =
     )
   })
 
+  it('does not tell him nothing can run a session on a server he has been using', () => {
+    /*
+     * He caught this one on screen: "why is it lying". The line read "Nothing on
+     * this server can run a session for you yet." beside a server he had been
+     * opening sessions on for weeks — every one of them an SSH shell this app
+     * holds. The missing thing is the host, which is a smaller and different
+     * claim, and the offer has to be worth something on top of what he already
+     * has rather than pretending he has nothing.
+     */
+    const none = hostLine({ ...readHostProbe(RUNNING).host, command: '' })
+    expect(none).not.toContain('Nothing on this server')
+    expect(none.toLowerCase()).toContain('ssh')
+
+    const said = hostConsequence('box', GOOD)
+    expect(said, 'the offer must not sell him a session on box, which he can already open').toContain(
+      'SSH shell this app holds open',
+    )
+    expect(said).toContain('keep running')
+    expect(said, 'a headless host has no copilot and he will look for it').toContain('no Copilot')
+  })
+
   it('never claims a host is running when it would not say', () => {
     const host = readHostProbe(['command\t/home/me/.local/bin/x', 'version\t0.9.1', ''].join('\n')).host
     expect(hostLine(host)).toContain('would not say')
