@@ -24,14 +24,20 @@ import './DeviceSessions.css'
  * smart people use it."* A heading, a name, two buttons, a tick per login.
  * Nothing explains what *All* means.
  *
- * ## Guests only
+ * ## Every approved device, not only guests
  *
- * `DeviceSessions` beside this lists every approved device, because his own
- * phone is paired as one of his own and the session question still applies to
- * it. This one lists guests, like `DeviceFolders`: one of the owner's own
- * machines has no login record at all — approval deletes it — and a row for it
- * would be a control that changes nothing. *"My device — full access. It's you
- * at another keyboard."*
+ * `DeviceFolders` lists guests alone, because one of the owner's own machines
+ * reaches every folder by construction and a folder row for it would change
+ * nothing. This one lists **both kinds**, like `DeviceSessions`, and it has to:
+ * both machines in his rail — DESKTOP-DDGMNCV and the Office PC — are paired as
+ * his own, so a panel that listed guests alone is a panel he would never see.
+ *
+ * That is not a contradiction of the approval card's *"My device — full access.
+ * It's you at another keyboard."* The card describes what a device is given when
+ * it is let in, and one of his own is given everything; narrowing it afterwards
+ * is a deliberate act at this keyboard, which is the same thing the folder list
+ * allows for a guest. The rule is enforced the same way for both kinds —
+ * `AccountGrants.shares` never asks what kind a device is.
  *
  * ## What the ticks are named
  *
@@ -165,7 +171,8 @@ export function DeviceLoginsView({
   onToggle,
 }: DeviceLoginsViewProps) {
   // Nothing at all rather than a sentence about a build that cannot do this, or
-  // about there being no guests — the same silence `DeviceSessions` keeps.
+  // about there being no approved devices — the same silence `DeviceSessions`
+  // keeps.
   if (!wired || devices.length === 0) return null
 
   return (

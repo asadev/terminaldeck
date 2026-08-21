@@ -2934,11 +2934,16 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
               logout, things, access — all of this we can just manage from
               this"* that this screen owns.
 
-              Guests only, like the folder panel and unlike the session one: one
-              of the owner's own machines has no login record at all — approval
-              deletes it — so a row for it would change nothing.
+              Every approved device, like the session panel and unlike the
+              folder one. The approval flow asks a *guest* the question and
+              leaves one of his own machines on everything — "full access, it's
+              you at another keyboard" — but both of the machines in his rail are
+              paired as his own, so a panel that listed guests alone is a panel he
+              would never see. Narrowing one of his own afterwards is a
+              deliberate act here rather than a promise broken on the approval
+              card, and `AccountGrants.shares` never asks what kind a device is.
             */}
-            <DeviceLogins devices={grantableDevices(state.devices, kinds)} />
+            <DeviceLogins devices={sessionDevices(state.devices)} />
           </>
         ) : null
       }
