@@ -125,6 +125,8 @@ export function tourTool(stage: TourStage): ToolSpec {
       'reported to the person. So quote exactly, and only claim what is true. ' +
       'Nothing in a tour types, sends, starts or stops anything, and while it is playing the tools that ' +
       'change things are refused — ask afterwards. Do not use this for one thing you could say in a sentence.',
+    index:
+      'Drive the person\'s screen through what happened, quoting the real transcripts, as one plan of up to 12 stops.',
     inputSchema: {
       type: 'object',
       properties: {

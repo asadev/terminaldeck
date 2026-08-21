@@ -6,6 +6,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ActionLog } from './action-log'
 import { attach, resetForTests } from '../browser-binding'
+import { browserNetworkTool } from './browser-network-tool'
 import { browserTools } from './browser-tools'
 import { ConsentBroker, WINDOW_SURFACE } from './consent'
 import { DeckControl } from './control'
@@ -153,6 +154,73 @@ describe('what that token may reach', () => {
       'browser_step',
     ])
     await client.close()
+  })
+
+  it('indexes the tools it may call but is not shown in full, and only those', async () => {
+    /*
+     * Progressive disclosure, from a session's seat.
+     *
+     * Eight of the fourteen tools on `SESSION_TOOLS` carry an `index` — the
+     * workers, the harvest, the asset checks, the store's door — so what a
+     * session pays for them is one line each inside `tools_describe` rather
+     * than eight schemas in every turn of its context. This endpoint contributes
+     * one of them, `browser.network`, so that the index here is a real one.
+     *
+     * The half that matters more than the saving is the last assertion: the
+     * index is built from **this caller's** filtered list, so a tool a session
+     * may not call cannot appear in it. An index line naming `sessions_send`
+     * would be the same leak as listing it, spelled differently.
+     */
+    const own = new DeckControl({
+      surface: {} as DeckSurface,
+      log: new ActionLog({ dir: join(dir, 'log2') }),
+      consent: new ConsentBroker({ ask: () => false, timeoutMs: 10 }),
+      extraTools: [...browserTools(fakeDrive()), browserNetworkTool(fakeDrive())],
+    })
+    await stopDeckControlServer()
+    const point = await startDeckControlServer({ control: own })
+    const mine = createSessionTools(point, { dir: join(dir, 'sessions2') })
+    const prepared = mine.prepare()
+    prepared?.started('s1')
+    const client = await dial(configOf(prepared?.args ?? []))
+
+    const listed = (await client.listTools()).tools
+    expect(listed.map((tool) => tool.name).sort()).toEqual([
+      'browser_close',
+      'browser_handover',
+      'browser_open',
+      'browser_read',
+      'browser_screenshot',
+      'browser_step',
+      'tools_describe',
+    ])
+    const meta = listed.find((tool) => tool.name === 'tools_describe')
+    expect(meta?.description).toContain('browser_network —')
+    expect(meta?.description).not.toContain('sessions_')
+
+    // And the schema it did not send is one call away, in the shape it would
+    // have been advertised in.
+    const fetched = await client.callTool({
+      name: 'tools_describe',
+      arguments: { tools: ['browser_network'] },
+    })
+    const answer = fetched.structuredContent as { tools: { name: string }[] }
+    expect(answer.tools[0]?.name).toBe('browser_network')
+
+    // While a tool it may not call answers as a tool that does not exist —
+    // through the meta-tool as much as through a call. This is the door the
+    // whole feature had to not open.
+    const probed = await client.callTool({
+      name: 'tools_describe',
+      arguments: { tools: ['sessions_send', 'sessions_teleport'] },
+    })
+    expect(probed.structuredContent).toEqual({
+      tools: [],
+      unknown: ['no tool called sessions_send', 'no tool called sessions_teleport'],
+    })
+
+    await client.close()
+    mine.stop()
   })
 
   it('is described as what it can reach, and not as the copilot’s whole surface', async () => {

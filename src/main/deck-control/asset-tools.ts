@@ -338,6 +338,8 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       'instead of a file, or comes back no bigger than the original is refused, and the original URL ' +
       'is always the last candidate and is always tried. A bad rewrite therefore costs you quality, ' +
       'never the asset. `attempts` says what was tried and why each one was refused.',
+    index:
+      'Given the URL a page printed, probe rewrites to find the biggest copy of that image or file that really exists.',
     inputSchema: RENDITION_SCHEMA,
     redactArgs: scrubUrlArgs,
     precheck: (args, context) => {
@@ -394,6 +396,8 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       '`record` hashes the file itself; it never takes a digest from you. `mode: refetch` does not ' +
       'read the ledger at all. `verify` checks every recorded file and is what "did this run work?" ' +
       'means.',
+    index:
+      'Ask whether an asset is already downloaded, intact and the right length, and record the ones that are. Resume or verify a download run.',
     inputSchema: LEDGER_SCHEMA,
     redactArgs: scrubUrlArgs,
     /*
@@ -534,6 +538,8 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       'run so it can be read at the end. `unknown` — nothing on the page stated a total — is not ' +
       'success: it means this page cannot be called complete. Give `pattern` whenever you can; ' +
       'without one only generic shapes are tried and two that disagree deliberately produce no answer.',
+    index:
+      'Compare how many items you captured against the total the page itself states, and record complete, short or unknown.',
     inputSchema: COVERAGE_SCHEMA,
     redactArgs: scrubUrlArgs,
     precheck: (args, context) => {
@@ -643,6 +649,8 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       'challenge, a navigation that ended somewhere unexpected — because by the time anything could ' +
       'be asked to take that picture the page has changed. This lists what it caught: the address, ' +
       'the status, which signal fired, and the path to the screenshot and to the evidence beside it.',
+    index:
+      'The pages that refused this browser — a 403, a 429, a challenge — with the screenshot taken at the moment it happened.',
     inputSchema: BLOCKS_SCHEMA,
     precheck: (_args, context) => mayUse(context, 'assets.blocks'),
     summary: () => 'List the block pages the browser photographed',

@@ -57,6 +57,7 @@ import {
   type ToolSpec,
 } from './catalogue'
 import { WINDOW_SURFACE, deviceSurface, type ConsentBroker } from './consent'
+import { advertisedCatalogue, withDescribe } from './describe-tool'
 import { checkToolArgs } from './schema'
 import {
   LOCAL_CALLER,
@@ -162,6 +163,17 @@ export interface CallOptions {
    * class, so there is no site at which somebody could forget.
    */
   attended?: boolean
+  /**
+   * The tool names this caller may see and call, or `undefined` for all of them.
+   *
+   * Passed straight through to {@link ToolContext.granted} and read by one tool.
+   * It is **not** a gate here: `server.ts` refuses a call to a name outside this
+   * set before the dispatcher is reached at all, and a second check in this
+   * class would be a second boundary to keep in step with the first. What it is
+   * for is `tools.describe`, whose *answer* is the catalogue and which therefore
+   * has to know what this caller is allowed to know exists.
+   */
+  granted?: ReadonlySet<string>
   /**
    * Whose call this is, and which tiers they were granted.
    *
@@ -300,7 +312,18 @@ export class DeckControl {
   private readonly now: () => number
 
   constructor(private readonly options: DeckControlOptions) {
-    this.catalogue = [...buildCatalogue(), ...(options.extraTools ?? [])]
+    /*
+     * The assembled list, with `tools.describe` on the end of it.
+     *
+     * Appended here rather than declared in `buildCatalogue()` because the
+     * meta-tool has to be able to answer about the contributed half — the
+     * browser verbs, the asset checks, the server actions — and
+     * `buildCatalogue()` takes no arguments and knows about none of them.
+     * `withDescribe` closes the tool over the finished array, so a lane that
+     * contributes a tool through `extraTools` gets it described without wiring
+     * anything, which is the one way this stays true as the catalogue grows.
+     */
+    this.catalogue = withDescribe([...buildCatalogue(), ...(options.extraTools ?? [])])
     this.specs = new Map()
     for (const spec of this.catalogue) {
       // A contributed tool that reused a built-in's name would shadow it
@@ -338,7 +361,12 @@ export class DeckControl {
     return [...this.started]
   }
 
-  private context(callId: string, caller: Caller, attended: boolean): ToolContext {
+  private context(
+    callId: string,
+    caller: Caller,
+    attended: boolean,
+    granted: ReadonlySet<string> | undefined,
+  ): ToolContext {
     return {
       surface: this.options.surface,
       /*
@@ -362,6 +390,15 @@ export class DeckControl {
        * device could not have done directly.
        */
       caller,
+      /*
+       * The caller's allow-list, handed down for exactly one tool.
+       *
+       * `tools.describe` returns schemas, so it has to answer the same question
+       * `server.ts` gates listing and calling on — see `ToolContext.granted`.
+       * `undefined` for every caller that is not carrying an allow-list, which
+       * is what the copilot itself is.
+       */
+      ...(granted === undefined ? {} : { granted }),
       // The id of the row this call will write, so a tool that creates
       // something durable can point that thing back at the turn that made it.
       // `sessions.start` is the only user today; see `ToolContext.callId`.
@@ -386,7 +423,17 @@ export class DeckControl {
    * has already been spent. See {@link MAX_CATALOGUE_TOKENS}.
    */
   cost(): CatalogueCost {
-    return catalogueCost(this.catalogue)
+    /*
+     * The advertised listing, not the catalogue behind it.
+     *
+     * These stopped being the same thing when `tools.describe` landed: a tool
+     * held behind it costs one line rather than a schema, and measuring the
+     * catalogue would report a bill nobody is paying — permanently over budget,
+     * which is a number the status channel would teach a person to ignore.
+     * Ungranted, because this is the copilot's own listing and the copilot's
+     * grant is everything; a session's listing is smaller still.
+     */
+    return catalogueCost(advertisedCatalogue(this.catalogue))
   }
 
   /**
@@ -511,7 +558,7 @@ export class DeckControl {
       })
     }
 
-    const context = this.context(id, caller, attended)
+    const context = this.context(id, caller, attended, options.granted)
 
     /*
      * The tool's own redaction, then the key-name pass, in that order.

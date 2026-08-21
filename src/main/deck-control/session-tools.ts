@@ -208,6 +208,19 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   ...ASSET_TOOL_NAMES,
   'browser.extract',
   'browser_extract',
+  /*
+   * The meta-tool, and it has to be on the list rather than exempt from it.
+   *
+   * Eight of the fourteen above are held behind `tools.describe` — the workers,
+   * the harvest, the four asset checks, the store's one door — so a session
+   * without this entry would be granted eight tools it could not find the
+   * arguments for, which is the dead capability this app keeps being about. It
+   * is not a widening: `describe-tool.ts` answers only about tools this same set
+   * contains, and a name outside it gets the sentence a name that does not exist
+   * gets. A session still cannot learn that `sessions.send` is a thing.
+   */
+  'tools.describe',
+  'tools_describe',
 ])
 
 /**
