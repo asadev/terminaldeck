@@ -78,30 +78,38 @@
  * `wsl-reach.test.ts` pins the string against the real server rather than
  * against a copy of it here.
  *
+ * ## The NAT case, which used to be a sentence and is now a second way in
+ *
+ * The paragraph that stood here on 2026-08-21 said the NAT case was reported
+ * rather than built, and that the report named `networkingMode=mirrored` and
+ * `wsl --shutdown`. That was the resistance this round exists to delete — a
+ * person being sent out of the app to edit a file they have never opened and
+ * restart the distribution their work is running in. It is gone.
+ *
+ * What replaced it is **not** a network path and needs nothing widened. A
+ * distribution can run Windows executables (binfmt_misc interop, on by default),
+ * and such a process inherits the Linux caller's pipes — a two-way channel that
+ * needs no port, no firewall rule and no restart. MCP's **stdio** transport is
+ * shaped exactly like it. So a distribution that cannot reach loopback is handed
+ * a stdio server instead of a URL, and `wsl-bridge.ts` is the program on the far
+ * end of those pipes. It runs on Windows, so the socket it opens is this
+ * machine's own loopback and every guard in `server.ts` sees the caller it has
+ * always seen.
+ *
+ * The route that stays unbuilt is the one that needs elevation: a second
+ * listener on the WSL virtual switch plus an inbound Windows Defender Firewall
+ * rule. If it is ever built, the shape is already decided and it is **not** a
+ * wider `isLoopback`: an allow-set holding the single address the distribution
+ * itself reported, *and* a grant flag on the token saying it was minted for a
+ * session in that distribution, both required together.
+ *
  * ## The security argument: nothing was widened
  *
  * `server.ts` refuses any peer that is not a loopback literal, and that rule is
- * untouched. It did not need touching, because in the configuration that works
- * the distribution's connection **is** loopback — there is no non-loopback peer
- * to allow.
- *
- * The NAT case would need an allowance, and it is deliberately not built. To
- * make it true this app would have to bind a second listener on the host's
- * address on the WSL virtual switch, which is a listening socket on a
- * non-loopback interface, and then persuade Windows Defender Firewall to let
- * inbound connections through on that interface — which needs elevation, once,
- * from the person. A feature that silently depends on an admin action nobody
- * took is the dead control this app keeps being about, so it is reported
- * instead: the sentence in `session-verbs.ts` names `networkingMode=mirrored`
- * and `wsl --shutdown`, which the person can do without elevation at all.
- *
- * If it is ever built, the shape is already decided and it is **not** a wider
- * `isLoopback`: an allow-set holding the single address the distribution itself
- * reported, *and* a grant flag on the token saying it was minted for a session
- * in that distribution, both required together. A loopback rule loosened for
- * everyone would hand every process on every interface of the machine the
- * chance to guess a port; an address the distro named, plus a token only that
- * session holds, hands it to the one place that already has both.
+ * untouched. It did not need touching in either configuration. Under mirrored
+ * networking the distribution's connection **is** loopback; under NAT nothing
+ * from the distribution reaches the socket at all, because what reaches it is a
+ * Windows process this app's own executable is running.
  *
  * ## What handing a distribution the token is worth, said plainly
  *
@@ -113,6 +121,11 @@
  * running in that distribution as that user could have read `<userData>` all
  * along; it is the same sentence `server.ts` writes about another process
  * running as this user on Windows itself.
+ *
+ * On the bridge path it is worth less again, which is the direction to move in:
+ * that config file holds **no token**. It names a script and a URL, and the
+ * bearer token is read from a second file by the bridge — a Windows process —
+ * so the secret never crosses the boundary at all.
  */
 
 import {
@@ -169,33 +182,60 @@ export const REACH_TIMEOUT_MS = 20_000
 export const RETRY_AFTER_MS = 30_000
 
 /**
- * The script, run inside the distribution, that answers both questions at once.
+ * The script, run inside the distribution, that answers every question at once.
  *
- * Two answers because it is one crossing. `wslpath` is WSL's own path
+ * Three answers because it is one crossing, and a crossing into a cold WSL2
+ * distribution is a virtual machine booting. `wslpath` is WSL's own path
  * translator and is in every distribution WSL installs, so it is the
  * authoritative reading of where `C:` is mounted — better than this side
  * guessing `/mnt/c` at the exact moment it is about to name a file a CLI has to
- * be able to open.
+ * be able to open. It is asked a second time about this app's executable, for
+ * the same reason and with the same authority.
  *
- * `curl` first and `wget` second because between them they cover every
- * distribution anybody works in; a distro with neither answers nothing, is read
- * as not reachable, and gets the honest sentence rather than a config file
- * pointing somewhere unproven. `--content-on-error` is what makes `wget` print
- * the body of a 403 instead of swallowing it, which is the whole of the
- * fingerprint.
+ * ## Why the verdict is computed over there rather than here
  *
- * The URL arrives as `$1` rather than being interpolated into this text, for the
- * reason `LOGIN_SHELL_SCRIPT` gives in `wsl.ts`: this script is a constant with
- * no caller data in it, and the data is a separate argument that `wsl.exe` hands
- * across whole.
+ * Because there are now two ways in and the cheap one must not be paid for
+ * twice. `curl` first and `wget` second because between them they cover every
+ * distribution anybody works in; if what comes back carries the fingerprint,
+ * the script stops — that distribution reaches this endpoint directly, which is
+ * mirrored networking, and nothing else needs starting. Only when it does not
+ * is the second way tried, and the second way costs a process launch across the
+ * interop boundary.
+ *
+ * So the script prints `reach=direct`, `reach=bridge` or `reach=none`, and this
+ * side reads a verdict rather than re-deriving one from two bodies. The
+ * fingerprint arrives as `$2` rather than being written into this text, for the
+ * same reason the URL does: this script is a constant with no caller data in it.
+ *
+ * ## What the bridge branch actually proves
+ *
+ * Everything in one command. That `[interop]` is enabled in that distribution;
+ * that this app's executable can be named and executed from over there; that
+ * `WSLENV` carried `ELECTRON_RUN_AS_NODE` across so it started as Node rather
+ * than as a second copy of the app; that `wsl-bridge.ts`'s script is where the
+ * config file will say it is; and that the endpoint answered it. A distribution
+ * that answers `reach=bridge` has already done, once, the exact thing every
+ * session will ask it to do.
+ *
+ * `--probe` and the two variables are pinned against `wsl-bridge.ts` in the
+ * test rather than interpolated, so the two spellings cannot drift apart
+ * quietly.
  */
 export const REACH_SCRIPT =
   "r=$(wslpath -u 'C:\\' 2>/dev/null); " +
   'printf \'mount=%s\\n\' "$r"; ' +
-  'if command -v curl >/dev/null 2>&1; then curl -s --max-time 4 "$1"; exit 0; fi; ' +
-  'if command -v wget >/dev/null 2>&1; then ' +
-  'wget -q -O - --content-on-error --timeout=4 "$1"; exit 0; fi; ' +
-  "printf 'no-http-client\\n'"
+  'd=""; ' +
+  'if command -v curl >/dev/null 2>&1; then d=$(curl -s --max-time 4 "$1"); ' +
+  'elif command -v wget >/dev/null 2>&1; then ' +
+  'd=$(wget -q -O - --content-on-error --timeout=4 "$1"); fi; ' +
+  'case "$d" in *"$2"*) printf \'reach=direct\\n\'; exit 0;; esac; ' +
+  'if [ -n "$3" ] && [ -n "$4" ]; then ' +
+  'x=$(wslpath -u "$3" 2>/dev/null); [ -n "$x" ] || x="$3"; ' +
+  'if [ -x "$x" ]; then ' +
+  'b=$(WSLENV=ELECTRON_RUN_AS_NODE ELECTRON_RUN_AS_NODE=1 "$x" "$4" --probe "$1" 2>/dev/null); ' +
+  'case "$b" in *"$2"*) printf \'exe=%s\\n\' "$x"; printf \'reach=bridge\\n\'; exit 0;; esac; ' +
+  'fi; fi; ' +
+  "printf 'reach=none\\n'"
 
 /** `$0` for the script above. Only ever seen in an error message from `sh`. */
 const REACH_SCRIPT_NAME = 'wsl-reach'
@@ -239,10 +279,40 @@ export function automountRoot(answer: string): string {
 
 /* ------------------------------------------------------------------- reach -- */
 
+/**
+ * Which of the two ways in this distribution actually has.
+ *
+ * A closed union rather than a boolean because the two are not degrees of the
+ * same thing: one is an HTTP URL and a bearer token in a file, the other is a
+ * command, a script and a token that never crosses. `deck-control/session-tools.ts`
+ * writes a different config file for each and declares this same shape
+ * structurally, for the reason that file's seams are shapes and not imports.
+ */
+export type WslReach =
+  /**
+   * `127.0.0.1` over there is `127.0.0.1` over here — mirrored networking. The
+   * cheapest path and the one that starts no process: the CLI speaks HTTP
+   * straight to the endpoint.
+   */
+  | { readonly kind: 'direct' }
+  /**
+   * It is not, which is the default configuration. The CLI is given a stdio
+   * server instead, run through WSL's Windows interop; `wsl-bridge.ts` is the
+   * program and carries the whole argument.
+   *
+   * `command` is this app's executable **as the distribution named it** —
+   * `wslpath`'s answer, not this side's guess. `script` is the bridge's Windows
+   * path, which is what its argv wants: it is a Windows process and nothing
+   * translates its arguments on the way across.
+   */
+  | { readonly kind: 'bridge'; readonly command: string; readonly script: string }
+
 /** What a session inside a distribution needs, once the endpoint has answered it. */
 export interface WslPlacement {
   /** Where `C:` is mounted in that distribution, as `wslpath` reported it. */
   readonly mount: string
+  /** Which way in the distribution proved it has. See {@link WslReach}. */
+  readonly reach: WslReach
   /** The path to give `--mcp-config`, or null for a file that cannot be named there. */
   argPath(file: string): string | null
 }
@@ -266,6 +336,17 @@ function keyFor(target: WslTarget, endpointUrl: string): string {
 export interface DistroReachOptions {
   exec?: WslExec
   now?: () => number
+  /**
+   * The second way in, offered to the probe rather than assumed by it.
+   *
+   * `exe` is this app's executable as **Windows** spells it (`process.execPath`)
+   * and `script` is where `wsl-bridge.ts` put the bridge. Absent — or either
+   * half empty — and the probe never tries the interop branch at all, which is
+   * what a build with no bridge to offer should do: measure the direct path and
+   * answer honestly about the rest. There is no shape here that reports a bridge
+   * nobody wrote.
+   */
+  bridge?: { exe: string; script: string } | null
 }
 
 /**
@@ -300,7 +381,7 @@ export async function distroPlacement(
   const already = inFlight.get(key)
   if (already !== undefined) return already
 
-  const run = probe(target, endpointUrl, options.exec ?? execWsl)
+  const run = probe(target, endpointUrl, options.exec ?? execWsl, options.bridge ?? null)
     .then((placement) => {
       readings.set(key, { at: now(), placement })
       return placement
@@ -325,6 +406,7 @@ async function probe(
   target: WslTarget,
   endpointUrl: string,
   exec: WslExec,
+  bridge: { exe: string; script: string } | null,
 ): Promise<WslPlacement | null> {
   const args = [
     ...(target.distro !== null && target.distro !== '' ? ['-d', target.distro] : []),
@@ -337,12 +419,33 @@ async function probe(
     REACH_SCRIPT,
     REACH_SCRIPT_NAME,
     endpointUrl,
+    REFUSAL_FINGERPRINT,
+    // Empty rather than absent when there is no bridge: `$3` and `$4` are read
+    // by the script either way, and a shell that finds them unset behaves the
+    // same as one that finds them empty only because the test is `-n`. Saying
+    // it in the argument list is one less thing to be true by accident.
+    bridge?.exe ?? '',
+    bridge?.script ?? '',
   ]
   const answer = await exec(args, REACH_TIMEOUT_MS)
   const text = decodeWslOutput(answer.stdout)
-  if (!text.includes(REFUSAL_FINGERPRINT)) return null
+  const verdict = /^reach=(direct|bridge)$/m.exec(text)?.[1] ?? null
+  if (verdict === null) return null
   const mount = automountRoot(/^mount=(.*)$/m.exec(text)?.[1] ?? '')
-  return { mount, argPath: (file: string) => wslMountPath(file, mount) }
+  const argPath = (file: string): string | null => wslMountPath(file, mount)
+  if (verdict === 'direct') return { mount, reach: { kind: 'direct' }, argPath }
+  /*
+   * A bridge verdict with nothing to run is not a bridge.
+   *
+   * `exe=` is written by the same `case` arm that writes `reach=bridge`, so the
+   * two cannot come apart in the script — but they can come apart in a *fake*,
+   * and a placement naming an empty command would produce a config file whose
+   * MCP server is the empty string. That is the dead control this whole file
+   * exists to avoid, so it is checked rather than trusted.
+   */
+  const command = (/^exe=(.*)$/m.exec(text)?.[1] ?? '').trim()
+  if (command === '' || bridge === null || bridge.script === '') return null
+  return { mount, reach: { kind: 'bridge', command, script: bridge.script }, argPath }
 }
 
 /**

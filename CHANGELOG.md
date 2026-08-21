@@ -55,6 +55,24 @@ Two things he hit within an hour of installing 0.9.0.
 
 ### Fixed
 
+- **A session in WSL gets this app's browser verbs without anybody editing
+  `.wslconfig`.** *"i want it to be with no resistance — people just install and
+  do some clicks and everything works fine."* Under WSL's default networking a
+  distribution cannot reach `127.0.0.1` on the Windows side, so a session in a
+  Linux folder was launched without the verbs and told to add
+  `networkingMode=mirrored` and run `wsl --shutdown`. Every word of that was
+  true and it was still a defect: it sent a person out of the app to edit a file
+  they have never opened and restart the distribution their work is running in.
+  The app crosses the boundary itself now. A distribution that cannot reach the
+  socket is handed a **stdio** MCP server run through WSL's own Windows interop
+  — no port, no firewall rule, no config file, no restart, and nothing to
+  press. The endpoint's loopback rule is untouched: what connects to it is a
+  process running on Windows as this account. The bearer token moved with it —
+  the config file a Linux process reads no longer contains one. Both ways in are
+  measured in one crossing before any session is told it has verbs, the cheap
+  one first; a distribution that answers neither is still told so, and now names
+  the one switch left (`[interop]` in its own `/etc/wsl.conf`) instead of a
+  reboot.
 - **A session could open a browser window and then not see inside it.** *"other
   sessions still cant see inside the browser window they opened they can just
   open, only copilot is capable for that."* The tools were minted correctly and

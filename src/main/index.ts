@@ -269,6 +269,7 @@ import { registerSetupIpc } from './setup'
 import { registerCookieImportIpc } from './cookie-import'
 import { registerBrowserIsolationIpc } from './browser-isolation'
 import { distroPlacement } from './wsl-reach'
+import { startedAsWslBridge } from './wsl-bridge'
 import { linuxPathFromUnc, registerWslIpc } from './wsl'
 import { createRoutines, registerRoutinesIpc } from './routines'
 import { DEFAULT_GLOBAL_MAX_RUNS_PER_HOUR } from './routines/engine'
@@ -798,7 +799,20 @@ const core = createHostCore({
      * distribution once per port and remembers, so this is a `wsl.exe` run on
      * the first WSL session of a run and nothing on any after it.
      */
-    insideDistro: (target) => distroPlacement(target, deckControl?.endpoint.url ?? ''),
+    insideDistro: (target) =>
+      distroPlacement(target, deckControl?.endpoint.url ?? '', {
+        /*
+         * And the second way in, for the distribution that cannot reach
+         * loopback at all — which is WSL's default networking and therefore
+         * most people's. `process.execPath` is this app's own executable, run
+         * as plain Node from inside the distribution over Windows interop, and
+         * `bridgeScript` is what it runs. Offered rather than assumed: the
+         * probe tries the cheap direct path first and only starts a process
+         * across the boundary when that answered nothing. `wsl-bridge.ts` holds
+         * the argument for why this needs no `.wslconfig` edit and no restart.
+         */
+        bridge: { exe: process.execPath, script: sessionTools?.bridgeScript() ?? '' },
+      }),
     /*
      * And yes, a session a device started may have them — to reach **that
      * device's** windows and nothing here.
@@ -4267,7 +4281,24 @@ function registerIpc(): void {
  * 8443. The guard belongs here rather than in the relay client: nothing further
  * down can tell a second copy from a reconnect, and it should not try.
  */
-if (!app.requestSingleInstanceLock()) {
+if (startedAsWslBridge(process.argv)) {
+  /*
+   * A copy started to *be* the WSL bridge, by an executable that came up as the
+   * app instead — and therefore a copy that must not become one.
+   *
+   * It cannot happen down the path `wsl-reach.ts` measured, and it is checked
+   * anyway because what would go wrong is a second instance started once per
+   * session, silently, on somebody's Windows machine. Ahead of the lock rather
+   * than relying on it: asking for the lock would fire `second-instance` in the
+   * running copy and put its window on their screen once per session, which is
+   * the visible half of the same bug. `wsl-bridge.ts` has the argument.
+   */
+  process.stderr.write(
+    `[${BRAND.name}] started as its WSL bridge but came up as the app, which means ELECTRON_RUN_AS_NODE ` +
+      'did not cross into Windows. Leaving rather than becoming a second copy.\n',
+  )
+  app.exit(0)
+} else if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {

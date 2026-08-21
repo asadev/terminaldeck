@@ -64,18 +64,23 @@ export type NoVerbsReason =
   /** Not a Claude CLI, which is the only one with a per-run MCP override. */
   | 'provider'
   /**
-   * Inside a WSL distribution that could not reach this app's tool endpoint.
+   * Inside a WSL distribution that could reach this app's tool endpoint neither
+   * way.
    *
-   * Narrower than it was, and the narrowing is the whole of the 2026-08-21 fix.
-   * This used to mean "inside WSL" flatly, on the reasoning that the endpoint
-   * and the config file are both the Windows side's. Half of that was a copy of
-   * the `open` shim's reasoning and did not apply: the shim cannot cross because
-   * the hook endpoint on Windows is a named pipe, and the verbs do not go
-   * through the pipe — `deck-control/server.ts` is plain HTTP on loopback, and
-   * the file can be named `/mnt/c/…`. What is left is one real question, asked
-   * of the distribution rather than assumed: does `127.0.0.1` there reach the
-   * host's loopback? It does under mirrored networking and does not under NAT.
-   * `wsl-reach.ts` measures it; this is the sentence for the answer that was no.
+   * Narrower than it was twice over. It used to mean "inside WSL" flatly, on a
+   * copy of the `open` shim's reasoning that did not apply — the shim cannot
+   * cross because the hook endpoint on Windows is a named pipe, and the verbs do
+   * not go through the pipe. On 2026-08-21 it narrowed to one measured question:
+   * does `127.0.0.1` in that distribution reach the host's loopback? It does
+   * under mirrored networking and does not under NAT.
+   *
+   * On 2026-08-22 it narrowed again, and this time the answer "no" stopped being
+   * the end of it. A distribution that cannot reach loopback is handed a stdio
+   * MCP server run through WSL's Windows interop instead of a URL — no port, no
+   * firewall rule, no `.wslconfig` edit, no restart. `wsl-bridge.ts` is that
+   * program and `wsl-reach.ts` measures both ways in one crossing. So this is
+   * now the sentence for a distribution that answered **neither**, which in
+   * practice means one with Windows interop switched off.
    */
   | 'wsl'
   /**
@@ -129,27 +134,34 @@ const BECAUSE: Readonly<Record<NoVerbsReason, string>> = Object.freeze({
  * something did not work will try again in another way; the measured version is
  * an agent reaching for a CDP port. Two are not. `early` is a session that
  * started a moment before the endpoint did, so the useful thing is to say that
- * rather than to close a door that is open. `wsl` is a door the *person* can
- * open — mirrored networking is a two-line edit in their own home directory —
- * so it names the edit rather than only refusing, while still telling the agent
- * not to go looking for another way in itself. Telling him is the point: a
- * session that quietly cannot see is exactly the thing he has been left to
- * discover twice.
+ * rather than to close a door that is open. `wsl` is a door that is *nearly*
+ * always already open — the app now crosses the boundary itself, through WSL's
+ * Windows interop, with nothing asked of anybody — so reaching this sentence at
+ * all means the one remaining switch is off, and it names that switch rather
+ * than only refusing.
+ *
+ * What it deliberately no longer names is `networkingMode=mirrored` and
+ * `wsl --shutdown`. That sentence was true and was still a defect: it sent a
+ * person out of the app to edit a file they have never opened and restart the
+ * distribution their work is running in. `wsl-bridge.ts` is what replaced it.
  */
 const THEN: Readonly<Record<NoVerbsReason, string>> = Object.freeze({
   provider: 'Say what you would have done on the page and let the person do it; there is no other way in.',
   /*
    * The one dead end with a remedy the person can carry out themselves, so it
-   * says the remedy rather than only closing the door. Mirrored networking is a
-   * two-line edit to a file in their own home directory and needs no
-   * administrator; the alternative — opening the Windows firewall on the WSL
-   * adapter — does, which is why it is not the one named. `wsl-reach.ts` has the
-   * argument.
+   * says the remedy rather than only closing the door — and it is a much rarer
+   * dead end than it was, because the app no longer needs the distribution's
+   * networking to be reconfigured at all. Getting here means both ways were
+   * tried and both failed, and the switch that turns the second one off is
+   * `[interop]`. It is a file inside their own distribution, needs no
+   * administrator, and takes effect on the next shell rather than on a restart.
+   * `wsl-reach.ts` and `wsl-bridge.ts` have the argument.
    */
   wsl:
-    'Tell the person to start this session again; if it still cannot, `networkingMode=mirrored` in ' +
-    'their `.wslconfig` and `wsl --shutdown` is what lets WSL reach this app. Until then say what you ' +
-    'would have done on the page and let them do it; there is no other way in.',
+    'Tell the person to start this session again; if it still cannot, this distribution has Windows ' +
+    'interop switched off, and `enabled = true` under `[interop]` in its `/etc/wsl.conf` is what lets ' +
+    'this app reach in. Until then say what you would have done on the page and let them do it; there ' +
+    'is no other way in.',
   device: 'Say what you would have done on the page and let the person do it; there is no other way in.',
   endpoint: 'Say what you would have done on the page and let the person do it; there is no other way in.',
   early:

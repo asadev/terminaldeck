@@ -180,11 +180,20 @@ export interface DeckControlServerOptions {
  * rule of ours is consulted, so loosening this would not make that case work —
  * it would only widen who else may knock.
  *
- * If the NAT case is ever built it takes a second listener on the WSL virtual
- * switch, an allow-set holding the single address the distribution itself
- * reported, **and** a grant flag on the token saying it was minted for a session
- * in that distribution — both required together, neither of them here.
- * `wsl-reach.ts` carries the whole argument and the reason it was not built.
+ * And on 2026-08-22 the NAT case was made to work **without** touching this,
+ * which is the part worth reading before anybody widens it in the belief that
+ * they have to. A distribution that cannot reach this socket is not given an
+ * address at all: it is given a stdio MCP server, run through WSL's Windows
+ * interop, and the process on the far end of those pipes is running on *this*
+ * machine as this account. What arrives here is a loopback connection from a
+ * local process — the caller this rule has always been written for. See
+ * `wsl-bridge.ts`.
+ *
+ * The route that stays unbuilt is a second listener on the WSL virtual switch,
+ * and if it is ever built it takes an allow-set holding the single address the
+ * distribution itself reported, **and** a grant flag on the token saying it was
+ * minted for a session in that distribution — both required together, neither of
+ * them here. `wsl-reach.ts` carries that argument too.
  */
 function isLoopback(address: string | undefined): boolean {
   if (!address) return false
