@@ -104,12 +104,42 @@ export interface AccountsApi {
   browserHistoryClear?(profileId: string): Promise<unknown>
 
   browserPasswordsAvailable?(): Promise<unknown>
+  /** Whether saving works, where the file is, and whether it verified. */
+  browserPasswordState?(): Promise<unknown>
+  /**
+   * Show that file in Finder or Explorer. Not the password — the file.
+   *
+   * Named `ShowFile` rather than `Reveal` deliberately: "reveal" on this bridge
+   * means the one thing that must never exist here, and the test in
+   * `BrowserSection.test.tsx` bans the spelling outright.
+   */
+  browserPasswordShowFile?(): Promise<unknown>
   browserPasswords?(profileId: string): Promise<unknown>
   browserPasswordForget?(profileId: string, origin: string, username: string): Promise<unknown>
   browserPasswordForgetAll?(): Promise<unknown>
   browserPasswordCopy?(profileId: string, origin: string, username: string): Promise<unknown>
   browserPasswordAnswer?(keep: boolean): Promise<unknown>
   onBrowserPasswordOffer?(cb: (id: string, origin: string, username: string) => void): () => void
+  /**
+   * A page with a sign-in form, and whether the saved login went in by itself.
+   *
+   * `filled: false` is not a failure. `browser-fill-gate.ts` withholds the
+   * automatic fill on any page an agent navigated to or is holding, and `note`
+   * is the sentence that says so — the offer is still there, one press away.
+   */
+  onBrowserLoginAvailable?(
+    cb: (id: string, origin: string, usernames: string[], filled: boolean, note: string) => void,
+  ): () => void
+  /**
+   * Type a saved login into the page in this tab. **A person's press only.**
+   *
+   * The one method in this family that causes a password to be typed anywhere,
+   * and the reason it is safe to have is where it lives: an `ipcMain` channel
+   * on the window's own bridge, which no agent and no guest page can reach. See
+   * the note in `src/preload/index.ts` and the argument in
+   * `browser-fill-gate.ts`.
+   */
+  browserPasswordFill?(id: string, username: string): Promise<unknown>
 
   browserSignInDiagnose?(url: string): Promise<unknown>
   browserSignInHandover?(url: string): Promise<unknown>
@@ -139,12 +169,16 @@ const METHODS = [
   'browserHistoryForget',
   'browserHistoryClear',
   'browserPasswordsAvailable',
+  'browserPasswordState',
+  'browserPasswordShowFile',
   'browserPasswords',
   'browserPasswordForget',
   'browserPasswordForgetAll',
   'browserPasswordCopy',
   'browserPasswordAnswer',
   'onBrowserPasswordOffer',
+  'onBrowserLoginAvailable',
+  'browserPasswordFill',
   'browserSignInDiagnose',
   'browserSignInHandover',
   'browserSignInAgents',
@@ -269,6 +303,60 @@ export function readLoginList(raw: unknown): SavedLoginSummary[] {
     })
   }
   return out
+}
+
+/**
+ * Is this address still on the origin a saved-login offer was made for?
+ *
+ * The renderer's half of the exact-origin rule `browser-passwords.ts` argues
+ * for: scheme, host and port, compared as a triple, with no registrable-domain
+ * grouping and no guessing. It is used to *stop drawing* an offer rather than
+ * to decide anything about a credential — the main process checks the same
+ * thing again before it fills, against what Chromium actually committed — so
+ * the failure direction here costs at worst a bar that is not shown.
+ *
+ * An address that will not parse matches nothing. A page with no address yet is
+ * a page with no sign-in form on it either.
+ */
+export function sameOrigin(origin: string, url: string): boolean {
+  if (origin === '' || url === '') return false
+  try {
+    return new URL(url).origin === origin
+  } catch {
+    return false
+  }
+}
+
+/** Mirrors `StoreState` in `src/main/browser-passwords.ts`. No password on it. */
+export interface PasswordStoreState {
+  available: boolean
+  /** The file. Named on screen so nobody has to be told to go and find it. */
+  path: string
+  exists: boolean
+  fault: 'none' | 'tampered' | 'unreadable'
+  /** The main process's own sentence for the fault. Empty when there is none. */
+  message: string
+}
+
+/**
+ * Read it, and default to the *cautious* answer for every missing field.
+ *
+ * `available: false` from an older preload means the manager says saving is not
+ * possible rather than offering something that will not work — which is the
+ * right way round, because the store itself refuses in exactly that case and
+ * two screens disagreeing about one machine is worse than one saying no.
+ */
+export function readPasswordStoreState(raw: unknown): PasswordStoreState | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const record = raw as Record<string, unknown>
+  return {
+    available: record.available === true,
+    path: typeof record.path === 'string' ? record.path : '',
+    exists: record.exists === true,
+    fault:
+      record.fault === 'tampered' ? 'tampered' : record.fault === 'unreadable' ? 'unreadable' : 'none',
+    message: typeof record.message === 'string' ? record.message : '',
+  }
 }
 
 /**

@@ -577,4 +577,55 @@ describe('the list itself', () => {
       expect(SESSION_TOOLS.has(id)).toBe(false)
     }
   })
+
+  /*
+   * The guard behind the paragraph in `session-tools.ts` about saved passwords.
+   *
+   * A comment saying "there must never be a tool that reads a password" is
+   * kept true by somebody reading it. This is the version a test keeps true:
+   * every future addition to either list is matched against the words such a
+   * tool would inevitably be spelled with, and a `browser.logins` returning
+   * nothing but hostnames turns the build red rather than shipping.
+   *
+   * It is a name check and it is honest about being one — nobody is going to
+   * smuggle a credential reader in under the name `browser.step`. Its job is
+   * the *accidental* addition, which is how this kind of surface actually
+   * grows: somebody wants an agent to know which sites have logins, it sounds
+   * like metadata, and it is a map of where a person has accounts.
+   */
+  it('has no tool that reads, fills or enumerates a saved password', () => {
+    const forbidden = /password|passwd|login|credential|secret|keychain|autofill/i
+    for (const name of [...SESSION_TOOLS, ...ELSEWHERE_TOOLS]) {
+      expect(
+        forbidden.test(name),
+        `${name} names a credential surface — see the saved-password section in session-tools.ts before adding it`,
+      ).toBe(false)
+    }
+    // And the shapes somebody would actually reach for.
+    for (const id of [
+      'browser.logins',
+      'browser_logins',
+      'browser.password',
+      'browser_password',
+      'browser.fill',
+      'browser_fill',
+      'browser.autofill',
+      'browser_autofill',
+      'browser.lift',
+      'browser_lift',
+    ]) {
+      expect(SESSION_TOOLS.has(id)).toBe(false)
+      expect(ELSEWHERE_TOOLS.has(id)).toBe(false)
+    }
+  })
+
+  /*
+   * `ELSEWHERE_TOOLS` is a subtraction from `SESSION_TOOLS`, so nothing can
+   * appear on it that is not on the other — but the subtraction is the kind of
+   * derivation the file's own rule warns about, and this is what stops it
+   * silently widening if it ever becomes a second literal.
+   */
+  it('never grants a session on another computer more than one in this window', () => {
+    for (const name of ELSEWHERE_TOOLS) expect(SESSION_TOOLS.has(name)).toBe(true)
+  })
 })

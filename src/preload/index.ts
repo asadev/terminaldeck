@@ -2236,6 +2236,25 @@ const api = {
 
   browserPasswordsAvailable: (): Promise<unknown> =>
     ipcRenderer.invoke('browser-password:available'),
+  /*
+   * What is stored, where, and whether anything is wrong with it.
+   *
+   * `browser-password:available` answers one of those three and the manager
+   * needs all of them at once — including the file's path, because "kept in
+   * this machine's secure store" names nothing a person can look at or delete.
+   */
+  browserPasswordState: (): Promise<unknown> => ipcRenderer.invoke('browser-password:state'),
+  /*
+   * Show that file in the OS file manager. Answers whether there was one.
+   *
+   * `ShowFile` and never `Reveal`: in a password manager "reveal" means reveal
+   * the *password*, which is the one thing this family must never do, and
+   * `BrowserSection.test.tsx` asserts against that spelling on this bridge by
+   * name. Nothing here shows a secret — it opens a Finder window on an
+   * encrypted blob.
+   */
+  browserPasswordShowFile: (): Promise<unknown> =>
+    ipcRenderer.invoke('browser-password:show-file'),
   browserPasswords: (profileId: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-password:list', profileId),
   browserPasswordForget: (profileId: string, origin: string, username: string): Promise<unknown> =>
@@ -2254,6 +2273,53 @@ const api = {
     ipcRenderer.on('browser:password-offer', handler)
     return () => ipcRenderer.off('browser:password-offer', handler)
   },
+  /*
+   * The page has a sign-in form and there is a login saved for it.
+   *
+   * `filled` says whether the browser already put it in. False means the fill
+   * was deliberately withheld — `browser-fill-gate.ts` withholds on any page an
+   * agent navigated to or is holding, because a fill an agent can cause is an
+   * agent signing in as the person — and `note` is the sentence saying so.
+   *
+   * `usernames` and not credentials. There is no password in this shape, in
+   * either direction, which is the rule the whole family lives under.
+   */
+  onBrowserLoginAvailable: (
+    cb: (
+      id: string,
+      origin: string,
+      usernames: string[],
+      filled: boolean,
+      note: string,
+    ) => void,
+  ): (() => void) => {
+    const handler = (
+      _e: IpcRendererEvent,
+      id: string,
+      origin: string,
+      usernames: string[],
+      filled: boolean,
+      note: string,
+    ) => cb(id, origin, usernames, filled, note)
+    ipcRenderer.on('browser:login-available', handler)
+    return () => ipcRenderer.off('browser:login-available', handler)
+  },
+  /*
+   * Fill a saved login into the page, because somebody pressed for it.
+   *
+   * The one method on this bridge that causes a password to be *typed*, and it
+   * is here — on the window's bridge, behind an `ipcMain` channel — for exactly
+   * the reason `browserWorkerLift` is, stated a screen above: a channel on this
+   * bridge is reachable from this renderer and from nothing else. Not from a
+   * page in the browser, which gets a different and much smaller preload with
+   * no `invoke` on it at all, and not from an agent, which talks to the main
+   * process over a loopback MCP endpoint that dispatches tools rather than
+   * channels.
+   *
+   * It answers with a boolean. Nothing comes back but whether it happened.
+   */
+  browserPasswordFill: (id: string, username: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-password:fill', id, username),
 
   browserSignInDiagnose: (url: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-signin:diagnose', url),
