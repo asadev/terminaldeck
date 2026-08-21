@@ -216,11 +216,12 @@ declare module 'ssh2' {
   /**
    * The subsystem, opened over a connection that is already up.
    *
-   * Declared as narrowly as everything else in this file: three calls, which is
-   * every call a folder picker makes. `readdir` and `realpath` answer the two
-   * questions — *what is in here* and *what is `~` actually called* — and `end`
-   * closes the channel, which is not the connection: the pool below still owns
-   * that and still decides when the socket goes.
+   * Declared as narrowly as everything else in this file: six calls, which is
+   * every call a folder picker and a file handover make. `readdir` and
+   * `realpath` answer the two questions — *what is in here* and *what is `~`
+   * actually called* — `stat`, `mkdir` and `fastPut` are the three a handover
+   * takes, and `end` closes the channel, which is not the connection: the pool
+   * below still owns that and still decides when the socket goes.
    *
    * The errors carry a numeric `code` from RFC 4251 §7 (`3` is permission
    * denied, `2` is no such file), and that number is the only thing that
@@ -238,6 +239,43 @@ declare module 'ssh2' {
       path: string,
       callback: (err: (Error & { code?: number }) | undefined, absolute: string) => void,
     ): void
+    /**
+     * One entry's attributes, or an error whose `code` says which absence it is.
+     *
+     * Used to find a free name before writing, so `2` — no such file — is the
+     * *wanted* answer and every other code is a reason to stop.
+     */
+    stat(
+      path: string,
+      callback: (err: (Error & { code?: number }) | undefined, stats: Stats) => void,
+    ): void
+    /**
+     * Make one directory. Not recursive, and no `-p`: SFTP has no such verb.
+     *
+     * A path whose parent does not exist fails, and a path that already exists
+     * fails too — measured against OpenSSH 9.6 on Ubuntu 24.04 on 2026-08-21,
+     * where a second `mkdir` of the same folder answers **`4`**, which is
+     * `SSH_FX_FAILURE`: the same code an actual failure carries. (v4 and later
+     * of the protocol have `11` for it; OpenSSH speaks v3.) So the number cannot
+     * be read as *taken*, which is why the caller asks whether the folder is
+     * there instead. The rest of that run: `realpath('.')` answered `/root` —
+     * not `/home/root`, which is the guess this app never makes — `stat` of a
+     * missing path answered `2`, and `fastPut` landed 8 bytes that `stat` then
+     * reported as 8.
+     */
+    mkdir(path: string, callback: (err?: Error & { code?: number }) => void): void
+    /**
+     * Copy a local file to a remote path, in parallel chunks over this channel.
+     *
+     * The library's own read-and-write loop rather than a stream this side
+     * drives, because it pipelines: a 3 MB screenshot over a long link is one
+     * round trip's latency rather than one per 32 KB block.
+     *
+     * It creates or **truncates** the remote path. There is no `wx` here, so the
+     * caller is responsible for choosing a name that is free — see `putFile` in
+     * `connection.ts`, which says what that does and does not guarantee.
+     */
+    fastPut(localPath: string, remotePath: string, callback: (err?: Error & { code?: number }) => void): void
     end(): void
   }
 

@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { readSessions, resolveAgentSessions, resolveTarget, whyDisabled } from './agent-target'
+import {
+  namesFrom,
+  readSessions,
+  resolveAgentSessions,
+  resolveTarget,
+  submitLine,
+  whyDisabled,
+  type AgentServerShell,
+  type SendOutcome,
+} from './agent-target'
 
 /**
  * "It will just randomly send to anyone whatever I say here."
@@ -47,6 +56,12 @@ const MACHINES = {
   ],
   blocked: null,
 }
+
+/** Two terminals this window has open on one server, plus one still opening. */
+const SHELLS: AgentServerShell[] = [
+  { tabId: 't1', serverId: 's1', serverName: 'Office PC', shellId: 'sh-1', startIn: '', ended: false },
+  { tabId: 't2', serverId: 's1', serverName: 'Office PC', shellId: 'sh-2', startIn: '/srv/paperclip', ended: false },
+]
 
 describe('readSessions', () => {
   it('numbers within a project, the way the rail does', () => {
@@ -350,5 +365,289 @@ describe('resolveAgentSessions', () => {
     // Both let go, or a browser window closed while it was open leaves a
     // listener writing into a dead hook.
     expect(unsubscribed).toBe(2)
+  })
+})
+
+
+/**
+ * "It is not even showing this session, by the way, Office PC session."
+ *
+ * He said it with the server's own page on screen — the browser was pointed at
+ * `127.0.0.1:3100`, which was Office PC's, and the one session running on Office
+ * PC was the one row the picker did not have. Two lists reached this file and
+ * the third never had: a shell on a server is not in `session:list` and not in
+ * `machines:list`, because nothing at the far end keeps it.
+ */
+describe('terminals on servers', () => {
+  it('lists them after this machine’s and the paired machines’, under the server’s name', () => {
+    const rows = readSessions({ here: LIVE, elsewhere: MACHINES }, undefined, SHELLS)
+    expect(rows.map((row) => row.label)).toEqual([
+      'terminaldeck · Session 1',
+      'terminaldeck · Session 2',
+      'science-locus · Session 1',
+      'Studio PC · terminaldeck · Session 1',
+      'Studio PC · terminaldeck · Session 2',
+      'Studio PC · imza · Session 1',
+      // No folder: the shell landed wherever the sign-in did, which is what the
+      // rail calls `Office PC › Session 1`.
+      'Office PC · Session 1',
+      'Office PC · paperclip · Session 1',
+    ])
+  })
+
+  it('carries the server, the shell handle and the server’s name on the row', () => {
+    const row = readSessions([], undefined, SHELLS)[0]
+    expect(row).toMatchObject({
+      id: 't1',
+      serverId: 's1',
+      shellId: 'sh-1',
+      machineId: '',
+      machineName: 'Office PC',
+    })
+  })
+
+  it('numbers per server rather than continuing this machine’s count', () => {
+    // Two `terminaldeck` sessions are open here; the server's first shell is
+    // still its Session 1, the same rule the machines branch follows.
+    const rows = readSessions(LIVE, undefined, SHELLS)
+    expect(rows[3].label).toBe('Office PC · Session 1')
+  })
+
+  it('lists them even when there is no session list at all', () => {
+    // A window with nothing running on this Mac and no paired machine still has
+    // the shell it opened on a server, and the picker is the whole route to it.
+    expect(readSessions(null, undefined, SHELLS).map((row) => row.label)).toEqual([
+      'Office PC · Session 1',
+      'Office PC · paperclip · Session 1',
+    ])
+  })
+
+  it('drops a shell it cannot name a server for', () => {
+    // A row that cannot say which computer it is on is not a row — the same line
+    // `sessionsElsewhere` takes about a link whose machine has been forgotten.
+    const nameless: AgentServerShell[] = [
+      { tabId: 't9', serverId: 's9', serverName: '', shellId: 'sh-9', startIn: '', ended: false },
+    ]
+    expect(readSessions([], undefined, nameless)).toEqual([])
+  })
+
+  it('is not a target while the server is still opening it', () => {
+    // This window mints the tab id before it asks the server for anything, so
+    // for a second there is a row with no channel behind it. Listed, because it
+    // is in the rail; refused, because `servers:shell:write` has nothing to take.
+    const opening: AgentServerShell[] = [
+      { tabId: 't3', serverId: 's1', serverName: 'Office PC', shellId: '', startIn: '', ended: false },
+    ]
+    const rows = readSessions([], undefined, opening)
+    expect(rows).toHaveLength(1)
+    expect(resolveTarget('t3', rows)).toBeNull()
+    expect(whyDisabled('t3', rows, true)).toBe('That terminal on Office PC is still opening.')
+  })
+
+  it('is a target the moment the handle is there', () => {
+    const rows = readSessions([], undefined, SHELLS)
+    expect(resolveTarget('t1', rows)?.shellId).toBe('sh-1')
+    expect(whyDisabled('t1', rows, true)).toBe('')
+  })
+
+  it('is not a target once the far end has gone', () => {
+    const gone: AgentServerShell[] = [{ ...SHELLS[0], ended: true }]
+    const rows = readSessions([], undefined, gone)
+    expect(resolveTarget('t1', rows)).toBeNull()
+    expect(whyDisabled('t1', rows, true)).toMatch(/has exited/)
+  })
+})
+
+/**
+ * "Why do we have two commander sessions and none of this is calling template?"
+ *
+ * There was one copilot. The other row was a session he had started in the same
+ * folder and named himself, wearing the copilot's name because the rule matched
+ * on `cwd` — and matched *after* the line that stores what he typed, so it
+ * overwrote his own name with one he had not chosen.
+ */
+describe('namesFrom', () => {
+  const COPILOT_ROOT = '/Users/apple/Templates'
+  const stored = [
+    { id: 'cop', cwd: COPILOT_ROOT, title: 'Templates' },
+    { id: 'mine', cwd: COPILOT_ROOT, title: 'This mac session' },
+    { id: 'other', cwd: '/Users/apple/Projects/terminaldeck', title: 'terminaldeck' },
+  ]
+
+  it('names the copilot’s own session and no other session in its folder', () => {
+    const names = namesFrom(stored, { sessionId: 'cop', name: 'Commander' })
+    expect(names.get('cop')).toBe('Commander')
+    expect(names.get('mine')).toBe('This mac session')
+  })
+
+  it('leaves the name somebody typed alone, even in the copilot’s folder', () => {
+    // The exact frame: the rail read "Templates › This mac session" and the
+    // picker read "Commander".
+    const rows = readSessions(
+      [
+        { id: 'cop', cwd: COPILOT_ROOT, provider: 'claude', exitCode: null },
+        { id: 'mine', cwd: COPILOT_ROOT, provider: 'claude', exitCode: null },
+      ],
+      namesFrom(stored, { sessionId: 'cop', name: 'Commander' }),
+    )
+    expect(rows.map((row) => row.label)).toEqual(['Commander', 'This mac session'])
+  })
+
+  it('leaves an unnamed session in that folder as its folder and number', () => {
+    const names = namesFrom([{ id: 'cop', cwd: COPILOT_ROOT, title: 'Templates' }], {
+      sessionId: 'cop',
+      name: 'Commander',
+    })
+    const rows = readSessions(
+      [
+        { id: 'cop', cwd: COPILOT_ROOT, provider: 'claude', exitCode: null },
+        { id: 'fresh', cwd: COPILOT_ROOT, provider: 'claude', exitCode: null },
+      ],
+      names,
+    )
+    expect(rows.map((row) => row.label)).toEqual(['Commander', 'Templates · Session 2'])
+  })
+
+  it('takes a title only when it has moved on from the folder', () => {
+    // The main process seeds every session's title with the folder's name, so a
+    // title equal to it is the absence of a name rather than one.
+    const names = namesFrom(stored, { sessionId: null, name: 'Commander' })
+    expect(names.has('other')).toBe(false)
+    expect(names.has('cop')).toBe(false)
+  })
+
+  it('names nothing specially when there is no answer about the copilot', () => {
+    // No copilot channels in this build, or it is not running. Guessing which
+    // row is the copilot is the one thing worse than a folder name.
+    const names = namesFrom(stored, { sessionId: null, name: 'Commander' })
+    expect([...names.values()]).toEqual(['This mac session'])
+  })
+})
+
+/**
+ * No two rows may read the same words.
+ *
+ * A label is the only thing a person picks a session by, so two rows wearing one
+ * is a dropdown that cannot do its job. The naming defect that produced his two
+ * `Commander` rows is fixed above; this is the guard on the shape of it.
+ */
+describe('two rows never read the same', () => {
+  it('qualifies both of them with the folder and number they would have had', () => {
+    const rows = readSessions(LIVE, new Map([['a', 'deploy'], ['b', 'deploy']]))
+    expect(rows.map((row) => row.label)).toEqual([
+      'deploy — terminaldeck · Session 1',
+      'deploy — terminaldeck · Session 2',
+      'science-locus · Session 1',
+    ])
+  })
+
+  it('leaves a name reused on another computer alone, because the machine is already on it', () => {
+    const links = [
+      { ...MACHINES.links[0], sessions: [{ ...MACHINES.links[0].sessions[0], title: 'deploy' }] },
+    ]
+    const rows = readSessions(
+      { here: [LIVE[0]], elsewhere: { ...MACHINES, links } },
+      new Map([['a', 'deploy']]),
+    )
+    // Not a collision at all: a remote row is prefixed with its machine, so the
+    // two already read differently and neither gets a qualifier it does not need.
+    expect(rows.map((row) => row.label)).toEqual(['deploy', 'Studio PC · deploy'])
+  })
+
+  it('leaves a list with no collision exactly as it was', () => {
+    const rows = readSessions(LIVE, new Map([['a', 'deploy']]))
+    expect(rows.map((row) => row.label)).toEqual([
+      'deploy',
+      'terminaldeck · Session 2',
+      'science-locus · Session 1',
+    ])
+  })
+})
+
+/**
+ * "It should not be waiting us to come and send."
+ *
+ * He pressed Send in the browser's screenshot popup, walked to the session, and
+ * found the composed line typed and unsent in its prompt box — twice on camera,
+ * with the transcript above it still ending at *"Hi"*. The write carried no
+ * return at all, and appending one would not have fixed it: any chunk of 64
+ * bytes or more is read as pasted text, and every line this picker composes
+ * carries a path and a pixel size.
+ */
+describe('submitLine', () => {
+  const LINE = 'Look [browser screenshot with 1 mark on it of http://127.0.0.1:3100/: /Users/apple/Pictures/Terminal Deck/shot.png (2000 x 1251)]'
+
+  async function record(
+    line: string,
+    answer: (data: string) => SendOutcome = () => ({ ok: true }),
+  ): Promise<{ writes: string[]; waits: number[]; outcome: SendOutcome }> {
+    const writes: string[] = []
+    const waits: number[] = []
+    const outcome = await submitLine(
+      line,
+      async (data) => {
+        writes.push(data)
+        return answer(data)
+      },
+      async (ms) => {
+        waits.push(ms)
+      },
+    )
+    return { writes, waits, outcome }
+  }
+
+  it('writes the words and then the return, as two writes with a gap between', async () => {
+    const { writes, waits, outcome } = await record(LINE)
+    expect(writes).toEqual([LINE, '\r'])
+    expect(waits).toHaveLength(1)
+    // Measured in `chat/attach/mentions.ts`: back to back they are one chunk and
+    // nothing is sent; 30 ms apart submits.
+    expect(waits[0]).toBeGreaterThanOrEqual(30)
+    expect(outcome).toEqual({ ok: true })
+  })
+
+  it('never puts the return in the same chunk as the words', async () => {
+    // The whole defect in one assertion: a single write of `text + '\r'` is
+    // classified as a paste and its return is a newline.
+    const { writes } = await record(LINE)
+    expect(writes.every((chunk) => chunk === '\r' || !chunk.includes('\r'))).toBe(true)
+  })
+
+  it('waits before the return rather than after it', async () => {
+    const order: string[] = []
+    await submitLine(
+      LINE,
+      async (data) => {
+        order.push(data === '\r' ? 'return' : 'text')
+        return { ok: true }
+      },
+      async () => {
+        order.push('wait')
+      },
+    )
+    expect(order).toEqual(['text', 'wait', 'return'])
+  })
+
+  it('does not press return on a line that was refused', async () => {
+    const { writes, outcome } = await record(LINE, () => ({ ok: false, message: 'That folder is not shared.' }))
+    expect(writes).toEqual([LINE])
+    expect(outcome).toEqual({ ok: false, message: 'That folder is not shared.' })
+  })
+
+  it('reports the refusal when it is the return that failed', async () => {
+    // Rare, and honest: the characters landed and the submit did not, so the
+    // line is sitting in somebody's prompt. Claiming success because the words
+    // arrived is how this defect stayed invisible for a day.
+    const { outcome } = await record(LINE, (data) =>
+      data === '\r' ? { ok: false, message: 'That session has gone.' } : { ok: true },
+    )
+    expect(outcome).toEqual({ ok: false, message: 'That session has gone.' })
+  })
+
+  it('adds the trailing space a mention needs, and only for a mention', async () => {
+    // `terminalWrites` owns that rule; this is the assertion that this file uses
+    // it rather than reimplementing the pair.
+    expect((await record('@"/a/b.ts" explain')).writes[0]).toBe('@"/a/b.ts" explain ')
+    expect((await record('run the tests')).writes[0]).toBe('run the tests')
   })
 })

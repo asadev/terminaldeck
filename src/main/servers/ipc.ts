@@ -49,9 +49,9 @@
  * break that quietly.
  */
 
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { InvokeRegistrar } from '../ipc-seam'
 import { writeSecretFile } from '../remote/secret-file'
@@ -72,6 +72,7 @@ import {
   type AbsentAction,
   type DownloadFromServer,
   type ListServerFolder,
+  type PutFileOnServer,
   type OpenServerShell,
   type RunOnServer,
   type ServerRoom,
@@ -126,7 +127,8 @@ import { ActivityTracker } from '../session-activity'
 // One list of control names for the whole main process. Imported rather than
 // restated because this handler narrows an IPC argument against it and a second
 // copy is a second thing to forget when a control is added.
-import { CONTROL_IDS } from '../remote/protocol'
+import { CONTROL_IDS, MAX_UPLOAD_BYTES } from '../remote/protocol'
+import { byteSize } from '../../shared/byte-size'
 
 /* ------------------------------------------------------------- channels -- */
 
@@ -325,6 +327,17 @@ export interface ServersIpcDeps {
    * broken one, and is the same fallback a server with no SFTP subsystem gets.
    */
   listFolder?: ListServerFolder
+  /**
+   * Put a file from this computer onto the server, over the same SFTP channel.
+   *
+   * Optional like `listFolder`, and its absence is answered the same way: a
+   * sentence, so the surface that wanted to hand a session a file says it cannot
+   * rather than handing over a path on the wrong computer. That is not a
+   * hypothetical — a path on this laptop typed at a prompt on somebody's server
+   * is a file the agent goes looking for, does not find, and reports missing to
+   * a person who is looking straight at it on their own screen.
+   */
+  putFile?: PutFileOnServer
   /**
    * Copy a file off the server. **Absent today**, and its absence is a stated
    * fact rather than a gap: `connection.ts` exposes `run`, `runScript`, `probe`
@@ -1140,6 +1153,52 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
         return { ok: true, shellId }
       } catch (error) {
         return failed(error)
+      }
+    },
+  )
+
+  /**
+   * Put a file on the server and answer **its** path for it.
+   *
+   * Answers `{ ok, path }` / `{ ok, message }` rather than this file's own
+   * `ServerResult`, and the difference is deliberate: the one consumer is
+   * `renderer/session-transfer.ts`, which reads exactly that shape from
+   * `machines:upload` as well, and one reader over two channels is what keeps a
+   * file going to a server and a file going to a paired PC from drifting into
+   * two behaviours. `readHandover` over there refuses an `ok` with no path,
+   * which is the one wrong answer either channel could give.
+   *
+   * The size is checked here, before anything is dialled, for the reason
+   * `upload-send.ts` checks it before announcing anything: an over-size file
+   * should be one sentence rather than a connection and then a sentence.
+   */
+  ipcMain.handle(
+    'servers:upload',
+    async (
+      _event,
+      serverId: unknown,
+      filePath: unknown,
+    ): Promise<{ ok: true; path: string } | { ok: false; message: string }> => {
+      if (typeof serverId !== 'string' || typeof filePath !== 'string' || filePath === '') {
+        return { ok: false, message: 'That is not a server and a file.' }
+      }
+      if (deps.putFile === undefined) {
+        return { ok: false, message: 'This copy of the app cannot put a file on a server.' }
+      }
+      let size = 0
+      try {
+        size = statSync(filePath).size
+      } catch {
+        return { ok: false, message: 'That file is not there any more.' }
+      }
+      if (size > MAX_UPLOAD_BYTES) {
+        return { ok: false, message: `That file is larger than ${byteSize(MAX_UPLOAD_BYTES)}.` }
+      }
+      try {
+        return { ok: true, path: await deps.putFile(serverId, filePath, basename(filePath)) }
+      } catch (error) {
+        const answer = failed(error)
+        return { ok: false, message: answer.sentence || 'That file did not send.' }
       }
     },
   )

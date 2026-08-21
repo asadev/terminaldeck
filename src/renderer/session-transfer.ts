@@ -50,6 +50,20 @@
  * protocol for the same act would be a second set of bugs and the host would
  * have had to grow a branch for it.
  *
+ * ## The third leg, and why it is genuinely a third
+ *
+ * A terminal on a **server** is a session too, and until 2026-08-21 it was the
+ * one kind this file could not answer for: a server row carries no `machineId`,
+ * so it fell through {@link runsHere} and was handed a path on this laptop —
+ * silently, which is the worst of the three possible wrongs. That is the exact
+ * case in the quotation above, where he says *"the session which is in server"*.
+ *
+ * It is not `uploadToMachine` with a different id, because there is no relay and
+ * no copy of this app over there: it is SFTP on the connection the servers area
+ * is already holding (`servers:upload` → `servers/connection.ts`'s `putFile`).
+ * What the two legs share is their **answer**, read by one {@link readHandover}
+ * — so the two cannot drift into different behaviour for the same act.
+ *
  * ## Bytes, and why they become a file before they go anywhere
  *
  * A drop hands over a path; a **paste** and a screenshot taken out of a web page
@@ -77,6 +91,16 @@ export interface SessionPlace {
   machineId: string
   /** What that machine is called here. Empty for this one. Never guessed. */
   machineName?: string
+  /**
+   * The server it is a terminal on. Absent or empty means it is not one.
+   *
+   * Never set at the same time as {@link machineId}: a session runs on this
+   * computer, on a paired machine, or on a server, and the three are three
+   * routes rather than three shades of one. Optional because most callers
+   * predate servers having sessions at all and mean "not a server" by saying
+   * nothing — which is what {@link runsHere} reads it as.
+   */
+  serverId?: string
 }
 
 /** A path on the machine the session runs on, or a sentence saying why not. */
@@ -116,11 +140,27 @@ export interface TransferBridge {
    * to remove.
    */
   stageForSession?(name: string, bytes: ArrayBuffer): Promise<unknown>
+  /**
+   * Send a file on this machine to a **server**, and answer where it landed.
+   *
+   * Optional for the same reason `stageForSession` is: a preload older than this
+   * channel must refuse a transfer to a server with a sentence rather than throw
+   * `undefined is not a function` into a click handler. The server names the
+   * file, exactly as a paired machine does, so the answer may not be the name it
+   * left with.
+   */
+  uploadToServer?(serverId: string, filePath: string): Promise<unknown>
 }
 
-/** True when the session runs on the computer this window is running on. */
+/**
+ * True when the session runs on the computer this window is running on.
+ *
+ * Both fields, because either one of them being set means it does not. Reading
+ * `machineId` alone is what handed a terminal on a server a path under this
+ * Mac's Pictures folder, with nothing on screen saying anything had gone wrong.
+ */
 export function runsHere(place: SessionPlace | null | undefined): boolean {
-  return !place || place.machineId === ''
+  return !place || (place.machineId === '' && (place.serverId ?? '') === '')
 }
 
 /** True when this source is bytes rather than a file already on disk. */
@@ -208,10 +248,16 @@ export async function pathForSession(
   // path is that machine's path. Nothing crosses anything.
   if (runsHere(place)) return { ok: true, path: here }
 
-  // Different machine: the far end names the file and answers with its own
-  // path, which is what gets handed over. `place` is non-null here — `runsHere`
-  // is true for null — and TypeScript needs saying so.
+  // Somewhere else: the far end names the file and answers with its own path,
+  // which is what gets handed over. `place` is non-null here — `runsHere` is
+  // true for null — and TypeScript needs saying so.
   const there = place as SessionPlace
+  if ((there.serverId ?? '') !== '') {
+    if (typeof api.uploadToServer !== 'function') {
+      return { ok: false, message: 'Sending files to a server is not available in this build.' }
+    }
+    return readHandover(await api.uploadToServer(there.serverId as string, here).catch(() => null))
+  }
   return readHandover(
     await api.uploadToMachine(there.machineId, here).catch(() => null),
   )

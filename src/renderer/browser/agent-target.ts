@@ -1,3 +1,4 @@
+import { SUBMIT_GAP_MS, terminalWrites } from '../chat/attach/mentions'
 import { folderName } from '../session-title'
 import { machineChoices, readMachines } from './machines-bridge'
 
@@ -85,6 +86,54 @@ import { machineChoices, readMachines } from './machines-bridge'
  * that said "Sent" about a line dropped on the floor is the thing this whole
  * file exists to not do.
  *
+ * ## Terminals on servers, which were the third of three lists
+ *
+ * `session:list` is this machine's ptys and `machines:list` is the machines
+ * running this app. A shell on a **server** is neither, and for the same reason
+ * it is neither in any other file: nothing at the far end keeps it, so there is
+ * nothing to ask — the list is this window's own (`machines/servers/
+ * server-sessions.ts`, which opens with that argument). It reached the rail, the
+ * strip and the window bar and never reached this picker.
+ *
+ * Asad found the gap with the server's own page on screen, 2026-08-21:
+ *
+ *   > *"Now let's say I give same to Office PC, if it will show. **It is not
+ *   > even showing this session**, by the way, Office PC session. So this is
+ *   > another thing to remember."*
+ *
+ * The page he had just screenshotted was being served by Office PC and the one
+ * session running on Office PC was the one session he could not send it to. So
+ * {@link readSessions} takes the open shells as its third argument — a
+ * parameter rather than a fourth channel on the bridge, because they are React
+ * state in this window and there is no IPC call that could answer for them — and
+ * they are labelled by the same {@link labelFor} the other two lists use, under
+ * the server's name where a machine's name goes.
+ *
+ * A shell that is still opening is listed and is **not** a target: this window
+ * mints a tab id before it asks the server for anything, so for a moment there
+ * is a row with no handle behind it. It says so in {@link whyDisabled} rather
+ * than being hidden, because the row is already in the rail and a picker that
+ * disagrees with the rail about what is open is the failure this file exists to
+ * avoid.
+ *
+ * ## Send means sent
+ *
+ * The last thing this file learnt is that a line is not delivered until it has
+ * been **submitted**. Asad, 2026-08-21, having pressed Send and then found the
+ * message sitting in the target session's prompt box:
+ *
+ *   > *"When we send from here, in the session, it should not be waiting us to
+ *   > come and send… Just make it like this send actually send and pushed inside
+ *   > the session also."*
+ *
+ * The write was `writeToSession(id, line)` with no return at all, and the fix is
+ * not to append one: `chat/attach/mentions.ts` measured the CLI classifying any
+ * stdin chunk of 64 bytes or more as **pasted text**, where a carriage return is
+ * a newline rather than submit — and every line this picker composes carries a
+ * screenshot path, so every one of them is over that. {@link submitLine} is the
+ * two writes that work, `SUBMIT_GAP_MS` apart, and it is the same pair for all
+ * three routes because it is the same pty on the other end of each of them.
+ *
  * ## The labels are built here, and now they carry the name somebody typed
  *
  * The rail's numbering lives in `renderer/shell`, which this file may not reach
@@ -139,8 +188,34 @@ export interface AgentSession {
    * *how*, which is the routing in `useAgentTarget`.
    */
   machineId: string
-  /** What that machine is called here, or empty for this one. Never guessed. */
+  /**
+   * What the computer it runs on is called here, or empty for this one.
+   *
+   * A paired machine's name or a server's, because the two rows say it in the
+   * same place and every sentence about a failed send names it the same way.
+   * Never guessed: a machine this window cannot name is not listed at all.
+   */
   machineName: string
+  /**
+   * The server it is a shell on, or empty.
+   *
+   * Never set at the same time as {@link machineId}: a session runs on this
+   * computer, on a machine running this app, or on a server, and those are three
+   * different routes rather than three shades of one. `session-transfer.ts`
+   * reads both fields off this row for the same reason — where the file has to
+   * end up is the same question as where the line has to go.
+   */
+  serverId: string
+  /**
+   * The far end's handle for that shell, or empty while it is still opening.
+   *
+   * The picker chooses server rows by their **tab** id, which this window mints
+   * before it asks the server for anything, so the row can exist for a moment
+   * with no channel behind it. This is the handle `servers:shell:write` actually
+   * takes, and its emptiness is what {@link resolveTarget} refuses on — an
+   * honest "not yet" rather than a press that writes into nothing.
+   */
+  shellId: string
 }
 
 /** The slice of `window.deck` this needs. Everything else about it is irrelevant. */
@@ -327,6 +402,61 @@ export type NameSource = ReadonlyMap<string, string>
 const NO_NAMES: NameSource = new Map()
 
 /**
+ * The names this window is using, out of the two places it keeps them.
+ *
+ * A function rather than a `useMemo` body, for the reason every rule in this
+ * file is one: it is a *rule about a list*, and this project's tests have no DOM
+ * to run a hook in — so a rule left inside a hook is a rule nothing can stand
+ * on. `useAgentTarget` calls it and does nothing else with either source.
+ *
+ * The two sources, and neither of them is the session list the picker reads:
+ *
+ *  - **The store**, which is where a rename typed in the rail lands and where
+ *    the auto-titler writes what an agent has called itself. It is React state
+ *    in this window and never reaches the main process, so `session:list` could
+ *    not carry it even in principle. A title that is still the folder's own name
+ *    is the *absence* of a name and is skipped — {@link nameOf} says the same
+ *    thing about the list's own title, and leaving the folder in here would
+ *    override the far better title the main process may have derived.
+ *  - **The copilot**, whose name is the one session name in this app that is not
+ *    a session property at all: it lives in its instruction file.
+ *
+ * ## The copilot is named by its session, not by its folder
+ *
+ * This matched on the copilot's working directory for a day, and a folder does
+ * not name one session — it names everything anybody starts in it. Asad,
+ * 2026-08-21, having started a session of his own in that folder and renamed it
+ * in the rail:
+ *
+ *   > *"Why all of them calls commander now? I mean, why do we have two
+ *   > commander sessions and none of this is calling template? **This Mac
+ *   > session, the one I just called.** See, this is also a problem."*
+ *
+ * There were not two copilots. There was one, plus his own session wearing its
+ * name — and because the folder match ran *after* the loop above, it overwrote
+ * the name he had typed with a name he had not. So the copilot's row is keyed on
+ * its id, and it is applied after the loop rather than inside it because the
+ * copilot's session need not be in the store this window is holding.
+ *
+ * A null id is a real answer — no copilot channels in this build, the copilot is
+ * not running, the read failed — and the honest response to it is to name
+ * nothing specially, rather than to guess which row is the copilot.
+ */
+export function namesFrom(
+  stored: readonly { id: string; cwd: string; title: string }[],
+  copilot: { sessionId: string | null; name: string },
+): NameSource {
+  const map = new Map<string, string>()
+  for (const session of stored) {
+    if (session.title && session.title !== folderName(session.cwd)) map.set(session.id, session.title)
+  }
+  if (copilot.sessionId !== null && copilot.sessionId !== '' && copilot.name !== '') {
+    map.set(copilot.sessionId, copilot.name)
+  }
+  return map
+}
+
+/**
  * The name somebody gave it, or `folder · Session 2` when nobody has.
  *
  * One function because the two lists have to number the same way. A remote
@@ -378,6 +508,8 @@ function sessionsHere(value: unknown, named: NameSource): AgentSession[] {
       label: labelFor(session.cwd, index, name),
       machineId: '',
       machineName: '',
+      serverId: '',
+      shellId: '',
     })
   }
   return out
@@ -434,10 +566,121 @@ function sessionsElsewhere(value: unknown, named: NameSource): AgentSession[] {
         ended: session.exitCode !== null,
         machineId: link.id,
         machineName,
+        serverId: '',
+        shellId: '',
       })
     }
   }
   return out
+}
+
+/**
+ * One shell this window has open on a server, as this picker needs to see it.
+ *
+ * Four of its fields come straight off `machines/servers/server-sessions.ts`'s
+ * `ServerSession`; `ended` is its `status` reduced to the one transition this
+ * list cares about, and `shellId` is the handle the window learns *afterwards*
+ * and keeps beside that list. It is declared here rather than imported so this
+ * module stays reachable from a test with no window around it — the same reason
+ * {@link AgentSession} mirrors `SessionMeta` instead of importing it.
+ */
+export interface AgentServerShell {
+  /** The tab id: what the rail, the strip and this picker all choose by. */
+  tabId: string
+  serverId: string
+  /** What that server is called here. */
+  serverName: string
+  /** `servers:shell:write`'s handle, or empty while the shell is opening. */
+  shellId: string
+  /** The folder it was opened in, or empty for wherever the sign-in lands. */
+  startIn: string
+  /** The far end has gone: somebody typed `exit`, or the link dropped. */
+  ended: boolean
+}
+
+/**
+ * The shells this window has open on servers, as rows.
+ *
+ * Numbered per folder **per server**, which is the rule the machines branch
+ * above states and for the same reason: a shell on Office PC that read
+ * `Session 3` because two are open on this Mac would be a number matching
+ * nothing on either screen. A shell opened with no folder — wherever the
+ * account's sign-in lands, which is what SSH gives you and what this app did for
+ * the whole life of the feature — is numbered in its own group and reads
+ * `Office PC · Session 1`, which is exactly what the rail calls it.
+ *
+ * `named` is passed and contributes nothing today, and that is deliberate rather
+ * than an oversight: nothing in this app renames a shell on a server, so the map
+ * — which is built from this window's session store — holds no entry for one.
+ * Forking a second labelling rule to say so would be the drift the one
+ * {@link labelFor} exists to prevent.
+ */
+function sessionsOnServers(
+  shells: readonly AgentServerShell[],
+  named: NameSource,
+): AgentSession[] {
+  const counts = new Map<string, number>()
+  const out: AgentSession[] = []
+  for (const shell of shells) {
+    if (shell.tabId === '' || shell.serverId === '' || shell.serverName === '') continue
+    const key = `${shell.serverId}\u0000${shell.startIn}`
+    const index = (counts.get(key) ?? 0) + 1
+    counts.set(key, index)
+    const name = nameOf(shell.tabId, shell.startIn, '', named)
+    out.push({
+      id: shell.tabId,
+      cwd: shell.startIn,
+      name,
+      label: `${shell.serverName} · ${labelFor(shell.startIn, index, name)}`,
+      // Nothing on this side classifies what is running in a shell on a server:
+      // it is a login shell until somebody types something into it, and this
+      // window never sees what. An empty string is that, rather than a guess
+      // that would print the wrong agent's name beside the row.
+      provider: '',
+      ended: shell.ended,
+      machineId: '',
+      machineName: shell.serverName,
+      serverId: shell.serverId,
+      shellId: shell.shellId,
+    })
+  }
+  return out
+}
+
+/**
+ * The same rows, with no two of them reading the same words.
+ *
+ * A label is what somebody picks a session by, so two rows wearing one label is
+ * a dropdown that cannot be used for its only purpose. Asad, 2026-08-21, with
+ * two rows both reading `Commander`: *"Why all of them calls commander now? I
+ * mean, why do we have two commander sessions and none of this is calling
+ * template?"* — the naming defect that caused that pair is fixed in
+ * {@link namesFrom}, and this is the guard that keeps the *shape* of it from
+ * coming back through any other route: two sessions a person has typed the same
+ * name into, an agent that titled itself the same as its neighbour.
+ *
+ * The qualifier is the label the row would have had with no name at all, which
+ * is the one thing that is already unique — folder and position, or the server's
+ * name and position. Only a colliding row wears it, so the ordinary list is
+ * untouched, and a row is never re-qualified twice: running this over a list it
+ * has already fixed finds no collisions and changes nothing.
+ */
+function distinctLabels(rows: readonly AgentSession[]): AgentSession[] {
+  const seen = new Map<string, number>()
+  for (const row of rows) seen.set(row.label, (seen.get(row.label) ?? 0) + 1)
+  const counts = new Map<string, number>()
+  return rows.map((row) => {
+    if ((seen.get(row.label) ?? 0) < 2) return row
+    // The same per-group counter the unnamed rows are numbered with, recomputed
+    // here because a row that carries a name never asked for its number and does
+    // not carry it. The group is the machine or server it is on plus its folder,
+    // which is what makes the answer match the number the rail would show.
+    const key = `${row.machineId}\u0000${row.serverId}\u0000${row.cwd}`
+    const index = (counts.get(key) ?? 0) + 1
+    counts.set(key, index)
+    const where = row.machineName === '' ? '' : `${row.machineName} · `
+    return { ...row, label: `${row.label} — ${where}${labelFor(row.cwd, index, '')}` }
+  })
 }
 
 /**
@@ -448,21 +691,32 @@ function sessionsElsewhere(value: unknown, named: NameSource): AgentSession[] {
  * "Session 2". A session with no folder is numbered in its own group rather
  * than being thrown in with the first project's, because it belongs to none.
  *
- * This machine's sessions come first and the remote ones follow, grouped by the
- * machine they run on. Same order as the machine picker beside it, where "this
- * machine" is always the first row — and the useful order besides, since the
- * rows at the top are the ones a send can actually reach.
+ * This machine's sessions come first, then the ones on paired machines, then the
+ * shells open on servers — grouped by the computer they run on. Same order as
+ * the machine picker beside it, where "this machine" is always the first row and
+ * the servers are last, and the useful order besides.
+ *
+ * `shells` is a parameter rather than a third channel on the bridge because
+ * there is nothing to ask: a shell on a server exists because this window is
+ * holding a connection to it, so this window's own list is the only list there
+ * is. See {@link AgentServerShell}.
  */
-export function readSessions(value: unknown, named: NameSource = NO_NAMES): AgentSession[] {
+export function readSessions(
+  value: unknown,
+  named: NameSource = NO_NAMES,
+  shells: readonly AgentServerShell[] = [],
+): AgentSession[] {
+  const servers = sessionsOnServers(shells, named)
   // A bare array is this machine's sessions and nothing else. See the note on
   // `AgentSessionBridge.listSessions`: that is a real answer, not an old one.
-  if (Array.isArray(value)) return sessionsHere(value, named)
-  if (typeof value !== 'object' || value === null) return []
+  if (Array.isArray(value)) return distinctLabels([...sessionsHere(value, named), ...servers])
+  if (typeof value !== 'object' || value === null) return distinctLabels(servers)
   const envelope = value as Record<string, unknown>
-  return [
+  return distinctLabels([
     ...sessionsHere(envelope.here, named),
     ...sessionsElsewhere(envelope.elsewhere, named),
-  ]
+    ...servers,
+  ])
 }
 
 /**
@@ -479,6 +733,12 @@ export function readSessions(value: unknown, named: NameSource = NO_NAMES): Agen
  * attaching. `session.send` is that verb, so a remote row is now a target like
  * any other and the machine it is on decides the *route* rather than the answer.
  * The header carries the mechanism.
+ *
+ * There is a fourth again, and it is a *moment* rather than a state: a shell on
+ * a server whose handle has not come back yet. That row is real — it is in the
+ * rail, and this window opened it — but `servers:shell:write` has nothing to
+ * take, so it is refused for the second or two it takes the server to answer,
+ * with its own sentence in {@link whyDisabled}.
  */
 export function resolveTarget(
   chosenId: string,
@@ -487,6 +747,7 @@ export function resolveTarget(
   if (!chosenId) return null
   const found = sessions.find((session) => session.id === chosenId)
   if (!found || found.ended) return null
+  if (found.serverId !== '' && found.shellId === '') return null
   return found
 }
 
@@ -514,6 +775,12 @@ export function whyDisabled(
   const found = sessions.find((session) => session.id === chosenId)
   if (!found) return 'That session is gone. Choose another one.'
   if (found.ended) return `${found.label} has exited. Choose another one.`
+  // The one refusal on this list that clears itself: the server is opening the
+  // shell and has not answered with its handle. Saying so beats a button that
+  // works a second later with no explanation of why it did not before.
+  if (found.serverId !== '' && found.shellId === '') {
+    return `That terminal on ${found.machineName} is still opening.`
+  }
   /*
    * Two sentences about machines used to live here — one for a list that was
    * entirely remote, one for a remote row that had been chosen — and both were
@@ -524,4 +791,58 @@ export function whyDisabled(
    * shows it there rather than predicting it here.
    */
   return ''
+}
+
+/* ------------------------------------------------------------- sending -- */
+
+/** What one write to a session came back with. A sentence only when it failed. */
+export type SendOutcome = { ok: true } | { ok: false; message: string }
+
+/**
+ * Put one line into a session **and submit it**.
+ *
+ * ## Why this is two writes and not a string with a `\r` on the end
+ *
+ * Because the CLI on the other end classifies each stdin chunk before it looks
+ * at the keys in it, and a chunk of 64 bytes or more is *pasted text*, where a
+ * carriage return is a newline rather than submit. `chat/attach/mentions.ts`
+ * measured that and owns the sequence; this calls its {@link terminalWrites} so
+ * there is one description of the trap and not two.
+ *
+ * Every line this picker composes carries a screenshot path and a size, so every
+ * one of them is well over that limit. A single write is therefore not "usually
+ * fine" here — it is a send button that never submits anything, which is exactly
+ * what Asad filmed: the composed line sitting unsent in the target session's
+ * prompt while the transcript above it still ended at *"Hi"*.
+ *
+ * ## Why the gap is real time
+ *
+ * The chunk is the unit being classified, so anything producing one `write` — a
+ * longer string, `\r\n`, the two concatenated — is one chunk and is read as a
+ * paste. The Return only arrives *as a key* when it is alone in its own read,
+ * which means a gap on the clock. `wait` is a parameter so a test can supply a
+ * fake one rather than sleeping.
+ *
+ * ## What it answers when the second write is the one that fails
+ *
+ * The second write's refusal, which means a caller can be told "it did not
+ * arrive" about a line that is now sitting typed and unsent in somebody's
+ * prompt. That is the honest report of what happened and it is the rarer half of
+ * a case that needs a session to exit inside fifty milliseconds; claiming
+ * success because the *characters* landed is how the defect this function exists
+ * for was invisible for a day.
+ */
+export async function submitLine(
+  line: string,
+  write: (data: string) => Promise<SendOutcome>,
+  wait: (ms: number) => Promise<void> = (ms) =>
+    new Promise((done) => {
+      setTimeout(done, ms)
+    }),
+): Promise<SendOutcome> {
+  const [typed, submit] = terminalWrites(line)
+  const first = await write(typed)
+  if (!first.ok) return first
+  await wait(SUBMIT_GAP_MS)
+  return write(submit)
 }

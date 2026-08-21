@@ -802,6 +802,21 @@ const api = {
   serverStartIn: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:start-in', id),
   setServerStartIn: (id: string, path: string | null): Promise<unknown> =>
     ipcRenderer.invoke('servers:start-in:set', id, path),
+  /*
+   * Put a file from this computer onto that server, and answer its path there.
+   *
+   * The server's half of `uploadToMachine`, and the reason it exists is the rule
+   * `renderer/session-transfer.ts` opens with: whatever a session is handed must
+   * exist on the machine that session runs on. A terminal on a server is a
+   * session, so a screenshot sent to one has to cross — a path under this Mac's
+   * Pictures folder is a file that agent will go looking for and not find.
+   *
+   * A path, never the bytes, for the same reason the machines channel takes one:
+   * the main process streams it off disk over the SFTP subsystem on whatever
+   * connection is already open, so a large file never enters the renderer's heap.
+   */
+  uploadToServer: (id: string, filePath: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:upload', id, filePath),
   writeToServerShell: (shellId: string, data: string): Promise<unknown> =>
     ipcRenderer.invoke('servers:shell:write', shellId, data),
   resizeServerShell: (shellId: string, cols: number, rows: number): Promise<unknown> =>

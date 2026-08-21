@@ -40,7 +40,7 @@ import {
   type SignInTrouble,
 } from './accounts-bridge'
 import { useAgentTarget } from './useAgentTarget'
-import type { AgentSessionBridge } from './agent-target'
+import type { AgentServerShell, AgentSessionBridge } from './agent-target'
 import {
   appCanvasColor,
   humanError,
@@ -229,6 +229,22 @@ export interface BrowserWorkspaceProps {
    * one and not the other should cost the picker rather than the browser.
    */
   sessionBridge?: AgentSessionBridge | null
+  /**
+   * The terminals this window has open on servers, for the send picker.
+   *
+   * A prop rather than something this panel reads for itself, because there is
+   * nothing to read: a server runs no copy of this app, so a shell on one exists
+   * only while this window is holding its connection and the window's own list
+   * is the whole of it (`machines/servers/server-sessions.ts` opens with that
+   * argument). Without it, the one session running on the very machine serving
+   * the page on screen was the one session the picker could not offer — which is
+   * what Asad found on 2026-08-21: *"It is not even showing this session, by the
+   * way, Office PC session."*
+   *
+   * Absent is an empty list, which is the honest answer for a host with no
+   * servers area and for every test that mounts this panel on its own.
+   */
+  serverShells?: readonly AgentServerShell[]
   /**
    * Per-tab isolation, which is optional rather than required.
    *
@@ -426,6 +442,7 @@ export function BrowserWorkspace({
   onStartUrl,
   bridge,
   sessionBridge,
+  serverShells,
   isolation,
   draw,
 }: BrowserWorkspaceProps) {
@@ -438,7 +455,7 @@ export function BrowserWorkspace({
    * place, and that is the whole of "that specific popup from that browser links
    * to one session".
    */
-  const agent = useAgentTarget(sessionBridge)
+  const agent = useAgentTarget(sessionBridge, serverShells)
   const iso = useMemo(() => isolation ?? resolveIsolationApi(), [isolation])
   const drawApi = useMemo(() => draw ?? resolveDrawApi(), [draw])
   const driveApi = useMemo(() => resolveDriveApi(), [])

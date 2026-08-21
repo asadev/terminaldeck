@@ -1934,6 +1934,12 @@ function registerIpc(): void {
     // verb here makes — there is still no timer and nothing connected to a
     // server nobody is looking at.
     listFolder: (serverId, path) => serverConnections.listDirectory(serverId, path),
+    // The other half of the folder picker's channel: a file *onto* the server,
+    // so a terminal running there can be handed a path its own machine can open.
+    // The folder is this app's name, decided here rather than in `connection.ts`
+    // — the SSH layer has no business knowing what this app is called.
+    putFile: (serverId, localPath, name) =>
+      serverConnections.putFile(serverId, localPath, name, BRAND.name),
     // §5.4 in one pair of lines: the page holds the connection while it is open
     // and lets go when it closes. There is no timer here and no keep-alive, and
     // a server nobody is looking at is not dialled at all.

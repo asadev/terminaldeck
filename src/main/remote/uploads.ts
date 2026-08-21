@@ -555,8 +555,17 @@ function capBytes(name: string, cap: number): string {
   return capped === extension && extension.length > 0 ? extension.slice(0, cap) : capped || 'file'
 }
 
-/** `photo.jpg`, then `photo (2).jpg`, and so on. Lazily, so most names cost one. */
-function* nameVariants(name: string): Generator<string> {
+/**
+ * `photo.jpg`, then `photo (2).jpg`, and so on. Lazily, so most names cost one.
+ *
+ * Exported for the same reason {@link safeName} is: it is a *rule* about what a
+ * landing file is called, and every place a file lands has to use the same one
+ * or the app names the same photo two ways depending on which computer it went
+ * to. `servers/connection.ts` is the second caller — a file put on a server over
+ * SFTP — and it walks these variants against the far end's `stat` exactly as the
+ * store below walks them against `open(…, 'wx')`.
+ */
+export function* nameVariants(name: string): Generator<string> {
   yield name
   const extension = extname(name)
   const stem = extension === '' ? name : name.slice(0, -extension.length)

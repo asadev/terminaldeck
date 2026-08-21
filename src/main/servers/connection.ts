@@ -59,6 +59,7 @@
 
 import { createHash } from 'node:crypto'
 import { Client, type Channel, type FileEntry, type SFTPWrapper } from 'ssh2'
+import { nameVariants, safeName } from '../remote/uploads'
 import type { ServerFacts } from './facts'
 import { PROBE_SCRIPT, parseProbe } from './probe.sh'
 import type { ServerCredentials } from './credentials'
@@ -596,6 +597,75 @@ export class ServerConnections {
     })
   }
 
+  /**
+   * Put a file from this computer onto a server, and answer **its** path for it.
+   *
+   * ## Why this exists
+   *
+   * Because of the rule `renderer/session-transfer.ts` states in one sentence:
+   * whatever a session is handed must exist on the machine that session runs on,
+   * named by that machine's path. That was true for this computer and for a
+   * paired machine — which uploads over the relay — and was not true for a
+   * terminal on a server, so the browser's screenshot popup had nothing honest
+   * to hand one. Asad, 2026-08-20, describing exactly this case before the
+   * picker could even list a server's sessions:
+   *
+   *   > *"if I send those to the session which is in server but the browser was
+   *   > in local, it will send the path of my current PC instead of the server
+   *   > where actually session is running. So in that case session will not be
+   *   > able to see the things that I have sent."*
+   *
+   * ## Where it lands, and why not `~/Downloads`
+   *
+   * `<login directory>/<folder>`, where `folder` is this app's own name and the
+   * login directory is whatever the **server** resolved `.` to — never
+   * `/home/<username>` assembled here, which is wrong for `root`, wrong on macOS
+   * and wrong on any account whose home has been moved. A desktop puts these in
+   * `<downloads>/<app name>` because a desktop has a Downloads folder that a
+   * person opens; a server usually has no such folder and creating one would be
+   * this app deciding how somebody's server is laid out. One folder, named after
+   * the app that made it, is the smallest honest footprint.
+   *
+   * ## What the free-name search does and does not promise
+   *
+   * `photo.jpg`, then `photo (2).jpg` — the same rule as every other landing
+   * place in this app, because it is the same rule: `safeName` and the variants
+   * come from `remote/uploads.ts` and are not restated here. The name is chosen
+   * by asking whether it is taken, which is a **check and not a reservation**:
+   * `fastPut` truncates, and SFTP's own exclusive-create cannot be told from an
+   * ordinary failure on an SFTPv3 server, which is every server this has been
+   * pointed at. Two files racing for one name in this folder would need two
+   * desktops writing to one server in the same instant, into a folder nothing
+   * but this app writes to; the alternative is a code path that reads `4` as
+   * *taken* and silently gives up on a real failure.
+   *
+   * Nothing is deleted, ever, and nothing is overwritten by name.
+   */
+  async putFile(serverId: string, localPath: string, name: string, folder: string): Promise<string> {
+    return this.withConnection(serverId, async (client) => {
+      const sftp = await openSftp(client)
+      try {
+        const home = await realpath(sftp, '.')
+        // SFTP paths are `/`-separated whatever the server runs, including a
+        // Windows OpenSSH server, whose `realpath` answers `/C:/Users/…`. This
+        // is the one place a path is assembled on this side, and it is assembled
+        // from an answer the server gave.
+        const dir = `${home.replace(/\/+$/, '')}/${folder}`
+        await ensureDirectory(sftp, dir)
+        for (const candidate of nameVariants(safeName(name))) {
+          const target = `${dir}/${candidate}`
+          if (await exists(sftp, target)) continue
+          await fastPut(sftp, localPath, target)
+          return target
+        }
+        throw new ServerProblem('lost', 'Every variant of that file name is taken on that server.')
+      } finally {
+        // The channel, not the connection — the same as `listDirectory`.
+        sftp.end()
+      }
+    })
+  }
+
   /* ------------------------------------------------------------- dialling -- */
 
   private async dial(serverId: string): Promise<Client> {
@@ -880,6 +950,65 @@ function sftpProblem(error: Error & { code?: number }, path: string): ServerProb
     return new ServerProblem('no-such-folder', `There is nothing at ${path} on this server.`)
   }
   return problemFor(error)
+}
+
+/**
+ * Is there anything at that path?
+ *
+ * `2` — no such file — is the answer this is asked for, so it is the only one
+ * that becomes `false`. Permission denied and every other code are re-thrown as
+ * sentences: an account that cannot stat its own upload folder must be told,
+ * not quietly handed the next name in the sequence.
+ */
+async function exists(sftp: SFTPWrapper, path: string): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    sftp.stat(path, (error) => {
+      if (error === undefined) {
+        resolve(true)
+        return
+      }
+      if (error.code === 2) {
+        resolve(false)
+        return
+      }
+      reject(sftpProblem(error, path))
+    })
+  })
+}
+
+/**
+ * Make one directory unless it is already there.
+ *
+ * The check comes first because SFTP's `mkdir` reports "it exists" as `4` on an
+ * SFTPv3 server — the same code it reports a real failure with — so reading the
+ * code would mean treating a broken server as a working one. A directory that
+ * appears between the check and the call still ends here as a sentence rather
+ * than as a silent success, which is the honest way round: the next attempt
+ * finds it and passes.
+ */
+async function ensureDirectory(sftp: SFTPWrapper, path: string): Promise<void> {
+  if (await exists(sftp, path)) return
+  return new Promise<void>((resolve, reject) => {
+    sftp.mkdir(path, (error) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, path))
+        return
+      }
+      resolve()
+    })
+  })
+}
+
+function fastPut(sftp: SFTPWrapper, localPath: string, remotePath: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    sftp.fastPut(localPath, remotePath, (error) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, remotePath))
+        return
+      }
+      resolve()
+    })
+  })
 }
 
 function wrapShell(channel: Channel, release: () => void): ServerShell {
