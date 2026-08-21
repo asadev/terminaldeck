@@ -22,6 +22,7 @@ import { CopilotAccess } from './copilot-access'
 import { ConsentBroker, type ConsentOutcome } from '../deck-control/consent'
 import { CopilotRuns } from './copilot-runs'
 import type { CopilotRemote } from './copilot-remote'
+import type { WindowAskDesk } from './window-asks'
 import { SessionFanout, type PtySource } from './session-fanout'
 import { CODE_LENGTH, isCode } from '../../shared/short-code'
 import {
@@ -3963,5 +3964,156 @@ describe('what a guest may reach on the loopback', () => {
 
     client.send({ t: 'ping' })
     await client.until((m) => m.t === 'pong', 'the pong')
+  })
+})
+
+describe('a browser window on the device, driven by a session here', () => {
+  /**
+   * The capability that runs the other way round.
+   *
+   * Everything else this server advertises is a verb a client sends. `windows`
+   * is a question *this machine* asks a device — a session running here, with a
+   * browser window attached to it in the app on that device's screen — so what
+   * it is gated on is having a desk to hold the question, and which connections
+   * it may be put to is decided by what the client said in its own `hello`.
+   */
+  function desk(): {
+    windows: WindowAskDesk
+    asked: { deviceId: string; message: ServerMessage }[]
+    answered: { id: string; ok: boolean; body: string }[]
+  } {
+    const asked: { deviceId: string; message: ServerMessage }[] = []
+    const answered: { id: string; ok: boolean; body: string }[] = []
+    const heldBy = new Map<string, readonly string[]>()
+    let wire: {
+      ask(deviceId: string, message: ServerMessage): number
+      reaches(deviceId: string): boolean
+    } | null = null
+    return {
+      asked,
+      answered,
+      windows: {
+        serve: (next) => {
+          wire = next
+        },
+        call: ({ deviceId, sessionId, tool, args }) => {
+          const message: ServerMessage = { t: 'window.call', id: 'w-1', session: sessionId, tool, args }
+          asked.push({ deviceId, message })
+          wire?.ask(deviceId, message)
+          return Promise.resolve({ ok: true, body: '{}' })
+        },
+        answer: (id, result) => {
+          answered.push({ id, ...result })
+          return true
+        },
+        held: (deviceId, sessions) => {
+          heldBy.set(deviceId, sessions)
+        },
+        holdersOf: (sessionId) =>
+          [...heldBy].filter(([, sessions]) => sessions.includes(sessionId)).map(([deviceId]) => deviceId),
+        reaches: (deviceId) => wire?.reaches(deviceId) ?? false,
+        gone: () => undefined,
+        stop: () => undefined,
+        waiting: 0,
+      },
+    }
+  }
+
+  it('is not advertised by a host with nowhere to hold the question', async () => {
+    /*
+     * The same rule every capability here follows: the thing that makes the
+     * feature possible decides whether it is offered. A device told it may be
+     * asked, by a host that could never ask, is a device running code for
+     * nothing.
+     */
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const hello = await client.until((m) => m.t === 'welcome', 'the welcome')
+    if (hello.t !== 'welcome') throw new Error('unreachable')
+    expect(hello.capabilities).not.toContain('windows')
+  })
+
+  it('is advertised when there is, and reaches only a client that can answer', async () => {
+    const held = desk()
+    const harness = await serve({ windows: held.windows })
+
+    // A client that has not said it holds windows. It is a device like any
+    // other; it simply has no code for this frame, and a question put to it
+    // would be a tool call waiting out a deadline.
+    const deaf = await connect(harness.port)
+    deaf.send(HELLO)
+    const welcome = await deaf.until((m) => m.t === 'welcome', 'the welcome')
+    if (welcome.t !== 'welcome') throw new Error('unreachable')
+    expect(welcome.capabilities).toContain('windows')
+
+    await held.windows.call({ deviceId: 'device-1', sessionId: 's1', tool: 'browser.read', args: '{}' })
+    expect(deaf.received.some((m) => m.t === 'window.call')).toBe(false)
+
+    // The same device, on a channel that said it can serve them.
+    const holder = await connect(harness.port)
+    holder.send({ ...HELLO, capabilities: ['windows'] })
+    await holder.until((m) => m.t === 'welcome', 'the welcome')
+    await held.windows.call({ deviceId: 'device-1', sessionId: 's1', tool: 'browser.read', args: '{}' })
+    const call = await holder.until((m) => m.t === 'window.call', 'the browser verb')
+    expect(call).toMatchObject({ t: 'window.call', session: 's1', tool: 'browser.read' })
+  })
+
+  it('hands an answer to the desk that asked, and drops one nobody asked for', async () => {
+    const held = desk()
+    const harness = await serve({ windows: held.windows })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['windows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'window.result', id: 'w-1', ok: true, body: '{"title":"Example"}' })
+    await new Promise((settle) => setTimeout(settle, 30))
+    expect(held.answered).toEqual([{ id: 'w-1', ok: true, body: '{"title":"Example"}' }])
+
+    /*
+     * And the channel stays open for an answer that crossed this end's deadline
+     * on the wire. That is an ordinary race with an already correct outcome —
+     * the tool call has been answered — and closing the link over it would turn
+     * a slow network into a dropped machine.
+     */
+    client.send({ t: 'window.result', id: 'w-9', ok: true, body: '{}' })
+    await new Promise((settle) => setTimeout(settle, 30))
+    expect(held.answered).toHaveLength(2)
+    expect(client.received.some((m) => m.t === 'error')).toBe(false)
+  })
+
+  it('writes down which of this machine’s sessions that device is holding a window for', async () => {
+    /*
+     * The fact that makes this feature work for a session nobody started
+     * remotely — one already running here, one restored, one typed into at this
+     * keyboard. The window is attached in the *other* app's map and nothing on
+     * this side of the wire can see it, so the device says which sessions of
+     * ours it is holding one for, and it says the whole set each time: a link
+     * that dropped and came back is correct by arriving, and a detach is a set
+     * with one fewer id in it.
+     *
+     * Without this, `windowOwnerOf` — written at the spawn — was the only
+     * answer, so the six verbs on any other session resolved in this machine's
+     * own empty map and said "no browser window is attached to this session"
+     * about a page on somebody's screen.
+     */
+    const held = desk()
+    const harness = await serve({ windows: held.windows })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['windows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'window.holds', sessions: ['s1', 's2'] })
+    await new Promise((settle) => setTimeout(settle, 30))
+    expect(held.windows.holdersOf('s1')).toEqual(['device-1'])
+
+    // The next set replaces the last one, which is the only way a detach
+    // travels.
+    client.send({ t: 'window.holds', sessions: ['s2'] })
+    await new Promise((settle) => setTimeout(settle, 30))
+    expect(held.windows.holdersOf('s1')).toEqual([])
+    expect(held.windows.holdersOf('s2')).toEqual(['device-1'])
+    // And the channel is unharmed by any of it.
+    expect(client.received.some((m) => m.t === 'error')).toBe(false)
   })
 })

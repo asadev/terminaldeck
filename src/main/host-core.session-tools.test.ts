@@ -7,6 +7,8 @@ import { createHostCore, type HostCore } from './host-core'
 import { installPaths, nodePaths, resetPaths } from './platform/paths'
 import { resetLoginPathCache } from './providers'
 import { noVerbsLine, resetNoVerbsForTests } from './session-verbs'
+import { boundaryFor } from './session-boundary'
+import { confinementKind } from './confine'
 
 /**
  * What actually ends up on a session's command line.
@@ -85,6 +87,7 @@ const recorder = {
 const alwaysTools = {
   prepare: () => ({
     args: ['--mcp-config', join(dir, 'session-tools', 'deck-control.json')] as readonly string[],
+    file: join(dir, 'session-tools', 'deck-control.json'),
     started: () => undefined,
   }),
 }
@@ -322,6 +325,235 @@ describe('the copilot', () => {
       // The rebuild that dropped the session's flags is the same one that has to
       // keep these, so `--session-id` riding beside them is part of the pin.
       expect(args).toContain('--session-id')
+    },
+    CASE_MS,
+  )
+})
+
+describe('a session a paired device started', () => {
+  /*
+   * The gate that used to be a flat refusal, and the two halves of what
+   * replaced it.
+   *
+   * The refusal's reasoning is untouched and is enforced elsewhere: such a
+   * session runs on *this* machine and must never be given the verbs over the
+   * windows *here* — `browser-tools.test.ts`'s forwarding block is where that is
+   * pinned. What changed is that there is now somewhere else for the verb to go,
+   * so the flags are handed over **only** when the assembly says it has a
+   * forwarder. `index.ts` answers true; the headless host passes no seam at all.
+   */
+  /*
+   * The guest git environment alone, with no `DeviceConfinement` beside it.
+   *
+   * Both together is what the device path really passes, and both together is
+   * unobservable here: `startSession` applies the confinement **instead of** the
+   * fence — deliberately, one sandbox rather than one nested inside another —
+   * so the recorder never sees the argv. `guest` on its own puts the launch on
+   * the same side of this gate (`forDevice` is either of the two) while leaving
+   * the command line readable, which is the thing under test.
+   */
+  const guest = { set: {}, remove: [], paths: [] }
+
+  it(
+    'is given them when this build can send its verbs to the device that asked',
+    async () => {
+      // The desktop's own answer, asked of the device that is starting this
+      // session: is there a live channel to it, on a build that advertised
+      // `windows`. It does not claim the device still is a minute later, or that
+      // it holds a window, or that the person has allowed it — those are
+      // answered per call, on the far side, in sentences an agent can act on.
+      const wired = createHostCore({
+        storageDir: join(dir, 'remote-wired'),
+        userData: dir,
+        sessionTools: { prepare: alwaysTools.prepare, reachesDeviceWindows: () => true },
+      })
+      let meta
+      try {
+        meta = await wired.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          undefined,
+          recorder,
+        )
+      } finally {
+        wired.ptys.killAll()
+        await wired.ptys.drain()
+        await wired.credentials.stop()
+      }
+      expect(meta.provider).toBe('claude')
+      expect(
+        configIn(spawned.at(-1) ?? []),
+        'a device’s session was launched with no --mcp-config, so its window is unreachable again',
+      ).not.toBeNull()
+      // And nothing to explain, because it holds them.
+      expect(noVerbsLine(meta.id)).toBeNull()
+    },
+    CASE_MS,
+  )
+
+  it(
+    'can read the config file it was handed, even held inside a sandbox',
+    async () => {
+      /*
+       * The failure this closes is the quiet one. `confine/plan.ts` keeps
+       * `<userData>` out of every read root deliberately — it also holds
+       * transcripts, pairing credentials and `state.json` — and the session's
+       * MCP config lives inside it. Without the file being granted, the launch
+       * has the flags, the file exists, and the sandbox refuses the read: an
+       * agent holding six verbs that answer nothing, with the reason visible
+       * only in a seatbelt denial nobody is reading.
+       */
+      if (confinementKind(process.platform) === 'none') return
+      const wired = createHostCore({
+        storageDir: join(dir, 'remote-held'),
+        userData: dir,
+        sessionTools: { prepare: alwaysTools.prepare, reachesDeviceWindows: () => true },
+      })
+      try {
+        const meta = await wired.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          { home: join(dir, 'work'), writable: [], files: [] },
+        )
+        const boundary = boundaryFor(meta.id)
+        expect(boundary, 'the session was not confined, so this proves nothing').not.toBeNull()
+        expect(boundary?.readableFiles ?? []).toContain(alwaysTools.prepare().file)
+      } finally {
+        wired.ptys.killAll()
+        await wired.ptys.drain()
+        await wired.credentials.stop()
+      }
+    },
+    CASE_MS,
+  )
+
+  it(
+    'is told plainly when this build cannot, rather than left to find out',
+    async () => {
+      /*
+       * A build with no forwarder — the headless host is the real one. Without
+       * the sentence, an agent told it owns `B1` with no verb for it does not
+       * conclude that it cannot look; it concludes it has not found the way yet,
+       * and the measured version of that is a proposal to install Playwright and
+       * read a CDP port.
+       */
+      const alone = createHostCore({
+        storageDir: join(dir, 'remote-alone'),
+        userData: dir,
+        sessionTools: { prepare: alwaysTools.prepare },
+      })
+      try {
+        const meta = await alone.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          undefined,
+          recorder,
+        )
+        expect(spawned.at(-1), 'the spawn was not recorded, so the next line proves nothing').toBeDefined()
+        expect(configIn(spawned.at(-1) ?? [])).toBeNull()
+        const said = noVerbsLine(meta.id) ?? ''
+        expect(said).toContain('cannot show a browser window')
+        expect(said).toContain('no other way in')
+      } finally {
+        alone.ptys.killAll()
+        await alone.ptys.drain()
+        await alone.credentials.stop()
+      }
+    },
+    CASE_MS,
+  )
+})
+
+describe('a session a phone started', () => {
+  /*
+   * The device that cannot serve a browser verb, which is most of them.
+   *
+   * `reachesDeviceWindows` was a constant `true` for one evening, and a constant
+   * cannot tell a paired desktop from a phone. A phone advertises no `windows`
+   * capability, holds no browser windows, and its client has never heard of
+   * `window.call` — so every one of the six verbs it was handed came back *"the
+   * computer holding that browser window is not connected right now"*, about a
+   * device that was connected and was holding nothing. Six dead controls and a
+   * false sentence, where before there had been no controls and a true one.
+   */
+  const guest = { set: {}, remove: [], paths: [] }
+
+  it(
+    'is launched with no browser verbs, and told why, when that device holds no windows',
+    async () => {
+      const asked: (string | undefined)[] = []
+      const wired = createHostCore({
+        storageDir: join(dir, 'remote-phone'),
+        userData: dir,
+        sessionTools: {
+          prepare: alwaysTools.prepare,
+          reachesDeviceWindows: (deviceId) => {
+            asked.push(deviceId)
+            return false
+          },
+        },
+      })
+      try {
+        const meta = await wired.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          undefined,
+          recorder,
+        )
+        expect(spawned.at(-1), 'the spawn was not recorded, so the next line proves nothing').toBeDefined()
+        expect(
+          configIn(spawned.at(-1) ?? []),
+          'a phone’s session was handed the browser verbs, which can only ever answer a refusal',
+        ).toBeNull()
+        // And the honest sentence it always had, rather than silence beside six
+        // tools that do not work.
+        expect(noVerbsLine(meta.id) ?? '').toContain('cannot show a browser window')
+        // Asked at all, which is the whole of the fix: a constant answers this
+        // without ever looking at the device.
+        expect(asked).toHaveLength(1)
+      } finally {
+        wired.ptys.killAll()
+        await wired.ptys.drain()
+        await wired.credentials.stop()
+      }
+    },
+    CASE_MS,
+  )
+
+  it(
+    'asks about the device that actually started it, not about the build',
+    async () => {
+      /*
+       * The confinement is what carries the device id — it is the one envelope
+       * that already travels from the device path into `startSession`, and a
+       * field on `CreateSessionInput` would be a claim page code could make.
+       * Without this the gate cannot tell one device from another, which is the
+       * same thing as a constant.
+       */
+      const asked: (string | undefined)[] = []
+      const wired = createHostCore({
+        storageDir: join(dir, 'remote-named'),
+        userData: dir,
+        sessionTools: {
+          prepare: alwaysTools.prepare,
+          reachesDeviceWindows: (deviceId) => {
+            asked.push(deviceId)
+            return true
+          },
+        },
+      })
+      try {
+        await wired.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          { home: join(dir, 'work'), writable: [], files: [], deviceId: 'phone-7' },
+        )
+      } finally {
+        wired.ptys.killAll()
+        await wired.ptys.drain()
+        await wired.credentials.stop()
+      }
+      expect(asked).toEqual(['phone-7'])
     },
     CASE_MS,
   )

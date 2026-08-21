@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { readMachineTabId } from '../shell/workspace-tabs'
-import { readSessions, resolveAgentSessions } from './agent-target'
+import { attachableSessions, readSessions, resolveAgentSessions } from './agent-target'
 import { useSessionBinding, useWindowBinding, type BoundWindowView } from './binding-view'
 
 /**
@@ -386,18 +386,16 @@ export function ConnectSessionButton({ browserTabId }: { browserTabId: string })
         const pop = (sessions: ReturnType<typeof readSessions>): void => {
           void show({
             tabId: browserTabId,
-            // A session whose process has exited is left out rather than listed
-            // and refused: attaching a window to a dead pty makes a relation
-            // nothing can ever act on, and the rail already keeps the row that
-            // explains where it went.
-            sessions: sessions
-              .filter((session) => !session.ended)
-              .map((session) => ({
-                sessionId: session.id,
-                machineId: session.machineId,
-                name: session.label,
-                machineName: session.machineName,
-              })),
+            // Only the rows this menu can honour. A session whose process has
+            // exited and a shell on a server would both take the tick and be
+            // attached to nothing — see `attachableSessions`, which holds the
+            // rule and both reasons.
+            sessions: attachableSessions(sessions).map((session) => ({
+              sessionId: session.id,
+              machineId: session.machineId,
+              name: session.label,
+              machineName: session.machineName,
+            })),
           })
         }
         if (!api) {

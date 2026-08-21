@@ -27,6 +27,17 @@ export interface Machine {
   platform: string
   pairedAt: number
   lastConnectedAt: number | null
+  /**
+   * May sessions on that machine act on browser windows in this app?
+   *
+   * Its own axis, and it starts closed — see `MachineStore.drivesWindows` in the
+   * main process for why a machine whose folders and sessions this desktop can
+   * reach has not thereby been handed the browser on this screen.
+   *
+   * Optional so that a view read from a build older than the field draws the
+   * switch off rather than crashing; `asView` fills it in.
+   */
+  drivesWindows?: boolean
 }
 
 export interface RemoteSession {
@@ -192,6 +203,17 @@ export interface MachinesBridge {
   pairMachine(code: string): Promise<unknown>
   forgetMachine(id: string): Promise<unknown>
   renameMachine(id: string, name: string): Promise<unknown>
+  /**
+   * May sessions on that machine act on browser windows in this app?
+   *
+   * Optional, and deliberately **not** on {@link BRIDGE_METHODS}: that list is
+   * an all-or-nothing gate — a preload missing one name makes the whole bridge
+   * resolve to null and takes the panel with it — and a grant added this round
+   * must not be able to blank a screen that works. The switch is drawn only when
+   * the method is there, which is the same rule the rest of this app follows: a
+   * control that cannot do anything is not drawn.
+   */
+  setMachineDrivesWindows?(id: string, allowed: boolean): Promise<unknown>
   connectMachine(id: string): Promise<unknown>
   disconnectMachine(id: string): Promise<unknown>
   attachMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
@@ -411,6 +433,9 @@ function asMachine(value: unknown): Machine | null {
     platform: text(value.platform),
     pairedAt: whole(value.pairedAt) ?? 0,
     lastConnectedAt: whole(value.lastConnectedAt),
+    // Only the literal `true`, the same rule the store reads it by. A grant is
+    // not a thing to infer from a truthy value crossing a bridge.
+    drivesWindows: value.drivesWindows === true,
   }
 }
 

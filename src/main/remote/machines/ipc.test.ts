@@ -19,6 +19,7 @@ import {
   MACHINES_STATE_CHANNEL,
   registerMachinesIpc,
   type InvokeRegistrar,
+  type MachinesIpcDeps,
   type MachinesView,
 } from './ipc'
 
@@ -97,6 +98,8 @@ function rig(
     dir?: string
     /** False for a relay that accepts the socket and never claims the slot. */
     slotClaimed?: boolean
+    /** The app's browser-window server, when a case is about one. */
+    serveWindows?: MachinesIpcDeps['serveWindows']
   } = {},
 ): Rig {
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
@@ -136,6 +139,7 @@ function rig(
     desk,
     status: options.status ?? connectedStatus,
     broadcast: (channel, payload) => broadcasts.push({ channel, payload }),
+    ...(options.serveWindows === undefined ? {} : { serveWindows: options.serveWindows }),
     createLink: (linkOptions): MachineLink => {
       const record = {
         options: linkOptions,
@@ -166,6 +170,7 @@ function rig(
         connect: () => {
           record.connected += 1
         },
+        announceWindows: () => true,
         disconnect: () => {
           record.disconnected += 1
         },
@@ -333,6 +338,7 @@ describe('launching', () => {
         'machines:create',
         'machines:detach',
         'machines:disconnect',
+        'machines:drive-windows',
         'machines:forget',
         'machines:input',
         'machines:list',
@@ -761,6 +767,7 @@ describe('waking', () => {
           return {
             connect: () => {},
             disconnect: () => {},
+            announceWindows: () => true,
             wake: () => {
               record.woken += 1
             },
@@ -823,5 +830,64 @@ describe('waking', () => {
     const view: MachinesView = machines.view()
     expect(view.machines).toHaveLength(1)
     machines.stop()
+  })
+})
+
+describe('letting a machine act on browser windows here', () => {
+  it('starts closed, is written through the one store, and answers the whole view', async () => {
+    /*
+     * The fourth grant axis. Folders, sessions and coding logins are the other
+     * three, and none of them says anything about the browser on *this* screen —
+     * a machine whose sessions this desktop can start and read has not thereby
+     * been handed the pages holding this account's logins.
+     */
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+
+    const before = ((await app.invoke('machines:list')) as MachinesView)
+    expect(before.machines[0].drivesWindows).toBe(false)
+
+    const after = ((await app.invoke('machines:drive-windows', hostId, true)) as MachinesView)
+    // The answer is the view, so the panel redraws from what was stored rather
+    // than from what it thinks it just set.
+    expect(after.machines[0].drivesWindows).toBe(true)
+    // Read from disk rather than from the rig's own copy, which was built
+    // before the write: the grant has to survive the process, because it is a
+    // decision rather than a session.
+    expect(new MachineStore(dir).drivesWindows(hostId)).toBe(true)
+
+    // Only the literal `true`. A grant is not a thing to infer from a truthy
+    // value arriving over a bridge.
+    expect(
+      ((await app.invoke('machines:drive-windows', hostId, 'yes')) as MachinesView).machines[0].drivesWindows,
+    ).toBe(false)
+  })
+
+  it('hands an inbound browser verb to whatever the app wired, with the machine on it', async () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const served: unknown[] = []
+    const app = rig({ dir, serveWindows: async (machineId, call) => {
+      served.push({ machineId, call })
+      return { ok: true, body: '{}' }
+    } })
+
+    const onWindowCall = app.links[0].options.onWindowCall
+    expect(onWindowCall, 'the link was built with no handler, so it never advertises the capability').toBeDefined()
+    await onWindowCall?.({ sessionId: 'sess-1', tool: 'browser.read', args: '{}' })
+    expect(served).toEqual([
+      { machineId: hostId, call: { sessionId: 'sess-1', tool: 'browser.read', args: '{}' } },
+    ])
+  })
+
+  it('gives the link no handler at all when the app wired none', () => {
+    // Absent rather than present-and-refusing: the link reads the absence to
+    // decide whether to advertise `windows`, and a machine told it may ask,
+    // asking, and being refused every time is a feature that exists only as a
+    // timeout.
+    const dir = tempDir()
+    paired(dir)
+    expect(rig({ dir }).links[0].options.onWindowCall).toBeUndefined()
   })
 })

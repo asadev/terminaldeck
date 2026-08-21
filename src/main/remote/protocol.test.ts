@@ -15,6 +15,7 @@ import {
   MAX_UPLOAD_DATA_CHARS,
   MAX_UPLOAD_DIR_BYTES,
   MAX_UPLOAD_NAME_BYTES,
+  MAX_WINDOW_HOLDS,
   NET_WINDOW_BYTES,
   SHA256_HEX_LENGTH,
   OUTPUT_CHUNK_BYTES,
@@ -107,6 +108,8 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'logins.read': true,
   'logins.signin': true,
   'chat.read': true,
+  'window.result': true,
+  'window.holds': true,
 }
 
 /** Same guard for the other direction. */
@@ -154,6 +157,7 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'logins.signedin': true,
   'session.sent': true,
   'chat.rows': true,
+  'window.call': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -281,6 +285,12 @@ const VALID_CLIENT: ClientMessage[] = [
   // The conversation, and the same view asking what has changed since.
   { t: 'chat.read', rid: 'cht-1', id: SESSION_ID, tail: false },
   { t: 'chat.read', rid: 'cht-2', id: SESSION_ID, tail: true },
+  { t: 'window.result', id: 'win-1', ok: true, body: '{"url":"https://example.com"}' },
+  { t: 'window.result', id: 'win-2', ok: false, body: '{"message":"no window by that name"}' },
+  // Which of that machine's sessions this client is holding a browser window
+  // for. The whole set every time, empty included: that is how a detach travels.
+  { t: 'window.holds', sessions: [SESSION_ID] },
+  { t: 'window.holds', sessions: [] },
 ]
 
 const SESSION: RemoteSession = {
@@ -338,6 +348,7 @@ const VALID_SERVER: ServerMessage[] = [
   // A folder with no transcript at all, which is not the same empty as a
   // session that has not spoken yet.
   { t: 'chat.rows', rid: 'cht-2', id: SESSION_ID, rows: [], reset: true, found: false },
+  { t: 'window.call', id: 'win-1', session: SESSION_ID, tool: 'browser.read', args: '{}' },
   { t: 'pong' },
   { t: 'created', session: SESSION },
   { t: 'closed', id: SESSION_ID },
@@ -2248,5 +2259,45 @@ describe('upload answers, on the client side of the wire', () => {
     expect(read({ t: 'upload.ack', id: 'up-1', bytes: -1 }).ok).toBe(false)
     expect(read({ t: 'upload.ack', id: 'up-1', bytes: 1.5 }).ok).toBe(false)
     expect(read({ t: 'upload.ack', id: '', bytes: 1 }).ok).toBe(false)
+  })
+})
+
+describe('window.holds', () => {
+  /**
+   * The frame a device sends to say which of the host's sessions have a browser
+   * window in *its* app. It addresses a verb and does nothing else — it is not a
+   * grant, and a session named in it that holds no window over there simply gets
+   * that device's own frames refused — so its parsing is deliberately forgiving
+   * where the rest of this file is not.
+   */
+  it('keeps the ids it can use and drops the ones it cannot', () => {
+    const parsed = parseClientMessage({
+      t: 'window.holds',
+      sessions: [SESSION_ID, '../../etc/passwd', 42, '', 'a-second-id'],
+    })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) throw new Error('unreachable')
+    expect(parsed.message).toEqual({ t: 'window.holds', sessions: [SESSION_ID, 'a-second-id'] })
+  })
+
+  it('trims a list too long to hold rather than closing the link over it', () => {
+    /*
+     * Unlike every size cap in this file. A person attaches windows by hand, one
+     * at a time, so the real number is one or two — but the list arrives from
+     * another computer and lands in a `Map` on this one, and dropping a working
+     * machine over the hundred and twenty-ninth entry would be a link lost to a
+     * fact nobody can act on.
+     */
+    const many = Array.from({ length: MAX_WINDOW_HOLDS + 50 }, (_, n) => `session-${n}`)
+    const parsed = parseClientMessage({ t: 'window.holds', sessions: many })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) throw new Error('unreachable')
+    if (parsed.message.t !== 'window.holds') throw new Error('unreachable')
+    expect(parsed.message.sessions).toHaveLength(MAX_WINDOW_HOLDS)
+  })
+
+  it('refuses a frame with no list at all', () => {
+    expect(parseClientMessage({ t: 'window.holds' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'window.holds', sessions: 'all of them' }).ok).toBe(false)
   })
 })

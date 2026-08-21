@@ -19,6 +19,7 @@
  *    own words about paired devices, which hold identically here.
  */
 
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -282,6 +283,18 @@ describe('when it lets go', () => {
 
     expect(ipc.serverOfShell(opened.shellId)).toBe('s1')
     expect(ipc.serverOfShell('nothing this app opened')).toBeNull()
+
+    /*
+     * And the two id spaces cannot collide, which is what makes `index.ts`'s
+     * `machineOfSession` safe to ask all three registries in a row with one id.
+     * A session id is a bare `randomUUID()`; a shell id is the server's id, a
+     * space, and a UUID. A UUID contains no space, so a session id can never
+     * name a shell and a shell id can never name a pty — the answer is decided
+     * by whichever registry actually holds it, never by the order they are
+     * asked in.
+     */
+    expect(opened.shellId).toContain(' ')
+    expect(ipc.serverOfShell(randomUUID())).toBeNull()
 
     // And it stops answering the moment the shell is gone, rather than pointing
     // a binding at a channel that has been closed.

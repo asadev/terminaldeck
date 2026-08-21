@@ -165,12 +165,67 @@ export interface MachinesIpcDeps {
   pair?: typeof pairWithCode
   /** Seam for the tests, so a link can be driven without a socket. */
   createLink?: typeof createMachineLink
+  /**
+   * Serve a browser verb that arrived from a session on that machine.
+   *
+   * Absent is the switch, as everywhere else: with no handler the link never
+   * advertises the `windows` capability, so a session over there is launched
+   * knowing it cannot drive rather than holding six verbs whose every call would
+   * time out. `index.ts` passes `remote/machines/window-serve.ts`, which is
+   * where the grant, the binding lookup and every tier check happen.
+   */
+  serveWindows?(
+    machineId: string,
+    call: { sessionId: string; tool: string; args: string },
+  ): Promise<{ ok: boolean; body: string }>
+  /**
+   * Which sessions **on that machine** this app is holding a browser window for.
+   *
+   * The other half of {@link MachinesIpcDeps.serveWindows}, and the half that
+   * decides whether it ever fires for a session this desktop did not start. A
+   * window attached here to a session over there is a relation written in *this*
+   * process — `browser-binding.ts`, keyed `<machineId>\0<sessionId>` — and the
+   * machine the pty is on has no way to derive it. So it is sent, on every
+   * welcome and on every attach or detach, and until it was, the feature only
+   * worked for sessions this app had started over there.
+   *
+   * Answered per machine because a link may only be told about its own: the
+   * sessions on one paired computer are not facts the next one gets to hear.
+   */
+  windowsHeld?(machineId: string): readonly string[]
   now?: () => number
 }
 
 export interface MachinesIpc {
   /** Every machine and the state of its link, as the window would draw it. */
   view(): MachinesView
+  /**
+   * May sessions on that machine act on browser windows here? Read per call.
+   *
+   * Exposed rather than answered inside, because the thing that asks is a
+   * dispatcher in `index.ts` that has no business holding a `MachineStore` of
+   * its own — a second store is how a switch and the code reading it come to
+   * disagree. Read on every inbound verb for the reason `callers.ts` gives about
+   * `TokenGrant.caller`: an untick has to land on the next call, not on the next
+   * reconnection.
+   */
+  drivesWindows(machineId: string): boolean
+  /**
+   * A browser window here was attached to, or detached from, a session on a
+   * paired machine. Tell every machine that is up which of its sessions this app
+   * now holds one for.
+   *
+   * Every link rather than the one that changed, and it costs one small frame
+   * per machine: the caller is a subscription to the whole binding map — see
+   * `browser-binding.ts`'s `subscribe` — which reports *that* the relation moved
+   * rather than which machine it moved for. Working out the difference here
+   * would be this file keeping a second copy of a map it does not own.
+   *
+   * A link that is down, or on a machine too old to know the frame, sends
+   * nothing and says so by answering false; it re-announces on its next welcome,
+   * which is the moment the far machine's table is empty anyway.
+   */
+  announceWindows(): void
   /** The machine woke up. Redial every link that is meant to be up. */
   wake(): void
   /** Drop every link and stop the beacon. For shutdown. */
@@ -332,6 +387,23 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
         deps.broadcast(MACHINES_COPILOT_CHAT_CHANNEL, { machineId: machine.id, chat })
       },
       onWelcome: (platform) => store.sawWelcome(machine.id, platform),
+      /*
+       * Spread rather than passed as possibly-undefined, because absence is what
+       * the link reads to decide whether to advertise the capability at all. A
+       * handler that was present and answered "no" would be a machine told it
+       * may ask, asking, and being refused on every call.
+       */
+      ...(deps.serveWindows === undefined
+        ? {}
+        : { onWindowCall: (call) => deps.serveWindows!(machine.id, call) }),
+      /*
+       * And which of that machine's sessions has a window here, whenever the
+       * link needs to say so. Read through the dep rather than captured, because
+       * the answer changes every time somebody attaches or detaches one.
+       */
+      ...(deps.windowsHeld === undefined
+        ? {}
+        : { windowsHeld: () => deps.windowsHeld!(machine.id) }),
       now,
     })
     links.set(machine.id, link)
@@ -457,6 +529,26 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
      * computer this desktop had just been told to forget.
      */
     announce()
+    return view()
+  })
+
+  /**
+   * May sessions on that machine act on browser windows in this app?
+   *
+   * Its own channel rather than a field on a general "update machine" verb,
+   * because it is the only setting here that is a *grant* — everything else on
+   * a machine row is a label or an address. `MachineStore.drivesWindows` carries
+   * the argument for why windows are their own axis and why the axis starts
+   * closed.
+   *
+   * Answers the whole view, like `machines:rename` beside it, so the panel
+   * redraws from one truth rather than from what it thinks it just set.
+   */
+  ipcMain.handle('machines:drive-windows', (_event, id: unknown, allowed: unknown): MachinesView => {
+    // Only the literal `true` grants. See `asStoredMachine`: this is the whole
+    // of the permission, and a truthy value arriving from a bridge is not a
+    // person pressing a switch.
+    if (typeof id === 'string') store.setDrivesWindows(id, allowed === true)
     return view()
   })
 
@@ -1138,6 +1230,10 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
 
   return {
     view,
+    drivesWindows: (machineId: string): boolean => store.drivesWindows(machineId),
+    announceWindows(): void {
+      for (const link of links.values()) link.announceWindows()
+    },
     sendFile,
     wake(): void {
       for (const link of links.values()) link.wake()

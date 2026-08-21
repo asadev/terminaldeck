@@ -89,6 +89,9 @@ import {
   watchRunChat,
 } from './remote/copilot-wiring'
 import { registerMachinesIpc, type MachinesIpc } from './remote/machines/ipc'
+import { serveWindowCall } from './remote/machines/window-serve'
+import { createWindowAsks } from './remote/window-asks'
+import { routeWindowVerb, type WindowRoute } from './window-owner'
 import { registerServersIpc, type ServersIpc } from './servers/ipc'
 import { findHostPackage } from './servers/host-package'
 import { registerServerReachIpc, type ServerReachIpc } from './servers/reach'
@@ -188,7 +191,10 @@ import {
   MID_TURN_EVENTS,
   sessionExited,
   sessionRemoved,
+  subscribe as subscribeToBindings,
   takeAnnouncement,
+  view as bindingView,
+  windowsOf,
 } from './browser-binding'
 import { noVerbsLine } from './session-verbs'
 import { currentOpenShim, removeOpenShim, writeOpenShim } from './open-shim'
@@ -203,8 +209,8 @@ import {
   installedBrowserTools,
   registerBrowserStoreIpc,
 } from './browser-store-ipc'
-import { browserTools } from './deck-control/browser-tools'
 import { storeTools } from './deck-control/store-tools'
+import { browserTools, type VerbForwarder } from './deck-control/browser-tools'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
 import { registerAttachBringInIpc } from './attach-bring-in'
@@ -421,13 +427,28 @@ function send(channel: string, ...args: unknown[]): boolean {
  * local one, which is the conservative direction — the local answer is the one
  * this process can verify.
  */
-function machineOfSession(sessionId: string): string | null {
-  if (sessionId === '') return null
-  if (ptys.list().some((meta) => meta.id === sessionId)) return ''
+function machineOfSession(id: string): string | null {
+  if (id === '') return null
+  if (ptys.list().some((meta) => meta.id === id)) return ''
   for (const link of machinesIpc?.view().links ?? []) {
-    if (link.sessions.some((session) => session.id === sessionId)) return link.id
+    if (link.sessions.some((session) => session.id === id)) return link.id
   }
-  return servers?.serverOfShell(sessionId) ?? null
+  /*
+   * And the third space of ids, which is why this parameter is not called
+   * `sessionId`.
+   *
+   * `serverOfShell` is keyed by *shell* id, and a shell on a server is a session
+   * to the binding map — `<machineId>\0<sessionId>` with the server standing in
+   * for the machine (`servers/ipc.ts` says so where it mints the id). So a shell
+   * id arriving here is the call working as intended, not a mix-up.
+   *
+   * The two spaces cannot collide, which is what makes asking all three in a row
+   * safe. A session id is `randomUUID()`. A shell id is `` `${serverId} ${randomUUID()}` ``
+   * — it contains a space, which a UUID never does — so a session id can never
+   * match a shell and a shell id can never match a pty. `servers/ipc.test.ts`
+   * pins both directions.
+   */
+  return servers?.serverOfShell(id) ?? null
 }
 
 const bindingDeps = {
@@ -637,6 +658,21 @@ export const WSL_DISTRO_KEY = 'wsl.distro'
  * Constructed at module scope, as its pieces were, and safe there for the same
  * reason: nothing in the constructor reads a file or binds a socket.
  */
+/**
+ * This machine's questions to a paired device about a browser window it holds.
+ *
+ * At module scope, and before `core`, because two things reach it and they are
+ * built at different moments: `deck-control`'s browser tools forward through it,
+ * and the remote endpoint gives it the wire to the devices. One desk, or a frame
+ * goes out on a socket and the answer is matched against a table nobody sent
+ * from.
+ *
+ * Safe here for the reason `core` is: the constructor is a `Map` and a number.
+ * Nothing is sent until a session asks, and nothing can be asked until the
+ * endpoint has handed it a wire.
+ */
+const windowAsks = createWindowAsks()
+
 const core = createHostCore({
   storageDir: remoteStorageDir(),
   userData: app.getPath('userData'),
@@ -649,7 +685,34 @@ const core = createHostCore({
    * later. A session started in that window is launched without them, which is
    * the honest answer and the one this app already gives for the `open` shim.
    */
-  sessionTools: { prepare: () => sessionTools?.prepare() ?? null },
+  sessionTools: {
+    prepare: () => sessionTools?.prepare() ?? null,
+    /*
+     * And yes, a session a device started may have them — to reach **that
+     * device's** windows and nothing here.
+     *
+     * Asked of the *device*, not of this assembly, and that is the whole of the
+     * difference from the constant `true` this was for one evening. A phone is
+     * connected, holds no browser windows, and its client has never heard of
+     * `window.call`: `true` handed it six verbs whose every call came back
+     * *"the computer holding that browser window is not connected right now"* —
+     * about a device sitting there connected, holding nothing. Before that it
+     * had no verbs and an honest sentence saying why, which is strictly better
+     * than six dead controls.
+     *
+     * So this is the one launch-time fact that can be established honestly:
+     * whether there is a live channel to that device on a build that advertised
+     * `windows`. Everything else — whether it still is a minute later, whether
+     * it holds a window for this session, whether the person allowed it — is
+     * answered per call on the far side, in sentences the agent can act on, and
+     * a launch-time probe of any of those would bake a fact that changes by the
+     * minute into a flag read once at exec.
+     *
+     * The headless host passes no `sessionTools` at all, so it answers no here
+     * by not being asked.
+     */
+    reachesDeviceWindows: (deviceId) => windowAsks.reaches(deviceId ?? ''),
+  },
   /*
    * Where the machine's WSL distribution is remembered.
    *
@@ -1542,6 +1605,143 @@ function reportRestore(decisions: readonly RestoreDecision[]): void {
 }
 
 /**
+ * Where a session's browser verb actually goes.
+ *
+ * ## The question
+ *
+ * A browser window is a `WebContentsView` in the renderer of the app somebody is
+ * looking at. A session can be running anywhere. So for every verb there is one
+ * fact to establish first — *which app holds the window this session is attached
+ * to* — and it has two answers, in this order.
+ *
+ * ## 1. A session a paired device started belongs to that device, always
+ *
+ * `host-core.ts`'s gate used to refuse such a session these verbs outright, and
+ * its reason still binds: the session runs on **this** machine, so a verb served
+ * locally would let a paired device drive the browser holding this account's
+ * logins, through a token that says `session` rather than `remote` and therefore
+ * slips past the refusal {@link mayDrive} makes to a device's face.
+ *
+ * That is why this branch has no local fallback and must never grow one. There
+ * is no "unless a window here is attached to it" clause, because such a clause
+ * *is* the door: attach one window on this machine to a guest's session and the
+ * guest's agent has it. The windows on this screen stay exactly as unreachable
+ * from a device's session as they were.
+ *
+ * ## 2. Any other session's window is wherever it was attached
+ *
+ * This is the half that was missing, and it is the whole of what Asad hit first.
+ * `window-owner.ts` is written at the spawn, so it knows about sessions a device
+ * *asked for* and about no others — and his test was a session already running
+ * on his PC, with a window attached from his Mac. It answered null, the verb was
+ * served on the PC, the PC's own map had nothing in it, and the agent said *"no
+ * browser window is attached to this session"* about a page he was looking at.
+ *
+ * The app that holds the window is the only one that can know, so it says so:
+ * `window.holds` carries the set on every welcome and every attach, and
+ * `WindowAskDesk.holdersOf` is the table it lands in. Which makes ownership a
+ * property of *where the window is* rather than of who spawned what.
+ *
+ * **This machine first.** Unlike branch 1, a local window wins here — and the
+ * difference is not an inconsistency, it is the point. Branch 1 is about a
+ * session belonging to somebody else, where a local window is a boundary being
+ * walked around. This branch is about the person's own session, where a window
+ * they attached in *this* app is simply the nearest true answer; serving it here
+ * costs no frame, and it also means a paired machine cannot take a local
+ * session's verbs away from the window on this screen by naming it.
+ *
+ * ## Two machines naming one session
+ *
+ * Refused, in a sentence, rather than sent to whichever answered first. Two
+ * people can each attach a window of their own to one session here and neither
+ * of them is wrong; a verb with two destinations has no correct one, and driving
+ * the wrong person's browser is not a thing to do on a guess.
+ */
+const forwardBrowserVerb: VerbForwarder = {
+  elsewhere: (session) => whereWindowIs(session).kind !== 'here',
+  send: async (session, tool, args) => {
+    const where = whereWindowIs(session)
+    if (where.kind === 'here') {
+      // Unreachable through `browserTools`, which asks `elsewhere` first, and
+      // still answered rather than thrown: this is inside a tool call, and a
+      // throw here would reach the model as a protocol error it can only retry.
+      throw new Error('that session is not on another computer')
+    }
+    if (where.kind === 'ambiguous') {
+      /*
+       * Named as a count rather than as machine names, because the names are the
+       * far machines' and this end holds ids. The action is the same either way
+       * and it is one a person takes, which is why the sentence is addressed to
+       * them through the agent rather than to the agent.
+       */
+      throw new Error(
+        `${where.deviceIds.length} computers have a browser window attached to this session, so there ` +
+          'is no single one to act on. Ask the person to detach it everywhere except the computer they ' +
+          'want you to drive.',
+      )
+    }
+    const deviceId = where.deviceId
+    const answer = await windowAsks.call({
+      deviceId,
+      sessionId: session.sessionId,
+      tool,
+      args: JSON.stringify(args),
+    })
+    let value: unknown
+    try {
+      value = JSON.parse(answer.body)
+    } catch {
+      throw new Error('the computer holding that browser window answered with something unreadable')
+    }
+    if (!answer.ok) {
+      /*
+       * The far side's sentence, unchanged, as this tool's error.
+       *
+       * Rewriting it here would be a second voice describing a refusal made
+       * three files away — and the sentences over there are the actionable ones:
+       * they name the switch to turn on, or the window that is not attached, or
+       * the verb that does work across a link.
+       */
+      const message =
+        typeof value === 'object' && value !== null && typeof (value as { message?: unknown }).message === 'string'
+          ? (value as { message: string }).message
+          : 'that could not be done on the computer holding that browser window'
+      throw new Error(message)
+    }
+    return {
+      value,
+      /*
+       * The log line says where it happened, and nothing about the page.
+       *
+       * `ToolOutput.summary` is the audit row, not a second copy of the answer —
+       * `catalogue.ts` is explicit about that — and the answer here can be a
+       * whole page outline. What is worth recording is that this app drove a
+       * browser it does not own, on which computer, with which verb.
+       */
+      summary: { forwardedTo: deviceId, tool },
+    }
+  },
+}
+
+/**
+ * The one decision {@link forwardBrowserVerb} makes, in one place so that its
+ * two methods cannot come to disagree — `elsewhere` runs in a precheck and
+ * `send` runs a moment later, and a rule written out twice is a call that is
+ * prechecked as local and then sent, or the other way round.
+ *
+ * The rule itself is `window-owner.ts`'s, beside the map it reads and testable
+ * without an Electron app around it. This is the two lookups it cannot do from
+ * there: the binding map, which is this process's, and the desk, which the
+ * remote endpoint fills in.
+ */
+function whereWindowIs(session: { sessionId: string; machineId: string }): WindowRoute {
+  return routeWindowVerb(session, {
+    attachedHere: (sessionId, machineId) => windowsOf(sessionId, machineId).length > 0,
+    holders: (sessionId) => windowAsks.holdersOf(sessionId),
+  })
+}
+
+/**
  * The copilot's browser tools, or none of them.
  *
  * Empty when the drive was never registered, which cannot happen through the
@@ -1555,7 +1755,9 @@ function browserDriveTools(): ReturnType<typeof browserTools> {
   // that the harvesting capability lives in its own file — see
   // `deck-control/browser-network-tool.ts`. It closes over the same drive and is
   // gated by the same `mayDrive` as the six.
-  return drive === null ? [] : [...browserTools(drive), browserNetworkTool(drive)]
+  return drive === null
+    ? []
+    : [...browserTools(drive, forwardBrowserVerb), browserNetworkTool(drive)]
 }
 
 /**
@@ -1620,6 +1822,17 @@ function browserStoreTools(): ReturnType<typeof storeTools> {
   const drive = browserDrive()
   return drive === null ? [] : storeTools({ drive, installed: installedBrowserTools })
 }
+
+/**
+ * The last set of held windows this app told the paired machines about.
+ *
+ * See the subscription in {@link registerIpc}. A string rather than a structure
+ * because the only question ever asked of it is whether it is the same as the
+ * one just computed, and `''` — nothing held anywhere — is the honest starting
+ * value: a link that comes up before the first attach announces its own empty
+ * set on its welcome.
+ */
+let announcedWindows = ''
 
 function registerIpc(): void {
   // Installed first so it wraps every handler registered below.
@@ -2103,6 +2316,15 @@ function registerIpc(): void {
   // has to be paired and approved before a byte moves.
   const remote = registerRemoteIpc(ipcMain, {
     sessions: remoteSessions,
+    /*
+     * The desk this machine's sessions ask a device through.
+     *
+     * Handed here so the endpoint can give it the wire to the live connections
+     * and settle its outstanding questions when one goes. It is the same object
+     * `forwardBrowserVerb` above sends into — one desk, or a frame goes out on a
+     * socket and the answer is matched against a table nobody sent from.
+     */
+    windows: windowAsks,
     // The same tracker the window uses, so a dev server started from the phone
     // and one started from the desktop are one thing rather than two views that
     // can disagree. `server.ts` only advertises the `devserver` capability when
@@ -2222,6 +2444,63 @@ function registerIpc(): void {
     // chip naming a machine whose pages have stopped answering is worse than no
     // chip at all.
     tunnelsDropped: (machineId) => browserReach?.forget(machineId),
+    /*
+     * The other direction of the browser feature, and the only inbound question
+     * a paired machine may ask this one.
+     *
+     * A session over there, attached to a window over **here**, calling one of
+     * the six verbs. Every decision is `window-serve.ts`'s and none of it is
+     * here: the grant is read off the machine store per call, the window is
+     * resolved inside that session's own binding, and the verb goes through
+     * `deck-control`'s dispatcher so it is tiered, confirmed, budgeted and
+     * logged exactly like a call from a session in this window.
+     *
+     * `machinesIpc` is captured rather than passed, and it is null on the line
+     * that builds this object: the closure runs on a frame from a socket, long
+     * after the assignment. `false` before then is the conservative answer and
+     * the true one — a machine cannot have sent a frame on a link that does not
+     * exist yet.
+     */
+    /*
+     * And the fact that makes the verb above fire for a session this app never
+     * started: which of that machine's sessions has a browser window *here*.
+     *
+     * Read out of the binding map every time it is sent, because that map is the
+     * only authority on it and a copy kept here would be a second one. Every
+     * session with at least one window, ended or not — a window is kept when its
+     * pty dies, deliberately (`SessionBinding.ended`), and a list that dropped it
+     * would answer "no window" about a page still on screen.
+     *
+     * See `MachinesIpcDeps.windowsHeld`, and `window.holds` in `protocol.ts` for
+     * why the whole set travels rather than a change.
+     */
+    windowsHeld: (machineId) =>
+      bindingView()
+        .sessions.filter((binding) => binding.machineId === machineId && binding.windows.length > 0)
+        .map((binding) => binding.sessionId),
+    serveWindows: (machineId, call) =>
+      serveWindowCall(
+        {
+          allowed: (id) => machinesIpc?.drivesWindows(id) ?? false,
+          control: () => deckControl?.control ?? null,
+          /*
+           * Whether a confirmation raised by this call could reach anybody.
+           *
+           * The same three checks `send` above makes, and for the same reason:
+           * this app with no window, or one on its way out, cannot draw the
+           * dialog `browser.step`'s first change on a public website asks for —
+           * so the call would hold the far machine's tool call open until the
+           * broker timed out. `attended: true` was asserted here for one
+           * evening with a comment arguing that a person must be present; on
+           * macOS an app with every window closed is still running, which is
+           * exactly the state that argument does not cover.
+           */
+          attended: () =>
+            !quitting && rendererAlive && mainWindow !== null && !mainWindow.isDestroyed(),
+        },
+        machineId,
+        call,
+      ),
   })
   /*
    * The other half of Machines: computers nobody sits at. §5.5.
@@ -2641,6 +2920,43 @@ function registerIpc(): void {
    * page opening somewhere he was not looking.
    */
   registerBrowserBindingIpc(ipcMain, bindingDeps)
+  /*
+   * And every paired machine hears about it.
+   *
+   * A window attached here to a session running on another computer is a fact
+   * only this app has — the `WebContentsView` is in this renderer — and the
+   * machine the pty is on needs it, or the six browser verbs on that session
+   * resolve in that machine's own empty map and answer "no browser window is
+   * attached to this session" about a page on this screen. That was the first
+   * thing Asad tried.
+   *
+   * Subscribed rather than called from `attach`, because a detach, a window
+   * closing, a session being removed and a renderer reload are all the same
+   * event to the far machine — "here is the set now" — and there is exactly one
+   * place all four already meet. `subscribe` fires once immediately with the
+   * current view, which is also correct: a link that came up before this line
+   * has already announced on its own welcome, and saying it twice costs one
+   * frame and cannot be wrong.
+   */
+  subscribeToBindings((next) => {
+    /*
+     * Only when the *set* moved.
+     *
+     * This map publishes on every change to it, and most of them are not this
+     * fact: `windowMoved` fires on every navigation and every title change, so a
+     * subscriber that announced unconditionally would put a frame on every
+     * paired machine's socket for each page a person clicks through. The far
+     * end's table is a set of session ids; a URL is not in it.
+     */
+    const now = next.sessions
+      .filter((binding) => binding.machineId !== '' && binding.windows.length > 0)
+      .map((binding) => `${binding.machineId}\u0000${binding.sessionId}`)
+      .sort()
+      .join('\n')
+    if (now === announcedWindows) return
+    announcedWindows = now
+    machinesIpc?.announceWindows()
+  })
   /*
    * The sidebar row's ⋯ menu, on the same dependencies.
    *
@@ -4189,6 +4505,10 @@ app.on('before-quit', (event) => {
    * asked in is already going. The bearer-token file goes with it, so nothing
    * is left on disk holding a token that authenticates a server that has gone.
    */
+  // Every browser verb still waiting on another computer is answered now, with
+  // a sentence, rather than left for a deadline this process will not live to
+  // see. See `window-asks.ts`.
+  windowAsks.stop()
   void deckControl?.stop()
   /*
    * Every server connection and every server terminal, closed.

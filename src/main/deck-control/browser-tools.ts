@@ -37,6 +37,15 @@ import { Refused, type Tier } from './surface'
  * else's" from "there is no such window". What it holds is what the person
  * handed it by attaching a window, and no more.
  *
+ * ## And a third fact, since the evening of 2026-08-21: the window may not be here
+ *
+ * A session can run on one computer while the window attached to it is in the
+ * app on another — which is the ordinary arrangement the moment somebody starts
+ * a session on their PC from their Mac and attaches a browser window to it.
+ * These verbs still take no tab id and still resolve a slot inside one binding;
+ * what changes is *which map* answers. {@link VerbForwarder} carries the rule and
+ * the reason it has no exceptions.
+ *
  * ## Why five schemas rather than a Playwright handle
  *
  * Asad asked for Playwright. What he described wanting from it is *stable
@@ -292,7 +301,8 @@ function targetOf(window: BoundWindow): Bound {
  * The machine is part of the lookup and not optional here. The binding is keyed
  * `<machineId>\0<sessionId>`, and a session on his PC asking about `B1` under
  * this computer's key would be asking about somebody else's window.
- *
+ */
+/*
  * Exported since 2026-08-21 for `store-tools.ts`, and exported rather than
  * re-implemented for the obvious reason: this function *is* the permission
  * model for naming a page, and a second copy of it is a second copy that will
@@ -516,6 +526,96 @@ const CLOSE_SCHEMA: JsonSchema = {
 /* --------------------------------------------------------------- the tools -- */
 
 /**
+ * The verb, sent to the machine that actually holds the window.
+ *
+ * ## Why forwarding rather than a browser on every machine
+ *
+ * A browser window is a `WebContentsView` in the renderer of the app somebody is
+ * looking at. A session can run anywhere — this computer, a machine paired to
+ * it, a shell on a server — and when Asad starts a session on his PC from his
+ * Mac and attaches a window to it, the window object is on the **Mac** and the
+ * pty is on the **PC**. Nothing about that is a mistake to be designed away: it
+ * is what "attach the browser I am looking at to the session I am running"
+ * means, and it is exactly what he described not working:
+ *
+ * > *"even if I open a browser in the same remote device and also browser is in
+ * > the remote device like the same machine and I select open a session also in
+ * > the remote device but they cannot even connect to each other if I am driving
+ * > them from another device as a remote"*
+ *
+ * So the six verbs are the same six wherever the session runs, and the one that
+ * moves is the *call*. One rule, stated once, applied by every tool: **if this
+ * app holds no window for the session asking, and the session belongs to a
+ * device, the verb goes to that device.**
+ *
+ * ## Why every verb, with no "unless there is one here" clause
+ *
+ * The obvious refinement — forward only when this app holds no window for that
+ * session — is the one thing this must not do, and it is worth writing down
+ * because it looks like an improvement. `host-core.ts` used to refuse a device's
+ * session these verbs outright, and its reason still binds: such a session runs
+ * on *this* machine, so a verb served locally would let a paired device drive
+ * the browser holding this account's logins, through a token that says `session`
+ * rather than `remote` and therefore slips past the refusal
+ * {@link mayDrive} makes to a device's face. A local-window fallback *is* that
+ * door: attach one window here to a guest's session and the guest's agent has
+ * it. So the answer does not depend on what is attached here — it depends only
+ * on whose session it is.
+ *
+ * ## What crosses, and what it means that so little does
+ *
+ * A tool name and its arguments. No window id, no view id and no page: the
+ * far end resolves the slot inside that session's own binding, so a window
+ * belonging to another session cannot be named, cannot be probed for, and is
+ * indistinguishable in the refusal from one that never existed — the property
+ * {@link boundOf} gives a local session, carried across the wire by carrying no
+ * more than it already had. And the grant, the tier, the confirmation and the
+ * action log are all on the far side, where the browser is.
+ *
+ * ## Two methods, because asking and doing are two different moments
+ *
+ * The precheck runs before the tier is read and before anything is logged, and
+ * all it needs to know is *whether* this call is this machine's to serve.
+ * Folding that into the sending call would mean a frame going out on the wire
+ * during a precheck — twice per call, once wasted — and a tool refused a moment
+ * later would already have driven somebody's browser.
+ */
+export interface VerbForwarder {
+  /**
+   * Was this session started by a paired device?
+   *
+   * Its windows are that device's, always — see the rule above for why this is
+   * not softened into "unless one is attached here". A session nobody started
+   * remotely answers false and is served locally, which is every session in this
+   * window and pays nothing.
+   */
+  elsewhere(session: { sessionId: string; machineId: string }): boolean
+  /** Send the verb to the computer that holds the window, and wait for it. */
+  send(
+    session: { sessionId: string; machineId: string },
+    tool: string,
+    args: Record<string, unknown>,
+  ): Promise<ToolOutput>
+}
+
+/**
+ * One tool, with the forward in front of it.
+ *
+ * The precheck is *replaced* rather than run first, and that is the whole of
+ * why this is a wrapper rather than a line inside each `run`. Every precheck
+ * here ends in {@link boundOf}, which resolves the window in **this** app's map
+ * — so on the machine the pty is on it refuses *"no window by that name"* over
+ * a page the person can see, before `run` is ever reached. What survives is
+ * {@link mayDrive}: a paired *device's* token is refused exactly as before, and
+ * an unattended run is refused exactly as before, because neither of those
+ * questions is about where the window is.
+ *
+ * The arguments are not validated here either, deliberately. They are validated
+ * by the same tool's precheck on the far side, which is the only copy that can
+ * resolve them — and a second, weaker check here would be a second place to
+ * keep in step with five schemas.
+ */
+/**
  * Everything driving refuses to do for a caller that is not the person at
  * this keyboard.
  *
@@ -568,7 +668,32 @@ export function mayDrive(context: ToolContext, tool: string): void {
   }
 }
 
-export function browserTools(drive: BrowserDrive): ToolSpec[] {
+function forwarding(spec: ToolSpec, forward: VerbForwarder): ToolSpec {
+  const away = (context: ToolContext): { sessionId: string; machineId: string } | null => {
+    const owner = callingSession(context)
+    return owner !== null && forward.elsewhere(owner) ? owner : null
+  }
+  return {
+    ...spec,
+    precheck: (args, context) => {
+      // {@link mayDrive} is the half that still has to run: a paired device's
+      // token and an unattended routine are refused wherever the window is.
+      // Everything after it in the original precheck resolves the window in this
+      // app's map, which is the map that does not have it.
+      if (away(context) !== null) {
+        mayDrive(context, spec.id)
+        return
+      }
+      spec.precheck?.(args, context)
+    },
+    run: async (args, context) => {
+      const owner = away(context)
+      return owner === null ? spec.run(args, context) : forward.send(owner, spec.id, args)
+    },
+  }
+}
+
+export function browserTools(drive: BrowserDrive, forward?: VerbForwarder): ToolSpec[] {
   const openTool: ToolSpec = {
     id: 'browser.open',
     wire: 'browser_open',
@@ -1063,5 +1188,18 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
       }),
   }
 
-  return [openTool, readTool, stepTool, screenshotTool, handoverTool, closeTool]
+  const tools = [openTool, readTool, stepTool, screenshotTool, handoverTool, closeTool]
+  /*
+   * All six or none, and never a subset.
+   *
+   * Q4's parity requirement — *"whatever it can do to its own tab it can do to
+   * an attached one"* — is what makes a partial list wrong here rather than
+   * merely incomplete: a session on another machine that could open a page and
+   * not read it is the exact complaint this round started from (*"other sessions
+   * still cant see inside the browser window they opened they can just open"*),
+   * and a verb left off this map is how it would come back. The one verb that
+   * genuinely cannot cross is refused on the far side with a sentence saying so;
+   * see `NOT_ACROSS_THE_WIRE` in `remote/machines/window-serve.ts`.
+   */
+  return forward === undefined ? tools : tools.map((spec) => forwarding(spec, forward))
 }
