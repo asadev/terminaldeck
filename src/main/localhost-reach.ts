@@ -102,14 +102,27 @@
  * approval screen and its folder grants. `own-ports.ts` was written for the
  * copilot's control plane and this is the same hole with one more machine in it.
  *
- * ## What is not here
+ * ## No idle reaper, and exactly one close
  *
- * There is no close button and no idle reaper. A tunnel lives for as long as the
- * link to that machine does — `machines/ipc.ts` drops them the moment the link
- * leaves `online`, and again at shutdown — because the alternative is a page
- * that dies while somebody is reading it, and because a listener costs one file
- * descriptor. The cost of keeping it is that a port taken by rung 1 stays taken
- * until the machine disconnects, which is the same bargain the phone makes.
+ * A tunnel lives for as long as the link to that machine does — `machines/ipc.ts`
+ * drops them the moment the link leaves `online`, and again at shutdown —
+ * because the alternative is a page that dies while somebody is reading it, and
+ * because a listener costs one file descriptor. Nothing times one out.
+ *
+ * {@link RemoteReach.close} is the single exception, and it exists for one
+ * gesture: the browser's machine picker moving a page **off** that machine.
+ * Rung 1 keeping the number is the whole value of the ladder above, and it has
+ * a consequence that shipped as a defect in 0.9.0: while the tunnel is up,
+ * `localhost:3100` **on this computer** is that machine's 3100. So choosing this
+ * computer in the picker could not be honoured by navigating anywhere — the
+ * address the page would be sent to *was* the tunnel, the page came back from
+ * the machine it was supposed to be leaving, and the bar ended up with the
+ * picker naming this Mac and the address field naming the PC over one page.
+ *
+ * The port is therefore handed back first, and only then does the address mean
+ * what the bar says it means. The trade this makes is the mirror of the one
+ * above: a second window reading a page through the same tunnel loses it, since
+ * one number on this machine can only point at one computer at a time.
  */
 
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
@@ -209,6 +222,19 @@ export interface RemoteReach {
   handle(message: ServerMessage): void
   /** The link dropped, or the app is quitting. Every socket goes with it. */
   closeAll(reason: string): void
+  /**
+   * Give one port back: close the local listener that was serving it.
+   *
+   * True when this desktop is no longer serving that far port on a local
+   * address — which **includes never having been**. The caller's question is
+   * about the address, not about this map's bookkeeping: a picker asking for
+   * `localhost:3100` to mean this computer again is answered by the port being
+   * free, however it got that way.
+   *
+   * The far end is told, exactly as it is told when a tunnel is closed for any
+   * other reason, so it stops holding its own half open.
+   */
+  close(port: number): boolean
   list(): ReachInfo[]
 }
 
@@ -612,6 +638,15 @@ export function createRemoteReach(deps: ReachDeps): RemoteReach {
         default:
           return
       }
+    },
+
+    close(port: number): boolean {
+      const id = byPort.get(port)
+      // Nothing of this desktop's is standing on that number, which is the
+      // answer the caller wanted rather than a failure to act.
+      if (id === undefined || !tunnels.has(id)) return true
+      closeTunnel(id, true)
+      return true
     },
 
     closeAll(reason: string): void {

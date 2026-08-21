@@ -240,6 +240,64 @@ describe('reaching another machine’s port from this one', () => {
     expect(ownPorts()).not.toContain(answer.localPort)
   })
 
+  /**
+   * The other half of keeping the number, and the 0.9.0 defect.
+   *
+   * Rung 1 and rung 2 keep the far machine's own port number on this computer,
+   * which is what makes a dev server's own redirects survive the trip — and it
+   * means that while the tunnel is up, that number here *is* the far machine.
+   * The browser's machine picker had no way to move a page home past it: the
+   * address it navigated to was the tunnel, so the page came back from the PC
+   * under a picker naming this Mac.
+   */
+  it('gives a port back, so the number means this machine again', async () => {
+    const port = await devServer('from the PC')
+    const { reach, frames } = pair([port])
+    const answer = await reach.open(port)
+    if (!answer.ok) throw new Error(answer.message)
+    // The case this is about: the listener took the same number.
+    expect(answer.sameNumber).toBe(true)
+    expect(await fetchText(answer.url)).toBe('from the PC /')
+
+    expect(reach.close(port)).toBe(true)
+
+    expect(reach.list()).toHaveLength(0)
+    // Out of this machine's own port list too, or a phone paired here would
+    // still be offered a listener that no longer exists.
+    expect(ownPorts()).not.toContain(answer.localPort)
+    await expect(fetchText(answer.url)).rejects.toMatchObject({ code: 'ECONNREFUSED' })
+    // And the far machine is told, so it is not left holding its own half open.
+    expect(frames.filter((frame) => frame.t === 'tunnel.close')).toHaveLength(1)
+    expect(frames.find((frame) => frame.t === 'tunnel.close')).toMatchObject({
+      id: openedId(frames),
+    })
+  })
+
+  it('reaches the same port again after it has been given back', async () => {
+    const port = await devServer('back again')
+    const { reach } = pair([port])
+    const first = await reach.open(port)
+    if (!first.ok) throw new Error(first.message)
+    reach.close(port)
+
+    const second = await reach.open(port)
+    if (!second.ok) throw new Error(second.message)
+    // A new tunnel rather than the closed one handed out again — the picker
+    // moving a page home and then back is the ordinary way this is used.
+    expect(await fetchText(second.url)).toBe('back again /')
+    expect(reach.list()).toHaveLength(1)
+  })
+
+  it('answers a port it is not serving with the truth: nothing of ours is there', async () => {
+    const port = await devServer('untouched')
+    const { reach } = pair([port])
+    // Never opened. The caller's question is whether that address is free of
+    // this desktop's listeners, and it is.
+    expect(reach.close(port)).toBe(true)
+    expect(reach.close(65000)).toBe(true)
+    expect(reach.list()).toHaveLength(0)
+  })
+
   it('takes the page down when the far machine closes the tunnel', async () => {
     const port = await devServer('going away')
     const { reach, frames } = pair([port])

@@ -363,6 +363,14 @@ describe('launching', () => {
         // than throwing, because every refusal here is a sentence somebody has
         // to read — not connected, not a port, not granted.
         'machines:reach',
+        // And giving one back. The listener keeps the far machine's own port
+        // *number* on this computer whenever it was free, which is what makes a
+        // dev server's own redirects survive the trip — and it means that until
+        // it is closed, that number here *is* that machine. The browser's
+        // machine picker moving a page back onto this computer has nowhere to
+        // send it until this is called; 0.9.0 navigated to the tunnel and came
+        // back from the PC under a picker naming this Mac.
+        'machines:reach:close',
         'machines:rename',
         'machines:resize',
         // Typing into a session over there **without attaching to it** — which

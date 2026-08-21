@@ -272,6 +272,33 @@ describe('asking for a port on another machine', () => {
     expect(app.sent[0]).toMatchObject({ t: 'tunnel.open', port: 5173 })
   })
 
+  /**
+   * The other half of the verb, and the reason it had to exist.
+   *
+   * The listener keeps the far machine's own port number on this computer
+   * whenever it was free — the whole value of the ladder in
+   * `localhost-reach.ts` — so until it is closed, `localhost:3100` here *is*
+   * that machine's 3100. The browser's machine picker moving a page back onto
+   * this computer had nowhere to send it: 0.9.0 navigated to the tunnel, the
+   * page came back from the PC, and the picker kept this Mac's name over it.
+   */
+  it('answers a hand-back with a boolean, not a sentence', async () => {
+    const app = rig({ online: true })
+    // Nothing was ever opened on 5173, and that is a true answer about the
+    // address rather than a failure: no listener of this desktop's is there.
+    expect(await app.invoke('machines:reach:close', app.machineId, 5173)).toBe(true)
+    // A machine this desktop has no link to took its listeners with it.
+    expect(await app.invoke('machines:reach:close', 'no-such-machine', 5173)).toBe(true)
+  })
+
+  it('refuses a hand-back that is not a machine and a port', async () => {
+    const app = rig({ online: true })
+    // The one answer that is not about a port. `false` here means the request
+    // was malformed, which the window must not read as "the address is free".
+    expect(await app.invoke('machines:reach:close', 7, 3000)).toBe(false)
+    expect(await app.invoke('machines:reach:close', app.machineId, '3000')).toBe(false)
+  })
+
   it('stops serving a machine’s pages the moment it is forgotten', async () => {
     const app = rig({ online: true })
     void app.invoke('machines:reach', app.machineId, 5173)
