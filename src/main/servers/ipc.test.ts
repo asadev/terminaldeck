@@ -1129,44 +1129,85 @@ describe('which login that server account signs in as', () => {
     })
     const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
     expect(await call('servers:shell:account', opened.shellId)).toEqual({
-      agentId: 'claude',
-      account: 'me@example.test',
-      signedIn: 'yes',
+      known: 'yes',
+      agents: 1,
+      logins: [{ agentId: 'claude', account: 'me@example.test' }],
     })
     await call('servers:shell:account', opened.shellId)
     expect(probes).toBe(1)
   })
 
-  it('says nothing at all when no agent there has a login to report', async () => {
-    // Absent rather than empty — the same silent degrade the connectors chip
-    // beside it makes. A chip drawn with nothing in it is worse than no chip.
-    const { call } = harness({
-      openShell: async () => ({
-        onData: () => () => undefined,
-        onClose: () => () => undefined,
-        write: () => undefined,
-        resize: () => undefined,
-        close: () => undefined,
-      }),
-    })
+  it('names every login rather than whichever the far end listed first', async () => {
+    /*
+     * It answered the first agent with an address on it, which on a server with
+     * two signed-in agents is a coin toss printed as a fact — the bar would say
+     * *Claude Code* over a terminal somebody runs Codex in. Both are reported
+     * and the bar names both.
+     */
+    const withTwo: ServerFacts = {
+      ...serverFacts(),
+      agents: factYes(
+        [
+          { id: 'claude', path: '/usr/bin/claude', version: '2.0.0', signedIn: 'no', account: null },
+          { id: 'codex', path: '/usr/bin/codex', version: '0.149.0', signedIn: 'yes', account: 'a@example.test' },
+          { id: 'gemini', path: '/usr/bin/gemini', version: '0.56.0', signedIn: 'yes', account: null },
+        ],
+        AT,
+        'looked for a coding assistant',
+      ),
+    }
+    const { call } = harness({ facts: async () => withTwo, openShell: async () => quietShell() })
     const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
-    expect(await call('servers:shell:account', opened.shellId)).toBeNull()
+    expect(await call('servers:shell:account', opened.shellId)).toEqual({
+      known: 'yes',
+      agents: 3,
+      logins: [
+        { agentId: 'codex', account: 'a@example.test' },
+        // A login with no address is still a login. Two of the three can be
+        // signed in with an API key, which has nobody's name on it.
+        { agentId: 'gemini', account: null },
+      ],
+    })
   })
 
-  it('says nothing when the server will not answer, rather than failing the bar', async () => {
+  it('says that there is no login rather than saying nothing at all', async () => {
+    /*
+     * This answered `null` for four different situations and the bar drew an
+     * empty slot for all four. *"No coding login on this server"* is a fact
+     * somebody can act on and *"we could not ask"* is a different fact; neither
+     * of them is nothing.
+     */
+    const { call } = harness({ openShell: async () => quietShell() })
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
+    expect(await call('servers:shell:account', opened.shellId)).toEqual({
+      known: 'yes',
+      agents: 0,
+      logins: [],
+    })
+  })
+
+  it('says it could not ask when the server will not answer, rather than failing the bar', async () => {
     const { call } = harness({
       facts: async () => {
         throw new ServerProblem('no-answer', 'That address did not answer.')
       },
-      openShell: async () => ({
-        onData: () => () => undefined,
-        onClose: () => () => undefined,
-        write: () => undefined,
-        resize: () => undefined,
-        close: () => undefined,
-      }),
+      openShell: async () => quietShell(),
     })
     const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
-    expect(await call('servers:shell:account', opened.shellId)).toBeNull()
+    expect(await call('servers:shell:account', opened.shellId)).toEqual({
+      known: 'cannot',
+      why: 'This server did not answer.',
+    })
   })
 })
+
+/** A shell that answers nothing, for the tests that only need one to exist. */
+function quietShell() {
+  return {
+    onData: () => () => undefined,
+    onClose: () => () => undefined,
+    write: () => undefined,
+    resize: () => undefined,
+    close: () => undefined,
+  }
+}

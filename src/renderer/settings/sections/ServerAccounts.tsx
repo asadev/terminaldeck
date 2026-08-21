@@ -74,11 +74,21 @@ import { RUN_TITLE, type AccountRun } from './AccountsSection'
  * this we can just manage from this"* is true of the pane rather than delegated
  * out of it.
  *
- * What is still genuinely absent is a **sign-out**: nothing in
- * `src/main/servers/` exposes one, and a server session runs as whatever login
- * that server's own home directory holds, so there is no per-session account to
- * switch either. That absence is a gap in the wiring, and this pane states it
- * rather than drawing a control for it.
+ * ## The sign-out this pane said it could not do
+ *
+ * It said so in a notice at the top: *"signing one out does not [work], because
+ * nothing on this side can ask a server to forget a login it holds."* That was a
+ * stated limitation and it was false. Measured on a real server on 2026-08-21:
+ * `codex logout` answers *"Successfully logged out"* and removes its stored
+ * credential, and `claude auth logout` sits in that CLI's own `auth` list beside
+ * `login` and `status`. Two of the three had had a way all along.
+ *
+ * So the row has a **Sign out** now, behind the same two presses and the same
+ * kind of sentence the install has, and the third — which genuinely has no
+ * command for it — carries its reason on its own row and no button. What is
+ * still absent is a per-*session* account to switch: a shell on a server runs as
+ * whatever login that account's own home holds, and there is nothing on the SSH
+ * side that could be handed a different one.
  */
 export function ServerAccounts() {
   const { wired, missing, servers, bridge, reading, problem } = useServers()
@@ -158,9 +168,8 @@ export function ServerAccounts() {
       {/* Said once, at the top, about the one thing this pane genuinely cannot
           do — see the header. Never a dead button per row. */}
       <Notice tone="info">
-        Opening a server here connects to it and reads what it has. Setting an agent up and signing
-        it in both work from the row; signing one out does not, because nothing on this side can ask
-        a server to forget a login it holds.
+        Opening a server here connects to it and reads what it has. Setting an agent up, signing it
+        in and signing it out all work from the row.
       </Notice>
 
       {servers.map((server) => (
@@ -217,10 +226,15 @@ type ServerLook =
  * two computers, and two vocabularies for it on one pane is the thing the
  * recording keeps catching.
  *
- * The third run is not padding. `probe.sh` can only ask Claude Code whether it
- * is signed in — the other two have no status command — so `unknown` is the
- * answer for most agents on most servers, and filing that under "not signed in"
- * would be this app inventing a state for somebody's machine.
+ * The third run has emptied out, and it stays because emptying is not the same
+ * as being wrong. Until 2026-08-21 only Claude Code could be asked and the other
+ * two answered `unknown` on every server, which put most rows in a run headed
+ * *"not answered"*. Both can be asked now — Codex through its own `login status`
+ * and Gemini through the rule it states about itself, both measured on a real
+ * server; see `main/servers/agent-signin.ts`. What is left under this heading is
+ * an agent that is installed and would not start, and a server whose answer was
+ * cut off, and those two must not be filed under "not signed in": that would be
+ * this app inventing a state for somebody's machine.
  */
 export function ServerLogins({ name, look }: { name: string; look: ServerLook | undefined }) {
   if (!look) return null
@@ -320,7 +334,7 @@ export function serverAgentRuns(
       state: 'unknown',
       line: broken
         ? 'Installed, and would not start'
-        : 'Installed. This agent has no way to be asked whether it is signed in.',
+        : 'Installed. This server did not say whether it is signed in.',
     }
   })
 

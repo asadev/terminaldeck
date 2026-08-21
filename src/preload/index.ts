@@ -987,6 +987,13 @@ const api = {
     ipcRenderer.invoke('servers:setup:install', id, agentId, shellId),
   signInOnServer: (id: string, agentId: string, shellId: string): Promise<unknown> =>
     ipcRenderer.invoke('servers:setup:signin', id, agentId, shellId),
+  /*
+   * And out again, which this app used to say it could not do. Two of the three
+   * have a command for exactly that — measured; see `servers/setup.ts` — and the
+   * third says on its own row that it has none.
+   */
+  signOutOnServer: (id: string, agentId: string, shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:setup:signout', id, agentId, shellId),
   cancelServerSetup: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('servers:setup:cancel', id),
   removeServerSetup: (id: string, agentId: string): Promise<unknown> =>

@@ -63,6 +63,13 @@
  * tool list at three names.
  */
 
+import {
+  AGENT_ENV_PROBE,
+  AGENT_VERSION_AWK,
+  readAgentEnv,
+  signInSnippet,
+  type SignInVars,
+} from './agent-signin'
 import type { AgentFact, AgentId, AgentInstallRoom, ServerFacts } from './facts'
 import type { ForwardingConnection } from './forward'
 import { forwardOn } from './forward'
@@ -145,11 +152,22 @@ export interface SetupState {
   /** The server's own words, when something failed. Shown behind a disclosure. */
   detail: string
   /**
-   * True when the sign-in has fallen back to being finished by hand.
+   * True when this app cannot see the end of this sign-in, and the person can.
    *
-   * Never silently substituted: the line above says which of the two paths they
-   * are on, because a sign-in that quietly became a copy-and-paste job is a
-   * sign-in that appears to have hung.
+   * Two routes: the one that fell back to being finished at a prompt, and the
+   * one that happens inside the agent's own full-screen interface. On both, the
+   * login is left running and nothing on this side is told when it worked — so
+   * the panel labels its button **I'm done** rather than **Stop**, and pressing
+   * it reads the server again.
+   *
+   * Deliberately **not** set on the device-code route, which used to set it. On
+   * that one the login command exits when the code is accepted and the flow
+   * watches it exit, so the person says nothing and a button offering to end it
+   * early would be a way to abandon a sign-in that was about to succeed.
+   *
+   * Never silently substituted: the line above says which of the paths they are
+   * on, because a sign-in that quietly became a copy-and-paste job is a sign-in
+   * that appears to have hung.
    *
    * There is deliberately no address on this. The address that works for a
    * person doing it themselves is the *other* one — `claude` prints a
@@ -161,6 +179,21 @@ export interface SetupState {
    * than to put a second, non-working address beside it.
    */
   byHand: boolean
+  /**
+   * The one-time code the sign-in printed, once it has printed one.
+   *
+   * Empty everywhere else, and empty until it appears — this is the *only*
+   * field on this state that is filled in from the terminal's own output rather
+   * than from something this app did, which is why {@link oneTimeCodeIn} is
+   * careful about what it will accept.
+   *
+   * It is on the state because the alternative is what was here before: a
+   * sentence saying *"enter the code below"* over a terminal the code has
+   * already scrolled up in, and a person squinting at ten characters of somebody
+   * else's screen to retype them into a browser. The panel draws it once, in
+   * large type, with a Copy beside it.
+   */
+  code: string
   /** True once this app put it here, which is what makes a way back honest. */
   weInstalled: boolean
   /** The version now on the server, once we know it. */
@@ -181,6 +214,7 @@ function state(
     line,
     detail: '',
     byHand: false,
+    code: '',
     weInstalled: false,
     version: null,
     ...over,
@@ -227,6 +261,17 @@ interface AgentSetup {
   consequence(serverName: string): string
   /** How its sign-in behaves on a headless machine. See {@link SignInShape}. */
   signIn: SignInShape
+  /**
+   * The command that signs this agent out, or null where it has none.
+   *
+   * Measured on a real box on 2026-08-21, because the pane was saying the
+   * opposite of all three: *"signing one out does not [work], because nothing on
+   * this side can ask a server to forget a login it holds."* Two of them have a
+   * command for exactly that and had had one all along.
+   */
+  signOut(binary: string): string | null
+  /** Why there is no sign-out here, in the agent's own terms. Null when there is one. */
+  whyNoSignOut: string | null
   /** What `remove` deletes besides the binary itself, relative to `$HOME`. */
   leaves: readonly string[]
   /** What a device-code sign-in opens on this Mac. Only for `device-code`. */
@@ -332,6 +377,8 @@ const AGENTS: Readonly<Record<AgentId, AgentSetup>> = {
       'It takes about a minute. It does not need administrator access and does not change anything ' +
       'else on the server. You can remove it again from here.',
     signIn: 'browser-shim-tunnel',
+    signOut: (binary) => `${binary} auth logout`,
+    whyNoSignOut: null,
     leaves: ['.local/share/claude/versions'],
     deviceUrl: null,
     verified:
@@ -355,6 +402,8 @@ const AGENTS: Readonly<Record<AgentId, AgentSetup>> = {
       'that is already there. It takes a few seconds. It does not need administrator access and does not ' +
       'change anything else on the server. You can remove it again from here.',
     signIn: 'device-code',
+    signOut: (binary) => `${binary} logout`,
+    whyNoSignOut: null,
     leaves: ['.local/lib/node_modules/@openai/codex'],
     deviceUrl: 'https://auth.openai.com/codex/device',
     verified:
@@ -379,6 +428,10 @@ const AGENTS: Readonly<Record<AgentId, AgentSetup>> = {
       'that is already there. It takes a few seconds. It does not need administrator access and does not ' +
       'change anything else on the server. You can remove it again from here.',
     signIn: 'in-terminal',
+    signOut: () => null,
+    whyNoSignOut:
+      'Gemini CLI has no way to be signed out from outside its own screen, so this has to be done in the ' +
+      'terminal here.',
     leaves: ['.local/lib/node_modules/@google/gemini-cli'],
     deviceUrl: null,
     verified:
@@ -415,6 +468,32 @@ export function installConsequence(id: AgentId, serverName: string): string {
 
 /** The button that puts it back, named the way a person would say it. */
 export const REMOVE_LABEL = 'Remove what was installed'
+
+/**
+ * Why this agent cannot be signed out from here, or null when it can.
+ *
+ * The pane draws the sentence and no button for a non-null answer, which is
+ * §4.1 — *"a control that cannot act is removed, or disabled with a stated
+ * reason. Never drawn hopefully."*
+ */
+export function whyNoSignOut(id: AgentId): string | null {
+  return AGENTS[id].whyNoSignOut
+}
+
+/**
+ * What signing out of this agent on this server does, said before it is done.
+ *
+ * The same shape as the install's consequence and for the same reason — §4.3,
+ * the sentence is written where the work is. It is short because the thing it
+ * describes is: the credential on that machine is removed and nothing else is
+ * touched, and the way back is the Sign in on the same row.
+ */
+export function signOutConsequence(id: AgentId, serverName: string): string {
+  return (
+    `This asks ${AGENTS[id].label} on ${serverName} to forget the login it is holding. Nothing else on ` +
+    'the server changes and it stays installed. You can sign in again from this row.'
+  )
+}
 
 /**
  * What the installer needs, checked before anybody is offered a button.
@@ -574,6 +653,101 @@ const INSTALL_CEILING_MS = 10 * 60 * 1000
  * cannot now happen.
  */
 const DEVICE_CEILING_MS = 16 * 60 * 1000
+
+/* ------------------------------------------------- reading the terminal -- */
+
+/**
+ * Colour and cursor moves, so the text can be read as text.
+ *
+ * Every one of these sign-ins paints its output, and the measured line is
+ * `\x1b[94m519G-KS0UC\x1b[0m` — a code with an escape either side of it. Without
+ * this the token below matches nothing at all.
+ */
+const ANSI = /\u001B\[[0-?]*[ -/]*[@-~]/g
+
+/**
+ * What a one-time code looks like, and nothing else does.
+ *
+ * Measured on a real box: Codex prints `519G-KS0UC` — upper case, one hyphen,
+ * four then five characters — alone on its own line, indented, under the
+ * sentence *"Enter this one-time code (expires in 15 minutes)"*. The bounds are
+ * a little wider than the measurement because the length of a code is not a
+ * promise anybody made; the *shape* is what makes it unmistakable in a terminal
+ * full of paths, versions and prose.
+ */
+const CODE_SHAPE = /^[A-Z0-9]{3,8}-[A-Z0-9]{3,8}$/
+
+/** As much of a sign-in's output as is worth keeping to find one short token in. */
+const MOST_WATCHED_BYTES = 64 * 1024
+
+/**
+ * The one-time code in what a sign-in has printed so far, or null.
+ *
+ * ## Two anchors, because one of them is a sentence
+ *
+ * A code-shaped token alone on a line is distinctive, and it is not distinctive
+ * *enough* to lift out of arbitrary output and put on screen as **the code** —
+ * getting that wrong is the failure this whole area is arranged against: a
+ * control that looks like it worked and did not. So it is only read out of
+ * output that also carries one of the two things the flow itself prints — the
+ * phrase, or the address this app opened for it — and never out of a terminal
+ * that merely happens to contain a hyphenated word.
+ *
+ * Two anchors rather than one because the phrase is a sentence in somebody
+ * else's program and nobody promised not to reword it, and the address is a
+ * constant this app already knows. Either is enough; neither alone is a
+ * dependency.
+ *
+ * Answers null the whole time nothing has been printed, which is the ordinary
+ * case for the first second of a sign-in and for every sign-in that has no code
+ * in it at all.
+ */
+export function oneTimeCodeIn(output: string, deviceUrl: string | null): string | null {
+  const plain = output.replace(ANSI, '')
+  const said = /one[- ]?time code/i.exec(plain)
+  const anchored =
+    said !== null || (deviceUrl !== null && deviceUrl !== '' && plain.includes(deviceUrl))
+  if (!anchored) return null
+  const from = said === null ? 0 : said.index
+  for (const line of plain.slice(from).split(/\r?\n/)) {
+    const word = line.trim()
+    if (CODE_SHAPE.test(word)) return word
+  }
+  return null
+}
+
+/**
+ * Watch a sign-in's output for its code, once, and stop.
+ *
+ * A listener on the shell that is already on screen rather than a second
+ * channel: these bytes are being painted into a terminal a person is looking at
+ * either way, and this reads the same stream on its way past. It stops itself
+ * the moment it has an answer, and the caller stops it when the attempt ends —
+ * so a sign-in that never prints a code costs one closure and a bounded string.
+ */
+function watchForCode(
+  shell: SetupShell,
+  deviceUrl: string | null,
+  found: (code: string) => void,
+): () => void {
+  let seen = ''
+  let done = false
+  const stop = shell.onData((chunk) => {
+    if (done) return
+    // Bounded: a code arrives in the first few hundred bytes, and an install
+    // that ran before it can be megabytes. Keeping the tail keeps the code.
+    seen = (seen + chunk).slice(-MOST_WATCHED_BYTES)
+    const code = oneTimeCodeIn(seen, deviceUrl)
+    if (code === null) return
+    done = true
+    stop()
+    found(code)
+  })
+  return () => {
+    done = true
+    stop()
+  }
+}
 
 /** Not an exit status any shell reports, so it cannot be mistaken for one. */
 const NEVER_ANSWERED = -1
@@ -752,15 +926,42 @@ export class ServerSetups {
     const base = (step: SetupStep, line: string, over: Partial<SetupState> = {}): SetupState =>
       state(serverId, agentId, step, line, { weInstalled, ...over })
 
+    /*
+     * The code, lifted out of the terminal on its way past.
+     *
+     * This is the whole of what was left to do by hand on this route, and it was
+     * the fiddliest thing in the feature: ten characters of somebody else's
+     * screen, mixed into an installer's scrollback, retyped into a browser
+     * window that is now covering the terminal they are in. The app is reading
+     * that stream anyway — it is what `typeAndWait` watches for the exit status
+     * — so this reads the same bytes and puts the code on the state, where the
+     * panel draws it once, large, with a Copy beside it.
+     *
+     * The line changes with it. A sentence pointing at a terminal is the right
+     * sentence only while there is nothing better on screen than the terminal.
+     */
+    let opened = false
+    const watching = watchForCode(shell, agent.deviceUrl, (code) => {
+      this.say(
+        base(
+          'signing-in',
+          opened
+            ? `${agent.label} is waiting for this code on the page that just opened in your browser.`
+            : `${agent.label} is waiting for this code. Open ${agent.deviceUrl ?? 'the address below'} and enter it.`,
+          { code },
+        ),
+      )
+    })
+
     try {
       if (this.deps.openInBrowser !== undefined && agent.deviceUrl !== null) {
         await this.deps.openInBrowser(agent.deviceUrl)
+        opened = true
         this.say(
           base(
             'signing-in',
             `${agent.label} is showing a one-time code in the terminal below. Enter it on the page ` +
               'that just opened in your browser.',
-            { byHand: true },
           ),
         )
       } else {
@@ -771,7 +972,6 @@ export class ServerSetups {
           base(
             'signing-in',
             `Open the address ${agent.label} prints below, and enter the code it shows there.`,
-            { byHand: true },
           ),
         )
       }
@@ -779,6 +979,7 @@ export class ServerSetups {
       attempt.stopLogin = () => shell.write('\u0003')
       const code = await this.typeAndWait(shell, `${binary} login --device-auth; echo ${DONE} $?`, DEVICE_CEILING_MS)
       attempt.stopLogin = null
+      watching()
       await this.finish(serverId)
 
       const after = await this.lookForAgent(serverId, agentId)
@@ -791,6 +992,7 @@ export class ServerSetups {
       this.say(failed)
       return failed
     } catch (error) {
+      watching()
       await this.finish(serverId)
       const failed = base('failed', 'The sign-in stopped before it finished.', {
         detail: error instanceof Error ? error.message : '',
@@ -947,14 +1149,96 @@ export class ServerSetups {
     }
   }
 
-  /** Stop whatever is in flight for this server and leave nothing behind. */
+  /**
+   * Stop whatever is in flight for this server and leave nothing behind.
+   *
+   * ## And say so, which it did not
+   *
+   * `finish` tears down the attempt and pushes nothing, so the row went on
+   * saying *"Gemini CLI signs in inside its own screen…"* after the person had
+   * pressed **Stop** — a screen describing work that had ended, which is the
+   * exact complaint this file already answers about *"Installing…"* left up
+   * after an install finished.
+   *
+   * The push is `idle`, and `idle` is what makes it correct rather than merely
+   * present: the panel's line falls back to the standing description for an
+   * idle row, and both the panel and `ipc.ts` treat an idle push as *what is on
+   * that machine has changed* — so the row re-reads the server instead of being
+   * told what to say. That matters most on the one route this app cannot watch
+   * to the end: a sign-in that happens inside the agent's own full-screen
+   * interface finishes without saying so to anybody, and **Stop** is now the
+   * press that asks whether it worked rather than a press that abandons it.
+   */
   async cancel(serverId: string): Promise<void> {
+    const stopped = this.attempts.get(serverId)
     await this.finish(serverId)
+    if (stopped === undefined) return
+    this.say(state(serverId, stopped.agentId, 'idle', ''))
   }
 
   /** Every server at once. For shutdown, and for the connection going away. */
   async cancelAll(): Promise<void> {
     for (const serverId of [...this.attempts.keys()]) await this.cancel(serverId)
+  }
+
+  /**
+   * Sign one agent out on the server, in the terminal the person is watching.
+   *
+   * ## Why this exists at all
+   *
+   * Because the pane above it said it could not, in as many words: *"signing one
+   * out does not [work], because nothing on this side can ask a server to forget
+   * a login it holds."* That was a stated limitation and it was false — measured
+   * on a real box on 2026-08-21, `codex logout` answers *"Successfully logged
+   * out"* and removes `auth.json`, and `claude auth logout` is in that CLI's own
+   * `auth` subcommand list beside `login` and `status`. Two of the three had had
+   * a way all along and this app was telling people otherwise.
+   *
+   * The third genuinely has none, and it says so on its own row rather than
+   * being given a button that would run nothing.
+   *
+   * ## Why the far end's own answer wins over the exit status
+   *
+   * The command is typed into the terminal like everything else here, so its
+   * exit status is available and it is the weaker of the two facts: measured,
+   * `codex logout` exits the same way whether it removed a login or found none
+   * to remove. What settles it is asking the machine afterwards, which this flow
+   * already knows how to do — so a sign-out that reported success and left a
+   * login in place cannot be reported as success.
+   */
+  async signOut(
+    serverId: string,
+    agentId: AgentId,
+    shell: SetupShell,
+    binary: string,
+  ): Promise<SetupState> {
+    await this.cancel(serverId)
+    const agent = AGENTS[agentId]
+    const command = agent.signOut(binary)
+    if (command === null) {
+      const failed = state(serverId, agentId, 'failed', agent.whyNoSignOut ?? `${agent.label} cannot be signed out from here.`)
+      this.say(failed)
+      return failed
+    }
+
+    this.say(state(serverId, agentId, 'signing-in', `Asking ${agent.label} to forget its login.`))
+    const code = await this.typeAndWait(shell, `${command}; echo ${DONE} $?`)
+    const after = await this.lookForAgent(serverId, agentId)
+
+    // The machine's own answer first. A `no` here is the whole of what was
+    // asked for, whatever the command's exit status said about itself.
+    if (after !== null && after.signedIn === 'no') {
+      const done = state(serverId, agentId, 'idle', `${agent.label} is signed out on this server.`, {
+        version: after.version,
+      })
+      this.say(done)
+      return done
+    }
+    const failed = state(serverId, agentId, 'failed', `${agent.label} is still signed in on this server.`, {
+      detail: code === 0 ? '' : `The command ended with ${code}.`,
+    })
+    this.say(failed)
+    return failed
   }
 
   /**
@@ -1167,52 +1451,19 @@ export function accountLine(id: AgentId, agent: AgentFact): string {
 }
 
 /**
- * Find one agent the same way the probe does, on its own.
+ * ## Asking whether it is signed in, per agent
  *
- * A near-copy of the `#agents` section, and the duplication is deliberate: this
- * one runs *after* an install, on a connection whose PATH is exactly the one
- * that could not see it, and inlining it here keeps the setup flow from
- * depending on a whole 293 ms probe to answer one question.
- *
- * ## Why the search is this wide for an npm install too
- *
- * Because both of the npm rows land in `~/.local/bin`, which was the blind spot
- * that started all of this: measured on the real box, a non-interactive `sh -s`
- * gets a PATH with no `~/.local/bin` on it, so a bare `command -v` answers "not
- * found" about a binary that is sitting right there. The same widening covers
- * all three, which is the point of there being one script.
- *
- * ## Asking whether it is signed in, per agent, and only where it is cheap
- *
- * Two of the three can be asked and the third cannot, and that was measured
- * rather than assumed:
- *
- *  - Claude Code answers `auth status --json` in 245 ms with a `loggedIn` flag
- *    and the address on the account.
- *  - Codex answers `login status` with *"Logged in using ChatGPT"*, or *"Not
- *    logged in"* against a configuration directory that has never been used. It
- *    prints no address, so the account stays empty rather than being guessed at.
- *  - Gemini has no equivalent at all — it has no login command — so its answer
- *    is `unknown`, which is the third state and draws a Sign in button rather
- *    than a claim in either direction.
+ * All three can be asked, and how each one is asked is in `agent-signin.ts`
+ * beside what was measured to establish it. It is imported rather than written
+ * again here because it *was* written again here, and the two copies disagreed:
+ * this one read Codex's `login status` on **stdout**, which is empty when nobody
+ * is signed in, so a server with no Codex login answered `unknown` — the state
+ * that draws no button and says the question cannot be put — while the probe
+ * two files over answered `no`. One script, one answer.
  */
-function findScript(id: AgentId): string {
+export function findScript(id: AgentId): string {
   const binary = { claude: 'claude', codex: 'codex', gemini: 'gemini' }[id]
-  const signedInCheck =
-    id === 'claude'
-      ? String.raw`s=$("$b" auth status --json 2>/dev/null | tr -d ' \t\n\r')
-case "$s" in
-  *'"loggedIn":true'*)  i=yes ;;
-  *'"loggedIn":false'*) i=no ;;
-esac
-e=$(printf '%s' "$s" | sed -n 's/.*"email":"\([^"]*\)".*/\1/p')`
-      : id === 'codex'
-        ? String.raw`s=$("$b" login status 2>/dev/null)
-case "$s" in
-  *"Logged in"*)     i=yes ;;
-  *"Not logged in"*) i=no ;;
-esac`
-        : '# This one has no way to be asked, so the answer stays unknown.'
+  const vars: SignInVars = { binary: 'b', state: 'i', account: 'e', codexHome: 'CXH', geminiEnv: 'GENV' }
 
   return String.raw`W="$PATH"
 for d in "$HOME/.local/bin" "$HOME/bin" "$HOME/.claude/local" "$HOME/.npm-global/bin"          "$HOME/.volta/bin" "$HOME/.bun/bin" "$HOME/.asdf/shims"          "$HOME/.local/share/mise/shims" /usr/local/bin /opt/homebrew/bin /snap/bin; do
@@ -1223,14 +1474,14 @@ ND="$NVM_DIR"
 for d in "$ND"/versions/node/*/bin; do [ -d "$d" ] && W="$W:$d"; done
 LS="$SHELL"
 [ -n "$LS" ] || LS=/bin/sh
+` + `LOGIN=$("$LS" -lc 'command -v ${binary}; ${AGENT_ENV_PROBE}' 2>/dev/null)\n` + readAgentEnv('LOGIN', vars) + String.raw`
 b=$(PATH="$W" command -v ` + binary + String.raw` 2>/dev/null)
-[ -n "$b" ] || b=$("$LS" -lc 'command -v ` + binary + String.raw`' 2>/dev/null | grep '/` + binary + String.raw`$' | head -n 1)
+[ -n "$b" ] || b=$(printf '%s\n' "$LOGIN" | grep '/` + binary + String.raw`$' | head -n 1)
 [ -n "$b" ] || exit 1
-v=$("$b" --version 2>/dev/null | head -n 1 | awk '{print $NF}')
+v=$("$b" --version 2>/dev/null | head -n 1 | awk '` + AGENT_VERSION_AWK + String.raw`')
 i=unknown
 e=
-` + signedInCheck + String.raw`
-printf '%s	%s	%s	%s
-' "$b" "$v" "$i" "$e"
+` + signInSnippet(id, vars) + String.raw`
+printf '%s\t%s\t%s\t%s\n' "$b" "$v" "$i" "$e"
 `
 }

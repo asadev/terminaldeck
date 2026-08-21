@@ -799,6 +799,38 @@ a.settings-btn {
  * including the cards the person came to this page for — off the bottom of the
  * screen, and then put it back when the install finished.
  */
+/*
+ * The one-time code a device sign-in is waiting for.
+ *
+ * Above the terminal and deliberately unlike it: mono, large, letter-spaced,
+ * and one press from the clipboard. The whole reason it is here is that ten
+ * characters in a scrollback are ten characters somebody has to find and
+ * retype, so anything that makes this look like more terminal output defeats
+ * it. `user-select: all` so that one click takes the whole code, for the
+ * builds where there is no clipboard to offer a button for.
+ */
+.servers-setup-code {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-sunken);
+}
+
+.servers-setup-code-value {
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-title1);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  user-select: all;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
 .servers-setup-terminal {
   position: relative;
   height: 260px;

@@ -64,7 +64,7 @@ describe('one server’s agents', () => {
     const runs = serverAgentRuns([agent({ id: 'gemini' })])
     const gemini = runs.flatMap((run) => run.agents).find((row) => row.id === 'gemini')
     expect(gemini?.state).toBe('unknown')
-    expect(gemini?.line).toContain('no way to be asked')
+    expect(gemini?.line).toContain('did not say whether it is signed in')
   })
 
   it('separates a broken install from an absent one', () => {

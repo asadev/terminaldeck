@@ -109,6 +109,8 @@ import {
   agentOn,
   agentSetup,
   installConsequence,
+  signOutConsequence,
+  whyNoSignOut,
   whyNotInstall,
   type SetupState,
 } from './setup'
@@ -203,8 +205,38 @@ export interface SetupRow {
   canInstall: boolean
   why: string | null
   consequence: string
+  /** What signing out would do, said before it is done. */
+  signOutConsequence: string
+  /** Why this one cannot be signed out from here, or null when it can. */
+  whyNoSignOut: string | null
   state: SetupState
 }
+
+/**
+ * One coding login on the account a server terminal signed in as.
+ *
+ * `account` is null where the agent has a login and no address to put on it —
+ * an API key rather than a sign-in, which is a real state of two of the three
+ * and is drawn as *signed in* with nothing after it rather than as a guess.
+ */
+export interface ShellLogin {
+  agentId: AgentId
+  account: string | null
+}
+
+/**
+ * What a terminal on a server can be told about the logins under it.
+ *
+ * Three fields and no fourth, because the bar has four sentences to choose
+ * between and these are what choose: whether the question could be put at all,
+ * how many coding agents are on that account, and which of them have a login.
+ * A shape that answered only the logins would leave *"no agent here"* and
+ * *"agents here, none signed in"* indistinguishable, and they are the two that
+ * lead somewhere different.
+ */
+export type ShellAccountAnswer =
+  | { known: 'yes'; agents: number; logins: ShellLogin[] }
+  | { known: 'cannot'; why: string }
 
 /**
  * What one server can say about the headless host: what is there, and what
@@ -2071,60 +2103,75 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
   })
 
   /**
-   * Which login the coding agent in that server account's home is signed in as.
+   * Which coding logins a terminal on a server has under it.
    *
-   * ## This is not the session's account, and it does not pretend to be
+   * ## What this is a fact about, said exactly
    *
-   * Every other bar in this app can name the account its session is running
-   * under because this app started that session and knows. Nothing on the SSH
-   * side carries it: a transcript line records `cwd`, `gitBranch`, `version` and
-   * its own `sessionId` and nothing whatever about a login, and the app did not
-   * spawn whatever is in that terminal. So there is no per-session fact here to
-   * report, and there is no switch to offer either — changing the account a
-   * server's agent uses is `claude /login` in that terminal, on that machine,
-   * through a browser over there.
+   * Not the session's account. Every other bar in this app can name the account
+   * its session runs under because this app started that session; nothing on the
+   * SSH side carries it. A transcript line records `cwd`, `gitBranch`, `version`
+   * and its own `sessionId` and nothing whatever about a login, and this app did
+   * not spawn whatever somebody has typed into that terminal.
    *
-   * What *is* true is a fact about the **home directory the shell landed in**:
-   * the probe already asks `claude auth status --json` there, and the answer is
-   * the login any `claude` started in that shell will run as unless somebody
-   * changes `HOME` or signs in again. That is a smaller claim than an account
-   * chip makes, so the bar states it as what it is — a sentence about the server
-   * account, drawn as text with no menu behind it — rather than drawing a picker
-   * whose rows would have nothing to act on. §4.1's rule, applied to a chip: a
-   * control that cannot act must not be drawn.
+   * What *is* true, and what this answers, is a fact about **the account that
+   * shell signed in as**: which coding agents are installed in the home it
+   * landed in and which of them have a login. That is the login any `claude`,
+   * `codex` or `gemini` started in that terminal will run as, unless somebody
+   * changes `HOME` or signs in again — and it is asked in the way that shell
+   * would ask it, through the login shell, so a `CODEX_HOME` or a
+   * `GEMINI_API_KEY` set in somebody's `.profile` is honoured rather than
+   * missed. See `agent-signin.ts`.
+   *
+   * ## Why it answers a list and not one name
+   *
+   * Because it used to answer the first agent it found with an address on it,
+   * and on a server with two signed-in agents that is a coin toss printed as a
+   * fact — the bar would say *Claude Code* over a terminal somebody runs Codex
+   * in. All of them are reported and the bar names them.
+   *
+   * ## And why it never answers nothing
+   *
+   * It used to answer `null` for four different situations — a server nobody
+   * has opened, a server that would not answer, a server with no agent on it,
+   * and a server whose agents are all signed out — and the bar drew nothing for
+   * all four. Nothing is the one thing that is never true: *"no coding login on
+   * this server"* is a fact somebody can act on, and *"we could not ask"* is a
+   * different fact that must not look like it. Four situations, four sentences,
+   * composed on the bar out of the three fields below.
    *
    * ## And it costs no round trip of its own
    *
    * Read out of the probe this server has already answered, exactly as
    * `setupRoom` reads its install room from it. A server nobody has looked at
    * yet is measured once, here, and every later ask is free — rather than an SSH
-   * probe every time a bar is drawn, which is what asking the far end per render
-   * would have been.
+   * probe every time a bar is drawn. What makes it *current* rather than merely
+   * cheap is that a sign-in through this app forgets that measurement when it
+   * finishes, so the next ask is a fresh one.
    */
   ipcMain.handle(
     'servers:shell:account',
-    async (
-      _event,
-      shellId: unknown,
-    ): Promise<{ agentId: string; account: string; signedIn: string } | null> => {
-      if (typeof shellId !== 'string') return null
+    async (_event, shellId: unknown): Promise<ShellAccountAnswer> => {
+      if (typeof shellId !== 'string') return { known: 'cannot', why: 'No terminal was named.' }
       const serverId = serverOf(shellId)
-      if (serverId === null) return null
+      if (serverId === null) return { known: 'cannot', why: 'That terminal is not open any more.' }
       try {
         if (!probed.has(serverId)) await look(serverId)
       } catch {
         // A server that will not answer has nothing to say about its sign-ins,
         // and the terminal beside this bar is already saying so far more loudly.
-        return null
+        return { known: 'cannot', why: 'This server did not answer.' }
       }
       const facts = probed.get(serverId)
-      if (facts === undefined || facts.agents.known !== 'yes') return null
-      for (const agent of facts.agents.value) {
-        if (agent.account !== null && agent.account !== '') {
-          return { agentId: agent.id, account: agent.account, signedIn: agent.signedIn }
-        }
+      if (facts === undefined) return { known: 'cannot', why: 'This server has not been looked at yet.' }
+      if (facts.agents.known === 'cannot') return { known: 'cannot', why: facts.agents.why }
+      const found = facts.agents.known === 'yes' ? facts.agents.value : []
+      return {
+        known: 'yes',
+        agents: found.length,
+        logins: found
+          .filter((agent) => agent.signedIn === 'yes')
+          .map((agent) => ({ agentId: agent.id, account: agent.account })),
       }
-      return null
     },
   )
 
@@ -2154,7 +2201,20 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
       return deps.withConnection(serverId, fn)
     },
     openInBrowser: deps.openInBrowser,
-    broadcast: (next) => deps.broadcast(SERVERS_SETUP_CHANNEL, next),
+    broadcast: (next) => {
+      /*
+       * A finished setup makes every measurement of this server stale.
+       *
+       * Not a tidy-up: `servers:shell:account` and `servers:setup:look` both
+       * read the probe record, so without this the bar over a terminal on that
+       * server goes on saying *not signed in* about a login the person has just
+       * finished, until the app is relaunched. `done` is a sign-in that
+       * succeeded and `idle` is an install that was taken back off; both change
+       * what is on that machine, and both are pushed through here.
+       */
+      if (next.step === 'done' || next.step === 'idle') forgetMeasurements(next.serverId)
+      deps.broadcast(SERVERS_SETUP_CHANNEL, next)
+    },
   })
 
   /**
@@ -2228,6 +2288,14 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
             canInstall: install !== null && why === null,
             why,
             consequence: installConsequence(agentId, name),
+            /*
+             * Both written in `setup.ts` beside the work — §4.3 — so the pane
+             * draws a sentence about signing out rather than composing one, and
+             * an agent that cannot be signed out from here carries the reason
+             * instead of a button.
+             */
+            signOutConsequence: signOutConsequence(agentId, name),
+            whyNoSignOut: whyNoSignOut(agentId),
             state: setups.stateOf(serverId, agentId),
           }
         }),
@@ -2292,6 +2360,48 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
       }
       try {
         return { ok: true, state: await setups.signIn(serverId, agentId, shell, agent.path) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  /**
+   * Sign one agent out on a server, in the terminal that is already open.
+   *
+   * Keyed on a shell for the same reason the install and the sign-in are: it
+   * runs a real command in a terminal the person is watching, rather than
+   * invisibly over a second channel. The pane that offers it is the pane that
+   * said this could not be done — see `setup.ts`'s `signOut` for what was
+   * measured to establish that it can.
+   */
+  ipcMain.handle(
+    'servers:setup:signout',
+    async (
+      _event,
+      serverId: unknown,
+      agentId: unknown,
+      shellId: unknown,
+    ): Promise<ServerResult<{ state: SetupState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string' || !isSetupAgent(agentId)) {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      const seen = await setupRoom(serverId)
+      if (!seen.ok) return seen
+      const agent = agentOn(seen.facts, agentId)
+      if (agent === null || agent.version === '') {
+        return {
+          ok: false,
+          sentence: `${agentSetup(agentId).label} is not ready on this server yet.`,
+          detail: '',
+        }
+      }
+      try {
+        return { ok: true, state: await setups.signOut(serverId, agentId, shell, agent.path) }
       } catch (error) {
         return failed(error)
       }
