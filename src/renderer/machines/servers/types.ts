@@ -1103,6 +1103,14 @@ export interface HostOffer {
    * rows this desktop holds.
    */
   linkedAs: string | null
+  /**
+   * True when there is a row for that host here and nothing is reaching it.
+   *
+   * Decided in main, from this desktop's own link state and the channel count
+   * that host prints in its own `status`. What it stops this section doing is
+   * looking finished over a machine no client has touched.
+   */
+  linkedButNotConnected: boolean
   state: HostState
 }
 
@@ -1177,6 +1185,12 @@ export function asHostOffer(value: unknown): HostOffer | null {
     // a press that mints its own code either links or says why, where a wrongly
     // claimed link would be a sentence nobody could act on.
     linkedAs: readText(value.linkedAs),
+    // Unreadable is "it is connected", which is the quiet answer rather than the
+    // loud one — the opposite direction to every other field here, and
+    // deliberately: this one only ever *adds* a warning and a second button, so
+    // reading a missing field as true would put both on screen for every build
+    // whose main process is older than the field.
+    linkedButNotConnected: value.linkedButNotConnected === true,
     state,
   }
 }

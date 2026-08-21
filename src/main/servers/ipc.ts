@@ -121,6 +121,7 @@ import {
 import {
   ServerHosts,
   hostConsequence,
+  channelsOf,
   hostIdOf,
   hostLine,
   reachLine,
@@ -250,6 +251,23 @@ export interface HostOffer {
    * label nobody could write.
    */
   linkedAs: string | null
+  /**
+   * True when there is a row for that host here and **nothing is reaching it**.
+   *
+   * The field that stops this panel from looking finished over a host no client
+   * has touched. Measured, and it is why this exists: an office PC running the
+   * host for two hours, on the relay, with a device of his approved in its own
+   * list — `channels 0`, nothing connected, and a panel whose only sentence was
+   * *"This computer is linked to it … sessions, folders and the terminal work
+   * there the way they do for any other machine."* Every word of that was false
+   * and none of it was a guess this app had to make: the contradiction is
+   * between two facts it already had on screen.
+   *
+   * A redial is fired for it before this is answered, so the ordinary version of
+   * this state repairs itself between one look and the next; what is left when
+   * it does not is drawn as a sentence and a press.
+   */
+  linkedButNotConnected: boolean
   state: HostState
 }
 
@@ -474,14 +492,34 @@ export interface ServersIpcDeps {
    */
   linkThisComputer?(code: string): Promise<LinkOutcome>
   /**
-   * Is this desktop already paired to the machine behind that host id, and what
-   * does it call it? `MachinesIpc.linkedTo`.
+   * Wait until this desktop's link to a machine it has just paired with is
+   * carrying. `MachinesIpc.whenReaching`.
+   *
+   * What stops an install that worked from accusing itself. The channel comes up
+   * a beat after the far end approves this computer, and the panel behind that
+   * install now asks the host how many channels it has open.
+   */
+  whenReaching?(machineId: string, ceilingMs: number): Promise<boolean>
+  /**
+   * Is this desktop paired to the machine behind that host id, what does it call
+   * it, and is that link up now? `MachinesIpc.linkStanding`.
    *
    * What makes the panel able to say "already linked" instead of offering a
    * second link, which is the difference between a screen that reports the world
-   * and one that offers a button and hopes.
+   * and one that offers a button and hopes. `online` is the half that keeps the
+   * first sentence honest: a row says this computer paired once, and this says
+   * whether anything is reaching that machine at this moment.
    */
-  linkedTo?(hostId: string): string | null
+  linkStanding?(hostId: string): { name: string; online: boolean } | null
+  /**
+   * Dial that machine now. `MachinesIpc.redial`.
+   *
+   * The panel's own remedy for the one contradiction it can see by itself — a
+   * machine row here and a host over there with nothing connected to it. Called
+   * instead of printing a sentence about it, because a reconnection costs one
+   * handshake and a sentence costs somebody a decision.
+   */
+  redial?(hostId: string): void
   /**
    * Copy a file off the server. **Absent today**, and its absence is a stated
    * fact rather than a gap: `connection.ts` exposes `run`, `runScript`, `probe`
@@ -2351,6 +2389,9 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
     // `host.ts` falls back on — showing the code — rather than a failure
     // discovered half way through an install.
     linkThisComputer: deps.linkThisComputer,
+    // Read once for the same reason, and absent means the flow does not wait:
+    // a build that cannot redeem a code has no link to wait for either.
+    whenReaching: deps.whenReaching,
     // Null when this build carries no package, which is answered as an absent
     // button with a sentence rather than as a failure part-way through.
     hostPackage: () => deps.hostPackage?.() ?? null,
@@ -2361,6 +2402,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
   const hostOffer = (look: HostLook, serverId: string, serverName: string): HostOffer => {
     const carried = deps.hostPackage?.() ?? null
     const why = carried === null ? NO_PACKAGE : whyNotHost(look.room)
+    const standing = linkStandingOf(look.host.status)
     return {
       host: look.host,
       room: look.room,
@@ -2383,15 +2425,34 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
        * linked", which draws the Link button — a press that mints its own fresh
        * code and can only ever succeed or say why.
        */
-      linkedAs: linkedAs(look.host.status),
+      linkedAs: standing?.name ?? null,
+      linkedButNotConnected: standing !== null && !standing.reaching,
       state: hosts.stateOf(serverId),
     }
   }
 
-  /** That host's row here, by the id it prints in its own `status`. */
-  const linkedAs = (status: string): string | null => {
+  /**
+   * That host's row here, by the id it prints in its own `status`, and whether
+   * anything is actually reaching it.
+   *
+   * Two sources, and the far one can only ever take the answer away. `online` is
+   * what *this* process believes about a socket it is holding; `channels` is what
+   * *that host* counted a second ago, in its own words, in the status this panel
+   * already prints verbatim. A socket that died in somebody's NAT table is
+   * online here and absent there, and the host is the one that is right — so a
+   * zero from the far end overrides a yes from this one.
+   *
+   * Null `channels` is not a zero and is not read as one: a host whose relay is
+   * off prints no channel line at all, and taking that absence for "nothing is
+   * connected" would turn a host that is deliberately not dialling out into a
+   * broken link.
+   */
+  const linkStandingOf = (status: string): { name: string; reaching: boolean } | null => {
     const hostId = hostIdOf(status)
-    return hostId === '' ? null : (deps.linkedTo?.(hostId) ?? null)
+    if (hostId === '') return null
+    const standing = deps.linkStanding?.(hostId) ?? null
+    if (standing === null) return null
+    return { name: standing.name, reaching: standing.online && channelsOf(status) !== 0 }
   }
 
   const nameOf = (serverId: string): string =>
@@ -2403,7 +2464,20 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
       if (typeof serverId !== 'string') return { ok: false, sentence: 'No server was named.', detail: '' }
       try {
         const look = await hosts.look(serverId)
-        return { ok: true, offer: hostOffer(look, serverId, nameOf(serverId)) }
+        const offer = hostOffer(look, serverId, nameOf(serverId))
+        /*
+         * Noticed and acted on, in that order, and this is the whole of "the app
+         * can see this itself".
+         *
+         * A row for that host here and nothing reaching it over there is a
+         * contradiction between two answers this call already holds. The useful
+         * response to it is not a sentence — it is a dial. So one is fired, and
+         * the sentence the panel draws is what is left when that has not worked
+         * yet. Not awaited: a handshake is not something a panel should open
+         * behind, and the next look reads the result.
+         */
+        if (offer.linkedButNotConnected) deps.redial?.(hostIdOf(look.host.status))
+        return { ok: true, offer }
       } catch (error) {
         return failed(error)
       }

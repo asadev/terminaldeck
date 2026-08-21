@@ -1170,3 +1170,106 @@ describe('which login that server account signs in as', () => {
     expect(await call('servers:shell:account', opened.shellId)).toBeNull()
   })
 })
+
+/**
+ * The host panel answering the one question it could see and was not asking.
+ *
+ * Measured on his office PC on 2026-08-22: the headless host up for two hours,
+ * connected to the relay, a device of his approved in its own list — and
+ * `channels 0`, nothing attached. The panel over it drew *"This computer is
+ * linked to it … sessions, folders and the terminal work there the way they do
+ * for any other machine"*, and no control at all, because the only question it
+ * asked was whether this desktop held a row for that host id.
+ *
+ * The status those tests read is the same text the panel already prints verbatim
+ * behind its disclosure. Nothing new had to be fetched to know this.
+ */
+const HOST_STATUS = [
+  'command\t/home/asad/.local/bin/terminaldeck',
+  'version\t0.9.1',
+  'os\tLinux',
+  'arch\tx86_64',
+  'node\tv22.23.2',
+  'npm\t/usr/bin/npm',
+  'tar\tyes',
+  'hash\tsha256sum',
+  'fetch\tcurl',
+  'home_free_kb\t32439968',
+  'state_dir\t/home/asad/.local/share/terminaldeck',
+  '--- status ---',
+  'Terminal Deck host 0.9.1 — running, idle',
+  '',
+  'Relay',
+  '  connected      wss://relay.terminaldeck.dev',
+  '  host id        KZ2J9AWGK8BWGQUEZDYKW5RS22',
+  '  fingerprint    NW76-TCC7-DKFD-AGVD-MBGK-W28U',
+  '  channels       CHANNELS',
+  '',
+].join('\n')
+
+function hostHarness(
+  channels: number,
+  standing: { name: string; online: boolean } | null,
+): { call: (channel: string, ...args: unknown[]) => Promise<unknown>; redialled: string[] } {
+  const redialled: string[] = []
+  const { call } = harness({
+    runScript: async (_serverId: string, script: string) =>
+      script.includes('--- status ---')
+        ? cmd({ stdout: HOST_STATUS.replace('CHANNELS', String(channels)) })
+        : cmd({ stdout: '' }),
+    linkStanding: () => standing,
+    redial: (hostId: string) => void redialled.push(hostId),
+  })
+  return { call, redialled }
+}
+
+async function hostOffer(
+  channels: number,
+  standing: { name: string; online: boolean } | null,
+): Promise<{ offer: { linkedAs: string | null; linkedButNotConnected: boolean }; redialled: string[] }> {
+  const { call, redialled } = hostHarness(channels, standing)
+  const answer = (await call('servers:host:look', 's1')) as {
+    ok: true
+    offer: { linkedAs: string | null; linkedButNotConnected: boolean }
+  }
+  return { offer: answer.offer, redialled }
+}
+
+describe('what the host panel says about being linked', () => {
+  it('contradicts a row this desktop holds when that host says nothing is connected', async () => {
+    const { offer, redialled } = await hostOffer(0, { name: 'office-pc', online: true })
+    expect(offer.linkedAs).toBe('office-pc')
+    // The desktop believed it held a live link; the host counted nobody. The
+    // host is the one that is right — a socket that died in a NAT table looks
+    // online from this side forever.
+    expect(offer.linkedButNotConnected).toBe(true)
+    // And it is not merely reported. The remedy is one handshake, so it is taken.
+    expect(redialled).toEqual(['KZ2J9AWGK8BWGQUEZDYKW5RS22'])
+  })
+
+  it('says the same when this desktop itself knows the link is down', async () => {
+    const { offer, redialled } = await hostOffer(2, { name: 'office-pc', online: false })
+    expect(offer.linkedButNotConnected).toBe(true)
+    // Two channels and none of them ours: a phone can be attached to a host this
+    // computer cannot reach, and a count above zero proves nothing about us.
+    expect(redialled).toEqual(['KZ2J9AWGK8BWGQUEZDYKW5RS22'])
+  })
+
+  it('leaves a working link alone, and dials nothing', async () => {
+    const { offer, redialled } = await hostOffer(1, { name: 'office-pc', online: true })
+    expect(offer.linkedAs).toBe('office-pc')
+    expect(offer.linkedButNotConnected).toBe(false)
+    expect(redialled).toEqual([])
+  })
+
+  /*
+   * A host with no row here is not "not connected" — it is not linked, which is
+   * a different sentence with a different button, and the panel already had it.
+   */
+  it('says nothing about connections for a host it has never linked', async () => {
+    const { offer, redialled } = await hostOffer(0, null)
+    expect(offer.linkedAs).toBeNull()
+    expect(offer.linkedButNotConnected).toBe(false)
+    expect(redialled).toEqual([])
+  })
+})

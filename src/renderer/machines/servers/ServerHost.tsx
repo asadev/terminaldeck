@@ -215,9 +215,15 @@ export function ServerHost({
       {controls.reach !== null && <p className="servers-card-why">{controls.reach}</p>}
       {/* Said rather than implied by the missing button. A section that simply
           stopped offering to link would leave somebody wondering whether it had
-          ever happened; this names the row it is in. */}
+          ever happened; this names the row it is in.
+
+          Two sentences and never both, because they are two different worlds:
+          one machine this app is talking to, and one machine it has a row for
+          and cannot reach. The second used to be drawn as the first. */}
       {controls.linkedAs !== null && (
-        <p className="servers-card-why">{linkedLine(controls.linkedAs)}</p>
+        <p className="servers-card-why">
+          {controls.away ? awayLine(controls.linkedAs) : linkedLine(controls.linkedAs)}
+        </p>
       )}
       {here && <p className="servers-card-why">{NO_COPILOT}</p>}
 
@@ -394,6 +400,32 @@ export function linkedLine(name: string): string {
 }
 
 /**
+ * The same row, and nothing is reaching it.
+ *
+ * The sentence that had to exist. Measured on his office PC: the host had been
+ * running for two hours, was connected to the relay, had a device of his
+ * approved in its own list — and was counting **zero** open channels. The panel
+ * over it said {@link linkedLine}, word for word, including the part about
+ * sessions and folders working there the way they do anywhere else. Nothing was
+ * working there. A panel that looks finished over a machine nothing is talking
+ * to is worse than one that says it does not know, because it sends somebody
+ * looking for the fault everywhere except where it is.
+ *
+ * Three things in order, and the order is the point: what is true, what the app
+ * has already done about it, and the one press left if that was not enough. The
+ * middle one is not a promise — `servers:host:look` fires the redial before this
+ * is drawn, so by the time these words are on screen the dial is out.
+ */
+export function awayLine(name: string): string {
+  return (
+    `This computer has a row for it — ${name} in Machines — and nothing is reaching it: that host ` +
+    'says nothing is connected to it. This app has just dialled it again. If this sentence is ' +
+    'still here the next time you open this page, Link this computer mints a fresh pairing and ' +
+    'replaces the row.'
+  )
+}
+
+/**
  * What a device paired to a server does not get, said here rather than
  * discovered on a phone.
  *
@@ -449,6 +481,16 @@ export interface HostControls {
   reach: string | null
   /** What this computer already calls it. Null when it is not linked, or when busy. */
   linkedAs: string | null
+  /**
+   * There is a row for it here and nothing is reaching it.
+   *
+   * Changes both halves of what this section says about a link: the sentence
+   * beside {@link HostControls.linkedAs}, and whether **Link this computer** is
+   * offered at all. Never true while {@link HostControls.linkedAs} is null —
+   * there is no such thing as being out of touch with a machine this computer
+   * has never paired with, and the panel already has a sentence for that one.
+   */
+  away: boolean
 }
 
 export function hostControls(offer: HostOffer, busy: boolean): HostControls {
@@ -459,18 +501,31 @@ export function hostControls(offer: HostOffer, busy: boolean): HostControls {
     // Nothing is offered while the terminal is in use: there is one of them, and
     // a second press would take it from the run that is using it.
     install: !busy && !here && offer.canInstall,
-    // Never both this and the sentence below it: `linkedAs` is the one fact
-    // deciding which, so the panel cannot say "already linked" and offer to link
-    // in the same breath. And never at all on a build that would answer the
-    // press with a pairing code instead — a button whose label is a promise the
-    // build cannot keep is the thing this whole change removes.
-    link: !busy && here && offer.canLink && offer.linkedAs === null,
+    /*
+     * Offered for a host this computer is not linked to — and for one it is
+     * linked to and cannot reach, which is the case this used to hide.
+     *
+     * The old rule was "never both this and the sentence below it", and it was
+     * right about the machine it was written for: a panel must not say "already
+     * linked" and offer to link in the same breath. What it missed is that a row
+     * with nothing behind it is not "already linked". Somebody looking at a host
+     * that has been up for two hours with nothing attached to it needs one
+     * press, and the honest one is this: it mints a fresh code on that server
+     * and replaces the row. So the sentence beside it changes instead — see
+     * {@link awayLine} — and the two are read together rather than exclusively.
+     *
+     * Never at all on a build that would answer the press with a pairing code
+     * instead: a button whose label is a promise the build cannot keep is the
+     * thing this whole section was rewritten to remove.
+     */
+    link: !busy && here && offer.canLink && (offer.linkedAs === null || offer.linkedButNotConnected),
     pair: !busy && here,
     remove: !busy && here,
     stop: busy,
     why: !busy && !here ? offer.why : null,
     reach: !busy && here ? offer.reach : null,
     linkedAs: !busy && here ? offer.linkedAs : null,
+    away: !busy && here && offer.linkedAs !== null && offer.linkedButNotConnected,
   }
 }
 

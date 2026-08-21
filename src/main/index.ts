@@ -2793,10 +2793,20 @@ function registerIpc(): void {
         message: 'This build has no Machines list to link that host into.',
       },
     // And the question the panel asks before offering to link at all: is that
-    // host already one of this desktop's machines? Read per call off the same
-    // store, never cached here — a second copy is how a screen and the truth
-    // come to disagree.
-    linkedTo: (hostId) => machinesIpc?.linkedTo(hostId) ?? null,
+    // host already one of this desktop's machines, and is the link behind that
+    // row up? Read per call off the same store and the same live links, never
+    // cached here — a second copy is how a screen and the truth come to
+    // disagree, which is precisely what a panel claiming a link that had not
+    // carried a byte in two hours was.
+    linkStanding: (hostId) => machinesIpc?.linkStanding(hostId) ?? null,
+    // And the remedy for the one contradiction that panel can see by itself.
+    redial: (hostId) => {
+      machinesIpc?.redial(hostId)
+    },
+    // And the wait that keeps an install's last sentence true: pairing ends at
+    // the far end's approval, and the channel comes up a beat after it.
+    whenReaching: async (machineId, ceilingMs) =>
+      (await machinesIpc?.whenReaching(machineId, ceilingMs)) ?? false,
     // §5.4 in one pair of lines: the page holds the connection while it is open
     // and lets go when it closes. There is no timer here and no keep-alive, and
     // a server nobody is looking at is not dialled at all.
