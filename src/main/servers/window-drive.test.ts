@@ -6,8 +6,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PreparedElsewhere } from '../deck-control/session-tools'
 import type { AgentFact } from './facts'
 import {
+  OPENER_NAMES,
+  SETTINGS_FILE,
+  SETTINGS_FLAG,
+  type ScratchFile,
+} from './window-belong'
+import {
   MCP_FLAG,
-  readArmed,
+  SCOUT_MARK,
+  readScouted,
   takesAnExportLine,
   SCRATCH_PREFIX,
   WHY_NOT,
@@ -16,7 +23,9 @@ import {
   disarmScript,
   honoursMcpConfig,
   pathLine,
+  scoutScript,
   subcommandsFrom,
+  wrapperScript,
   type WindowDriveDeps,
 } from './window-drive'
 
@@ -39,6 +48,8 @@ Options:
   --mcp-config <configs...>            Load MCP servers from JSON files or
                                        strings (space-separated)
   -p, --print                          Print response and exit
+  --settings <file-or-json>            Path to a settings JSON file or a JSON
+                                       string to load additional settings from
 
 Commands:
   agents [options]                     Manage background agents
@@ -70,15 +81,44 @@ function fakeClaude(): string {
   return path
 }
 
-/** Run the arm script for real and answer the folder it made. */
-function arm(real: string, config = '{"mcpServers":{}}'): string {
-  const { dir } = readArmed(
-    execFileSync('sh', ['-s'], {
-      input: armScript({ config, real, subcommands: subcommandsFrom(HELP) }),
-      encoding: 'utf8',
+/** Run one script on this machine's own `sh`, the way the far end would. */
+function run(script: string): string {
+  return execFileSync('sh', ['-s'], { input: script, encoding: 'utf8' })
+}
+
+/**
+ * Scout for real, then write for real, and answer the folder.
+ *
+ * Both halves, because they are two round trips in the app and the second one is
+ * composed out of the first one's answer — a helper that skipped the scout would
+ * be testing a folder path this suite invented rather than the one `mktemp`
+ * chose.
+ */
+function arm(
+  real: string,
+  over: { config?: string; settings?: string | null; extra?: readonly ScratchFile[] } = {},
+): string {
+  const dir = readScouted(run(scoutScript())).dir
+  made.push(dir)
+  run(
+    armScript({
+      dir,
+      files: [
+        { path: 'deck-control.json', body: over.config ?? '{"mcpServers":{}}' },
+        ...(over.extra ?? []),
+        {
+          path: 'bin/claude',
+          body: wrapperScript({
+            real,
+            subcommands: subcommandsFrom(HELP),
+            config: `${dir}/deck-control.json`,
+            settings: over.settings === undefined ? null : over.settings,
+          }),
+          executable: true,
+        },
+      ],
     }),
   )
-  made.push(dir)
   return dir
 }
 
@@ -175,7 +215,7 @@ describe('the wrapper, run', () => {
 
 describe('what it leaves on the server', () => {
   it('writes the config where the wrapper names it, and only for this account', () => {
-    const dir = arm(fakeClaude(), '{"mcpServers":{"deck-control":{"type":"http"}}}')
+    const dir = arm(fakeClaude(), { config: '{"mcpServers":{"deck-control":{"type":"http"}}}' })
     expect(dir.startsWith(SCRATCH_PREFIX)).toBe(true)
     expect(JSON.parse(readFileSync(join(dir, 'deck-control.json'), 'utf8'))).toEqual({
       mcpServers: { 'deck-control': { type: 'http' } },
@@ -184,6 +224,26 @@ describe('what it leaves on the server', () => {
     // than from a chmod that runs after the bytes are already readable.
     expect(statSync(dir).mode & 0o777).toBe(0o700)
     expect(statSync(join(dir, 'deck-control.json')).mode & 0o777).toBe(0o600)
+  })
+
+  it('answers with this machine’s own programs, absolutely, and never a bare word', () => {
+    const answer = readScouted(run(scoutScript()))
+    made.push(answer.dir)
+
+    expect(answer.dir.startsWith(SCRATCH_PREFIX)).toBe(true)
+    // Resolved by `command -v` while this folder is nowhere near any PATH, which
+    // is the whole of `open-shim.ts`'s rule about run-time lookups: the shim
+    // must never find itself. Compared against the same question asked outside.
+    expect(answer.curl).toBe(
+      execFileSync('sh', ['-c', 'command -v curl || true'], { encoding: 'utf8' }).trim(),
+    )
+    // macOS has `/usr/bin/open` and no `xdg-open`; a Linux box is the other way
+    // round. Either way, whatever came back is an absolute path or nothing —
+    // never the bare word `command -v` prints for a builtin.
+    for (const found of Object.values(answer.openers)) {
+      if (found !== '') expect(found.startsWith('/')).toBe(true)
+    }
+    expect(Object.keys(answer.openers)).toEqual([...OPENER_NAMES])
   })
 
   it('takes exactly its own folder back, and refuses any other path', () => {
@@ -224,25 +284,59 @@ function minted(): PreparedElsewhere & { dropped: boolean; bound: string[] } {
   return it
 }
 
+/**
+ * What a scout answers, as the far end would print it.
+ *
+ * A helper rather than a literal at nine call sites, because the shape grew once
+ * — it was two lines and is now a mark and six — and a suite that spelled it out
+ * everywhere is a suite that pins the old shape in eight places and the new one
+ * in none.
+ */
+function scoutedLines(
+  over: Partial<{ dir: string; shell: string; curl: string; openers: Record<string, string> }> = {},
+): string {
+  const openers = over.openers ?? { 'xdg-open': '/usr/bin/xdg-open' }
+  return [
+    SCOUT_MARK,
+    over.dir ?? `${SCRATCH_PREFIX}abcdef`,
+    over.shell ?? '/bin/bash',
+    over.curl ?? '/usr/bin/curl',
+    ...OPENER_NAMES.map((name) => openers[name] ?? ''),
+  ].join('\n')
+}
+
 function drives(over: Partial<WindowDriveDeps> = {}): {
   it: WindowDrives
   deps: WindowDriveDeps
   token: ReturnType<typeof minted>
   letGoes: string[]
+  written: string[]
 } {
   const token = minted()
   const letGoes: string[] = []
+  const written: string[] = []
   const deps: WindowDriveDeps = {
     allowed: () => true,
     claudeOn: async () => claudeFact(),
     run: async () => ({ stdout: HELP, stderr: '' }),
-    runScript: async () => ({ stdout: `${SCRATCH_PREFIX}abcdef\n/bin/bash` }),
-    reach: async () => ({ ok: true, reach: { port: 40404, close: () => undefined } }),
-    letGo: (serverId) => letGoes.push(serverId),
+    runScript: async (_serverId, script) => {
+      written.push(script)
+      return { stdout: script.includes('mktemp') ? scoutedLines() : '' }
+    },
+    reach: async (_serverId, kind) => ({
+      ok: true,
+      reach: { port: kind === 'control' ? 40404 : 40405, close: () => undefined },
+    }),
+    letGo: (serverId, kind) => letGoes.push(`${serverId}/${kind}`),
     mint: () => token,
+    hookEndpoint: () => ({ token: 'abc123' }),
+    remoteContext: () => ({
+      pages: { 'INDEX.md': '# index' },
+      mapFor: (dir) => `read ${dir}/INDEX.md`,
+    }),
     ...over,
   }
-  return { it: new WindowDrives(deps), deps, token, letGoes }
+  return { it: new WindowDrives(deps), deps, token, letGoes, written }
 }
 
 describe('who gets the verbs', () => {
@@ -297,17 +391,22 @@ describe('who gets the verbs', () => {
 
   it('gives the token back and lets go of the port when the files would not land', async () => {
     const { it, token, letGoes } = drives({
-      runScript: async () => {
+      runScript: async (_serverId, script) => {
+        if (script.includes('mktemp')) return { stdout: scoutedLines() }
         throw new Error('no space left on device')
       },
     })
     expect((await it.arm('server-1', 'shell-9')).ok).toBe(false)
     expect(token.dropped).toBe(true)
-    expect(letGoes).toEqual(['server-1'])
+    // Both reaches, because by the time the files are written this shell is
+    // holding a reference to each of them.
+    expect(letGoes).toEqual(['server-1/control', 'server-1/hooks'])
   })
 
   it('refuses a folder answer that is not one of ours', async () => {
-    const { it, token } = drives({ runScript: async () => ({ stdout: '/etc\n/bin/bash' }) })
+    const { it, token } = drives({
+      runScript: async () => ({ stdout: scoutedLines({ dir: '/etc' }) }),
+    })
     expect((await it.arm('server-1', 'shell-9')).ok).toBe(false)
     expect(token.dropped).toBe(true)
   })
@@ -321,12 +420,23 @@ describe('who gets the verbs', () => {
 })
 
 describe('the shell the person is dropped into', () => {
-  it('reads the folder and the shell off the end, past whatever a profile printed', () => {
-    // Plenty of `.profile`s print something. The two lines that matter are the
-    // last two, so they are read from the end.
-    expect(readArmed('bash: warning: setlocale\n/tmp/td-drive-abc123\n/bin/bash')).toEqual({
-      dir: '/tmp/td-drive-abc123',
+  it('reads the answers past whatever a profile printed, by the mark', () => {
+    // Plenty of `.profile`s print something before a script's own output, so the
+    // answers are found by the mark rather than by counting from either end.
+    expect(readScouted(`bash: warning: setlocale\n${scoutedLines()}`)).toEqual({
+      dir: `${SCRATCH_PREFIX}abcdef`,
       shell: '/bin/bash',
+      curl: '/usr/bin/curl',
+      openers: { open: '', 'xdg-open': '/usr/bin/xdg-open', 'sensible-browser': '' },
+    })
+  })
+
+  it('answers with nothing at all when the mark never arrived', () => {
+    expect(readScouted('permission denied\n')).toEqual({
+      dir: '',
+      shell: '',
+      curl: '',
+      openers: { open: '', 'xdg-open': '', 'sensible-browser': '' },
     })
   })
 
@@ -350,16 +460,16 @@ describe('the shell the person is dropped into', () => {
   it('gives back the token, the port and the folder when the shell cannot take it', async () => {
     const { it: drive, token, letGoes } = drives({
       runScript: async (_serverId, script) =>
-        script.includes('rm -rf')
-          ? { stdout: '' }
-          : { stdout: `${SCRATCH_PREFIX}abcdef\n/usr/bin/fish` },
+        script.includes('mktemp') ? { stdout: scoutedLines({ shell: '/usr/bin/fish' }) } : { stdout: '' },
     })
 
     const out = await drive.arm('server-1', 'shell-9')
 
     expect(out).toEqual({ ok: false, why: WHY_NOT.shell })
     expect(token.dropped).toBe(true)
-    expect(letGoes).toEqual(['server-1'])
+    // Refused before either reach was widened to the hook endpoint, so there is
+    // exactly one reference to hand back.
+    expect(letGoes).toEqual(['server-1/control'])
   })
 
   it('removes what it had already put on the server', async () => {
@@ -367,9 +477,7 @@ describe('the shell the person is dropped into', () => {
     const { it: drive } = drives({
       runScript: async (_serverId, script) => {
         scripts.push(script)
-        return script.includes('rm -rf')
-          ? { stdout: '' }
-          : { stdout: `${SCRATCH_PREFIX}abcdef\n/usr/bin/fish` }
+        return script.includes('mktemp') ? { stdout: scoutedLines({ shell: '/usr/bin/fish' }) } : { stdout: '' }
       },
     })
 
@@ -388,7 +496,7 @@ describe('taking it away', () => {
     const { it, token } = drives({
       runScript: async (_serverId, script) => {
         if (script.includes('rm -rf')) order.push('removed')
-        return { stdout: `${SCRATCH_PREFIX}abcdef\n/bin/bash` }
+        return { stdout: script.includes('mktemp') ? scoutedLines() : '' }
       },
     })
     await it.arm('server-1', 'shell-9')
@@ -412,7 +520,12 @@ describe('taking it away', () => {
     expect(it.whyNot('shell-a')).toBe(WHY_NOT['not-allowed'])
     expect(it.whyNot('shell-b')).toBe(WHY_NOT['not-allowed'])
     expect(it.whyNot('shell-c')).toBeNull()
-    expect(letGoes).toEqual(['server-1', 'server-1'])
+    expect(letGoes).toEqual([
+      'server-1/control',
+      'server-1/hooks',
+      'server-1/control',
+      'server-1/hooks',
+    ])
   })
 
   it('is idempotent, because a shell can close twice', async () => {
@@ -420,6 +533,149 @@ describe('taking it away', () => {
     await it.arm('server-1', 'shell-9')
     it.disarm('shell-9')
     it.disarm('shell-9')
-    expect(letGoes).toEqual(['server-1'])
+    expect(letGoes).toEqual(['server-1/control', 'server-1/hooks'])
+  })
+})
+
+/* ----------------------------------------------------- belonging, on top -- */
+
+/**
+ * The second half: the `open` shim, the hooks and the documents.
+ *
+ * Its failures are silent by design — a server with no `curl` still gets a
+ * terminal and still gets the browser verbs — so what is pinned here is that the
+ * silence is *honest*: nothing is written that would half-work, and
+ * `belonging()` says exactly what was managed rather than what was hoped.
+ */
+describe('what a server session is told about where it is', () => {
+  it('adds the settings flag only when there is a settings file', () => {
+    const bare = arm(fakeClaude())
+    expect(callWrapper(bare, [])).toEqual([MCP_FLAG, join(bare, 'deck-control.json')])
+
+    const dir = arm(fakeClaude(), {
+      settings: `${SCRATCH_PREFIX}placeholder/${SETTINGS_FILE}`,
+      extra: [{ path: SETTINGS_FILE, body: '{"hooks":{}}' }],
+    })
+    // The wrapper was written naming a file that is not there, which is the one
+    // shape that would stop `claude` starting — so it tests before it uses it.
+    expect(callWrapper(dir, [])).toEqual([MCP_FLAG, join(dir, 'deck-control.json')])
+
+    const real = arm(fakeClaude(), {
+      settings: undefined,
+    })
+    expect(callWrapper(real, [])).not.toContain(SETTINGS_FLAG)
+  })
+
+  it('uses the settings file when it is actually there', () => {
+    const dir = readScouted(run(scoutScript())).dir
+    made.push(dir)
+    run(
+      armScript({
+        dir,
+        files: [
+          { path: 'deck-control.json', body: '{}' },
+          { path: SETTINGS_FILE, body: '{"hooks":{}}' },
+          {
+            path: 'bin/claude',
+            body: wrapperScript({
+              real: fakeClaude(),
+              subcommands: subcommandsFrom(HELP),
+              config: `${dir}/deck-control.json`,
+              settings: `${dir}/${SETTINGS_FILE}`,
+            }),
+            executable: true,
+          },
+        ],
+      }),
+    )
+    expect(callWrapper(dir, ['-p', 'hi'])).toEqual([
+      MCP_FLAG,
+      join(dir, 'deck-control.json'),
+      SETTINGS_FLAG,
+      join(dir, SETTINGS_FILE),
+      '-p',
+      'hi',
+    ])
+  })
+
+  it('hands the session a map naming the documents on that server', async () => {
+    const { it } = drives()
+    await it.arm('server-1', 'shell-9')
+    expect(it.belonging('shell-9')).toEqual({
+      map: `read ${SCRATCH_PREFIX}abcdef/context/INDEX.md`,
+      opensInApp: true,
+    })
+  })
+
+  it('says nothing at all about a shell it never armed', async () => {
+    const { it } = drives()
+    expect(it.belonging('shell-9')).toBeNull()
+  })
+
+  it('still opens pages here when the claude on that server is too old for hooks', async () => {
+    const noSettings = HELP.replace('--settings <file-or-json>', '--seatings <file>')
+    const { it, written } = drives({ run: async () => ({ stdout: noSettings, stderr: '' }) })
+
+    const out = await it.arm('server-1', 'shell-9')
+
+    expect(out.ok).toBe(true)
+    // The shim is a PATH entry and a `curl`; it has nothing to do with the CLI's
+    // version, so requirement one survives a CLI that cannot take the flag.
+    expect(it.belonging('shell-9')).toEqual({ map: null, opensInApp: true })
+    const files = written.join('\n')
+    for (const name of OPENER_NAMES) expect(files).toContain(`bin/${name}`)
+    expect(files).not.toContain(SETTINGS_FILE)
+    expect(files).not.toContain(SETTINGS_FLAG)
+  })
+
+  it('arranges none of it on a server with no curl, and claims none of it', async () => {
+    const { it, written, letGoes } = drives({
+      runScript: async (_serverId, script) => ({
+        stdout: script.includes('mktemp') ? scoutedLines({ curl: '' }) : '',
+      }),
+    })
+
+    const out = await it.arm('server-1', 'shell-9')
+
+    // The terminal still opens and still gets the browser verbs.
+    expect(out.ok).toBe(true)
+    expect(it.belonging('shell-9')).toBeNull()
+    // Nothing that needs a `curl` was written, and the hook endpoint was never
+    // even asked for a port.
+    expect(written.join('\n')).not.toContain('bin/open')
+    it.disarm('shell-9')
+    expect(letGoes).toEqual(['server-1/control'])
+  })
+
+  it('writes nothing of it when the hook endpoint is not running', async () => {
+    const { it, written } = drives({ hookEndpoint: () => null })
+    expect((await it.arm('server-1', 'shell-9')).ok).toBe(true)
+    expect(it.belonging('shell-9')).toBeNull()
+    expect(written.join('\n')).not.toContain('bin/xdg-open')
+  })
+
+  it('writes nothing of it when that server will not open a second port', async () => {
+    const { it, written, letGoes } = drives({
+      reach: async (_serverId, kind) =>
+        kind === 'control'
+          ? { ok: true, reach: { port: 40404, close: () => undefined } }
+          : { ok: false, message: 'no second forward.' },
+    })
+    expect((await it.arm('server-1', 'shell-9')).ok).toBe(true)
+    expect(it.belonging('shell-9')).toBeNull()
+    expect(written.join('\n')).not.toContain('bin/open')
+    // A reach that failed handed its own reference back, so nothing is released
+    // for it here.
+    it.disarm('shell-9')
+    expect(letGoes).toEqual(['server-1/control'])
+  })
+
+  it('refuses to write a file whose path it cannot vouch for', () => {
+    expect(() =>
+      armScript({ dir: `${SCRATCH_PREFIX}abcdef`, files: [{ path: 'bin/$(id)', body: 'x' }] }),
+    ).toThrow()
+    expect(() =>
+      armScript({ dir: `${SCRATCH_PREFIX}abcdef`, files: [{ path: 'a', body: 'TD_FILE_0' }] }),
+    ).toThrow()
   })
 })

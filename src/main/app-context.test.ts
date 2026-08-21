@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   bootMapFor,
+  composeRemoteContext,
   contextDir,
   currentAppContext,
   INDEX_FILE,
@@ -211,5 +212,82 @@ describe('which knocks carry it', () => {
     // not there yet. Both callers write it before anything can start a session;
     // this is what holds if one of them ever stops.
     expect(bootMapFor('SessionStart', 's1')).toBeNull()
+  })
+})
+
+/* ------------------------------------------------- and the same, elsewhere -- */
+
+describe('what a session on a server is given instead', () => {
+  const remote = (opensInApp = true) =>
+    composeRemoteContext({
+      version: '9.9.9',
+      serverName: 'Office PC',
+      appMachineName: 'Asad’s MacBook',
+      opensInApp,
+    })
+
+  it('names documents on that machine, never a path that only exists here', () => {
+    const here = write()
+    const there = remote()
+    const map = there.mapFor('/tmp/td-drive-abc123/context')
+
+    expect(map).toContain('/tmp/td-drive-abc123/context/INDEX.md')
+    // The one that would have been handed over before this existed: a path under
+    // `<userData>` on this Mac, which on somebody's Ubuntu box is a file that is
+    // not there. An agent told to read it reads nothing.
+    expect(map).not.toContain(contextDir(here))
+    expect(currentAppContext()?.map).not.toBe(map)
+  })
+
+  it('is the caller’s text when the caller has one, and this run’s otherwise', () => {
+    write()
+    const theirs = remote().mapFor('/tmp/td-drive-abc123/context')
+    expect(bootMapFor('SessionStart', 'server-1 shell-9', 'server-1', theirs)).toBe(theirs)
+    // Handing in nothing keeps the answer a local session has always had.
+    expect(bootMapFor('SessionStart', 's1')).toBe(currentAppContext()?.map)
+  })
+
+  it('describes the transport that is actually carrying it', () => {
+    const pages = remote().pages
+    const sessions = pages['sessions-and-machines.md']
+
+    // The hook that carried this did not come from that account's settings file
+    // and nothing was written into it, so the page does not say either.
+    expect(sessions).toContain("Nothing was written into this account's home directory.")
+    expect(sessions).toContain('# terminaldeck-hook')
+    expect(sessions).not.toContain('~/.codex/hooks.json')
+    // And there is no session variable in an SSH shell to look one up in — the
+    // first thing `window-drive.ts` rejected, and a thing an agent would go
+    // hunting for if it were promised.
+    expect(sessions).not.toContain('TERMINALDECK_SESSION')
+    expect(sessions).toContain("There is no session id in this shell's environment")
+  })
+
+  it('says which machine is which, in every page that mentions one', () => {
+    const pages = remote().pages
+    expect(pages['INDEX.md']).toContain('Office PC')
+    expect(pages['INDEX.md']).toContain('Asad’s MacBook')
+    // The person reading the output is not sitting at the machine this session
+    // is running on, which is the fact most worth stating and least obvious.
+    expect(pages['sessions-and-machines.md']).toContain(
+      'This session is running on Office PC, and the app',
+    )
+    expect(pages['browser-windows.md']).toContain('on Asad’s MacBook')
+  })
+
+  it('never claims an opener it did not manage to install', () => {
+    expect(remote(true).pages['browser-windows.md']).toContain(
+      "ahead of this server's own opener",
+    )
+    const without = remote(false).pages
+    expect(without['browser-windows.md']).toContain('opens **on this server** rather than in the')
+    expect(without['INDEX.md']).toContain("this server's own opener")
+  })
+
+  it('does not name a directory it cannot know yet', () => {
+    // The folder is made by `mktemp -d` on the far end, so at the moment these
+    // are composed there is no path to print. `mapText` already argues that one
+    // path is enough and that an agent holding the index can list its folder.
+    expect(remote().pages['INDEX.md']).not.toContain('This directory:')
   })
 })

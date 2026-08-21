@@ -30,6 +30,8 @@ function fakeClient(
 ): ReverseConnection & {
   connect(info: IncomingTcp): { accepted: boolean; rejected: boolean; channel: FakeStream | null }
   unbound: number
+  /** Every port a cancel named, in order. See `unbind` in the module. */
+  unboundPorts: number[]
   listeners: number
 } {
   let onTcp:
@@ -37,6 +39,7 @@ function fakeClient(
     | null = null
   const client = {
     unbound: 0,
+    unboundPorts: [] as number[],
     get listeners(): number {
       return onTcp === null ? 0 : 1
     },
@@ -54,8 +57,9 @@ function fakeClient(
       cb(answer.error, answer.port ?? 0)
       return client
     },
-    unforwardIn(_addr: string, _port: number, cb: (e?: Error) => void): unknown {
+    unforwardIn(_addr: string, port: number, cb: (e?: Error) => void): unknown {
       client.unbound += 1
+      client.unboundPorts.push(port)
       cb()
       return client
     },
@@ -115,7 +119,7 @@ describe('what the server is asked', () => {
   it('asks for its own loopback, never a name and never the wildcard', () => {
     const client = fakeClient()
     const forwardIn = vi.spyOn(client, 'forwardIn')
-    void openWindowReach(client, { localPort: 1234, runScript: async () => loopback })
+    void openWindowReach(client, { local: { port: 1234 }, runScript: async () => loopback })
     expect(forwardIn.mock.calls[0]?.[0]).toBe(LOOPBACK_V4)
     // Zero, so the server chooses. A fixed number would collide with whatever
     // that machine already has and would fail for a second app on it.
@@ -125,7 +129,7 @@ describe('what the server is asked', () => {
   it('checks the port it was given, not the one it asked for', async () => {
     const asked: string[] = []
     await openWindowReach(fakeClient({ port: 51515 }), {
-      localPort: 1234,
+      local: { port: 1234 },
       runScript: async (script) => {
         asked.push(script)
         return loopback
@@ -160,7 +164,7 @@ describe('the bind-address check', () => {
 describe('when it refuses', () => {
   it('says what the SSH settings would have to change when the bind fails', async () => {
     const result = await openWindowReach(fakeClient({ error: new Error('administratively prohibited') }), {
-      localPort: 1234,
+      local: { port: 1234 },
       runScript: async () => loopback,
     })
     expect(result).toEqual({ ok: false, message: CANNOT_FORWARD })
@@ -168,7 +172,7 @@ describe('when it refuses', () => {
 
   it('refuses a server that answered with no port at all', async () => {
     const result = await openWindowReach(fakeClient({ port: 0 }), {
-      localPort: 1234,
+      local: { port: 1234 },
       runScript: async () => loopback,
     })
     expect(result.ok).toBe(false)
@@ -177,11 +181,16 @@ describe('when it refuses', () => {
   it('takes the port back down when it landed on every interface', async () => {
     const client = fakeClient()
     const result = await openWindowReach(client, {
-      localPort: 1234,
+      local: { port: 1234 },
       runScript: async () => ({ stdout: 'public\n' }),
     })
     expect(result).toEqual({ ok: false, message: BOUND_TOO_WIDELY })
-    expect(client.unbound).toBe(1)
+    // Both spellings of the same cancel. `ssh2` rewrites a `0` request to the
+    // port the server answered with before keying its own table, and OpenSSH
+    // matches on the port its listener is actually on — so the real port is what
+    // works there, and the zero is what works on the servers with the compat
+    // bug. See `unbind`.
+    expect(client.unboundPorts).toEqual([40404, 0])
     // And nothing is left listening for connections on it.
     expect(client.listeners).toBe(0)
   })
@@ -189,17 +198,17 @@ describe('when it refuses', () => {
   it('takes it back down when the server could not be asked at all', async () => {
     const client = fakeClient()
     const result = await openWindowReach(client, {
-      localPort: 1234,
+      local: { port: 1234 },
       runScript: async () => ({ stdout: '' }),
     })
     expect(result).toEqual({ ok: false, message: CANNOT_TELL_WHERE_BOUND })
-    expect(client.unbound).toBe(1)
+    expect(client.unboundPorts).toEqual([40404, 0])
   })
 
   it('treats a connection that died mid-check as not knowing', async () => {
     const client = fakeClient()
     const result = await openWindowReach(client, {
-      localPort: 1234,
+      local: { port: 1234 },
       runScript: async () => {
         throw new Error('Not connected')
       },
@@ -217,7 +226,7 @@ describe('what it carries', () => {
     const client = fakeClient()
     const dialled: FakeStream[] = []
     const result = await openWindowReach(client, {
-      localPort: 1234,
+      local: { port: 1234 },
       runScript: async () => loopback,
       openLocal: () => {
         const socket = new FakeStream()
@@ -287,11 +296,11 @@ describe('what it carries', () => {
     const { client, reach } = await live()
     const seen = client.connect({ destIP: '127.0.0.1', destPort: 40404 })
     reach.close()
-    expect(client.unbound).toBe(1)
+    expect(client.unboundPorts).toEqual([40404, 0])
     expect(client.listeners).toBe(0)
     expect(seen.channel?.destroyed).toBe(true)
     // Idempotent: a shell closing and the app quitting are two paths to here.
     reach.close()
-    expect(client.unbound).toBe(1)
+    expect(client.unbound).toBe(2)
   })
 })

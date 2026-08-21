@@ -2,7 +2,14 @@ import { readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { afterAll, describe, expect, it } from 'vitest'
 import { Client } from 'ssh2'
-import { armScript, disarmScript, readArmed, subcommandsFrom } from './window-drive'
+import {
+  armScript,
+  disarmScript,
+  readScouted,
+  scoutScript,
+  subcommandsFrom,
+  wrapperScript,
+} from './window-drive'
 import { openWindowReach, type ReverseConnection } from './window-reach'
 
 /**
@@ -114,7 +121,7 @@ describe.skipIf(!live)('a real server’s own loopback, answered from here', () 
     const localPort = await endpointHere()
 
     const opened = await openWindowReach(client as unknown as ReverseConnection, {
-      localPort,
+      local: { port: localPort },
       runScript: (script) => exec(client, 'sh -s', script).then((stdout) => ({ stdout })),
     })
 
@@ -189,18 +196,35 @@ describe.skipIf(!live)('a real server’s own loopback, answered from here', () 
        * run.
        */
       expect(standIn.startsWith('/tmp/td-live-')).toBe(true)
-      const armed = readArmed(
-        await exec(
-          client,
-          'sh -s',
-          armScript({
-            config: '{"mcpServers":{"deck-control":{"type":"http"}}}',
-            real: `${standIn}/claude`,
-            subcommands: subcommandsFrom('Commands:\n  mcp   Configure MCP\n  update  Update\n'),
-          }),
-        ),
-      )
+      const armed = readScouted(await exec(client, 'sh -s', scoutScript()))
       expect(armed.dir.startsWith('/tmp/td-drive-')).toBe(true)
+      await exec(
+        client,
+        'sh -s',
+        armScript({
+          dir: armed.dir,
+          files: [
+            {
+              path: 'deck-control.json',
+              body: '{"mcpServers":{"deck-control":{"type":"http"}}}',
+            },
+            {
+              path: 'bin/claude',
+              body: wrapperScript({
+                real: `${standIn}/claude`,
+                subcommands: subcommandsFrom('Commands:\n  mcp   Configure MCP\n  update  Update\n'),
+                config: `${armed.dir}/deck-control.json`,
+                settings: null,
+              }),
+              executable: true,
+            },
+          ],
+        }),
+      )
+      // `curl` is what the whole belonging half rides on, so a real machine is
+      // the only place the scout's answer for it can be checked against the
+      // machine itself.
+      expect(armed.curl).toBe((await exec(client, 'command -v curl || true')).trim())
       // `$SHELL` is exported by sshd out of that account's passwd entry, which
       // is where the answer to "can this terminal take an `export` line" comes
       // from. A real machine is the only place that can be checked.

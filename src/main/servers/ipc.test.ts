@@ -274,7 +274,27 @@ describe('a terminal that can drive the browser window attached to it', () => {
     }
   }
 
-  function drivingHarness(allowed: boolean, over: Partial<ServersIpcDeps> = {}) {
+  /**
+   * The scout's answer, in the shape `readScouted` finds by its mark: the
+   * folder, the login shell, `curl`, and one line per opener.
+   */
+  function scoutAnswer(over: { curl?: string } = {}): string {
+    return [
+      'TD_SCOUTED',
+      '/tmp/td-drive-abc123',
+      '/bin/bash',
+      over.curl ?? '/usr/bin/curl',
+      '',
+      '/usr/bin/xdg-open',
+      '',
+    ].join('\n')
+  }
+
+  function drivingHarness(
+    allowed: boolean,
+    over: Partial<ServersIpcDeps> = {},
+    scout: string = scoutAnswer(),
+  ) {
     const written: string[] = []
     const scripts: string[] = []
     let drives = allowed
@@ -291,7 +311,7 @@ describe('a terminal that can drive the browser window attached to it', () => {
       runScript: async (_serverId, script) => {
         scripts.push(script)
         if (script.includes('command -v ss')) return cmd({ stdout: 'loopback\n' })
-        if (script.includes('mktemp -d')) return cmd({ stdout: '/tmp/td-drive-abc123\n/bin/bash' })
+        if (script.includes('mktemp -d')) return cmd({ stdout: scout })
         return cmd({ stdout: '##compose-available\nno\n' })
       },
       openShell: async () => shell,
@@ -407,6 +427,85 @@ describe('a terminal that can drive the browser window attached to it', () => {
   it('says nothing about a shell it has never heard of', async () => {
     const { ipc } = drivingHarness(true)
     expect(ipc.whyNotDrive('a shell nobody opened')).toBeNull()
+  })
+
+  /*
+   * And the other half of the same grant: a session on a server that knows where
+   * it is, has this app's `open` in front of the server's own, and is told when a
+   * window is attached to it. `servers/window-belong.ts` carries the whole
+   * argument; what is pinned here is the wiring, because it is the wiring that
+   * was missing — the hook endpoint is a second listener with a second address,
+   * so reaching it takes a second forward.
+   */
+  function belongingHarness(over: Partial<ServersIpcDeps> = {}, scout: string = scoutAnswer()) {
+    const bound: number[] = []
+    return drivingHarness(true, {
+      run: async () =>
+        cmd({ stdout: `${HELP}  --settings <file-or-json>  Load additional settings\n` }),
+      hookEndpoint: () => ({ socketPath: '/tmp/hook.sock', token: 'deadbeef' }),
+      remoteContext: (serverName, opensInApp) => ({
+        pages: { 'INDEX.md': `# ${serverName} ${String(opensInApp)}` },
+        mapFor: (dir) => `read ${dir}/INDEX.md`,
+      }),
+      withConnection: async (_serverId, fn) =>
+        fn({
+          on: () => undefined,
+          removeListener: () => undefined,
+          forwardIn: (_addr: string, _port: number, cb: (e: undefined, p: number) => void) => {
+            const port = 40404 + bound.length
+            bound.push(port)
+            cb(undefined, port)
+          },
+          unforwardIn: (_addr: string, _port: number, cb: () => void) => cb(),
+          forwardOut: () => undefined,
+        } as never),
+      ...over,
+    }, scout)
+  }
+
+  it('opens a second forward, because the hooks are a second endpoint', async () => {
+    const { call, scripts } = belongingHarness()
+
+    await call('servers:shell:open', 's1', 100, 40)
+
+    // Two ports, each proved to be on that server's own loopback before a byte
+    // crossed it. One would have pointed the hooks at `deck-control`, which
+    // answers 404 at the far end of somebody's SSH connection.
+    expect(scripts.filter((script) => script.includes('command -v ss')).length).toBe(2)
+    const written = scripts.find((script) => script.includes('bin/claude')) ?? ''
+    expect(written).toContain('bin/open')
+    expect(written).toContain('bin/td-hook')
+    expect(written).toContain('settings.json')
+    expect(written).toContain('context/INDEX.md')
+    // Two ports, and the shim and the hooks use the one that is not
+    // `deck-control`'s.
+    expect(written).toContain('http://127.0.0.1:40405/open')
+  })
+
+  it('hands that session a map naming the documents on that server', async () => {
+    const { call, ipc } = belongingHarness()
+
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
+
+    expect(ipc.belongingOf(opened.shellId)).toEqual({
+      map: 'read /tmp/td-drive-abc123/context/INDEX.md',
+      opensInApp: true,
+    })
+    expect(ipc.belongingOf('a shell nobody opened')).toBeNull()
+  })
+
+  it('still opens the terminal, and claims none of it, on a server with no curl', async () => {
+    const { call, ipc, scripts } = belongingHarness({}, scoutAnswer({ curl: '' }))
+
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
+
+    expect(opened.ok).toBe(true)
+    // The browser verbs are untouched; only the half that needs a `curl` is off,
+    // and nothing on screen or in the agent's context says otherwise.
+    expect(ipc.whyNotDrive(opened.shellId)).toBeNull()
+    expect(ipc.belongingOf(opened.shellId)).toBeNull()
+    expect(scripts.filter((script) => script.includes('command -v ss')).length).toBe(1)
+    expect((scripts.find((script) => script.includes('bin/claude')) ?? '')).not.toContain('bin/open')
   })
 })
 

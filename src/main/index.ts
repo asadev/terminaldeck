@@ -171,7 +171,12 @@ import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
 import { createSessionTools, type SessionTools } from './deck-control/session-tools'
 import { registerDeckignoreIpc } from './deckignore'
 import { defaultContext, registerHooksIpc, syncInstalledHooks } from './hooks'
-import { hookConfigPath, registerHookServer, stopHookServer } from './hook-server'
+import {
+  currentHookEndpoint,
+  hookConfigPath,
+  registerHookServer,
+  stopHookServer,
+} from './hook-server'
 import { registerMcpIpc } from './mcp-client'
 import { registerStageIpc } from './local-stage'
 import { registerBrowserIpc } from './browser-tab'
@@ -198,7 +203,7 @@ import {
 } from './browser-binding'
 import { noVerbsLine } from './session-verbs'
 import { currentOpenShim, removeOpenShim, writeOpenShim } from './open-shim'
-import { bootMapFor, writeAppContext } from './app-context'
+import { bootMapFor, composeRemoteContext, writeAppContext } from './app-context'
 import { describeThisMachine } from './remote/machines/guest'
 import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
 import { browserNetworkTool } from './deck-control/browser-network-tool'
@@ -2832,6 +2837,38 @@ function registerIpc(): void {
      */
     controlPort: () => deckControl?.endpoint.port ?? 0,
     mintSessionTools: (grant) => sessionTools?.prepareElsewhere(grant) ?? null,
+    /*
+     * And the other endpoint, which is the one his three complaints about a
+     * server session all landed on.
+     *
+     * `deck-control` carries the browser *verbs*; this carries where a URL goes
+     * and every answer an agent's own hooks are given, which is how a session
+     * comes to know it is inside this app and that a window has been attached to
+     * it. Read at the moment it is needed for the same reason `controlPort` is —
+     * it binds after this line runs, and a terminal opened in that gap gets no
+     * belonging half and says nothing about one.
+     */
+    hookEndpoint: () => {
+      const live = currentHookEndpoint()
+      return live === null ? null : { socketPath: live.socketPath, token: live.token }
+    },
+    /*
+     * The documents a session on a server is given, composed here because this
+     * is where the app's own version and this computer's name live.
+     *
+     * They are the same three pages a local session can read, said for a machine
+     * that is not this one: the hooks over there come from a settings file in a
+     * folder under `/tmp` rather than from an account's `~/.claude/settings.json`,
+     * and the browser windows they describe are on this screen rather than on
+     * that server. `app-context.ts` owns every word of it.
+     */
+    remoteContext: (serverName, opensInApp) =>
+      composeRemoteContext({
+        version: app.getVersion(),
+        serverName,
+        appMachineName: describeThisMachine().name,
+        opensInApp,
+      }),
   })
   /*
    * A server's own `localhost`, in the same one browser window.
@@ -4247,21 +4284,38 @@ app.whenReady().then(() => {
      * third branch. A session this app did not start still gets null out of
      * `hookContext` and so is still told nothing at all.
      */
-    contextFor: ({ event, sessionId }) =>
+    contextFor: ({ event, sessionId }) => {
+      const machineId = sessionId === null ? '' : (machineOfSession(sessionId) ?? '')
+      /*
+       * Whether this knock came from a shell on a server, and what that shell
+       * actually got.
+       *
+       * Null for every local session and every paired machine, which is every
+       * caller this branch had before today, so those answers are byte for byte
+       * what they were. Non-null only for a server shell whose belonging half
+       * was arranged, and it carries the two facts this file would otherwise get
+       * *wrong* for one:
+       *
+       *  - `opensInApp` is a claim about that shell's PATH, not this Mac's. This
+       *    build always writes the local shim on macOS, so reading
+       *    `currentOpenShim()` for a server session would have promised an agent
+       *    on somebody's Ubuntu box that `open <url>` lands here — the exact
+       *    confident falsehood these answers exist to avoid.
+       *  - `map` names documents on **that** machine.
+       *    `<userData>/context/INDEX.md` is a path that does not exist there, and
+       *    telling an agent to read it is telling it to read nothing.
+       */
+      const belonging = sessionId === null ? null : (servers?.belongingOf(sessionId) ?? null)
       // Two spellings of the same moment: Claude's `PostToolUse` and Gemini's
       // `AfterTool`. See `MID_TURN_EVENTS` in `browser-binding.ts`.
-      MID_TURN_EVENTS.has(event)
+      return MID_TURN_EVENTS.has(event)
         ? sessionId === null
           ? null
-          : takeAnnouncement(
-              sessionId,
-              machineOfSession(sessionId) ?? '',
-              noVerbsLine(sessionId),
-            )
-        : hookContext(sessionId, sessionId === null ? '' : (machineOfSession(sessionId) ?? ''), {
+          : takeAnnouncement(sessionId, machineId, noVerbsLine(sessionId))
+        : hookContext(sessionId, machineId, {
             known: sessionId !== null && machineOfSession(sessionId) !== null,
-            opensInApp: currentOpenShim() !== null,
-            map: bootMapFor(event, sessionId),
+            opensInApp: belonging === null ? currentOpenShim() !== null : belonging.opensInApp,
+            map: bootMapFor(event, sessionId, machineId, belonging?.map ?? null),
             /*
              * And whether this one may act on the windows it is about to be
              * told about.
@@ -4273,7 +4327,8 @@ app.whenReady().then(() => {
              * `session-verbs.ts`.
              */
             cannotDrive: sessionId === null ? null : noVerbsLine(sessionId),
-          }),
+          })
+    },
   })
     .then(() => syncInstalledHooks(defaultContext()))
     .catch((err) => {

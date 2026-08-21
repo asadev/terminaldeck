@@ -1,6 +1,6 @@
 /**
- * This computer's `deck-control` endpoint, reachable from the server's own
- * loopback and from nowhere else.
+ * One of this computer's endpoints, reachable from the server's own loopback and
+ * from nowhere else.
  *
  * ## What it is for
  *
@@ -24,6 +24,20 @@
  * session reach the `deck-control` of the machine that owns the window*. Only
  * the transport changes — SSH instead of the relay — and this file is that
  * transport.
+ *
+ * ## Two endpoints, one shape
+ *
+ * That was the whole of it until a second failure turned out to have the same
+ * root. A session on a server opened a page **on the server**, did not know it
+ * was inside this app, and was never told a browser window had been attached to
+ * it. All three arrive on the *hook* endpoint rather than on `deck-control`, and
+ * `hook-server.ts` is a separate listener with a separate address — so a server
+ * that can reach one still cannot reach the other.
+ *
+ * So this opens either, and {@link LocalEnd} is the only difference: a port for
+ * `deck-control`, a socket path for the hook endpoint, and the same forward, the
+ * same loopback proof and the same pump for both. `servers/window-belong.ts` is
+ * what goes on the far end of the second one.
  *
  * ## Why this does not open the endpoint to the network
  *
@@ -230,17 +244,39 @@ export interface WindowReach {
   close(): void
 }
 
+/**
+ * Which endpoint on **this** machine the forwarded bytes are joined to.
+ *
+ * Two shapes because there are two endpoints and they are addressed differently,
+ * and a single `localPort` could only ever name one of them:
+ *
+ *  - `deck-control` is an HTTP server on this Mac's loopback, so it has a port.
+ *  - The hook endpoint deliberately has **no port at all**. `hook-server.ts`
+ *    opens with a post-mortem of the version that did, and ends by noting that
+ *    nothing is claimed in `own-ports.ts` any more — *"a control plane that
+ *    cannot be addressed over the network needs no list keeping it off one."*
+ *    It is a unix socket, or a named pipe on Windows, and both are addressed by
+ *    a path that `net.createConnection` takes directly.
+ *
+ * Nothing about the boundary changes between the two. The forward is still bound
+ * on the **server's** own `127.0.0.1`, still proved to be there before a byte
+ * crosses it, and the socket the bytes finally arrive on is still one that only a
+ * process on this Mac can open — which for the unix socket is the kernel
+ * enforcing `0600`, a stronger check than the loopback bind the port gets.
+ */
+export type LocalEnd = { port: number } | { socketPath: string }
+
 export interface WindowReachDeps {
-  /** The endpoint's port on **this** machine. `deck-control`'s, always. */
-  localPort: number
+  /** The endpoint on **this** machine the accepted connections are joined to. */
+  local: LocalEnd
   /** Run one short script on that server. `ServerConnections.runScript`. */
   runScript(script: string): Promise<{ stdout: string }>
   /**
-   * Dial this machine's loopback. Injected only so a test can stand in for a
+   * Dial this machine's endpoint. Injected only so a test can stand in for a
    * real socket — the same seam, and the same one-line reason, that
    * `ServerConnections` gives for `newClient`.
    */
-  openLocal?(port: number): ReachStream
+  openLocal?(local: LocalEnd): ReachStream
 }
 
 export type ReachResult =
@@ -270,7 +306,7 @@ export async function openWindowReach(
     answer = 'unknown'
   }
   if (answer !== 'loopback') {
-    unbind(client)
+    unbind(client, port)
     return { ok: false, message: answer === 'public' ? BOUND_TOO_WIDELY : CANNOT_TELL_WHERE_BOUND }
   }
 
@@ -303,10 +339,27 @@ function bind(client: ReverseConnection): Promise<number | null> {
   })
 }
 
-function unbind(client: ReverseConnection): void {
+/**
+ * Stop the server listening, and say so in both spellings.
+ *
+ * Two cancels, because the pair the far end matches on depends on the far end.
+ * Read out of `ssh2/lib/client.js` rather than assumed: a `forwardIn` asked for
+ * port `0` **reassigns `bindPort` to the port the server answered with** before
+ * writing its own table, unless the server carries the `DYN_RPORT_BUG` compat
+ * flag, in which case it stays `0`. OpenSSH matches a `cancel-tcpip-forward`
+ * against the port its listener is actually on, so the real port is the one that
+ * works there and the zero is the one that works on the buggy servers.
+ *
+ * Sending both costs one extra global request whose failure reply is ignored,
+ * and buys a listener that is really gone. That matters more since there are
+ * **two** forwards per server: they cannot collide — each is on its own port and
+ * a cancel for a port nothing is listening on matches nothing — but a cancel
+ * that quietly did nothing would leave a listener on somebody's machine for as
+ * long as anything else held the connection open.
+ */
+function unbind(client: ReverseConnection, port: number): void {
   try {
-    // The pair that was *asked* for, not the port that came back: the library
-    // keys its own table on the request. See `ssh2.d.ts`.
+    client.unforwardIn(LOOPBACK_V4, port, () => undefined)
     client.unforwardIn(LOOPBACK_V4, 0, () => undefined)
   } catch {
     // The connection has gone, which has already cancelled every forward on it.
@@ -324,7 +377,14 @@ function serve(client: ReverseConnection, port: number, deps: WindowReachDeps): 
   const open = new Set<ReachStream>()
   let closed = false
   const dial =
-    deps.openLocal ?? ((to: number): ReachStream => createConnection(to, '127.0.0.1') as Socket)
+    deps.openLocal ??
+    ((to: LocalEnd): ReachStream =>
+      // A path rather than a port for the hook endpoint, which has neither a
+      // port nor any way to be given one. `createConnection` takes both, and on
+      // Windows the same call takes the `\\.\pipe\…` name `hookAddress` returns.
+      ('port' in to
+        ? createConnection(to.port, '127.0.0.1')
+        : createConnection(to.socketPath)) as Socket)
 
   const onConnection = (
     info: IncomingTcp,
@@ -348,7 +408,7 @@ function serve(client: ReverseConnection, port: number, deps: WindowReachDeps): 
     } catch {
       return
     }
-    const local = dial(deps.localPort)
+    const local = dial(deps.local)
     open.add(channel)
     pump(channel, local, () => open.delete(channel))
   }
@@ -365,7 +425,7 @@ function serve(client: ReverseConnection, port: number, deps: WindowReachDeps): 
     client.removeListener('tcp connection', onConnection as (...args: never[]) => void)
     for (const channel of [...open]) channel.destroy()
     open.clear()
-    if (tell) unbind(client)
+    if (tell) unbind(client, port)
   }
 
   return { port, close: () => stop(true) }

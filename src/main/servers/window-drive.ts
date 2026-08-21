@@ -64,6 +64,30 @@
  * verbs"* is always to say so, because an agent told merely that something did
  * not work goes looking for another way in.
  *
+ * ## And the second half, added when the same shell turned out not to know where
+ * it was
+ *
+ * The wrapper above is about *verbs*. It is not the only thing an SSH shell is
+ * missing, and the other two came back as one complaint:
+ *
+ * > *"server session is still opening browser in where its based like inside the
+ * > server not in the app, and dont get to know about terminal deck until we talk
+ * > about it, and dont get to know about browser connection even if we connect it
+ * > manually."*
+ *
+ * Same root: no `open` shim and no hooks, because both of those are things
+ * `host-core.ts` arranges for a session it starts and nobody arranges for a shell
+ * a person types into. Both are answered by the same directory this file already
+ * puts first on that shell's `PATH`, and `window-belong.ts` is what goes in it.
+ * The only thing that changes here is that the folder now holds more than two
+ * files, and that filling it is a second round trip — see {@link scoutScript} for
+ * why that is a simplification rather than a cost.
+ *
+ * The two halves fail apart on purpose. A server with no `curl`, or a `claude`
+ * too old for `--settings`, still gets a terminal and still gets the browser
+ * verbs; what it does not get is claimed nowhere, in the app or in the agent's
+ * own context.
+ *
  * ## No `ssh2` here either
  *
  * `host-key-checked.test.ts` walks this folder and fails the build if anything
@@ -71,8 +95,18 @@
  * promises; the connection arrives as functions.
  */
 
+import type { RemoteAppContext } from '../app-context'
 import type { AgentFact } from './facts'
 import type { PreparedElsewhere } from '../deck-control/session-tools'
+import {
+  CONTEXT_SUBDIR,
+  OPENER_NAMES,
+  SETTINGS_FILE,
+  SETTINGS_FLAG,
+  belongFiles,
+  honoursSettings,
+  type ScratchFile,
+} from './window-belong'
 import type { ReachResult, WindowReach } from './window-reach'
 
 /* ------------------------------------------------------ reading the help -- */
@@ -135,80 +169,157 @@ export function subcommandsFrom(help: string): string[] {
 export const SCRATCH_PREFIX = '/tmp/td-drive-'
 
 /**
- * The script that lands the config and the wrapper, and prints where.
+ * The mark the scout prints before its answers.
  *
- * ## Why a script on standard input and not files over SFTP
- *
- * Because one of the two files is a **bearer token**. `connection.ts`'s
- * `runScript` hands the whole text to `sh -s` on the far end's standard input,
- * which is the door it opened precisely so that a command line does not appear
- * in that machine's process list where anybody signed into it can read it. SFTP
- * would work for the bytes and would then need a second round trip to `chmod`
- * the result, leaving a window in which the file exists and is readable.
- *
- * `umask 077` before anything is written closes that window instead of chasing
- * it: every file this creates is `0600` from the instant it exists, inside a
- * directory that is `0700`.
- *
- * ## Why the config path is interpolated by the shell and everything else by us
- *
- * The directory is chosen by `mktemp` on the far end, so only the shell knows
- * it — hence the one unquoted heredoc, which expands `$d` and nothing else,
- * because the line it contains is fixed text with no other `$` in it. The
- * wrapper's body is a quoted heredoc, so nothing in it is expanded at write
- * time and every `$1`, `$@` and `$REAL` reaches the file as written.
+ * A sentinel rather than counting lines back from the end, because the number of
+ * answers grew once already: it was the folder and the login shell, and it is now
+ * those plus `curl` and every opener name. Counting from the end works and goes
+ * quietly wrong the next time something is added to the list, which is the shape
+ * of bug this whole round is about.
  */
-export function armScript(input: {
-  /** The whole config file, as `PreparedElsewhere.configFor` composed it. */
-  config: string
-  /** The absolute path of `claude` on that server, from the probe. */
-  real: string
-  /** That server's own subcommands, from its own `--help`. */
-  subcommands: readonly string[]
-}): string {
+export const SCOUT_MARK = 'TD_SCOUTED'
+
+/**
+ * Make the folder, and measure the machine everything else is composed against.
+ *
+ * ## Why this is a round trip of its own, and the wrapper is not in it
+ *
+ * It used to write the files as well, and the price was a heredoc that had to be
+ * *unquoted* so the far end could expand the folder `mktemp` had just chosen —
+ * with every `$`, backtick and backslash in everything it wrote suddenly
+ * meaningful. That was survivable for one JSON file. It is not survivable for a
+ * settings file, three shim scripts and three Markdown documents full of code
+ * spans, and the failure mode is a script on somebody's `PATH` with a mangled
+ * line in it.
+ *
+ * So the folder is chosen first and *answered*, and {@link armScript} then writes
+ * every file with the path already in it, in quoted heredocs that expand nothing.
+ * One extra round trip on a connection that is already up, in exchange for there
+ * being no shell expansion anywhere in the bytes this app puts on somebody's
+ * server.
+ *
+ * ## What it measures, and why here
+ *
+ * All of it is free — the connection is open and the answers are one `command -v`
+ * each — and all of it has to be known *before* anything is composed:
+ *
+ *  - **The login shell.** `sshd` exports `$SHELL` from that account's passwd
+ *    entry, so it is already in this script's environment. It decides whether
+ *    the `PATH` line can be typed at all; see {@link takesAnExportLine}.
+ *  - **`curl`.** Everything in `window-belong.ts` is a `curl` — the hooks and
+ *    the `open` shim both — and a server without one gets neither rather than
+ *    scripts that fail on every call.
+ *  - **Each opener.** The shim needs the *absolute* path of the thing it falls
+ *    back to, resolved now, while this directory is nowhere near any `PATH`.
+ *    `open-shim.ts` states the rule at length: a `PATH` lookup at run time would
+ *    find the shim, which would exec the shim, for ever.
+ *
+ * An answer that is not an absolute path, or that has a quote in it, is returned
+ * as nothing at all. `command -v` answers with a bare word for a builtin and with
+ * nothing for a program that is not there, and neither is something to bake into
+ * a script.
+ */
+export function scoutScript(): string {
   return [
     'umask 077',
     `d=$(mktemp -d ${SCRATCH_PREFIX}XXXXXX) || exit 1`,
     'chmod 700 "$d" || exit 1',
     'mkdir "$d/bin" || exit 1',
-    "cat > \"$d/deck-control.json\" <<'TD_CONFIG'",
-    input.config.replace(/\n+$/, ''),
-    'TD_CONFIG',
-    'cat > "$d/bin/claude" <<TD_HEAD',
-    '#!/bin/sh',
-    'CONFIG="$d/deck-control.json"',
-    'TD_HEAD',
-    "cat >> \"$d/bin/claude\" <<'TD_BODY'",
-    wrapperBody(input.real, input.subcommands),
-    'TD_BODY',
-    'chmod 700 "$d/bin/claude" || exit 1',
-    /*
-     * Two lines: where it landed, and which shell the person is about to be
-     * dropped into.
-     *
-     * The second is asked here rather than in a round trip of its own because it
-     * is free — `sshd` exports `$SHELL` from that account's passwd entry, so it
-     * is already in the environment this script runs in — and because the answer
-     * decides whether the `PATH` line below can be typed at all. See
-     * {@link pathLine}.
-     */
-    'printf \'%s\\n%s\' "$d" "${SHELL:-}"',
+    // One program, absolutely, or an empty line. Never a builtin, never a
+    // relative word, and never anything this app would have to escape.
+    'found() {',
+    '  v=$(command -v "$1" 2>/dev/null) || v=',
+    '  case "$v" in /*) ;; *) v= ;; esac',
+    `  case "$v" in *"'"*) v= ;; esac`,
+    "  printf '%s\\n' \"$v\"",
+    '}',
+    `printf '%s\\n' '${SCOUT_MARK}' "$d" "\${SHELL:-}"`,
+    'found curl',
+    ...OPENER_NAMES.map((name) => `found ${name}`),
   ].join('\n')
 }
 
+/** What {@link scoutScript} answered. */
+export interface Scouted {
+  /** The folder it made, or `''` when the answer was not one of ours. */
+  dir: string
+  /** The account's login shell, or `''` when its passwd entry names none. */
+  shell: string
+  /** Absolute `curl` on that server, or `''` when it has none. */
+  curl: string
+  /** Absolute path of each opener in {@link OPENER_NAMES}, `''` where absent. */
+  openers: Readonly<Record<string, string>>
+}
+
 /**
- * What {@link armScript} answered: the folder, and the account's login shell.
+ * Read the scout's answers, past whatever a `.profile` printed before them.
  *
- * A shell that printed a warning before either — plenty of `.profile`s do — is
- * read from the end rather than the start, because the two lines this cares
- * about are the last two.
+ * Found by {@link SCOUT_MARK} rather than by position, and by the **last** one:
+ * a login file that echoed the mark itself would otherwise be read as the start
+ * of the answers, and the real answers are always the ones at the end.
  */
-export function readArmed(stdout: string): { dir: string; shell: string } {
-  const lines = stdout.split('\n')
-  return {
-    dir: (lines[lines.length - 2] ?? '').trim(),
-    shell: (lines[lines.length - 1] ?? '').trim(),
+export function readScouted(stdout: string): Scouted {
+  const lines = stdout.split('\n').map((line) => line.replace(/\r$/, '').trim())
+  const at = lines.lastIndexOf(SCOUT_MARK)
+  const take = (offset: number): string => (at === -1 ? '' : (lines[at + offset] ?? ''))
+  const openers: Record<string, string> = {}
+  OPENER_NAMES.forEach((name, index) => {
+    openers[name] = take(4 + index)
+  })
+  return { dir: take(1), shell: take(2), curl: take(3), openers }
+}
+
+/**
+ * Write every file into a folder the far end already made and already named.
+ *
+ * ## Why every heredoc here is quoted
+ *
+ * Because there is nothing left for the shell to fill in. The folder came back
+ * from {@link scoutScript}, so every path in every file is already a literal by
+ * the time this is composed — which means the far end can be told to expand
+ * *nothing*, and a backtick in a Markdown code span, a `$1` in a shim and a
+ * backslash in a JSON string all reach the file as written. `umask 077` before
+ * anything is written is what makes each of them `0600` from the instant it
+ * exists rather than a `chmod` later that chases a window it cannot close.
+ *
+ * ## And why it refuses rather than escapes
+ *
+ * The guard on `$d` is `disarmScript`'s, and the guard on each path is the same
+ * idea one level down: these become filenames inside a double-quoted word on
+ * somebody's machine, so a path this module cannot vouch for is a throw rather
+ * than a clever quoting rule. Every caller is inside `arm`'s `try`, where a throw
+ * is already a refusal with the folder taken back.
+ */
+export function armScript(input: { dir: string; files: readonly ScratchFile[] }): string {
+  const lines = [
+    `d='${singleQuote(input.dir)}'`,
+    `case "$d" in ${SCRATCH_PREFIX}??????) ;; *) exit 1 ;; esac`,
+    'umask 077',
+  ]
+
+  const folders = new Set<string>()
+  for (const file of input.files) {
+    if (!/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(file.path)) {
+      throw new Error(`window-drive: refusing to write ${file.path}`)
+    }
+    const slash = file.path.lastIndexOf('/')
+    if (slash > 0) folders.add(file.path.slice(0, slash))
   }
+  for (const folder of [...folders].sort()) lines.push(`mkdir -p "$d/${folder}" || exit 1`)
+
+  input.files.forEach((file, index) => {
+    const tag = `TD_FILE_${index}`
+    const body = file.body.replace(/\n+$/, '')
+    // A file whose own text contains the delimiter would end its heredoc early
+    // and leave the rest of it running as shell. It cannot happen with anything
+    // this app composes, and it is not a thing to find out about later.
+    if (body.split('\n').includes(tag)) throw new Error(`window-drive: ${file.path} contains ${tag}`)
+    lines.push(`cat > "$d/${file.path}" <<'${tag}'`, body, tag)
+    if (file.executable) lines.push(`chmod 700 "$d/${file.path}" || exit 1`)
+  })
+
+  lines.push('exit 0')
+  return lines.join('\n')
 }
 
 /**
@@ -249,7 +360,7 @@ export function takesAnExportLine(shell: string): boolean {
 }
 
 /**
- * The wrapper itself, minus the one line the shell writes above it.
+ * The wrapper, whole.
  *
  * ## The order of the branches is the safety case
  *
@@ -257,11 +368,11 @@ export function takesAnExportLine(shell: string): boolean {
  * reason — this goes on the `PATH` of a terminal somebody is working in, and a
  * wrapper that breaks an ordinary invocation is worse than no wrapper at all:
  *
- *  1. **no arguments, or a first argument that is a flag** → add `--mcp-config`.
+ *  1. **no arguments, or a first argument that is a flag** → add the flags.
  *     `claude`, `claude -c`, `claude --resume`, `claude -p "…"`.
  *  2. **a first argument that this server's own help listed as a subcommand** →
  *     exec untouched. `claude mcp list`, `claude update`, `claude doctor`.
- *  3. **anything else** → a prompt, so add the flag. `claude "fix the build"`.
+ *  3. **anything else** → a prompt, so add the flags. `claude "fix the build"`.
  *
  * ## The one line that could brick a terminal
  *
@@ -272,35 +383,64 @@ export function takesAnExportLine(shell: string): boolean {
  * `REAL_OPENER` and it is the one line in either file that is worth reading
  * twice.
  *
- * The shebang and the one line naming the config file are not here: they are the
- * two lines {@link armScript} writes above this in its *unquoted* heredoc,
- * because only the far end knows the folder `mktemp` chose. Everything below is
- * written literally, so every `$1`, `$@` and `$REAL` in it reaches the file as
- * typed.
+ * ## Two flags now, and the second is optional twice over
+ *
+ * `--mcp-config` is what gives the agent this app's browser verbs, and it is why
+ * this wrapper exists at all. {@link SETTINGS_FLAG} is what gives it the hooks
+ * that tell it where it is and what has just been attached to it
+ * (`window-belong.ts`), and it is added only when **both** are true: this
+ * server's own `--help` listed the flag, and the settings file it would name was
+ * actually written. A flag naming a file that is not there is a `claude` that
+ * refuses to start, which is the one failure this whole file is careful about.
+ *
+ * Every path in here is a literal, because {@link scoutScript} already answered
+ * with the folder. Nothing in this script is expanded when it is written.
  */
-function wrapperBody(real: string, subcommands: readonly string[]): string {
-  const safe = subcommands.filter((word) => /^[a-z][a-z0-9-]*$/.test(word))
+export function wrapperScript(input: {
+  /** Absolute `claude` on that server. */
+  real: string
+  /** That server's own subcommands, from its own `--help`. */
+  subcommands: readonly string[]
+  /** Absolute path of the MCP config beside it. */
+  config: string
+  /** Absolute path of the settings file, or null when there is none. */
+  settings: string | null
+}): string {
+  const safe = input.subcommands.filter((word) => /^[a-z][a-z0-9-]*$/.test(word))
   const lines = [
+    '#!/bin/sh',
     '# Written by this app when the terminal it is on was opened, and removed when',
-    '# that terminal closes. It adds one flag to `claude` so that the agent in this',
-    '# shell can act on the browser windows attached to this session, and it changes',
-    '# nothing else about how `claude` runs.',
+    '# that terminal closes. It adds one or two flags to `claude` so that the agent',
+    '# in this shell can act on the browser windows attached to this session and can',
+    '# be told what it is running inside. It changes nothing else about how `claude`',
+    '# runs.',
     '#',
     '# Absolute, and never a PATH lookup: the directory this file is in is FIRST on',
     "# this shell's PATH, so a lookup would find this script and exec it for ever.",
-    `REAL='${singleQuote(real)}'`,
+    `REAL='${singleQuote(input.real)}'`,
+    `CONFIG='${singleQuote(input.config)}'`,
+    ...(input.settings === null ? [] : [`SETTINGS='${singleQuote(input.settings)}'`]),
     '',
-    '# A subcommand does not take --mcp-config and would fail on it. This list is',
+    '# A subcommand does not take these flags and would fail on them. This list is',
     "# what this machine's own `claude --help` printed when the terminal opened.",
     'case "${1:-}" in',
   ]
   if (safe.length > 0) lines.push(`  ${safe.join('|')}) exec "$REAL" "$@" ;;`)
-  lines.push(
-    '  *) ;;',
-    'esac',
-    '',
-    `exec "$REAL" ${MCP_FLAG} "$CONFIG" "$@"`,
-  )
+  lines.push('  *) ;;', 'esac', '')
+  if (input.settings === null) {
+    lines.push(`exec "$REAL" ${MCP_FLAG} "$CONFIG" "$@"`)
+  } else {
+    // Tested rather than assumed, because the folder can be taken back while a
+    // shell is still open — an unticked switch does exactly that — and a flag
+    // naming a file that has gone is every `claude` in this terminal refusing to
+    // start rather than one capability quietly missing.
+    lines.push(
+      'if [ -f "$SETTINGS" ]; then',
+      `  exec "$REAL" ${MCP_FLAG} "$CONFIG" ${SETTINGS_FLAG} "$SETTINGS" "$@"`,
+      'fi',
+      `exec "$REAL" ${MCP_FLAG} "$CONFIG" "$@"`,
+    )
+  }
   return lines.join('\n')
 }
 
@@ -319,7 +459,10 @@ export function pathLine(dir: string): string {
 
   return (
     `export PATH='${singleQuote(dir)}/bin':$PATH ` +
-    '# so `claude` here can drive the browser windows you attach to this terminal\n'
+    // Widened when the folder grew an `open` shim beside the `claude` wrapper.
+    // The line is the one thing this feature does that he can see, so what it
+    // says has to cover everything it buys rather than the half it bought first.
+    '# so what runs here can reach the browser windows you attach to this terminal\n'
   )
 }
 
@@ -392,14 +535,66 @@ export interface WindowDriveDeps {
   /** Run one script on the far end's standard input. `ServerConnections.runScript`. */
   runScript(serverId: string, script: string): Promise<{ stdout: string }>
   /**
-   * The port on that server's loopback that reaches this endpoint, opened on
-   * first use and reference-counted. See `window-reach.ts`.
+   * A port on that server's loopback that reaches one of this app's endpoints,
+   * opened on first use and reference-counted. See `window-reach.ts`.
+   *
+   * Two kinds because there are two endpoints and they are separate listeners:
+   * `control` is `deck-control`, which serves the browser verbs, and `hooks` is
+   * the hook endpoint, which serves the `open` route and every answer an agent's
+   * hooks are given. `hook-server.ts` opens with the post-mortem of the version
+   * where those were one thing.
    */
-  reach(serverId: string): Promise<ReachResult>
-  /** Let go of one reference to that reach. */
-  letGo(serverId: string): void
+  reach(serverId: string, kind: ReachKind): Promise<ReachResult>
+  /** Let go of one reference to one of those reaches. */
+  letGo(serverId: string, kind: ReachKind): void
   /** A token and a caller for a session this process will never see. */
   mint(grant: { allowed(): boolean }): PreparedElsewhere | null
+  /**
+   * This run's hook endpoint, or null when it is not running.
+   *
+   * Only the token, and only because a `curl` on somebody's server has to
+   * present one. Null is an ordinary state — the endpoint binds a moment after
+   * the window is built — and it means the belonging half is simply not arranged
+   * for this terminal.
+   */
+  hookEndpoint?(): { token: string } | null
+  /**
+   * The documents and the map a session on this server should be given, or null
+   * when this build has none to compose.
+   *
+   * `app-context.ts` owns the text. This only asks for it, per server, because
+   * the pages name the server and say where the app itself is running — and
+   * because `opensInApp` is a claim about what this particular arm just managed
+   * to put on that shell's `PATH`.
+   */
+  remoteContext?(serverId: string, opensInApp: boolean): RemoteAppContext | null
+}
+
+/** Which of this app's two endpoints a reach leads to. */
+export type ReachKind = 'control' | 'hooks'
+
+/**
+ * What a session in one shell should be told about where it is, beyond the
+ * standing description `browser-binding.ts` composes.
+ *
+ * Null from {@link WindowDrives.belonging} covers two states on purpose — a
+ * shell whose belonging half could not be arranged, and a shell this object has
+ * never heard of — because both want the same answer at the call site: fall back
+ * to what a local session is told, which for an id this app did not start is
+ * nothing at all.
+ */
+export interface Belonging {
+  /**
+   * The map naming the documents **on that server**, or null when no hooks were
+   * installed and so nothing would ever read it.
+   *
+   * Never this Mac's map. `<userData>/context/INDEX.md` is a path that does not
+   * exist over there, and handing it over would be this app telling an agent to
+   * read a file it cannot open.
+   */
+  map: string | null
+  /** Whether this app's `open` really is first on that shell's `PATH`. */
+  opensInApp: boolean
 }
 
 /**
@@ -414,7 +609,15 @@ export interface WindowDriveDeps {
 export class WindowDrives {
   private readonly armed = new Map<
     string,
-    { serverId: string; dir: string; minted: PreparedElsewhere }
+    {
+      serverId: string
+      dir: string
+      minted: PreparedElsewhere
+      /** Whether this shell is holding a reference to the hook reach as well. */
+      hooks: boolean
+      /** What it should be told about where it is, or null. */
+      belonging: Belonging | null
+    }
   >()
   /** shellId → why it has no verbs. Absent means it has them, or is not ours. */
   private readonly withheld = new Map<string, string>()
@@ -422,13 +625,29 @@ export class WindowDrives {
   constructor(private readonly deps: WindowDriveDeps) {}
 
   /**
-   * Give one shell the verbs, or say why it cannot have them. Never throws.
+   * Give one shell the verbs and, when it can be arranged, a sense of where it
+   * is. Never throws.
    *
    * Called **before** the shell is opened rather than after, which costs a few
    * hundred milliseconds on the first terminal for a server and is the whole
    * point: the `PATH` line has to be the first thing in that shell, or there is
    * a window in which the person types `claude` and gets a session that quietly
    * cannot see. `session-verbs.ts` is a page about that exact failure.
+   *
+   * ## Two halves, and only the first can refuse
+   *
+   * The **control half** — a token, `deck-control`'s reach and the `--mcp-config`
+   * the wrapper adds — is what the switch beside this server is about, and every
+   * way it can fail already has a sentence in {@link WHY_NOT}. It is unchanged.
+   *
+   * The **belonging half** — the `open` shim, the hooks and the documents
+   * (`window-belong.ts`) — is added on top and is silent when it cannot happen.
+   * That is deliberate: a server with no `curl`, or a `claude` too old for
+   * {@link SETTINGS_FLAG}, still gets a terminal and still gets the browser
+   * verbs, and nothing on screen claims otherwise. What is *never* silent is the
+   * consequence — `opensInApp` on {@link Belonging} is what this arm actually
+   * managed, so the documents and the boot description say the true thing rather
+   * than the hoped one.
    */
   async arm(serverId: string, shellId: string): Promise<ArmOutcome> {
     const refuse = (why: string): ArmOutcome => {
@@ -460,36 +679,28 @@ export class WindowDrives {
     const minted = this.deps.mint({ allowed: () => this.deps.allowed(serverId) })
     if (minted === null) return refuse(WHY_NOT.endpoint)
 
-    const reach = await this.deps.reach(serverId)
+    const reach = await this.deps.reach(serverId, 'control')
     if (!reach.ok) {
       minted.drop()
       return refuse(reach.message)
     }
 
-    let landed: { dir: string; shell: string }
+    let scouted: Scouted
     try {
-      const answer = await this.deps.runScript(
-        serverId,
-        armScript({
-          // The address is the *server's* view of this endpoint: its own
-          // loopback, on the port it chose. See `window-reach.ts` for why that
-          // keeps the endpoint's own loopback rule true on both machines.
-          config: minted.configFor(`http://127.0.0.1:${reach.reach.port}/mcp`),
-          real: claude.path,
-          subcommands: subcommandsFrom(help),
-        }),
-      )
-      landed = readArmed(answer.stdout)
+      scouted = readScouted((await this.deps.runScript(serverId, scoutScript())).stdout)
     } catch {
       minted.drop()
-      this.deps.letGo(serverId)
-      return refuse('this app could not put the files it needs on that server.')
+      this.deps.letGo(serverId, 'control')
+      return refuse('this app could not make a folder of its own on that server.')
     }
-    const dir = landed.dir
+    const dir = scouted.dir
+
     /** Give everything back, including what is now on the far end. */
+    let holdingHooks = false
     const undo = (why: string): ArmOutcome => {
       minted.drop()
-      this.deps.letGo(serverId)
+      this.deps.letGo(serverId, 'control')
+      if (holdingHooks) this.deps.letGo(serverId, 'hooks')
       if (dir.startsWith(SCRATCH_PREFIX)) {
         void this.deps.runScript(serverId, disarmScript(dir)).catch(() => undefined)
       }
@@ -499,30 +710,139 @@ export class WindowDrives {
       return undo('that server did not answer with a folder this app could use.')
     }
     /*
-     * The last question, and it is asked after the files rather than before
-     * because the answer arrives with them for free — `sshd` exports `$SHELL`
-     * into the script's own environment. A shell that cannot take the line is a
-     * refusal with the folder removed, not a line typed hopefully.
+     * The last question of the control half, and it is asked after the folder
+     * rather than before because the answer arrives with it for free — `sshd`
+     * exports `$SHELL` into the scout's own environment. A shell that cannot
+     * take the line is a refusal with the folder removed, not a line typed
+     * hopefully.
      */
-    if (!takesAnExportLine(landed.shell)) return undo(WHY_NOT.shell)
+    if (!takesAnExportLine(scouted.shell)) return undo(WHY_NOT.shell)
+
+    /* ------------------------------------------ and now the belonging half -- */
+
+    let belonging: Belonging | null = null
+    let settingsPath: string | null = null
+    let extras: ScratchFile[] = []
+    const endpoint = this.deps.hookEndpoint?.() ?? null
+    if (scouted.curl !== '' && endpoint !== null) {
+      const hookReach = await this.deps.reach(serverId, 'hooks')
+      if (hookReach.ok) {
+        holdingHooks = true
+        // Two flags, two questions. `--mcp-config` was already required above;
+        // this one decides only whether the hooks can be installed at all, and a
+        // server that cannot take it still gets the `open` shim.
+        const withHooks = honoursSettings(help)
+        /*
+         * `true` before the files are written, and it is not a guess: the
+         * openers are the one thing `belongFiles` always writes when it writes
+         * anything at all, so the pages are either composed beside a shim that
+         * exists or thrown away with everything else a few lines below.
+         */
+        const remote = withHooks ? (this.deps.remoteContext?.(serverId, true) ?? null) : null
+        extras = belongFiles({
+          dir,
+          curl: scouted.curl,
+          port: hookReach.reach.port,
+          sessionId: shellId,
+          token: endpoint.token,
+          openers: scouted.openers,
+          pages: remote?.pages ?? null,
+          hooks: withHooks,
+        })
+        if (extras.length === 0) {
+          // Something this module would have had to interpolate was not what it
+          // said it was. Nothing half-written goes on somebody's PATH.
+          this.deps.letGo(serverId, 'hooks')
+          holdingHooks = false
+        } else {
+          if (withHooks) settingsPath = `${dir}/${SETTINGS_FILE}`
+          belonging = {
+            map: remote === null ? null : remote.mapFor(`${dir}/${CONTEXT_SUBDIR}`),
+            opensInApp: true,
+          }
+        }
+      }
+    }
+
+    /* ------------------------------------------------- everything, written -- */
+
+    try {
+      const config = `${dir}/deck-control.json`
+      await this.deps.runScript(
+        serverId,
+        armScript({
+          dir,
+          files: [
+            {
+              path: 'deck-control.json',
+              // The address is the *server's* view of this endpoint: its own
+              // loopback, on the port it chose. See `window-reach.ts` for why
+              // that keeps the endpoint's own loopback rule true on both
+              // machines.
+              body: minted.configFor(`http://127.0.0.1:${reach.reach.port}/mcp`),
+            },
+            ...extras,
+            /*
+             * The wrapper is written **last**, and that ordering is the one that
+             * matters: it names the settings file, so it must not exist before
+             * the file it points at. A `cat` that failed halfway leaves a folder
+             * with no `bin/claude` in it, which is a terminal with no wrapper —
+             * recoverable — rather than a wrapper naming a file that is not
+             * there, which is a `claude` that refuses to start.
+             */
+            {
+              path: 'bin/claude',
+              body: wrapperScript({
+                real: claude.path,
+                subcommands: subcommandsFrom(help),
+                config,
+                settings: settingsPath,
+              }),
+              executable: true,
+            },
+          ],
+        }),
+      )
+    } catch {
+      return undo('this app could not put the files it needs on that server.')
+    }
 
     // Bound only now, and to the server rather than to this machine: the binding
     // map keys a window `<serverId>\0<shellId>`, so the caller has to carry the
     // server where a machine id goes or every one of its verbs would look for a
     // window on this computer. See `browser-binding.ts`.
     minted.started(shellId, serverId)
-    this.armed.set(shellId, { serverId, dir, minted })
+    this.armed.set(shellId, { serverId, dir, minted, hooks: holdingHooks, belonging })
     this.withheld.delete(shellId)
     return { ok: true, line: pathLine(dir) }
   }
 
   /**
-   * The shell has gone. The token stops working, the folder goes, and the reach
-   * is let go of.
+   * What a session in this shell should be told about where it is, or null.
+   *
+   * Read by `index.ts` when a hook from that shell arrives, because it is the
+   * one place that knows two things `app-context.ts` and `browser-binding.ts`
+   * cannot: that this session is on a server at all, and what this app actually
+   * managed to put on its `PATH`.
+   */
+  belonging(shellId: string): Belonging | null {
+    return this.armed.get(shellId)?.belonging ?? null
+  }
+
+  /**
+   * The shell has gone. The token stops working, the folder goes, and both
+   * reaches are let go of.
    *
    * The token is dropped **first**, and that ordering is the one that matters: a
    * removal that failed on the far end would otherwise leave a config file
    * naming a token that still worked.
+   *
+   * The folder is the way back for everything, not just for the MCP config: the
+   * `open` shim, the settings file holding the hooks, the curl config holding
+   * this run's hook token and the documents are all inside it, and `rm -rf` on it
+   * is what makes this app's whole footprint on somebody's server one directory
+   * with a way back. Nothing was written into that account's home, so there is
+   * nothing else to undo.
    */
   disarm(shellId: string): void {
     this.withheld.delete(shellId)
@@ -530,7 +850,8 @@ export class WindowDrives {
     if (entry === undefined) return
     this.armed.delete(shellId)
     entry.minted.drop()
-    this.deps.letGo(entry.serverId)
+    this.deps.letGo(entry.serverId, 'control')
+    if (entry.hooks) this.deps.letGo(entry.serverId, 'hooks')
     void this.deps
       .runScript(entry.serverId, disarmScript(entry.dir))
       .catch(() => undefined)

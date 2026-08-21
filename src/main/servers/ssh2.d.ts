@@ -177,10 +177,17 @@ declare module 'ssh2' {
       callback: (err: Error | undefined, port: number) => void,
     ): this
     /**
-     * Stop listening. The address and port must be the pair `forwardIn` was
-     * *asked* for, not the port it answered with — the library keys its own
-     * table on the request (`lib/client.js:1358`), and a zero asked for is a
-     * zero to cancel.
+     * Stop listening, and which port to name is not obvious.
+     *
+     * Re-read in `lib/client.js`: a `forwardIn` asked for port `0` **reassigns
+     * its own `bindPort` to the port the server answered with** before writing
+     * its forwarding table, so the key is the real port — unless the server
+     * carries the `DYN_RPORT_BUG` compat flag, where the zero survives. OpenSSH
+     * itself matches a cancel against the port its listener is on, so the real
+     * port is what actually stops it there.
+     *
+     * `window-reach.ts` sends both and ignores the failure reply to whichever
+     * one did not match, which is the only spelling that is right on both.
      */
     unforwardIn(bindAddr: string, bindPort: number, callback: (err?: Error) => void): this
     /**
