@@ -195,20 +195,20 @@ describe('the name a server suggested', () => {
 
 describe('choosing a path in a folder', () => {
   it('puts a second file of the same name beside the first, never over it', () => {
-    const held = new Set(['/d/report.pdf'])
-    expect(freeDownloadPath('/d', 'report.pdf', (p) => held.has(p))).toBe('/d/report (2).pdf')
+    const held = new Set([join('/d', 'report.pdf')])
+    expect(freeDownloadPath('/d', 'report.pdf', (p) => held.has(p))).toBe(join('/d', 'report (2).pdf'))
   })
 
   it('counts a name this run has reserved but not yet written', () => {
     // The window `existsSync` alone cannot see: two downloads a second apart are
     // both told the name is free before either has written a byte.
-    const reserved = new Set(['/d/report.pdf'])
-    expect(freeDownloadPath('/d', 'report.pdf', () => false, reserved)).toBe('/d/report (2).pdf')
+    const reserved = new Set([join('/d', 'report.pdf')])
+    expect(freeDownloadPath('/d', 'report.pdf', () => false, reserved)).toBe(join('/d', 'report (2).pdf'))
   })
 
   it('keeps the extension where a suffix would be useless', () => {
-    const held = new Set(['/d/a.tar.gz'])
-    expect(freeDownloadPath('/d', 'a.tar.gz', (p) => held.has(p))).toBe('/d/a.tar (2).gz')
+    const held = new Set([join('/d', 'a.tar.gz')])
+    expect(freeDownloadPath('/d', 'a.tar.gz', (p) => held.has(p))).toBe(join('/d', 'a.tar (2).gz'))
   })
 
   it('ignores a relative folder, which would resolve against a folder nobody chose', () => {

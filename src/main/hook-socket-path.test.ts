@@ -114,7 +114,19 @@ describe('the address is never too long for the kernel', () => {
   })
 })
 
-describe('and a data directory that used to kill the feature now serves it', () => {
+/*
+ * POSIX only, and not as a convenience.
+ *
+ * The whole subject of this block is the 100-byte limit on a unix socket path
+ * and what the endpoint does when a data directory blows past it. Windows has
+ * no such limit and no such path: `hookAddress` answers a named pipe there,
+ * `\\.\pipe\…`, which is not a file, does not live under `home`, and cannot be
+ * handed to `existsSync`. The Windows behaviour is asserted directly by the
+ * test above this one, which is the right shape for it.
+ */
+describe.skipIf(process.platform === 'win32')(
+  'and a data directory that used to kill the feature now serves it',
+  () => {
   it('binds, and writes the moved path into the config a hook reads', async () => {
     const dir = longDir()
     const home = shortHome()
@@ -162,4 +174,5 @@ describe('a start that fails leaves something to show a person', () => {
 
     expect(hookServerFailure()).toBeNull()
   })
-})
+  },
+)

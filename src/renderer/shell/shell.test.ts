@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -631,7 +631,9 @@ describe('the Windows window buttons get their room', () => {
       const css = stripComments(lf(readFileSync(abs, 'utf8')))
       for (const [selector, body] of topLevelRules(css)) {
         if (body.includes('--window-controls-inset')) {
-          holders.push(`${relative(RENDERER, abs)}: ${selector}`)
+          // Git for Windows checks this tree out with backslashes; the names
+          // below are the sheet's identity, not the OS's spelling of it.
+          holders.push(`${relative(RENDERER, abs).split(sep).join('/')}: ${selector}`)
         }
       }
     }
