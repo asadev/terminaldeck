@@ -9,6 +9,7 @@ import {
   accountsBridge,
   errorMessage,
   forgetSignIns,
+  inheritedInstallNote,
   isSystemAccountId,
   knownSignIns,
   parseAccount,
@@ -54,6 +55,7 @@ const SNAPSHOT: AccountsSnapshot = {
   ],
   defaultId: null,
   projectDefaults: { '/w/app': 'work' },
+  inherited: [],
 }
 
 describe('parseSnapshot', () => {
@@ -517,7 +519,7 @@ describe('accountForFolder', () => {
   })
 
   it('has nothing to say when there are no accounts', () => {
-    expect(accountForFolder({ accounts: [], defaultId: null, projectDefaults: {} }, '/w')).toBeNull()
+    expect(accountForFolder({ accounts: [], defaultId: null, projectDefaults: {}, inherited: [] }, '/w')).toBeNull()
   })
 })
 
@@ -543,5 +545,74 @@ describe('errorMessage', () => {
   it('falls back when there is nothing readable', () => {
     expect(errorMessage('nope', 'fallback')).toBe('fallback')
     expect(errorMessage(new Error(''), 'fallback')).toBe('fallback')
+  })
+})
+
+/**
+ * Why "your own install" is the directory it is.
+ *
+ * The main process resolves that account through its own
+ * `CLAUDE_CONFIG_DIR`, so a Deck launched from a terminal that is itself inside
+ * a Claude session on another profile adopts that profile — for the Default row
+ * here, for the chip over any session started on it, and for that session's
+ * settings, transcripts and control cluster. It is correct (the pty inherits
+ * the same variable, so the session really does read that store) and it is
+ * nobody's choice made in this app, which is the definition of a silent
+ * surprise. So it is stated, and the sentence names the directory: "an
+ * inherited config directory" is not something a person can go and check.
+ */
+describe('inheritedInstallNote', () => {
+  const SYSTEM = { system: true, provider: 'claude' as const, configDir: '/Users/me/.claude-work' }
+  const INHERITED = [{ provider: 'claude' as const, env: 'CLAUDE_CONFIG_DIR', dir: '/Users/me/.claude-work' }]
+
+  it('names the directory and the variable that set it', () => {
+    const note = inheritedInstallNote(SYSTEM, INHERITED)
+    expect(note).not.toBeNull()
+    expect(note).toContain('/Users/me/.claude-work')
+    expect(note).toContain('CLAUDE_CONFIG_DIR')
+  })
+
+  it('says nothing at all on the ordinary machine', () => {
+    expect(inheritedInstallNote(SYSTEM, [])).toBeNull()
+  })
+
+  it('is only ever about the machine’s own install', () => {
+    // An account the user created carries its config directory *because they
+    // chose it*. There is nothing surprising to explain, and a note here would
+    // be a paragraph on every row of the list.
+    expect(inheritedInstallNote({ ...SYSTEM, system: false }, INHERITED)).toBeNull()
+  })
+
+  it('never puts one agent’s sentence on another agent’s row', () => {
+    const codexRow = { system: true, provider: 'codex' as const, configDir: '/Users/me/.codex' }
+    expect(inheritedInstallNote(codexRow, INHERITED)).toBeNull()
+    const codex = [{ provider: 'codex' as const, env: 'CODEX_HOME', dir: '/Users/me/.codex-work' }]
+    expect(inheritedInstallNote(codexRow, codex)).toContain('CODEX_HOME')
+    expect(inheritedInstallNote(SYSTEM, codex)).toBeNull()
+  })
+})
+
+describe('parseSnapshot carries the inherited installs', () => {
+  it('narrows each row and keeps the directory', () => {
+    const parsed = parseSnapshot({
+      profiles: [],
+      inherited: [{ provider: 'claude', env: 'CLAUDE_CONFIG_DIR', dir: '/w/store' }],
+    })
+    expect(parsed.inherited).toEqual([
+      { provider: 'claude', env: 'CLAUDE_CONFIG_DIR', dir: '/w/store' },
+    ])
+  })
+
+  it('drops a row with no directory, rather than drawing a note that names nothing', () => {
+    const parsed = parseSnapshot({
+      profiles: [],
+      inherited: [{ provider: 'claude', env: 'CLAUDE_CONFIG_DIR' }, null, 7, { dir: '' }],
+    })
+    expect(parsed.inherited).toEqual([])
+  })
+
+  it('is empty for a payload from a build that predates it', () => {
+    expect(parseSnapshot({ profiles: [] }).inherited).toEqual([])
+    expect(parseSnapshot(null).inherited).toEqual([])
   })
 })

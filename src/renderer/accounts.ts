@@ -138,18 +138,32 @@ export interface AccountView {
   lastUsedAt: number | null
 }
 
+/**
+ * An agent whose own install is a directory this app inherited from the shell
+ * that launched it. Mirrors `InheritedInstall` in `src/main/profiles.ts`.
+ */
+export interface InheritedInstallView {
+  provider: ProviderId | null
+  /** The variable that named it — quoted in the sentence, so it can be checked. */
+  env: string
+  dir: string
+}
+
 export interface AccountsSnapshot {
   accounts: AccountView[]
   /** Null means "the user's own install", which is the system account. */
   defaultId: string | null
   /** Canonical project path → account id. */
   projectDefaults: Record<string, string>
+  /** Nearly always empty. See {@link inheritedInstallNote}. */
+  inherited: InheritedInstallView[]
 }
 
 export const EMPTY_SNAPSHOT: AccountsSnapshot = {
   accounts: [],
   defaultId: null,
   projectDefaults: {},
+  inherited: [],
 }
 
 /** Mirrors `SignInState` in `src/main/profiles-signin.ts`. */
@@ -240,11 +254,63 @@ export function parseSnapshot(value: unknown): AccountsSnapshot {
     }
   }
 
+  const inherited: InheritedInstallView[] = []
+  for (const entry of Array.isArray(raw?.inherited) ? raw.inherited : []) {
+    const row = asRecord(entry)
+    // A directory is the whole point of the sentence this feeds, so a row
+    // without one is dropped rather than drawn as a note naming nothing.
+    if (!row || typeof row.dir !== 'string' || row.dir === '') continue
+    inherited.push({
+      provider: isProviderId(row.provider) ? row.provider : null,
+      env: typeof row.env === 'string' ? row.env : '',
+      dir: row.dir,
+    })
+  }
+
   return {
     accounts,
     defaultId: typeof raw?.defaultProfileId === 'string' ? raw.defaultProfileId : null,
     projectDefaults,
+    inherited,
   }
+}
+
+/**
+ * Why the machine's own install is the directory it is, or null when there is
+ * nothing surprising to say.
+ *
+ * ## The surprise this ends
+ *
+ * `claudeConfigDir()` in the main process reads `CLAUDE_CONFIG_DIR` off the app
+ * process's own environment, so launching Deck from a terminal that is itself
+ * inside a Claude session on another profile makes that profile "your own
+ * install" everywhere the app says those words — the Default row here, the chip
+ * over any session started on it, that session's transcripts, its
+ * `settings.json` and the control cluster read from it. It is *correct*: the
+ * pty inherits the same variable (`session-env.ts` keeps it deliberately) and
+ * `sessionEnv()` contributes nothing for this profile, so a session started on
+ * Default genuinely reads that directory. But nobody picked it in this app, and
+ * an app that quietly adopts a login from its parent shell is exactly the
+ * silent surprise the whole account-alignment pass exists to remove.
+ *
+ * So it is kept and stated. The directory is named in full rather than
+ * gestured at, because "an inherited directory" is not something a person can
+ * go and look at, and the variable is named because that is where the
+ * correction is made — close the terminal's session, or launch Deck from a
+ * shell without it.
+ *
+ * Pure, and takes the row it is about, so it can be pinned without a DOM and so
+ * a row for another agent never wears another agent's sentence.
+ */
+export function inheritedInstallNote(
+  account: Pick<AccountView, 'system' | 'provider' | 'configDir'>,
+  inherited: readonly InheritedInstallView[],
+): string | null {
+  if (!account.system) return null
+  const match = inherited.find((entry) => entry.provider === account.provider)
+  if (!match) return null
+  const agent = account.provider === null ? 'This agent' : (AGENT_CATALOG[account.provider]?.label ?? 'This agent')
+  return `${agent}'s own install here is ${match.dir}, not the default one. Deck was launched from a terminal with ${match.env} set to it, and sessions started on this account inherit the same variable — so this is the login they really run as. Launch Deck from a shell without ${match.env} to get the default install back.`
 }
 
 const STATES: ReadonlySet<string> = new Set(['signed-in', 'signed-out', 'unknown', 'unsupported'])

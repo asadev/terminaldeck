@@ -16,6 +16,7 @@ import {
   accountsBridge,
   announceAccountsChanged,
   askForAddAccount,
+  inheritedInstallNote,
   isSystemAccountId,
   profileLoginLabel,
   renameAccount,
@@ -1348,6 +1349,25 @@ export function AccountChip({
                 : blocked !== null
 
               /*
+               * Why "your own install" is the directory it is, on the row that
+               * says it — see {@link inheritedInstallNote}.
+               *
+               * Beside the row rather than inside it: the pickable form of the
+               * row is a `<button>`, and `HoverNote` is a button too, so nested
+               * it would be invalid markup and would swallow the press that
+               * picks the account. It is also not on the menu heading, where
+               * the other two notes live, because this one is a statement about
+               * a single row and the heading's two are about the whole list —
+               * and that heading is deliberately never allowed to grow a second
+               * dot.
+               *
+               * Null on every ordinary machine, which is most of them: this is
+               * only ever drawn when the app really was launched from a shell
+               * that had redirected the agent's config directory.
+               */
+              const inherited = inheritedInstallNote(account, accounts.snapshot.inherited)
+
+              /*
                * A paragraph, not a disabled button. The accounts are still worth
                * showing — they are what the Accounts screen would let you sign
                * in to — but nothing here can act on them, and a button that
@@ -1407,6 +1427,9 @@ export function AccountChip({
                     >
                       {line}
                     </button>
+                  )}
+                  {inherited !== null && (
+                    <HoverNote label={`where ${login} keeps its login`}>{inherited}</HoverNote>
                   )}
                   <button
                     type="button"

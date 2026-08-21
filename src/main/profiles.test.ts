@@ -27,7 +27,9 @@ import {
   setGlobalDefault,
   setProjectDefault,
   slugifyProfileId,
+  inheritedSystemInstalls,
   supportsProfiles,
+  systemConfigDir,
   systemProfile,
   uniqueProfileId,
   SYSTEM_PROFILE_ID,
@@ -834,5 +836,70 @@ describe('never destroys the state file', () => {
     createProfile('Two')
     setGlobalDefault(null)
     expect(backups()).toHaveLength(1)
+  })
+})
+
+/**
+ * "Your own install", and the environment this app happened to be launched in.
+ *
+ * ## What was measured
+ *
+ * Driving the real functions with `CLAUDE_CONFIG_DIR` set and unset moves nine
+ * answers at once — `claudeConfigDir()`, `transcriptDir`, `configDirs`,
+ * `transcriptDirs`, `systemConfigDir('claude')`, the Default profile's
+ * directory, `sharedProjectsRoot()`, `claudeTrustFile()` and which path
+ * `isProtectedDir` refuses. So launching Deck from a terminal that is itself
+ * inside a Claude session on another profile makes that profile the machine's
+ * own install everywhere the app says those words.
+ *
+ * ## Why it is kept rather than ignored
+ *
+ * Because it is **true**, and the app would be lying if it said otherwise.
+ * `sessionEnv()` returns `{}` for the system profile on purpose — setting
+ * `CLAUDE_CONFIG_DIR=$HOME/.claude` is not a no-op, it makes the user's normal
+ * login read as unconfigured — and `session-env.ts` keeps the variable rather
+ * than stripping it, so a session started on Default really does inherit it and
+ * really does read that directory. An app that displayed `~/.claude` there
+ * would be naming a store no session is reading.
+ *
+ * What is left is to stop it being *silent*, which is what
+ * `inheritedSystemInstalls` is for.
+ */
+describe('an install inherited from the launching shell', () => {
+  const INHERITED = join(tmpdir(), 'terminaldeck-inherited-install')
+
+  it('is what "your own install" means, because it is what the session will read', () => {
+    expect(systemConfigDir('claude', { CLAUDE_CONFIG_DIR: INHERITED })).toBe(INHERITED)
+    expect(systemConfigDir('codex', { CODEX_HOME: INHERITED })).toBe(INHERITED)
+  })
+
+  it('is not what the agent’s *default* store means, which is asked with an empty environment', () => {
+    /*
+     * The distinction `session-account.ts` turns on. Its second rung reads a
+     * running agent's own environment and finds no config variable in it, which
+     * means that agent is on `$HOME/.claude` — and this used to answer the
+     * inherited directory anyway, because the Claude branch ignored its `env`
+     * argument and called `claudeConfigDir()`, which reads `process.env`.
+     */
+    expect(systemConfigDir('claude', {})).toBe(join(homedir(), '.claude'))
+    expect(systemConfigDir('codex', {})).toBe(join(homedir(), '.codex'))
+  })
+
+  it('names the agent, the variable and the directory, so a screen can say all three', () => {
+    const found = inheritedSystemInstalls({ CLAUDE_CONFIG_DIR: INHERITED })
+    expect(found).toEqual([{ provider: 'claude', env: 'CLAUDE_CONFIG_DIR', dir: INHERITED }])
+  })
+
+  it('is empty on the ordinary machine, and ignores a variable set to nothing', () => {
+    expect(inheritedSystemInstalls({})).toEqual([])
+    // An exported-but-empty variable is how a shell spells "unset" by accident;
+    // the CLI falls back to the default store for it, and so must this.
+    expect(inheritedSystemInstalls({ CLAUDE_CONFIG_DIR: '   ' })).toEqual([])
+    expect(systemConfigDir('claude', { CLAUDE_CONFIG_DIR: '   ' })).toBe(join(homedir(), '.claude'))
+  })
+
+  it('reports every agent whose store was redirected, not just Claude’s', () => {
+    const both = inheritedSystemInstalls({ CLAUDE_CONFIG_DIR: INHERITED, CODEX_HOME: '/tmp/cx' })
+    expect(both.map((entry) => entry.provider).sort()).toEqual(['claude', 'codex'])
   })
 })

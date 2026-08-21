@@ -904,3 +904,50 @@ describe('a session whose account cannot be changed says so', () => {
     expect(fixedAccountNote({ ...shell, sessionAgent: 'claude', sessionProvider: 'claude' })).toBeNull()
   })
 })
+
+/**
+ * Where the machine's own install came from, on the row that names it.
+ *
+ * The sentence itself is `inheritedInstallNote` and is pinned in
+ * `accounts.test.ts` against the real function. What this pins is the wiring —
+ * that the menu asks it, per row, with the snapshot the main process actually
+ * sent, and that the dot is a sibling of the row rather than a child of it.
+ *
+ * Structural rather than rendered because these rows only exist while the menu
+ * is open, and this folder has no DOM to open it in. The two things that could
+ * silently go wrong here are both visible in the source: asking with the wrong
+ * list, and nesting a button inside a button.
+ */
+describe('the menu says why "your own install" is the directory it is', () => {
+  const source = readFileSync(join(__dirname, 'AccountChip.tsx'), 'utf8')
+
+  it('asks per row, with the list the main process sent', () => {
+    expect(source).toContain('inheritedInstallNote(account, accounts.snapshot.inherited)')
+  })
+
+  it('puts the dot beside the row, never inside the button that picks the account', () => {
+    /*
+     * `HoverNote` renders a `<button>`. The pickable form of a row is also a
+     * `<button>`, so nesting them would be invalid markup and — the part that
+     * matters on screen — the inner button would swallow the click that picks
+     * the account.
+     */
+    const rowStart = source.indexOf('<div key={account.id} className="account-menu-row">')
+    const renameStart = source.indexOf('className="account-menu-rename-button"')
+    const noteStart = source.indexOf('{inherited !== null && (')
+    expect(rowStart).toBeGreaterThan(-1)
+    expect(noteStart).toBeGreaterThan(rowStart)
+    expect(noteStart).toBeLessThan(renameStart)
+    // And it is not inside the `{line}` fragment, which is what both forms of
+    // the row wrap.
+    expect(source).not.toMatch(/<span className="folder-menu-name">\{login\}<\/span>\s*<HoverNote/)
+  })
+
+  it('does not grow a third dot on the heading, which is allowed exactly two', () => {
+    // `foreign` and `fixed` are mutually exclusive there by construction, and
+    // this note is about one row rather than about the list — so it must not
+    // have been put beside them.
+    const head = source.slice(source.indexOf('folder-menu-head'), source.indexOf('account-menu-blocked'))
+    expect(head).not.toContain('inheritedInstallNote')
+  })
+})

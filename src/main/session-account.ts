@@ -62,10 +62,15 @@
  *
  *     An absent `CLAUDE_CONFIG_DIR` in an environment that was genuinely read is
  *     an answer, not a gap: it means the agent is on its own default store,
- *     which is exactly what the system profile describes. It is only believed
- *     when `HOME` matches this app's own, because a default store is
- *     `$HOME/.claude` and another `HOME` is another store this app has no record
- *     of.
+ *     `$HOME/.claude`. Asked as `systemConfigDir(provider, {})` and *not* as
+ *     "the machine's own install" — those are the same string on an ordinary
+ *     machine and different ones on a Deck launched from a terminal that was
+ *     itself inside a session on another profile, where the app inherits that
+ *     profile's variable. This branch has just read the agent's own environment
+ *     and found no variable in it, so the app's environment has nothing to say
+ *     about it. It is only believed when `HOME` matches this app's own, because
+ *     a default store is `$HOME/.claude` and another `HOME` is another store
+ *     this app has no record of.
  *
  *  3. **Nothing else, and this was checked rather than assumed.** The obvious
  *     third rung is the transcript, and it does not exist: every line of all 542
@@ -102,7 +107,7 @@ import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { AGENT_CATALOG } from '../shared/agent-catalog'
 import type { ProviderId, SessionMeta } from '../shared/types'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
-import { findProfile, getState, supportsProfiles, systemProfileFor } from './profiles'
+import { findProfile, getState, supportsProfiles, systemConfigDir, systemProfileFor } from './profiles'
 
 const run = promisify(execFile)
 
@@ -412,13 +417,33 @@ async function fromProcess(pid: number): Promise<SessionAccountAnswer> {
   if (home !== null && resolve(home) !== resolve(homedir())) {
     return { kind: 'withheld', reason: FOREIGN_HOME }
   }
-  const system = systemProfileFor(spec.provider, getState())
+  /*
+   * The agent's *default* store, asked with an empty environment.
+   *
+   * This used to read `systemProfileFor(provider).configDir`, which resolves
+   * through this app process's own environment — and that is a different
+   * question. If Deck was launched from a terminal inside a session on another
+   * profile it carries that profile's `CLAUDE_CONFIG_DIR`, so "the machine's
+   * own install" answered the redirected directory; meanwhile the branch that
+   * reaches this line has just *read this agent's environment* and found no
+   * such variable in it, which means this agent is on `$HOME/.claude` and on
+   * nothing else. The two disagreed, and the app printed the one it had not
+   * looked at. Asking with `{}` is asking the question this branch is actually
+   * in: where does this agent keep its login when nothing redirects it.
+   *
+   * The profile record is then looked up by that directory like any other, so a
+   * machine where nothing was inherited answers exactly as it did — the system
+   * profile, by name — and a machine where something was inherited names the
+   * store rather than a profile that is not this session's.
+   */
+  const configDir = systemConfigDir(spec.provider, {})
+  const found = profileForDir(spec.provider, configDir)
   return {
     kind: 'known',
     provider: spec.provider,
-    configDir: system.configDir,
-    profileId: system.id,
-    profileName: system.name,
+    configDir,
+    profileId: found?.id ?? null,
+    profileName: found?.name ?? null,
     source: 'process',
   }
 }
@@ -497,6 +522,37 @@ export function establishedAccount(sessionId: string): KnownSessionAccount | nul
   }
   void sessionAccount(sessionId).catch(() => undefined)
   return null
+}
+
+/**
+ * The configuration directory one session's agent is reading, when that has been
+ * established and it belongs to the agent being asked about.
+ *
+ * The synchronous seam for the surfaces that read *files* rather than name an
+ * account: `agent-controls.ts` resolves `settings.json`,
+ * `permissions.defaultMode` and this project's transcripts through it, having
+ * previously read all three out of `claudeConfigDir()` — this app process's own
+ * store — for every session whichever account it was running as. That is the
+ * same class of wrong claim {@link sessionAccount} exists to end, one control
+ * cluster along: a person on two logins saw the model, effort, fast mode and
+ * permission mode of the one they were not using.
+ *
+ * `provider` is checked rather than assumed, and it is the whole reason this is
+ * a function instead of `establishedAccount(id)?.configDir` written out at each
+ * call site. A directory is an answer about *one* agent — `~/.codex` holds no
+ * `settings.json` Claude has ever read — so a caller that wants Claude's store
+ * gets null for a session running Codex, and falls back rather than reading a
+ * file that means nothing to it.
+ *
+ * Null is the honest answer twice over: nothing established yet (the probe is
+ * running, and the *next* read will have it), and this session running an agent
+ * other than the one asked about. Both leave the caller on the fallback it had
+ * before this existed, which is the rule that keeps an unknown account from
+ * becoming a wrong one.
+ */
+export function establishedConfigDir(sessionId: string, provider: ProviderId = 'claude'): string | null {
+  const account = establishedAccount(sessionId)
+  return account !== null && account.provider === provider ? account.configDir : null
 }
 
 /* ------------------------------------------------------------------- email -- */

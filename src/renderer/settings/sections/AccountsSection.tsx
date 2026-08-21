@@ -19,6 +19,7 @@ import {
   accountRowLabel,
   accountsBridge,
   announceAccountsChanged,
+  inheritedInstallNote,
   onAddAccountRequested,
   takeAddAccountRequest,
   normalizeAccountName,
@@ -30,6 +31,7 @@ import {
   type AccountView,
   type AccountsSnapshot,
   type AccountsBridge,
+  type InheritedInstallView,
   type SignInView,
 } from '../../accounts'
 
@@ -208,9 +210,27 @@ export function historyLine(history: AccountHistoryView): string {
  * the string in the document for a screen reader and costs the pane no height,
  * which is the trade every long half of an explanation in this window makes.
  */
-export function accountNote(account: AccountView, history: AccountHistoryView | null): string {
+export function accountNote(
+  account: AccountView,
+  history: AccountHistoryView | null,
+  inherited: readonly InheritedInstallView[] = [],
+): string {
   const where = `Its own folder is ${account.configDir}.`
-  return history ? `${where} ${historyLine(history)}` : where
+  const lines = [where, ...(history ? [historyLine(history)] : [])]
+  /*
+   * And, on the machine's own install only, why that folder is that folder.
+   *
+   * The line above prints the directory either way, so a reader who already
+   * knows what `~/.claude` looks like can see something is different — but
+   * "different" is not an explanation, and the cause is not on this screen at
+   * all: it is an environment variable in the terminal Deck happened to be
+   * launched from. `inheritedInstallNote` is the same sentence the account chip
+   * shows, from the same function, so the two surfaces cannot word it
+   * differently. Empty on every machine where nothing was inherited.
+   */
+  const adopted = inheritedInstallNote(account, inherited)
+  if (adopted !== null) lines.push(adopted)
+  return lines.join(' ')
 }
 
 /**
@@ -721,7 +741,7 @@ export function AccountsView({
                 <span className="settings-account-mark" aria-hidden="true" />
                 <span>{accountStateLine(state)}</span>
                 <HoverNote label={accountRowLabel(account, state)}>
-                  {accountNote(account, rowHistory)}
+                  {accountNote(account, rowHistory, snapshot.inherited)}
                 </HoverNote>
               </span>
 

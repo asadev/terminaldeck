@@ -1,9 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { mkdirSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import type { SessionMeta } from '../shared/types'
+import { installPaths, resetPaths } from './platform/paths'
+import { resetProfilesCache, systemProfileId } from './profiles'
 import {
   agentUnder,
+  configureSessionAccounts,
   environmentValue,
   environmentWasRead,
+  establishedConfigDir,
   parseProcessTable,
+  sessionAccount,
+  type SessionAccountDeps,
 } from './session-account'
 
 /**
@@ -126,5 +136,203 @@ describe('reading one variable out of `ps eww`', () => {
     expect(environmentWasRead('  PID   TT  STAT      TIME COMMAND\n69371   ??  SN  0:00.01 sleep 8\n')).toBe(
       false,
     )
+  })
+})
+
+/**
+ * The ladder itself, and the two things about it that turn on *this app's own*
+ * environment rather than the session's.
+ *
+ * Deck reads `CLAUDE_CONFIG_DIR` off its own process to decide where "the
+ * machine's own install" is, and it is launched from a terminal constantly — a
+ * terminal that may itself be inside a Claude session on another profile. That
+ * inheritance is real and is kept (`session-env.ts` keeps the variable
+ * deliberately, and `sessionEnv()` contributes nothing for the system profile,
+ * so a session started on Default genuinely reads the inherited directory). But
+ * it must not leak into the answer for an agent whose environment has just been
+ * *read* and found to have no such variable: that agent is on `$HOME/.claude`,
+ * whatever this app inherited.
+ */
+describe('the ladder, against this app’s own inherited environment', () => {
+  const USER_DATA = join(tmpdir(), `terminaldeck-session-account-${process.pid}`)
+  const realConfigDir = process.env.CLAUDE_CONFIG_DIR
+
+  beforeEach(() => {
+    resetPaths()
+    installPaths({
+      userData: () => USER_DATA,
+      home: () => USER_DATA,
+      downloads: () => USER_DATA,
+      appRoot: () => USER_DATA,
+    })
+    rmSync(USER_DATA, { recursive: true, force: true })
+    mkdirSync(USER_DATA, { recursive: true })
+    resetProfilesCache()
+    configureSessionAccounts(null)
+    delete process.env.CLAUDE_CONFIG_DIR
+  })
+
+  afterAll(() => {
+    resetPaths()
+    configureSessionAccounts(null)
+    if (realConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = realConfigDir
+    rmSync(USER_DATA, { recursive: true, force: true })
+  })
+
+  function meta(over: Partial<SessionMeta> = {}): SessionMeta {
+    return {
+      id: 'sess-ladder',
+      title: 'zsh',
+      cwd: '/Users/apple/Projects/demo',
+      provider: 'shell',
+      exitCode: null,
+      createdAt: 1,
+      ...over,
+    }
+  }
+
+  /**
+   * A `ps` reporting one `claude` under the session's pty, with the environment
+   * it was given. `PATH` is always there because its absence is what
+   * `environmentWasRead` uses to refuse a scrubbed environment, and `HOME` is
+   * this machine's real one because a different `HOME` is a different store and
+   * is refused one rung earlier.
+   */
+  function processWith(env: string, session = meta()): SessionAccountDeps {
+    return {
+      pidOf: () => 4242,
+      describeSession: () => session,
+      platform: 'darwin',
+      exec: (_command, args) =>
+        Promise.resolve(
+          args[0] === '-Ao'
+            ? ' 5000 4242 claude\n 4242    1 -zsh\n'
+            : `  PID   TT  STAT      TIME COMMAND\n 5000 s001  S+     0:01 claude ` +
+              `PATH=/usr/bin ${env} HOME=${homedir()}\n`,
+        ),
+    }
+  }
+
+  it('names the agent’s own default store, not the directory Deck inherited', async () => {
+    /*
+     * The wrong answer this replaces: `systemProfileFor(provider).configDir`,
+     * which resolves through *this process's* environment. With Deck launched
+     * from a redirected shell that answered `/tmp/somebody-elses-store` for an
+     * agent whose environment had just been read and had no variable in it at
+     * all — a confident name for a login that session is not on, which is the
+     * exact class of claim this module exists to end.
+     */
+    process.env.CLAUDE_CONFIG_DIR = join(tmpdir(), 'terminaldeck-inherited-store')
+    configureSessionAccounts(processWith(''))
+    const answer = await sessionAccount('sess-ladder')
+    expect(answer.kind).toBe('known')
+    if (answer.kind !== 'known') return
+    expect(answer.configDir).toBe(join(homedir(), '.claude'))
+    expect(answer.configDir).not.toBe(process.env.CLAUDE_CONFIG_DIR)
+    // No profile record points there while something else is "the system
+    // profile", so the store is named and nothing is claimed about a profile.
+    expect(answer.profileId).toBeNull()
+    expect(answer.source).toBe('process')
+  })
+
+  it('still names the system profile when Deck inherited nothing', async () => {
+    // The ordinary machine, and the regression guard: this is the behaviour
+    // that shipped, and the fix above must not have moved it.
+    configureSessionAccounts(processWith(''))
+    const answer = await sessionAccount('sess-ladder')
+    expect(answer).toMatchObject({
+      kind: 'known',
+      configDir: join(homedir(), '.claude'),
+      profileId: systemProfileId('claude'),
+      profileName: 'Default',
+    })
+  })
+
+  it('still believes the variable when the agent itself declares one', async () => {
+    const declared = join(tmpdir(), 'terminaldeck-declared-store')
+    configureSessionAccounts(processWith(`CLAUDE_CONFIG_DIR=${declared}`))
+    const answer = await sessionAccount('sess-ladder')
+    expect(answer).toMatchObject({ kind: 'known', configDir: declared })
+  })
+})
+
+/**
+ * `establishedConfigDir` — the synchronous seam `agent-controls.ts` reads
+ * `settings.json`, `permissions.defaultMode` and the project's transcripts
+ * through, so that the control cluster describes the account the session is
+ * running as rather than the one this app process resolved.
+ */
+describe('the config directory one session’s files should be read from', () => {
+  const USER_DATA = join(tmpdir(), `terminaldeck-established-dir-${process.pid}`)
+
+  beforeEach(() => {
+    resetPaths()
+    installPaths({
+      userData: () => USER_DATA,
+      home: () => USER_DATA,
+      downloads: () => USER_DATA,
+      appRoot: () => USER_DATA,
+    })
+    rmSync(USER_DATA, { recursive: true, force: true })
+    mkdirSync(USER_DATA, { recursive: true })
+    resetProfilesCache()
+    configureSessionAccounts(null)
+  })
+
+  afterAll(() => {
+    resetPaths()
+    configureSessionAccounts(null)
+    rmSync(USER_DATA, { recursive: true, force: true })
+  })
+
+  const SESSION: SessionMeta = {
+    id: 'sess-files',
+    title: 'zsh',
+    cwd: '/Users/apple/Projects/demo',
+    provider: 'shell',
+    exitCode: null,
+    createdAt: 1,
+  }
+
+  function on(dir: string): SessionAccountDeps {
+    return {
+      pidOf: () => 4242,
+      describeSession: () => SESSION,
+      platform: 'darwin',
+      exec: (_command, args) =>
+        Promise.resolve(
+          args[0] === '-Ao'
+            ? ' 5000 4242 claude\n 4242    1 -zsh\n'
+            : `  PID   TT  STAT      TIME COMMAND\n 5000 s001  S+     0:01 claude ` +
+              `PATH=/usr/bin CLAUDE_CONFIG_DIR=${dir} HOME=${homedir()}\n`,
+        ),
+    }
+  }
+
+  it('is null until the probe has landed, so the caller keeps its own fallback', () => {
+    configureSessionAccounts(on('/tmp/work-store'))
+    // Every first read of every session is in this state. Null is what leaves
+    // `agent-controls.ts` reading `claudeConfigDir()` exactly as it did before,
+    // which is the rule that stops an unknown account becoming a wrong one.
+    expect(establishedConfigDir('sess-files')).toBeNull()
+  })
+
+  it('names the store once it has, for the agent that is running', async () => {
+    configureSessionAccounts(on('/tmp/work-store'))
+    await sessionAccount('sess-files')
+    expect(establishedConfigDir('sess-files')).toBe('/tmp/work-store')
+  })
+
+  it('answers null for a different agent, rather than handing over a directory that is not its', async () => {
+    /*
+     * A directory is an answer about one agent. `~/.codex` holds no
+     * `settings.json` Claude has ever read, so a caller asking for Claude's
+     * store gets nothing and falls back — rather than being handed a path and
+     * reading a file that means nothing to it.
+     */
+    configureSessionAccounts(on('/tmp/work-store'))
+    await sessionAccount('sess-files')
+    expect(establishedConfigDir('sess-files', 'codex')).toBeNull()
   })
 })

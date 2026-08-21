@@ -1502,3 +1502,191 @@ describe('readPermissionDefault', () => {
     expect(reading.source).toBe('settings')
   })
 })
+
+/**
+ * The control cluster follows the session's own account, not the app's.
+ *
+ * ## The defect
+ *
+ * `readControls` reached `readClaudeSettings()` and `readPermissionDefault()`
+ * with their default arguments, and both of those default to
+ * `claudeConfigDir()` — the **app process's** `CLAUDE_CONFIG_DIR`, or
+ * `~/.claude`. So on a machine with two logins the model, effort, fast-mode and
+ * permission-mode fallbacks all described whichever account this app happened
+ * to resolve, for every session alike, however many accounts were running. That
+ * is the fifth surface in the set Asad listed beside the account chip, the usage
+ * bar and the session's own limit notice:
+ *
+ *   > *"all of them are not about one logged in account, they should be all
+ *   > aligned."*
+ *
+ * ## What is pinned
+ *
+ * Two real config directories on disk holding *different* settings, and one
+ * `SessionAccess` that names one of them. Every assertion below is the reading
+ * that comes back from the real `readControls`, so it fails if any one of the
+ * four fallbacks is re-pointed at the process's own store — including a fifth
+ * added later that forgets to ask, which is the shape of the original bug.
+ */
+describe('the controls read the account the session is running as', () => {
+  const made: string[] = []
+  const realConfigDir = process.env.CLAUDE_CONFIG_DIR
+
+  function store(settings: Record<string, unknown>): string {
+    const dir = mkdtempSync(join(tmpdir(), 'terminaldeck-controls-store-'))
+    made.push(dir)
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify(settings))
+    return dir
+  }
+
+  afterAll(() => {
+    if (realConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = realConfigDir
+    for (const dir of made) rmSync(dir, { recursive: true, force: true })
+    resetDeviceHomes()
+  })
+
+  /**
+   * A screen with an agent on it and nothing announced, so every fallback runs.
+   *
+   * Deliberately without the status rule above the composer. That rule is what
+   * `readFastIndicator` reads fast mode off, and it answers from *any* rule it
+   * finds — so with one here the fast row is settled by the screen and never
+   * reaches the settings fallback these cases are about. No rule is a real
+   * screen state (an older CLI, a mid-repaint frame) and it is the one in which
+   * the file is the only source there is.
+   */
+  const QUIET = ['⏺ Claude Code', '❯'].join('\n')
+
+  function access(configDir: string | null): SessionAccess {
+    return {
+      write: () => undefined,
+      screen: () => Promise.resolve(QUIET),
+      configDir: () => configDir,
+    }
+  }
+
+  it('reads effort, fast mode and the permission default out of that account’s settings.json', async () => {
+    resetDeviceHomes()
+    // The app's own store says one thing…
+    process.env.CLAUDE_CONFIG_DIR = store({
+      effortLevel: 'low',
+      fastMode: false,
+      permissions: { defaultMode: 'plan' },
+    })
+    // …and the account this session is actually running as says another.
+    const session = store({
+      effortLevel: 'high',
+      fastMode: true,
+      permissions: { defaultMode: 'acceptEdits' },
+    })
+
+    const reading = await readControls(access(session), 's', undefined, 'claude')
+    expect(reading.effort.value).toBe('high')
+    expect(reading.effort.source).toBe('settings')
+    expect(reading.fast.value).toBe('on')
+    expect(reading.permission.value).toBe('acceptEdits')
+  })
+
+  it('falls back to the app’s own store when no account has been established', async () => {
+    /*
+     * The rule that keeps this from trading one wrong answer for another: an
+     * account this app cannot name is *unknown*, and an unknown account must
+     * keep the behaviour that shipped rather than be turned into a different
+     * account. `establishedConfigDir` answers null while its probe is still
+     * running, which is every first read of every session.
+     */
+    resetDeviceHomes()
+    process.env.CLAUDE_CONFIG_DIR = store({ effortLevel: 'low', permissions: { defaultMode: 'plan' } })
+    const reading = await readControls(access(null), 's', undefined, 'claude')
+    expect(reading.effort.value).toBe('low')
+    expect(reading.permission.value).toBe('plan')
+  })
+
+  it('is the same answer for a SessionAccess that cannot be asked at all', async () => {
+    // `servers/ipc.ts` builds one over an SSH channel and its tests build one
+    // by hand; neither can answer this, and `configDir` is optional for them.
+    resetDeviceHomes()
+    process.env.CLAUDE_CONFIG_DIR = store({ effortLevel: 'medium' })
+    const bare: SessionAccess = { write: () => undefined, screen: () => Promise.resolve(QUIET) }
+    expect((await readControls(bare, 's', undefined, 'claude')).effort.value).toBe('medium')
+  })
+
+  it('reads the model out of that account’s transcripts rather than the app’s', async () => {
+    /*
+     * The same fault one rung up the model chain. `transcriptDirs` puts the
+     * *primary* store first and a session's own store is the primary one for
+     * it — two accounts with the same project open each keep their own
+     * conversation, so reading the app's store answers with the model of the
+     * login you are not on.
+     */
+    resetDeviceHomes()
+    const cwd = '/Users/apple/Projects/agent-controls-account-fixture'
+    const mine = store({})
+    const theirs = store({})
+    process.env.CLAUDE_CONFIG_DIR = theirs
+    for (const [dir, model] of [
+      [mine, 'claude-sonnet-5'],
+      [theirs, 'claude-opus-5'],
+    ] as const) {
+      const projects = join(dir, 'projects', encodeProjectPath(cwd))
+      mkdirSync(projects, { recursive: true })
+      writeFileSync(
+        join(projects, 'sess.jsonl'),
+        `${JSON.stringify({
+          type: 'assistant',
+          sessionId: 'sess',
+          message: { role: 'assistant', model, usage: { input_tokens: 1, output_tokens: 1 } },
+        })}\n`,
+      )
+    }
+
+    expect(await readModelFromTranscript(cwd, mine)).toBe('claude-sonnet-5')
+    expect((await readControls(access(mine), 's', cwd, 'claude')).model.value).toBe('claude-sonnet-5')
+    // And unchanged for a caller that names no store.
+    expect(await readModelFromTranscript(cwd)).toBe('claude-opus-5')
+  })
+
+  it('reports the failure reading from that account’s settings too', async () => {
+    /*
+     * `applyControl` re-reads after a change it could not confirm, and that
+     * re-read is a file read. Answering it from another account's file is the
+     * same wrong claim as the read path's, in the one place a person is already
+     * being told something went wrong.
+     */
+    resetDeviceHomes()
+    process.env.CLAUDE_CONFIG_DIR = store({ effortLevel: 'low' })
+    const session = store({ effortLevel: 'xhigh' })
+    const deaf: SessionAccess = {
+      write: () => undefined,
+      // An agent that is mid-turn: the composer is there, so the command is
+      // typed, and nothing is ever printed back.
+      screen: () => Promise.resolve(QUIET),
+      configDir: () => session,
+    }
+    const result = await applyControl(
+      deaf,
+      { ...CLAUDE, sessionId: 's', control: 'effort', value: 'medium' },
+      QUICK,
+    )
+    expect(result.ok).toBe(false)
+    expect(result.reading.value).toBe('xhigh')
+  })
+
+  it('reads nothing at all for a session on another computer, whatever it says its store is', async () => {
+    /*
+     * `ControlScope` is checked *before* this — a shell on a server reads its
+     * own files through that machine's copy of this module, and every path in
+     * here describes this laptop. A store name arriving alongside
+     * `onThisMachine: false` must not re-open the door that flag closes.
+     */
+    resetDeviceHomes()
+    process.env.CLAUDE_CONFIG_DIR = store({ effortLevel: 'low' })
+    const session = store({ effortLevel: 'xhigh', permissions: { defaultMode: 'plan' } })
+    const reading = await readControls(access(session), 's', undefined, 'claude', {
+      onThisMachine: false,
+    })
+    expect(reading.effort.value).toBeNull()
+    expect(reading.permission.value).toBeNull()
+  })
+})
