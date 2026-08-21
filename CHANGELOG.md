@@ -10,6 +10,113 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+His third recorded review — 25 minutes, 2,765 words — turned into 82 numbered
+requirements, each one matched against the frame that was on screen when he said
+it. Fourteen lanes built them. 51 landed whole, 24 landed in part with what is
+missing written down, one could not be built at all and says so here.
+
+### Added
+
+- **The copilot side panel is a conversation, not a feed.** It used to list the
+  driving steps as they happened; it is now a chat with **whichever session owns
+  that browser window** — not only Commander. Plain text: a box, an attach
+  button, send. It takes the rail's own column at the rail's own width instead
+  of floating over it, starts at the Commander row rather than the top of the
+  window, folds into that row and comes back from it, and once put away it
+  **stays** away — not for a new page, a new tab, or the next errand.
+- **Downloads.** The built-in browser could not download a file: `will-download`
+  was `preventDefault()` in both copies of `harden()`. Downloads now work, are
+  listed, and can be pointed at **another machine and a folder on it** — and
+  that delivery is a *move*: the staged copy is removed once the far machine
+  answers with a real path.
+- **Browsing history and address-bar suggestions**, per profile, with a page you
+  can click back into. A profile also gained a real settings section — rename,
+  badge, its saved logins.
+- **Chat view for a session on a paired machine.** The verbs already crossed the
+  relay for the phone; the desktop had simply never sent one. The same
+  `ChatView` draws it, and the machine that owns the transcript collapses it.
+- **Split can hold a session on another computer.** Panes come from the open-tab
+  list rather than this window's own, and a far terminal is positioned over a
+  measured hole rather than moved — unmounting one replays its whole scrollback,
+  and unmounting a server pane closes the SSH shell.
+- **A device you grant access to can be given some of your AI logins, or none.**
+  A third per-device axis beside folders and sessions, with an accounts step in
+  the approve dialog.
+- **Every session boots knowing what app it is inside**, wherever it runs. The
+  injection is an index — three sentences naming a path — and behind it the
+  documents an agent can follow when it wants more. Nothing to find and edit,
+  nothing in Settings, nothing printed at him.
+
+### Changed
+
+- **The whole UI is one notch larger.** Body lands on 14px and the ladder moves
+  with it. Not a density change: no row, control or spacing step moved, and the
+  terminal's own size is a separate setting and untouched.
+- **"Add agent" is "Add accounts"**, and signed-in accounts are separated from
+  the not-installed and not-signed-in ones in both the list and the menu. A
+  signed-in row names the login; where an agent will not say who it is signed in
+  as, the row says that rather than borrowing the install's name.
+- **Settings → Coding AI reaches past this machine** — linked devices and stored
+  servers are listed, and a server row asks that server what it has.
+- Project and Integrations pages **name the folder and machine they are
+  reporting on**, and AI readiness says which agent each check is about and
+  which instructions file it would write before you press the button.
+
+### Fixed
+
+- **A browser opened by a session on another computer no longer opens here.**
+  Four defects underneath one symptom: the remote and server terminals asked for
+  a link handler with no session id, so a click fell through to the Mac's own
+  Chrome; `knowsSession` ignored the machine its own interface declared; the
+  copilot's open passed an empty machine id; and the hook's route dropped the
+  machine entirely.
+- **Send from the browser's popup now sends.** It wrote the line into the
+  session's prompt and left it there for him to walk over and press Return.
+- **Sessions are called by their own names.** The copilot's name was being
+  applied by *folder*, so every session started in that folder was "Commander".
+- **Shells on a connected server appear in the send-to-session picker**, and the
+  path each session is handed is still one its own machine can open.
+- **One machine label on the browser bar.** A fabricated "This machine" chip sat
+  beside a picker pointed at a different computer.
+- **The ✕ on a session tab works on the tab you are looking at**, for every kind
+  including Commander — and it ends nothing: the session keeps running and keeps
+  its row.
+- **An email address can no longer reach a session row.** The mailbox was the
+  *first* rung of that label; it only looked fixed because one account is signed
+  in and the column gets suppressed.
+- **Clicking inside a driven page no longer stops the copilot.** An
+  `input-event` watcher parked the drive on any keystroke it could not claim.
+- **The browser's menus draw on top of the page** instead of behind it.
+- **Windows: every row reaches the right edge.** The caption-button reserve was
+  on the bare `.toolbar` rule, so the bar *below* the title band held 160px of
+  space for buttons that are not in it — while every left-edge reserve in the
+  same sheet was correctly conditioned.
+- **Windows: the minimise, maximise and close buttons dim with everything else.**
+  They are painted by the OS above the page, so no scrim could reach them; the
+  dimming is composited into the title-bar overlay itself.
+- **A long data-directory path silently disabled the whole hook channel.** The
+  endpoint's socket path could exceed the 100-byte unix limit, and the app logged
+  one line and carried on with boot context, session status and browser naming
+  all quietly dead.
+- Two literal NUL bytes and two font-size tokens that have never existed
+  (`--text-sm`, `--t-caption-2`) — the latter meaning those rules had been
+  drawing at whatever they inherited.
+
+### Not in this release
+
+- **Browser extensions.** Hedged twice when he asked for it, and the largest
+  single item on the list.
+- **Saved passwords as a section.** Chromium exposes no password store to an
+  Electron app; a page there would be a page that cannot answer.
+- **Chat and an account chip on a *server* session.** A server does not run this
+  app — there is a pty over SSH and nothing that reads the far filesystem, and
+  nothing on that side carries which login a shell's agent is on. The honest
+  refusals are left in place rather than made clickable over an empty view.
+- **A second in-session view** still lives in the Remote panel — title, cwd,
+  Close, no controls. It is the drift the one-view work is about and it is
+  written down rather than quietly left.
+
+
 ## [0.8.1] — 2026-08-20
 
 ### Fixed
