@@ -9,6 +9,7 @@ import { ReadinessPanel } from '../components/ReadinessPanel'
 import { McpInspector } from '../components/McpInspector'
 import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
+import { PageScope } from '../components/PageScope'
 import { FeatureOffer } from '../features/FeatureOffer'
 import { useFeatures } from '../features/FeaturesProvider'
 import { Dashboard } from '../dashboard/Dashboard'
@@ -59,6 +60,23 @@ interface Props {
 }
 
 const GIT_GROUPS: readonly GitFileGroup[] = ['conflicted', 'staged', 'unstaged', 'untracked']
+
+/**
+ * The views whose subject is the open folder, and which therefore say so.
+ *
+ * A set rather than a check for "has a project" because the two are not the
+ * same question: `hooks` and `github` are project-gated as well, and neither
+ * was part of what he was looking at — this is the run of pages he walked on
+ * 2026-08-21, minus MCP servers, which draws its own line for the reason in the
+ * render below. Adding a view here is one entry and nothing else.
+ */
+const SCOPED_PANELS: ReadonlySet<PanelId> = new Set<PanelId>([
+  'overview',
+  'files',
+  'artifacts',
+  'git',
+  'readiness',
+])
 
 function asGitGroup(focus: string | null | undefined): GitFileGroup | undefined {
   return GIT_GROUPS.find((group) => group === focus)
@@ -115,6 +133,22 @@ export function filesPageState(tree: TreeRootState): FilesPageState {
   // with the button on it.
   if (tree.status === 'empty') return 'blank'
   return tree.status === 'error' ? 'tree-only' : 'tree-and-viewer'
+}
+
+/**
+ * What an empty Files page says it read.
+ *
+ * Pure and exported because it is the sentence that has to stay truthful, and
+ * the truth has two halves that are easy to say as one: *which folder*, and
+ * *what was excluded from the listing*. A folder whose every file is covered by
+ * `.gitignore` — a downloads folder, a checkout mid-build — is not an empty
+ * folder, and before the ignored-files switch existed this page called both of
+ * them the same thing.
+ */
+export function filesBlankReason(root: string, showIgnored: boolean): string {
+  return showIgnored
+    ? `Nothing at all in ${root}, ignored files included.`
+    : `Nothing in ${root} that your .gitignore does not exclude.`
 }
 
 /**
@@ -187,6 +221,19 @@ function FilesPage({
      * says only what it did (`Nothing to show`) and offers the one press that
      * settles it. With them shown and still nothing there, the folder is empty
      * and the page can say so, and there is nothing left to offer.
+     *
+     * The sentence under it is new, and it is the whole of what he was missing:
+     *
+     *   > *"For files is empty, not showing anything."*
+     *
+     * No frame caught this page, so what it did is not in doubt and what it
+     * *said* is: two words in the middle of a window, about a folder it never
+     * named. `~/Templates` really was empty, so the page was right — and being
+     * right without saying what you read is indistinguishable from being
+     * broken. The line names the folder and says which pass produced the
+     * answer, so "empty" and "you are looking at the wrong folder" stop being
+     * the same two words. The scope line above the page names it as well; this
+     * one is what the reader is looking at when the page is otherwise bare.
      */
     return (
       <PageEmpty
@@ -197,7 +244,9 @@ function FilesPage({
             ? undefined
             : { label: 'Show ignored files', onClick: () => setFilter(true), primary: true }
         }
-      />
+      >
+        {filesBlankReason(root, showIgnored)}
+      </PageEmpty>
     )
   }
 
@@ -343,6 +392,13 @@ export function PanelView({
 
   return (
     <div className="panel-page" data-panel={panel} aria-label={spec.label}>
+      {/* What this page is reporting on, above what it found. One line, drawn
+          here rather than by five pages, so five pages cannot come to five
+          different ideas of where their subject lives — `PageScope.tsx` carries
+          the report. MCP servers is deliberately not in this list: its subject
+          can be another machine, chosen on the page itself, so it draws its own
+          line and keeps the two in step. */}
+      {SCOPED_PANELS.has(panel) && projectPath !== null && <PageScope path={projectPath} />}
       <ErrorBoundary label={spec.label}>{body}</ErrorBoundary>
     </div>
   )

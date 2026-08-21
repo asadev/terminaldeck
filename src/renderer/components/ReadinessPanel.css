@@ -37,8 +37,8 @@
    spans the window to separate a number from a list is a line doing work that
    a column of white space does better. */
 /* Spans every row the other column can produce, so the list starts level with
-   the score instead of below it. There are five: an error, the cap banner, the
-   machine-level notice, the list and the hidden-row footer.
+   the score instead of below it. There are six: the agent pills, an error, the
+   cap banner, the machine-level notice, the list and the hidden-row footer.
 
    It is a count and not `1 / -1`, which was tried and is wrong here: `-1` names
    the last line of the *explicit* grid, and this grid declares no rows at all,
@@ -48,7 +48,7 @@
    with it. */
 .readiness-head {
   grid-column: 1;
-  grid-row: 1 / span 5;
+  grid-row: 1 / span 6;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -82,6 +82,38 @@
   margin: var(--sp-1) 0 0;
   font-size: var(--t-body);
   color: var(--text-secondary);
+}
+
+/* Which agent this page is graded for — the first row of the right-hand
+   column. `.page-pill` in shell.css does the chips themselves: one pill in this
+   app, per `components/Pill.tsx`. */
+.readiness > .page-pills {
+  grid-column: 2;
+  margin-bottom: var(--sp-4);
+}
+
+/* The target, under the count. A caption rather than a second heading: it is
+   the same fact the pressed pill below carries, said for somebody reading the
+   header rather than scanning the row of controls. */
+.readiness-target {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-muted);
+}
+
+/* The seam in the list where the counted rows stop. Space and a caption, no
+   rule: a line across the page to separate two runs of rows is the thing
+   CLAUDE.md's design note names outright. */
+.readiness-aside {
+  margin: var(--sp-5) 0 var(--sp-1);
+  /* Lined up with the row titles beside it: a row is `--sp-3` of padding, then
+     an `--sp-5` glyph, then an `--sp-3` gap. */
+  padding-left: calc(var(--sp-3) + var(--sp-5) + var(--sp-3));
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  text-transform: none;
+  color: var(--text-muted);
 }
 
 .readiness-rescan {
@@ -475,6 +507,7 @@
     flex: 1;
   }
 
+  .readiness > .page-pills,
   .readiness-error,
   .readiness-cap,
   .readiness-machine,

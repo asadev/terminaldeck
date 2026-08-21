@@ -16,6 +16,7 @@ import {
   formatBytes,
   ignoreBlockFor,
   ignoreCovers,
+  INSTRUCTIONS_AGENTS,
   isUnfilledSkeleton,
   listPaths,
   looksLikeSecretFile,
@@ -412,38 +413,41 @@ describe('scanReadiness — an empty folder', () => {
   }, GIT_HEAVY_MS)
 
   /**
-   * The naming rule, at the one readiness row that had a vendor's filename in
-   * its prose.
+   * The naming rule, at the one readiness row whose subject is an agent rather
+   * than the project.
    *
    *   > *"You should not mention in any settings or any pop-up a specific tool
    *   > or LLM, because they can use some other also."*
    *
-   * Two assertions in opposite directions, because this row has to do two
-   * things at once and the easy mistakes are the ones that do only one. The
-   * finding describes the category and names nothing; the fix beside it names
-   * exactly what it will write, because what lands in somebody's repository is
-   * a fact about their filesystem and they are entitled to it before they press
-   * a button. Deleting the second in the name of neutrality would be the worse
-   * failure of the two.
+   * The neutral row is the one nobody has chosen an agent for, so it names
+   * none: no vendor, no filename, and — since 2026-08-21 — no fix either,
+   * because creating "the instructions file" for a reader who has not said
+   * which agent they run is the silent choice the rule forbids. What it does
+   * say is how many files it looked for, which is a fact about the scan.
+   *
+   * The named version of all of that is `report.agents`, tested below.
    */
-  it('states the finding without naming any agent’s filename', async () => {
+  it('states the neutral finding without naming any agent or filename', async () => {
     const report = await scanReadiness(await tempProject())
     const row = byId(report, 'claude-md')
     for (const name of ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md', 'Claude', 'Codex', 'Gemini']) {
       expect(row.detail, `the finding says ${name}`).not.toContain(name)
     }
-    // And the disclosure, still there, on the thing that acts.
-    expect(row.fix?.description).toContain('CLAUDE.md')
-    expect(row.fix?.label).toBe('Create instructions file')
+    expect(row.fix).toBeNull()
   }, GIT_HEAVY_MS)
 
   it('offers a fix for every missing foundation', async () => {
     const dir = await tempProject()
     const report = await scanReadiness(dir)
-    expect(byId(report, 'claude-md').fix?.id).toBe('create-claude-md')
     expect(byId(report, 'readme').fix?.id).toBe('create-readme')
     expect(byId(report, 'gitignore').fix?.id).toBe('create-gitignore')
     expect(byId(report, 'git-repo').fix?.id).toBe('git-init')
+    // The instructions fix is per agent — one for each, on the variants.
+    expect(report.agents.map((entry) => entry.check.fix?.id)).toEqual([
+      'create-claude-md',
+      'create-agents-md',
+      'create-gemini-md',
+    ])
   }, GIT_HEAVY_MS)
 })
 
@@ -461,6 +465,86 @@ describe('scanReadiness — a well-set-up project', () => {
   it('does not flag .env.example as a secret', async () => {
     const report = await scanReadiness(await goodProject())
     expect(byId(report, 'secrets').status).toBe('pass')
+  }, GIT_HEAVY_MS)
+})
+
+/**
+ * The per-agent half of the report — T68's evidence.
+ *
+ * *"And now here we also don't know which AI it is talking about."* These are
+ * the facts the page needs to answer that: which agents there are, what each
+ * one reads, and what this project has for each. Every assertion here is about
+ * information that did not exist in the report before.
+ */
+describe('scanReadiness — graded per agent', () => {
+  /**
+   * The structural half of the naming rule, which no string scan can reach.
+   *
+   *   > *"where we can have an option between Claude, Codex, Gemini, in those
+   *   > places don't name only Claude. Give all the options."*
+   *
+   * This page spells three vendors' filenames at runtime, out of this table.
+   * `neutral-naming.test.ts` cannot see a name composed at runtime — its own
+   * note says so — so what keeps the rule is this: the table names a file for
+   * every agent that has one, or the suite goes red.
+   */
+  it('names an instructions file for every agent that has one, never for one alone', () => {
+    expect(INSTRUCTIONS_AGENTS.map((entry) => entry.agent)).toEqual(['claude', 'codex', 'gemini'])
+    for (const entry of INSTRUCTIONS_AGENTS) {
+      expect(entry.file, entry.agent).toMatch(/\.md$/)
+      // The file it would create is one that agent actually reads — the table
+      // cannot drift into offering to write something nobody opens.
+      expect(entry.candidates, entry.agent).toContain(entry.file)
+    }
+  })
+
+  it('answers for every agent that reads an instructions file, in catalogue order', async () => {
+    const report = await scanReadiness(await tempProject())
+    expect(report.agents.map((entry) => entry.agent)).toEqual(['claude', 'codex', 'gemini'])
+    // A label from the one catalogue that names agents, never spelled here.
+    expect(report.agents.map((entry) => entry.label)).toEqual(['Claude Code', 'Codex CLI', 'Gemini CLI'])
+    expect(report.agents.map((entry) => entry.file)).toEqual(INSTRUCTIONS_AGENTS.map((e) => e.file))
+  }, GIT_HEAVY_MS)
+
+  it('names the agent and the file it looked for in every finding', async () => {
+    const report = await scanReadiness(await tempProject())
+    for (const entry of report.agents) {
+      expect(entry.check.detail, entry.agent).toContain(entry.label)
+      expect(entry.check.detail, entry.agent).toContain(entry.file)
+      // And the button says what it will write, before it is pressed.
+      expect(entry.check.fix?.label, entry.agent).toBe(`Create ${entry.file}`)
+      expect(entry.check.fix?.touches, entry.agent).toEqual([entry.file])
+    }
+  }, GIT_HEAVY_MS)
+
+  /**
+   * The reason each variant carries its own score.
+   *
+   * A project with a `CLAUDE.md` is instructed for two of the three agents —
+   * Claude Code reads it, Codex reads `AGENTS.md`, Gemini reads `GEMINI.md` —
+   * so the same folder is genuinely a different grade depending on which agent
+   * you run in it. A page that swapped the row and left the ring alone would be
+   * the arithmetic that does not add up, which is the other half of this round.
+   */
+  it('scores the same project differently for an agent whose file is missing', async () => {
+    const report = await scanReadiness(await goodProject())
+    const claude = report.agents.find((entry) => entry.agent === 'claude')
+    const gemini = report.agents.find((entry) => entry.agent === 'gemini')
+    expect(claude?.check.status).toBe('pass')
+    expect(claude?.score).toBe(report.score)
+    expect(gemini?.check.status).toBe('fail')
+    expect(gemini?.score).toBeLessThan(report.score)
+  }, GIT_HEAVY_MS)
+
+  it('counts a project instructed when only another agent’s file is there', async () => {
+    const dir = await tempProject()
+    await write(dir, 'GEMINI.md', GOOD_CLAUDE_MD)
+    const report = await scanReadiness(dir)
+    // The neutral row grades the union: a project with GEMINI.md in it is
+    // instructed, and before this table existed the scan said it was not.
+    expect(byId(report, 'claude-md').status).toBe('pass')
+    expect(report.agents.find((entry) => entry.agent === 'gemini')?.check.status).toBe('pass')
+    expect(report.agents.find((entry) => entry.agent === 'codex')?.check.status).toBe('fail')
   }, GIT_HEAVY_MS)
 })
 
@@ -636,6 +720,20 @@ describe('applyReadinessFix', () => {
     const second = await applyReadinessFix(dir, 'create-claude-md')
     expect(second.ok).toBe(false)
     expect(await readFile(join(dir, 'CLAUDE.md'), 'utf8')).toBe('hand written, do not clobber\n')
+  })
+
+  it('writes the file the fix id names, titled with its own name', async () => {
+    for (const entry of INSTRUCTIONS_AGENTS) {
+      const dir = await tempProject()
+      const result = await applyReadinessFix(dir, entry.fixId)
+      expect(result.ok, entry.agent).toBe(true)
+      expect(result.changed, entry.agent).toEqual([entry.file])
+      const text = await readFile(join(dir, entry.file), 'utf8')
+      // A Markdown document titles itself with its own filename — and it is
+      // that line `isUnfilledSkeleton` matches when it decides whether somebody
+      // has filled the skeleton in.
+      expect(text.startsWith(`# ${entry.file}`), entry.agent).toBe(true)
+    }
   })
 
   it('names the README after the project folder', async () => {

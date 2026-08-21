@@ -18,6 +18,8 @@ import { execFile } from 'node:child_process'
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
+import { AGENT_CATALOG } from '../shared/agent-catalog'
+import type { ProviderId } from '../shared/types'
 import { compileIgnorePattern, parseIgnoreFile, safeJoin, type IgnoreRule } from './fs-tree'
 import { findGitDir, readGitStatus } from './git'
 import { currentPlatform, isWindows, withPath, type Platform } from './platform/host'
@@ -43,7 +45,18 @@ export type ReadinessCheckId =
   | 'lockfile'
 
 export type ReadinessFixId =
+  /*
+   * One id per agent, because the file each one reads is a different file.
+   *
+   * `create-claude-md` kept its name when the other two were added: an id is
+   * never read on screen, and renaming this one would orphan every dismissal
+   * and every score history keyed on it. What it writes is stated by the fix
+   * that carries it, which is built from {@link INSTRUCTIONS_AGENTS} rather
+   * than spelled out three times.
+   */
   | 'create-claude-md'
+  | 'create-agents-md'
+  | 'create-gemini-md'
   | 'create-readme'
   | 'create-gitignore'
   | 'patch-gitignore'
@@ -143,6 +156,48 @@ export interface ReadinessCheck {
 
 export type ReadinessBand = 'strong' | 'fair' | 'weak' | 'at-risk'
 
+/**
+ * The same project, graded for one named agent.
+ *
+ * ## Why the report is not one list any more
+ *
+ * Asad, on the readiness page, 2026-08-21:
+ *
+ *   > *"And now here we also don't know which AI it is talking about."*
+ *
+ * The page had one row reading *"Agent instructions present and useful — No
+ * instructions file at the project root"* and a button reading *"Create
+ * instructions file"*, and nothing anywhere on it said Claude, Codex or Gemini,
+ * or which of `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` the button was about to
+ * write. Every other check on the page is a fact about the project — a
+ * lockfile is a lockfile whoever reads it — but that one is a fact about *an
+ * agent*, and it had been written as though there were only one.
+ *
+ * So the scan answers for each agent as well as for the project. Everything but
+ * the instructions check is shared, because nothing else here differs by agent;
+ * what varies is that check, and therefore the weighted score, which is why
+ * each variant carries its own — a page that swapped one row and left the ring
+ * showing the other agent's number would be the arithmetic that does not add up
+ * (T67) wearing a new hat.
+ *
+ * The neutral list is still the top-level one, and stays the answer for
+ * everything that asks this module a question without naming an agent — the
+ * Overview's readiness tile, chiefly. See {@link checkInstructions} for what
+ * "neutral" grades.
+ */
+export interface ReadinessForAgent {
+  agent: ProviderId
+  /** What that agent is called on screen, from the one catalogue that names it. */
+  label: string
+  /** The file it reads at a project root, and the one its fix would write. */
+  file: string
+  /** The instructions check as it reads for this agent. */
+  check: ReadinessCheck
+  score: number
+  band: ReadinessBand
+  cappedBy: string | null
+}
+
 export interface ReadinessReport {
   projectPath: string
   /** 0–100, weighted over the applicable checks, then gated. */
@@ -151,6 +206,13 @@ export interface ReadinessReport {
   checks: ReadinessCheck[]
   /** Why the score was held below what the weights alone produced, if it was. */
   cappedBy: string | null
+  /**
+   * The same scan, graded for each agent this build knows the instructions file
+   * of. Ordered as {@link INSTRUCTIONS_AGENTS} is, which is the catalogue's own
+   * order — never "the one this machine has installed first", which would make
+   * the page's default depend on the reader's machine.
+   */
+  agents: ReadinessForAgent[]
   scannedAt: string
 }
 
@@ -641,7 +703,72 @@ async function checkSecrets(root: string, tracked: string[] | null): Promise<Rea
   )
 }
 
-const CLAUDE_MD_CANDIDATES = ['CLAUDE.md', '.claude/CLAUDE.md', 'AGENTS.md']
+/**
+ * Which file each agent reads for its project instructions, and which one this
+ * app would write for it.
+ *
+ * ## Every line of this table was read off the CLI itself
+ *
+ * The rule the agent catalogue states — never declare something about an agent
+ * that has not been checked against the real thing — applies with more force
+ * here, because a wrong filename does not fail loudly: it grades somebody's
+ * project against a file their agent never reads, and then offers to create a
+ * second one beside the one they already have. Measured on this machine on
+ * 2026-08-21:
+ *
+ *     Claude Code 2.1.238   the binary carries the string
+ *                           "CLAUDE.md / AGENTS.md discovery", so it reads both
+ *     Codex 0.146.0-alpha   `AGENTS.md` in the shipped binary
+ *                           (`~/.codex/plugins/.plugin-appserver/codex`; the npm
+ *                           launcher on PATH has no vendored binary — see the
+ *                           catalogue's note on `alternateBins`)
+ *     Gemini CLI 0.46.0     `DEFAULT_CONTEXT_FILENAME = "GEMINI.md"` in three
+ *                           of its bundle chunks
+ *
+ * `.claude/CLAUDE.md` stays in Claude Code's candidates because the check has
+ * accepted it since it was written and a project that keeps its instructions
+ * there is instructed; nothing in this pass established a second location for
+ * the other two, so neither gets one invented.
+ *
+ * `shell` is absent and it is the only member of `ProviderId` that is: a login
+ * shell reads no instructions file, so a row for it would be a check that can
+ * never pass and never matter.
+ *
+ * ## Naming the files at all
+ *
+ * `neutral-naming.test.ts` refuses two of these three filenames anywhere in
+ * copy, for a reason that is exactly right and exactly why they belong here:
+ * *"a settings pane that says 'edit your CLAUDE.md' has silently chosen one of
+ * three agents on a screen where all three are possible."* This screen chooses
+ * nothing — it offers all three, the reader picks, and the file named is the
+ * file that reader's agent reads. That is part 3 of the rule satisfied rather
+ * than dodged, and `ReadinessPanel.test.tsx` pins it the way the guard's own
+ * note says part 3 has to be pinned: by asserting the screen offers all of them.
+ */
+interface InstructionsAgent {
+  agent: ProviderId
+  /** Files this agent reads at the project root, best first. */
+  candidates: string[]
+  /** The one it would be given if it has none. Always `candidates[0]`. */
+  file: string
+  fixId: ReadinessFixId
+}
+
+export const INSTRUCTIONS_AGENTS: readonly InstructionsAgent[] = [
+  { agent: 'claude', candidates: ['CLAUDE.md', '.claude/CLAUDE.md', 'AGENTS.md'], file: 'CLAUDE.md', fixId: 'create-claude-md' },
+  { agent: 'codex', candidates: ['AGENTS.md'], file: 'AGENTS.md', fixId: 'create-agents-md' },
+  { agent: 'gemini', candidates: ['GEMINI.md'], file: 'GEMINI.md', fixId: 'create-gemini-md' },
+]
+
+/**
+ * Every file any known agent would read, in the order they are looked for.
+ *
+ * This is what the neutral check grades, and it is a union rather than one
+ * agent's list: a project with only `GEMINI.md` in it *is* instructed, and
+ * before this table existed the scan told its owner they had no instructions
+ * file at all.
+ */
+const CLAUDE_MD_CANDIDATES = [...new Set(INSTRUCTIONS_AGENTS.flatMap((entry) => entry.candidates))]
 
 /** Below this an instructions file is a stub that tells an agent nothing. */
 export const CLAUDE_MD_MIN_LINES = 12
@@ -657,98 +784,87 @@ const COMMAND_HINT_RE =
   /```|(^|[\s`("'])(npm|pnpm|yarn|bun|npx|make|cargo|pytest|uv|dotnet|gradle|mvn|docker|deno|rake|tox|go (run|test|build)|python3? -m|\.\/[\w.-]+\.sh)\b/i
 
 /**
+ * The fix that writes one agent's instructions file.
+ *
+ * ## The label names the file now, and that is the whole of T68
+ *
+ * It read "Create instructions file", on a page that named no agent, above a
+ * finding that named no file. Asad: *"here we also don't know which AI it is
+ * talking about."* Pressing it wrote `CLAUDE.md` — correct for one of the three
+ * agents this app runs, invisible before the press for all of them.
+ *
+ * The rule this appears to cross is the one that says a screen must not pick an
+ * agent for a reader who runs another, and it is satisfied rather than
+ * sidestepped: the page above this button offers Claude Code, Codex CLI and
+ * Gemini CLI, the reader picks, and this button then names *that* reader's
+ * file. Naming it is disclosure — what is about to appear on their disk — and
+ * it is the same disclosure the description has carried since it was written,
+ * moved to where it is read without a hover. See {@link INSTRUCTIONS_AGENTS}.
+ *
+ * ## `touches` names the file too
+ *
+ * `touches` is the always-visible line, printed under "Changes" the moment the
+ * row is drawn. It said "your instructions file" — the category — because a
+ * vendor's filename standing there unprompted on a page that grades any
+ * repository was the thing the 2026-08-17 review objected to. On a page where
+ * the agent is chosen above it, the category phrase is the one that is now
+ * unhelpful: it is the file this button is about to create, and the reader is
+ * deciding whether to let it.
+ */
+function createInstructionsFix(entry: InstructionsAgent): ReadinessFix {
+  const label = AGENT_CATALOG[entry.agent].label
+  return {
+    id: entry.fixId,
+    label: `Create ${entry.file}`,
+    description: `Writes an instructions skeleton at the project root for ${label} — what this is, how to run it, how to test it, layout and conventions — each section left as a prompt for you to fill in. Refuses if one is already there.`,
+    touches: [entry.file],
+    destructive: false,
+  }
+}
+
+/**
  * What this check is called on screen, written once because it is said eight
  * times.
  *
- * It was a literal title spelled out at every
- * return in {@link checkClaudeMd} and once more in `scanReadiness`, and the
- * naming sweep is only half the reason it is a constant now. Nine copies of a
- * title is nine chances for one of them to drift, and a readiness row whose
- * heading changes depending on *which* branch answered is a row that looks like
- * two different checks.
+ * It was a literal title spelled out at every return in
+ * {@link checkInstructions} and once more in `scanReadiness`, and the naming
+ * sweep is only half the reason it is a constant now. Nine copies of a title is
+ * nine chances for one of them to drift, and a readiness row whose heading
+ * changes depending on *which* branch answered is a row that looks like two
+ * different checks.
  *
- * The name describes the category rather than one vendor's filename. This check
- * already accepts three different files — see {@link CLAUDE_MD_CANDIDATES} —
- * so it was never really about CLAUDE.md, and titling it that told somebody
- * whose project carries an `AGENTS.md` that they had failed a check they had in
- * fact passed. The `id` stays `claude-md`: ids are not read, and changing one
- * would orphan the score history keyed on it.
+ * The name describes the category rather than one vendor's filename. Which
+ * agent a given variant is about is said in the row's own finding, where it is
+ * a fact about what was looked for rather than a heading that would have to
+ * change under a pill.
  */
 const AGENT_INSTRUCTIONS_TITLE = 'Agent instructions present and useful'
 
-const FIX_CREATE_CLAUDE_MD: ReadinessFix = {
-  id: 'create-claude-md',
-  label: 'Create instructions file',
-  /*
-   * The label names the category; the description names the file, because the
-   * description is where a person finds out what is about to appear on their
-   * disk. That is disclosure rather than branding — the sweep's rule is about
-   * prose that describes a mechanism, and "a file called CLAUDE.md will be
-   * created at your project root" is a fact about their filesystem that they
-   * are entitled to before they press the button.
-   *
-   * It is now the *only* place this check says a filename out loud. The fail
-   * branch below used to list the three the scan accepts, and that clause has
-   * gone — see the long note there for why a definition of the category is not
-   * the same act as a disclosure of what a button is about to write. Which
-   * means this sentence has to carry the whole of the disclosure.
-   *
-   * **Where it is shown, corrected on 2026-08-19.** This note used to claim the
-   * description is "shown twice before anything happens: as the button's
-   * tooltip, and in full beside the confirm step `ReadinessPanel` puts between
-   * the press and the write." The second half was never true of *this* fix.
-   * `ReadinessPanel` renders the description only while `confirming`, and it
-   * only ever sets `confirming` for a `destructive` fix — this one is
-   * `destructive: false` just below, because creating a file that refuses to
-   * overwrite anything needs no second ask. So the description reaches a
-   * person exactly once, as the button's `title`. That is a hover, and a hover
-   * is not a thing that happens to somebody on a touch screen or reading with a
-   * keyboard. The disclosure being hover-only is a gap, and it is not this
-   * field's to close — closing it means giving the panel a visible place to put
-   * a non-destructive fix's description, which is a change to how every fix on
-   * that screen is drawn.
-   *
-   * **Why `touches` no longer says it.** `touches` is the always-visible line —
-   * `ReadinessPanel` prints it under "Changes" the moment the row is drawn, on
-   * every project, for everybody, before anything is pressed or hovered. A
-   * vendor's filename standing there unprompted is the exact shape of what the
-   * 2026-08-17 review objected to:
-   *
-   *   > *"You should not mention in any settings or any pop-up a specific tool
-   *   > or LLM, because they can use some other also."*
-   *
-   * A readiness report runs on any repository with any agent in it, so that
-   * line is read by people who have never installed the CLI whose filename it
-   * was reciting. It now names the category, which is what the line is for:
-   * "Changes your instructions file" answers *what part of my project is about
-   * to move*, which is the question somebody deciding whether to press has.
-   *
-   * The cost is real and worth stating, because it is the property the panel's
-   * own note says this line has: a path in `touches` cannot drift from the code
-   * the way a re-worded sentence can, and a category phrase can. What holds it
-   * honest instead is the pair either side of it — the description discloses
-   * the filename, and `applyReadinessFix` writes that same filename — plus the
-   * strict half of
-   * `neutral-naming.test.ts`, which since 2026-08-19 reads `touches` as copy
-   * and fails on any vendor filename put back into it, however short.
-   *
-   * It stays CLAUDE.md rather than becoming AGENTS.md, and that is a decision
-   * rather than an oversight. Both are read: `claude` 2.1.234 on this machine
-   * carries the string "Claude Code hardcodes CLAUDE.md / AGENTS.md discovery",
-   * so either would work for the CLI this build leans on. Changing which file
-   * a fix writes is a change to what lands in somebody's repository, and that
-   * belongs to whoever owns this feature, not to a pass over its wording.
-   */
-  description:
-    'Writes an instructions skeleton at the project root — what this is, how to run it, how to test it, layout and conventions — each section left as a prompt for you to fill in. The file is CLAUDE.md. Refuses if one is already there.',
-  touches: ['your instructions file'],
-  destructive: false,
-}
+/**
+ * The instructions check, for one agent or for the project as a whole.
+ *
+ * `agent` is null for the neutral answer — the one the top-level report and the
+ * Overview's tile carry — and it grades *any* file a known agent would read. A
+ * project with only `GEMINI.md` in it is instructed, and saying otherwise was a
+ * real defect rather than a wording problem: the scan told its owner they had
+ * no instructions file while the file sat in the root.
+ *
+ * With an agent, it grades only what that agent reads and its finding says so
+ * by name. The two share every rule below the search — the skeleton test, the
+ * length floor, the bloat ceiling, the runnable-command test — because those
+ * are properties of an instructions file and not of whose it is.
+ */
+async function checkInstructions(
+  root: string,
+  agent: InstructionsAgent | null,
+): Promise<ReadinessCheck> {
+  const candidates = agent === null ? CLAUDE_MD_CANDIDATES : agent.candidates
+  const who = agent === null ? 'An agent' : AGENT_CATALOG[agent.agent].label
+  const fix = agent === null ? null : createInstructionsFix(agent)
 
-async function checkClaudeMd(root: string): Promise<ReadinessCheck> {
   let found: string | null = null
   let text: string | null = null
-  for (const candidate of CLAUDE_MD_CANDIDATES) {
+  for (const candidate of candidates) {
     const entry = await readTextEntry(root, candidate)
     // Present but unreadably large is a finding of its own — never "missing".
     if (entry.kind === 'too-big') {
@@ -771,58 +887,38 @@ async function checkClaudeMd(root: string): Promise<ReadinessCheck> {
 
   if (text === null || found === null) {
     /*
-     * The only branch that cannot name a real file, because there is not one.
+     * The only branch that cannot name a file on disk, because there is not one
+     * — so it names the file that is missing instead.
      *
-     * Every other branch interpolates `found` or `candidate` — the filename
-     * actually sitting on the person's disk, which is a fact about their
-     * project and belongs on screen. This one has no such file, so what it used
-     * to do instead was recite the three names the scan accepts:
-     *
-     *     No instructions file — none of CLAUDE.md, .claude/CLAUDE.md or
-     *     AGENTS.md is here.
-     *
-     * That was defended as the actionable half, and it is the sentence the
-     * completeness audit found still live on a surface the review named. The
-     * defence does not survive being read next to the rule:
-     *
-     *   > *"You should not mention in any settings or any pop-up a specific
-     *   > tool or LLM, because they can use some other also."*
-     *
-     * This clause is not disclosing what is about to happen to somebody's
-     * repository — it is *defining the category* by two spellings of one
-     * vendor's filename, on a panel that a person who has never installed that
-     * vendor's CLI will read. The disclosure the review does entitle him to is
-     * the other one, and it is still there and unchanged: the fix below names
-     * the file it writes, in `FIX_CREATE_CLAUDE_MD.description`, which the panel
-     * shows as the button's tooltip and again in full when the button is
-     * pressed and asks to be confirmed. Which filename lands in the repository
-     * is answered before anybody presses anything.
-     *
-     * What is lost is a person whose project keeps its instructions under a
-     * fourth name learning which three this scan looks at. That is a smaller
-     * loss than it sounds — the row above them says what the check is called,
-     * the fix says what it makes, and `CLAUDE_MD_CANDIDATES` is where the list
-     * lives for anybody who needs it — and it is bought with the whole of the
-     * vendor's name coming off the panel.
+     * It used to recite the three names the scan accepts in one sentence, which
+     * was removed on 2026-08-19 as *defining the category* by one vendor's
+     * filenames on a panel that a person running another agent would read. That
+     * argument stands, and the answer to it is not silence: it is that the
+     * reader has chosen an agent two centimetres above this row, and the file
+     * named here is the file *that* agent reads. The neutral variant, which is
+     * the one nobody has chosen anything for, still names no file — it lists
+     * how many were looked for and leaves the choice on the pills.
      */
     return check(
       'claude-md',
       AGENT_INSTRUCTIONS_TITLE,
       'fail',
-      'No instructions file at the project root. Every session starts by re-deriving your build commands, your layout and your conventions from scratch — slower, more expensive, and wrong more often.',
-      FIX_CREATE_CLAUDE_MD,
+      agent === null
+        ? `No instructions file at the project root — none of the ${candidates.length} files a known agent reads is here. Every session starts by re-deriving your build commands, your layout and your conventions from scratch — slower, more expensive, and wrong more often.`
+        : `${who} reads ${listPaths(agent.candidates, 3)}, and this project ${agent.candidates.length === 1 ? 'has no such file' : 'has none of them'}. Every session starts by re-deriving your build commands, your layout and your conventions from scratch — slower, more expensive, and wrong more often.`,
+      fix,
     )
   }
 
   // Before the length and the command test, both of which this app's own
   // template passes on the strength of its empty fenced blocks. See
   // `isUnfilledSkeleton`.
-  if (isUnfilledSkeleton(text, CLAUDE_MD_TEMPLATE)) {
+  if (isUnfilledSkeleton(text, instructionsTemplate(basenameOf(found)))) {
     return check(
       'claude-md',
       AGENT_INSTRUCTIONS_TITLE,
       'warn',
-      `${found} is still the skeleton this app wrote — every line in it is a heading or a placeholder. Fill in what the project is, how to run it, how to test it and the conventions you enforce; until then it tells an agent nothing it could not guess.`,
+      `${found} is still the skeleton this app wrote — every line in it is a heading or a placeholder. Fill in what the project is, how to run it, how to test it and the conventions you enforce; until then it tells ${agent === null ? 'an agent' : who} nothing it could not guess.`,
       null,
       false,
       found,
@@ -868,7 +964,7 @@ async function checkClaudeMd(root: string): Promise<ReadinessCheck> {
     'claude-md',
     AGENT_INSTRUCTIONS_TITLE,
     'pass',
-    `${found} is ${lines} meaningful lines and documents commands an agent can run.`,
+    `${found} is ${lines} meaningful lines and documents commands ${agent === null ? 'an agent' : who} can run.`,
     null,
     false,
     found,
@@ -1448,7 +1544,7 @@ export async function scanReadiness(projectPath: string): Promise<ReadinessRepor
 
   const checks = await Promise.all([
     guard('secrets', 'No secrets committed', () => checkSecrets(root, tracked), true),
-    guard('claude-md', AGENT_INSTRUCTIONS_TITLE, () => checkClaudeMd(root)),
+    guard('claude-md', AGENT_INSTRUCTIONS_TITLE, () => checkInstructions(root, null)),
     guard('test-script', 'Tests can be run with one command', () => checkTestScript(root, pkg)),
     guard('git-repo', 'Git repository initialised', () => checkGitRepo(root, gitDir)),
     guard('gitignore', '.gitignore covers the basics', () => checkGitignore(root, pkg)),
@@ -1461,13 +1557,64 @@ export async function scanReadiness(projectPath: string): Promise<ReadinessRepor
     guard('lockfile', 'Dependencies are pinned', () => checkLockfile(root, pkg)),
   ])
 
+  /*
+   * The same project, once per agent — one instructions check swapped, the rest
+   * of the list shared, the score re-run over the swap.
+   *
+   * Re-running `scoreChecks` rather than adjusting the number is what keeps the
+   * ring and the rows telling one story: the weights, the gate and the caps are
+   * all in that one function, and a second arithmetic here would be the second
+   * copy that eventually disagrees. It costs nothing — the reads are already
+   * done, and each variant is one more pass over ten objects.
+   */
+  const agents = await Promise.all(
+    INSTRUCTIONS_AGENTS.map(async (entry) => {
+      const check = await guard('claude-md', AGENT_INSTRUCTIONS_TITLE, () =>
+        checkInstructions(root, entry),
+      )
+      const swapped = checks.map((existing) => (existing.id === 'claude-md' ? check : existing))
+      const scored = scoreChecks(swapped)
+      return {
+        agent: entry.agent,
+        label: AGENT_CATALOG[entry.agent].label,
+        file: entry.file,
+        check,
+        score: scored.score,
+        band: scored.band,
+        cappedBy: scored.cappedBy,
+      }
+    }),
+  )
+
   const { score, band, cappedBy } = scoreChecks(checks)
-  return { projectPath: root, score, band, checks, cappedBy, scannedAt: new Date().toISOString() }
+  return {
+    projectPath: root,
+    score,
+    band,
+    checks,
+    cappedBy,
+    agents,
+    scannedAt: new Date().toISOString(),
+  }
 }
 
 /* ------------------------------------------------------------------ fixes -- */
 
-const CLAUDE_MD_TEMPLATE = `# CLAUDE.md
+/**
+ * The skeleton the instructions fix writes, titled with the file's own name.
+ *
+ * A function rather than a constant since 2026-08-21, because there are three
+ * files now and a Markdown document titles itself with its own filename — the
+ * convention every one of these follows. It is also read the other way round:
+ * `isUnfilledSkeleton` compares a file on disk against the template for *that*
+ * file, so a `GEMINI.md` full of nothing but headings is recognised as the
+ * skeleton this app wrote rather than graded as somebody's real instructions.
+ *
+ * Everything below the title is identical for all three. What an agent needs to
+ * be told about a repository is not a property of which agent it is.
+ */
+function instructionsTemplate(file: string): string {
+  return `# ${file}
 
 Instructions for an AI agent working in this repository.
 
@@ -1500,6 +1647,7 @@ Instructions for an AI agent working in this repository.
 
 <!-- Files, directories or commands an agent must leave alone. -->
 `
+}
 
 function readmeTemplate(name: string): string {
   return `# ${name}
@@ -2072,8 +2220,21 @@ export async function applyReadinessFix(
   const root = projectPath
 
   switch (fixId) {
+    /*
+     * Three ids, one body of work, and the file each writes comes from the same
+     * table the check searched — so a button that says it will create a file
+     * and the file that appears cannot be two different names.
+     */
     case 'create-claude-md':
-      return createFile(root, 'CLAUDE.md', CLAUDE_MD_TEMPLATE, TEMPLATE_NOTE)
+    case 'create-agents-md':
+    case 'create-gemini-md': {
+      const entry = INSTRUCTIONS_AGENTS.find((candidate) => candidate.fixId === fixId)
+      // Unreachable while the table covers every id in the union above, and
+      // `readiness.test.ts` pins that. Refusing rather than asserting keeps a
+      // future fourth agent's half-wired id from writing an empty-named file.
+      if (!entry) return refuse('This build does not know which file that would create.')
+      return createFile(root, entry.file, instructionsTemplate(entry.file), TEMPLATE_NOTE)
+    }
 
     case 'create-readme':
       return createFile(root, 'README.md', readmeTemplate(basenameOf(root)), TEMPLATE_NOTE)

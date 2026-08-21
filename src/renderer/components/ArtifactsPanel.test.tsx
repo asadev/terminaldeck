@@ -9,6 +9,7 @@ import {
   diffLines,
   directoryOf,
   kindOf,
+  nothingFound,
   previewKindOf,
   wasMade,
   MAX_DIFF_LINES,
@@ -132,15 +133,47 @@ describe('diffLines', () => {
 
 /* ---------------------------------------------------------------- summary -- */
 
-describe('summarize', () => {
-  it('says nothing was produced rather than showing an empty list', () => {
-    expect(summarize(list(), 0, 'made')).toBe('Nothing written or edited in 3 sessions.')
+/**
+ * The zero he could not check.
+ *
+ *   > *"No artifacts are still. I don't know. We don't have artifacts maybe."*
+ *
+ * The page said "Nothing written or edited in 15 sessions." and stopped, which
+ * leaves no way to tell a correct zero from a broken page — and his was almost
+ * certainly correct. Every assertion here is about a fact the answer already
+ * carried and the sentence threw away.
+ */
+describe('nothingFound', () => {
+  it('names the folder it read, so the zero can be checked', () => {
+    expect(nothingFound(list())).toBe('Nothing written or edited in /p — 3 sessions read.')
   })
 
   it('distinguishes "no sessions" from "sessions that produced nothing"', () => {
-    expect(summarize(list({ sessionsScanned: 0 }), 0, 'made')).toBe(
-      'No sessions recorded for this project yet.',
+    expect(nothingFound(list({ sessionsScanned: 0 }))).toBe(
+      'Nothing written or edited in /p — no sessions have been recorded for it yet.',
     )
+  })
+
+  /**
+   * The interesting zero, and the one the page never showed: an agent launched
+   * from a parent workspace writes into *that* folder, so the scan sees the
+   * writes and files them outside the project. "15 sessions, 40 files, none of
+   * them here" is an explanation; "nothing in 15 sessions" is a shrug.
+   */
+  it('reports changes that landed outside the folder, which is why there are none in it', () => {
+    expect(nothingFound(list({ outsideProject: 40 }))).toBe(
+      'Nothing written or edited in /p — 3 sessions read, 40 changes to files outside it.',
+    )
+  })
+
+  it('says nothing about files elsewhere when there were none', () => {
+    expect(nothingFound(list({ outsideProject: 0 }))).not.toContain('outside')
+  })
+})
+
+describe('summarize', () => {
+  it('hands an empty list to the sentence that explains itself', () => {
+    expect(summarize(list(), 0, 'made')).toBe(nothingFound(list()))
   })
 
   it('counts what is shown against what was found', () => {

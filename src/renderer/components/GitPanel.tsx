@@ -208,23 +208,21 @@ export function changeLabel(kind: GitChangeKind, code: string): string {
 }
 
 /*
- * What is wrong, in as few words as will carry it.
+ * What is wrong, in as few words as will carry it — and in the same words the
+ * Overview's git tile uses for the same four situations.
  *
- * These were a title *and* a sentence — "Nothing to track here" over "This
- * folder is not a git repository." — which is the same fact said twice, and the
- * second time in prose. Asad, this round: *"don't put any single statement in
- * anywhere… we want simplicity."* So the sentence is gone and the title carries
- * the whole fact, with the button under it carrying the way out.
- *
- * `git-missing` keeps its command because that is the one case where the way
- * out is not a button this app can offer, and a name with no install line
- * leaves somebody with nowhere to go.
+ * They were four *different* words until 2026-08-21. The tile said "Nothing to
+ * track here" and this page said "Not a repository" about the same folder in
+ * the same second, and `widgets.tsx` carried a comment claiming they were "the
+ * same headings Source control uses", which had quietly stopped being true.
+ * Two names for one situation is how a person ends up believing they are
+ * looking at two findings.
  */
 const UNAVAILABLE_TITLE: Record<GitUnavailableReason, string> = {
-  'not-a-repo': 'Not a repository',
+  'not-a-repo': 'Nothing to track here',
   'git-missing': 'git is not installed',
-  'no-such-folder': 'Folder is gone',
-  error: 'git could not read this folder',
+  'no-such-folder': 'That folder is gone',
+  error: 'Source control is unavailable',
 }
 
 /**
@@ -232,20 +230,42 @@ const UNAVAILABLE_TITLE: Record<GitUnavailableReason, string> = {
  * pure function, because it is the half of this branch that can be wrong in a
  * way nobody notices.
  *
- * Two things have to stay true together, and they are easy to break apart:
- * the button is offered **only** where `git init` would actually help, and the
- * sentence is printed **only** where the button is not there to carry the
- * meaning. Getting the pair wrong in either direction is a real defect —
- * offering "Create a repository" over a repository git is refusing on ownership
- * grounds would make a second one beside the first, and dropping the sentence
- * without a button would leave a title alone on an empty page.
+ * The button is offered **only** where `git init` would actually help: offering
+ * "Create a repository" over a repository git is refusing on ownership grounds
+ * would make a second one beside the first. `canInit` comes from `main/git.ts`
+ * rather than being guessed here.
+ *
+ * ## Why the sentence is back
+ *
+ * It was suppressed whenever the button was drawn, on the argument that a title
+ * plus a button already say "no repository, and here is how to get one" and the
+ * sentence would be a third copy of one fact. He looked at the result on
+ * 2026-08-21 and said:
+ *
+ *   > *"Source control, nothing."*
+ *
+ * Two words in the middle of a window and a button is what "nothing" looks
+ * like. The Overview page he had been on one click earlier had the answer he
+ * was missing — *"Nothing to track here — This folder is not a git repository.
+ * Source control can create one."* — and the page named after that sentence did
+ * not carry it.
+ *
+ * So the page says why, always, and the version it says is the tile's minus its
+ * last clause: *"Source control can create one"* is a pointer to this page,
+ * from a page that is not this one, and the button under this sentence is that
+ * offer rather than a description of it. Which folder it is about is on the
+ * scope line above the page — see `components/PageScope.tsx` — so the sentence
+ * does not repeat the path either.
  */
 export interface UnavailableView {
   title: string
-  /** Null when the button says it, so the page never states the same fact twice. */
-  message: string | null
+  /** Never null: a page with nothing on it has to say what it looked at. */
+  message: string
   canInit: boolean
 }
+
+/** The tile's sentence, minus the clause that points at this very page. */
+const NOT_A_REPO_HERE = 'This folder is not a git repository.'
 
 export function unavailableView(
   status: GitStatusResult | null,
@@ -255,8 +275,15 @@ export function unavailableView(
   const canInit = status !== null && !status.repo && status.canInit === true && hasInit
   return {
     title: UNAVAILABLE_TITLE[reason],
+    /*
+     * The written message from `git.ts` wherever there is one, because it is the
+     * one that names a way out no title can — the `safe.directory` command for a
+     * repository refused on ownership grounds, git's own words for a failure
+     * nobody anticipated. The plain sentence is used only where the message
+     * would send the reader to the page they are already on.
+     */
     message: canInit
-      ? null
+      ? NOT_A_REPO_HERE
       : status !== null && !status.repo
         ? status.message
         : 'git could not read this folder',
@@ -746,20 +773,8 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
               : undefined
           }
         >
-          {/*
-            The sentence, only when nothing else on the page is carrying it.
-
-            With the button there, the title and the button already say "no
-            repository, and here is how to get one" — printing "This folder is
-            not a git repository" underneath is the third copy of one fact, and
-            it is the kind of standing prose this round removed everywhere.
-
-            Without the button the message is the only information on screen,
-            and it is worth its space: a repository refused for dubious
-            ownership reports the same `reason`, and its written message names
-            the `safe.directory` command and the path, which no title can.
-          */}
-          {view.message ?? undefined}
+          {/* Why the page is empty, always — see `unavailableView`. */}
+          {view.message}
         </PageEmpty>
       </section>
     )

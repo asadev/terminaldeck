@@ -9,9 +9,15 @@ import {
 import { McpAddForm, type McpAddResult } from './McpAddForm'
 import { readFailure, withDeadline } from '../deadline'
 import { recall, remember } from '../panel-cache'
+import { rowDetail } from '../chat/attach/McpServers'
+import { useMachines } from '../machines/useMachines'
+import { thisMachine } from '../platform'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty, PageNote } from './PageEmpty'
+import { PageScope } from './PageScope'
+import { Pill, PillRow } from './Pill'
 import { HoverNote } from './HoverNote'
+import { reportableMachines, useMachineServers, type MachineTarget } from './mcp-machines'
 import './McpInspector.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -373,6 +379,173 @@ export function ToolRow({ tool, disabled, onCall }: ToolRowProps) {
 
 /* ----------------------------------------------------------------- panel -- */
 
+/**
+ * Which machine this page is a report on.
+ *
+ * Asad, with a PC and a server both connected and neither of them anywhere on
+ * this page: *"Here also maybe we need to see which MCP servers or which
+ * machine connected."*
+ *
+ * The pills exist only when there is a second machine to be — *"a dropdown only
+ * when some exist. Hide it when empty"*, his most repeated note — and
+ * `reportableMachines` decides which ones qualify, so a pill can never be
+ * offered for a machine the reader would then have to be apologised to about.
+ * See `mcp-machines.ts` for the three conditions and for what does and does not
+ * cross the wire.
+ *
+ * Its own component because both halves of this page draw it, and because a row
+ * of pills nobody can click in a static render is a thing worth having a test
+ * of.
+ */
+export function MachinePills({
+  targets,
+  pick,
+  onPick,
+}: {
+  targets: readonly MachineTarget[]
+  pick: string | null
+  onPick(machineId: string | null): void
+}) {
+  if (targets.length === 0) return null
+  const here = thisMachine()
+  return (
+    <PillRow label="Which machine’s servers to show" lead="Report on">
+      <Pill on={pick === null} title={`The configuration on ${here}`} onClick={() => onPick(null)}>
+        {here}
+      </Pill>
+      {targets.map((entry) => (
+        <Pill
+          key={entry.machineId}
+          on={pick === entry.machineId}
+          title={`Read the configuration on ${entry.name}, for the folder ${entry.sessionTitle} runs in`}
+          onClick={() => onPick(entry.machineId)}
+        >
+          {entry.name}
+        </Pill>
+      ))}
+    </PillRow>
+  )
+}
+
+/**
+ * One paired machine's MCP servers, on this page rather than only inside that
+ * machine's session.
+ *
+ * ## What it can say, and what it deliberately cannot
+ *
+ * Everything here is read-only, and that is a property of the wire rather than
+ * a decision about the design. What crosses is the *list* — the six fields
+ * `McpRow` carries — because that is what `ControlsReadingWire.connectors`
+ * carries. Opening a server spawns a process on the machine that owns it;
+ * adding or removing one runs the CLI in a directory on that machine. Neither
+ * has a frame, so neither has a button: a row that expanded into nothing, or a
+ * Remove that reached the wrong computer, is the dead control this window is
+ * not allowed to have.
+ *
+ * ## Why it names a session
+ *
+ * Two of the three MCP scopes are keyed on a working directory — `mcp-add.ts`
+ * spells out which — so "that machine's servers" is not a question with one
+ * answer. What the far end resolves is *that session's folder*, and saying
+ * which one is the difference between a list and a list you can check. It is
+ * the same reason this page has named its own folder since it was written.
+ */
+function MachineServerList({ target }: { target: MachineTarget }) {
+  const { status, rows, reload } = useMachineServers(target)
+
+  const reloadButton = (
+    <button type="button" className="mcp-refresh" onClick={reload} disabled={status === 'loading'}>
+      {status === 'loading' ? 'Reading…' : 'Reload'}
+    </button>
+  )
+
+  return (
+    <>
+      {/* The machine, the folder it resolved for, and which session it asked
+          through — the three facts that make the list checkable. */}
+      <PageScope
+        path={target.cwd === '' ? null : target.cwd}
+        machine={target.name}
+        detail={`through ${target.sessionTitle}`}
+      />
+
+      {status === 'loading' ? (
+        <PageNote page busy>
+          Asking {target.name}…
+        </PageNote>
+      ) : status === 'unanswered' ? (
+        <PageEmpty
+          icon={panelSpec('mcp').icon}
+          title={`${target.name} did not answer`}
+          action={{ label: 'Try again', onClick: reload, primary: true }}
+        >
+          {/* Not "no servers": a machine that said nothing and a machine with
+              none configured are different facts, and reporting the first as
+              the second tells somebody their PC has no servers because a relay
+              round trip went missing. */}
+          The link to it is up, but nothing came back for that session.
+        </PageEmpty>
+      ) : rows.length === 0 ? (
+        <PageEmpty
+          icon={panelSpec('mcp').icon}
+          title="No servers there"
+          extra={reloadButton}
+          hint={
+            <span className="mcp-folder" title={target.cwd}>
+              {folderName(target.cwd)}
+            </span>
+          }
+        >
+          Nothing is configured for that folder on {target.name}.
+        </PageEmpty>
+      ) : (
+        <>
+          <header className="mcp-head">
+            <div className="mcp-subheading">
+              <HoverNote label="Where these come from">
+                {`Read on ${target.name}, from the configuration that applies to that session’s folder. Adding, removing and opening a server happen on the machine that runs it.`}
+              </HoverNote>
+            </div>
+            <div className="mcp-head-actions">{reloadButton}</div>
+          </header>
+          <ul className="mcp-servers">
+            {rows.map((row) => (
+              <li className="mcp-server" key={row.id} data-state="idle">
+                <div className="mcp-server-head">
+                  {/* A row, not a button. Nothing on this page can open a
+                      server on another machine, so nothing here looks like it
+                      can — see the note on this component. */}
+                  <span className="mcp-server-static">
+                    <span className="mcp-dot" data-state="idle" aria-hidden="true" />
+                    <span className="mcp-server-name">{row.name}</span>
+                    {row.scope ? (
+                      <span className="mcp-tag" data-scope={row.scope}>
+                        {row.scope}
+                      </span>
+                    ) : null}
+                    {row.transport ? <span className="mcp-tag">{row.transport}</span> : null}
+                    {!row.enabled && (
+                      <span className="mcp-tag" data-warn="true">
+                        disabled
+                      </span>
+                    )}
+                    {/* Whose server this is, on the row itself — the whole of
+                        *"we need to see which MCP servers or which machine"*. */}
+                    <span className="mcp-tag" data-machine="true">
+                      {target.name}
+                    </span>
+                  </span>
+                </div>
+                <p className="mcp-server-command">{rowDetail(row) || '—'}</p>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  )
+}
+
 export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) {
   const api = useMemo(() => bridge ?? resolveBridge(), [bridge])
 
@@ -383,6 +556,17 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
   const [section, setSection] = useState<SectionKey>('tools')
   const [inventories, setInventories] = useState<Record<string, InventoryState>>({})
   const [adding, setAdding] = useState(false)
+  /**
+   * Which machine's servers are on screen, or null for this one.
+   *
+   * Asad: *"as soon as we connect to one machine, that machine's things should
+   * come here and start showing here… instead of the remote session."* This is
+   * the choice that does it, and it is state rather than a route because it is
+   * a question about what you are reading now — a page that came back pointed
+   * at a PC that has since been unplugged would be worse than one that starts
+   * where the folder is.
+   */
+  const [machinePick, setMachinePick] = useState<string | null>(null)
 
   /**
    * Ticket for the newest list request. Switching projects, or an impatient
@@ -584,10 +768,50 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
    * once there is a list to work with the header owns it, because an empty
    * state is no longer on screen to hold it.
    */
+  /*
+   * The machines this page could report on, and the one it is reporting on.
+   *
+   * `useMachines` is the window's own read of the estate — the same hook the
+   * rail and the New Session dialog use — so this page cannot come to disagree
+   * with them about which machines are connected. The target is derived from
+   * the pick rather than stored beside it, which is what makes a machine going
+   * offline put the page back on this one instead of leaving it pointed at a
+   * pill that is no longer there.
+   */
+  const estate = useMachines()
+  const targets = useMemo(() => reportableMachines(estate.machines), [estate.machines])
+  const target = targets.find((entry) => entry.machineId === machinePick) ?? null
+  /** What to call this computer on a pill and on a row. */
+  const here = thisMachine()
+
+  /*
+   * A machine's page instead of this one's, and an early return rather than a
+   * branch wrapped around four hundred lines of markup.
+   *
+   * Every hook above has run by here, which is the only thing that makes this
+   * safe — and it is what keeps the local half of the page exactly the markup
+   * it was, rather than the same markup one indent deeper inside a ternary.
+   */
+  if (target !== null) {
+    return (
+      <div className="mcp">
+        <MachinePills targets={targets} pick={target.machineId} onPick={setMachinePick} />
+        <MachineServerList target={target} />
+      </div>
+    )
+  }
+
   const blank = !loading && servers.length === 0 && !listError && !adding
 
   return (
     <div className="mcp">
+      {/* Null, always: past the return above, the page is this machine's. */}
+      <MachinePills targets={targets} pick={null} onPick={setMachinePick} />
+      {/* What this list is: the configuration on this machine, for this folder.
+          The page has named the folder since *"On MCP servers did nothing"* —
+          it was reading a different one from the rail's — and it names the
+          machine now for the same reason, one connected PC later. */}
+      <PageScope path={projectPath} />
       {/*
         The intro and the Reload button stand down while the page is a blank.
 
@@ -630,9 +854,15 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
             <button
               type="button"
               className="mcp-add-open"
+              /* Which machine it lands on, before it is pressed. A server is
+                 added by running the CLI in a folder, which happens on the
+                 machine that owns the file — so with a paired machine on the
+                 pills beside this button, "Add server" is a question this
+                 button has to answer rather than leave open. */
+              title={`Adds to the configuration on ${here}`}
               onClick={() => setAdding((open) => !open)}
             >
-              {adding ? 'Close' : 'Add server'}
+              {adding ? 'Close' : targets.length > 0 ? `Add server on ${here}` : 'Add server'}
             </button>
           )}
           <button type="button" className="mcp-refresh" onClick={() => void refresh()} disabled={loading}>
@@ -695,7 +925,7 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
              MCP servers, read by somebody who navigated there. */
           title="No servers yet"
           action={{
-            label: 'Add a server',
+            label: targets.length > 0 ? `Add a server on ${here}` : 'Add a server',
             primary: true,
             onClick: () => setAdding(true),
           }}
@@ -758,6 +988,18 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
                   </span>
                   <span className="mcp-tag">{server.transport}</span>
                   {!server.enabled && <span className="mcp-tag" data-warn="true">disabled</span>}
+                  {/* Whose server this is. It is always this computer on this
+                      half of the page — the pills above switch the other half —
+                      and saying so is what makes a two-machine estate readable:
+                      *"here also maybe we need to see which MCP servers or
+                      which machine connected."* Drawn only once there is
+                      another machine to be confused with, so a person with one
+                      computer is not told which computer they are on. */}
+                  {targets.length > 0 && (
+                    <span className="mcp-tag" data-machine="true">
+                      {here}
+                    </span>
+                  )}
                   <span className="mcp-server-state">{STATE_LABEL[server.state]}</span>
                 </button>
 
