@@ -256,6 +256,33 @@ describe('who may reach the endpoint', () => {
     expect(response.status).toBe(403)
   })
 
+  it('refuses a rebound Host that carries this socket’s own port', async () => {
+    // The literal is the whole defence. A name is refused whatever port it
+    // spells, including the right one.
+    const response = await raw({
+      headers: { Authorization: `Bearer ${endpoint.token}`, Host: `attacker.example:${endpoint.port}` },
+    })
+    expect(response.status).toBe(403)
+  })
+
+  it('takes a loopback Host whose port is the far end’s', async () => {
+    /*
+     * A session on a **server**, arriving through the port that machine opened
+     * for it (`servers/window-reach.ts`).
+     *
+     * Its CLI addresses `http://127.0.0.1:<that server's port>/mcp`, so the
+     * `Host` it sends carries a number this socket has never heard of — a
+     * loopback literal on a machine where that is as true as it is here,
+     * arriving on a connection only a process on that server could have made.
+     * Pinning the number turned that into a 403 and would have left the whole
+     * feature answering nothing while looking wired.
+     */
+    const response = await raw({
+      headers: { Authorization: `Bearer ${endpoint.token}`, Host: '127.0.0.1:40404' },
+    })
+    expect(response.status).toBe(200)
+  })
+
   it('serves one path and nothing else', async () => {
     const response = await raw({
       path: '/anything-else',

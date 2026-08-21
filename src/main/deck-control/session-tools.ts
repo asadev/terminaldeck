@@ -49,10 +49,12 @@
  * ## What this reaches, and what it still does not
  *
  * This endpoint is loopback-only by construction (`hostIsLocal`, and the whole
- * argument at the top of `server.ts`), so it can only ever be handed to a
- * session whose CLI runs on **this** box. That is not the same question as
- * *where the window is*, and confusing the two is what made this section wrong
- * until 2026-08-21.
+ * argument at the top of `server.ts`), so every call that reaches it arrives on
+ * a socket on **this** box — including a shell on a server, whose port is on the
+ * *server's* loopback and whose bytes come back down the link this Mac itself
+ * opened. That is not the same question as *where the CLI is*, nor as *where the
+ * window is*, and confusing those three is what made this section wrong twice on
+ * 2026-08-21.
  *
  * A session started here **by a paired device** is one of ours: it gets a token
  * and a config file from this endpoint like any other. What is different is
@@ -72,21 +74,30 @@
  * cannot reach the endpoint gets no flags and the sentence, like any other
  * launch that cannot be given them.
  *
- * A shell on a **server** is the case that is still not built, and the reason is
- * different from the one this section used to give. There is no app on a server
- * — no endpoint, no hook, no `open` shim — and the Mac starts that shell through
- * `ssh2`, so the missing piece is not a protocol frame. It is a way to put a
- * config file where that CLI will read it and a port there that reaches this
- * machine; `ssh2`'s remote port forwarding gives the second and nothing gives
- * the first, because `--mcp-config` is read once at exec and a person types
- * `claude` into that shell themselves.
+ * A shell on a **server** was the case that was not built, and it is built now —
+ * differently, because a server has no app on it: no endpoint, no hook, no
+ * `open` shim, and no `startSession` that could fold a flag into an argv. This
+ * Mac opens that shell over `ssh2`, so it controls both ends of the connection
+ * and the two missing pieces are found there rather than in a protocol frame.
+ * `servers/window-reach.ts` asks the server to listen on **its own** loopback
+ * and hands every connection back down the link to this endpoint, which keeps
+ * the loopback rule true on both machines at once; `servers/window-drive.ts`
+ * puts a config file and a small `claude` wrapper on that shell's `PATH`, which
+ * is the same trick `open-shim.ts` plays here and is the only way to reach a
+ * command line a *person* types. {@link SessionTools.prepareElsewhere} is this
+ * file's half: a token and a caller, with the URL left to whoever knows it.
  *
- * Nothing here pretends otherwise: a session that cannot be given the tools is
- * launched without them — **and is told so**, which is the half that was
- * missing. `session-verbs.ts` holds the reason `host-core.ts` wrote down and the
- * one sentence the hook answer prints beside the window list, because a session
- * that has been told it owns `B1` and has no verb for it goes looking for
- * another way in rather than concluding there is none.
+ * It reaches exactly one agent. `--mcp-config` is a Claude Code flag; Codex and
+ * Gemini have no per-run MCP override to put on a command line, so a server
+ * shell running one of those gets nothing and is not told it got something —
+ * see `WHY_NOT` in `servers/window-drive.ts`, which names them.
+ *
+ * Nothing here pretends otherwise anywhere else either: a session that cannot be
+ * given the tools is launched without them — **and is told so**, which is the
+ * half that was missing. `session-verbs.ts` holds the reason `host-core.ts`
+ * wrote down and the one sentence the hook answer prints beside the window list,
+ * because a session that has been told it owns `B1` and has no verb for it goes
+ * looking for another way in rather than concluding there is none.
  *
  * ## The trap this file cannot defend itself against, and where it is closed
  *
@@ -233,6 +244,62 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * The tools whose whole answer is a **file on this machine**.
+ *
+ * Written out rather than inferred from a schema, for the reason
+ * {@link SESSION_TOOLS} is written out: a grant is a thing somebody decides,
+ * and the next tool that answers with a path has to be added to a list a person
+ * reads rather than caught by a rule about field names.
+ *
+ * `browser.network` arms a page to write background responses to disk here, and
+ * the five `assets.*` are how those files are then checked, upgraded and read
+ * back. Every one of them names a path in this app's own scrape folder.
+ */
+const FILES_ON_THIS_MACHINE: ReadonlySet<string> = new Set([
+  ...ASSET_TOOL_NAMES,
+  'browser.network',
+  'browser_network',
+])
+
+/**
+ * What a session on **another computer** may see and call.
+ *
+ * ## Why it is not simply {@link SESSION_TOOLS}
+ *
+ * A shell on a server reaches these tools over a port that server opened back to
+ * this Mac (`servers/window-reach.ts`), and its verbs are served *here*, because
+ * the window is here. That is right for everything that acts on a page and
+ * answers about a page. It is wrong for the harvesting family, whose answers are
+ * paths in a folder on this computer — an agent on somebody's Linux box handed
+ * one goes looking for it, does not find it, and reports a file missing that a
+ * person can see on their own screen. A tool that reports success and hands back
+ * something unusable is the dead control this whole round is about.
+ *
+ * So they are not merely refused: they are **not on this list**, so a session on
+ * a server can neither call them nor find that they exist — which is the same
+ * property `SESSION_TOOLS` gives an ordinary session about `sessions.send`, and
+ * it is the honest one. There is nothing here for that session to work around.
+ *
+ * `browser.screenshot` is the one exception and it stays, because *"all six or
+ * none"* is a requirement rather than a preference (`browser-tools.ts` argues it
+ * where the six are assembled). It refuses instead, in the same sentence
+ * `remote/machines/window-serve.ts` refuses it in at the other end of the relay
+ * — see `refuseAPathOnTheWrongComputer`.
+ *
+ * ## And why this is subtraction rather than a second list
+ *
+ * The file's own rule is that a grant is written down, not derived — because
+ * derivation means a tool added elsewhere silently becoming something a session
+ * can call. That risk is unchanged here: a tool added to {@link SESSION_TOOLS}
+ * is granted to a session on a server exactly as it is to a session in this
+ * window, which is the same decision, made once. What is written down is the
+ * *narrowing*, which is the part that is specific to being on another computer.
+ */
+export const ELSEWHERE_TOOLS: ReadonlySet<string> = new Set(
+  [...SESSION_TOOLS].filter((name) => !FILES_ON_THIS_MACHINE.has(name)),
+)
+
+/**
  * All three tiers, and `alter` is the one worth explaining.
  *
  * The allow-list is what bounds this caller, not the tier table: the only tool
@@ -292,6 +359,53 @@ export interface PreparedSessionTools {
   started(sessionId: string, machineId?: string): void
 }
 
+/**
+ * A launch this process will never see, holding a token that is nonetheless
+ * ours.
+ *
+ * ## Why this is a second entry point and not an option on {@link SessionTools.prepare}
+ *
+ * Because two of the three things `prepare` returns are meaningless here.
+ * `args` are folded into a command line this app composes, and there is no
+ * command line — a person types `claude` into an SSH shell. `file` is a path on
+ * this computer, and the file has to be on somebody else's. What survives is the
+ * *token*, and the one thing this file knows how to do with it: turn it into the
+ * text of a config file.
+ *
+ * ## Why the token itself never comes out
+ *
+ * {@link configFor} takes the URL and answers the whole file, so the secret is
+ * only ever inside the text that is about to be written 0600 on the far end.
+ * Handing the caller a `token` string would put a bearer secret in a variable in
+ * a module whose job is transport, where the next person to add a log line owns
+ * it. `remote/secret-file.ts` makes the same argument about which door a secret
+ * goes through; this is the same argument about how far it travels first.
+ *
+ * ## And why the grant is a function
+ *
+ * `allowed()` is asked on **every tool call**, not captured when the shell
+ * opened, for the reason `callers.ts` gives about `TokenGrant.caller` and
+ * `MachineStore.drivesWindows` gives about its own read: a person unticking the
+ * switch beside that server must land on the very next call, not on the next
+ * time a terminal is opened. Revoking also drops the token outright — see
+ * `servers/window-drive.ts` — so this is the second of two checks on one rule,
+ * which `ServerGrants` argues for at length: one stops the grant existing, one
+ * stops it being used, and a hole in either is a hole.
+ */
+export interface PreparedElsewhere {
+  /**
+   * The config file's whole text, for a URL only the far end can name.
+   *
+   * The port is on the *server's* loopback and is chosen by the server, so this
+   * file cannot compose the address and does not try.
+   */
+  configFor(url: string): string
+  /** The shell exists. Bind the token to it, and to the server it is on. */
+  started(sessionId: string, machineId: string): void
+  /** Nothing was armed, or it has gone. The token stops working immediately. */
+  drop(): void
+}
+
 export interface SessionTools {
   /**
    * Mint a token and a config file for a session about to start.
@@ -302,6 +416,19 @@ export interface SessionTools {
    * a call is refused rather than attributed to nothing.
    */
   prepare(inside?: LaunchPlacement): PreparedSessionTools | null
+  /**
+   * Mint a token for a session that runs somewhere this process cannot write.
+   *
+   * Null for the same reason {@link SessionTools.prepare} answers null: there is
+   * no endpoint to point anything at yet, and a shell must not fail to open over
+   * a feature that is merely absent.
+   *
+   * The grant is {@link ELSEWHERE_TOOLS} rather than {@link SESSION_TOOLS} and
+   * that is the whole difference between the two doors: one token is for a CLI
+   * on this machine, the other for one that is not, and the narrowing is decided
+   * here so that no caller can pick the wider set for itself.
+   */
+  prepareElsewhere(grant: { allowed(): boolean }): PreparedElsewhere | null
   /** A session has gone. Its token stops working and its file is removed. */
   release(sessionId: string): void
   /** Test seam: how many launches are still holding a token. */
@@ -310,14 +437,23 @@ export interface SessionTools {
   stop(): void
 }
 
-/** Where a session's config file lives, and what is in it. */
-function configFor(endpoint: DeckControlEndpoint, token: string): string {
+/**
+ * What is in a session's config file, given the address that session can reach
+ * this endpoint on.
+ *
+ * The URL is a parameter rather than read off the endpoint because it is not
+ * always the endpoint's own: a shell on a server reaches this same server on a
+ * port on **its** loopback, chosen by that server, which this process cannot
+ * compose. Everything else — the transport, the header, the shape — is the same
+ * file in both cases and must stay one function.
+ */
+function configFor(url: string, token: string): string {
   return `${JSON.stringify(
     {
       mcpServers: {
         [SERVER_NAME]: {
           type: 'http',
-          url: endpoint.url,
+          url,
           headers: { Authorization: `Bearer ${token}` },
         },
       },
@@ -380,63 +516,133 @@ export function createSessionTools(
     }
   }
 
+  /**
+   * Where a launch's folder goes. One rule, asked once inside {@link mint} and
+   * once before it, by the caller that has to know the file's *name* before it
+   * is willing to have anything minted at all.
+   */
+  const dirFor = (launchId: string): string => join(options.dir, launchId)
+
+  /**
+   * One token, one table entry, one claim deadline — everything both entry
+   * points below have in common.
+   *
+   * Extracted rather than written twice because what it holds is the permission
+   * model: which tools this caller may see, whether a confirmation can be asked
+   * of anybody, and what a call resolves to before the session exists. A second
+   * copy of that is a second copy that will one day disagree about a boundary,
+   * and the two callers differ only in *where the config file lands*.
+   *
+   * The launch id is a parameter, defaulted, for exactly that difference:
+   * {@link SessionTools.prepare} has to work out what a CLI on the far side of a
+   * WSL boundary will be told to open — a name derived from this id — and refuse
+   * before a token exists. Nothing about what is minted depends on where the id
+   * came from, and no caller may pass a `granted` set it did not decide here.
+   */
+  function mint(
+    allowed: (() => boolean) | null,
+    granted: ReadonlySet<string>,
+    launchId: string = randomUUID(),
+  ): {
+    token: string
+    launchId: string
+    dir: string
+    started(sessionId: string, machineId: string): void
+  } {
+    const token = randomUUID().replaceAll('-', '') + randomUUID().replaceAll('-', '')
+    const dir = dirFor(launchId)
+    const entry = {
+      token,
+      dir,
+      sessionId: null as string | null,
+      claim: null as NodeJS.Timeout | null,
+    }
+    let machine = ''
+    minted.set(launchId, entry)
+    // Unreferenced, so a pending claim can never be the reason the process
+    // will not exit — one of these is armed for every session that starts.
+    entry.claim = setTimeout(() => forget(launchId), CLAIM_TTL_MS)
+    entry.claim.unref?.()
+    endpoint.callers.set(token, {
+      /*
+       * Attended, and the reason is the same one a phone's run is attended
+       * for: there is demonstrably a person — this is a terminal in a window
+       * on their screen — and a confirmation can be drawn where they are
+       * looking. The one question this caller can provoke is `browser.step`'s
+       * first change on a public website, and that is exactly a question a
+       * person at a keyboard should be asked.
+       *
+       * True for a shell on a server as well, and for the same reason rather
+       * than by extension: the terminal is a pane in this window, drawn by the
+       * same `@xterm` stack every other session is, and the dialog would be
+       * raised over it. What is on somebody else's machine is the *process*,
+       * not the person.
+       */
+      attended: true,
+      tools: granted,
+      caller: (): Caller =>
+        /*
+         * Two ways to be nobody, and they are answered identically on purpose.
+         *
+         * The first is registered-but-not-yet-bound — see below — and the
+         * second is a caller whose permission has been taken away since it was
+         * minted. `allowed` is asked here, per call, rather than captured, so
+         * unticking a switch lands on the very next tool call; it is null for
+         * every caller that has no such switch, which is every session in this
+         * window.
+         */
+        entry.sessionId === null || (allowed !== null && !allowed())
+          ? // Registered, not yet bound. A tool call in this window resolves to
+            // a caller that may do nothing, rather than to one whose windows
+            // would be looked up under an empty session id.
+            { kind: 'session', tiers: NO_TIERS }
+          : { kind: 'session', sessionId: entry.sessionId, machineId: machine, tiers: SESSION_TIERS },
+    })
+    return {
+      token,
+      launchId,
+      dir,
+      started(sessionId: string, machineId = ''): void {
+        if (entry.claim !== null) clearTimeout(entry.claim)
+        entry.claim = null
+        entry.sessionId = sessionId
+        machine = machineId
+      },
+    }
+  }
+
   return {
     prepare(inside?: LaunchPlacement): PreparedSessionTools | null {
       // Nothing to point a session at. Answered rather than thrown, because a
       // launch must not fail over a feature that is merely absent.
       if (endpoint.url === '') return null
-      const launchId = randomUUID()
-      const token = randomUUID().replaceAll('-', '') + randomUUID().replaceAll('-', '')
-      const dir = join(options.dir, launchId)
-      const file = join(dir, 'deck-control.json')
       /*
        * The name the CLI will be given, decided **before** anything is minted.
        *
        * Order matters here and nowhere else in this function: a placement that
        * cannot name the file has to leave this run with no token registered and
        * no secret on disk, rather than with a live entry nobody will ever
-       * present. The claim deadline below would eventually collect it, and
-       * "eventually" is not the same as "never existed".
+       * present. The claim deadline `mint` arms would eventually collect it, and
+       * "eventually" is not the same as "never existed" — which is why the
+       * launch id is worked out here and handed down, rather than minted first
+       * and given back.
        */
+      const launchId = randomUUID()
+      const file = join(dirFor(launchId), 'deck-control.json')
       const named = inside === undefined ? file : inside.argPath(file)
       if (named === null) return null
-      const entry = {
-        token,
-        dir,
-        sessionId: null as string | null,
-        claim: null as NodeJS.Timeout | null,
-      }
-      let machine = ''
-      minted.set(launchId, entry)
-      // Unreferenced, so a pending claim can never be the reason the process
-      // will not exit — one of these is armed for every session that starts.
-      entry.claim = setTimeout(() => forget(launchId), CLAIM_TTL_MS)
-      entry.claim.unref?.()
-      endpoint.callers.set(token, {
-        /*
-         * Attended, and the reason is the same one a phone's run is attended
-         * for: there is demonstrably a person — this is a terminal in a window
-         * on their screen — and a confirmation can be drawn where they are
-         * looking. The one question this caller can provoke is `browser.step`'s
-         * first change on a public website, and that is exactly a question a
-         * person at a keyboard should be asked.
-         */
-        attended: true,
-        tools: SESSION_TOOLS,
-        caller: (): Caller =>
-          entry.sessionId === null
-            ? // Registered, not yet bound. A tool call in this window resolves to
-              // a caller that may do nothing, rather than to one whose windows
-              // would be looked up under an empty session id.
-              { kind: 'session', tiers: NO_TIERS }
-            : { kind: 'session', sessionId: entry.sessionId, machineId: machine, tiers: SESSION_TIERS },
-      })
+      /*
+       * The same `mint` a shell on a server goes through, with the wider of the
+       * two grants because this CLI runs on this machine. There is one copy of
+       * the permission model and this is a caller of it, not a second one.
+       */
+      const launch = mint(null, SESSION_TOOLS, launchId)
       // Written through the one writer that knows how to keep a secret — 0600 on
       // POSIX, an ACL naming this account alone on Windows. It holds a bearer
       // token for a server on this machine, which is the same class of secret
       // `deck-control.json` in the copilot's folder already goes through that
       // door for.
-      writeSecretFile(dir, file, configFor(endpoint, token))
+      writeSecretFile(launch.dir, file, configFor(endpoint.url, launch.token))
       return {
         /*
          * Without `--strict-mcp-config`, and that absence is deliberate.
@@ -456,12 +662,25 @@ export function createSessionTools(
          * through `wsl.exe`. So the two spellings cannot be confused by anyone.
          */
         file,
-        started(sessionId: string, machineId = ''): void {
-          if (entry.claim !== null) clearTimeout(entry.claim)
-          entry.claim = null
-          entry.sessionId = sessionId
-          machine = machineId
-        },
+        started: launch.started,
+      }
+    },
+    prepareElsewhere(grant: { allowed(): boolean }): PreparedElsewhere | null {
+      if (endpoint.url === '') return null
+      const launch = mint(grant.allowed, ELSEWHERE_TOOLS)
+      return {
+        /*
+         * The URL comes from the caller and the token never leaves this
+         * closure. Nothing is written here: the file this text becomes is
+         * written by a `sh` script on somebody else's machine, under `umask
+         * 077`, inside a `mktemp -d` that is `0700` — see
+         * `servers/window-drive.ts`, which is the only caller and says why the
+         * text travels on a script's standard input rather than on a command
+         * line anybody on that box could read out of `ps`.
+         */
+        configFor: (url: string): string => configFor(url, launch.token),
+        started: launch.started,
+        drop: () => forget(launch.launchId),
       }
     },
     release(sessionId: string): void {

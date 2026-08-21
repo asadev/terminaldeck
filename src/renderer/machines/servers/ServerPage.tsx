@@ -59,6 +59,15 @@ interface Props {
   onBack(): void
   onForget(id: string): void
   onRename(id: string, name: string): void
+  /**
+   * Turn on, or off, whether sessions on this server may act on browser windows
+   * here.
+   *
+   * Absent when the preload does not carry the channel, and then the section is
+   * not drawn at all — a switch that cannot be answered is worse than no switch,
+   * because the state it shows would be the state nothing holds.
+   */
+  onDrivesWindows?(id: string, allowed: boolean): void
 }
 
 export function ServerPage({
@@ -70,6 +79,7 @@ export function ServerPage({
   onBack,
   onForget,
   onRename,
+  onDrivesWindows,
 }: Props) {
   const { look } = useServerRoom(bridge, server.id, onState)
   /*
@@ -222,6 +232,9 @@ export function ServerPage({
             onRevoke={() => {
               if (bridge) void bridge.revokeServerCopilot(server.id).then(look, look)
             }}
+            {...(onDrivesWindows === undefined
+              ? {}
+              : { onDrivesWindows: (allowed: boolean) => onDrivesWindows(server.id, allowed) })}
           />
         </>
       )}

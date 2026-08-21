@@ -923,3 +923,32 @@ a.settings-btn {
   overflow-x: auto;
   user-select: text;
 }
+
+/*
+ * The switch that lets an agent in a terminal on this server act on the browser
+ * windows somebody attached to it.
+ *
+ * Its own pair of rules rather than borrowing `.machines-grant-row` next door,
+ * and the reason is a real one rather than tidiness: that class is defined in
+ * `machines.css`, which reaches a screen only because `MachineLinks.tsx` happens
+ * to be mounted on it. This section belongs to a server page, so its styling
+ * belongs in the server page's own sheet — the alternative is a control whose
+ * appearance depends on which other component was rendered beside it.
+ */
+.servers-drive {
+  margin: 8px 0 0;
+}
+
+.servers-drive-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.servers-drive-row input {
+  margin: 0;
+  flex: none;
+}

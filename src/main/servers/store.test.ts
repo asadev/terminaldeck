@@ -129,6 +129,40 @@ describe('reading a file that may not be ours', () => {
   })
 })
 
+describe('whether its sessions may drive a browser window here', () => {
+  it('is closed for a server nobody has said anything about', () => {
+    const server = store.add({ name: 'x', address: 'example.com', username: 'ada' })
+    expect(store.list()[0].drivesWindows).toBe(false)
+    expect(store.drivesWindows(server.id)).toBe(false)
+  })
+
+  it('is closed for a server this store has never heard of', () => {
+    expect(store.drivesWindows('nothing like this')).toBe(false)
+  })
+
+  it('survives a restart, because the agent using it does', () => {
+    const server = store.add({ name: 'x', address: 'example.com', username: 'ada' })
+    expect(store.setDrivesWindows(server.id, true)).toBe(true)
+    expect(new ServerStore(dir).drivesWindows(server.id)).toBe(true)
+    expect(store.setDrivesWindows(server.id, false)).toBe(false)
+    expect(new ServerStore(dir).drivesWindows(server.id)).toBe(false)
+  })
+
+  it('answers false for a server it could not store the answer against', () => {
+    // A control that shows the state it was just pressed into, over a store
+    // that holds nothing, is the dead control this round is about.
+    expect(store.setDrivesWindows('no such server', true)).toBe(false)
+  })
+
+  it('reads anything that is not exactly true as closed', () => {
+    // A hand-edited file, or one written by a version that spelled it
+    // differently. The direction to be wrong in is off.
+    expect(readServers({ servers: [row({ drivesWindows: 'yes' })] })[0].drivesWindows).toBe(false)
+    expect(readServers({ servers: [row()] })[0].drivesWindows).toBe(false)
+    expect(readServers({ servers: [row({ drivesWindows: true })] })[0].drivesWindows).toBe(true)
+  })
+})
+
 describe('what reaches the disk', () => {
   it('is a list of names and addresses and nothing else', () => {
     const server = store.add({ name: 'x', address: 'example.com', username: 'ada' })

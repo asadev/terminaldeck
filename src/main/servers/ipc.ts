@@ -131,6 +131,14 @@ import {
   type HostState,
 } from './host'
 import { NO_PACKAGE, type HostPackage } from './host-package'
+/*
+ * The two halves of *a session on a server drives the window attached to it*.
+ * Both are wired here because this is the file that opens the shell, and the
+ * `PATH` line has to be typed into it before anybody can type `claude`.
+ */
+import { WHY_NOT, WindowDrives, type ArmOutcome } from './window-drive'
+import { openWindowReach, type ReachResult, type ReverseConnection } from './window-reach'
+import type { PreparedElsewhere } from '../deck-control/session-tools'
 import { NO_SECURE_STORE, credentialFromDraft, type ServerCredential, type SignInDraft } from './credentials'
 import { DEFAULT_GRANT_MS, MAX_GRANT_MS, GrantRefused, ServerGrants, type GrantState } from './grants'
 /*
@@ -456,7 +464,14 @@ export interface ServersIpcDeps {
    */
   withConnection?<T>(
     serverId: string,
-    fn: (client: ForwardingConnection) => Promise<T>,
+    /*
+     * Both shapes, because two features borrow the same connection for two
+     * opposite things: `forward.ts` asks it to reach *out* to a port on the
+     * server, and `window-reach.ts` asks it to listen *there* and hand the
+     * connections back here. An `ssh2` `Client` satisfies both, and naming both
+     * is what keeps either from being widened by a cast at a call site.
+     */
+    fn: (client: ForwardingConnection & ReverseConnection) => Promise<T>,
   ): Promise<T>
   /**
    * Open a web address in the person's own browser.
@@ -485,6 +500,25 @@ export interface ServersIpcDeps {
    * smaller screen, not a broken one.
    */
   pickKeyFile?(): Promise<string | null>
+  /**
+   * The port `deck-control` is listening on, on **this** machine, or 0.
+   *
+   * Zero is a real and ordinary state rather than a gap: the control server
+   * binds a few hundred milliseconds after the window is built, and a terminal
+   * opened inside that window is opened without the verbs and told so
+   * ({@link WHY_NOT.endpoint}). A function rather than a number because it is
+   * not known when these deps are built.
+   */
+  controlPort?(): number
+  /**
+   * Mint a token and a caller for a session this process will never spawn.
+   *
+   * `deck-control/session-tools.ts`'s `prepareElsewhere`. Optional for the
+   * reason every other capability here is: a build with no control endpoint —
+   * the headless host — must register the same handlers and answer honestly,
+   * not fail to register.
+   */
+  mintSessionTools?(grant: { allowed(): boolean }): PreparedElsewhere | null
   now?: () => number
 }
 
@@ -520,6 +554,17 @@ export interface ServerListStore {
   get(id: string): { startIn: string | null } | null
   /** Remember that folder, or clear it with null. See A's `setStartIn`. */
   setStartIn(id: string, path: string | null): boolean
+  /**
+   * May sessions on this server drive browser windows in this app?
+   *
+   * Optional, and an absent pair reads as a permanent `false`. That is the
+   * honest degradation rather than a gap: a host whose store predates this
+   * cannot record the answer, so the switch is never on, so nothing is ever
+   * armed — which is exactly what every server did before this existed.
+   */
+  drivesWindows?(id: string): boolean
+  /** Say whether it may, and answer what is now true. See A's `setDrivesWindows`. */
+  setDrivesWindows?(id: string, allowed: boolean): boolean
 }
 
 /** The slice of A's `ServerCredentials` this file uses. */
@@ -602,6 +647,17 @@ export interface ServersIpc {
    * exist.
    */
   serverOfShell(shellId: string): string | null
+  /**
+   * Why the session in this shell cannot act on a browser window, or null.
+   *
+   * Null covers two states on purpose — a shell that *can* and an id this file
+   * has never heard of — because the honest thing to say about the second is
+   * nothing. What earns a sentence is the case where this app positively knows
+   * that the row somebody is about to press has nothing behind it: a server
+   * shell offered in the browser's connect menu, given a `B1`, and unable to do
+   * anything with it. `browser-binding-ipc.ts` puts this on the row.
+   */
+  whyNotDrive(shellId: string): string | null
   /** The room, for `tools.ts`. */
   room: ServerRoom
   /** The copilot's per-server permission, for `tools.ts` and for a settings screen. */
@@ -712,6 +768,134 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
    */
   const screens = new Map<string, ActivityTracker>()
 
+  /* ------------------------- driving a browser window from that server -- */
+
+  /**
+   * One reference-counted way in to this app's control endpoint per server.
+   *
+   * Per **server** rather than per shell, because the port is one listener on
+   * one SSH connection and every terminal on that machine can share it — what
+   * is per shell is the token and the config file naming it, which is what makes
+   * a verb resolve to *that* session's windows and no other's.
+   *
+   * The connection is held for exactly as long as the port is wanted, by holding
+   * A's own `withConnection` open around a promise nothing settles until the last
+   * terminal has gone. That is the pool's existing reference count doing the
+   * work rather than a second lifetime to keep in step with it, and it means a
+   * server nobody has a terminal on has no connection, no listener and no
+   * timer — §5.4, and his standing **events, not polling** rule.
+   */
+  const reaches = new Map<string, { users: number; opening: Promise<ReachResult>; close(): void }>()
+
+  /** A promise somebody else settles. Two of them are what hold a reach open. */
+  function deferred<T>(): { promise: Promise<T>; settle(value: T): void } {
+    let settle: (value: T) => void = () => undefined
+    const promise = new Promise<T>((resolve) => {
+      let done = false
+      settle = (value: T): void => {
+        if (done) return
+        done = true
+        resolve(value)
+      }
+    })
+    return { promise, settle }
+  }
+
+  function openReach(serverId: string, localPort: number): {
+    opening: Promise<ReachResult>
+    close(): void
+  } {
+    const opened = deferred<ReachResult>()
+    const finished = deferred<void>()
+    void (async (): Promise<void> => {
+      try {
+        await deps.withConnection?.(serverId, async (client) => {
+          const result = await openWindowReach(client, {
+            localPort,
+            runScript: (script) => deps.runScript(serverId, script),
+          })
+          opened.settle(result)
+          if (!result.ok) return
+          // Nothing settles this until the last terminal using the port closes,
+          // so the connection — and the listener on it — lives exactly that long.
+          await finished.promise
+          result.reach.close()
+        })
+      } catch (error) {
+        // The transport's own sentence, which `connection.ts` already wrote —
+        // re-wording it here would be this layer inventing copy about a failure
+        // it did not diagnose. See {@link failed} on the line above this one.
+        opened.settle({ ok: false, message: failed(error).sentence })
+      } finally {
+        // A connection that died under us has taken the forward with it, so
+        // anybody still waiting to let go is let go of here.
+        finished.settle()
+        opened.settle({ ok: false, message: WHY_NOT.endpoint })
+      }
+    })()
+    return { opening: opened.promise, close: () => finished.settle() }
+  }
+
+  async function reachFor(serverId: string): Promise<ReachResult> {
+    const localPort = deps.controlPort?.() ?? 0
+    if (localPort <= 0 || deps.withConnection === undefined) {
+      return { ok: false, message: WHY_NOT.endpoint }
+    }
+    let held = reaches.get(serverId)
+    if (held === undefined) {
+      held = { users: 0, ...openReach(serverId, localPort) }
+      reaches.set(serverId, held)
+    }
+    held.users += 1
+    const result = await held.opening
+    // An open that failed hands its own reference back, so a caller never has to
+    // remember to release something it was never given.
+    if (!result.ok) letGoOfReach(serverId)
+    return result
+  }
+
+  function letGoOfReach(serverId: string): void {
+    const held = reaches.get(serverId)
+    if (held === undefined) return
+    held.users -= 1
+    if (held.users > 0) return
+    reaches.delete(serverId)
+    held.close()
+  }
+
+  /**
+   * Which terminals on which servers were given the browser verbs.
+   *
+   * Everything it decides lives in `window-drive.ts` so that it is exercisable
+   * without `ipcMain`, a socket or a server; what is here is the four things it
+   * needs from this file's transport.
+   */
+  const windowDrives = new WindowDrives({
+    allowed: (serverId) => deps.store?.drivesWindows?.(serverId) === true,
+    claudeOn: async (serverId) => agentOn(await measured(serverId), 'claude'),
+    run: (serverId, argv) => deps.run(serverId, argv),
+    runScript: (serverId, script) => deps.runScript(serverId, script),
+    reach: reachFor,
+    letGo: letGoOfReach,
+    mint: (grant) => deps.mintSessionTools?.(grant) ?? null,
+  })
+
+  /**
+   * The probe's answer for one server, asked once and then remembered.
+   *
+   * `probed` is filled by every `look`, so a person who has opened the server's
+   * page has already paid for this; a terminal opened from the rail without ever
+   * looking at the page has not, and asks. Either way it is one measurement per
+   * server rather than one per terminal.
+   */
+  async function measured(serverId: string): Promise<ServerFacts> {
+    const already = probed.get(serverId)
+    if (already !== undefined) return already
+    const facts = await deps.facts(serverId)
+    probed.set(serverId, facts)
+    return facts
+  }
+
   /**
    * The session layer `agent-controls.ts` asks for, over an SSH channel.
    *
@@ -782,6 +966,13 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
      */
     const space = shellId.indexOf(' ')
     if (space > 0) void setups.cancel(shellId.slice(0, space))
+    /*
+     * And the token this terminal was holding, the folder on the server, and
+     * this app's share of the port that reaches back here. The token goes first
+     * — see `WindowDrives.disarm` — because a removal that failed on the far end
+     * must not leave a config file naming a bearer token that still works.
+     */
+    windowDrives.disarm(shellId)
   }
   const grants = new ServerGrants({ now, knows: (id) => deps.servers().some((server) => server.id === id) })
 
@@ -1263,9 +1454,53 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
        */
       const named = typeof startIn === 'string' && startIn !== '' ? startIn : null
       const folder = named ?? deps.store?.get(serverId)?.startIn ?? undefined
+      /*
+       * The id is minted before anything is opened, because the browser verbs
+       * are arranged **against it** and they have to be arranged *first*.
+       *
+       * `--mcp-config` is read once, at exec, and nothing here composes the
+       * command line — a person types `claude` into this terminal themselves. So
+       * the way in is a wrapper on that shell's `PATH` (`window-drive.ts`), and
+       * the line that puts it there has to be the first thing in the shell or
+       * there is a window in which they type `claude` and get an agent that
+       * quietly cannot see the window they attached. `session-verbs.ts` is a
+       * page about that exact failure.
+       *
+       * It costs a few hundred milliseconds on the first terminal for a server —
+       * one `claude --help` there, one script, one port — and nothing at all for
+       * a server whose switch is off, which is every server until somebody turns
+       * one on.
+       */
+      const shellId = `${serverId} ${randomUUID()}`
+      /*
+       * One connection for the whole sequence. Without it the help query, the
+       * script and the shell would each dial and hang up in turn; the pool
+       * reference-counts, so this is the same socket for all three.
+       *
+       * The flag is what pairs it. `release` is a decrement, so calling it after
+       * an `acquire` that threw — or on a host that has one and not the other —
+       * would take a reference somebody else is holding.
+       */
+      let holding = false
+      if (deps.acquire !== undefined && deps.release !== undefined) {
+        try {
+          await deps.acquire(serverId)
+          holding = true
+        } catch {
+          // Not a reason to refuse a terminal: `openShell` dials for itself, and
+          // a dial that is going to fail should fail there, where the sentence
+          // about it is already written.
+        }
+      }
+      let armed: ArmOutcome
+      try {
+        armed = await windowDrives.arm(serverId, shellId)
+      } catch (error) {
+        // Never a reason not to open the terminal. A person asked for a shell.
+        armed = { ok: false, why: failed(error).sentence }
+      }
       try {
         const shell = await deps.openShell(serverId, size, folder)
-        const shellId = `${serverId} ${randomUUID()}`
         /*
          * `onData` and `onClose` hand back an unsubscribe function. They are
          * dropped on purpose: this app is the shell's only listener and the
@@ -1302,12 +1537,54 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
         shellServers.set(shellId, serverId)
         // Before the first byte, because the question this answers is *which
         // conversations could possibly be this one's* and a conversation that
-        // began between the shell opening and this line is one of them.
+        // began between the shell opening and this line is one of them. It is
+        // also before the line below is typed, which is the first byte.
         shellOpenedAt.set(shellId, now())
+        /*
+         * Typed into the shell, and echoed by it.
+         *
+         * The precedent is `connection.ts`'s `startIn`: SSH has no "start here"
+         * either, so the app types the `cd` a person would have typed. The line
+         * is visible in the scrollback with a comment on it saying what it is,
+         * which is the honest property rather than a cost — nothing this app
+         * does to somebody's terminal should be invisible in that terminal.
+         */
+        if (armed.ok) shell.write(armed.line)
         return { ok: true, shellId }
       } catch (error) {
+        // The shell did not open, so nothing is going to type `claude` into it.
+        windowDrives.disarm(shellId)
         return failed(error)
+      } finally {
+        if (holding) deps.release?.(serverId)
       }
+    },
+  )
+
+  /**
+   * The switch: may sessions on this server act on browser windows here?
+   *
+   * The same shape `machines:drive-windows` has for a paired computer, because
+   * it is the same question asked of a different kind of machine, and answering
+   * with the stored value rather than with `true` is what stops the tick showing
+   * a state nothing behind it holds.
+   *
+   * Turning it **off** does two things and needs both. The stored answer is what
+   * every future tool call is checked against — `session-tools.ts` asks it per
+   * call, never captures it — and `revoke` takes the tokens away from the
+   * terminals that are already open, closes their folders on the server and lets
+   * go of the port. `ServerGrants` argues for exactly this doubling: one guards
+   * the grant existing, one guards it being used.
+   */
+  ipcMain.handle(
+    'servers:drive-windows',
+    (_event, serverId: unknown, allowed: unknown): { drivesWindows: boolean } => {
+      if (typeof serverId !== 'string' || typeof allowed !== 'boolean') {
+        return { drivesWindows: false }
+      }
+      const now = deps.store?.setDrivesWindows?.(serverId, allowed) ?? false
+      if (!now) windowDrives.revoke(serverId)
+      return { drivesWindows: now }
     },
   )
 
@@ -2066,6 +2343,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
 
   return {
     serverOfShell: (shellId) => shellServers.get(shellId) ?? null,
+    whyNotDrive: (shellId) => windowDrives.whyNot(shellId),
     room,
     grants,
     stop: () => {
@@ -2080,6 +2358,9 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
       // of them may be sitting on a pairing prompt in a terminal about to go.
       void hosts.cancelAll()
       for (const shellId of [...shells.keys()]) dropShell(shellId, true)
+      // After the shells, because each of those disarms its own and this is only
+      // for anything a shell that closed some other way left behind.
+      windowDrives.stop()
       for (const serverId of views.keys()) deps.release?.(serverId)
       views.clear()
       probed.clear()

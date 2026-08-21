@@ -207,6 +207,24 @@ export function MachinesPanel({ bridge: supplied }: Props = {}) {
     [bridge, opener, reread],
   )
 
+  /**
+   * The switch on a server's page, or nothing when the preload has no channel
+   * for it.
+   *
+   * `reread` afterwards rather than optimistically, and for the reason the grant
+   * next to it re-reads: the main process answers with what is now **true**, and
+   * a tick drawn off the press rather than off the answer would be claiming a
+   * permission that a store which refused to record it does not hold.
+   */
+  const drivesWindows = useCallback(
+    (id: string, allowed: boolean) => {
+      const set = bridge?.setServerDrivesWindows
+      if (!bridge || set === undefined) return
+      void set.call(bridge, id, allowed).then(reread, reread)
+    },
+    [bridge, reread],
+  )
+
   if (view.kind === 'add') {
     return (
       <AddServer
@@ -241,6 +259,9 @@ export function MachinesPanel({ bridge: supplied }: Props = {}) {
           onBack={() => setView({ kind: 'list' })}
           onForget={forget}
           onRename={rename}
+          {...(bridge?.setServerDrivesWindows === undefined
+            ? {}
+            : { onDrivesWindows: drivesWindows })}
         />
       )
     }

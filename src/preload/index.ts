@@ -838,6 +838,8 @@ const api = {
   grantServerCopilot: (id: string, forMs: number): Promise<unknown> =>
     ipcRenderer.invoke('servers:grant', id, forMs),
   revokeServerCopilot: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:revoke', id),
+  setServerDrivesWindows: (id: string, allowed: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('servers:drive-windows', id, allowed),
   serverGrantState: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('servers:grant-state', id),
   /*

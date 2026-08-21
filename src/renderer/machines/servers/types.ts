@@ -307,6 +307,17 @@ export interface Server {
    * whether they recognise one can go and check it somewhere else.
    */
   fingerprint?: string
+  /**
+   * May sessions on this server act on browser windows in this app?
+   *
+   * Its own axis, and it starts closed — the same shape and the same argument
+   * `Machine.drivesWindows` carries for a paired computer, one machine over.
+   * Attaching a window to a terminal and letting the agent in that terminal
+   * *act* on it are two different things, and the second is not implied by the
+   * first. See `StoredServer.drivesWindows` in the main process, which is where
+   * the answer actually lives.
+   */
+  drivesWindows?: boolean
 }
 
 /**
@@ -585,6 +596,17 @@ export interface ServersBridge {
   cancelServerHost?(id: string): Promise<unknown>
   /** `servers:host:changed` — pushed, because a two-minute install is not a press. */
   onServerHost?(cb: (state: unknown) => void): () => void
+  /**
+   * `servers:drive-windows` — may sessions on this server act on browser windows
+   * here? Answers `{ drivesWindows }`, which is what is now **true** rather than
+   * what was asked for, so a tick can never show a state nothing holds.
+   *
+   * Optional and out of `BRIDGE_METHODS` for the same reason the host channels
+   * are: a preload older than this would otherwise take the whole servers area
+   * away over one switch. Absent means the section is not drawn at all, which is
+   * a smaller screen rather than a broken one.
+   */
+  setServerDrivesWindows?(id: string, allowed: boolean): Promise<unknown>
 }
 
 const BRIDGE_METHODS = [
@@ -1218,6 +1240,10 @@ function asServer(value: unknown): Server | null {
     username: text(value.username),
     ...(credential === undefined ? {} : { credential }),
     ...(fingerprint === '' ? {} : { fingerprint }),
+    // `=== true` rather than truthiness, and absent reads as closed: a build
+    // whose main process predates this says nothing, and the answer for "said
+    // nothing" about a permission has to be no.
+    drivesWindows: value.drivesWindows === true,
   }
 }
 

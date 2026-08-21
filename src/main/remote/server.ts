@@ -795,8 +795,9 @@ export interface RemoteEndpointOptions {
    * frame and never waits on an answer that is not coming.
    *
    * Nothing about the decision is here. The grant is read per call in
-   * `window-grants.ts`, the allow-list is `SESSION_TOOLS`, the window is resolved
-   * inside that session's own binding, and the answer is cut to fit by
+   * `window-grants.ts`, the allow-list is `ELSEWHERE_TOOLS` — the session grant
+   * minus the tools whose answers are files on this computer — the window is
+   * resolved inside that session's own binding, and the answer is cut to fit by
    * `fitAnswer` — all of it in `machines/window-serve.ts`, which is the same
    * function the machine links serve their asks through. One decider, or the two
    * come to allow what each other refuses.
@@ -5721,8 +5722,9 @@ export interface RemoteIpcDeps {
    * frame and never waits on an answer that is not coming.
    *
    * Nothing about the decision is here. The grant is read per call in
-   * `window-grants.ts`, the allow-list is `SESSION_TOOLS`, the window is resolved
-   * inside that session's own binding, and the answer is cut to fit by
+   * `window-grants.ts`, the allow-list is `ELSEWHERE_TOOLS` — the session grant
+   * minus the tools whose answers are files on this computer — the window is
+   * resolved inside that session's own binding, and the answer is cut to fit by
    * `fitAnswer` — all of it in `machines/window-serve.ts`, which is the same
    * function the machine links serve their asks through. One decider, or the two
    * come to allow what each other refuses.

@@ -48,13 +48,26 @@
  *     that axis defaults closed, and `window-grants.ts` for the same axis
  *     pointing at a device that dialled in rather than a machine this desktop
  *     dialled out to.
- *  2. **Is that verb one of the six?** {@link SESSION_TOOLS}, the same positive
- *     list a session on this machine holds on its own token. Checked here as
- *     well as by `server.ts`'s `allowed` predicate, because this path does not
- *     go through `server.ts` at all: it reaches `DeckControl.call` directly, so
- *     the allow-list has to be applied by whoever is doing the reaching. A
- *     forwarded caller that could name `sessions.start` would be the one hole
- *     that makes *"driving other sessions is only for the copilot"* untrue.
+ *  2. **Is that verb one this caller may name?** {@link ELSEWHERE_TOOLS}, which
+ *     is the positive list a session on this machine holds on its own token
+ *     minus the family whose answers are files *here* — see `session-tools.ts`,
+ *     which argues the narrowing. Checked here as well as by `server.ts`'s
+ *     `allowed` predicate, because this path does not go through `server.ts` at
+ *     all: it reaches `DeckControl.call` directly, so the allow-list has to be
+ *     applied by whoever is doing the reaching. A forwarded caller that could
+ *     name `sessions.start` would be the one hole that makes *"driving other
+ *     sessions is only for the copilot"* untrue.
+ *
+ *     The same set decides for every caller that is not on this computer, and
+ *     that is on purpose. A session on a paired machine, a session on a device
+ *     that dialled in, and a shell on a server reached over its own reverse
+ *     tunnel are the same fact — the agent is not on the computer the window is
+ *     on — and a second list would be a second answer to one question, drifting
+ *     apart the first time either was edited. Both of this function's doors are
+ *     already one answer because both land here; a shell on a server never does
+ *     — it reaches `server.ts` over its own reverse tunnel — and it is held to
+ *     the same set because `session-tools.ts` mints its token with this list and
+ *     no other.
  *
  * Everything after that is `deck-control`'s: the tool's own `precheck` resolves
  * the window inside that session's binding and finds nothing for a window
@@ -82,7 +95,7 @@
  * connection*. Reading a page must never be a way to lose the machine.
  */
 
-import { SESSION_TOOLS, SESSION_TIERS } from '../../deck-control/session-tools'
+import { ELSEWHERE_TOOLS, SESSION_TIERS } from '../../deck-control/session-tools'
 import type { CallResult } from '../../deck-control/control'
 import { MAX_MESSAGE_BYTES, MAX_WINDOW_RESULT_BYTES } from '../protocol'
 
@@ -90,7 +103,7 @@ import { MAX_MESSAGE_BYTES, MAX_WINDOW_RESULT_BYTES } from '../protocol'
 export interface WindowCall {
   /** The far machine's own id for the session that is asking. */
   sessionId: string
-  /** A tool id or its wire name — both spellings are on {@link SESSION_TOOLS}. */
+  /** A tool id or its wire name — both spellings are on {@link ELSEWHERE_TOOLS}. */
   tool: string
   /** Its arguments, as the JSON text that crossed the wire. */
   args: string
@@ -225,7 +238,7 @@ export async function serveWindowCall(
   const wall = NOT_ACROSS_THE_WIRE.get(call.tool)
   if (wall !== undefined) return refuse(wall)
 
-  if (!SESSION_TOOLS.has(call.tool)) {
+  if (!ELSEWHERE_TOOLS.has(call.tool)) {
     /*
      * Deliberately the same words a browser verb gets for naming a window that
      * is not its own. A sentence saying *"that tool exists but not for you"*

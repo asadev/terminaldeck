@@ -178,6 +178,31 @@ export interface BindingIpcDeps {
    * is driving, until the agent's next call happens to be refused.
    */
   endDrive?(browserTabId: string): void
+  /**
+   * Why the session in this row could not act on this window if it were
+   * attached to it, or null when it could.
+   *
+   * ## The row this closes
+   *
+   * A shell on a server has been offered here since the servers feature learnt
+   * to be a session. Pressing it attached a window, gave it a `B1`, drew the
+   * chip on the strip — and there was nothing at all behind it, because the
+   * agent in that shell is a process on somebody else's Linux box and the window
+   * is a `WebContentsView` in this one. A control that completes, names what it
+   * made and does nothing is the defect this whole round is about, and this menu
+   * was carrying one.
+   *
+   * It is closed from both ends. `servers/window-drive.ts` makes most such rows
+   * *work*; this is the other half, for the ones that still cannot — the switch
+   * beside that server is off, it has no `claude`, its SSH settings will not
+   * open a port — and it says which at the moment somebody is choosing, in the
+   * words of the file that decided it.
+   *
+   * Absent leaves every row exactly as it was. Null is the answer for every
+   * session in this window and for every id this app has no opinion about, and
+   * both mean the same thing: say nothing.
+   */
+  whyNotDrive?(session: { sessionId: string; machineId: string }): string | null
 }
 
 /**
@@ -681,7 +706,12 @@ export interface SessionChoice {
  * pairing he described second.
  */
 export function connectMenuItems(
-  request: { browserTabId: string; sessions: SessionChoice[] },
+  request: {
+    browserTabId: string
+    sessions: SessionChoice[]
+    /** See {@link BindingIpcDeps.whyNotDrive}. Absent leaves every row as it was. */
+    whyNotDrive?(session: { sessionId: string; machineId: string }): string | null
+  },
 ): MenuItemConstructorOptions[] {
   const entry = known.get(request.browserTabId)
   const owner = ownerOf(request.browserTabId)
@@ -732,13 +762,34 @@ export function connectMenuItems(
       const bound = holds
         ? owner.windows.find((window) => window.browserTabId === request.browserTabId)
         : undefined
+      /*
+       * Why this session could not act on this window, said on the row rather
+       * than discovered afterwards.
+       *
+       * The row stays **enabled**, and that is deliberate: attaching is still a
+       * real and useful thing to do — it is what puts the page in the rail
+       * beside that terminal and what the person points at when they talk about
+       * it — and a greyed row would take away something that works in order to
+       * warn about something that does not. What it must not do is complete
+       * silently and hand back a `B1` with nothing behind it.
+       */
+      const why =
+        request.whyNotDrive?.({ sessionId: session.sessionId, machineId: sessionMachine }) ?? null
+      const named = bound ? `${slotName(bound.n)}   ${session.name}` : session.name
       items.push({
         type: 'checkbox',
         checked: holds,
         // The slot this window has *in that session* leads when it has one, so
         // the row reads as the same fact the strip's chip and the agent's own
         // context are stating.
-        label: bound ? `${slotName(bound.n)}   ${session.name}` : session.name,
+        //
+        // The mark goes in the **label**, not only in the sublabel: `sublabel`
+        // draws on macOS and is ignored on Windows and Linux, so a warning that
+        // lived only there would be a warning two thirds of the people who ship
+        // this never see. Four words, because a menu row is not a paragraph —
+        // the sentence itself is one hover away and is the same string.
+        label: why === null ? named : `${named}   ·   cannot drive it`,
+        ...(why === null ? {} : { sublabel: why, toolTip: why }),
         click: () => {
           if (holds) disconnect(request.browserTabId)
           else
@@ -767,7 +818,12 @@ export function showConnectMenu(
 ): boolean {
   const window = deps.window()
   if (!window || window.isDestroyed()) return false
-  Menu.buildFromTemplate(connectMenuItems(request)).popup({ window })
+  Menu.buildFromTemplate(
+    // Taken from the deps here rather than sent up by the renderer, because the
+    // only thing that can answer it is the main process — `servers/ipc.ts` knows
+    // which terminals it armed and why the rest were not.
+    connectMenuItems({ ...request, ...(deps.whyNotDrive ? { whyNotDrive: deps.whyNotDrive } : {}) }),
+  ).popup({ window })
   return true
 }
 

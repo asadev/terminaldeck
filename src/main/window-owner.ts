@@ -172,6 +172,23 @@ export interface WindowRouteDeps {
  * one session are two people each looking at a page, and preferring either would
  * be driving one of their browsers on a guess. Two of anything is refused by the
  * caller with a sentence, which is the same answer two devices already got.
+ *
+ * ## 3. A shell on a server is branch 2, and that is the whole of its routing
+ *
+ * Since `servers/window-drive.ts`, the agent in a terminal on a server can reach
+ * these verbs — over a port that server opened back to this Mac, with a token of
+ * its own. Its calls arrive here as an ordinary `session` caller whose machine
+ * is the **server's id**, which is exactly the half of the key
+ * `browser-binding.ts` files its windows under (`<serverId>\0<shellId>`, with
+ * the server standing in for the machine).
+ *
+ * So there is nothing new to decide. Nobody spawned it, so branch 1 does not
+ * fire; the window really is in this app, so `attachedHere` says yes and the
+ * verb is served here — which is the true answer, because the window object is a
+ * `WebContentsView` in this process and the only thing that was ever missing was
+ * a way for that session to *ask*. No frame is sent and no case is added: the
+ * transport changed and the routing did not, which is the property worth
+ * writing down rather than a coincidence to rely on.
  */
 export function routeWindowVerb(
   session: { sessionId: string; machineId: string },

@@ -2130,8 +2130,10 @@ export type ClientMessage =
    * deliberately does not are on {@link WindowCallFrame}; what belongs here is
    * that it is the only *question* a client may ask this host on this subject,
    * and that the answer to it is not in this file: the grant is read per call in
-   * `window-grants.ts`, the allow-list is `SESSION_TOOLS`, and the window is
-   * resolved inside that session's own binding by `deck-control`.
+   * `window-grants.ts`, the allow-list is `ELSEWHERE_TOOLS` — the session grant
+   * minus the tools that answer with a path on this computer, which is the right
+   * narrowing for a caller that is not on it — and the window is resolved inside
+   * that session's own binding by `deck-control`.
    */
   | WindowCallFrame
   /**
