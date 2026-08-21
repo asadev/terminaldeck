@@ -59,9 +59,24 @@ export function ToolsPanel({ open, api, onClose }: Props) {
   /** The row with something in flight, so its button can say so. */
   const [busy, setBusy] = useState('')
 
+  /** Why the list could not be read, or `''`. */
+  const [problem, setProblem] = useState('')
+
   const load = useCallback(async () => {
     if (!api.browserStore) return
-    setView(readStoreView(await api.browserStore()))
+    try {
+      setView(readStoreView(await api.browserStore()))
+      setProblem('')
+    } catch (error) {
+      /*
+       * A dialog that opens and stays blank is the dead end this whole round is
+       * about: it reads as a store with nothing in it, which is a different and
+       * much more misleading thing than a store that could not be read. So the
+       * panel finishes loading either way and says which one happened.
+       */
+      setView({ tools: [], folder: '', orphans: [] })
+      setProblem(error instanceof Error ? error.message : 'The list could not be read.')
+    }
     setLoaded(true)
   }, [api])
 
@@ -108,7 +123,9 @@ export function ToolsPanel({ open, api, onClose }: Props) {
 
   return (
     <Modal open={open} title="Browser tools" onClose={onClose} size="lg">
-      {!loaded ? null : (
+      {!loaded ? null : problem !== '' ? (
+        <p className="bw-error">{problem}</p>
+      ) : (
         <>
           {installed.length > 0 && (
             <section className="bw-store-section">
