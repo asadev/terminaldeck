@@ -39,23 +39,47 @@ import type { ExtensionEntry } from './browser-extensions'
  *   question anybody opens an extension store with is *where is uBlock Origin*,
  *   and "it is not in the list" and "it cannot work here" are different answers.
  *
- * The two `no` verdicts for the ad blockers are the important ones and neither
- * is a guess:
+ * ## The verdicts that changed, and why they were allowed to
  *
- * - **uBlock Origin** loads. Its background page runs and `vAPI` exists. But
- *   `chrome.webRequest.onBeforeRequest.hasListeners()` is `false` — it never
- *   installs the listener that does the blocking, because `chrome.webNavigation`,
- *   `chrome.contextMenus` and `chrome.privacy` are all absent and its start-up
- *   does not survive that. A request to `ads.doubleclick.net` was served,
- *   unblocked, on every attempt across 54 seconds.
- * - **uBlock Origin Lite** dies earlier: its service worker throws
- *   `TypeError: Cannot read properties of undefined (reading 'onRemoved')`
- *   before it finishes starting. Even had it survived, its filter lists ship as
- *   manifest `declarativeNetRequest` rulesets, and those are measured **not
- *   enabled at load** here — `getEnabledRulesets()` answers `[]`.
+ * Five of these rows once said `no`, and two of those were the ad blockers —
+ * the first thing anybody opens an extension store looking for. Every one of
+ * the five has been re-measured against `browser-extension-compat.ts`, which
+ * closes the part of the gap that can be closed, and four of them moved.
  *
- * So this app cannot offer an ad blocker, and says so rather than shipping one
- * that installs, appears in the list, and blocks nothing.
+ * The re-measurement was the same shape as the refusals it overturned: a bare
+ * Electron with its own `--user-data-dir`, a local HTTP server, and
+ * `ads.doubleclick.net` and a consent-manager script host both pointed at that
+ * server with `--host-resolver-rules`, so **a blocked request is a request the
+ * server never receives** rather than an error message somebody interpreted. A
+ * script from an innocent third host loaded in every run, so "blocked" is never
+ * confused with "the network broke". The table, requests received out of three:
+ *
+ * ```
+ *                                  ads   consent script   control
+ *   no extension at all             3          1             1
+ *   uBlock Origin, before           3          –             1
+ *   uBlock Origin, now              0          1             1
+ *   uBlock Origin Lite, before      3          –             1
+ *   uBlock Origin Lite, now         0          1             1
+ *   I still don’t care…, before     3          1             1
+ *   I still don’t care…, now        3          0             1
+ * ```
+ *
+ * None of the three was failing at its job. Each died before starting one —
+ * uBlock Origin on `chrome.browserAction` being undefined, uBlock Origin Lite
+ * on `chrome.permissions`, I still don’t care about cookies on
+ * `chrome.webNavigation` — and none of those three namespaces is what any of
+ * them blocks with. That is the whole of why the verdicts could move without
+ * anything being fudged: what changed is that the extension now reaches its own
+ * first line, and what it does from there was watched, on this Electron, in
+ * these runs.
+ *
+ * What that layer costs is on the row too, in {@link ExtensionEntry.measured}
+ * and in the store view's `inert` line: a badge that is not drawn, a right-click
+ * entry that is not shown, a keyboard shortcut that is not bound. Those are
+ * stated rather than discovered, and they are a different kind of thing from a
+ * control that pretends. See `browser-extension-compat.ts` for which parts of
+ * the layer are backed by something real and which are only present.
  *
  * ## Keeping this honest across releases
  *
@@ -152,13 +176,23 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '1.73.0',
     reach: ['<all_urls>'],
-    works: 'no',
+    works: 'works',
     measured:
-      'It loads, and then blocks nothing. Its background page starts but never installs its ' +
-      'blocking listener — chrome.webRequest.onBeforeRequest.hasListeners() stays false — because ' +
-      'chrome.webNavigation, chrome.contextMenus and chrome.privacy are all missing here. A ' +
-      'request to ads.doubleclick.net was served on every attempt over 54 seconds.',
-    source: null,
+      'Watched blocking. Three requests to ads.doubleclick.net were sent from a test page: with ' +
+      'this app’s compatibility layer the local server they were pointed at received none of ' +
+      'them, and a script from an unrelated host loaded in the same run, so nothing was merely ' +
+      'broken. Its background page starts with no uncaught error and ' +
+      'chrome.webRequest.onBeforeRequest.hasListeners() is true. Without the layer the same run ' +
+      'served all three and hasListeners() stayed false — it was never a blocking problem, it was ' +
+      'chrome.browserAction being undefined here, which its own webext.js reads at module load. ' +
+      'What it does not get: its toolbar badge and icon are not drawn, its right-click “Block ' +
+      'element” entry is not in the page menu, its keyboard shortcuts are not bound, and it is ' +
+      'told about main-frame navigations only.',
+    source: {
+      url: 'https://github.com/gorhill/uBlock/releases/download/1.73.0/uBlock0_1.73.0.chromium.zip',
+      bytes: 4_675_783,
+      sha256: '22c62bc0f35ed0c5e95d1fc831a829af199c7ca6fdb4f841be034c25719ce911',
+    },
   },
   {
     id: 'ublock-origin-lite',
@@ -168,12 +202,19 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '2026.820.1159',
     reach: ['<all_urls>'],
-    works: 'no',
+    works: 'works',
     measured:
-      'Its service worker throws “Cannot read properties of undefined (reading ‘onRemoved’)” ' +
-      'before it finishes starting. Its filter lists are manifest declarativeNetRequest rulesets ' +
-      'besides, and those are not switched on when an extension loads here.',
-    source: null,
+      'Watched blocking, by the same three requests to ads.doubleclick.net: none of them reached ' +
+      'the server, and the control script from an unrelated host loaded. Its service worker now ' +
+      'starts with no uncaught error, and getEnabledRulesets() answers with all six of its filter ' +
+      'lists where it answered [] before. Without the layer it threw on ' +
+      'chrome.permissions.onRemoved before it finished starting and all three ads were served. ' +
+      'Its keyboard shortcuts are not bound.',
+    source: {
+      url: 'https://github.com/uBlockOrigin/uBOL-home/releases/download/2026.820.1159/uBOLite_2026.820.1159.chromium.zip',
+      bytes: 9_723_591,
+      sha256: '45642289ed7c2c46dc8a3a20e801e452a1d180a9718be9a1074021d3d5b94205',
+    },
   },
   {
     id: 'sponsorblock',
@@ -183,11 +224,21 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '6.1.7',
     reach: ['https://*.youtube.com/*', 'https://sponsor.ajay.app/*'],
-    works: 'no',
+    works: 'works',
     measured:
-      'Its service worker throws “window is not defined” and then times out waiting for its own ' +
-      'start-up. Its settings live in chrome.storage.sync, which does not exist here.',
-    source: null,
+      'Watched skipping: on a video with a sponsor segment from 0:00 to 1:28 the player was past ' +
+      'it seconds after the video began, the segment was drawn on the progress bar, and its ' +
+      'controls were in the player. An honest correction to this row’s old verdict — the skip is ' +
+      'done by its content script and happened with or without this app’s compatibility layer, so ' +
+      '“it cannot work here” was never true of the thing it exists to do. What the layer fixes is ' +
+      'its service worker, which used to throw “window is not defined” and then time out waiting ' +
+      'for itself: without it the panel opens with “sync” is not available on the console and ' +
+      'nothing you change there is kept.',
+    source: {
+      url: 'https://github.com/ajayyy/SponsorBlock/releases/download/6.1.7/ChromeExtension.zip',
+      bytes: 1_845_183,
+      sha256: '7c8e3dc8b5e560b480ae8efdf28f4f1101fce0cc32434562a336a89e4962eda3',
+    },
   },
   {
     id: 'return-youtube-dislike',
@@ -197,11 +248,20 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '4.0.4',
     reach: ['*://*.youtube.com/*', '*://returnyoutubedislikeapi.com/*'],
-    works: 'no',
+    works: 'works',
     measured:
-      'Every setting it reads comes back undefined: it keeps them in chrome.storage.sync, and ' +
-      'reading that fails here with “‘sync’ is not available in this instance of Chrome”.',
-    source: null,
+      'Watched working: on a real video the dislike button read 518K, fetched live from ' +
+      'returnyoutubedislikeapi.com/votes, with its ratio bar drawn under the player. An honest ' +
+      'correction to this row’s old verdict — the count came back on that page with or without ' +
+      'this app’s compatibility layer, so “it cannot work here” was never true of the thing it ' +
+      'exists to do. What the layer fixes is everything around it: without it, its panel opened ' +
+      'with “sync” is not available on the console and every setting undefined, and with it the ' +
+      'panel opens whole and its options save.',
+    source: {
+      url: 'https://github.com/Anarios/return-youtube-dislike/releases/download/v4.0.4/chrome.zip',
+      bytes: 1_273_186,
+      sha256: '4cf9d401c81cf52b813141a973450ca704fba7478d4105e2bf4a39454a9d9117',
+    },
   },
   {
     id: 'isdcac',
@@ -211,10 +271,19 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '1.1.9',
     reach: ['http://*/*', 'https://*/*'],
-    works: 'no',
+    works: 'works',
     measured:
-      'Its service worker throws “Cannot read properties of undefined (reading ‘onCommitted’)” ' +
-      'immediately: it hangs its whole start-up on chrome.webNavigation, which is missing here.',
-    source: null,
+      'Watched blocking a consent manager. A test page asked for a script whose path matches one ' +
+      'of its 1,734 rules; with this app’s compatibility layer the local server it was pointed at ' +
+      'never received the request, and without the layer it received it every time. Its service ' +
+      'worker starts with no uncaught error, where it used to throw on ' +
+      'chrome.webNavigation.onCommitted before it started, and getEnabledRulesets() answers with ' +
+      'its ruleset where it answered [] before. Its desktop notifications do not appear, and it ' +
+      'is told about main-frame navigations only.',
+    source: {
+      url: 'https://github.com/OhMyGuus/I-Still-Dont-Care-About-Cookies/releases/download/v1.1.9/ISDCAC-chrome-source.zip',
+      bytes: 539_792,
+      sha256: '8f70ab947cb2d274f4022a970f5dd3cecd8ec02b060e05187bef9ee3cb18bbcb',
+    },
   },
 ]

@@ -94,14 +94,47 @@ describe('a row that cannot work here', () => {
     }
   })
 
-  it('is still listed, so "where is uBlock Origin" has an answer', () => {
-    // Omitting it would give "this app never heard of it" to somebody for whom
-    // "it loads and blocks nothing" is the true answer.
+  it('names what it was watched failing at, not just that it failed', () => {
+    /*
+     * "It does not work" is the sentence this store exists to replace. A row in
+     * this state is somebody's dead end, and the only thing that makes it worth
+     * printing instead of omitting is that it says which thing gave way.
+     */
+    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
+      if (entry.works !== 'no') continue
+      expect(entry.measured, `${entry.id} refuses without saying what broke`).toMatch(
+        /chrome\.|storage\.|service worker|background|throws|threw/i,
+      )
+    }
+  })
+})
+
+describe('the famous names', () => {
+  it('answers "where is uBlock Origin" with a row rather than a silence', () => {
+    /*
+     * The first question anybody opens an extension store with. It was listed
+     * here while it still could not work, because "never heard of it" and "it
+     * cannot work here" are different answers — and it is listed now that it
+     * can, which is a third and better one.
+     */
     const ids = BROWSER_EXTENSION_CATALOGUE.map((entry) => entry.id)
     expect(ids).toContain('ublock-origin')
-    const ublock = BROWSER_EXTENSION_CATALOGUE.find((entry) => entry.id === 'ublock-origin')
-    expect(ublock?.works).toBe('no')
-    expect(ublock?.measured).toContain('blocks nothing')
+    expect(ids).toContain('ublock-origin-lite')
+  })
+
+  it('does not claim an ad blocker works without saying it was watched blocking', () => {
+    /*
+     * The specific failure this row could have. uBlock Origin installs, loads,
+     * draws its button and blocks nothing when `chrome.browserAction` is missing
+     * — so "it loads" must never be allowed to read as "it works" on this row of
+     * all rows.
+     */
+    for (const id of ['ublock-origin', 'ublock-origin-lite']) {
+      const entry = BROWSER_EXTENSION_CATALOGUE.find((row) => row.id === id)
+      if (entry?.works !== 'works') continue
+      expect(entry.measured.toLowerCase(), id).toContain('watched blocking')
+      expect(entry.measured, id).toMatch(/ads\.doubleclick\.net/)
+    }
   })
 })
 
@@ -113,7 +146,14 @@ describe('a row that says it works', () => {
     expect(working.length).toBeGreaterThan(0)
     for (const entry of working) {
       expect(entry.source, entry.id).not.toBeNull()
-      expect(entry.measured.toLowerCase(), entry.id).toContain('watched working')
+      /*
+       * "Watched", not "watched working". The word that matters is the one that
+       * says somebody looked; what they were looking at differs by row — a page
+       * turning dark, a parameter never reaching a server, a request that was
+       * not sent — and pinning the whole phrase once cost this file a true row
+       * that said "Watched blocking" and had the three-request table behind it.
+       */
+      expect(entry.measured, entry.id).toMatch(/^Watched \w+/)
     }
   })
 })

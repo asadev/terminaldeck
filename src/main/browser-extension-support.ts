@@ -1,3 +1,11 @@
+/*
+ * `browser-extension-compat.ts` imports only a *type* from this file, so this
+ * value import is not a runtime cycle: the type is erased before either module
+ * exists. The alternative was writing the namespace list out twice, and two
+ * copies of a list is how a screen and the code start disagreeing.
+ */
+import { COMPAT_PROVIDES } from './browser-extension-compat'
+
 /**
  * What a browser extension can actually do inside this app — measured, not
  * remembered.
@@ -379,6 +387,11 @@ export function popupPage(manifest: ExtensionManifest): string {
 /**
  * The limits, in the words a person reads them in, once.
  *
+ * Rewritten when `browser-extension-compat.ts` arrived, because three of these
+ * sentences had become false. A limits list that goes on naming a limit the app
+ * has since closed is the same defect as a control that does nothing, read the
+ * other way round: it talks somebody out of an install that would have worked.
+ *
  * Exported as data rather than written into JSX so the same sentences can be
  * asserted by a test and reused by the tool an agent calls. A screen and an
  * agent disagreeing about what this browser can do is the same defect as a
@@ -391,11 +404,15 @@ export const EXTENSION_LIMITS: readonly string[] = [
     'newer build of this app offers a newer one.',
   `This browser is Chromium ${CHROMIUM_MEASURED} inside Electron ${ELECTRON_MEASURED}, which ` +
     'provides only part of the extension API. Missing here: ' +
-    `${MISSING_APIS.join(', ')}. A row says which of them the extension in front of you asks for.`,
-  'chrome.storage.sync is not available, so an extension that keeps its settings there comes up ' +
-    'with none of them. Its manifest cannot show this — it was found by running them.',
+    `${MISSING_APIS.join(', ')}. This app fills in enough of ` +
+    `${COMPAT_PROVIDES.filter((name) => name !== 'storage.sync').join(', ')} for an extension to ` +
+    'start, and a row says which of them it filled in and what stays inert.',
+  'chrome.storage.sync is not available. This app gives an extension a store of its own that ' +
+    'behaves like it and lives on this machine — there is no account here to sync to, and never ' +
+    'was. Its manifest cannot show this; it was found by running them.',
   'Filter lists shipped as manifest declarativeNetRequest rulesets are not switched on when an ' +
-    'extension loads, so a content blocker built that way loads and blocks nothing.',
+    'extension loads. This app switches on the ones a manifest marks enabled, once, after ' +
+    'installing, and leaves them alone after that.',
   'Packed .crx files cannot be installed, and neither can an extension from the Chrome Web Store.',
 ]
 

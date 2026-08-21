@@ -59,6 +59,62 @@ function storeWith(catalogue: ExtensionCatalogue, archive: Buffer | null, over: 
   })
 }
 
+describe('the compatibility layer, at install time', () => {
+  /*
+   * The store is where the layer is actually applied, and the failure mode it
+   * guards against is specific: an install that reports success while the layer
+   * never reached the disk gives a row that says an extension works over a copy
+   * that will die on its first line, exactly as it did before any of this.
+   */
+  it('writes the layer into the unpacked copy and into the background it named', async () => {
+    const archive = makeExtensionZip(
+      plainManifest({ background: { service_worker: 'bg.js' } }),
+      [{ path: 'bg.js', bytes: Buffer.from('(function () { self.ran = true })()\n', 'utf8') }],
+    )
+    const store = storeWith([entryFor('test', archive)], archive)
+    const result = await store.install(PROFILE, 'test')
+    expect(result.ok).toBe(true)
+    const dir = join(profileExtensionsRoot(root, PROFILE) ?? '', 'test')
+    expect(existsSync(join(dir, 'td-compat.js'))).toBe(true)
+    const background = readFileSync(join(dir, 'bg.js'), 'utf8')
+    expect(background.split('\n')[0]).toBe("importScripts('td-compat.js');")
+    expect(background).toContain('self.ran = true')
+  })
+
+  it('names the layer in the confirmation rather than editing somebody’s extension in silence', async () => {
+    const archive = makeExtensionZip(
+      plainManifest({ background: { service_worker: 'bg.js' }, permissions: ['storage', 'contextMenus'] }),
+      [{ path: 'bg.js', bytes: Buffer.from('var a = 1\n', 'utf8') }],
+    )
+    const store = storeWith(
+      [entryFor('test', archive, { reach: ['https://example.com/*'] })],
+      archive,
+    )
+    const result = await store.install(PROFILE, 'test')
+    expect(result.message).toContain('This app fills in')
+    expect(result.message).toContain('chrome.contextMenus')
+    expect(result.message).toContain('its right-click menu entries are not shown')
+  })
+
+  it('shows on the row what it filled in and what is still not there', async () => {
+    const archive = makeExtensionZip(
+      plainManifest({ background: { service_worker: 'bg.js' }, permissions: ['storage', 'webNavigation'] }),
+      [{ path: 'bg.js', bytes: Buffer.from('var a = 1\n', 'utf8') }],
+    )
+    const store = storeWith([entryFor('test', archive)], archive)
+    await store.install(PROFILE, 'test')
+    const row = store.view(PROFILE, 'Default').extensions.find((entry) => entry.id === 'test')
+    expect(row?.provides).toContain('webNavigation')
+    expect(row?.inert.join(' ')).toContain('main-frame navigations only')
+    /*
+     * And it no longer appears under "Not available here", which is the half of
+     * this that would otherwise go on being false: the row would name a
+     * namespace as missing that the app had just supplied.
+     */
+    expect(row?.missing).not.toContain('webNavigation')
+  })
+})
+
 describe('a profile id is a directory name, so it is checked', () => {
   it('takes exactly what `partitionFor` takes and nothing else', async () => {
     /*
@@ -280,7 +336,7 @@ describe('installing', () => {
     expect(result.message).toContain('chrome.contextMenus')
   })
 
-  it('warns when its rules are static rulesets, which this browser will not switch on', async () => {
+  it('says it switched the static rulesets on, because this browser will not', async () => {
     const archive = makeExtensionZip(
       plainManifest({
         permissions: ['declarativeNetRequest'],
@@ -290,7 +346,14 @@ describe('installing', () => {
     )
     const result = await storeWith([entryFor('test', archive)], archive).install(PROFILE, 'test')
     expect(result.ok).toBe(true)
-    expect(result.message).toContain('declarativeNetRequest rulesets')
+    /*
+     * This used to assert a warning. The sentence changed when
+     * `browser-extension-compat.ts` started switching these on — a row that went
+     * on warning about something the app had already handled would be talking
+     * somebody out of an install that works.
+     */
+    expect(result.message).toContain('declarativeNetRequest ruleset')
+    expect(result.message).toContain('switched it on')
   })
 })
 

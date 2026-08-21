@@ -14,6 +14,7 @@ import {
   usesStaticRulesets,
   type ExtensionManifest,
 } from './browser-extension-support'
+import { applyCompat, planCompat, type CompatReport } from './browser-extension-compat'
 import { manifestPrefix, unzip } from './browser-extension-unzip'
 
 /**
@@ -173,8 +174,24 @@ export interface StoreExtension {
   reach: string[]
   /** True when its content scripts run on every page. */
   everywhere: boolean
-  /** `chrome.*` it asks for that this browser does not have. */
+  /**
+   * `chrome.*` it asks for that this browser does not have **and this app does
+   * not fill in**.
+   *
+   * Narrowed deliberately when `browser-extension-compat.ts` arrived. Before it,
+   * this was every missing namespace and the row said each one meant "whatever
+   * it uses those for will not work" — which was true then and is false now for
+   * the ones the layer defines. A row that goes on printing a sentence the code
+   * underneath it stopped meaning is the same defect as a button that does
+   * nothing, only quieter.
+   */
   missing: string[]
+  /** `chrome.*` this app fills in for it, so its start-up survives. */
+  provides: string[]
+  /** What stays inert even with the layer, in the words a row shows. */
+  inert: string[]
+  /** How many manifest declarativeNetRequest rulesets this app switches on. */
+  rulesetsSwitchedOn: number
   /** The page its toolbar button opens, or `''`. */
   popup: string
   /**
@@ -504,6 +521,9 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           reach: [...entry.reach],
           everywhere: everywhereIn(entry.reach),
           missing: [] as string[],
+          provides: [] as string[],
+          inert: [] as string[],
+          rulesetsSwitchedOn: 0,
           popup: '',
           staticRulesets: false,
           message: '',
@@ -529,6 +549,7 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           }
         }
         const { manifest, installedAt, enabled } = loaded.extension
+        const compat = planCompat(manifest)
         return {
           ...base,
           state: 'installed' as const,
@@ -537,7 +558,10 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           enabled,
           reach: reachOf(manifest),
           everywhere: everywhere(manifest),
-          missing: missingApis(manifest),
+          missing: missingApis(manifest).filter((api) => !compat.provides.includes(api)),
+          provides: compat.provides,
+          inert: compat.inert,
+          rulesetsSwitchedOn: compat.rulesets.length,
           popup: popupPage(manifest),
           staticRulesets: usesStaticRulesets(manifest),
         }
@@ -621,6 +645,7 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
         return { ok: false, message: `${entry.name} was not installed: ${can.why}.` }
       }
 
+      let compat: CompatReport = { ok: true, provides: [], inert: [], why: '' }
       /*
        * A reinstall replaces rather than merges. A directory left over from an
        * older release with files the new one no longer ships is a mixture of two
@@ -637,6 +662,16 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           mkdirSync(dirname(target), { recursive: true })
           writeFileSync(target, file.bytes)
         }
+        /*
+         * The compatibility layer goes in before the record is written, so a row
+         * can never say Installed over a copy that has not had it. It runs after
+         * the digest check and after every byte is on disk, which is the whole
+         * of why it is allowed to touch somebody else's bundle: what was
+         * verified is what was unpacked, and this is this app's own code being
+         * added to this app's own per-profile copy afterwards.
+         */
+        compat = applyCompat(dir, parsed.manifest)
+
         writeRecord(dir, {
           id,
           version: typeof parsed.manifest.version === 'string' ? parsed.manifest.version : '',
@@ -665,17 +700,34 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
        * whole of where an extension is and is not.
        */
       const name = displayName(parsed.manifest, entry.name)
-      const gaps = missingApis(parsed.manifest)
+      const plan = planCompat(parsed.manifest)
+      const gaps = missingApis(parsed.manifest).filter((api) => !compat.provides.includes(api))
       const note =
         gaps.length === 0
           ? ''
           : ` It asks for ${gaps.map((api) => `chrome.${api}`).join(', ')}, which this browser does not have, so whatever it uses those for will not work.`
-      const rulesets = usesStaticRulesets(parsed.manifest)
-        ? ' Its filter lists ship as manifest declarativeNetRequest rulesets, which this browser does not switch on.'
-        : ''
+      /*
+       * The layer is named rather than left silent. It rewrote files inside the
+       * extension, and an app that quietly edits a program somebody just agreed
+       * to install and then does not mention it is keeping a secret it has no
+       * reason to keep.
+       */
+      const filled =
+        compat.provides.length === 0
+          ? ''
+          : ` This app fills in ${compat.provides.map((api) => `chrome.${api}`).join(', ')} so it can start.`
+      const inert = compat.inert.length === 0 ? '' : ` Even so, ${compat.inert.join('; ')}.`
+      const layerFailed = compat.ok ? '' : ` The compatibility layer could not be written: ${compat.why}.`
+      const one = plan.rulesets.length === 1
+      const rulesets =
+        plan.rulesets.length > 0
+          ? ` Its ${plan.rulesets.length} manifest declarativeNetRequest ruleset${one ? '' : 's'} ${one ? 'is' : 'are'} not switched on when an extension loads here, so this app switched ${one ? 'it' : 'them'} on.`
+          : usesStaticRulesets(parsed.manifest)
+            ? ' Its filter lists ship as manifest declarativeNetRequest rulesets, which this browser does not switch on.'
+            : ''
       return {
         ok: true,
-        message: `${name} is installed in this profile and switched on.${note}${rulesets}`,
+        message: `${name} is installed in this profile and switched on.${filled}${inert}${note}${rulesets}${layerFailed}`,
       }
     },
 

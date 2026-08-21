@@ -46,6 +46,9 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     reach: [],
     everywhere: false,
     missing: [],
+    provides: [],
+    inert: [],
+    rulesetsSwitchedOn: 0,
     popup: '',
     staticRulesets: false,
     message: '',
@@ -192,5 +195,43 @@ describe('a damaged install', () => {
     })
     expect(html).toContain('different release')
     expect(html).toContain('Remove')
+  })
+})
+
+describe('the compatibility layer, on the row', () => {
+  it('names what this app filled in and what is still not there', () => {
+    /*
+     * The layer rewrites files inside a program somebody just agreed to install.
+     * An app that does that and does not say so is keeping a secret it has no
+     * reason to keep — and one that says "works" without naming what is inert is
+     * the row version of a button that does nothing.
+     */
+    const html = render(
+      row({
+        state: 'installed',
+        enabled: true,
+        provides: ['contextMenus', 'webNavigation'],
+        inert: ['its right-click menu entries are not shown'],
+      }),
+    )
+    expect(html).toContain('Filled in by this app')
+    expect(html).toContain('chrome.contextMenus')
+    expect(html).toContain('Still not there')
+    expect(html).toContain('right-click menu entries are not shown')
+  })
+
+  it('stops warning about static rulesets once it has switched them on', () => {
+    const warned = render(row({ state: 'installed', staticRulesets: true, rulesetsSwitchedOn: 0 }))
+    expect(warned).toContain('are not in force')
+    const handled = render(row({ state: 'installed', staticRulesets: true, rulesetsSwitchedOn: 6 }))
+    expect(handled).not.toContain('are not in force')
+    expect(handled).toContain('switched its 6 on')
+  })
+
+  it('says nothing about a layer for a row nobody has installed', () => {
+    // Before an install there is no manifest, so there is nothing measured to
+    // say. A row that guessed would be guessing about somebody else's release.
+    const html = render(row({ state: 'available' }))
+    expect(html).not.toContain('Filled in by this app')
   })
 })
