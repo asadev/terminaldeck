@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useCopilotNaming } from '../copilot/useCopilotNaming'
-import { folderName } from '../session-title'
 import { useOptionalStore } from '../state/store'
 import {
+  namesFrom,
   readSessions,
   resolveAgentSessions,
   resolveTarget,
   sendPayload,
+  submitLine,
   whyDisabled,
+  type AgentServerShell,
   type AgentSession,
   type AgentSessionBridge,
   type NameSource,
+  type SendOutcome,
 } from './agent-target'
 
 /**
@@ -88,7 +91,44 @@ function machineSend(): MachineSendBridge | null {
   return deck && typeof deck.sendToMachineSession === 'function' ? (deck as MachineSendBridge) : null
 }
 
-export function useAgentTarget(bridge?: AgentSessionBridge | null): AgentTarget {
+/** The slice a send to a terminal on a server needs. Feature-detected the same way. */
+interface ServerSendBridge {
+  writeToServerShell(shellId: string, data: string): Promise<unknown>
+}
+
+function serverSend(): ServerSendBridge | null {
+  const deck = (globalThis as { deck?: Partial<ServerSendBridge> }).deck
+  return deck && typeof deck.writeToServerShell === 'function' ? (deck as ServerSendBridge) : null
+}
+
+/**
+ * `servers:shell:write` answers `{ written: boolean }` and nothing else.
+ *
+ * There is no sentence to carry back, and inventing one here would be this
+ * machine guessing about somebody's server. The only two things that make it
+ * false are a shell id the main process has no channel for and a non-string
+ * argument, and both mean the same thing to the person: that terminal is gone.
+ */
+function wroteToServer(answer: unknown, serverName: string): SendOutcome {
+  const written =
+    typeof answer === 'object' && answer !== null && (answer as { written?: unknown }).written === true
+  return written ? { ok: true } : { ok: false, message: `That terminal on ${serverName} is no longer open.` }
+}
+
+export function useAgentTarget(
+  bridge?: AgentSessionBridge | null,
+  /**
+   * The shells this window has open on servers.
+   *
+   * A parameter rather than something read off the preload, because there is
+   * nothing over there to read: a server runs no copy of this app, so the shells
+   * exist only as long as this window holds their connections and this window's
+   * own list is the whole truth. `App.tsx` owns that list and hands it down.
+   * Absent — every test, and any host that has no servers area — is an empty
+   * list, which lists nothing rather than failing to list something.
+   */
+  servers: readonly AgentServerShell[] = [],
+): AgentTarget {
   const api = useMemo(
     () =>
       bridge !== undefined
@@ -106,16 +146,9 @@ export function useAgentTarget(bridge?: AgentSessionBridge | null): AgentTarget 
   /*
    * The names the window is already using for these sessions.
    *
-   * Two sources, because a session's name lives in two places in this app and
-   * neither of them is the session list this picker reads.
-   *
-   *  - **The store**, which is where a rename typed in the rail lands and where
-   *    the auto-titler writes what an agent has called itself. It is React state
-   *    in this window and never reaches the main process, so `session:list`
-   *    could not carry it even in principle.
-   *  - **The copilot's instruction file**, read by `useCopilotNaming`. The
-   *    copilot is titled from its folder like everything else, and its folder is
-   *    called `copilot`, which is exactly the label he objected to.
+   * Two sources — the store, and the copilot's instruction file by way of
+   * `useCopilotNaming` — and the rule for combining them is `namesFrom` in
+   * `agent-target.ts`, where it can be tested. This hook only supplies them.
    *
    * `useOptionalStore` rather than `useStore` for the reason `session-rename.ts`
    * gives about the same call: this hook is also mounted in tests and in the
@@ -138,6 +171,17 @@ export function useAgentTarget(bridge?: AgentSessionBridge | null): AgentTarget 
   const namesKey = (stored ?? []).map((session) => `${session.id}\u0000${session.title}`).join('\u0001')
 
   /*
+   * The shells on servers, flattened to what can change a row.
+   *
+   * Same argument as `namesKey` one line up: `servers` is an array the window
+   * rebuilds on every render that touches it, so depending on the array itself
+   * would re-read the session list on renders that changed nothing about it.
+   */
+  const serversKey = servers
+    .map((shell) => `${shell.tabId}\u0000${shell.shellId}\u0000${shell.serverName}\u0000${shell.startIn}\u0000${shell.ended}`)
+    .join('\u0001')
+
+  /*
    * Re-read the list rather than patching it.
    *
    * `session:created` carries a whole `SessionMeta` and `session:exit` carries
@@ -147,27 +191,26 @@ export function useAgentTarget(bridge?: AgentSessionBridge | null): AgentTarget 
    * and the call is a single IPC round trip; re-reading it is both simpler and
    * the only version that cannot drift.
    */
-  const names = useMemo<NameSource>(() => {
-    const map = new Map<string, string>()
-    for (const session of stored ?? []) {
-      // A title that is still the folder's own name is the absence of a name,
-      // and `nameOf` says so as well — but it says so about the *list's* title,
-      // and this map wins over that. Leaving the folder in here would therefore
-      // override the far better title the main process may have derived.
-      if (session.title && session.title !== folderName(session.cwd)) {
-        map.set(session.id, session.title)
-      }
-      // The copilot is titled from its folder like everything else, and the
-      // window prints its real name everywhere it draws it. This is the one row
-      // in a session list that is renamed from outside the session.
-      if (copilot.root !== null && session.cwd === copilot.root) map.set(session.id, copilot.name)
-    }
-    return map
+  const names = useMemo<NameSource>(
+    () => namesFrom(stored ?? [], copilot),
     // Keyed on `namesKey` rather than on `stored`, which is a fresh array on
     // every store write — a status change, a byte of output landing. The note
     // where `namesKey` is built carries the argument; this dependency list is
     // the whole reason it exists.
-  }, [namesKey, copilot.root, copilot.name])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [namesKey, copilot.sessionId, copilot.name],
+  )
+
+  /*
+   * The same list, in a ref.
+   *
+   * `refresh` is rebuilt on `serversKey` and deliberately not on `servers`,
+   * which is a fresh array on renders that changed nothing about it. This is
+   * what a callback that survived one of those reads, so it still sees the
+   * current array rather than the one it closed over.
+   */
+  const shells = useRef(servers)
+  shells.current = servers
 
   const refresh = useCallback(() => {
     if (!api) return
@@ -175,7 +218,7 @@ export function useAgentTarget(bridge?: AgentSessionBridge | null): AgentTarget 
     api
       .listSessions()
       .then((value) => {
-        if (live) setSessions(readSessions(value, names))
+        if (live) setSessions(readSessions(value, names, shells.current))
       })
       .catch(() => {
         // Leave the last good list rather than emptying the picker under the
@@ -184,7 +227,11 @@ export function useAgentTarget(bridge?: AgentSessionBridge | null): AgentTarget 
     return () => {
       live = false
     }
-  }, [api, names])
+    // `serversKey` rather than `servers`: the array is rebuilt on renders that
+    // changed nothing about it, and re-reading the whole list on each of those
+    // would be an IPC round trip per keystroke somewhere else in the window.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, names, serversKey])
 
   useEffect(() => refresh(), [refresh])
 
@@ -220,19 +267,77 @@ export function useAgentTarget(bridge?: AgentSessionBridge | null): AgentTarget 
   const target = resolveTarget(chosenId, sessions)
 
   /**
-   * Put the line where the chosen row says it goes.
+   * One chunk of characters into the chosen session, wherever it is.
    *
-   * Two routes, one rule: `machineId` decides which, and it is read off the row
-   * at the moment of the press rather than remembered. A row on this computer is
-   * `writeToSession`, unchanged since the day this picker was built. A row on a
-   * paired machine is `sendToMachineSession`, which rides the `session.send`
-   * verb — typing authorised by the device's folder reach, with no attach and so
-   * no scrollback replayed into a terminal somebody is reading.
+   * Three routes, one rule: the row says which, and it is read off the row at
+   * the moment of the press rather than remembered.
    *
-   * The remote branch is feature-detected rather than assumed. A window running
-   * against a preload older than the verb must refuse with a sentence, not throw
-   * `undefined is not a function` into a click handler and leave the button
-   * saying nothing at all.
+   *  - **This computer** — `writeToSession`, unchanged since the day this picker
+   *    was built, and the only one of the three that cannot fail once the
+   *    session has resolved.
+   *  - **A paired machine** — `sendToMachineSession`, which rides the
+   *    `session.send` verb: typing authorised by the device's folder reach, with
+   *    no attach and so no scrollback replayed into a terminal somebody is
+   *    reading.
+   *  - **A terminal on a server** — `writeToServerShell`, the same channel the
+   *    terminal pane itself types through, addressed by the handle the server
+   *    answered `servers:shell:open` with.
+   *
+   * Every one of the three is feature-detected rather than assumed. A window
+   * running against a preload older than one of these channels must refuse with
+   * a sentence, not throw `undefined is not a function` into a click handler and
+   * leave the button saying nothing at all.
+   */
+  const writeOne = useCallback(
+    async (target: AgentSession, data: string): Promise<SendOutcome> => {
+      if (!api) return { ok: false, message: 'This build cannot type into your sessions.' }
+      if (target.serverId !== '') {
+        const server = serverSend()
+        if (!server) {
+          return { ok: false, message: `This build cannot type into a terminal on ${target.machineName}.` }
+        }
+        const answer = await server.writeToServerShell(target.shellId, data).catch(() => null)
+        return wroteToServer(answer, target.machineName)
+      }
+      if (target.machineId === '') {
+        api.writeToSession(target.id, data)
+        return { ok: true }
+      }
+      const remote = machineSend()
+      if (!remote) {
+        return { ok: false, message: `This build cannot type into a session on ${target.machineName}.` }
+      }
+      // The far machine's own words when it refuses, because it is the only end
+      // that knows why — the folder was unshared a minute ago, the pty exited
+      // between the list and the press. A sentence written here would be a guess
+      // about a computer this one is not on.
+      const outcome = await remote
+        .sendToMachineSession(target.machineId, target.id, data)
+        .catch(() => ({ ok: false, message: `${target.machineName} did not answer.` }))
+      return outcome.ok
+        ? { ok: true }
+        : { ok: false, message: outcome.message || `${target.machineName} refused it.` }
+    },
+    [api],
+  )
+
+  /**
+   * Put the line into the chosen session **and press Return on it**.
+   *
+   * The second half of that sentence is the whole of the 2026-08-21 change. This
+   * used to be one `writeToSession(now.id, line)` with no carriage return at
+   * all, so a send left the composed line typed and unsent in the target
+   * session's prompt box and the agent never saw it. Asad, having pressed Send
+   * and then walked over to the session to find it sitting there: *"it should
+   * not be waiting us to come and send… Just make it like this send actually
+   * send and pushed inside the session also."*
+   *
+   * Appending `\r` would not have fixed it. `submitLine` carries the measurement
+   * — a stdin chunk of 64 bytes or more is read as pasted text, where a carriage
+   * return is a newline — and every line this picker composes is over that,
+   * because every one of them carries a path and a pixel size. So it is two
+   * writes with a real gap between them, through whichever of the three routes
+   * the row names.
    */
   const send = useCallback(
     async (text: string, options?: { submit?: boolean }): Promise<boolean> => {
@@ -246,29 +351,14 @@ export function useAgentTarget(bridge?: AgentSessionBridge | null): AgentTarget 
       // pressing it is where a session exits.
       const now = resolveTarget(chosenId, sessions)
       if (!now) return false
-      if (now.machineId === '') {
-        api.writeToSession(now.id, line)
-        return true
-      }
-      const remote = machineSend()
-      if (!remote) {
-        setProblem(`This build cannot type into a session on ${now.machineName}.`)
-        return false
-      }
-      // The far machine's own words when it refuses, because it is the only end
-      // that knows why — the folder was unshared a minute ago, the pty exited
-      // between the list and the press. A sentence written here would be a guess
-      // about a computer this one is not on.
-      const outcome = await remote
-        .sendToMachineSession(now.machineId, now.id, line)
-        .catch(() => ({ ok: false, message: `${now.machineName} did not answer.` }))
+      const outcome = await submitLine(line, (data) => writeOne(now, data))
       if (!outcome.ok) {
-        setProblem(outcome.message || `${now.machineName} refused it.`)
+        setProblem(outcome.message)
         return false
       }
       return true
     },
-    [api, chosenId, sessions],
+    [api, chosenId, sessions, writeOne],
   )
 
   return {

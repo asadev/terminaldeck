@@ -25,31 +25,52 @@ import { useCopilotSetup } from './useCopilotSetup'
  * copilot only ever appeared in the rail and the strip, and stopped being
  * invisible the moment a second list started including it.
  *
- * ## Why the folder rather than the session id
+ * ## Why the session id, and why the folder was the wrong handle
  *
- * `paths.root` is fixed for the life of the install — it is a directory this app
- * made and keeps — whereas the copilot's session id is minted afresh by every
- * start, every restart and every crash-and-respawn. A hook that cached the id
- * would be wrong within one press of Restart, and would have to re-read on every
- * session event to stay right. The folder is read once and stays true, and the
- * caller matches it against whatever session list it is already holding.
+ * This answered `root` — the copilot's working directory — for one day, on the
+ * argument that a folder is fixed for the life of the install while a session id
+ * is minted afresh by every start and restart. The argument was true about the
+ * *handle* and wrong about the *question*, because a folder does not name one
+ * session. It names everything anybody starts in it. Asad, 2026-08-21, having
+ * started a session of his own in the folder his copilot runs in and renamed it
+ * in the rail:
+ *
+ *   > *"Why all of them calls commander now? I mean, why do we have two
+ *   > commander sessions and none of this is calling template? **This Mac
+ *   > session, the one I just called.** See, this is also a problem."*
+ *
+ * There were not two copilots. There was one, plus his own session wearing its
+ * name, because the caller matched on `cwd` and the copilot's folder was the
+ * folder he had picked in the New session dialog — and the folder match ran
+ * *after* the line that stores the title he typed, so it overwrote his own name
+ * with the copilot's.
+ *
+ * A name belongs to a session, so it is keyed on the session. The staleness the
+ * old note worried about is real and is answered rather than avoided: this
+ * re-reads on `session:created` and `session:exit`, and a copilot restart is
+ * exactly those two events. Between the exit and the next answer the copilot row
+ * is briefly called what its folder calls it, which is a worse label for a
+ * moment and never somebody else's.
  *
  * ## What a caller does with this
  *
- * Finds the row whose `cwd` is {@link root} and calls it {@link name}. Null root
- * means the question could not be answered — no copilot channels in this build,
- * or the read failed — and the honest thing then is to leave the row named
- * however it was, rather than guessing which one is the copilot.
+ * Finds the row whose **id** is {@link sessionId} and calls it {@link name}.
+ * Null means the question could not be answered — no copilot channels in this
+ * build, the copilot is not running, or the read failed — and the honest thing
+ * then is to leave every row named however it was, rather than guessing which
+ * one is the copilot.
  */
 export interface CopilotNaming {
-  /** The copilot's working directory, or null when it could not be read. */
-  root: string | null
+  /** The copilot's own session, or null when there is no answer to that. */
+  sessionId: string | null
   /** What it is called. Falls back to this app's word for an unnamed copilot. */
   name: string
 }
 
 interface StateBridge {
   copilotState(): Promise<unknown>
+  onSessionCreated?(callback: (meta: unknown) => void): () => void
+  onSessionExit?(callback: (id: string, exitCode: number) => void): () => void
 }
 
 function bridge(): StateBridge | null {
@@ -59,27 +80,48 @@ function bridge(): StateBridge | null {
 
 export function useCopilotNaming(): CopilotNaming {
   const setup = useCopilotSetup()
-  const [root, setRoot] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
 
   useEffect(() => {
     const deck = bridge()
     if (!deck) return
     let live = true
-    void deck
-      .copilotState()
-      .then((value) => {
-        if (live) setRoot(readCopilotState(value)?.paths?.root ?? null)
-      })
-      .catch(() => {
-        // No copilot channels, or the read threw. The caller names nothing
-        // specially, which leaves its rows exactly as they were — a worse label
-        // than the right one, and a far better outcome than pinning the
-        // copilot's name onto whichever session happened to answer.
-      })
+    const read = (): void => {
+      void deck
+        .copilotState()
+        .then((value) => {
+          if (live) setSessionId(readCopilotState(value)?.sessionId ?? null)
+        })
+        .catch(() => {
+          // No copilot channels, or the read threw. The caller names nothing
+          // specially, which leaves its rows exactly as they were — a worse
+          // label than the right one, and a far better outcome than pinning the
+          // copilot's name onto whichever session happened to answer.
+        })
+    }
+    read()
+    /*
+     * The two events a restart is made of.
+     *
+     * There is no `copilot:changed` broadcast and this does not invent one —
+     * `useCopilot.ts` gives the reason at length — but the copilot is a pty like
+     * any other, so its process ending and the replacement starting both arrive
+     * on the ordinary session channels. Re-reading on them is what keeps a
+     * *session id* usable as the handle: without it, one press of Restart would
+     * leave this pointing at a session that no longer exists and the copilot's
+     * row would fall back to its folder's name.
+     *
+     * Both optional, because a preload older than either must still name the
+     * copilot correctly at mount rather than render nothing at all.
+     */
+    const offCreated = deck.onSessionCreated?.(() => read())
+    const offExit = deck.onSessionExit?.(() => read())
     return () => {
       live = false
+      offCreated?.()
+      offExit?.()
     }
   }, [])
 
-  return { root, name: setup.name }
+  return { sessionId, name: setup.name }
 }

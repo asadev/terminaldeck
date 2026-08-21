@@ -55,10 +55,78 @@ interface FakeOptions {
   /** What `exec` should answer with, keyed by the command line it was given. */
   answers?: Record<string, { stdout?: string; code?: number }>
   failWith?: Error & { level?: string; code?: string }
+  /** What the SFTP subsystem should already contain, by absolute path. */
+  sftp?: FakeSftpOptions
+}
+
+interface FakeSftpOptions {
+  /** What the server resolves `.` to. Never assembled on this side. */
+  home?: string
+  /** Paths that already exist over there. */
+  present?: string[]
+  /** Paths whose `stat` should fail with this RFC 4251 code instead. */
+  refuse?: Record<string, number>
+  /** Make the subsystem itself unavailable, the way a server without it does. */
+  absent?: boolean
+}
+
+/**
+ * The SFTP subsystem, without a server.
+ *
+ * Narrow on purpose — the same six calls `ssh2.d.ts` declares — so that a test
+ * standing on it is standing on what this app actually asks for rather than on
+ * a mock of the whole protocol.
+ */
+class FakeSftp {
+  put: [string, string][] = []
+  made: string[] = []
+  ends = 0
+  private readonly present: Set<string>
+
+  constructor(private readonly options: FakeSftpOptions) {
+    this.present = new Set(options.present ?? [])
+  }
+
+  realpath(path: string, cb: (err: undefined, absolute: string) => void): void {
+    setImmediate(() => cb(undefined, path === '.' ? this.options.home ?? '/home/imza' : path))
+  }
+
+  readdir(_path: string, cb: (err: undefined, list: never[]) => void): void {
+    setImmediate(() => cb(undefined, []))
+  }
+
+  stat(path: string, cb: (err: (Error & { code?: number }) | undefined, stats?: unknown) => void): void {
+    setImmediate(() => {
+      const refused = this.options.refuse?.[path]
+      if (refused !== undefined) {
+        cb(Object.assign(new Error('refused'), { code: refused }))
+        return
+      }
+      if (this.present.has(path)) cb(undefined, {})
+      else cb(Object.assign(new Error('no such file'), { code: 2 }))
+    })
+  }
+
+  mkdir(path: string, cb: (err?: Error & { code?: number }) => void): void {
+    this.made.push(path)
+    this.present.add(path)
+    setImmediate(() => cb())
+  }
+
+  fastPut(localPath: string, remotePath: string, cb: (err?: Error & { code?: number }) => void): void {
+    this.put.push([localPath, remotePath])
+    this.present.add(remotePath)
+    setImmediate(() => cb())
+  }
+
+  end(): void {
+    this.ends += 1
+  }
 }
 
 class FakeClient extends EventEmitter {
   static made: FakeClient[] = []
+  sftpChannels: FakeSftp[] = []
   ended = 0
   destroyed = 0
   ran: string[] = []
@@ -106,6 +174,17 @@ class FakeClient extends EventEmitter {
       (rows, cols, height, width) => this.windows.push([rows, cols, height, width]),
     )
     callback(undefined, channel)
+    return true
+  }
+
+  sftp(callback: (err: Error | undefined, sftp: FakeSftp) => void): boolean {
+    if (this.options.sftp?.absent === true) {
+      setImmediate(() => callback(new Error('no subsystem'), undefined as unknown as FakeSftp))
+      return true
+    }
+    const channel = new FakeSftp(this.options.sftp ?? {})
+    this.sftpChannels.push(channel)
+    setImmediate(() => callback(undefined, channel))
     return true
   }
 
@@ -481,5 +560,97 @@ describe('the terminal', () => {
     await pool.acquire(server.id)
     shell.close()
     expect(pool.isOpen(server.id)).toBe(true)
+  })
+})
+
+
+/**
+ * Putting a file on a server.
+ *
+ * The rule it serves is `renderer/session-transfer.ts`'s: whatever a session is
+ * handed must exist on the machine that session runs on, named by that
+ * machine's path. A terminal on a server is a session, and this is the only way
+ * a file reaches one.
+ */
+describe('putting a file on a server', () => {
+  const LOCAL = '/Users/apple/Pictures/Terminal Deck/shot.png'
+
+  /** A stored server, because dialling one that is not on the list is a refusal. */
+  function put(options: FakeSftpOptions, name = 'shot.png'): Promise<string> {
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    return connections({ sftp: options }).putFile(server.id, LOCAL, name, 'Terminal Deck')
+  }
+
+  it('answers the path the server knows it by, not the one it left with', async () => {
+    const where = await put({ home: '/home/imza' })
+    expect(where).toBe('/home/imza/Terminal Deck/shot.png')
+    expect(FakeClient.made[0].sftpChannels[0].put).toEqual([[LOCAL, '/home/imza/Terminal Deck/shot.png']])
+  })
+
+  it('asks the server where home is rather than assembling one', () => {
+    // `/home/<username>` is wrong for `root`, wrong on macOS and wrong on any
+    // account whose home has been moved. Whatever the server resolves `.` to is
+    // the answer.
+    return expect(put({ home: '/var/root' })).resolves.toBe('/var/root/Terminal Deck/shot.png')
+  })
+
+  it('makes its one folder, and only when it is not already there', async () => {
+    await put({ home: '/home/imza' })
+    expect(FakeClient.made[0].sftpChannels[0].made).toEqual(['/home/imza/Terminal Deck'])
+
+    FakeClient.made = []
+    await put({ home: '/home/imza', present: ['/home/imza/Terminal Deck'] })
+    expect(FakeClient.made[0].sftpChannels[0].made).toEqual([])
+  })
+
+  it('lands beside a file of the same name rather than on top of it', async () => {
+    const where = await put({
+      home: '/home/imza',
+      present: ['/home/imza/Terminal Deck', '/home/imza/Terminal Deck/shot.png'],
+    })
+    expect(where).toBe('/home/imza/Terminal Deck/shot (2).png')
+  })
+
+  it('reduces whatever it is handed to one file name', async () => {
+    // `safeName` is the rule, shared with the phone's upload, and the property
+    // this relies on is that it never answers anything containing a separator.
+    expect(await put({ home: '/home/imza' }, '../../etc/passwd')).toBe(
+      '/home/imza/Terminal Deck/passwd',
+    )
+  })
+
+  it('says so when the sign-in may not read the folder, rather than trying the next name', async () => {
+    // Permission denied is not "that name is free". Walking on to `shot (2).png`
+    // would write nothing and answer a path to a file that is not there.
+    await expect(
+      put({ home: '/home/imza', refuse: { '/home/imza/Terminal Deck': 3 } }),
+    ).rejects.toMatchObject({ kind: 'not-allowed' })
+  })
+
+  it('says so when the server has no SFTP subsystem at all', async () => {
+    // A configuration on somebody's machine rather than a fault here, and it
+    // gets the same sentence the folder picker gets.
+    await expect(put({ absent: true })).rejects.toBeInstanceOf(ServerProblem)
+  })
+
+  it('closes its own channel and leaves the socket to the pool', async () => {
+    await put({ home: '/home/imza' })
+    // The channel is this function's and is always closed. The socket is the
+    // pool's: it went here only because nothing else was holding this server —
+    // a page with it open keeps the reference, and then the handover rides the
+    // connection that is already up and does not hang up on the page.
+    expect(FakeClient.made[0].sftpChannels[0].ends).toBe(1)
+    expect(FakeClient.made[0].ended).toBe(1)
+  })
+
+  it('rides a connection somebody else is already holding', async () => {
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    const pool = connections({ sftp: { home: '/home/imza' } })
+    // A page looking at this server, which is what §5.4 says holds it open.
+    await pool.acquire(server.id)
+    await pool.putFile(server.id, LOCAL, 'shot.png', 'Terminal Deck')
+    expect(FakeClient.made).toHaveLength(1)
+    expect(FakeClient.made[0].ended).toBe(0)
+    pool.release(server.id)
   })
 })

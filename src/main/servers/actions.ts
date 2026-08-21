@@ -165,6 +165,27 @@ export type ListServerFolder = (
   path: string,
 ) => Promise<{ path: string; entries: readonly { name: string; kind: 'folder' | 'link' | 'file' }[] }>
 
+/**
+ * Put a file from this computer onto a server, and answer the path it got there.
+ *
+ * The counterpart of {@link ListServerFolder}, over the same SFTP subsystem on
+ * the same already-open connection, and it exists for the rule
+ * `renderer/session-transfer.ts` states: whatever a session is handed must exist
+ * on the machine that session runs on, named by that machine's path. A terminal
+ * on a server is a session, and until this existed the only path the app could
+ * hand one was a path on this laptop.
+ *
+ * `name` is a suggestion, not a path. The server decides what the file is
+ * actually called — the same bargain the phone's upload makes with this desktop
+ * — so a second capture lands beside the first rather than on top of it, and
+ * nothing here can be talked into writing outside the one folder it makes.
+ */
+export type PutFileOnServer = (
+  serverId: string,
+  localPath: string,
+  name: string,
+) => Promise<string>
+
 /* ------------------------------------------------------------------- facts -- */
 
 /**

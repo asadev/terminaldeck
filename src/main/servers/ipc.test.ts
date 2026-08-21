@@ -19,7 +19,7 @@
  *    own words about paired devices, which hold identically here.
  */
 
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -596,5 +596,68 @@ describe('the way back survives the thing it is a way back from', () => {
     const row = Object.values(written.rows)[0]
     expect(row.kind).toBe('repo-commit')
     expect(row.commit).toBe('d'.repeat(40))
+  })
+})
+
+/**
+ * Putting a file on a server, from the window.
+ *
+ * The one consumer is `renderer/session-transfer.ts`, which reads this answer
+ * with the *same* function it reads `machines:upload` with — so the shape here
+ * is not a local choice, it is what keeps a file going to a server and a file
+ * going to a paired PC from becoming two behaviours.
+ */
+describe('servers:upload', () => {
+  const HERE = join(tmpdir(), 'td-upload-fixture.png')
+
+  it('answers the path the server gave it', async () => {
+    writeFileSync(HERE, 'x')
+    const { call } = harness({ putFile: async () => '/home/imza/Terminal Deck/shot.png' })
+    expect(await call('servers:upload', 's1', HERE)).toEqual({
+      ok: true,
+      path: '/home/imza/Terminal Deck/shot.png',
+    })
+  })
+
+  it('sends the file’s own name as the suggestion, never a path', async () => {
+    writeFileSync(HERE, 'x')
+    const putFile = vi.fn(async () => '/home/imza/Terminal Deck/x.png')
+    const { call } = harness({ putFile })
+    await call('servers:upload', 's1', HERE)
+    expect(putFile).toHaveBeenCalledWith('s1', HERE, 'td-upload-fixture.png')
+  })
+
+  it('says so on a build that cannot put a file on a server at all', async () => {
+    writeFileSync(HERE, 'x')
+    const { call } = harness()
+    expect(await call('servers:upload', 's1', HERE)).toMatchObject({ ok: false })
+  })
+
+  it('says so about a file that is not there, without dialling anything', async () => {
+    const putFile = vi.fn(async () => '/x')
+    const { call } = harness({ putFile })
+    expect(await call('servers:upload', 's1', join(tmpdir(), 'td-not-a-file.png'))).toMatchObject({
+      ok: false,
+    })
+    expect(putFile).not.toHaveBeenCalled()
+  })
+
+  it('answers the server’s own sentence when it refuses', async () => {
+    writeFileSync(HERE, 'x')
+    const { call } = harness({
+      putFile: async () => {
+        throw new ServerProblem('not-allowed', 'This sign-in is not allowed to write there.')
+      },
+    })
+    expect(await call('servers:upload', 's1', HERE)).toEqual({
+      ok: false,
+      message: 'This sign-in is not allowed to write there.',
+    })
+  })
+
+  it('refuses anything that is not a server and a file', async () => {
+    const { call } = harness({ putFile: async () => '/x' })
+    expect(await call('servers:upload', 7, HERE)).toMatchObject({ ok: false })
+    expect(await call('servers:upload', 's1', '')).toMatchObject({ ok: false })
   })
 })

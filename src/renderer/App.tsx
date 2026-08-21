@@ -3041,6 +3041,35 @@ function Workspace() {
   }, [])
 
   /**
+   * The same shells, as the browser's send-to-session picker needs them.
+   *
+   * The two halves joined once, here, rather than in the panel: the window is
+   * the only place that holds both the rows and the handles the far end
+   * answered with, and a browser panel reaching for either of them would be a
+   * second owner of a list that has exactly one.
+   *
+   * It is passed to **both** mount sites of `BrowserWorkspace` below, for the
+   * reason `tabId` is: the split pane and the flat one are two mounts of the
+   * same window, and a prop given to one of them is a feature that disappears
+   * when somebody splits the window.
+   */
+  const browserServerShells = useMemo(
+    () =>
+      serverSessions.map((entry) => ({
+        tabId: entry.tabId,
+        serverId: entry.serverId,
+        serverName: entry.serverName,
+        // Empty until the server has answered `servers:shell:open`. The picker
+        // lists the row and says it is still opening rather than hiding it —
+        // see `resolveTarget`.
+        shellId: serverShellIds[entry.tabId] ?? '',
+        startIn: entry.startIn ?? '',
+        ended: entry.status === 'exited',
+      })),
+    [serverSessions, serverShellIds],
+  )
+
+  /**
    * What the Machines panel is handed so its pages can open one of these.
    *
    * A context rather than a prop, because the only route from here to a server's
@@ -4438,6 +4467,9 @@ function Workspace() {
                       // reset by that remount; the shell tab id is the same
                       // string either side of it.
                       tabId={pageTab.id}
+                      // The terminals open on servers, so the picker in this
+                      // page's popups can offer them. See `browserServerShells`.
+                      serverShells={browserServerShells}
                       onStartUrl={(url) => {
                         applySettings({ ...settings, 'browser.startUrl': url })
                         void window.deck.setSettings({
@@ -5996,6 +6028,8 @@ function Workspace() {
                 initialUrl={tab.url}
                 // The other mount site. See the note beside the split one.
                 tabId={tab.id}
+                // The terminals open on servers. See `browserServerShells`.
+                serverShells={browserServerShells}
                 onStartUrl={(url) => {
                   applySettings({ ...settings, 'browser.startUrl': url })
                   void window.deck.setSettings({ 'browser.startUrl': url })

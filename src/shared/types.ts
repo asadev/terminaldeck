@@ -714,6 +714,16 @@ export interface DeckApi {
    * may not be the name it left with — or with a sentence.
    */
   uploadToMachine(id: string, filePath: string): Promise<unknown>
+  /**
+   * The same act, onto a server: a path here, a path over there, or a sentence.
+   *
+   * Its own channel rather than a branch on the one above, because there is no
+   * relay and no copy of this app at the far end — it is SFTP on the connection
+   * the servers area is already holding. What the two share is their *answer*,
+   * which `renderer/session-transfer.ts` reads with one function so that a file
+   * going to a server and a file going to a paired PC cannot drift apart.
+   */
+  uploadToServer(id: string, filePath: string): Promise<unknown>
   cancelMachineUpload(id: string): Promise<unknown>
   /** Slice-by-slice progress for the transfer to that machine. */
   onMachineUpload(cb: (progress: unknown) => void): () => void
