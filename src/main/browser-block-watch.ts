@@ -352,6 +352,20 @@ export interface BlockWatchDeps {
   /** A masked PNG of the page, or `null`. */
   shot(): Promise<Buffer | null>
   rules?(): BlockRules
+  /**
+   * Whether this page's profile wants its refusals photographed.
+   *
+   * Absent — or `true` — is the behaviour this feature shipped with, which is
+   * the right default: by the time an agent has noticed it was blocked the
+   * challenge has rotated and the picture is of something else, so the only
+   * useful moment to take one is a moment nobody asked for.
+   *
+   * It is a switch at all because the Scraping panel offers one, and a control
+   * that stores a preference nothing reads is a control that looks like it
+   * works and does not. Read on every event rather than once at attach, so
+   * turning it off stops the next picture instead of the next page.
+   */
+  enabled?(): boolean
   now?(): number
   /** Told about every capture, so something can say it happened. */
   onCapture?(shot: BlockShot): void
@@ -449,6 +463,9 @@ export function attachBlockWatch(wc: BlockWatchTarget, deps: BlockWatchDeps): vo
     // person can take the page between the navigation starting and it settling,
     // and this is the last moment before anything is read.
     if (deps.state() !== 'agent') return
+    // And the profile's own answer, asked at the same moment and for the same
+    // reason: it can be turned off between the navigation and the settle.
+    if (deps.enabled?.() === false) return
 
     let finalUrl = ''
     let title = ''

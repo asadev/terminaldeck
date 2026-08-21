@@ -23,7 +23,8 @@ import {
 } from './browser-drive-script'
 import { imageSizeScript } from './browser-capture-script'
 import { CaptureStore, type CaptureBounds } from './browser-capture-store'
-import type { FetchRules } from './browser-fetch-rules'
+import { interceptedKinds, type FetchRules } from './browser-fetch-rules'
+import { resolveArming } from './browser-scrape-settings'
 import { PageNetwork, type NetworkStatus } from './browser-network'
 import {
   EXTRACT_SCRIPT,
@@ -404,6 +405,28 @@ export interface DriveHost {
    * than arming something that writes nowhere.
    */
   captureFolder?(input: { viewId: string; runId: string }): string | null
+  /**
+   * What this page's profile has been told to do when nothing names it.
+   *
+   * The four scraping engines take their configuration on the call, which is
+   * the right shape for an engine and left a person with no way to say *"always
+   * fulfil this profile's images"* — see `browser-scraping-ipc.ts`. This is the
+   * seam that lets a stored answer be the one that runs: a `browser.network`
+   * call that omits `rules` gets the profile's, and one that names them is
+   * untouched.
+   *
+   * Handed in for the same reason {@link captureFolder} is: the answer depends
+   * on which browser profile the tab was built in, and this module has no
+   * business looking that up. Absent in a build with no browser wiring, in
+   * which case nothing falls back and every call is exactly what it says.
+   */
+  scrapeDefaults?(viewId: string): {
+    rules: FetchRules | null
+    capture: boolean | null
+    bounds: CaptureBounds | null
+    /** Whether a page that refuses us is photographed. `null`: nobody said. */
+    blockShots: boolean | null
+  } | null
 }
 
 /**
@@ -1048,6 +1071,13 @@ export class BrowserDrive {
     attachBlockWatch(wc, {
       state: () => slot.state,
       dir: () => blockShotDir(app.getPath('userData')),
+      /*
+       * The profile's own answer, if it has one. Absent host, absent profile
+       * or an unset switch all mean *on*, which is what this feature shipped
+       * with and the only default worth having — a picture nobody asked for is
+       * the only kind that can be taken in time.
+       */
+      enabled: () => this.host.scrapeDefaults?.(slot.viewId ?? '')?.blockShots !== false,
       // Bounded inside the page by `TEXT_SCRIPT`; a challenge page is a few
       // hundred characters and this is what tells one from an ordinary 200.
       text: async () => {
@@ -1838,16 +1868,63 @@ export class BrowserDrive {
       /** Which kinds' bodies to keep. Empty means the capture default. */
       bodyKinds: ReadonlySet<string>
       bounds: CaptureBounds
+      /**
+       * Which of the three the caller actually named.
+       *
+       * Without it a stored setting could never win: `capture` defaults to true
+       * and `bounds` is filled in with the engine's own numbers before this is
+       * called, so *"the caller said nothing"* and *"the caller said exactly the
+       * default"* arrive here identical. A stored value may only replace the
+       * first of those — a call that names a bound must get the bound it named.
+       */
+      named?: { rules?: boolean; capture?: boolean; bounds?: boolean }
     },
     target?: DriveTarget | null,
   ): Promise<{
     window: string | null
     rules: FetchRules
+    /** Whether responses are actually being recorded — the profile may have said. */
+    capturing: boolean
     dir: string
     manifest: string
     previous: NetworkStatus | null
   }> {
     const { slot, wc } = await this.hold(target)
+    /*
+     * What this page's profile stored, for the parts of the call that named
+     * nothing. A stored answer never overrules one the caller gave, and
+     * `armed.rules` on the way out is what actually ran — so a caller that
+     * omitted its rules can read which ones it got.
+     */
+    const { rules, capture, bounds } = resolveArming(
+      {
+        rules: input.rules,
+        capture: input.capture,
+        bounds: input.bounds,
+        ...(input.named === undefined ? {} : { named: input.named }),
+      },
+      this.host.scrapeDefaults?.(slot.viewId ?? '') ?? null,
+    )
+
+    /*
+     * Nothing to arm is refused here rather than performed, and here rather
+     * than only at the tool, because this is the first point at which the whole
+     * answer is known: the tool sees the call, and the call may deliberately
+     * name nothing because the profile has an answer stored. A page armed with
+     * no rule and no capture behaves exactly as it already did, so reporting
+     * `armed: true` for it would be a control that says it worked and did not.
+     *
+     * Before the standing run is stopped, and that ordering is the whole of it:
+     * a refusal that had already disarmed the previous run would throw away a
+     * capture the caller never asked to end.
+     */
+    if (interceptedKinds(rules).length === 0 && !capture) {
+      throw new DriveRefused(
+        'that would arm nothing: no rule blocks or fulfills anything and capture is off. Set a rule, ' +
+          'leave capture on, or store rules for this profile in the Scraping panel.',
+      )
+    }
+
     /*
      * The previous run is stopped and handed back, never left running beside
      * this one. Two stores appending one manifest would interleave sequence
@@ -1860,7 +1937,7 @@ export class BrowserDrive {
 
     let store: CaptureStore | null = null
     let dir = ''
-    if (input.capture) {
+    if (capture) {
       if (!this.host.captureFolder) {
         throw new DriveRefused(
           'this build cannot write captured traffic anywhere, so capture cannot be turned on. Arm the ' +
@@ -1875,7 +1952,7 @@ export class BrowserDrive {
       if (folder === null) {
         throw new DriveRefused('this page has no profile to file captured traffic under')
       }
-      store = new CaptureStore(folder, input.bounds, { now: () => this.host.now() })
+      store = new CaptureStore(folder, bounds, { now: () => this.host.now() })
       /*
        * The folder is made *now*, while there is a caller to tell.
        *
@@ -1896,7 +1973,7 @@ export class BrowserDrive {
 
     const network = this.netFor(slot, wc)
     await network.arm({
-      rules: input.rules,
+      rules,
       capture:
         store === null
           ? null
@@ -1918,7 +1995,14 @@ export class BrowserDrive {
     slot.touchedAt = this.host.now()
     return {
       window: slot === this.own ? null : slot.name,
-      rules: input.rules,
+      /*
+       * What ran, never what was asked for. When the call named no rules and
+       * the profile had some, these are the profile's — and a caller reading
+       * `intercepting` off this rather than off its own arguments is a caller
+       * whose result is true of the page in front of it.
+       */
+      rules,
+      capturing: capture,
       dir,
       manifest: store === null ? '' : store.manifestPath,
       previous,

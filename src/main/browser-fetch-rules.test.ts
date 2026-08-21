@@ -13,8 +13,8 @@ import {
 } from './browser-fetch-rules'
 
 describe('three answers, not two', () => {
-  it('offers cheap alongside allow and block, because two is what lost the images', () => {
-    expect([...RULE_ACTIONS]).toEqual(['allow', 'block', 'cheap'])
+  it('offers fulfill alongside allow and block, because two is what lost the images', () => {
+    expect([...RULE_ACTIONS]).toEqual(['allow', 'block', 'fulfill'])
   })
 
   it('cannot name the page’s own document, at any spelling', () => {
@@ -54,13 +54,13 @@ describe('three answers, not two', () => {
   it('leaves alone anything no rule mentions', () => {
     expect(actionFor('image', {})).toBe('allow')
     expect(actionFor(null, { image: 'block' })).toBe('allow')
-    expect(actionFor('image', { image: 'cheap' })).toBe('cheap')
+    expect(actionFor('image', { image: 'fulfill' })).toBe('fulfill')
   })
 
   it('intercepts only the kinds a rule actually changes', () => {
     // The narrowing that keeps this cheap: `Fetch.enable` with no patterns
     // pauses every request in the page, including the document.
-    expect(interceptedKinds({ image: 'cheap', script: 'allow', xhr: 'block' })).toEqual([
+    expect(interceptedKinds({ image: 'fulfill', script: 'allow', xhr: 'block' })).toEqual([
       'image',
       'xhr',
     ])
@@ -71,21 +71,21 @@ describe('three answers, not two', () => {
 
 describe('reading a rules object off a tool call', () => {
   it('takes the ordinary shape', () => {
-    const read = readFetchRules({ image: 'cheap', font: 'block', script: 'allow' })
-    expect(read.rules).toEqual({ image: 'cheap', font: 'block', script: 'allow' })
+    const read = readFetchRules({ image: 'fulfill', font: 'block', script: 'allow' })
+    expect(read.rules).toEqual({ image: 'fulfill', font: 'block', script: 'allow' })
     expect(read.unknownKinds).toEqual([])
     expect(read.badActions).toEqual([])
   })
 
   /*
    * The near-miss is the whole reason this returns lists instead of dropping
-   * what it does not understand. `images: 'cheap'` is the shape right and one
+   * what it does not understand. `images: 'fulfill'` is the shape right and one
    * word wrong — the same mistake `schema.ts` was written for — and the cost of
    * silently ignoring it is a page that behaves completely normally while the
    * caller believes it is being harvested cheaply.
    */
   it('names a kind it does not know rather than dropping it', () => {
-    const read = readFetchRules({ images: 'cheap', stylesheets: 'block' })
+    const read = readFetchRules({ images: 'fulfill', stylesheets: 'block' })
     expect(read.rules).toEqual({})
     expect(read.unknownKinds).toEqual(['images', 'stylesheets'])
   })
@@ -104,7 +104,7 @@ describe('reading a rules object off a tool call', () => {
 
   it('says what it is doing, for the dialog and the log', () => {
     expect(describeRules({})).toBe('none')
-    expect(describeRules({ xhr: 'allow', image: 'cheap' })).toBe('image: cheap, xhr: allow')
+    expect(describeRules({ xhr: 'allow', image: 'fulfill' })).toBe('image: fulfill, xhr: allow')
   })
 })
 
@@ -136,5 +136,22 @@ describe('what a cheap answer actually is', () => {
     const names = cheapHeaders('text/css', 0).map((header) => header.name)
     expect(names).not.toContain('set-cookie')
     expect(names).not.toContain('location')
+  })
+})
+
+describe('the word this action used to be called', () => {
+  it('still reads `cheap`, and stores `fulfill`', () => {
+    // The rename is a rename of the *vocabulary*, not a break: a recipe on disk
+    // or a caller written against an older build says `cheap`, and refusing it
+    // would turn a working call into an error nobody asked for. Nothing this
+    // process emits says `cheap` any more.
+    const read = readFetchRules({ image: 'cheap', script: 'CHEAP' })
+    expect(read.rules).toEqual({ image: 'fulfill', script: 'fulfill' })
+    expect(read.badActions).toEqual([])
+    expect(describeRules(read.rules)).toBe('image: fulfill, script: fulfill')
+  })
+
+  it('does not accept any other near-miss, which is the whole of the mercy', () => {
+    expect(readFetchRules({ image: 'abort' }).badActions).toEqual(['image: abort'])
   })
 })

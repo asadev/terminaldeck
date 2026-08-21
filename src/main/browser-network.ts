@@ -135,7 +135,8 @@ export interface RuleCounts {
   /** Continued to the network — a kind with no rule, or one this could not decide. */
   allowed: number
   blocked: number
-  cheap: number
+  /** Answered out of this process with something valid and empty. */
+  fulfilled: number
   /**
    * Paused requests this could not answer at all.
    *
@@ -157,7 +158,7 @@ function emptyRuleCounts(): RuleCounts {
     paused: 0,
     allowed: 0,
     blocked: 0,
-    cheap: 0,
+    fulfilled: 0,
     stuck: 0,
     sized: { attributes: 0, srcset: 0, box: 0, none: 0, unknown: 0 },
     derivedHeights: 0,
@@ -491,7 +492,7 @@ export class PageNetwork {
     kind: ResourceKind,
     url: string,
   ): Promise<void> {
-    this.counts.cheap += 1
+    this.counts.fulfilled += 1
     let mimeType: string
     let body: Buffer
     if (kind === 'image') {

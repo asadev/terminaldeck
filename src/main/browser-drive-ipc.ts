@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { app, type IpcMain } from 'electron'
 import { captureDir } from './browser-capture-store'
+import {
+  captureBoundsOf,
+  fetchRulesOf,
+  scrapeSettingsFor,
+} from './browser-scrape-settings'
 import { browserTabContents, browserTabProfile } from './browser-tab'
 import { BLANK_URL } from './browser-url'
 import type { DriveStatus } from './browser-drive'
@@ -407,6 +412,27 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
       const profileId = browserTabProfile(viewId)
       if (profileId === null) return null
       return captureDir(app.getPath('userData'), profileId === '' ? 'isolated' : profileId, runId)
+    },
+    /*
+     * What the page's profile has been told to do, for whatever the call did
+     * not name.
+     *
+     * Resolved here for the same reason `captureFolder` is: the answer turns on
+     * which browser profile the tab was built in, which `browser-tab.ts` stamps
+     * at creation and the driver has no business looking up. An Isolated tab
+     * has no profile and gets nothing stored — its jar dies with it, so a
+     * setting filed under it would belong to nobody.
+     */
+    scrapeDefaults: (viewId) => {
+      const profileId = browserTabProfile(viewId)
+      if (profileId === null || profileId === '') return null
+      const settings = scrapeSettingsFor(app.getPath('userData'), profileId)
+      return {
+        rules: fetchRulesOf(settings),
+        capture: settings.capture.on,
+        bounds: captureBoundsOf(settings),
+        blockShots: settings.checks.screenshotOnBlock,
+      }
     },
     publish: (status: DriveStatus) => deps.send(DRIVE_STATE_CHANNEL, status),
     now: () => Date.now(),

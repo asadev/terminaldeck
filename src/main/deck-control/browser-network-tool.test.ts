@@ -25,12 +25,12 @@ function status(over: Partial<NetworkStatus> = {}): NetworkStatus {
   return {
     armed: true,
     suspended: false,
-    rules: { image: 'cheap' },
+    rules: { image: 'fulfill' },
     counts: {
       paused: 0,
       allowed: 0,
       blocked: 0,
-      cheap: 0,
+      fulfilled: 0,
       stuck: 0,
       sized: { attributes: 0, srcset: 0, box: 0, none: 0, unknown: 0 },
       derivedHeights: 0,
@@ -55,7 +55,10 @@ function fakeDrive(over: Partial<Record<string, unknown>> = {}): BrowserDrive & 
       calls.push(['arm', input, target])
       return {
         window: null,
+        // What the drive actually armed, which is what the tool now reports —
+        // a stored profile rule may have answered a call that named none.
         rules: (input as { rules: unknown }).rules,
+        capturing: (input as { capture: boolean }).capture,
         dir: '/data/browser-captures/default/run-1',
         manifest: '/data/browser-captures/default/run-1/capture.jsonl',
         previous: null,
@@ -143,7 +146,7 @@ describe('arguments that are refused before anything happens', () => {
     // harvested cheaply.
     const result = await control(fakeDrive(), dir).call('browser_network', {
       action: 'start',
-      rules: { images: 'cheap' },
+      rules: { images: 'fulfill' },
     })
     expect(result.ok).toBe(false)
     if (!result.ok) {
@@ -158,7 +161,7 @@ describe('arguments that are refused before anything happens', () => {
       rules: { image: 'abort' },
     })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toContain('allow, block or cheap')
+    if (!result.ok) expect(result.error).toContain('allow, block or fulfill')
   })
 
   it('refuses a limit it does not take, and one that is out of range', async () => {
@@ -205,7 +208,7 @@ describe('starting', () => {
     const drive = fakeDrive()
     const result = await control(drive, dir).call('browser_network', {
       action: 'start',
-      rules: { image: 'cheap', script: 'block' },
+      rules: { image: 'fulfill', script: 'block' },
     })
     expect(result.ok).toBe(true)
     const value = result.value as Record<string, unknown>
@@ -220,7 +223,7 @@ describe('starting', () => {
     const drive = fakeDrive()
     const deck = control(drive, dir)
     await deck.call('browser_network', { action: 'start' })
-    await deck.call('browser_network', { action: 'start', capture: false, rules: { image: 'cheap' } })
+    await deck.call('browser_network', { action: 'start', capture: false, rules: { image: 'fulfill' } })
     const armed = drive.calls.filter((call) => (call as unknown[])[0] === 'arm')
     expect((armed[0] as [string, { capture: boolean }])[1].capture).toBe(true)
     expect((armed[1] as [string, { capture: boolean }])[1].capture).toBe(false)
@@ -229,10 +232,10 @@ describe('starting', () => {
   it('says in the log what it armed, without the caller having to open the result', async () => {
     await control(fakeDrive(), dir).call('browser_network', {
       action: 'start',
-      rules: { image: 'cheap' },
+      rules: { image: 'fulfill' },
     })
     const written = readFileSync(join(dir, 'actions.jsonl'), 'utf8')
-    expect(written).toContain('image: cheap')
+    expect(written).toContain('image: fulfill')
   })
 })
 
@@ -272,7 +275,7 @@ describe('the three answers that must never collapse into one', () => {
     const drive = fakeDrive({
       disarmNetwork: async () =>
         status({
-          counts: { ...status().counts, paused: 40, cheap: 40, sized: { attributes: 40, srcset: 0, box: 0, none: 0, unknown: 0 } },
+          counts: { ...status().counts, paused: 40, fulfilled: 40, sized: { attributes: 40, srcset: 0, box: 0, none: 0, unknown: 0 } },
           capture: {
             dir: '/run',
             manifest: '/run/capture.jsonl',

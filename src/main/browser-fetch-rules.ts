@@ -14,12 +14,12 @@
  *  - **allow** — the ordinary thing. The request goes to the network.
  *  - **block** — the request fails, and the page is told so. Honest, fast, and
  *    it costs you every URL that would have been revealed by the load.
- *  - **cheap** — the request is answered out of this process with something
+ *  - **fulfill** — the request is answered out of this process with something
  *    valid and empty. No byte crosses the network, the page's `onload` fires,
  *    the observer advances, and the next URL appears in the DOM where the crawl
  *    can read it.
  *
- * `cheap` is the reason this file exists. `block` is kept because it is
+ * `fulfill` is the reason this file exists. `block` is kept because it is
  * sometimes exactly right — a tracking script, a video that would otherwise
  * stream — and because a control that only offers the clever option is a
  * control somebody works around.
@@ -34,13 +34,13 @@
  * additionally refuses an interception pattern that names `Document` at the
  * channel, so a later edit here cannot reach it either.
  *
- * ## What `cheap` costs, per kind, stated rather than discovered
+ * ## What `fulfill` costs, per kind, stated rather than discovered
  *
  * A cheaply-answered request is a *lie to the page*, and each kind believes a
  * different thing:
  *
  *  - `image` — an actual transparent PNG at the size the page expects. The one
- *    kind where cheap is nearly free: layout, `naturalWidth`, `onload` and
+ *    kind where fulfilling is nearly free: layout, `naturalWidth`, `onload` and
  *    lazy-loading all behave. This is what the feature is for.
  *  - `stylesheet` — an empty sheet. The page renders unstyled. Text, links and
  *    the DOM are untouched, which is all a harvest reads, but a screenshot of
@@ -52,7 +52,7 @@
  *    ever; use `allow` there.
  *  - `script` — an empty script that parses and does nothing. **This is the one
  *    that will quietly ruin a scrape.** On a modern site the code that reveals
- *    the data *is* the script; cheapening it leaves a shell. It is offered
+ *    the data *is* the script; fulfilling it leaves a shell. It is offered
  *    because a caller may know exactly which scripts they mean, and it is
  *    described here so nobody reaches for it as a speed-up.
  *  - `xhr` / `fetch` — an empty JSON object. Also self-defeating in the
@@ -83,9 +83,26 @@ export const RESOURCE_KINDS = [
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number]
 
-export const RULE_ACTIONS = ['allow', 'block', 'cheap'] as const
+export const RULE_ACTIONS = ['allow', 'block', 'fulfill'] as const
 
 export type RuleAction = (typeof RULE_ACTIONS)[number]
+
+/**
+ * What `fulfill` used to be called, still accepted and never written.
+ *
+ * The word was `cheap` until 2026-08-21, and it was the odd one out on an axis:
+ * `allow` and `block` name what happens to the request, `cheap` named what it
+ * cost. Nobody could guess from the vocabulary that the third one is the option
+ * that saves a lazy-loading page — which is why `scraping-view.ts` had to carry
+ * a whole sentence explaining the difference — and `fulfill` is both the honest
+ * name for it and the word every routing library already uses, so a model
+ * writing a `browser.network` call reaches for the right one first.
+ *
+ * Read, not written: {@link readFetchRules} accepts a stored recipe or an older
+ * caller that still says `cheap`, and everything this process emits — rule
+ * echoes, counters, summaries — says `fulfill`.
+ */
+const ACTION_ALIASES: Readonly<Record<string, RuleAction>> = Object.freeze({ cheap: 'fulfill' })
 
 /** A rule per kind. Absent means `allow`, which is what a browser does anyway. */
 export type FetchRules = Partial<Record<ResourceKind, RuleAction>>
@@ -161,7 +178,9 @@ export interface ReadRules {
 /**
  * Narrow a rules object off a tool call.
  *
- * Nothing is silently dropped. A model that writes `images` for `image`, or
+ * Nothing is silently dropped, and `cheap` is the one word that is quietly
+ * corrected rather than refused — see {@link ACTION_ALIASES}, which is the
+ * whole of that mercy. A model that writes `images` for `image`, or
  * `abort` for `block`, has the shape right and one word wrong — exactly the
  * mistake `deck-control/schema.ts` was written for one layer up — and the
  * whole cost of getting it wrong here is a page that behaves normally while the
@@ -177,7 +196,8 @@ export function readFetchRules(raw: unknown): ReadRules {
       out.unknownKinds.push(key)
       continue
     }
-    const action = typeof value === 'string' ? value.toLowerCase() : ''
+    const typed = typeof value === 'string' ? value.toLowerCase() : ''
+    const action = ACTION_ALIASES[typed] ?? typed
     if (!ACTION_SET.has(action)) {
       out.badActions.push(`${key}: ${typeof value === 'string' ? value : typeof value}`)
       continue
@@ -187,7 +207,7 @@ export function readFetchRules(raw: unknown): ReadRules {
   return out
 }
 
-/** `image: cheap, script: block` — for a summary line and the action log. */
+/** `image: fulfill, script: block` — for a summary line and the action log. */
 export function describeRules(rules: FetchRules): string {
   const parts = RESOURCE_KINDS.filter((kind) => rules[kind] !== undefined).map(
     (kind) => `${kind}: ${rules[kind]}`,

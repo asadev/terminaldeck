@@ -212,6 +212,22 @@ export interface PoolDeps {
   now(): number
   /** 0 ≤ r < 1. An argument so the jitter can be pinned in a test. */
   random(): number
+  /**
+   * Something observable changed: a lease was taken, let go, or dropped.
+   *
+   * Optional, and the pool does not care what happens next — it exists because
+   * a screen that shows *busy* had no way to hear about it. Until this landed,
+   * the Scraping panel's fleet line read *"4 workers · busy not measured"* on a
+   * build where the pool knew exactly which of them were busy, because nothing
+   * in this process emitted an event and the panel refuses to print a zero it
+   * has not been told.
+   *
+   * **Not called from {@link WorkerPool.status}.** Every method sweeps expired
+   * leases first, including `status()`, so a sweep that announced itself would
+   * re-enter whatever is building the answer. An expiry noticed while somebody
+   * is reading the status is already in the answer they are reading.
+   */
+  changed?(): void
 }
 
 /**
@@ -365,6 +381,7 @@ export function createWorkerPool(deps: PoolDeps): WorkerPool {
         expiresAt: now + holdMs,
       }
       leases.set(chosen.profileId, lease)
+      deps.changed?.()
 
       const last = released.get(chosen.profileId)
       const waitMs =
@@ -390,6 +407,7 @@ export function createWorkerPool(deps: PoolDeps): WorkerPool {
       if (!lease || lease.holder !== input.holder) return false
       leases.delete(input.profileId)
       released.set(input.profileId, deps.now())
+      deps.changed?.()
       return true
     },
 
@@ -412,17 +430,21 @@ export function createWorkerPool(deps: PoolDeps): WorkerPool {
         released.set(profileId, now)
         count += 1
       }
+      if (count > 0) deps.changed?.()
       return count
     },
 
     forget(profileId): void {
-      leases.delete(profileId)
-      released.delete(profileId)
+      const held = leases.delete(profileId)
+      const paced = released.delete(profileId)
+      if (held || paced) deps.changed?.()
     },
 
     reset(): void {
+      const had = leases.size > 0 || released.size > 0
       leases.clear()
       released.clear()
+      if (had) deps.changed?.()
     },
   }
 }

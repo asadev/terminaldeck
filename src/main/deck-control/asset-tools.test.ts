@@ -10,6 +10,8 @@ import { blockShotDir, coveragePath, ledgerPath } from '../browser-scrape-paths'
 import { captureBlock, classifyBlock, type BlockEvidence } from '../browser-block-watch'
 import { ActionLog } from './action-log'
 import { assetTools, ASSET_TOOL_NAMES, scrubUrl } from './asset-tools'
+import { resetScrapeSettingsForTests, setScrapeSettings } from '../browser-scrape-settings'
+import { resetScrapeStatusForTests, runOwnerOf } from '../browser-scrape-status'
 import { ConsentBroker, WINDOW_SURFACE } from './consent'
 import { DeckControl, type CallResult } from './control'
 import { SESSION_TOOLS } from './session-tools'
@@ -109,6 +111,8 @@ beforeEach(async () => {
   files = mkdtempSync(join(tmpdir(), 'asset-tools-files-'))
   probes = {}
   askedAs = []
+  resetScrapeSettingsForTests()
+  resetScrapeStatusForTests()
   server = createServer((request, response) => {
     if ((request.url ?? '') !== '/plan.jpg') {
       response.writeHead(404, { 'content-type': 'text/plain' })
@@ -571,5 +575,137 @@ describe('what reaches the log', () => {
 
   it('leaves an ordinary URL alone', () => {
     expect(scrubUrl('https://x.test/i/1920/a.jpg')).toBe('https://x.test/i/1920/a.jpg')
+  })
+})
+
+/**
+ * The settings a person typed on the Scraping panel, reaching a run.
+ *
+ * The four scraping engines take their configuration on the call and stored
+ * nothing, so every control on that screen was a preference nothing read. These
+ * are the two places a stored answer now arrives — and the rule that keeps it
+ * safe: **a stored setting fills a silence, it never overrules an argument.**
+ */
+describe('what the profile stored', () => {
+  it('rewrites an asset URL for a call that named no rules', async () => {
+    setScrapeSettings(userData, 'default', {
+      assets: { upgrade: { on: true, from: '/small/', to: '/big/' } },
+    })
+    probes['https://x.test/i/small/a.jpg'] = { status: 200, bytes: 20_000, contentType: 'image/jpeg' }
+    probes['https://x.test/i/big/a.jpg'] = { status: 200, bytes: 400_000, contentType: 'image/jpeg' }
+    const deck = control()
+    const answer = await call(deck, 'assets.rendition', {
+      url: 'https://x.test/i/small/a.jpg',
+      profileId: 'default',
+    })
+    expect(answer.ok).toBe(true)
+    expect(answer.value).toMatchObject({ url: 'https://x.test/i/big/a.jpg', upgraded: true })
+
+    // …and a call that names its own rules is untouched by what is stored,
+    // including one that deliberately names none.
+    const named = await call(deck, 'assets.rendition', {
+      url: 'https://x.test/i/small/a.jpg',
+      profileId: 'default',
+      rules: [],
+    })
+    expect(named.value).toMatchObject({ url: 'https://x.test/i/small/a.jpg', upgraded: false })
+  })
+
+  it('uses the stored ledger mode when the call names none, and never over one it names', async () => {
+    setScrapeSettings(userData, 'default', { assets: { ledger: { on: true, refetch: true } } })
+    const deck = control()
+    const silent = await call(deck, 'assets.fetch', {
+      runId: 'stored-mode',
+      dir: files,
+      urls: [`${origin}/plan.jpg`],
+      profileId: 'default',
+    })
+    expect(silent.ok).toBe(true)
+    expect(silent.value).toMatchObject({ mode: 'refetch' })
+
+    const named = await call(deck, 'assets.fetch', {
+      runId: 'named-mode',
+      dir: files,
+      urls: [`${origin}/plan.jpg`],
+      profileId: 'default',
+      mode: 'resume',
+    })
+    expect(named.value).toMatchObject({ mode: 'resume' })
+  })
+
+  it('reaches assets.ledger too, which has a run id and no profile at all', async () => {
+    setScrapeSettings(userData, 'default', { assets: { ledger: { on: true, refetch: true } } })
+    const deck = control()
+    // One fetch files the run under the profile…
+    await call(deck, 'assets.fetch', {
+      runId: 'owned',
+      dir: files,
+      urls: [`${origin}/plan.jpg`],
+      profileId: 'default',
+    })
+    // …and the ledger, asked about that run by id alone, runs in the mode the
+    // panel's switch is in rather than silently in `resume`.
+    const answer = await call(deck, 'assets.ledger', {
+      runId: 'owned',
+      op: 'decide',
+      url: `${origin}/plan.jpg`,
+    })
+    expect(answer.ok).toBe(true)
+    expect(answer.value).toMatchObject({ mode: 'refetch', action: 'fetch' })
+  })
+
+  it('files the run under the profile, so the panel can answer for it after a restart', async () => {
+    const answer = await call(control(), 'assets.fetch', {
+      runId: 'filed',
+      dir: files,
+      urls: [`${origin}/plan.jpg`],
+      profileId: 'default',
+    })
+    expect(answer.ok).toBe(true)
+    expect(runOwnerOf(userData, 'filed')).toBe('default')
+  })
+
+  it('reads a coverage total with the pattern its own run’s profile stored', async () => {
+    setScrapeSettings(userData, 'default', {
+      checks: { coverage: { on: true, pattern: 'of ([\\d,]+) plans' } },
+    })
+    const deck = control()
+    // One fetch names the profile, which files the run…
+    await call(deck, 'assets.fetch', {
+      runId: 'checked',
+      dir: files,
+      urls: [`${origin}/plan.jpg`],
+      profileId: 'default',
+    })
+    // …and the check, which carries no profile and no pattern, finds both.
+    const answer = await call(deck, 'assets.coverage', {
+      runId: 'checked',
+      captured: 300,
+      text: 'Showing 1–24 of 16,498 plans',
+    })
+    expect(answer.ok).toBe(true)
+    expect(answer.value).toMatchObject({ stated: 16_498, verdict: 'short', statedFrom: 'text' })
+  })
+
+  it('leaves the coverage pattern alone while the switch is off', async () => {
+    setScrapeSettings(userData, 'default', {
+      checks: { coverage: { on: false, pattern: 'lists ([\\d,]+) plans' } },
+    })
+    const deck = control()
+    await call(deck, 'assets.fetch', {
+      runId: 'unchecked',
+      dir: files,
+      urls: [`${origin}/plan.jpg`],
+      profileId: 'default',
+    })
+    const answer = await call(deck, 'assets.coverage', {
+      runId: 'unchecked',
+      captured: 300,
+      // A line only the stored pattern could read: the generic shapes want an
+      // "of N", an "N results" or an "N total", and this is none of them.
+      text: 'This development lists 16,498 plans.',
+    })
+    expect(answer.ok).toBe(true)
+    expect((answer.value as { stated: number | null }).stated).toBeNull()
   })
 })

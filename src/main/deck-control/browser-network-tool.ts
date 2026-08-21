@@ -31,7 +31,7 @@ import { Refused } from './surface'
  * ## Why one tool and not three
  *
  * Because it is one capability. A page is armed for a harvest in a single act:
- * answer its images cheaply *and* record the JSON it fetches, then read it, then
+ * fulfill its images cheaply *and* record the JSON it fetches, then read it, then
  * stop and collect. Splitting that into `browser.rules` and `browser.capture`
  * would be two calls that are never made apart, two schemas on every turn, and
  * two ways to end up half-armed — a page recording nothing while the caller
@@ -91,6 +91,15 @@ const BODY_KINDS: readonly string[] = [...RESOURCE_KINDS, 'document']
 interface Limits {
   bounds: CaptureBounds
   bodyKinds: Set<string>
+  /**
+   * Whether any bound was actually named.
+   *
+   * Every field of `bounds` is filled in with the engine's own number before
+   * this returns, so *"the caller said nothing"* and *"the caller said exactly
+   * the default"* are otherwise the same object. The profile's stored budget may
+   * replace only the first of those.
+   */
+  namedBounds: boolean
 }
 
 /**
@@ -110,6 +119,7 @@ function readLimits(raw: unknown): Limits {
       maxEntries: DEFAULT_MAX_ENTRIES,
     },
     bodyKinds: new Set<string>(),
+    namedBounds: false,
   }
   if (raw === undefined || raw === null) return limits
   if (typeof raw !== 'object' || Array.isArray(raw)) {
@@ -119,12 +129,15 @@ function readLimits(raw: unknown): Limits {
     switch (key) {
       case 'maxBodyBytes':
         limits.bounds.maxBodyBytes = whole(key, value, 1_024, MAX_MAX_BODY_BYTES)
+        limits.namedBounds = true
         break
       case 'maxTotalBytes':
         limits.bounds.maxTotalBytes = whole(key, value, 1_024, MAX_MAX_TOTAL_BYTES)
+        limits.namedBounds = true
         break
       case 'maxEntries':
         limits.bounds.maxEntries = whole(key, value, 1, MAX_MAX_ENTRIES)
+        limits.namedBounds = true
         break
       case 'bodyKinds': {
         if (!Array.isArray(value)) {
@@ -166,7 +179,7 @@ function whole(key: string, value: unknown, min: number, max: number): number {
 function rulesOf(args: Record<string, unknown>): ReturnType<typeof readFetchRules> {
   const raw = args.rules
   if (raw !== undefined && raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
-    throw new Refused('not-permitted', 'rules must be an object of kind → allow | block | cheap')
+    throw new Refused('not-permitted', 'rules must be an object of kind → allow | block | fulfill')
   }
   const read = readFetchRules(raw)
   if (read.unknownKinds.length > 0) {
@@ -179,7 +192,7 @@ function rulesOf(args: Record<string, unknown>): ReturnType<typeof readFetchRule
   if (read.badActions.length > 0) {
     throw new Refused(
       'not-permitted',
-      `${read.badActions.join(', ')} — a rule's value must be allow, block or cheap.`,
+      `${read.badActions.join(', ')} — a rule's value must be allow, block or fulfill.`,
     )
   }
   return read
@@ -208,18 +221,18 @@ export function browserNetworkTool(drive: BrowserDrive): ToolSpec {
     /*
      * Every word here is charged on every turn — see `MAX_CATALOGUE_TOKENS`,
      * which the shipped list sits just under. What survived the trimming is the
-     * part a model cannot work out for itself: that `cheap` exists and why it
+     * part a model cannot work out for itself: that `fulfill` exists and why it
      * beats blocking, and that the valuable data is in the background requests
      * rather than in the HTML. The result shapes explain themselves at the point
      * of use, so they are not described here.
      */
     description:
       'Arm a page for harvesting. `rules` — image, media, font, stylesheet, script, xhr, fetch → allow, ' +
-      'block or cheap — answers a request cheaply rather than blocking it, so lazy-loading still fires ' +
+      'block or fulfill — answers a request cheaply rather than blocking it, so lazy-loading still fires ' +
       'and the real URLs still appear. `capture` (default true) writes background XHR/fetch responses to ' +
       'disk; the data is rarely in the HTML. `limits` caps what is kept.',
     index:
-      'Arm an attached page to harvest: block or cheapen request types so lazy-loading still fires, and write background XHR/fetch responses to disk.',
+      'Arm an attached page to harvest: block or fulfill request types so lazy-loading still fires, and write background XHR/fetch responses to disk.',
     inputSchema: NETWORK_SCHEMA,
     precheck: (args, context) => {
       mayDrive(context, 'browser.network')
@@ -228,17 +241,28 @@ export function browserNetworkTool(drive: BrowserDrive): ToolSpec {
       if (action !== 'start') return
       const read = rulesOf(args)
       readLimits(args.limits)
-      if (interceptedKinds(read.rules).length === 0 && !capturing(args)) {
-        /*
-         * Refused rather than performed, and this is the whole of item 8 in one
-         * branch. A start with every rule left at `allow` and `capture: false`
-         * asks for a page that behaves exactly as it already does — so
-         * answering `armed: true` would be a control that reports working and
-         * does nothing, which is the failure this round exists to end.
-         */
+      /*
+       * Refused rather than performed, and this is the whole of item 8 in one
+       * branch. A start with every rule left at `allow` and `capture: false`
+       * asks for a page that behaves exactly as it already does — so answering
+       * `armed: true` would be a control that reports working and does nothing,
+       * which is the failure this round exists to end.
+       *
+       * Only when rules were **named**, though. A call that names none may be
+       * deliberately leaving the page's own profile to answer — see
+       * `browser-scraping-ipc.ts` — and this layer cannot see a profile. The
+       * same refusal is made again in `armNetwork`, which can, and that is the
+       * one that is always right.
+       */
+      if (
+        args.rules !== undefined &&
+        args.rules !== null &&
+        interceptedKinds(read.rules).length === 0 &&
+        !capturing(args)
+      ) {
         throw new Refused(
           'not-permitted',
-          'that would arm nothing: no rule is set to block or cheap and capture is off. Set a rule, or ' +
+          'that would arm nothing: no rule is set to block or fulfill and capture is off. Set a rule, or ' +
             'leave capture on.',
         )
       }
@@ -263,10 +287,33 @@ export function browserNetworkTool(drive: BrowserDrive): ToolSpec {
             const limits = readLimits(args.limits)
             const capture = capturing(args)
             const armed = await drive.armNetwork(
-              { rules: read.rules, capture, bodyKinds: limits.bodyKinds, bounds: limits.bounds },
+              {
+                rules: read.rules,
+                capture,
+                bodyKinds: limits.bodyKinds,
+                bounds: limits.bounds,
+                /*
+                 * Which of the three this call actually named, so the page's
+                 * own profile can answer for the rest. A stored setting never
+                 * overrules an argument; it only fills a silence.
+                 */
+                named: {
+                  rules: args.rules !== undefined && args.rules !== null,
+                  capture: args.capture !== undefined,
+                  bounds: limits.namedBounds,
+                },
+              },
               target,
             )
-            const kinds = interceptedKinds(read.rules)
+            /*
+             * Off what was armed, not off the arguments.
+             *
+             * When the call named no rules and the profile had some, the page
+             * is intercepting and the arguments say it is not — and a result
+             * that reported `intercepting: []` about a page cheerfully
+             * fulfilling its images is a tool lying about its own effect.
+             */
+            const kinds = interceptedKinds(armed.rules)
             return {
               value: withEmptiness(
                 {
@@ -274,7 +321,7 @@ export function browserNetworkTool(drive: BrowserDrive): ToolSpec {
                   window: armed.window,
                   rules: armed.rules,
                   intercepting: kinds,
-                  capturing: capture,
+                  capturing: armed.capturing,
                   /*
                    * The folder is on the result, not only in a log.
                    *
@@ -294,18 +341,18 @@ export function browserNetworkTool(drive: BrowserDrive): ToolSpec {
                   previous: armed.previous,
                 },
                 {
-                  produced: kinds.length + (capture ? 1 : 0),
+                  produced: kinds.length + (armed.capturing ? 1 : 0),
                   // Unreachable while the precheck stands, and stated anyway:
                   // the day somebody widens that rule, this is what the caller
                   // is told instead of a silent success.
-                  whenNone: 'nothing was armed — no rule blocks or cheapens anything and capture is off',
+                  whenNone: 'nothing was armed — no rule blocks or fulfills anything and capture is off',
                 },
               ),
               summary: {
                 action: 'start',
                 ...(where === null ? {} : { window: where }),
-                rules: describeRules(read.rules),
-                capturing: capture,
+                rules: describeRules(armed.rules),
+                capturing: armed.capturing,
                 /*
                  * `false`, every time, while the precheck above stands — and
                  * written out rather than left off, because a log where only
@@ -313,7 +360,7 @@ export function browserNetworkTool(drive: BrowserDrive): ToolSpec {
                  * row at a time to find out which. The other two actions here
                  * already say it; this one was the odd one out.
                  */
-                ...emptySummary(kinds.length + (capture ? 1 : 0)),
+                ...emptySummary(kinds.length + (armed.capturing ? 1 : 0)),
               },
             }
           }
@@ -409,7 +456,7 @@ export function browserNetworkTool(drive: BrowserDrive): ToolSpec {
                 action: 'stop',
                 ...(where === null ? {} : { window: where }),
                 paused: status.counts.paused,
-                cheap: status.counts.cheap,
+                fulfilled: status.counts.fulfilled,
                 blocked: status.counts.blocked,
                 captured: captured?.entries ?? 0,
                 bodies: captured?.bodies ?? 0,
