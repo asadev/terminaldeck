@@ -140,6 +140,28 @@ export interface BindingIpcDeps {
    */
   knowsSession(sessionId: string, machineId: string): boolean
   /**
+   * Which machine this app believes a session is running on, or null when it
+   * has never heard of the id.
+   *
+   * The empty string for a session on this computer, a machine id for one on a
+   * paired device, a server id for a shell on a server — the same vocabulary
+   * the binding key already uses.
+   *
+   * It exists because two callers name a session and genuinely cannot name its
+   * machine. The copilot's `browser.open` is handed a session id by a model,
+   * and the shim's `POST /open` is handed one by a `curl` inside a shell. Both
+   * used to write the empty string there, which is not "unknown" — it is a
+   * positive claim that the session is on this computer, and for a session on
+   * his PC it is false. A window opened under a false key is a window the
+   * session it was opened for can never name, which is precisely the shape of
+   * `browser.open` refusing *"that session has no window by that name"* over a
+   * page it had just opened.
+   *
+   * Absent leaves the old behaviour exactly as it was: an unnamed machine means
+   * this computer. Every test that builds these deps by hand predates it.
+   */
+  machineOfSession?(sessionId: string): string | null
+  /**
    * End whatever the copilot was doing in a window that has just been
    * disconnected.
    *
@@ -320,7 +342,19 @@ export function openForSession(
   deps: BindingIpcDeps,
   request: { url: string; sessionId: string | null; machineId?: string; newWindow?: boolean },
 ): Promise<OpenAnswer> {
-  return routeOpen(request, {
+  /*
+   * An absent machine is a question; an empty one is an answer.
+   *
+   * `''` means "this computer" everywhere in this feature, so a caller that
+   * writes it has said where the session is. A caller that leaves the field out
+   * has not, and this is where that gets resolved rather than silently read as
+   * the local machine — see {@link BindingIpcDeps.machineOfSession} for the two
+   * callers that cannot know and for what the old default did to them.
+   */
+  const machineId =
+    request.machineId ??
+    (request.sessionId === null ? '' : (deps.machineOfSession?.(request.sessionId) ?? ''))
+  return routeOpen({ ...request, machineId }, {
     // `browserTabContents` answers null for an id it does not know, for a view
     // that has gone and for one its renderer took down with it — all three of
     // which mean the same thing here, and all three of which are handled by

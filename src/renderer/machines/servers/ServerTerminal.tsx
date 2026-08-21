@@ -218,7 +218,42 @@ export function ServerTerminal({
    * would tear this pane down and open a **second shell on somebody's server**
    * every time the find field took a keystroke.
    */
-  const { attach: attachFind, bar: findBar } = useTerminalFind()
+  /**
+   * The far end's id for this shell, once it has one.
+   *
+   * State as well as the local `shellId` inside the effect, because a *render*
+   * has to see it: the link identity below is read at click time out of a ref
+   * the hook rewrites every render, so a value that only ever lived inside the
+   * effect could never reach it. Null until `servers:shell:open` answers, which
+   * is a real window of a second or two — a link clicked in it carries no
+   * session, and goes to the machine, which is what happened to every link in
+   * this pane before today.
+   */
+  const [openedShellId, setOpenedShellId] = useState<string | null>(null)
+  /*
+   * Destructured, because the hook returns a fresh object every render and only
+   * `attach` is stable enough for a dependency list. Listing the object itself
+   * would tear this pane down and open a **second shell on somebody's server**
+   * every time the find field took a keystroke.
+   */
+  /*
+   * With this shell's identity, which it was called without.
+   *
+   * A shell on a server is a session everywhere else in this app — a tab, a row
+   * in the rail, its own ⌘W — so a URL clicked in one belongs in that session's
+   * own browser window. Called with nothing, the click reached main as a bare
+   * address and `link:open` handed it to `shell.openExternal`, which is Chrome
+   * on this Mac rather than anything to do with the server.
+   *
+   * The server's id stands in for the machine, which is the same thing the
+   * binding menus and the window's own `hostMachineId` already do for a page
+   * served by a server: one vocabulary, `<machineId>\0<sessionId>`, with a
+   * server in the machine half.
+   */
+  const { attach: attachFind, bar: findBar } = useTerminalFind({
+    ...(openedShellId === null ? {} : { sessionId: openedShellId }),
+    machineId: serverId,
+  })
   /**
    * Why the terminal is not here, when it is not.
    *
@@ -350,6 +385,9 @@ export function ServerTerminal({
           return
         }
         shellId = opened
+        // And into a render, so the link identity above can carry it. See
+        // {@link openedShellId}.
+        setOpenedShellId(opened)
         // Told before the backlog is drained, so the bar above this pane can
         // take its first reading of the screen as soon as there is a screen —
         // the main process has already attached its emulator to this id by the

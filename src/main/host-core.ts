@@ -289,6 +289,32 @@ export class OpenSessionLedger {
 /* ---------------------------------------------------------------- options -- */
 
 export interface HostCoreOptions {
+  /**
+   * How a session is given this app's browser verbs, or absent in a build that
+   * has no tool endpoint to give them from.
+   *
+   * A structural seam rather than an import: `deck-control` knows about loopback
+   * sockets, bearer tokens and MCP, and this file knows how a pty is spawned.
+   * Neither has any business importing the other, and the headless host — which
+   * runs this same `startSession` with no window and no endpoint — passes
+   * nothing and launches every session exactly as it did before.
+   *
+   * `prepare()` is called *before* the process exists and hands back the
+   * arguments plus a way to bind the token to the session id once there is one.
+   * A launch that never gets that far is disarmed by the seam's own deadline
+   * rather than by an unwind here. See `deck-control/session-tools.ts`.
+   */
+  sessionTools?: {
+    /**
+     * Null when there is nothing to hand out — the tool endpoint has not come
+     * up, or failed to. A session is then launched exactly as it was before,
+     * with no argument added and nothing said about tools it does not have.
+     */
+    prepare(): {
+      args: readonly string[]
+      started(sessionId: string, machineId?: string): void
+    } | null
+  }
   /** Everything remote access keeps on disk: the trust store, the identity, the grants. */
   storageDir: string
   /**
@@ -865,7 +891,60 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * only a main-process caller may set (`guest`, `confine`, `fence`) is a
      * positional argument for exactly this reason, and this joins them.
      */
-    const spec = withLaunchArgs(table, extraArgs ?? [], platform, process.env, target)
+    /*
+     * This app's browser verbs, on this session's own command line.
+     *
+     * Asad, 2026-08-21: *"driving other browsers should be for all of the
+     * sessions, regardless of even they are Commander, they are not Commander"*
+     * — and, of a session that had none: *"if I currently ask the session which
+     * is outside, it just don't know anything."*
+     *
+     * Five conditions, and each one rules out a case where this would be a claim
+     * rather than a capability — or, in the first case, a capability nobody
+     * meant to hand out:
+     *
+     *  - **Not a session a paired device asked for.** `guest` and `confine` are
+     *    set by exactly one caller, the device path, and such a session runs on
+     *    *this* machine under a guest git identity inside a granted folder. Give
+     *    it these verbs and a phone gains, through its own session, the thing
+     *    `browser-tools.ts` refuses it directly and says it always will: a way
+     *    to make this Mac open a page, click through it and raise a banner
+     *    saying "type your password" inside the owner's trusted app chrome. The
+     *    caller kind on the token would be `session` rather than `remote`, so
+     *    that refusal would not fire — which is exactly how a boundary gets
+     *    walked around rather than removed.
+     *  - **A caller that composed its own arguments owns the tool surface.**
+     *    There is exactly one — the copilot, which passes `--mcp-config <its own
+     *    file> --strict-mcp-config` — and adding a second `--mcp-config` beside
+     *    a strict one would either be ignored or would replace the surface its
+     *    whole permission model is built on.
+     *  - **The shipped Claude CLI.** `--mcp-config` is Claude's flag. Codex and
+     *    Gemini configure MCP servers in files of their own with no per-run
+     *    override this app can compose, so they are launched exactly as before;
+     *    see `session-tools.ts` for what is missing rather than pretended.
+     *  - **Not inside WSL**, for the same reason the `open` shim is withheld
+     *    there: the process is a Linux one and the file path, and the loopback
+     *    address in it, are the Windows side's.
+     *  - **The endpoint exists.** A build with no `deck-control` server — the
+     *    headless host, a test harness — passes no seam and every session is
+     *    launched the way it always was.
+     */
+    const sessionTools =
+      guest === undefined &&
+      confine === undefined &&
+      (extraArgs ?? []).length === 0 &&
+      provider === 'claude' &&
+      !addedRuns &&
+      target === null
+        ? (options.sessionTools?.prepare() ?? null)
+        : null
+    const spec = withLaunchArgs(
+      table,
+      sessionTools === null ? (extraArgs ?? []) : [...(extraArgs ?? []), ...sessionTools.args],
+      platform,
+      process.env,
+      target,
+    )
 
     // Resolve the profile the session should run as and hand the PTY its
     // config-dir override. Without this the picker records a choice that never
@@ -1278,6 +1357,17 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       // exist.
       hostCwd: spec.spawn.hostCwd,
     })
+
+    /*
+     * The token minted for this launch, now that the launch has an id to be.
+     *
+     * Nothing undoes it on the failure path and nothing needs to: a launch that
+     * throws before this line never reaches it, and the seam disarms an
+     * unclaimed one on a deadline of its own — see `CLAIM_TTL_MS` in
+     * `deck-control/session-tools.ts`. One mechanism rather than two, because
+     * the second one is the one that gets forgotten on the path nobody exercises.
+     */
+    sessionTools?.started(meta.id)
 
     /*
      * Write down what this session is held inside, now that it has an id.

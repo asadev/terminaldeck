@@ -13,13 +13,29 @@ import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { Refused, type Tier } from './surface'
 
 /**
- * The five browser tools, and the decisions inside them.
+ * The six browser tools, and the decisions inside them.
  *
  * Contributed through `DeckControlOptions.extraTools`, which exists for exactly
  * this and whose comment says so: a feature that wants to give the copilot a
  * capability reaches it *through* the dispatcher rather than beside it, so it
  * is prechecked, tiered, escalated, budgeted, gated and logged like the
  * fourteen in `catalogue.ts`. Nothing here re-implements any of that.
+ *
+ * ## Two kinds of caller, since 2026-08-21
+ *
+ * They were the copilot's alone. Asad asked for the other half in as many
+ * words — *"driving other browsers should be for all of the sessions,
+ * regardless of even they are Commander, they are not Commander, they are from
+ * remote channel, they are from server"* — so an ordinary session now reaches
+ * these same six over the same socket, holding a token of its own whose
+ * allow-list contains nothing else (`session-tools.ts`).
+ *
+ * The two callers differ in exactly one place, {@link boundOf}, and the
+ * difference is the whole permission model: the copilot may name any session and
+ * one of that session's slots, and a session may name **only itself**. It cannot
+ * enumerate, it cannot probe, and it cannot tell "that window is somebody
+ * else's" from "there is no such window". What it holds is what the person
+ * handed it by attaching a window, and no more.
  *
  * ## Why five schemas rather than a Playwright handle
  *
@@ -180,14 +196,90 @@ interface Bound {
 }
 
 /**
+ * The session behind a call, when the caller *is* a session rather than the
+ * copilot.
+ *
+ * Null for the copilot at the desk and for a paired device, which is every
+ * caller these tools had before this round. See `Caller.sessionId`.
+ */
+function callingSession(context: ToolContext): { sessionId: string; machineId: string } | null {
+  const caller = context.caller
+  if (caller.kind !== 'session' || caller.sessionId === undefined) return null
+  return { sessionId: caller.sessionId, machineId: caller.machineId ?? '' }
+}
+
+/** One window of a session's own, as a target. */
+function targetOf(window: BoundWindow): Bound {
+  if (window.viewId === null) {
+    // Reaching here means the window *is* this session's — the lookup has
+    // already said so — so a specific sentence discloses nothing, and the state
+    // is real and temporary: the renderer has registered the window but not yet
+    // told us which view is in it.
+    throw new Refused('not-permitted', `${slotName(window.n)} has no page in it yet`)
+  }
+  return {
+    target: {
+      key: boundKey(window.browserTabId),
+      viewId: window.viewId,
+      browserTabId: window.browserTabId,
+      name: slotName(window.n),
+    },
+    window,
+  }
+}
+
+/**
  * Which page a call names, or null for the caller's own tab.
+ *
+ * ## The copilot's rule, unchanged
  *
  * Both arguments or neither: a `window` with no session is a name with nothing
  * to resolve it against, and a `sessionId` with no window would have to guess
  * which of that session's windows was meant. Guessing here means driving a page
  * he is looking at, so it is refused instead.
+ *
+ * ## A session calling about itself
+ *
+ * A session has no tab of its own to fall back to — the copilot's bare pane is
+ * the copilot's, deliberately (`openBarePane`) — and it has no business naming
+ * another session at all. So for a session caller the target is resolved
+ * **inside its own binding**, always:
+ *
+ *  - `sessionId` may be its own or absent; anything else is refused in the words
+ *    an unknown window gets, because the difference between "no such session"
+ *    and "not yours" is what must not be learnable by trying.
+ *  - no `window` means its lowest-numbered one — `B1`, the same window its hook
+ *    context already tells it *"the browser"* means, so the phrase means the
+ *    same thing to the model as it does to him.
+ *  - no windows at all is a refusal that says how to get one, because that is a
+ *    real and ordinary state for a session that has not opened a page yet.
+ *
+ * The machine is part of the lookup and not optional here. The binding is keyed
+ * `<machineId>\0<sessionId>`, and a session on his PC asking about `B1` under
+ * this computer's key would be asking about somebody else's window.
  */
-function boundOf(args: Record<string, unknown>): Bound | null {
+function boundOf(args: Record<string, unknown>, context: ToolContext): Bound | null {
+  const owner = callingSession(context)
+  if (owner !== null) {
+    const named = optStr(args, 'sessionId')
+    if (named !== null && named !== owner.sessionId) {
+      throw new Refused('not-permitted', NO_SUCH_WINDOW)
+    }
+    const name = optStr(args, 'window')
+    if (name === null) {
+      const windows = windowsOf(owner.sessionId, owner.machineId)
+      if (windows.length === 0) {
+        throw new Refused(
+          'not-permitted',
+          'no browser window is attached to this session. browser.open opens one and attaches it.',
+        )
+      }
+      return targetOf(windows[0])
+    }
+    const window = windowNamed(owner.sessionId, name, owner.machineId)
+    if (window === null) throw new Refused('not-permitted', NO_SUCH_WINDOW)
+    return targetOf(window)
+  }
   const sessionId = optStr(args, 'sessionId')
   const name = optStr(args, 'window')
   if (sessionId === null && name === null) return null
@@ -236,10 +328,14 @@ function boundOf(args: Record<string, unknown>): Bound | null {
  * page did open and the person can see it, so the honest answer is the sentence
  * the route composed, without a name the agent would only be refused on.
  */
-async function settledWindow(sessionId: string, before: ReadonlySet<number>): Promise<string | null> {
+async function settledWindow(
+  sessionId: string,
+  before: ReadonlySet<number>,
+  machineId?: string,
+): Promise<string | null> {
   const deadline = Date.now() + NEW_WINDOW_SETTLE_MS
   for (;;) {
-    const made = windowsOf(sessionId).find(
+    const made = windowsOf(sessionId, machineId).find(
       (window) => !before.has(window.n) && window.viewId !== null,
     )
     if (made) return slotName(made.n)
@@ -262,18 +358,26 @@ async function settledWindow(sessionId: string, before: ReadonlySet<number>): Pr
 const NEW_WINDOW_SETTLE_MS = 4_000
 
 /** The same, for a rule that runs before the precheck and must not throw. */
-function maybeBound(args: Record<string, unknown>): Bound | null {
+function maybeBound(args: Record<string, unknown>, context: ToolContext): Bound | null {
   try {
-    return boundOf(args)
+    return boundOf(args, context)
   } catch {
     return null
   }
 }
 
-/** What a summary calls the page: `B2`, or the copilot's own tab. */
-function whereOf(args: Record<string, unknown>): string {
+/**
+ * What a summary calls the page: `B2`, or the copilot's own tab.
+ *
+ * A session caller never has an unnamed tab — see {@link boundOf} — so its
+ * summaries name the slot even when the call did not, which is what the dialog
+ * and the action log have to say for a person to recognise the page.
+ */
+function whereOf(args: Record<string, unknown>, context: ToolContext): string {
   const name = optStr(args, 'window')
-  return name === null ? 'the copilot’s browser tab' : (maybeBound(args)?.target.name ?? name)
+  const found = maybeBound(args, context)?.target.name ?? null
+  if (found !== null) return found
+  return name ?? (callingSession(context) === null ? 'the copilot’s browser tab' : 'its browser window')
 }
 
 /**
@@ -384,13 +488,30 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
    *    trusted app chrome, is a remote phishing primitive with the best possible
    *    disguise. A remote `act` grant is a real thing somebody might hand out
    *    (`surface.ts:92`); this must not ride in on it.
+   *  - **A session of this app's own is not that**, and this is the distinction
+   *    the 2026-08-21 review turns on. The refusal above is about a *device*
+   *    driving this machine. What he asked for is a *session* driving the window
+   *    that is attached to it:
+   *
+   *      > *"But driving other browsers should be for all of the sessions,
+   *      > regardless of even they are Commander, they are not Commander, they
+   *      > are from remote channel, they are from server… Other sessions can
+   *      > drive any connected browser which we allow to the session to drive."*
+   *
+   *    A session caller can name nothing but its own attached windows — see
+   *    {@link boundOf} — so what it holds is exactly the thing the person handed
+   *    it by attaching a window, and no more. It cannot reach the page next
+   *    door, it cannot enumerate what exists, and it has no way to ask about a
+   *    session that is not itself. The device refusal above is untouched by it:
+   *    a device's token still carries `kind: 'remote'` and still lands in the
+   *    first branch, target or no target.
    *  - **Unattended is refused**, because a routine at 03:00 driving somebody's
    *    logged-in browser is the shape `surface.ts`'s
    *    `not-permitted-unattended` was written from. A routine may still *offer*
    *    to drive by posting an alert.
    */
-  const local = (context: ToolContext, tool: string): void => {
-    if (context.caller.kind !== 'local') {
+  const mayDrive = (context: ToolContext, tool: string): void => {
+    if (callingSession(context) === null && context.caller.kind !== 'local') {
       throw new Refused(
         'not-granted',
         `${tool} only works for the person at this machine. Driving a browser from a paired device is ` +
@@ -413,13 +534,45 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
     tier: 'act',
     title: 'Open a page',
     description:
-      'Point a page at a URL. No target: your own tab, opened if you have none, in the tab strip where ' +
-      'the person can see and close it. `sessionId` + `window`: that window, which they are probably ' +
-      'looking at. `sessionId` + `newWindow`: a new window attached to that session. Then browser.read.',
+      'Point a page at a URL. No target: your own browser window, opened and attached if you have none, ' +
+      'in the tab strip where the person can see and close it. `sessionId` + `window`: that window, which ' +
+      'they are probably looking at. `sessionId` + `newWindow`: a new window attached to that session. ' +
+      'Then browser.read.',
     inputSchema: OPEN_SCHEMA,
     precheck: (args, context) => {
-      local(context, 'browser.open')
+      mayDrive(context, 'browser.open')
       str(args, 'url')
+      /*
+       * A session opening a page opens *its own*, and that is the whole of the
+       * target question for it.
+       *
+       * `sessionId` may name itself or be left out; `window` picks one of its
+       * own windows; `newWindow` asks for another. Anything naming somebody else
+       * is refused in {@link boundOf}'s words. Nothing here needs the session to
+       * know its own id, because it does not have one to give — the token it
+       * called with is what says who it is.
+       */
+      const owner = callingSession(context)
+      if (owner !== null) {
+        if (args.isolate === true) {
+          throw new Refused(
+            'not-permitted',
+            'isolate only applies to the copilot’s own tab. A session’s window is a page in the strip and ' +
+              'it keeps the partition it was built with.',
+          )
+        }
+        const named = optStr(args, 'sessionId')
+        if (named !== null && named !== owner.sessionId) {
+          throw new Refused('not-permitted', NO_SUCH_WINDOW)
+        }
+        if (args.newWindow === true && optStr(args, 'window') !== null) {
+          throw new Refused('not-permitted', 'name window or newWindow, not both')
+        }
+        // A named window still has to be one of its own; an unnamed one is the
+        // route below, which mints one rather than refusing.
+        if (optStr(args, 'window') !== null) boundOf(args, context)
+        return
+      }
       /*
        * Isolation is a property of a page that is being *built*, so it can only
        * be asked for about the copilot's own tab.
@@ -446,15 +599,44 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
         }
         return
       }
-      boundOf(args)
+      boundOf(args, context)
     },
-    summary: (args) =>
+    summary: (args, context) =>
       args.newWindow === true
         ? `Open ${optStr(args, 'url') ?? '?'} in a new window for session ${optStr(args, 'sessionId') ?? '?'}`
-        : `Open ${optStr(args, 'url') ?? '?'} in ${whereOf(args)}`,
-    run: async (args): Promise<ToolOutput> =>
+        : `Open ${optStr(args, 'url') ?? '?'} in ${whereOf(args, context)}`,
+    run: async (args, context): Promise<ToolOutput> =>
       asTool(async () => {
         const url = str(args, 'url')
+        const owner = callingSession(context)
+        if (owner !== null && optStr(args, 'window') === null) {
+          /*
+           * The session's own window, through the route its own `open <url>`
+           * takes.
+           *
+           * Same function, same numbering, same sentence back — so *"open a
+           * page"* typed at the agent and `open <url>` typed at the shell land
+           * in the same window with the same name. `resolve` decides whether
+           * that is the window it already has or a new one, which is his rule
+           * read literally: reuse `B1` unless the page has unfinished work, or
+           * unless a new one was asked for outright.
+           */
+          const before = new Set(
+            windowsOf(owner.sessionId, owner.machineId).map((window) => window.n),
+          )
+          const made = await drive.openForSession({
+            url,
+            sessionId: owner.sessionId,
+            machineId: owner.machineId,
+            ...(args.newWindow === true ? { newWindow: true } : {}),
+          })
+          if (!made.attached) throw new DriveRefused(made.line)
+          const window = await settledWindow(owner.sessionId, before, owner.machineId)
+          return {
+            value: { ...made, window },
+            summary: { attached: true, ...(window === null ? {} : { window }) },
+          }
+        }
         if (args.newWindow === true) {
           /*
            * A window for the *session*, through the route the shim uses.
@@ -466,7 +648,24 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
            */
           const sessionId = str(args, 'sessionId')
           const before = new Set(windowsOf(sessionId).map((window) => window.n))
-          const made = await drive.openForSession({ url, sessionId, machineId: '' })
+          /*
+           * No `machineId`, deliberately, and this line used to read
+           * `machineId: ''`.
+           *
+           * A tool call names a session and nothing else — a model has no way to
+           * know which computer that session runs on, and the schema does not
+           * offer it one. The empty string is not the absence of that knowledge:
+           * it is the assertion that the session is on *this* computer, and the
+           * binding is keyed `<machineId>\0<sessionId>`, so a window opened for
+           * a session on his PC was filed under a key that session could never
+           * name. The tool then refused *"that session has no window by that
+           * name"* over the page it had itself just opened.
+           *
+           * Omitting it hands the question to the one place that can answer it:
+           * `BindingIpcDeps.machineOfSession`, wired in `src/main/index.ts`,
+           * which looks in the local ptys, the paired machines and the servers.
+           */
+          const made = await drive.openForSession({ url, sessionId })
           if (!made.attached) throw new DriveRefused(made.line)
           const window = await settledWindow(sessionId, before)
           return {
@@ -474,7 +673,7 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
             summary: { attached: true, ...(window === null ? {} : { window }) },
           }
         }
-        const bound = boundOf(args)
+        const bound = boundOf(args, context)
         const result = await drive.open(
           { url, isolate: args.isolate === true },
           bound?.target,
@@ -508,18 +707,18 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
       'Use waitFor instead of calling this repeatedly.',
     inputSchema: READ_SCHEMA,
     precheck: (args, context) => {
-      local(context, 'browser.read')
+      mayDrive(context, 'browser.read')
       optStr(args, 'selector')
       optStr(args, 'waitFor')
-      boundOf(args)
+      boundOf(args, context)
     },
-    summary: (args) => {
+    summary: (args, context) => {
       const selector = optStr(args, 'selector')
-      return selector === null ? `Read ${whereOf(args)}` : `Read ${selector} in ${whereOf(args)}`
+      return selector === null ? `Read ${whereOf(args, context)}` : `Read ${selector} in ${whereOf(args, context)}`
     },
-    run: async (args): Promise<ToolOutput> =>
+    run: async (args, context): Promise<ToolOutput> =>
       asTool(async () => {
-        const target = boundOf(args)?.target ?? null
+        const target = boundOf(args, context)?.target ?? null
         const timeoutMs = optInt(args, 'timeoutMs', 10_000, 500, 30_000)
         const waitFor = optStr(args, 'waitFor')
         if (waitFor !== null) {
@@ -583,24 +782,24 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
      * tab moves — including by a link click or a server redirect — with no
      * cooperation needed from the model.
      */
-    escalate: (args): Tier => {
+    escalate: (args, context): Tier => {
       // The *target's* origin, not the drive's. A grant is a person's answer
       // about one site on one page, so reading it off the wrong page would
       // carry a yes given for the copilot's own tab onto a window he is
       // looking at. `maybeBound` never throws: this rule runs ahead of the
       // precheck, and a throw here is read as "assume alter" rather than as
       // the refusal the precheck is about to give.
-      const target = maybeBound(args)?.target ?? null
+      const target = maybeBound(args, context)?.target ?? null
       const origin = drive.origin(target)
       if (origin === null) return 'act'
       if (isPrivateOrigin(origin)) return 'act'
       return drive.originGranted(origin, target) ? 'act' : 'alter'
     },
     precheck: (args, context) => {
-      local(context, 'browser.step')
+      mayDrive(context, 'browser.step')
       const verb = verbOf(args)
       const selector = str(args, 'selector')
-      const bound = boundOf(args)
+      const bound = boundOf(args, context)
       /*
        * Before the gate, and that ordering is the whole point of it being here.
        *
@@ -657,11 +856,11 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
      * how many characters and never which. See `redactArgs` below for the other
      * half: the raw arguments row.
      */
-    summary: (args) => {
+    summary: (args, context) => {
       const verb = typeof args.verb === 'string' ? args.verb : '?'
       const selector = optStr(args, 'selector') ?? '?'
       const value = optStr(args, 'value')
-      const target = maybeBound(args)?.target ?? null
+      const target = maybeBound(args, context)?.target ?? null
       const site = drive.origin(target) ?? 'the page'
       // The window's name leads when there is one, because `B2` is what he says
       // out loud and an origin alone cannot tell two windows apart.
@@ -679,9 +878,9 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
       if (typeof value === 'string') out.value = `[${value.length} characters]`
       return out
     },
-    run: async (args): Promise<ToolOutput> =>
+    run: async (args, context): Promise<ToolOutput> =>
       asTool(async () => {
-        const target = boundOf(args)?.target ?? null
+        const target = boundOf(args, context)?.target ?? null
         const verb = verbOf(args)
         const selector = str(args, 'selector')
         const value = optStr(args, 'value')
@@ -726,13 +925,13 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
       'browser.read — the outline is what tells you what to click, and a picture is not.',
     inputSchema: SHOT_SCHEMA,
     precheck: (args, context) => {
-      local(context, 'browser.screenshot')
-      boundOf(args)
+      mayDrive(context, 'browser.screenshot')
+      boundOf(args, context)
     },
-    summary: (args) => `Photograph ${whereOf(args)}`,
-    run: async (args): Promise<ToolOutput> =>
+    summary: (args, context) => `Photograph ${whereOf(args, context)}`,
+    run: async (args, context): Promise<ToolOutput> =>
       asTool(async () => {
-        const target = boundOf(args)?.target ?? null
+        const target = boundOf(args, context)?.target ?? null
         const shot = await drive.screenshot(target)
         return {
           value: { ...shot, window: target?.name ?? null },
@@ -754,15 +953,15 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
       'again to keep waiting, or say something to them. It has not failed.',
     inputSchema: HANDOVER_SCHEMA,
     precheck: (args, context) => {
-      local(context, 'browser.handover')
+      mayDrive(context, 'browser.handover')
       str(args, 'prompt')
-      boundOf(args)
+      boundOf(args, context)
     },
-    summary: (args) =>
-      `Ask the person to take over ${whereOf(args)}: ${optStr(args, 'prompt') ?? ''}`,
-    run: async (args): Promise<ToolOutput> =>
+    summary: (args, context) =>
+      `Ask the person to take over ${whereOf(args, context)}: ${optStr(args, 'prompt') ?? ''}`,
+    run: async (args, context): Promise<ToolOutput> =>
       asTool(async () => {
-        const target = boundOf(args)?.target ?? null
+        const target = boundOf(args, context)?.target ?? null
         const result = await drive.handover(str(args, 'prompt'), HANDOVER_WINDOW_MS, target)
         return {
           value: {
@@ -805,13 +1004,13 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
       'Your own tab is closed by the person.',
     inputSchema: CLOSE_SCHEMA,
     precheck: (args, context) => {
-      local(context, 'browser.close')
-      boundOf(args)
+      mayDrive(context, 'browser.close')
+      boundOf(args, context)
     },
-    summary: (args) => `Close ${whereOf(args)}`,
-    run: async (args): Promise<ToolOutput> =>
+    summary: (args, context) => `Close ${whereOf(args, context)}`,
+    run: async (args, context): Promise<ToolOutput> =>
       asTool(async () => {
-        const bound = boundOf(args)
+        const bound = boundOf(args, context)
         if (bound === null) {
           throw new DriveRefused('name the session and the window to close')
         }

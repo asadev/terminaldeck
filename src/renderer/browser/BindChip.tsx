@@ -47,10 +47,23 @@ import { useSessionBinding, useWindowBinding, type BoundWindowView } from './bin
  * spells its tab ids. One helper because the strip and the rail both need it
  * and two spellings of an id split is how one of the two surfaces quietly stops
  * finding any binding at all.
+ *
+ * A shell on a **server** is the third case and it cannot be read out of the id
+ * at all. `serverTabId` joins the server with `shellKey`, which is this window's
+ * handle minted before the shell exists; the id main knows it by is the far
+ * end's, and it arrives on `servers:shell:open`. So it rides on the tab — see
+ * `WorkspaceTab.server` — and a shell whose id has not come back yet falls
+ * through to the local shape, finds no binding, and draws no chip, which is the
+ * truth for a shell that cannot have one yet.
  */
-export function bindKey(tab: { id: string }): { sessionId: string; machineId: string } {
+export function bindKey(tab: {
+  id: string
+  server?: { id: string; sessionId?: string }
+}): { sessionId: string; machineId: string } {
   const remote = readMachineTabId(tab.id)
-  return remote ?? { sessionId: tab.id, machineId: '' }
+  if (remote) return remote
+  if (tab.server?.sessionId) return { sessionId: tab.server.sessionId, machineId: tab.server.id }
+  return { sessionId: tab.id, machineId: '' }
 }
 
 /** How many chips are drawn before the rest become a count. */

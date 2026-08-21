@@ -252,13 +252,32 @@ export function serverSessionGroups(
  * this window holds, so there is no version of the far end that can refuse it.
  * There is nothing over there to refuse.
  */
-export function serverTabs(open: readonly ServerSession[]): WorkspaceTab[] {
+export function serverTabs(
+  open: readonly ServerSession[],
+  /**
+   * The far end's id for each open shell, by tab id — the map `App.tsx` fills
+   * from `ServerTerminal`'s `onOpened`.
+   *
+   * A parameter rather than a field on {@link ServerSession} because the row is
+   * this window's record of what it *asked for* and the id is the far end's
+   * answer, which arrives later and belongs to whoever is holding the channel.
+   * Optional, so every caller that only wants pills — and every test of this
+   * function — is unchanged.
+   */
+  shellIds: Readonly<Record<string, string>> = {},
+): WorkspaceTab[] {
   return open.map((entry) => ({
     id: entry.tabId,
     kind: 'session' as const,
     label: '',
     status: entry.status,
-    server: { id: entry.serverId, name: entry.serverName },
+    server: {
+      id: entry.serverId,
+      name: entry.serverName,
+      // Spread conditionally: absent and empty have to be the same thing to
+      // every reader. See `WorkspaceTab.server`.
+      ...(shellIds[entry.tabId] ? { sessionId: shellIds[entry.tabId] } : {}),
+    },
     closable: true,
   }))
 }

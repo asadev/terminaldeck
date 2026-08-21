@@ -499,6 +499,21 @@ export type AddServerFailure =
   | 'unknown'
 
 export interface ServersIpc {
+  /**
+   * Which server a shell id belongs to, or null for an id nothing here opened.
+   *
+   * A shell on a server is a *session* everywhere else in the app — it has a
+   * tab, a row in the rail and, since this round, browser windows of its own —
+   * and the session↔browser map keys those windows `<machineId>\0<sessionId>`
+   * with the server standing in for the machine. Nothing outside this file can
+   * answer which server a shell is on, so the one thing that can, does.
+   *
+   * Read rather than parsed out of the id. The id happens to begin with the
+   * server's, and a reader that split on the space would be one server name
+   * with a space in it away from binding a window to a machine that does not
+   * exist.
+   */
+  serverOfShell(shellId: string): string | null
   /** The room, for `tools.ts`. */
   room: ServerRoom
   /** The copilot's per-server permission, for `tools.ts` and for a settings screen. */
@@ -536,6 +551,8 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
     probed.delete(serverId)
   }
   const shells = new Map<string, ServerShell>()
+  /** Which server each open shell is on. See {@link ServersIpc.serverOfShell}. */
+  const shellServers = new Map<string, string>()
   /**
    * One shadow terminal per open server shell, keyed the same way.
    *
@@ -623,6 +640,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
   function dropShell(shellId: string, close: boolean): void {
     if (close) shells.get(shellId)?.close()
     shells.delete(shellId)
+    shellServers.delete(shellId)
     screens.get(shellId)?.dispose()
     screens.delete(shellId)
     /*
@@ -1150,6 +1168,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
           deps.broadcast(SERVERS_SHELL_CLOSED_CHANNEL, { shellId })
         })
         shells.set(shellId, shell)
+        shellServers.set(shellId, serverId)
         return { ok: true, shellId }
       } catch (error) {
         return failed(error)
@@ -1589,6 +1608,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
   )
 
   return {
+    serverOfShell: (shellId) => shellServers.get(shellId) ?? null,
     room,
     grants,
     stop: () => {

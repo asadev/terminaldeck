@@ -95,6 +95,32 @@ export interface WorkspaceTab {
    * soon as it has a title of its own.
    */
   url?: string
+  /**
+   * Browsers only — the machine whose network this page should be reached
+   * through, when a session on another machine asked for it.
+   *
+   * Absent for every page opened from the globe or by a session on this
+   * computer, and absent means this computer.
+   *
+   * ## Why this is not {@link WorkspaceTab.machine}
+   *
+   * They are one field apart in conversation and they are different facts, so
+   * they are different fields — the same separation `browser-binding.ts` keeps
+   * between `SessionBinding.machineId` and `BoundWindow.hostMachineId`. That one
+   * says *the process behind this tab runs over there*; this says *the page in
+   * this tab is served from over there*. A session on his PC can open a page
+   * served by this Mac, and the reverse, and neither may be inferred from the
+   * other. *"We always need a truth."*
+   *
+   * The id alone, with no name. The name is drawn by the panel's own machine
+   * picker, which is the one place that reads the machines view — a name carried
+   * here would be a second copy of it, going stale the day a machine is renamed.
+   *
+   * Read once, at mount, like {@link WorkspaceTab.url} beside it, and for the
+   * same reason: after that the machine behind the page is whatever the address
+   * says it is, read back off the tunnels in `servedBy`.
+   */
+  hostMachineId?: string
   /** True for tabs the user can close. */
   closable: boolean
   /**
@@ -170,7 +196,27 @@ export interface WorkspaceTab {
    * because the rail heading, the pill's tooltip, the window bar and the close
    * confirmation all print it and none of them can read the servers list.
    */
-  server?: { id: string; name: string }
+  server?: {
+    id: string
+    name: string
+    /**
+     * The far end's own id for this shell, once `servers:shell:open` has
+     * answered — the id everything outside this window knows the shell by.
+     *
+     * Absent for the second or two before that answer arrives, and absent is
+     * the answer rather than a gap: until then there is nothing this app could
+     * attach a browser window to.
+     *
+     * It is here because a shell on a server is a *session* to the
+     * session↔browser map, which keys its bindings `<machineId>\0<sessionId>`
+     * with the server standing in for the machine — and the tab id cannot
+     * supply it. `serverTabId` joins the server with `shellKey`, this window's
+     * own handle minted **before** anything is opened, precisely so a tab can
+     * exist while the shell is still being asked for; the far end's id is a
+     * different string and arrives later. See `bindKey` in `browser/BindChip.tsx`.
+     */
+    sessionId?: string
+  }
 }
 
 /**

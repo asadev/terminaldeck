@@ -207,10 +207,14 @@ export function customProviderSpec(
 }
 
 /**
- * The same agent, launched with two more flags on the end of its command line.
+ * The same agent, launched with a few more flags on the end of its command line.
  *
- * One caller: the copilot, which is spawned with `--mcp-config <file>
- * --strict-mcp-config` so that it has the `deck-control` tools at all. Without
+ * Two callers now, and both are about the same file. The copilot is spawned with
+ * `--mcp-config <file> --strict-mcp-config` so that it has the `deck-control`
+ * tools at all; every ordinary Claude session is spawned with a `--mcp-config`
+ * of its own — no `--strict` — so that it has the browser verbs and keeps
+ * whatever MCP servers the person configured for their own work. See
+ * `deck-control/session-tools.ts`. Without
  * this seam it had none — `mcpConfigPath()` wrote the file, the server listened,
  * and nothing on the spawn path could put a flag anywhere, so every sentence
  * about the copilot being "bounded by the tool tiers and the consent gate"

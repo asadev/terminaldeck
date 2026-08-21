@@ -9,7 +9,7 @@ import { browserTools, isPrivateOrigin } from './browser-tools'
 import { buildCatalogue, catalogueCost } from './catalogue'
 import { ConsentBroker, WINDOW_SURFACE } from './consent'
 import { DeckControl } from './control'
-import { NO_TIERS, type Caller, type DeckSurface } from './surface'
+import { ALL_TIERS as ALL, NO_TIERS, type Caller, type DeckSurface } from './surface'
 
 /**
  * The tool surface, and the one promise it makes about a password.
@@ -674,5 +674,148 @@ describe('isolation, asked for where it cannot apply', () => {
 
     expect(result.ok).toBe(true)
     expect(drive.calls).toEqual([['open', { url: 'https://x.test', isolate: true }]])
+  })
+})
+
+describe('a session driving its own windows', () => {
+  /**
+   * The caller a session's own token resolves to.
+   *
+   * `machineId` is deliberately non-empty on the second one: the binding is keyed
+   * `<machineId>\0<sessionId>` and half the point of this round is that a session
+   * on his PC and a session on this Mac with the same id are different sessions.
+   */
+  const here: Caller = { kind: 'session', sessionId: 's1', machineId: '', tiers: ALL }
+  const there: Caller = { kind: 'session', sessionId: 's1', machineId: 'pc-1', tiers: ALL }
+
+  /** A drive that can also mint a window for a session, which the plain fake cannot. */
+  function driveWithOpen(): BrowserDrive & { calls: unknown[]; opened: unknown[] } {
+    const drive = fakeDrive('http://localhost:3000') as BrowserDrive & {
+      calls: unknown[]
+      opened: unknown[]
+    }
+    const opened: unknown[] = []
+    ;(drive as unknown as Record<string, unknown>).openForSession = async (input: unknown) => {
+      opened.push(input)
+      // The real route attaches the window it minted before it answers, which is
+      // what `settledWindow` is waiting for. A fake that did not would make this
+      // test spend the full four-second settle window proving nothing.
+      const asked = input as { sessionId: string; machineId?: string }
+      attach({
+        sessionId: asked.sessionId,
+        machineId: asked.machineId ?? '',
+        browserTabId: 'browser:new',
+        viewId: 'view-new',
+      })
+      return { line: 'Opened in B1 — Terminal Deck.', attached: true }
+    }
+    ;(drive as unknown as Record<string, unknown>).opened = opened
+    return drive
+  }
+
+  it('reads its own window without naming a session at all', async () => {
+    // The window is attached the way the app attaches one — by the person, or by
+    // the route a session's own `open <url>` takes — and that attaching is the
+    // whole of the permission: *"if we connect any browser, they should be able
+    // to drive it."*
+    attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'view-1' })
+    const deck = control(fakeDrive('http://localhost:3000'), dir)
+
+    const result = await deck.call('browser_read', {}, { caller: here })
+
+    expect(result.ok).toBe(true)
+    // The row says which window it read, because a session caller has no
+    // unnamed tab and the log has to name the page a person could look at.
+    expect(result.row.detail).toContain('Read B1')
+  })
+
+  it('finds the window of a session on another machine under that machine’s key', async () => {
+    attach({ sessionId: 's1', machineId: 'pc-1', browserTabId: 'browser:9', viewId: 'view-9' })
+    const deck = control(fakeDrive('http://localhost:3000'), dir)
+
+    expect((await deck.call('browser_read', {}, { caller: there })).ok).toBe(true)
+    // And the same id on *this* machine is a different session with no windows,
+    // which is the property the machine half of the key exists for.
+    const local = await deck.call('browser_read', {}, { caller: here })
+    expect(local.ok).toBe(false)
+    expect(local.error).toContain('no browser window is attached')
+  })
+
+  it('cannot name another session’s window, and cannot tell that one exists', async () => {
+    attach({ sessionId: 'other', browserTabId: 'browser:2', viewId: 'view-2' })
+    attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'view-1' })
+    const deck = control(fakeDrive('http://localhost:3000'), dir)
+
+    const named = await deck.call('browser_read', { sessionId: 'other', window: 'B1' }, { caller: here })
+    const invented = await deck.call('browser_read', { sessionId: 'nobody', window: 'B1' }, { caller: here })
+
+    expect(named.ok).toBe(false)
+    expect(invented.ok).toBe(false)
+    // The same sentence for both, so "that session exists" is not learnable by
+    // trying — the argument `windowNamed` already makes for the copilot.
+    expect(named.error).toBe(invented.error)
+  })
+
+  it('has no window at all until one is attached, and says how to get one', async () => {
+    const deck = control(fakeDrive('http://localhost:3000'), dir)
+    const result = await deck.call('browser_read', {}, { caller: here })
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('browser.open')
+  })
+
+  it('opens through the route its own `open <url>` takes, carrying its machine', async () => {
+    const drive = driveWithOpen()
+    const deck = control(drive, dir)
+
+    const result = await deck.call('browser_open', { url: 'http://localhost:3000/' }, { caller: there })
+
+    expect(result.ok).toBe(true)
+    // Its own session and its own machine, neither of them supplied by the model
+    // — the token is what says who it is. `machineId: ''` here would file the
+    // window under a key this session could never name again.
+    expect(drive.opened).toEqual([
+      { url: 'http://localhost:3000/', sessionId: 's1', machineId: 'pc-1' },
+    ])
+    // And nothing was opened on the copilot's own pane.
+    expect(drive.calls).toEqual([])
+  })
+
+  it('may not ask for an isolated tab, because it has no tab of its own', async () => {
+    const drive = driveWithOpen()
+    const deck = control(drive, dir)
+    const result = await deck.call(
+      'browser_open',
+      { url: 'https://x.test', isolate: true },
+      { caller: here },
+    )
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('isolate')
+    expect(drive.opened).toEqual([])
+  })
+
+  it('does not loosen the refusal for a paired device', async () => {
+    // T28's other side, from T29's direction: opening the browser verbs to
+    // sessions must not open them to a phone. The wording is the one
+    // `browser-tools.ts` has always used, target or no target.
+    const deck = control(fakeDrive('https://example.com'), dir)
+    const device: Caller = { kind: 'remote', deviceId: 'phone-1', tiers: ALL }
+    const result = await deck.call('browser_read', {}, { caller: device })
+    expect(result.ok).toBe(false)
+    expect(result.refusal).toBe('not-granted')
+    expect(result.error).toContain('paired device')
+  })
+
+  it('refuses a token whose session has not been bound yet', async () => {
+    /*
+     * The gap between a token being registered and the pty existing.
+     * `session-tools.ts` answers a caller with no session and no tiers there,
+     * and this is what that caller gets: refused, rather than resolved against
+     * an empty session id.
+     */
+    attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'view-1' })
+    const deck = control(fakeDrive('http://localhost:3000'), dir)
+    const unbound: Caller = { kind: 'session', tiers: NO_TIERS }
+    const result = await deck.call('browser_read', {}, { caller: unbound })
+    expect(result.ok).toBe(false)
   })
 })

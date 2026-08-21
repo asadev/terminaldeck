@@ -195,6 +195,44 @@ export interface BrowserWorkspaceProps {
    */
   initialUrl?: string
   /**
+   * Whose network this page belongs on — the machine of the session that asked
+   * for it, when a session did.
+   *
+   * Empty, and by default absent, for every page opened from the globe or by a
+   * session on this computer.
+   *
+   * ## What it is for
+   *
+   * Asad, on the thing he called his biggest problem:
+   *
+   *   > *"as soon as I tell them open a browser, they just directly go inside my
+   *   > PC and they opens. If I tell a remote session to open a browser, they
+   *   > open the browser inside wherever they are actually in the main machine,
+   *   > not in here in this one."*
+   *
+   * It collides with a rule he set earlier and which `localhost-reach.ts` quotes
+   * as its reason for existing — *"keep the same one browser window for every
+   * device… shape of the application should not be changing for local and remote
+   * devices"* — and the rule wins. So this does not open a browser process over
+   * there. It makes the page in **this** window belong to that machine: the
+   * picker points there, so `http://localhost:3000` from a session on his PC is
+   * his PC's `3000` through the tunnel, and the machine chip on the tab names
+   * his PC because the tunnel is what `servedBy` reads.
+   *
+   * ## Why it is only a request until the machine answers
+   *
+   * It is applied when — and only when — that machine turns up in the picker's
+   * own list and is reachable. A picker set to a machine this window has not
+   * heard of would be reset by `lostMachine` a frame later with *"that machine
+   * is no longer paired"*, and, worse, a label naming a machine whose tunnel is
+   * not open would be a page claiming to be somewhere it is not. See the effect
+   * that consumes it.
+   *
+   * Read once, at mount, like {@link BrowserWorkspaceProps.initialUrl} above and
+   * for the same reason.
+   */
+  initialMachineId?: string
+  /**
    * The shell tab id of the window this panel *is*.
    *
    * This panel had no id of any kind until 2026-08-19, because nothing outside
@@ -464,6 +502,7 @@ export function BrowserWorkspace({
   tabId,
   startUrl = '',
   initialUrl = '',
+  initialMachineId = '',
   onStartUrl,
   onSettings,
   bridge,
@@ -1468,6 +1507,48 @@ export function BrowserWorkspace({
     },
     [reachPort, act],
   )
+
+  /*
+   * The machine a session asked this page to be opened on, taken up once its
+   * row exists.
+   *
+   * ## Why it waits, and why it can only fire once
+   *
+   * The machines view arrives on a push, so the list is empty for the first
+   * frames of a pane's life. Setting the picker from the prop at mount would run
+   * straight into `lostMachine` above — a selection naming a machine that is not
+   * in the list is reset with *"that machine is no longer paired"*, and the page
+   * would be back on this computer's network with a sentence blaming the wrong
+   * thing. Waiting for the row means the picker is never set to a machine this
+   * window cannot name.
+   *
+   * Once, because after this the machine behind the page is the person's to
+   * choose: the picker is a control, and a prop that re-asserted itself would
+   * take a page back off them every time the machines list changed.
+   *
+   * The address is re-opened rather than merely re-labelled, and only when it is
+   * a loopback one — `destinationFor` is what decides that, and it is the same
+   * function the address bar uses, so a page from a session and a page he typed
+   * end up in the same place. Everything else keeps the URL it opened with: a
+   * public address is the same page from every machine, and tunnelling it would
+   * be a claim rather than a reach.
+   */
+  const claimedMachine = useRef(initialMachineId === '')
+  useEffect(() => {
+    if (claimedMachine.current) return
+    const found = machines.find((one) => one.id === initialMachineId)
+    if (!found) return
+    claimedMachine.current = true
+    if (found.unreachable !== null) {
+      // Said, not swallowed. The page is on this computer's network and the
+      // person is looking at a tab that was meant to be somewhere else.
+      setNotice(`${found.name} — ${found.unreachable}`)
+      return
+    }
+    setMachineId(found.id)
+    const target = destinationFor(found.id, openAtRef.current)
+    if (target.kind === 'there') void openThere(found, target.port, target.url)
+  }, [initialMachineId, machines, openThere])
 
   const navigate = useCallback(
     (input: string): void => {
