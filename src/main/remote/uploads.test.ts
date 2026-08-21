@@ -25,7 +25,15 @@ let desk: UploadDesk
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'td-uploads-'))
   sent = []
-  desk = createUploadDesk({ store: diskUploadStore(dir), send: (message) => sent.push(message) })
+  desk = createUploadDesk({
+    // `store` takes the folder the sender named — null for "wherever you
+    // normally put them", which is the phone's case and every case before
+    // `upload.begin.dir` existed. This desk answers the same folder either way;
+    // the tests that exercise a *named* folder are in `server.test.ts`, where
+    // the device's grants are, because that is where the refusal is decided.
+    store: () => diskUploadStore(dir),
+    send: (message) => sent.push(message),
+  })
 })
 
 afterEach(() => {
@@ -142,7 +150,7 @@ describe('a file that arrives', () => {
   it('creates the folder on the first upload rather than at startup', async () => {
     const fresh = join(dir, 'not', 'there', 'yet')
     const frames: ServerMessage[] = []
-    const nested = createUploadDesk({ store: diskUploadStore(fresh), send: (m) => frames.push(m) })
+    const nested = createUploadDesk({ store: () => diskUploadStore(fresh), send: (m) => frames.push(m) })
     nested.handle({ t: 'upload.begin', id: 'up-1', name: 'x.txt', size: 3 })
     await waitFor('a nested folder to be made', () => frames.some((f) => f.t !== 'upload.ack'))
     expect(frames.find((f) => f.t === 'upload.ready')).toBeDefined()

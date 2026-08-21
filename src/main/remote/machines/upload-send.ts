@@ -31,6 +31,13 @@
  * frame would be a `writeFile` at a location chosen across a network, which is
  * the argument the receiving half opens with.
  *
+ * `send`'s optional `dir` is the one qualification of that, and it is not a
+ * `path`: it is a *folder*, and the far machine resolves it against the list it
+ * published to this device and refuses anything outside — `storeForFolder` in
+ * `server.ts`. So this end still proposes nothing it has not been offered. It
+ * exists for browser downloads, where the person choosing the destination is
+ * sitting at this keyboard and picked the folder off that machine's own list.
+ *
  * The path that comes back is what gets typed at the prompt, shell-quoted, by
  * the caller — the same thing the phone does with it. Nothing is typed until the
  * file has actually landed: a path announced at `upload.ready` and then never
@@ -101,7 +108,7 @@ export interface UploadSender {
    * leave this machine, because the caller is a drop on a terminal pane and the
    * only wrong answer is silence.
    */
-  send(filePath: string): Promise<SendFileOutcome>
+  send(filePath: string, dir?: string): Promise<SendFileOutcome>
   /** A frame off the wire. True when it belonged to the transfer in flight. */
   receive(message: ServerMessage): boolean
   /** The link went away. Whatever was in flight ends, visibly. */
@@ -281,7 +288,7 @@ export function createUploadSender(deps: UploadSenderDeps): UploadSender {
   }
 
   return {
-    async send(filePath: string): Promise<SendFileOutcome> {
+    async send(filePath: string, dir?: string): Promise<SendFileOutcome> {
       if (live) {
         return {
           ok: false,
@@ -345,7 +352,18 @@ export function createUploadSender(deps: UploadSenderDeps): UploadSender {
         // a path. That ordering is the receiving half's design and this end
         // keeps it: the person is told where the file is going while they can
         // still stop it.
-        if (!deps.send({ t: 'upload.begin', id: upload.id, name, size })) {
+        /*
+         * `dir` is left off entirely when nothing was chosen, rather than sent
+         * as an empty string. The far end reads absent and empty the same way,
+         * but a build older than the field would carry an unknown key through
+         * its parser, and an additive wire earns that by not adding keys nobody
+         * asked for.
+         */
+        const begin =
+          dir === undefined || dir === ''
+            ? ({ t: 'upload.begin', id: upload.id, name, size } as const)
+            : ({ t: 'upload.begin', id: upload.id, name, size, dir } as const)
+        if (!deps.send(begin)) {
           fail('That machine is not connected.', false)
         }
       })

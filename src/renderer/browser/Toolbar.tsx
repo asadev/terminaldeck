@@ -65,6 +65,21 @@ interface Props {
   menuRef?: RefObject<HTMLButtonElement | null>
   /** The profile button, anchoring its own menu for the same reason. */
   profileRef?: RefObject<HTMLButtonElement | null>
+  /** The downloads button, when there is one. Same reason as the two above. */
+  downloadsRef?: RefObject<HTMLButtonElement | null>
+  /**
+   * What the downloads button should say, or null for *do not draw one*.
+   *
+   * Null is the ordinary state and the button is genuinely absent then, which is
+   * Chrome's own behaviour and is deliberate: a control that is empty nine days
+   * in ten is a control people stop seeing, and the standing door into downloads
+   * is the row in the ⋯ menu. This appears when something has actually happened
+   * — a file arriving, or one that did not. `downloadsBadge` in
+   * `downloads-bridge.ts` is the rule, and it is pure so it can be pinned.
+   */
+  downloadsBadge?: { label: string; tone: 'busy' | 'bad' | 'done' } | null
+  downloadsOpen?: boolean
+  onDownloads?: () => void
   /** The overflow menu — the start page, cookies, the recorded flow. */
   onMenu(): void
   menuOpen: boolean
@@ -185,6 +200,10 @@ export function Toolbar({
   actionsRef,
   menuRef,
   profileRef,
+  downloadsRef,
+  downloadsBadge = null,
+  downloadsOpen = false,
+  onDownloads,
   onMenu,
   menuOpen,
   onProfiles,
@@ -436,6 +455,36 @@ export function Toolbar({
           the half of *"so we can have these profiles over here as icon"* that
           was missing.
         */}
+        {/*
+          Downloads, immediately left of the profile — Chrome's own slot for it,
+          and he was pointing at Chrome when he asked. It carries no `fold`: a
+          control that only appears while something is happening must not also be
+          able to disappear into a menu at a narrow width, or the one moment it
+          exists for is the moment it is invisible.
+        */}
+        {onDownloads && downloadsBadge && (
+          <button
+            ref={downloadsRef}
+            type="button"
+            className="bw-icon bw-downloads-btn"
+            data-tone={downloadsBadge.tone}
+            title="Downloads"
+            aria-label="Downloads"
+            aria-pressed={downloadsOpen}
+            data-on={downloadsOpen || undefined}
+            onClick={onDownloads}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 4v11" />
+              <path d="M7 11l5 5 5-5" />
+              <path d="M5 20h14" />
+            </svg>
+            <span className="bw-dl-badge" aria-hidden="true">
+              {downloadsBadge.label}
+            </span>
+          </button>
+        )}
+
         {onProfiles && (
           <button
             ref={profileRef}

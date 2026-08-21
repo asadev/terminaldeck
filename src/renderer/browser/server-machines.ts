@@ -205,6 +205,11 @@ export function serverChoices(
       // `title` — see `MachineChoice.detail` — so nothing is lost and nothing
       // arbitrary is printed into a 19rem menu.
       unreachable: state?.state === 'refused' ? 'Refused' : null,
+      // A server publishes no folder list — there is no `welcome` on an ssh
+      // connection to carry one — so a downloads destination on it is a path
+      // typed in and resolved by the server's own `realpath`. `null` is the
+      // honest answer here and it is not the same as `[]`; see the field.
+      folders: null,
       detail: state?.state === 'refused' ? state.message : null,
     }
   })

@@ -306,16 +306,22 @@ export interface MachineLink {
    */
   input(sessionId: string, data: string): boolean
   /**
-   * Send a file from this machine into that machine's downloads folder.
+   * Send a file from this machine into a folder on that machine.
    *
-   * The verb behind dropping a photo on a remote session's pane. Resolves with
-   * the path it landed at over there — which the caller types at the prompt,
-   * quoted — or with a sentence. Refused before anything is announced when that
-   * machine never advertised `upload`.
+   * The verb behind dropping a photo on a remote session's pane, and behind
+   * delivering a browser download to another computer. Resolves with the path it
+   * landed at over there — which the caller types at the prompt, quoted, or
+   * shows on a downloads row — or with a sentence. Refused before anything is
+   * announced when that machine never advertised `upload`.
+   *
+   * `dir` is optional and absent is the old behaviour: that machine's own
+   * downloads folder. When it is given, **that machine decides whether it is
+   * allowed** — see `storeForFolder` in `server.ts` — so a refusal arrives as a
+   * sentence from over there rather than being guessed at here.
    *
    * See `upload-send.ts` for the flow control, the digest and the three bounds.
    */
-  sendFile(filePath: string): Promise<SendFileOutcome>
+  sendFile(filePath: string, dir?: string): Promise<SendFileOutcome>
   /** Stop the transfer in flight, if there is one. The far end deletes its half. */
   cancelFile(): void
   resize(sessionId: string, cols: number, rows: number): boolean
@@ -1293,7 +1299,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       // asked for and nothing went wrong.
       return true
     },
-    sendFile(filePath): Promise<SendFileOutcome> {
+    sendFile(filePath, dir): Promise<SendFileOutcome> {
       // Refused here rather than sent and refused there, for the reason `create`
       // and `close` give below: the far end answers an unadvertised verb by
       // closing the channel, and a drop that disconnects you is worse than one
@@ -1304,7 +1310,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           message: 'That machine is running an older build that cannot receive files.',
         })
       }
-      return uploads.send(filePath)
+      return uploads.send(filePath, dir)
     },
     cancelFile(): void {
       uploads.closeAll('Cancelled.')

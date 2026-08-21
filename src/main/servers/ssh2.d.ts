@@ -216,11 +216,19 @@ declare module 'ssh2' {
   /**
    * The subsystem, opened over a connection that is already up.
    *
-   * Declared as narrowly as everything else in this file: three calls, which is
-   * every call a folder picker makes. `readdir` and `realpath` answer the two
-   * questions — *what is in here* and *what is `~` actually called* — and `end`
+   * Declared as narrowly as everything else in this file: seven calls, which is
+   * every call a folder picker and a file delivery make. `readdir` and
+   * `realpath` answer the two questions — *what is in here* and *what is `~`
+   * actually called* — `fastPut`, `stat`, `rename` and `unlink` are the four a
+   * write needs to land a file under a name nothing else is using, and `end`
    * closes the channel, which is not the connection: the pool below still owns
    * that and still decides when the socket goes.
+   *
+   * `fastPut` is the library's parallel-read upload rather than a stream: it
+   * opens several reads against the local file and writes them at offsets, which
+   * is what makes an ordinary file cross in one round of latency rather than in
+   * one per 32 KB. Its callback is the only completion signal — there is no
+   * event to wait for afterwards.
    *
    * The errors carry a numeric `code` from RFC 4251 §7 (`3` is permission
    * denied, `2` is no such file), and that number is the only thing that
@@ -238,6 +246,21 @@ declare module 'ssh2' {
       path: string,
       callback: (err: (Error & { code?: number }) | undefined, absolute: string) => void,
     ): void
+    stat(
+      path: string,
+      callback: (err: (Error & { code?: number }) | undefined, stats: Stats) => void,
+    ): void
+    fastPut(
+      localPath: string,
+      remotePath: string,
+      callback: (err: (Error & { code?: number }) | undefined) => void,
+    ): void
+    rename(
+      from: string,
+      to: string,
+      callback: (err: (Error & { code?: number }) | undefined) => void,
+    ): void
+    unlink(path: string, callback: (err: (Error & { code?: number }) | undefined) => void): void
     end(): void
   }
 

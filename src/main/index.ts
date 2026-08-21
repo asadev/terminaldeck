@@ -203,6 +203,11 @@ import {
 } from './settings-extra'
 import { registerBrowserSessionIpc } from './browser-session'
 import { registerBrowserProfileIpc } from './browser-profiles'
+import {
+  DOWNLOADS_CHANNEL,
+  installDownloads,
+  registerBrowserDownloadIpc,
+} from './browser-downloads'
 import { registerBrowserPasswordIpc } from './browser-passwords'
 import { registerBrowserSignInIpc } from './browser-signin'
 import { registerBrowserViewIpc } from './browser-view'
@@ -2332,6 +2337,49 @@ function registerIpc(): void {
   // Profiles first: everything below asks which one is switched on, and
   // `registerBrowserSessionIpc` hardens that profile's session as its first act.
   registerBrowserProfileIpc(ipcMain, () => app.getPath('userData'))
+
+  /*
+   * Downloads in the built-in browser, including the ones bound for a computer
+   * that is not this one.
+   *
+   * `deliver` is the only part of the feature that has to be assembled here,
+   * because it is the only part that needs both halves of "another machine":
+   * a paired desktop reached over the relay, and a server reached over ssh. They
+   * share no protocol and answer the same shape, which is what lets
+   * `browser-downloads.ts` hold one code path for both and is why the choice
+   * between them is made by id here rather than by a flag on the wire.
+   *
+   * Servers are asked first because the two id spaces are separate stores and a
+   * server id is the narrower question — `serverStore.get` is a lookup in a file
+   * this process owns, while `machines.sendFile` has to answer for a link that
+   * may be reconnecting.
+   */
+  installDownloads({
+    userData: () => app.getPath('userData'),
+    defaultDir: () => join(app.getPath('downloads'), BRAND.name),
+    broadcast: (view) => {
+      send(DOWNLOADS_CHANNEL, view)
+    },
+    window: () => mainWindow,
+    deliver: async (machineId, localPath, folder) => {
+      if (serverStore.get(machineId) !== null) {
+        try {
+          return { ok: true, path: await serverConnections.sendFile(machineId, localPath, folder) }
+        } catch (error) {
+          return {
+            ok: false,
+            // The server's own sentence where there is one. `ServerProblem`
+            // messages are written to be read by a person and are the only thing
+            // that can say *why* — a full disk, a folder that is not writable by
+            // this sign-in, an SFTP subsystem that is switched off.
+            message: error instanceof Error ? error.message : 'That server would not take the file.',
+          }
+        }
+      }
+      return await machines.sendFile(machineId, localPath, folder === '' ? undefined : folder)
+    },
+  })
+  registerBrowserDownloadIpc(ipcMain)
   registerBrowserPasswordIpc(ipcMain, () => app.getPath('userData'))
   registerBrowserSignInIpc(ipcMain)
   // registerBrowserSessionIpc hardens the active profile's session.

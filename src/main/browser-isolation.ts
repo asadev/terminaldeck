@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { app, session, type IpcMain, type Session } from 'electron'
+import { attachDownloads } from './browser-downloads'
 import { writeRecordPreload } from './browser-record-preload'
 
 /**
@@ -34,9 +35,10 @@ import { writeRecordPreload } from './browser-record-preload'
  *
  * A guest page is untrusted whichever partition it is in. Everything
  * `browser-tab.ts` does to the shared session is done here too — permissions
- * refused, downloads blocked — and the flow recorder's session preload is
- * registered as well, or recording would silently stop working the moment a tab
- * was switched to Isolated. Both are easy to forget and neither fails loudly.
+ * refused, downloads taken by `browser-downloads.ts` rather than by Chromium's
+ * own Save-As sheet — and the flow recorder's session preload is registered as
+ * well, or recording would silently stop working the moment a tab was switched
+ * to Isolated. All three are easy to forget and none of them fails loudly.
  *
  * ## The seam
  *
@@ -79,15 +81,20 @@ export function newIsolationKey(): string {
 /**
  * Harden a guest partition.
  *
- * Deliberately the same list as `hardenedGuestSession()` in `browser-tab.ts`:
- * a page being looked at has no business asking for the camera, the clipboard
- * or a notification, and there is no UI here to ask the user with. Downloads are
- * refused for the same reason they are refused there.
+ * Deliberately the same list as `hardenedGuestSession()` in `browser-tab.ts`: a
+ * page being looked at has no business asking for the camera, the clipboard or a
+ * notification, and there is no UI here to ask the user with.
+ *
+ * Downloads are wired for the same reason they are wired there, and the wiring
+ * has to be in both copies. An isolated tab that refused a download while an
+ * ordinary one took it would be the shape of defect this whole review is about —
+ * a feature that works until you press one unrelated switch. `browser-profiles.ts`
+ * holds the other copy and the argument for why the refusal went.
  */
 function harden(ses: Session): Session {
   ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
   ses.setPermissionCheckHandler(() => false)
-  ses.on('will-download', (event) => event.preventDefault())
+  attachDownloads(ses)
 
   // The recorder's guest script is attached per *session*, so an isolated tab
   // that skipped this would look like it was recording and capture nothing.

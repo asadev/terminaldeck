@@ -38,6 +38,7 @@ import type { PairingToken } from '../device-auth'
 import type { PairingDesk, RemoteStatus } from '../server'
 import { thisMachineName } from '../../platform/host'
 import { createMachineLink, type MachineLink, type MachineLinkState } from './guest'
+import type { SendFileOutcome } from './upload-send'
 import { pairWithCode, type PairResult } from './pair'
 import { offerFrom } from './rendezvous'
 import { MachineStore, type Machine } from './store'
@@ -164,6 +165,16 @@ export interface MachinesIpc {
   wake(): void
   /** Drop every link and stop the beacon. For shutdown. */
   stop(): void
+  /**
+   * Send a file to one machine, from inside the main process.
+   *
+   * The same act `machines:upload` performs for the renderer, exposed because
+   * `browser-downloads.ts` has a finished download in its hand in main and
+   * bouncing it out to a window and back would put the decision to delete the
+   * local copy on the far side of two IPC hops. Answers the far machine's own
+   * sentence on a refusal, which is what the downloads row prints.
+   */
+  sendFile(machineId: string, filePath: string, dir?: string): Promise<SendFileOutcome>
 }
 
 export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcDeps): MachinesIpc {
@@ -831,13 +842,11 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
    */
   ipcMain.handle(
     'machines:upload',
-    async (_event, id: unknown, filePath: unknown): Promise<unknown> => {
+    async (_event, id: unknown, filePath: unknown, dir: unknown): Promise<unknown> => {
       if (typeof id !== 'string' || typeof filePath !== 'string' || filePath === '') {
         return { ok: false, message: 'That is not a machine and a file.' }
       }
-      const link = links.get(id)
-      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.' }
-      return await link.sendFile(filePath)
+      return await sendFile(id, filePath, typeof dir === 'string' && dir !== '' ? dir : undefined)
     },
   )
 
@@ -985,8 +994,26 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
    */
   for (const machine of store.list()) linkFor(machine)
 
+  /**
+   * One place both doors into a transfer go through.
+   *
+   * The renderer's `machines:upload` and the main process's own
+   * `MachinesIpc.sendFile` were the same four lines twice, and the second copy
+   * is exactly where a refusal sentence drifts from the first.
+   */
+  async function sendFile(
+    machineId: string,
+    filePath: string,
+    dir?: string,
+  ): Promise<SendFileOutcome> {
+    const link = links.get(machineId)
+    if (!link) return { ok: false, message: 'This desktop is not linked to that machine.' }
+    return await link.sendFile(filePath, dir)
+  }
+
   return {
     view,
+    sendFile,
     wake(): void {
       for (const link of links.values()) link.wake()
     },

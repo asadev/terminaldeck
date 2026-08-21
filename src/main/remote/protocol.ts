@@ -667,6 +667,17 @@ export const MAX_UPLOAD_BYTES = 512 * 1024 * 1024
  */
 export const MAX_UPLOAD_NAME_BYTES = 255
 
+/**
+ * Longest `upload.begin.dir`, in UTF-8 bytes.
+ *
+ * A bound on a hostile frame and nothing more. What decides whether a folder may
+ * actually be written to is the host, against the list it published to *this*
+ * device — see `upload.begin.dir` for the argument, and `reachFor` in
+ * `device-reach.ts` for the rule. 4096 is `PATH_MAX` on Linux, which is the
+ * largest a real path gets on any machine this runs on.
+ */
+export const MAX_UPLOAD_DIR_BYTES = 4096
+
 /** Hex SHA-256, as the phone reports it and as the desktop answers. */
 export const SHA256_HEX_LENGTH = 64
 
@@ -1751,8 +1762,23 @@ export type ClientMessage =
    * `size` is declared up front rather than discovered, and that is what makes
    * the two honest things here possible: a file too large for this Mac is refused
    * before anything is created, and the progress bar has a denominator.
+   *
+   * `dir` is the one field on this frame that names a *place*, and the paragraph
+   * above says why that is dangerous: `uploads.ts` opens by refusing to build a
+   * path out of two pieces of network input. It is here anyway, under one rule
+   * that keeps that promise — **the host resolves it against the folder list the
+   * host itself published to this device**, exactly as `create` resolves its
+   * `cwd`, and refuses anything that is not inside one of them. So this field
+   * selects from a menu the receiving machine wrote; it does not name a
+   * location. Absent — which is every phone, and every desktop before 2026-08-21
+   * — means the host's own downloads folder, and that path is unchanged.
+   *
+   * It exists because of one sentence, about a download in the built-in browser:
+   *
+   *   > *"We should actually be able to maybe choose, if possible, it will bring
+   *   > the thing in that machine where we want to actually download."*
    */
-  | { t: 'upload.begin'; id: string; name: string; size: number }
+  | { t: 'upload.begin'; id: string; name: string; size: number; dir?: string }
   /** One slice of the file, base64. Only legal after `upload.ready`. */
   | { t: 'upload.data'; id: string; data: string }
   /**
@@ -3367,7 +3393,19 @@ export function parseClientMessage(raw: unknown): ParseResult {
       // that completes instantly and produces an empty file at a real path.
       const size = whole(parsed.size, 1, MAX_UPLOAD_BYTES)
       if (size === null) return bad('upload.begin with an unusable size')
-      return { ok: true, message: { t: 'upload.begin', id: uploadId, name, size } }
+      /*
+       * The optional destination. Absent and empty are the same answer — the
+       * host's own folder — so an older sender and a sender that chose nothing
+       * take the identical path through everything below.
+       */
+      const dir = parsed.dir
+      if (dir === undefined || dir === '') {
+        return { ok: true, message: { t: 'upload.begin', id: uploadId, name, size } }
+      }
+      if (typeof dir !== 'string') return bad('upload.begin with an unusable folder')
+      if (overBytes(dir, MAX_UPLOAD_DIR_BYTES)) return tooLarge('upload.begin with a folder over the limit')
+      if (CONTROL_CHARS.test(dir)) return bad('upload.begin with an unusable folder')
+      return { ok: true, message: { t: 'upload.begin', id: uploadId, name, size, dir } }
     }
     case 'upload.data': {
       const uploadId = id(parsed.id)

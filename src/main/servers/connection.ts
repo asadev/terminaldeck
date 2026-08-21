@@ -58,6 +58,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { basename } from 'node:path'
 import { Client, type Channel, type FileEntry, type SFTPWrapper } from 'ssh2'
 import type { ServerFacts } from './facts'
 import { PROBE_SCRIPT, parseProbe } from './probe.sh'
@@ -596,6 +597,74 @@ export class ServerConnections {
     })
   }
 
+  /**
+   * Put one file into a folder on a server, and answer with the path it landed
+   * at.
+   *
+   * ## Why this exists
+   *
+   * Asad, 2026-08-21, about a download in the built-in browser with the machine
+   * picker pointed at his Office PC:
+   *
+   *   > *"We should actually be able to maybe choose, if possible, it will bring
+   *   > the thing in that machine where we want to actually download."*
+   *
+   * A server is one of the machines that picker offers, so a download bound for
+   * one has to be able to get there. The paired-machine half of the same feature
+   * goes over the relay (`upload-send.ts`); this is the ssh half, and there is no
+   * shared code between them because there is no shared protocol — what is
+   * shared is the answer shape, so `browser-downloads.ts` cannot tell them apart.
+   *
+   * ## Why SFTP and not `cat > file`
+   *
+   * The same argument {@link listDirectory} makes about `ls`, in the other
+   * direction: a shell redirect needs the remote path to survive being written
+   * into a command line, and a folder called `my project` or one with a quote in
+   * it does not. SFTP takes the path as data. It is also the only way to get a
+   * useful failure — a full disk over `cat` is an exit status, and over SFTP it
+   * is a code this side already turns into a sentence.
+   *
+   * ## Why it lands as `.part` and is renamed
+   *
+   * The same promise `uploads.ts` makes to a phone, and for the same reason: a
+   * half-written file wearing the right name and the right extension is worse
+   * than no file, because the failure surfaces later, in whatever opens it. A
+   * failed put deletes its own partial rather than leaving it on somebody's
+   * server.
+   *
+   * ## Why the name can change
+   *
+   * A file already at that name is left alone and this one lands beside it as
+   * `report (2).pdf`. Overwriting is not a thing to do quietly on a machine the
+   * person is not looking at — the same rule `diskUploadStore` and
+   * `attach-bring-in.ts` hold to, and the answer carries whichever name was
+   * actually used so nothing has to guess.
+   */
+  async sendFile(serverId: string, localPath: string, folder: string): Promise<string> {
+    return this.withConnection(serverId, async (client) => {
+      const sftp = await openSftp(client)
+      try {
+        // Resolved by the server, never assembled here — `~`, a relative path
+        // and a link all become the real thing, which is what makes the joined
+        // path below a path that exists.
+        const dir = await realpath(sftp, folder === '' ? '.' : folder)
+        const wanted = basename(localPath)
+        const target = await freeRemotePath(sftp, dir, wanted)
+        const partial = `${target}.part`
+        try {
+          await fastPut(sftp, localPath, partial)
+          await renameRemote(sftp, partial, target)
+        } catch (error) {
+          await unlinkRemote(sftp, partial)
+          throw error
+        }
+        return target
+      } finally {
+        sftp.end()
+      }
+    })
+  }
+
   /* ------------------------------------------------------------- dialling -- */
 
   private async dial(serverId: string): Promise<Client> {
@@ -848,6 +917,69 @@ function realpath(sftp: SFTPWrapper, path: string): Promise<string> {
       resolve(absolute)
     })
   })
+}
+
+function fastPut(sftp: SFTPWrapper, localPath: string, remotePath: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    sftp.fastPut(localPath, remotePath, (error) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, remotePath))
+        return
+      }
+      resolve()
+    })
+  })
+}
+
+function renameRemote(sftp: SFTPWrapper, from: string, to: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    sftp.rename(from, to, (error) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, to))
+        return
+      }
+      resolve()
+    })
+  })
+}
+
+/** Best-effort. It runs on a failure path and has nothing left to report to. */
+function unlinkRemote(sftp: SFTPWrapper, path: string): Promise<void> {
+  return new Promise<void>((resolve) => {
+    sftp.unlink(path, () => resolve())
+  })
+}
+
+/** Does anything exist at this path? A `stat` error of any kind reads as "no". */
+function remoteExists(sftp: SFTPWrapper, path: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    sftp.stat(path, (error) => resolve(error === undefined))
+  })
+}
+
+/**
+ * `report.pdf`, then `report (2).pdf`, on the far end.
+ *
+ * Joined with a forward slash rather than with `path.join`: this path is on the
+ * server, and on a Windows desktop `join` would produce a backslash for a folder
+ * that is almost always POSIX. SFTP paths are `/`-separated in the protocol
+ * itself, which is what makes that safe rather than an assumption about the
+ * far end's operating system.
+ *
+ * A `stat` per attempt, and the loop is bounded: an unbounded search against a
+ * folder holding a thousand `report (n).pdf` would be a thousand round trips
+ * started by one click.
+ */
+async function freeRemotePath(sftp: SFTPWrapper, dir: string, wanted: string): Promise<string> {
+  const base = dir.endsWith('/') ? dir.slice(0, -1) : dir
+  const dot = wanted.lastIndexOf('.')
+  const stem = dot > 0 ? wanted.slice(0, dot) : wanted
+  const extension = dot > 0 ? wanted.slice(dot) : ''
+  for (let n = 1; n <= 20; n += 1) {
+    const candidate = `${base}/${n === 1 ? wanted : `${stem} (${n})${extension}`}`
+    if (!(await remoteExists(sftp, candidate))) return candidate
+  }
+  return `${base}/${stem} (${Date.now()})${extension}`
 }
 
 function readdir(sftp: SFTPWrapper, path: string): Promise<FileEntry[]> {

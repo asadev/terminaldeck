@@ -1815,6 +1815,39 @@ const api = {
   browserProfileDelete: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-profile:delete', id),
 
+  /* ------------------------------------------------ browser downloads -- */
+
+  /*
+   * Downloads, including the ones bound for another computer.
+   *
+   * Six invokes and one push, and the push carries the whole view rather than a
+   * delta: the list is short, it changes on every chunk of a file, and a
+   * renderer that applied deltas would have to be right about all of them to end
+   * up with the list the main process is actually holding. The same argument
+   * `browser:bindings` makes one file over.
+   *
+   * `browserDownloadFolder` opens a native folder chooser on **this** machine
+   * and nothing else. A folder on another computer cannot be picked with a sheet
+   * that reads this one's disk — see `chooseDownloadFolder` in
+   * `browser-downloads.ts` for why offering one anyway would be a lie.
+   */
+  browserDownloads: (): Promise<unknown> => ipcRenderer.invoke('browser-download:list'),
+  browserDownloadDestination: (destination: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-download:destination', destination),
+  browserDownloadCancel: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-download:cancel', id),
+  browserDownloadClear: (): Promise<unknown> => ipcRenderer.invoke('browser-download:clear'),
+  browserDownloadOpen: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-download:open', id),
+  browserDownloadReveal: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-download:reveal', id),
+  browserDownloadFolder: (): Promise<unknown> => ipcRenderer.invoke('browser-download:folder'),
+  onBrowserDownloads: (cb: (view: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, view: unknown) => cb(view)
+    ipcRenderer.on('browser:downloads', handler)
+    return () => ipcRenderer.off('browser:downloads', handler)
+  },
+
   browserPasswordsAvailable: (): Promise<unknown> =>
     ipcRenderer.invoke('browser-password:available'),
   browserPasswords: (profileId: string): Promise<unknown> =>

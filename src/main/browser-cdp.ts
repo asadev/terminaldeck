@@ -167,9 +167,12 @@ export const DENIED_METHODS: readonly string[] = [
   'Storage.clearDataForOrigin',
   'Storage.getUsageAndQuota',
   /*
-   * Downloads. `will-download` is already prevented on both guest sessions;
-   * these two re-enable it *and* let the caller name the directory, which is a
-   * concrete escalation from "drive a page" to "write files anywhere".
+   * Downloads. A person clicking a link now gets one — `browser-downloads.ts`
+   * takes `will-download` on both guest sessions and writes into one folder that
+   * was chosen in the app. These two are still refused, and the distinction is
+   * the whole point: they let *the caller* name the directory, which is a
+   * concrete escalation from "drive a page" to "write files anywhere", and the
+   * caller here is an agent rather than the person at the keyboard.
    */
   'Page.setDownloadBehavior',
   'Browser.setDownloadBehavior',

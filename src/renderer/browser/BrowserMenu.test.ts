@@ -50,3 +50,40 @@ describe('the browser can reach its own settings', () => {
     expect(onScreen).toContain('{onSettings && (')
   })
 })
+
+/**
+ * Downloads, the standing door.
+ *
+ *   > *"Then I need to have downloads option"*
+ *   > *"Then I need proper downloads folder and all of this stuff, history, save
+ *   > passwords and all of this."*
+ *
+ * Said with Chrome's ⋮ open and the pointer resting on its `Downloads ⌥⌘L`. The
+ * button on the toolbar comes and goes with the list — see `downloadsBadge` —
+ * so this row is the one place downloads can always be reached from. Its absence
+ * would make the button's absence a feature that hides.
+ */
+describe('the browser can reach its downloads', () => {
+  it('draws a row that says the word', () => {
+    expect(onScreen).toContain('Downloads')
+    expect(onScreen).toContain('onDownloads()')
+  })
+
+  it('takes the panel as a prop rather than opening it itself', () => {
+    // The panel is anchored to a rectangle only the workspace can measure, and
+    // one popup at a time on this bar is the workspace's rule to keep.
+    expect(onScreen).toContain('onDownloads?: () => void')
+  })
+
+  it('goes with the thing behind it rather than being drawn disabled', () => {
+    // A row that opened a panel which could never list anything is the shape of
+    // half-feature this review is about. `downloadsAvailable` decides, and the
+    // row is conditional on the prop.
+    expect(onScreen).toContain('{onDownloads && (')
+  })
+
+  it('closes the menu behind it, like every other row here', () => {
+    const row = onScreen.slice(onScreen.indexOf('onDownloads()'))
+    expect(row.slice(0, row.indexOf('</button>'))).toContain('onClose()')
+  })
+})
