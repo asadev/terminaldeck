@@ -2043,3 +2043,255 @@
 .bw-dl-clear:hover {
   background: var(--bg-hover);
 }
+
+/*
+  ----------------------------------------------------------------- scraping --
+
+  The scraping panel: workers, the session lift, request rules, capture, assets,
+  checks and the tools store, in one `lg` dialog.
+
+  Two things in here are load-bearing rather than decorative.
+
+  **`.bw-scrape-option` is a three-state control that has to show a fourth
+  state — none.** Every setting this panel draws can be unset, because the
+  engine behind it may not have said, and "nothing pressed" is the only honest
+  way to draw that. So the pressed state is a fill (`--accent-soft` plus its
+  line) rather than an absence of one: an unpressed group and a group whose
+  first option is selected must not be able to look alike.
+
+  **`.bw-scrape-facts` is where measured numbers live, and it is deliberately
+  quiet.** These are counts a person compares against a page's own stated total;
+  tabular numerals so two of them line up, and muted so a fact never competes
+  with the control above it for being the thing you look at.
+
+  No rules between sections, per the standing note above `.bw-menu-list`:
+  *"a lot of separations is not a good idea"* — space first, a tint on hover,
+  never a line.
+*/
+
+.bw-scrape {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.bw-scrape-profile {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* Seven sections stacked, where the profile panel stacks one: they need air
+   above them. Space rather than a rule, per the note above `.bw-menu-list`. */
+.bw-scrape .bw-history-heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  padding-left: 0;
+}
+
+/* Every section head says whose settings are under it — the fleet and the store
+   belong to the browser, the rest to the profile named here. Right-aligned, so
+   seven of them read as a column somebody can scan for one profile's name. */
+.bw-scrape-scope {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  font-weight: var(--w-regular);
+  text-transform: none;
+}
+
+.bw-scrape-headful {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+}
+
+/* A section this build has no engine behind. Drawn, named, and empty — see the
+   note on `Unavailable` in `ScrapingPanel.tsx` for why it is neither hidden nor
+   a row of disabled controls. */
+.bw-scrape-unwired {
+  margin: 0;
+  padding: var(--sp-15) var(--sp-2);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+}
+
+.bw-scrape-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+}
+
+.bw-scrape-facts {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-body);
+}
+
+/* A coverage check that came up short is the one number on this screen that has
+   to be uncomfortable to read past. `unknown` stays muted: no verdict is not a
+   bad verdict, and colouring it would make "nobody measured" look like "fine". */
+.bw-scrape-facts[data-tone='short'] {
+  color: var(--color-warning);
+}
+
+.bw-scrape-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.bw-scrape-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  flex: 1;
+  min-width: 0;
+}
+
+.bw-scrape-field-label {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+.bw-scrape-number {
+  flex: 0 0 96px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bw-scrape-state {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+/* Busy is the one worker state worth finding at a glance in a list of eight. */
+.bw-scrape-state[data-state='busy'] {
+  color: var(--accent);
+}
+
+/* "Not reported" is not "idle" — `workerRows` argues that at length — so it is
+   drawn as the absence it is rather than as a state. */
+.bw-scrape-state[data-state='unreported'] {
+  color: var(--text-muted);
+}
+
+.bw-scrape-choice,
+.bw-scrape-targets {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-05);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.bw-scrape-option,
+.bw-scrape-target {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-footnote);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.bw-scrape-option:hover:not(:disabled),
+.bw-scrape-target:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.bw-scrape-option[data-on],
+.bw-scrape-target[data-on] {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.bw-scrape-option:disabled,
+.bw-scrape-target:disabled {
+  color: var(--text-muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
+/*
+  A lift somebody — or something — asked for and nobody has granted.
+
+  Tinted with the accent rather than left plain: it is the one thing in this
+  panel that arrived on its own and is waiting on a person, and it sits above the
+  control it is about so that it is read before the button is reached.
+*/
+.bw-scrape-ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+}
+
+.bw-scrape-ask-line {
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+.bw-scrape-ask-when {
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.bw-scrape-tool {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  padding: var(--sp-15) 0;
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+}
+
+/* What a tool may reach, before it is on disk. Monospace because these are
+   capabilities being enumerated, not prose to skim. */
+.bw-scrape-reach {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}
+
+/*
+  Verified, or not verified.
+
+  Two colours and no third: `unverified`, `mismatch` and `unknown` are different
+  facts and each has its own sentence on the row, but they have one consequence —
+  it will not install — and a palette that graded them would suggest a middle
+  case that can be waved through.
+*/
+.bw-scrape-identity {
+  flex-shrink: 0;
+  font-size: var(--t-caption);
+  font-weight: var(--w-medium);
+  color: var(--color-critical);
+}
+
+.bw-scrape-identity[data-identity='verified'] {
+  color: var(--color-positive);
+}

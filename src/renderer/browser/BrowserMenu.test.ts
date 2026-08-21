@@ -128,3 +128,48 @@ describe('the browser can reach its downloads', () => {
     expect(row.slice(0, row.indexOf('</button>'))).toContain('onClose()')
   })
 })
+
+/**
+ * Scraping, the row that opens the work this browser can do to a site.
+ *
+ * The capability is four things being built at once — worker profiles and the
+ * session lift, request rules and passive capture, byte-exact assets with a
+ * resume ledger, and a store that verifies a tool before it installs. Four
+ * things with no single door is four features nobody can find, which is the
+ * complaint this whole menu was rebuilt for; `ScrapingPanel.tsx` is the door.
+ *
+ * The block below is the same bargain every other row here makes, and it is
+ * worth being precise about which bargain: the row is drawn where **profiles**
+ * are, because a worker *is* a profile (`browser-profiles.ts` — a persistent
+ * partition on disk). A build whose preload cannot answer for profiles has no
+ * fleet to list, no session to lift and no per-profile rules to set, so the
+ * panel could only say "nothing here" — and a row that opens that is the
+ * half-feature the tests above exist to prevent.
+ */
+describe('the browser can reach its scraping', () => {
+  it('draws a row that says the word', () => {
+    expect(onScreen).toContain('Scraping')
+    expect(onScreen).toContain('onScraping()')
+  })
+
+  it('takes the panel as a prop rather than opening it itself', () => {
+    // Same reason as Downloads: one popup at a time on this bar is the
+    // workspace's rule to keep, and the panel is a dialog it owns.
+    expect(onScreen).toContain('onScraping?: () => void')
+  })
+
+  it('goes with the thing behind it rather than being drawn disabled', () => {
+    expect(onScreen).toContain('{onScraping && (')
+  })
+
+  it('closes the menu behind it, like every other row here', () => {
+    const row = onScreen.slice(onScreen.indexOf('onScraping()'))
+    expect(row.slice(0, row.indexOf('</button>'))).toContain('onClose()')
+  })
+
+  it('sits above Settings, because it is about the browser working', () => {
+    // Settings is the row that leaves this menu's subject and stays last. A
+    // scraping run is this browser doing something, which belongs before it.
+    expect(onScreen.indexOf('{onScraping && (')).toBeLessThan(onScreen.indexOf('{onSettings && ('))
+  })
+})

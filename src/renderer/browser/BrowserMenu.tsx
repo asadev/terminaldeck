@@ -14,6 +14,18 @@ interface Props {
   /** Absent when the panel has no way to write the setting — the row goes then. */
   onStartUrl?: (url: string) => void
   /**
+   * Open the scraping panel — every scraping capability, on one screen.
+   *
+   * Absent on a build that cannot list this browser's profiles, and then there
+   * is no row. A worker *is* a profile (`browser-profiles.ts`), so a build that
+   * cannot answer for profiles has nothing to draw a fleet, a session lift or a
+   * per-profile rule set out of — and a row opening a panel that could only say
+   * "nothing here" is the half-feature this menu's tests are about. Absent
+   * rather than disabled, for the reason the History row gives: disabled says
+   * "not now", and the truth in such a build is "not at all".
+   */
+  onScraping?: () => void
+  /**
    * Open Settings → Browser. Absent when the host has no Settings to open.
    *
    * The row it draws is the only door into those settings from inside the
@@ -108,6 +120,7 @@ export function BrowserMenu({
   url,
   startUrl,
   onStartUrl,
+  onScraping,
   onSettings,
   onHistory,
   onFlow,
@@ -263,6 +276,30 @@ export function BrowserMenu({
             }}
           >
             Recorded flow
+          </button>
+        )}
+
+        {/*
+          Scraping: the workers, the session lift, the request rules, what is
+          captured, how assets are taken and checked, and the tools store.
+
+          A row rather than a corner of Settings → Browser, and one level above
+          it in this menu, because it is about *this browser doing work* rather
+          than about how this browser is set up — and because it is the one
+          screen where the answer to "why did that run come back with 7% of the
+          pages" is visible. Everything it opens is per profile where that means
+          anything, and the panel says which profile on every section.
+        */}
+        {onScraping && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            onClick={() => {
+              onScraping()
+              onClose()
+            }}
+          >
+            Scraping
           </button>
         )}
 

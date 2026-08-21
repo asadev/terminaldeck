@@ -15,6 +15,7 @@ import { RecorderPanel } from './RecorderPanel'
 import { ScreenshotPopup } from './ScreenshotPopup'
 import { HistoryPanel } from './HistoryPanel'
 import { ProfileSettings } from './ProfileSettings'
+import { ScrapingPanel } from './ScrapingPanel'
 import { SessionModal } from './SessionModal'
 import { Toolbar } from './Toolbar'
 import {
@@ -96,6 +97,7 @@ import {
   resolveDriveApi,
   type DriveStatus,
 } from './drive-bridge'
+import { resolveScrapingApi, type ScrapingApi } from './scraping-bridge'
 import { resolveOmnibox } from './omnibox'
 import { browserOverlayDom, isCovered, watchOverlays, type Overlay } from './overlay-watch'
 import { ConnectSessionButton } from './BindChip'
@@ -333,6 +335,15 @@ export interface BrowserWorkspaceProps {
    * ships this. `draw-bridge.ts` spells that out.
    */
   draw?: DrawApi
+  /**
+   * The scraping seams, injectable for the same reason as the two above.
+   *
+   * Almost none of it is wired yet — `scraping-bridge.ts` is a set of typed
+   * contracts the scraping lanes fill — and that is precisely why it must not go
+   * anywhere near `BRIDGE_METHODS`: a name listed there blanks the whole browser
+   * panel on every build whose preload predates it, which today is every build.
+   */
+  scraping?: ScrapingApi
 }
 
 const EMPTY_RECORDING: RecordingState = {
@@ -520,6 +531,7 @@ export function BrowserWorkspace({
   serverShells,
   isolation,
   draw,
+  scraping,
 }: BrowserWorkspaceProps) {
   const api = useMemo(() => bridge ?? resolveBrowserBridge(), [bridge])
   /*
@@ -533,6 +545,7 @@ export function BrowserWorkspace({
   const agent = useAgentTarget(sessionBridge, serverShells)
   const iso = useMemo(() => isolation ?? resolveIsolationApi(), [isolation])
   const drawApi = useMemo(() => draw ?? resolveDrawApi(), [draw])
+  const scrapeApi = useMemo(() => scraping ?? resolveScrapingApi(), [scraping])
   const driveApi = useMemo(() => resolveDriveApi(), [])
   const missing = useMemo(
     () => (bridge ? [] : missingBridgeMethods(typeof window === 'undefined' ? null : (window as unknown as { deck?: unknown }).deck)),
@@ -644,6 +657,16 @@ export function BrowserWorkspace({
    */
   const [settingsFor, setSettingsFor] = useState<string | null>(null)
   const [historyFor, setHistoryFor] = useState<string | null>(null)
+  /**
+   * The scraping panel — one flag, because it is about the browser rather than
+   * about a row somebody opened it from.
+   *
+   * It edits per-profile settings and picks the profile itself, opening on
+   * whichever one the browser is on; a second state naming a profile here would
+   * be a second answer to that question, going stale the moment the panel's own
+   * picker moved.
+   */
+  const [scrapingOpen, setScrapingOpen] = useState(false)
   /** Earlier addresses matching the draft in the bar. Empty draws no list. */
   const [suggestions, setSuggestions] = useState<readonly HistoryVisit[]>([])
   const [flowOpen, setFlowOpen] = useState(false)
@@ -2941,6 +2964,14 @@ export function BrowserWorkspace({
               ? () => setHistoryFor(activeProfileId)
               : undefined
           }
+          /*
+             Scraping. Offered where profiles are, because a worker *is* a
+             profile: the fleet, the session lift and every per-profile rule in
+             that panel are all a profile with a partition behind it, and a build
+             whose preload cannot answer for profiles has nothing there to show
+             or set. The panel picks the profile itself, so nothing is passed.
+          */
+          onScraping={profilesAvailable(accounts) ? () => setScrapingOpen(true) : undefined}
           onFlow={recording.steps.length > 0 ? () => openAt(null, () => setFlowOpen(true)) : undefined}
           /* Only when there is no profile button to hold it — see `onCookies`
              in `BrowserMenu`. Site data belongs to a profile, and a build that
@@ -3033,6 +3064,28 @@ export function BrowserWorkspace({
           setHistoryFor(profileId)
         }}
         onClose={() => setSettingsFor(null)}
+      />
+
+      {/*
+        Everything this browser does to a site it is taking apart, on one screen.
+
+        A dialog rather than a popup, for the reason the two above it are:
+        a menu is anchored to the button that opened it and sized for rows of a
+        few words, and a fleet, seven request rules, a resume ledger and a tools
+        store are not that. It parks the page while it is up exactly as they do
+        — `overlay-watch.ts` measures it like any other portalled surface.
+
+        `downloadsView` is handed over rather than read again inside: the panel
+        says where byte-exact assets land, the workspace is already subscribed to
+        the push that answers it, and two readers of one fact drift by a frame.
+      */}
+      <ScrapingPanel
+        open={scrapingOpen}
+        api={scrapeApi}
+        accounts={accounts}
+        downloads={downloadsAvailable(downloads) ? downloadsView : null}
+        profileId={activeProfileId}
+        onClose={() => setScrapingOpen(false)}
       />
 
       <HistoryPanel
