@@ -838,3 +838,87 @@ describe('a browser verb arriving from that machine', () => {
     expect((JSON.parse(last.body) as { message: string }).message).toBe('the drive is not up')
   })
 })
+
+/**
+ * Telling that machine which of its sessions has a browser window here.
+ *
+ * The half of the browser feature that has to travel, because the relation is a
+ * `WebContentsView` and a `Map` in *this* process and the pty is on the other
+ * computer. Without it the far machine could only reach the windows of sessions
+ * it had started for this app, and every other session — one already running
+ * there, one restored, one typed into at that keyboard — was told "no browser
+ * window is attached to this session" about a page on this screen.
+ */
+describe('saying which windows are held here', () => {
+  function linkHolding(held: () => readonly string[]) {
+    const rig = harness()
+    const link = createMachineLink({
+      id: 'machine-1',
+      secrets: secrets(),
+      onState: () => undefined,
+      onOutput: () => undefined,
+      onWelcome: () => undefined,
+      onWindowCall: () => Promise.resolve({ ok: true, body: '{}' }),
+      windowsHeld: held,
+      dial: rig.dial,
+      baseBackoffMs: 5,
+      maxBackoffMs: 10,
+    })
+    return { link, rig }
+  }
+
+  function frames(fake: Fake): unknown[] {
+    return fake.sent.map((text) => JSON.parse(text) as unknown)
+  }
+
+  it('says it on every welcome, without being asked and without a surface open', async () => {
+    /*
+     * On the welcome rather than from a screen, because this socket is new after
+     * every reconnect and the far machine's table went with the old one. A
+     * laptop that slept has windows it is still holding and a link that has
+     * forgotten to say so.
+     */
+    const { link, rig } = linkHolding(() => ['s1', 's2'])
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['windows'] }))
+    await settle()
+
+    expect(frames(rig.fakes[0])).toContainEqual({ t: 'window.holds', sessions: ['s1', 's2'] })
+    link.disconnect()
+  })
+
+  it('says nothing to a machine that never advertised it, rather than dropping the link', async () => {
+    /*
+     * `parseClientMessage` answers a frame it has never heard of by closing the
+     * channel. So an older desktop must not be sent this one: a machine that
+     * falls off the network is a far worse outcome than a window it cannot be
+     * told about.
+     */
+    const { link, rig } = linkHolding(() => ['s1'])
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome())
+    await settle()
+
+    expect(frames(rig.fakes[0]).some((m) => (m as { t?: string }).t === 'window.holds')).toBe(false)
+    expect(link.announceWindows()).toBe(false)
+    link.disconnect()
+  })
+
+  it('re-reads the set each time, so an attach after the welcome still arrives', async () => {
+    // The person attaches a window ten minutes into a session. Nothing about the
+    // link changed; the answer did.
+    let held: string[] = []
+    const { link, rig } = linkHolding(() => held)
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['windows'] }))
+    await settle()
+
+    held = ['s1']
+    expect(link.announceWindows()).toBe(true)
+    expect(frames(rig.fakes[0]).at(-1)).toEqual({ t: 'window.holds', sessions: ['s1'] })
+    link.disconnect()
+  })
+})

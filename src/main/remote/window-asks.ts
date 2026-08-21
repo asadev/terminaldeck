@@ -41,7 +41,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { ServerMessage } from './protocol'
+import { MAX_WINDOW_HOLDS, type ServerMessage } from './protocol'
 
 /**
  * How long a forwarded verb waits for the machine holding the window.
@@ -73,6 +73,16 @@ export interface WindowWire {
    * keeps an old client from becoming a fifty-five second stall.
    */
   ask(deviceId: string, message: ServerMessage): number
+  /**
+   * Could {@link ask} reach that device right now, without sending anything?
+   *
+   * The same two conditions `ask` applies — a live channel to that device, on a
+   * build that advertised `windows` — asked ahead of time by the launch gate.
+   * Separate from `ask` rather than an `ask` with no message, because a probe
+   * that put a frame on a socket would be a launch writing to somebody's
+   * network.
+   */
+  reaches(deviceId: string): boolean
 }
 
 /** What `server.ts` needs from a desk, so a test can supply another. */
@@ -88,6 +98,65 @@ export interface WindowAskDesk {
    * of the endpoint does.
    */
   serve(wire: WindowWire): void
+  /**
+   * That device has told us it is holding browser windows for these sessions of
+   * ours. The list replaces whatever it said last.
+   *
+   * ## Why the device says so rather than this machine working it out
+   *
+   * Until this existed, the only sessions whose windows could be reached were
+   * the ones a device had *started* — `window-owner.ts` writes that down at the
+   * spawn, because that is the one moment the device id and the session id are
+   * both in hand. It is a true fact and it is the wrong question. Asad attaches
+   * a browser window in his Mac's app to a session already running on his PC —
+   * one he started at that keyboard, or one that came back with a restore — and
+   * the PC has no spawn to have recorded. Every verb from it was served on the
+   * PC, resolved in the PC's own empty map, and answered *"no browser window is
+   * attached to this session"* about a page he was looking at.
+   *
+   * Nothing on this machine can know that. The relation is a `WebContentsView`
+   * and a `Map` in the *other* app's process — see `browser-binding.ts`, which
+   * writes it under `<machineId>\0<sessionId>` where the machine id is this
+   * computer as that app knows it. So the fact travels: the app that holds the
+   * window says which of this machine's sessions it is holding one for, on the
+   * `windows` capability it already advertises, and re-says it on every welcome
+   * because a reconnection is the ordinary state of a link rather than an error.
+   *
+   * ## Why a whole list rather than "attached"/"detached"
+   *
+   * A delta needs both ends to have seen every message ever sent. This one is
+   * idempotent: a link that dropped and came back sends its set again and the
+   * two ends agree, with nothing to reconcile and no way to drift. It is also
+   * how a *detach* arrives — the session simply stops being on the list.
+   */
+  held(deviceId: string, sessions: readonly string[]): void
+  /**
+   * Which devices say they hold a browser window for this session, newest claim
+   * last. Empty when nobody does.
+   *
+   * A list rather than one device, because two paired machines can each attach a
+   * window of their own to one session here and neither of them is wrong. The
+   * caller — `index.ts`'s forwarder — is what decides that a verb with two
+   * possible destinations is refused with a sentence rather than sent to a guess.
+   */
+  holdersOf(sessionId: string): string[]
+  /**
+   * Is there a live channel to that device that can serve a browser verb at all?
+   *
+   * Asked at *launch*, by the gate in `host-core.ts` that decides whether a
+   * session started for a device is given the six verbs. A phone is the case it
+   * exists for: it is connected, it holds no browser windows and its client has
+   * never heard of `window.call`, so handing its session the verbs produces six
+   * tools that answer *"the computer holding that browser window is not
+   * connected right now"* about a device that is sitting there connected. The
+   * honest answer is the one it had before — no verbs, and a sentence saying
+   * why.
+   *
+   * It is a snapshot and cannot be anything else: the device may go before the
+   * first call. That is fine and is a different sentence, composed per call.
+   * What this rules out is the case that is already decided at exec time.
+   */
+  reaches(deviceId: string): boolean
   /** Ask the device that started this session to act on its window. */
   call(input: {
     deviceId: string
@@ -126,6 +195,22 @@ function refusal(message: string): WindowAnswer {
 export function createWindowAsks(options: { timeoutMs?: number } = {}): WindowAskDesk {
   const timeoutMs = options.timeoutMs ?? WINDOW_ASK_TIMEOUT_MS
   const pending = new Map<string, Pending>()
+  /**
+   * deviceId → the sessions of ours that device says it holds a window for.
+   *
+   * Keyed by device rather than by session so that one frame replaces one
+   * device's whole answer, which is what makes a detach arrive at all — see
+   * {@link WindowAskDesk.held}.
+   *
+   * Nothing is dropped when a device disconnects, and that is deliberate. A
+   * laptop that closed its lid still has the window attached to it, and the
+   * sentence for a verb sent there is *"that computer is not connected right
+   * now"* — which is true, actionable and composed per call. Forgetting instead
+   * would answer *"no browser window is attached to this session"*, which is
+   * false and is the exact sentence this whole round exists to stop. The entry
+   * is replaced on the device's next welcome.
+   */
+  const holders = new Map<string, readonly string[]>()
   let wire: WindowWire | null = null
 
   function finish(id: string, answer: WindowAnswer): boolean {
@@ -140,6 +225,26 @@ export function createWindowAsks(options: { timeoutMs?: number } = {}): WindowAs
   return {
     serve(next: WindowWire): void {
       wire = next
+    },
+    held(deviceId: string, sessions: readonly string[]): void {
+      if (deviceId === '') return
+      /*
+       * An empty list is a real answer — "I have detached the last one" — and it
+       * is kept as an empty entry rather than deleted, so that a device saying
+       * nothing and a device saying none are the same thing to every reader.
+       */
+      holders.set(deviceId, [...sessions].slice(0, MAX_WINDOW_HOLDS))
+    },
+    holdersOf(sessionId: string): string[] {
+      if (sessionId === '') return []
+      const out: string[] = []
+      for (const [deviceId, sessions] of holders) {
+        if (sessions.includes(sessionId)) out.push(deviceId)
+      }
+      return out
+    },
+    reaches(deviceId: string): boolean {
+      return deviceId !== '' && (wire?.reaches(deviceId) ?? false)
     },
     call({ deviceId, sessionId, tool, args }): Promise<WindowAnswer> {
       const id = randomUUID()

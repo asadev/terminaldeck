@@ -59,10 +59,20 @@
  * hands back nothing usable — the dead control this round is about, wearing a
  * green tick. So it is refused with the sentence that says why and names the
  * verb that does work across the wire.
+ *
+ * ## And two things this end must not assume on the way out
+ *
+ * Whether anybody is here — {@link WindowServeDeps.attended}, which was a
+ * hardcoded `true` and a paragraph of argument for one evening — and whether the
+ * answer will fit. {@link fitAnswer} at the bottom of this file holds the second,
+ * and it is the more serious of the two: an uncapped page outline is over both
+ * of the wire's size caps, and both of them are answered by *closing the
+ * connection*. Reading a page must never be a way to lose the machine.
  */
 
 import { SESSION_TOOLS, SESSION_TIERS } from '../../deck-control/session-tools'
 import type { CallResult } from '../../deck-control/control'
+import { MAX_MESSAGE_BYTES, MAX_WINDOW_RESULT_BYTES } from '../protocol'
 
 /** What one forwarded call carries. */
 export interface WindowCall {
@@ -98,6 +108,26 @@ export interface WindowServeDeps {
       options: { caller: { kind: 'session'; sessionId: string; machineId: string; tiers: typeof SESSION_TIERS }; attended: boolean },
     ): Promise<CallResult>
   } | null
+  /**
+   * Is there a person at *this* computer — the one whose browser is about to
+   * move — right now?
+   *
+   * Asked, not asserted. This used to be a hardcoded `true` with a paragraph
+   * arguing that a person must be there, and the paragraph is the tell: the one
+   * thing `attended` decides is whether an `alter`-tier call may raise a
+   * confirmation and wait for somebody to answer it, so a wrong `true` is a
+   * dialog drawn at an empty desk and a browser held open until it times out.
+   * `browser.step`'s first change on a public website is exactly that call.
+   *
+   * The honest question is whether this app has a window that could draw the
+   * dialog. It is not "is somebody looking" — nothing can know that — and it is
+   * deliberately not stricter than the answer a session in this window gets from
+   * `session-tools.ts`, which is `true` on the same grounds: there is a window
+   * on a screen. What it rules out is the case that assertion could not: this
+   * app with no window at all, which on macOS is an ordinary running app and is
+   * where a confirmation goes nowhere.
+   */
+  attended(): boolean
 }
 
 /** The answer shape `guest.ts` puts straight into a `window.result`. */
@@ -210,15 +240,177 @@ export async function serveWindowCall(
       tiers: SESSION_TIERS,
     },
     /*
-     * Attended, and for the reason a session's own token is: the person is at
-     * *this* computer, looking at the window this call is about, and a
-     * confirmation can be drawn where they are looking. That it was a session on
-     * another machine that asked does not change where the browser is.
+     * Asked of this computer rather than asserted about it. See
+     * {@link WindowServeDeps.attended}: the one thing this decides is whether a
+     * confirmation can be raised and waited on, and there is no honesty in
+     * answering that from a comment.
      */
-    attended: true,
+    attended: deps.attended(),
   })
 
-  return result.ok
-    ? { ok: true, body: JSON.stringify(result.value ?? null) }
-    : refuse(result.error ?? 'that could not be done.')
+  if (!result.ok) return refuse(result.error ?? 'that could not be done.')
+  return fitAnswer(result.value)
+}
+
+/**
+ * How much of an answer can cross, and what happens to the rest.
+ *
+ * ## The failure this closes
+ *
+ * `JSON.stringify(result.value)` used to go straight onto the wire. `browser.read`
+ * builds a page outline with up to `MAX_OUTLINE_TEXT_CHARS` — forty thousand
+ * characters — of the page's own words, plus every link and button on it, and
+ * that does not fit. The two ends have two different caps and *both* of them end
+ * the connection: `parseClientMessage` refuses a `window.result` body over
+ * {@link MAX_WINDOW_RESULT_BYTES}, and before it ever gets there the frame
+ * reader refuses the whole message over {@link MAX_MESSAGE_BYTES} and answers
+ * `CLOSE.messageTooBig`. So a thin page worked and a real one dropped the link
+ * between the two machines — the session's terminal, its file transfers and
+ * everything else on it, lost to a page read.
+ *
+ * That must not be a possible outcome of reading a page, which is why this is a
+ * truncation and not a refusal. A refusal was the original design (see
+ * `MAX_WINDOW_RESULT_BYTES`) and it is the wrong half of the trade: a page too
+ * big to send whole is a *normal* page, and an agent that asks for a page and is
+ * told "no" learns nothing about the page.
+ *
+ * ## And it says so, in the answer
+ *
+ * A silently shortened page reading is the same class of failure as a silently
+ * skipped download: the model quotes what it was given, and what it was given
+ * ends in the middle of the sentence that mattered. So the value carries
+ * {@link TRUNCATION_KEY} — how many characters and how many list entries were
+ * dropped, and the two arguments that get them back — and the model can see that
+ * it is holding part of a page.
+ *
+ * ## Why it shrinks fields rather than cutting the text
+ *
+ * Because the body is JSON and half of a JSON document does not parse; the
+ * forwarding end would report *"answered with something unreadable"*, which is a
+ * lost page dressed as a bug. So the *structure* is preserved and its two
+ * unbounded parts — long strings, long arrays — are cut down inside it.
+ */
+const TRUNCATION_KEY = 'truncatedOnTheWay'
+
+/**
+ * Room left for the envelope the body travels in.
+ *
+ * The body is escaped into `{"t":"window.result","id":"…","ok":true,"body":"…"}`,
+ * which is about sixty bytes, and the escaping itself is the part worth leaving
+ * room for: every quote and newline in a page's text becomes two characters. So
+ * the check below measures the *escaped* body against the frame cap rather than
+ * assuming it is the same size, and this is only the fixed overhead around it.
+ */
+const ENVELOPE_BYTES = 512
+
+function bytes(text: string): number {
+  return Buffer.byteLength(text, 'utf8')
+}
+
+/**
+ * Would this body cross both ends' caps? Both, because they measure different
+ * things and either one of them closes the connection.
+ */
+function fits(body: string): boolean {
+  if (bytes(body) > MAX_WINDOW_RESULT_BYTES) return false
+  return bytes(JSON.stringify(body)) + ENVELOPE_BYTES <= MAX_MESSAGE_BYTES
+}
+
+/** What was left out, so the answer can say it. */
+interface Dropped {
+  chars: number
+  items: number
+}
+
+/**
+ * The biggest shrinkable field of an object, or null when there is none.
+ *
+ * "Biggest" is measured serialised, because that is the thing being cut down to
+ * a size. Strings and arrays only: a number cannot be shortened and an object
+ * cut in half is a shape the far end will read as fact.
+ */
+function fattest(value: Record<string, unknown>): string | null {
+  let name: string | null = null
+  let size = 0
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== 'string' && !Array.isArray(entry)) continue
+    const entrySize = bytes(JSON.stringify(entry) ?? '')
+    if (entrySize <= size) continue
+    size = entrySize
+    name = key
+  }
+  return name
+}
+
+/**
+ * One answer, cut to fit if it has to be, saying what it lost.
+ *
+ * Exported for its own test: this is a bound on something that crosses a network
+ * and is worth pinning by hand rather than through a socket.
+ */
+export function fitAnswer(value: unknown): WindowServed {
+  const whole = JSON.stringify(value ?? null)
+  if (whole !== undefined && fits(whole)) return { ok: true, body: whole }
+
+  /*
+   * Only an object can be shrunk honestly. Everything the six verbs answer with
+   * is one — an outline, a `{ selector, text }`, a `{ opened }` — and a bare
+   * string or array too large to send is a shape nothing here produces, so it is
+   * refused with a sentence rather than mangled into a different shape than the
+   * tool's own schema promises.
+   */
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return refuse(
+      'that answer was too large to send between the two computers. Ask again for less of it — a ' +
+        '`selector` for the one part you need, or a smaller `textChars`.',
+    )
+  }
+
+  const shrunk: Record<string, unknown> = { ...(value as Record<string, unknown>) }
+  const dropped: Dropped = { chars: 0, items: 0 }
+  /*
+   * Bounded, because a loop that cuts a fraction each time converges but is
+   * still a loop over somebody else's data. Sixty-four halvings of the largest
+   * field takes any real page under the cap many times over; the exit below is
+   * for the shape nobody has thought of yet.
+   */
+  for (let step = 0; step < 64; step += 1) {
+    shrunk[TRUNCATION_KEY] = note(dropped)
+    const body = JSON.stringify(shrunk)
+    if (body !== undefined && fits(body)) return { ok: true, body }
+    const key = fattest(shrunk)
+    if (key === null || key === TRUNCATION_KEY) break
+    const entry = shrunk[key]
+    if (typeof entry === 'string') {
+      // Two thirds each pass rather than a computed cut: a character is not a
+      // byte and escaping is not a fixed cost, so the honest way to hit a byte
+      // budget is to cut and measure.
+      const kept = Math.floor(entry.length * 0.66)
+      dropped.chars += entry.length - kept
+      shrunk[key] = entry.slice(0, kept)
+    } else if (Array.isArray(entry)) {
+      const kept = Math.floor(entry.length * 0.66)
+      dropped.items += entry.length - kept
+      shrunk[key] = entry.slice(0, kept)
+    } else {
+      break
+    }
+  }
+
+  return refuse(
+    'that answer was too large to send between the two computers, and could not be shortened. Ask ' +
+      'again for less of it — a `selector` for the one part you need, or a smaller `textChars`.',
+  )
+}
+
+/** The sentence the model reads beside a page it is only holding part of. */
+function note(dropped: Dropped): Record<string, unknown> {
+  return {
+    message:
+      'This answer was too large to send between the two computers, so part of it was left out on the ' +
+      'way. The page itself is unchanged. Ask again with a `selector` for the part you need, or a ' +
+      'smaller `textChars`, and do not treat what is here as the whole page.',
+    charactersDropped: dropped.chars,
+    entriesDropped: dropped.items,
+  }
 }

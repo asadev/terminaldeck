@@ -349,6 +349,21 @@ export interface DeviceConfinement {
    * Optional, so every existing caller keeps meaning what it already meant.
    */
   projects?: readonly string[]
+  /**
+   * Which device this confinement was built for, when it was built for one.
+   *
+   * Nothing in `confine/` reads it and nothing here ever should: a boundary is
+   * made of paths, and the day it starts varying by *who* is behind it is the
+   * day two devices get two different sandboxes from one function. It rides here
+   * because `host-core.ts`'s launch gate needs it and this is the only envelope
+   * that already travels from the device path into `startSession` — the same
+   * argument {@link projects} makes for itself one field up, which is that a
+   * second parameter would mean a second code path through the one function in
+   * this app that starts a session.
+   *
+   * Absent for the copilot's confinement, which belongs to no device.
+   */
+  deviceId?: string
 }
 
 /**

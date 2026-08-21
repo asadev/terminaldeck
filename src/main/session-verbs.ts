@@ -65,7 +65,18 @@ export type NoVerbsReason =
   | 'provider'
   /** Inside a WSL distribution: the endpoint and the file are the Windows side's. */
   | 'wsl'
-  /** A session a paired device asked for. See the gate in `host-core.ts`. */
+  /**
+   * A session a paired device asked for, on a device that cannot hold a browser
+   * window — a phone.
+   *
+   * Narrower than it was. Such a session's windows are never on this machine (a
+   * device driving the browser here is refused and always will be), so they are
+   * on the device, and since 2026-08-21 a verb can be sent there — but only to a
+   * build that advertises `CAPABILITY.windows`, which a phone does not and a
+   * paired desktop does. So this reason is now exactly the devices that have no
+   * window to reach, and the sentence says that rather than the old blanket one.
+   * See the gate in `host-core.ts`.
+   */
   | 'device'
   /** This build has no `deck-control` endpoint at all — the headless host. */
   | 'endpoint'
@@ -92,7 +103,7 @@ export type NoVerbsReason =
 const BECAUSE: Readonly<Record<NoVerbsReason, string>> = Object.freeze({
   provider: 'this app can only add its browser verbs to a Claude session',
   wsl: 'the verbs are on the Windows side and this session runs inside WSL',
-  device: 'a session a paired device started is not given them',
+  device: 'the device that started this session cannot show a browser window',
   endpoint: 'this app’s control endpoint is not running here',
   early: 'this session started before this app’s control endpoint did, and the flag that carries them is ' +
     'read once at launch',

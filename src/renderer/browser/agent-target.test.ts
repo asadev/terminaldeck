@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   type AgentServerShell,
+  attachableSessions,
   namesFrom,
   readSessions,
   resolveAgentSessions,
@@ -671,5 +672,50 @@ describe('submitLine', () => {
     // it rather than reimplementing the pair.
     expect((await record('@"/a/b.ts" explain')).writes[0]).toBe('@"/a/b.ts" explain ')
     expect((await record('run the tests')).writes[0]).toBe('run the tests')
+  })
+})
+
+/**
+ * The same rows, filtered down to the ones a browser window can be attached to.
+ *
+ * Sending text and attaching a window are two different verbs with two different
+ * reaches, and this list is built for the first. Every row can take text — a
+ * shell on a server takes it through `servers:shell:write` — and two kinds of
+ * row cannot take a window.
+ */
+describe('attachableSessions', () => {
+  it('leaves out a shell on a server, which nothing could drive', () => {
+    /*
+     * Case 3 of the browser feature — a session on an SSH server driving a
+     * window — is genuinely not built, and saying so is fine. Offering the
+     * connection anyway is not: the row would take the tick, be given a `B1`,
+     * and be attached to nothing. Its `id` is this window's *tab* id rather than
+     * any session id the far end knows, and its `machineId` is empty, which the
+     * binding map reads as *this computer* — so the relation would be filed
+     * under a key naming a session that does not exist on the machine it claims.
+     */
+    const rows = readSessions(LIVE, namesFrom([], { sessionId: null, name: '' }), SHELLS)
+    expect(rows.some((row) => row.serverId === 's1')).toBe(true)
+
+    const attachable = attachableSessions(rows)
+    expect(attachable.some((row) => row.serverId !== '')).toBe(false)
+    // And everything that can be attached to is still there: this machine's
+    // sessions are untouched by the rule.
+    expect(attachable.map((row) => row.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('leaves out a session whose process has gone', () => {
+    // Attaching a window to a dead pty makes a relation nothing can ever act on,
+    // and the rail already keeps the row that explains where it went.
+    const rows = readSessions([...LIVE, { ...LIVE[0], id: 'd', exitCode: 0 }])
+    expect(attachableSessions(rows).map((row) => row.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('keeps a session on a paired machine, which is the whole point of the feature', () => {
+    // The window is here, the pty is there, and `window.holds` is what tells
+    // that machine so. A row that could not be attached to would be the feature
+    // switched off at the menu.
+    const rows = readSessions({ here: [], elsewhere: MACHINES })
+    expect(attachableSessions(rows).map((row) => row.id)).toEqual(['r1', 'r2', 'r3'])
   })
 })

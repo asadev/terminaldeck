@@ -720,6 +720,40 @@ export function readSessions(
 }
 
 /**
+ * The rows a browser window may actually be attached to.
+ *
+ * ## Two rows that are in this list for sending and must not be in it for attaching
+ *
+ * Everything else this module produces is a picker for *sending text* — a
+ * screenshot's description, a recorded flow, a chat line — and every row can
+ * receive text, including a shell on a server, which takes it through
+ * `servers:shell:write`. Attaching is a different verb with a different reach,
+ * and two kinds of row cannot honour it:
+ *
+ *  - **A session whose process has exited.** Attaching a window to a dead pty
+ *    makes a relation nothing can ever act on, and the rail already keeps the
+ *    row that explains where it went.
+ *  - **A shell on a server.** Case 3 of the browser feature — a session on an
+ *    SSH server driving a window — is genuinely not built, and there is nothing
+ *    dishonest about that; `deck-control/session-tools.ts` says exactly why (no
+ *    app on the server, no endpoint, no way to put a config file where that CLI
+ *    will read it). What *would* be dishonest is offering the connection anyway.
+ *    Such a row would take the tick, be given a `B1`, and sit there attached to
+ *    nothing: its `id` is this window's tab id rather than any session id the
+ *    far end knows, and its `machineId` is empty, which the binding map reads as
+ *    *this computer* — so the relation would be filed under a key naming a
+ *    session that does not exist on the machine it claims.
+ *
+ * A pure function rather than a filter written at the one call site, because
+ * "which rows may be attached to" is a rule and the call site is a menu. The day
+ * a second surface pops that menu — the pane bar already pops the mirror image
+ * of it — the rule is a thing to call rather than a line to remember.
+ */
+export function attachableSessions(rows: readonly AgentSession[]): AgentSession[] {
+  return rows.filter((row) => !row.ended && row.serverId === '')
+}
+
+/**
  * The session a send would actually reach, given what is chosen.
  *
  * Null in three cases, and they are the same answer to the user: nothing

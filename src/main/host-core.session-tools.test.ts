@@ -357,10 +357,11 @@ describe('a session a paired device started', () => {
   it(
     'is given them when this build can send its verbs to the device that asked',
     async () => {
-      // The desktop's own answer, which `index.ts` writes as a constant `true`:
-      // it says this *assembly* has a forwarder, not that the device is awake or
-      // that the person has allowed it. Those are answered per call, on the far
-      // side, in sentences an agent can act on.
+      // The desktop's own answer, asked of the device that is starting this
+      // session: is there a live channel to it, on a build that advertised
+      // `windows`. It does not claim the device still is a minute later, or that
+      // it holds a window, or that the person has allowed it — those are
+      // answered per call, on the far side, in sentences an agent can act on.
       const wired = createHostCore({
         storageDir: join(dir, 'remote-wired'),
         userData: dir,
@@ -451,13 +452,108 @@ describe('a session a paired device started', () => {
         expect(spawned.at(-1), 'the spawn was not recorded, so the next line proves nothing').toBeDefined()
         expect(configIn(spawned.at(-1) ?? [])).toBeNull()
         const said = noVerbsLine(meta.id) ?? ''
-        expect(said).toContain('paired device')
+        expect(said).toContain('cannot show a browser window')
         expect(said).toContain('no other way in')
       } finally {
         alone.ptys.killAll()
         await alone.ptys.drain()
         await alone.credentials.stop()
       }
+    },
+    CASE_MS,
+  )
+})
+
+describe('a session a phone started', () => {
+  /*
+   * The device that cannot serve a browser verb, which is most of them.
+   *
+   * `reachesDeviceWindows` was a constant `true` for one evening, and a constant
+   * cannot tell a paired desktop from a phone. A phone advertises no `windows`
+   * capability, holds no browser windows, and its client has never heard of
+   * `window.call` — so every one of the six verbs it was handed came back *"the
+   * computer holding that browser window is not connected right now"*, about a
+   * device that was connected and was holding nothing. Six dead controls and a
+   * false sentence, where before there had been no controls and a true one.
+   */
+  const guest = { set: {}, remove: [], paths: [] }
+
+  it(
+    'is launched with no browser verbs, and told why, when that device holds no windows',
+    async () => {
+      const asked: (string | undefined)[] = []
+      const wired = createHostCore({
+        storageDir: join(dir, 'remote-phone'),
+        userData: dir,
+        sessionTools: {
+          prepare: alwaysTools.prepare,
+          reachesDeviceWindows: (deviceId) => {
+            asked.push(deviceId)
+            return false
+          },
+        },
+      })
+      try {
+        const meta = await wired.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          undefined,
+          recorder,
+        )
+        expect(spawned.at(-1), 'the spawn was not recorded, so the next line proves nothing').toBeDefined()
+        expect(
+          configIn(spawned.at(-1) ?? []),
+          'a phone’s session was handed the browser verbs, which can only ever answer a refusal',
+        ).toBeNull()
+        // And the honest sentence it always had, rather than silence beside six
+        // tools that do not work.
+        expect(noVerbsLine(meta.id) ?? '').toContain('cannot show a browser window')
+        // Asked at all, which is the whole of the fix: a constant answers this
+        // without ever looking at the device.
+        expect(asked).toHaveLength(1)
+      } finally {
+        wired.ptys.killAll()
+        await wired.ptys.drain()
+        await wired.credentials.stop()
+      }
+    },
+    CASE_MS,
+  )
+
+  it(
+    'asks about the device that actually started it, not about the build',
+    async () => {
+      /*
+       * The confinement is what carries the device id — it is the one envelope
+       * that already travels from the device path into `startSession`, and a
+       * field on `CreateSessionInput` would be a claim page code could make.
+       * Without this the gate cannot tell one device from another, which is the
+       * same thing as a constant.
+       */
+      const asked: (string | undefined)[] = []
+      const wired = createHostCore({
+        storageDir: join(dir, 'remote-named'),
+        userData: dir,
+        sessionTools: {
+          prepare: alwaysTools.prepare,
+          reachesDeviceWindows: (deviceId) => {
+            asked.push(deviceId)
+            return true
+          },
+        },
+      })
+      try {
+        await wired.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          { home: join(dir, 'work'), writable: [], files: [], deviceId: 'phone-7' },
+        )
+      } finally {
+        wired.ptys.killAll()
+        await wired.ptys.drain()
+        await wired.credentials.stop()
+      }
+      expect(asked).toEqual(['phone-7'])
     },
     CASE_MS,
   )

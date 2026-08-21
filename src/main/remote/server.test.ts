@@ -3984,7 +3984,11 @@ describe('a browser window on the device, driven by a session here', () => {
   } {
     const asked: { deviceId: string; message: ServerMessage }[] = []
     const answered: { id: string; ok: boolean; body: string }[] = []
-    let wire: { ask(deviceId: string, message: ServerMessage): number } | null = null
+    const heldBy = new Map<string, readonly string[]>()
+    let wire: {
+      ask(deviceId: string, message: ServerMessage): number
+      reaches(deviceId: string): boolean
+    } | null = null
     return {
       asked,
       answered,
@@ -4002,6 +4006,12 @@ describe('a browser window on the device, driven by a session here', () => {
           answered.push({ id, ...result })
           return true
         },
+        held: (deviceId, sessions) => {
+          heldBy.set(deviceId, sessions)
+        },
+        holdersOf: (sessionId) =>
+          [...heldBy].filter(([, sessions]) => sessions.includes(sessionId)).map(([deviceId]) => deviceId),
+        reaches: (deviceId) => wire?.reaches(deviceId) ?? false,
         gone: () => undefined,
         stop: () => undefined,
         waiting: 0,
@@ -4069,6 +4079,41 @@ describe('a browser window on the device, driven by a session here', () => {
     client.send({ t: 'window.result', id: 'w-9', ok: true, body: '{}' })
     await new Promise((settle) => setTimeout(settle, 30))
     expect(held.answered).toHaveLength(2)
+    expect(client.received.some((m) => m.t === 'error')).toBe(false)
+  })
+
+  it('writes down which of this machine’s sessions that device is holding a window for', async () => {
+    /*
+     * The fact that makes this feature work for a session nobody started
+     * remotely — one already running here, one restored, one typed into at this
+     * keyboard. The window is attached in the *other* app's map and nothing on
+     * this side of the wire can see it, so the device says which sessions of
+     * ours it is holding one for, and it says the whole set each time: a link
+     * that dropped and came back is correct by arriving, and a detach is a set
+     * with one fewer id in it.
+     *
+     * Without this, `windowOwnerOf` — written at the spawn — was the only
+     * answer, so the six verbs on any other session resolved in this machine's
+     * own empty map and said "no browser window is attached to this session"
+     * about a page on somebody's screen.
+     */
+    const held = desk()
+    const harness = await serve({ windows: held.windows })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['windows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'window.holds', sessions: ['s1', 's2'] })
+    await new Promise((settle) => setTimeout(settle, 30))
+    expect(held.windows.holdersOf('s1')).toEqual(['device-1'])
+
+    // The next set replaces the last one, which is the only way a detach
+    // travels.
+    client.send({ t: 'window.holds', sessions: ['s2'] })
+    await new Promise((settle) => setTimeout(settle, 30))
+    expect(held.windows.holdersOf('s1')).toEqual([])
+    expect(held.windows.holdersOf('s2')).toEqual(['device-1'])
+    // And the channel is unharmed by any of it.
     expect(client.received.some((m) => m.t === 'error')).toBe(false)
   })
 })

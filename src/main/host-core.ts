@@ -329,16 +329,33 @@ export interface HostCoreOptions {
       started(sessionId: string, machineId?: string): void
     } | null
     /**
-     * Can a session a **device** started act on the browser windows that device
-     * holds?
+     * Can a session **this device** started act on the browser windows that
+     * device holds?
      *
      * A seam rather than a constant because the answer is a fact about the
      * assembly: the desktop builds a `WindowAskDesk` and wires the forwarder
      * that `deck-control`'s browser tools use, and the headless host does
      * neither. Read at the gate below, where the reason a launch is given the
      * verbs and the reason it is not are decided in one place.
+     *
+     * ## Why it is asked about *this* device rather than about the build
+     *
+     * Because most devices cannot serve a browser verb and never will. A phone
+     * is a client of this protocol like any other — it starts sessions here, it
+     * is granted folders — and it holds no browser windows and its build has
+     * never heard of `window.call`. Answering yes for the whole assembly handed
+     * every phone session six verbs that each came back *"the computer holding
+     * that browser window is not connected right now"*, about a phone that was
+     * connected and was holding nothing. A session with no verbs and one true
+     * sentence about why (`session-verbs.ts`) is the better of the two, and it
+     * is what such a session had before.
+     *
+     * The device id is `undefined` for a launch that is confined for some other
+     * reason — the copilot's — and that answers no, which is the conservative
+     * direction and cannot be wrong: a launch with no device behind it has no
+     * device's windows to reach.
      */
-    reachesDeviceWindows?(): boolean
+    reachesDeviceWindows?(deviceId: string | undefined): boolean
   }
   /** Everything remote access keeps on disk: the trust store, the identity, the grants. */
   storageDir: string
@@ -948,8 +965,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      *    windows on this screen are as unreachable from a device's session as
      *    they were, and what the session gained is the ability to act on the
      *    window the person attached to it *in their own app*, which is the whole
-     *    of what he asked for. `reachesDeviceWindows` is the assembly saying
-     *    that forwarder exists; without it this is the flat refusal it was.
+     *    of what he asked for. `reachesDeviceWindows` is that forwarder saying it
+     *    can actually reach **this** device — a phone cannot serve a browser
+     *    verb and never could, so it keeps the flat refusal it always had, and
+     *    with it the honest sentence `session-verbs.ts` prints.
      *  - **A caller that composed its own arguments owns the tool surface.**
      *    There is exactly one — the copilot, which passes `--mcp-config <its own
      *    file> --strict-mcp-config` — and adding a second `--mcp-config` beside
@@ -968,7 +987,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      */
     const forDevice = guest !== undefined || confine !== undefined
     const sessionTools =
-      (!forDevice || options.sessionTools?.reachesDeviceWindows?.() === true) &&
+      (!forDevice || options.sessionTools?.reachesDeviceWindows?.(confine?.deviceId) === true) &&
       (extraArgs ?? []).length === 0 &&
       provider === 'claude' &&
       !addedRuns &&
@@ -1978,6 +1997,20 @@ export function createHostCore(options: HostCoreOptions): HostCore {
              * and they contain nothing this session was not already told.
              */
             files: [join(guestRoot, HELPER_FILE), ...(currentAppContext()?.files ?? [])],
+            /*
+             * And which device this is all for, carried to the one gate that
+             * needs it.
+             *
+             * `startSession` decides whether this launch gets the browser verbs,
+             * and that decision now depends on whether *this* device can serve
+             * one — a paired desktop can, a phone cannot. The device id is right
+             * here and nowhere downstream of this line, and it rides on the
+             * confinement rather than on `CreateSessionInput` for the reason
+             * `guest`, `confine` and `fence` are arguments rather than fields:
+             * the input crosses the preload bridge, and which device a session
+             * belongs to is not something page code may claim.
+             */
+            deviceId: input.deviceId,
           }
           let meta: SessionMeta
           try {

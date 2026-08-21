@@ -781,12 +781,26 @@ export const MAX_MESSAGE_BYTES = 64 * 1024
  * up to `MAX_OUTLINE_TEXT_CHARS` of, so the answer cap is the larger of the two
  * and still inside {@link MAX_MESSAGE_BYTES} with room for the envelope.
  *
- * An answer that does not fit is **refused with a sentence**, never truncated.
- * Half a page outline is worse than no page outline: the JSON would not parse,
- * and if it did the model would act on a list of elements that stops in the
- * middle. The sentence names the two things that make it fit — a `selector`, or
- * a smaller `textChars` — because a refusal an agent cannot act on is a refusal
- * that gets retried unchanged.
+ * ## What happens to an answer that does not fit
+ *
+ * It is cut down **before the frame is built**, by the end that composed it, and
+ * the value it sends says how much it lost — see `fitAnswer` in
+ * `machines/window-serve.ts`. What this cap does here is refuse a body that
+ * arrived over it anyway, which after that fix means a peer that did not
+ * truncate: a build too old to know, or something that is not this app.
+ *
+ * This note used to say an over-long answer is refused rather than truncated,
+ * and that reading was measured and wrong. Nothing truncated on the sending
+ * side, so a `browser.read` of a real page — the outline holds up to
+ * `MAX_OUTLINE_TEXT_CHARS` of the page's words plus every link on it — went out
+ * whole, over this cap and over {@link MAX_MESSAGE_BYTES} behind it, and the
+ * frame reader closed the connection with `CLOSE.messageTooBig`. The two
+ * machines lost their link, terminal and all, because an agent read a page.
+ *
+ * Half an outline is still worse than none, which is why the fix is a
+ * *structural* cut with a note in the value rather than a shortened JSON string:
+ * the document still parses, and the model is told it is holding part of a page
+ * and which argument gets the rest.
  */
 /**
  * Longest tool name a `window.call` may carry.
@@ -801,6 +815,20 @@ export const MAX_TOOL_NAME_LENGTH = 64
 
 export const MAX_WINDOW_ARGS_BYTES = 16 * 1024
 export const MAX_WINDOW_RESULT_BYTES = 48 * 1024
+
+/**
+ * How many sessions one device may say it is holding browser windows for.
+ *
+ * A person attaches windows by hand, one window at a time, from a window's own
+ * menu — so the real number is one or two and a hundred and twenty-eight is not
+ * a limit anybody will meet. It is here because the list arrives from another
+ * computer and lands in a `Map` on this one, and an unbounded list from a peer
+ * is memory somebody else chose the size of. Over-long is **trimmed rather than
+ * refused**, unlike every size cap above it: the frame is a device saying which
+ * of its own windows are attached, and closing a link over the hundred and
+ * twenty-ninth would take down a working machine over a fact nobody can act on.
+ */
+export const MAX_WINDOW_HOLDS = 128
 
 /** Largest `input` payload. A paste, not a file upload. */
 export const MAX_INPUT_BYTES = 16 * 1024
@@ -1960,6 +1988,43 @@ export type ClientMessage =
    * because a device that has gone cannot send a frame saying so.
    */
   | { t: 'window.result'; id: string; ok: boolean; body: string }
+  /**
+   * Which of **your** sessions this app is holding a browser window for.
+   *
+   * ## The fact that was missing, and why only this end has it
+   *
+   * A browser window is a `WebContentsView` in the renderer of the app somebody
+   * is looking at, and the session it is attached to can be running on another
+   * computer entirely. `browser-binding.ts` writes that relation here, keyed
+   * `<machineId>\0<sessionId>`, where the machine id is the host this client is
+   * talking to. The host has no copy of it and no way to derive one: it has a
+   * pty, and nothing on a pty says that somebody two rooms away has put a page
+   * beside it.
+   *
+   * Without this frame the host could only reach the windows of sessions a
+   * device had *started* — recorded at the spawn, which is the one moment both
+   * ids are in hand. Asad's first test was a session already running on his PC
+   * with a window attached from his Mac, and every verb it had answered *"no
+   * browser window is attached to this session"* about a page on his screen.
+   *
+   * ## Why the whole set, and why it is sent again on every welcome
+   *
+   * It is idempotent. A delta would need both ends to have seen every frame ever
+   * sent, and this link's normal state is *reconnecting* — a lid closes, a
+   * network changes, the relay redeploys. Sending the set means a link that came
+   * back is correct by arriving, and a detach is simply a set with one fewer id
+   * in it. Trimmed to {@link MAX_WINDOW_HOLDS} rather than refused.
+   *
+   * ## What it is not
+   *
+   * Not a permission and not a claim on anything. The host does not act on this
+   * beyond *addressing* a verb it was going to send anyway, and every verb it
+   * sends is resolved over there inside that session's own binding — so a device
+   * that named a session it holds no window for gains exactly one thing: its own
+   * `window.call` frames come back refused. See `window-asks.ts` for the table
+   * this lands in and for what the host does when two devices name one session.
+   */
+  | { t: 'window.holds'; sessions: string[] }
   /* ---- capability `copilot`. Refused per-tier, per device. ---------------- */
   /**
    * ## The rule that makes this whole surface safe: **no tool name is on the wire**
@@ -3733,6 +3798,25 @@ export function parseClientMessage(raw: unknown): ParseResult {
      * {@link MAX_WINDOW_RESULT_BYTES} for why an over-long one is refused rather
      * than cut.
      */
+    /*
+     * A device saying which of this machine's sessions it is holding a window
+     * for. Shape and size only; `window-asks.ts` decides what it means.
+     *
+     * Anything in the list that is not a usable id is dropped rather than made a
+     * reason to refuse the frame, and the list is trimmed rather than refused —
+     * the same argument {@link MAX_WINDOW_HOLDS} makes. The one thing this frame
+     * can do is address a verb, and a bad entry in it addresses nothing.
+     */
+    case 'window.holds': {
+      const raw = Array.isArray(parsed.sessions) ? parsed.sessions : null
+      if (raw === null) return bad('window.holds without a session list')
+      const sessions: string[] = []
+      for (const entry of raw.slice(0, MAX_WINDOW_HOLDS)) {
+        const session = id(entry)
+        if (session !== null) sessions.push(session)
+      }
+      return { ok: true, message: { t: 'window.holds', sessions } }
+    }
     case 'window.result': {
       const requestId = id(parsed.id)
       if (!requestId) return bad('window.result without an id')

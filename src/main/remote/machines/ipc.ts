@@ -168,6 +168,21 @@ export interface MachinesIpcDeps {
     machineId: string,
     call: { sessionId: string; tool: string; args: string },
   ): Promise<{ ok: boolean; body: string }>
+  /**
+   * Which sessions **on that machine** this app is holding a browser window for.
+   *
+   * The other half of {@link MachinesIpcDeps.serveWindows}, and the half that
+   * decides whether it ever fires for a session this desktop did not start. A
+   * window attached here to a session over there is a relation written in *this*
+   * process — `browser-binding.ts`, keyed `<machineId>\0<sessionId>` — and the
+   * machine the pty is on has no way to derive it. So it is sent, on every
+   * welcome and on every attach or detach, and until it was, the feature only
+   * worked for sessions this app had started over there.
+   *
+   * Answered per machine because a link may only be told about its own: the
+   * sessions on one paired computer are not facts the next one gets to hear.
+   */
+  windowsHeld?(machineId: string): readonly string[]
   now?: () => number
 }
 
@@ -185,6 +200,22 @@ export interface MachinesIpc {
    * reconnection.
    */
   drivesWindows(machineId: string): boolean
+  /**
+   * A browser window here was attached to, or detached from, a session on a
+   * paired machine. Tell every machine that is up which of its sessions this app
+   * now holds one for.
+   *
+   * Every link rather than the one that changed, and it costs one small frame
+   * per machine: the caller is a subscription to the whole binding map — see
+   * `browser-binding.ts`'s `subscribe` — which reports *that* the relation moved
+   * rather than which machine it moved for. Working out the difference here
+   * would be this file keeping a second copy of a map it does not own.
+   *
+   * A link that is down, or on a machine too old to know the frame, sends
+   * nothing and says so by answering false; it re-announces on its next welcome,
+   * which is the moment the far machine's table is empty anyway.
+   */
+  announceWindows(): void
   /** The machine woke up. Redial every link that is meant to be up. */
   wake(): void
   /** Drop every link and stop the beacon. For shutdown. */
@@ -339,6 +370,14 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
       ...(deps.serveWindows === undefined
         ? {}
         : { onWindowCall: (call) => deps.serveWindows!(machine.id, call) }),
+      /*
+       * And which of that machine's sessions has a window here, whenever the
+       * link needs to say so. Read through the dep rather than captured, because
+       * the answer changes every time somebody attaches or detaches one.
+       */
+      ...(deps.windowsHeld === undefined
+        ? {}
+        : { windowsHeld: () => deps.windowsHeld!(machine.id) }),
       now,
     })
     links.set(machine.id, link)
@@ -1144,6 +1183,9 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   return {
     view,
     drivesWindows: (machineId: string): boolean => store.drivesWindows(machineId),
+    announceWindows(): void {
+      for (const link of links.values()) link.announceWindows()
+    },
     sendFile,
     wake(): void {
       for (const link of links.values()) link.wake()

@@ -363,6 +363,20 @@ export interface MachineLink {
    * store, so the pairing survives untouched.
    */
   close(sessionId: string): boolean
+  /**
+   * Tell that machine which of its sessions this app is holding a browser window
+   * for, right now.
+   *
+   * Called on every welcome by the link itself, and by the app whenever a window
+   * is attached or detached. `false` means nothing was sent: the link is down, or
+   * that machine's build never advertised `windows` — an older desktop would
+   * answer a frame it has never heard of by closing the channel, which is how a
+   * new fact becomes a machine that falls off the network.
+   *
+   * The whole set every time. See the frame's own note for why a delta would
+   * drift and this cannot.
+   */
+  announceWindows(): boolean
   /** Ask again what is listening over there. Refused unless it advertised `localhost`. */
   ports(): boolean
   /**
@@ -642,6 +656,23 @@ export interface MachineLinkOptions {
     tool: string
     args: string
   }): Promise<{ ok: boolean; body: string }>
+  /**
+   * Which of *that* machine's sessions this app currently holds a browser window
+   * for, asked whenever the answer has to be sent.
+   *
+   * The other half of {@link onWindowCall}, and the half without which it only
+   * ever fires for sessions this app itself started over there. The window is
+   * attached in this process — `browser-binding.ts`, under
+   * `<machineId>\0<sessionId>` where the machine id is this link — and the far
+   * machine has no way to learn that a page is sitting beside one of its ptys.
+   * So it is told: see `CAPABILITY.windows` and {@link MachineLink.announceWindows}.
+   *
+   * A function rather than a list, read at the moment of sending, because the
+   * answer changes every time somebody attaches or detaches a window and the two
+   * moments this is sent — a welcome, and a change — are both "say what is true
+   * now".
+   */
+  windowsHeld?(): readonly string[]
   now?: () => number
   /** Seams for the tests, so nothing here dials the public internet. */
   dial?: (request: DialRequest) => Promise<GuestChannel>
@@ -791,6 +822,27 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     if (channel === null || current.state !== 'online') return false
     channel.send(serialize(message))
     return true
+  }
+
+  /**
+   * See {@link MachineLink.announceWindows}. A function rather than only a
+   * method because the welcome handler calls it too, before the object that
+   * carries the method exists.
+   *
+   * Two gates, and the second is the version check.
+   *
+   * `windowsHeld` absent means this build has no windows to hold — the headless
+   * host, a test harness — and a frame saying "none" from something that can
+   * never have any is noise on somebody's socket. `windows` absent from the far
+   * machine's capabilities means it is a build from before this frame existed,
+   * and `parseClientMessage` over there answers an unknown type by closing the
+   * channel: a machine that drops off the network is a far worse outcome than a
+   * window it cannot be told about.
+   */
+  function announceWindows(): boolean {
+    if (options.windowsHeld === undefined) return false
+    if (!current.capabilities.includes(CAPABILITY.windows)) return false
+    return send({ t: 'window.holds', sessions: [...options.windowsHeld()] })
   }
 
   /**
@@ -1045,6 +1097,21 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
          * that disconnects you is worse than a button that is not offered.
          */
         if (message.capabilities.includes(CAPABILITY.localhost)) send({ t: 'ports' })
+        /*
+         * And which of that machine's sessions has a browser window here.
+         *
+         * On the welcome, for the same reason the copilot stream is opened here:
+         * this socket is new after every reconnect and the far machine's table
+         * was cleared with the old one. A surface cannot be relied on to notice a
+         * reconnection, and nothing would tell it — so the link says it itself,
+         * every time, before anybody over there can ask.
+         *
+         * `announceWindows` is what gates it on the capability. Sending it to a
+         * machine that never advertised `windows` would be a frame that build has
+         * never heard of, and `parseClientMessage` answers those by closing the
+         * channel.
+         */
+        announceWindows()
         return
       }
       case 'window.call': {
@@ -1481,6 +1548,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       if (!current.capabilities.includes(CAPABILITY.localhost)) return false
       return send(message)
     },
+    announceWindows,
     openThere(url): boolean {
       if (!current.capabilities.includes(CAPABILITY.web)) return false
       // The URL is not checked here and deliberately is not. The far machine

@@ -4272,6 +4272,28 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         desk.handle(message satisfies UploadMessage)
         return
       }
+      case 'window.holds': {
+        /*
+         * A device saying which of this machine's sessions it is holding a
+         * browser window for.
+         *
+         * This is the fact that makes the feature work for a session nobody
+         * started remotely — one already running here, or restored here, or
+         * typed into at this keyboard — because the window is attached in *that*
+         * app's map and nothing on this side of the wire can see it. See
+         * `CAPABILITY.windows` and `WindowAskDesk.held`.
+         *
+         * Recorded whatever the ids are and whether or not this machine has ever
+         * heard of them. It is not a grant and it takes nothing away: a session
+         * with a window attached *here* is still served here (see the forwarder
+         * in `index.ts`), and a verb addressed to this device is still resolved
+         * over there inside that session's own binding — so a device that named
+         * a session it holds no window for has arranged for its own frames to
+         * come back refused.
+         */
+        options.windows?.held(connection.deviceId, message.sessions)
+        return
+      }
       case 'window.result': {
         /*
          * A device answering a browser verb this machine asked it to run.
@@ -4577,6 +4599,24 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         heard += 1
       }
       return heard
+    },
+    /*
+     * The same two conditions, asked without writing to anybody's socket.
+     *
+     * The launch gate in `host-core.ts` is the caller: a session started for a
+     * device that cannot serve a browser verb is launched with no browser verbs
+     * and told why, rather than with six tools that all end in the same sentence
+     * about a device that is plainly connected. A phone is exactly that device —
+     * it holds no windows and its client has never heard of `window.call` — and
+     * before this it was the constant `true` that handed it the six.
+     */
+    reaches(deviceId: string): boolean {
+      for (const connection of live.values()) {
+        if (connection.deviceId !== deviceId) continue
+        if (!connection.capabilities.includes(CAPABILITY.windows)) continue
+        return true
+      }
+      return false
     },
   })
 

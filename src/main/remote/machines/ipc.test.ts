@@ -170,6 +170,7 @@ function rig(
         connect: () => {
           record.connected += 1
         },
+        announceWindows: () => true,
         disconnect: () => {
           record.disconnected += 1
         },
@@ -766,6 +767,7 @@ describe('waking', () => {
           return {
             connect: () => {},
             disconnect: () => {},
+            announceWindows: () => true,
             wake: () => {
               record.woken += 1
             },

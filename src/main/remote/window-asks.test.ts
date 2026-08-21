@@ -22,6 +22,7 @@ describe('asking the machine that holds the window', () => {
     const out = sent()
     const desk = createWindowAsks()
     desk.serve({
+      reaches: () => true,
       ask: (deviceId, message) => {
         expect(deviceId).toBe('dev-1')
         out.frames.push(message)
@@ -53,7 +54,7 @@ describe('asking the machine that holds the window', () => {
 
   it('refuses in milliseconds when nothing over there can hear it', async () => {
     const desk = createWindowAsks()
-    desk.serve({ ask: () => 0 })
+    desk.serve({ reaches: () => false, ask: () => 0 })
     const answer = await desk.call({
       deviceId: 'dev-1',
       sessionId: 'sess-1',
@@ -71,7 +72,7 @@ describe('asking the machine that holds the window', () => {
     vi.useFakeTimers()
     try {
       const desk = createWindowAsks({ timeoutMs: 1_000 })
-      desk.serve({ ask: () => 1 })
+      desk.serve({ reaches: () => true, ask: () => 1 })
       const answer = desk.call({
         deviceId: 'dev-1',
         sessionId: 'sess-1',
@@ -91,7 +92,7 @@ describe('asking the machine that holds the window', () => {
 
   it('settles every question to a device the moment its channel goes', async () => {
     const desk = createWindowAsks()
-    desk.serve({ ask: () => 1 })
+    desk.serve({ reaches: () => true, ask: () => 1 })
     const mine = desk.call({ deviceId: 'dev-1', sessionId: 's', tool: 'browser.read', args: '{}' })
     const other = desk.call({ deviceId: 'dev-2', sessionId: 's', tool: 'browser.read', args: '{}' })
     expect(desk.waiting).toBe(2)
@@ -109,7 +110,7 @@ describe('asking the machine that holds the window', () => {
 
   it('drops an answer nothing is waiting for, rather than throwing', () => {
     const desk = createWindowAsks()
-    desk.serve({ ask: () => 1 })
+    desk.serve({ reaches: () => true, ask: () => 1 })
     // What a device sends when its answer and this end's deadline crossed on the
     // wire. The tool call has already been answered; there is nothing to do and
     // nothing to complain about.
@@ -126,5 +127,87 @@ describe('asking the machine that holds the window', () => {
      */
     expect(WINDOW_ASK_TIMEOUT_MS).toBeGreaterThan(45_000)
     expect(WINDOW_ASK_TIMEOUT_MS).toBeLessThan(60_000)
+  })
+})
+
+/**
+ * Which computer holds the window, when nothing here spawned the session.
+ *
+ * The half of this desk that is not a question at all. Until it existed, a
+ * browser verb could only be addressed for a session a device had *started* —
+ * the spawn is the one moment both ids are in hand — so a session already
+ * running here with a window attached from another machine had nowhere to send
+ * anything, and answered "no browser window is attached to this session" about a
+ * page on somebody's screen.
+ */
+describe('the table of who is holding a window', () => {
+  it('answers with the device that said so', () => {
+    const desk = createWindowAsks()
+    desk.held('mac', ['sess-1', 'sess-2'])
+
+    expect(desk.holdersOf('sess-1')).toEqual(['mac'])
+    expect(desk.holdersOf('sess-3')).toEqual([])
+  })
+
+  it('replaces a device’s whole set, which is how a detach arrives', () => {
+    /*
+     * There is no "detached" frame and there must not be: a delta needs both
+     * ends to have seen every message ever sent, and this link's normal state is
+     * reconnecting. The window that was let go is simply not in the next set.
+     */
+    const desk = createWindowAsks()
+    desk.held('mac', ['sess-1', 'sess-2'])
+    desk.held('mac', ['sess-2'])
+
+    expect(desk.holdersOf('sess-1')).toEqual([])
+    expect(desk.holdersOf('sess-2')).toEqual(['mac'])
+
+    desk.held('mac', [])
+    expect(desk.holdersOf('sess-2')).toEqual([])
+  })
+
+  it('names every computer that claims one, so the caller can refuse rather than guess', () => {
+    const desk = createWindowAsks()
+    desk.held('mac', ['sess-1'])
+    desk.held('laptop', ['sess-1'])
+
+    expect(desk.holdersOf('sess-1')).toEqual(['mac', 'laptop'])
+  })
+
+  it('keeps holding it while that computer is away, because the window is still there', () => {
+    /*
+     * `gone` settles the questions outstanding to a device; it does not forget
+     * what that device is holding. A laptop with its lid shut still has the page
+     * attached, and the true sentence is "that computer is not connected right
+     * now" — which the call path composes. Forgetting would answer "no browser
+     * window is attached to this session", which is false and is the whole
+     * defect this feature exists to close.
+     */
+    const desk = createWindowAsks()
+    desk.serve({ reaches: () => true, ask: () => 1 })
+    desk.held('mac', ['sess-1'])
+    desk.gone('mac')
+
+    expect(desk.holdersOf('sess-1')).toEqual(['mac'])
+  })
+
+  it('says whether a device could be asked at all, without sending anything', () => {
+    // What the launch gate reads. A phone advertises no `windows` capability, so
+    // the wire cannot reach it, so its sessions are launched with no browser
+    // verbs and one honest sentence instead of six dead ones.
+    const desk = createWindowAsks()
+    const frames: unknown[] = []
+    desk.serve({
+      reaches: (deviceId) => deviceId === 'mac',
+      ask: (_deviceId, message) => {
+        frames.push(message)
+        return 1
+      },
+    })
+
+    expect(desk.reaches('mac')).toBe(true)
+    expect(desk.reaches('phone-1')).toBe(false)
+    expect(desk.reaches('')).toBe(false)
+    expect(frames).toEqual([])
   })
 })

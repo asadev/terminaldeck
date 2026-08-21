@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { serveWindowCall, type WindowServeDeps } from './window-serve'
+import { fitAnswer, serveWindowCall, type WindowServeDeps } from './window-serve'
 import type { CallResult } from '../../deck-control/control'
+import { MAX_MESSAGE_BYTES, MAX_WINDOW_RESULT_BYTES } from '../protocol'
+import { MAX_OUTLINE_TEXT_CHARS } from '../../browser-driver'
 
 /**
  * The end of the wire that decides.
@@ -20,6 +22,7 @@ function deck(answer: Partial<CallResult> = {}): {
   const calls: { name: string; args: unknown; caller: unknown; attended: boolean }[] = []
   const deps: WindowServeDeps = {
     allowed: () => true,
+    attended: () => true,
     control: () => ({
       call: async (name, args, options) => {
         calls.push({ name, args, caller: options.caller, attended: options.attended })
@@ -129,9 +132,9 @@ describe('what reaches the dispatcher', () => {
       sessionId: 'sess-1',
       machineId: 'machine-1',
     })
-    // Attended, because the person is at *this* computer looking at the window
-    // this call is about. Which machine asked does not change where the browser
-    // is, and a confirmation can be drawn where they are looking.
+    // Attended is *asked* of this computer rather than asserted about it. The
+    // fake says yes; the test below says what happens when the honest answer is
+    // no.
     expect(calls[0].attended).toBe(true)
   })
 
@@ -143,5 +146,94 @@ describe('what reaches the dispatcher', () => {
     // ones, and a second voice describing the same refusal is how two spellings
     // of one rule get shipped.
     expect(said(answer.body)).toBe('B2 has no page in it yet')
+  })
+})
+
+/**
+ * The two things this end must not do to an answer: assert it is watched, and
+ * put it on the wire whatever its size.
+ */
+describe('what the answering end must not assume', () => {
+  it('passes on this computer’s real answer about whether anybody is here', async () => {
+    /*
+     * `attended: true` was hardcoded, with a comment arguing that a person must
+     * be there. The one thing the flag decides is whether an `alter`-tier call
+     * may raise a confirmation and wait for it — `browser.step`'s first change
+     * on a public website — so a wrong yes is a dialog drawn at an empty desk
+     * and a browser held open until the broker times out. On macOS an app with
+     * every window closed is still running, which is exactly the state the
+     * comment did not cover.
+     */
+    const { deps, calls } = deck()
+    const answer = await serveWindowCall({ ...deps, attended: () => false }, 'machine-1', READ)
+
+    expect(answer.ok).toBe(true)
+    expect(calls[0].attended).toBe(false)
+  })
+
+  it('cuts a page too big for the wire down to size instead of dropping the link', async () => {
+    /*
+     * The measured failure: `browser.read` builds an outline holding up to
+     * `MAX_OUTLINE_TEXT_CHARS` — forty thousand characters — of the page's own
+     * words plus every link and button on it, and it went out whole. Both ends
+     * cap a frame and both of them answer by *closing the connection*
+     * (`CLOSE.messageTooBig`), so a thin page worked and a real one took down
+     * the link between the two machines: the terminal, the transfers, all of it,
+     * lost because an agent read a page.
+     */
+    const { deps } = deck({
+      ok: true,
+      value: {
+        url: 'https://example.com',
+        title: 'A real page',
+        text: 'x'.repeat(MAX_OUTLINE_TEXT_CHARS),
+        elements: Array.from({ length: 600 }, (_, n) => ({
+          selector: `#e${n}`,
+          role: 'button',
+          text: `element number ${n}`,
+        })),
+      },
+    })
+    const answer = await serveWindowCall(deps, 'machine-1', READ)
+
+    expect(answer.ok).toBe(true)
+    // Under both caps, measured the way each end measures it: the body itself,
+    // and the body escaped into the frame that carries it.
+    expect(Buffer.byteLength(answer.body, 'utf8')).toBeLessThanOrEqual(MAX_WINDOW_RESULT_BYTES)
+    expect(Buffer.byteLength(JSON.stringify(answer.body), 'utf8')).toBeLessThan(MAX_MESSAGE_BYTES)
+
+    // Still a document, because half a JSON document is a page reported as a
+    // protocol error rather than as a page.
+    const value = JSON.parse(answer.body) as Record<string, unknown>
+    expect(value.url).toBe('https://example.com')
+    expect(value.title).toBe('A real page')
+
+    /*
+     * And it says so. A silently shortened page reading is the same class of
+     * failure as a silently skipped download: the model quotes what it was
+     * given, and what it was given stops in the middle of the thing that
+     * mattered.
+     */
+    const note = value.truncatedOnTheWay as { message: string; charactersDropped: number }
+    expect(note.charactersDropped).toBeGreaterThan(0)
+    expect(note.message).toMatch(/textChars/)
+  })
+
+  it('leaves an answer that fits exactly as the tool composed it', async () => {
+    // No note, no reshaping. The ordinary case pays nothing for the one above.
+    const { deps } = deck({ ok: true, value: { url: 'https://example.com', text: 'short' } })
+    const answer = await serveWindowCall(deps, 'machine-1', READ)
+
+    expect(JSON.parse(answer.body)).toEqual({ url: 'https://example.com', text: 'short' })
+  })
+
+  it('refuses, actionably, an answer with nothing in it that can be shortened', () => {
+    // A bare string too large to send is a shape none of the six verbs produces.
+    // It is refused with the two arguments that make it fit rather than cut into
+    // a value of a different shape than the tool's own schema promises.
+    const answer = fitAnswer('y'.repeat(MAX_WINDOW_RESULT_BYTES + 10))
+
+    expect(answer.ok).toBe(false)
+    expect(said(answer.body)).toMatch(/selector/)
   })
 })
