@@ -322,6 +322,20 @@ export interface DeckApi {
   getPreferences(): Promise<Preferences>
   setPreferences(patch: Partial<Preferences>): Promise<Preferences>
   /**
+   * Whether a dialog's scrim is over the window.
+   *
+   * Layout state going the wrong way — renderer to main — which is worth the
+   * one line it costs because on Windows three of this window's controls are
+   * outside the page. The OS paints minimise, maximise and close into the strip
+   * above the renderer's output, so `.modal-overlay` dims the whole app except
+   * them, and Settings opened with the brightest thing on screen in the corner.
+   * The main process repaints the strip; this is how it is told to.
+   *
+   * Returns nothing, deliberately: it is a `send`, so a dialog opening is never
+   * waiting on this process. A no-op on every platform without an overlay.
+   */
+  setChromeDimmed(dimmed: boolean): void
+  /**
    * The stored values changed, and this window is not what changed them.
    *
    * Both carry the whole store rather than the patch. There is no push for this

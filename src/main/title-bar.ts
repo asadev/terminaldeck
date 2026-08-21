@@ -38,13 +38,14 @@ import type { Platform } from './platform/host'
  * The overlay's background is painted by the OS, outside the page, so it cannot
  * read a CSS variable — the same wall `index.ts`'s pre-paint `backgroundColor`
  * hits, and `src/renderer/styles/tokens.test.ts` opens by listing the three
- * hand-copies of that kind that had all silently gone stale. So the two values
- * below are copies, and `title-bar.test.ts` is the mechanism that keeps them
- * honest: it reads `tokens.css`, composites the toolbar's real recipe, and
- * fails naming the token that moved. Do not "fix" a failure there by editing
- * the hex until it passes — the point of the test is that the strip and the bar
- * beside it are the same colour, and the arithmetic is written out below so the
- * next reader can check it by hand.
+ * hand-copies of that kind that had all silently gone stale. So the values
+ * below are copies — two for the bar as it normally is, and two more for the
+ * bar with a dialog's scrim over it (see `DIMMED`) — and `title-bar.test.ts` is
+ * the mechanism that keeps them honest: it reads `tokens.css` and `Modal.css`,
+ * composites the toolbar's real recipe, and fails naming the token that moved.
+ * Do not "fix" a failure there by editing the hex until it passes — the point of
+ * the test is that the strip and the bar beside it are the same colour, and the
+ * arithmetic is written out below so the next reader can check it by hand.
  *
  * ## Which bar the strip actually sits in
  *
@@ -140,6 +141,53 @@ const OVERLAY: Record<Appearance, WindowControlsOverlay> = {
 }
 
 /**
+ * The same two, with the modal scrim over them.
+ *
+ * ## The defect
+ *
+ * *"when I click on settings in the windows side the buttons for minimise
+ * maximise and close on the right corner comes stays light so they should also
+ * get dull just like anything else"*
+ *
+ * A dialog in this app lays `.modal-overlay` over the whole window and
+ * everything under it recedes — the sidebar, both bars, the terminal. On
+ * Windows the window buttons are not under it, because they are not in the page
+ * at all: the OS paints them into the strip *above* the renderer's output. So
+ * opening Settings dimmed every pixel except three buttons, which left the
+ * brightest thing on the screen sitting in the corner of a dimmed window.
+ *
+ * There is no CSS answer to that — the scrim cannot reach outside the page — so
+ * the composite is done here and handed to `setTitleBarOverlay` while a dialog
+ * is up. `index.ts` owns *when*; this owns *what colour*.
+ *
+ * ## The arithmetic, so the next reader can check it rather than trust it
+ *
+ * `--modal-scrim` in `components/Modal.css`, per appearance, over the two
+ * colours above. The scrim is flat, so unlike the sheen this is exact:
+ *
+ *   dark:  scrim `color-mix(in srgb, #000 52%, transparent)` = rgb(0,0,0)/0.52
+ *          bar    33 × 0.48 = 15.84 → #101010
+ *          symbol 168 × 0.48 = 80.64 → #515151
+ *   light: scrim `color-mix(in srgb, var(--text-primary) 38%, transparent)`,
+ *          and `--text-primary` is #1c1c1c, so rgb(28,28,28)/0.38
+ *          bar    28 × 0.38 + 252 × 0.62 = 166.88 → #a7a7a7
+ *          symbol 28 × 0.38 +  84 × 0.62 =  62.72 → #3f3f3f
+ *
+ * The overlay's `blur(3px)` is not in that sum and does not need to be: a blur
+ * moves colour sideways, it does not change the average of a flat field, and
+ * what is behind the strip is a flat field.
+ *
+ * These are hand-copies of tokens, exactly like the two above, and
+ * `title-bar.test.ts` recomputes both from `Modal.css` and `tokens.css` for the
+ * same reason it recomputes those — every hand-copy in this repository that was
+ * guarded by a comment asking the next person to remember went stale.
+ */
+const DIMMED: Record<Appearance, WindowControlsOverlay> = {
+  dark: { color: '#101010', symbolColor: '#515151', height: OVERLAY_HEIGHT },
+  light: { color: '#a7a7a7', symbolColor: '#3f3f3f', height: OVERLAY_HEIGHT },
+}
+
+/**
  * The user's theme plus the OS setting, collapsed to what is actually painted.
  *
  * The renderer has its own copy of this rule (`renderer/theme.ts`), and it has
@@ -180,13 +228,22 @@ export function usesWindowControlsOverlay(platform: Platform): boolean {
  * `setTitleBarOverlay` on a window that was not created with one — it is a
  * Windows/Linux-only method and the guard has to be the same value that decided
  * the constructor options, or the two can disagree.
+ *
+ * `dimmed` is whether a dialog's scrim is over the window right now. It is a
+ * parameter of this function rather than a second function because the caller
+ * has one question — "what should the strip be wearing?" — and every answer to
+ * it has to go through the same platform guard; a second entry point is a
+ * second place for that guard to be forgotten. Defaulted to `false` so that the
+ * window's own construction, which happens before anything can be open over it,
+ * reads as it always did.
  */
 export function overlayFor(
   platform: Platform,
   appearance: Appearance,
+  dimmed = false,
 ): WindowControlsOverlay | null {
   if (!usesWindowControlsOverlay(platform)) return null
-  return OVERLAY[appearance]
+  return dimmed ? DIMMED[appearance] : OVERLAY[appearance]
 }
 
 /**

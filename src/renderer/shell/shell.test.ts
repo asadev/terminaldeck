@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -530,8 +530,118 @@ describe('the Windows window buttons get their room', () => {
   it('reserves exactly what was measured, and nothing when there is nothing to reserve', () => {
     // The zero fallback is what keeps every other platform on the padding it
     // had before this existed — the rule resolves to `calc(--sp-3 + 0px)`.
-    const toolbar = requireRule(SHELL, '.toolbar')
+    const toolbar = requireRule(SHELL, '.toolbar:not([data-under-strip])')
     expect(toolbar).toContain('padding-right: calc(var(--sp-3) + var(--window-controls-inset, 0px))')
+  })
+
+  it('reserves it only in the band the buttons are actually drawn in', () => {
+    /*
+     * The defect this scoping fixed, pinned so it cannot come back as a
+     * declaration on `.toolbar` itself.
+     *
+     * The OS overlay is `OVERLAY_HEIGHT` tall — one `--toolbar-h` band, the top
+     * one. With a tab strip open that band is `.strip`, and this bar is the row
+     * *below* it: nothing is drawn over its right-hand end, so a reserve there
+     * is a strip of unused window. Measured on his PC at 1920×1080 the session
+     * bar's controls stopped 160px short of the right edge with clean space
+     * beside them, while the same controls sit flush right on the Mac.
+     *
+     * Three claims, because there are three ways to get it wrong: the bare rule
+     * must not carry it back, the scoped rule must exist, and the under-strip
+     * rule must not quietly re-add it as an override.
+     */
+    expect(
+      requireRule(SHELL, '.toolbar'),
+      '`.toolbar` reserves the caption buttons’ width unconditionally again. Under a tab strip ' +
+        'this bar is not the band the buttons are in, so that is an unused strip of window ' +
+        'beside the session controls.',
+    ).not.toContain('--window-controls-inset')
+    expect(SHELL).toContain('.toolbar:not([data-under-strip]) {')
+    expect(requireRule(SHELL, '.toolbar[data-under-strip]')).not.toContain('padding-right')
+  })
+
+  it('leaves the reserve on the strip, which is the band the buttons are in', () => {
+    // The other half of the same claim, and the half that must not be "fixed"
+    // by symmetry: when there is a strip, the buttons are in it, and its
+    // openers would sit under the close button without this.
+    expect(requireRule(STRIP, '.strip')).toContain(
+      'padding-right: calc(var(--sp-2) + var(--window-controls-inset, 0px))',
+    )
+  })
+
+  it('puts the rail’s arrow back on the row’s own centre line', () => {
+    /*
+     * The vertical half of the traffic-light reserve, and the half that was
+     * missed when the horizontal half was written.
+     *
+     * `.sidebar-gutter` turns centring off and pads 5px from the top so the
+     * arrow's centre lands on y = 19, which is the macOS lights' centre line
+     * (`{ x: 14, y: 12 }` plus half of 14). Windows has no lights and nothing
+     * else in the window is on 19 — the band beside this gutter is
+     * `--toolbar-h` with `align-items: center`, so every tab and every button on
+     * it is on 24 and the arrow sat five pixels above all of them.
+     *
+     * Not caught by `lightsReserveOffenders`: it looks for 82px and 118px, and
+     * this is a 5.
+     */
+    const mac = requireRule(SHELL, '.sidebar-gutter')
+    expect(mac).toContain('align-items: flex-start')
+    expect(mac).toContain('padding: 5px var(--sp-2) 0 82px')
+
+    const windows = requireRule(SHELL, ':root[data-window-controls] .sidebar-gutter')
+    expect(
+      windows,
+      'the rail’s collapse arrow is aligned to traffic lights that do not exist on this ' +
+        'platform, five pixels above everything on the band beside it.',
+    ).toContain('align-items: center')
+    expect(windows).toContain('padding-top: 0')
+  })
+
+  it('reserves it in exactly two rules in the whole renderer, and names them', () => {
+    /*
+     * The sweep, because the failure this fixes was not a wrong number — it was
+     * a *second* row holding the reserve, and a third would look just as
+     * reasonable to whoever added it. Every other row of the window uses the
+     * window's full width, on Windows exactly as on the Mac.
+     *
+     * Derived from the sheets rather than asserted against a list of files, for
+     * the reason `styles/verbatim.test.ts` walks the tree: a hand-written list
+     * passes forever while the app grows panes it has never heard of, which is
+     * the shape of the bug rather than an unrelated risk.
+     *
+     * The two that are allowed are the two bands that can be the window's top
+     * one — `stripIsPresent` in `browser/workspace-strip.ts` is the predicate
+     * that decides which — and the overlay is `OVERLAY_HEIGHT` tall, so it is in
+     * one of them and never in both.
+     */
+    const RENDERER = resolve(HERE, '..')
+    const sheets: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const abs = join(dir, entry.name)
+        if (entry.isDirectory()) walk(abs)
+        else if (entry.name.endsWith('.css')) sheets.push(abs)
+      }
+    }
+    walk(RENDERER)
+    expect(sheets.length, 'no stylesheets found — has the renderer moved?').toBeGreaterThan(10)
+
+    const holders: string[] = []
+    for (const abs of sheets) {
+      const css = stripComments(lf(readFileSync(abs, 'utf8')))
+      for (const [selector, body] of topLevelRules(css)) {
+        if (body.includes('--window-controls-inset')) {
+          holders.push(`${relative(RENDERER, abs)}: ${selector}`)
+        }
+      }
+    }
+
+    expect(
+      holders.sort(),
+      'the Windows caption buttons are drawn into one band, the window\'s top one. A rule that ' +
+        'reserves their width anywhere else is an unused strip of window beside its controls — ' +
+        'which is exactly what the session bar was doing at 1920×1080.',
+    ).toEqual(['browser/WorkspaceTabStrip.css: .strip', 'shell/shell.css: .toolbar:not([data-under-strip])'])
   })
 
   it('is installed by the toolbar itself', () => {
@@ -618,7 +728,7 @@ describe('the sheet reads the same however git checked it out', () => {
      * `\r` at the end of a line inside it is exactly the shape that would slip
      * through the check above and fail the one that matters.
      */
-    const body = requireRule(asWindows(SHELL), '.toolbar')
+    const body = requireRule(asWindows(SHELL), '.toolbar:not([data-under-strip])')
     expect(body).not.toContain('\r')
     expect(body).toContain('padding-right: calc(var(--sp-3) + var(--window-controls-inset, 0px))')
   })
