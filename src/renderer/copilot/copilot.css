@@ -80,6 +80,49 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /*
+    The same surface as the pane it holds — 2026-08-22.
+
+    This element had no background at all, so everything above `.cp-body` fell
+    through to `.main`, which is the app canvas. In the dark theme the canvas and
+    the terminal's paper are the same colour and nothing showed; in the light
+    theme the canvas is `#ffffff` and the paper is `#e8e8e8`, so the machine
+    switch and the record strip were drawn on a **pure white plate spanning the
+    whole window** between the toolbar and the terminal. Rendered and measured
+    before it was touched: with four machines and an empty strip the plate is the
+    row's own 30px, and with a signed-out account it is the strip's whole height
+    as well.
+
+    Asad, 2026-08-21: *"on the copilot page dont give full light bar for full
+    width of page for the pills keep it less obvious and simple."* That bar is
+    this missing declaration and nothing in `.cp-machines` — the row paints no
+    fill of its own and never did.
+
+    The rule it now follows is the app's, not a new one. `--tab-active` in
+    `tokens.css` states it, `.toolbar[data-under-strip]` and `.pane-cell-head`
+    obey it, and his own words for it are *"on light mode it is pure white, and
+    inside the terminal itself it is a little bit different, like kind of grey."*
+    The two panes this one is a sibling of — `.remote-pane` and `.server-pane` in
+    `shell.css`, the same `position: absolute; inset: 0` column — already paint
+    `--terminal-bg` on the page itself. This was the one that did not.
+  */
+  background: var(--terminal-bg);
+}
+
+/*
+  Except when the pane is another machine's conversation, which is not a
+  terminal and is deliberately drawn on the app's own surface — see `.cp-remote`
+  below for why. The band above it has to follow it there, or the fix moves the
+  seam instead of closing it, which is the fault one level up that
+  `.toolbar[data-under-strip][data-page]` exists to avoid.
+
+  Keyed on the pane itself rather than on an attribute somebody has to remember
+  to write: the thing whose colour is being matched is the thing the selector
+  asks for, so the two cannot drift apart. `.panes:has(> .page-blank:only-child)`
+  in `shell.css` is the same spelling.
+*/
+.copilot-page:has(.cp-remote) {
+  background: var(--bg-primary);
 }
 
 .copilot-page[data-visible='false'] {
@@ -140,6 +183,11 @@
 
   It is `flex-shrink: 0` above a strip that can scroll and a pane that fills, so
   a long list of machines wraps rather than squeezing the terminal.
+
+  It paints **no fill of its own**, and that is load-bearing rather than an
+  omission: the row takes the page's surface, and the page takes the surface of
+  the pane under it. A background written here would be the full-width bar back,
+  drawn deliberately this time.
 */
 .cp-machines {
   flex-shrink: 0;
@@ -160,14 +208,47 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.cp-machine:hover {
+/*
+  Hover means *"not here yet"*, so it does not apply to the one you are already
+  on — the rule `.settings-scope` states in the same words, and the rail's.
+
+  It used to be a bare `.cp-machine:hover` that the chosen rule below happened to
+  beat on source order alone: same specificity, later in the file. That is a
+  correct screen held up by nothing, and it inverts the moment anybody moves a
+  block. Said out loud instead.
+*/
+.cp-machine:not([data-chosen]):hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
 
+/*
+  The one you are on.
+
+  Two marks now — the plate and the label's weight — where it was the plate
+  alone. A single small grey rectangle was carrying the whole answer to *"which
+  machine am I looking at"*, and saying it twice quietly beats saying it once
+  louder: *"keep it less obvious and simple."*
+
+  The plate stays at `--fill-tertiary` and that is a measurement, not an
+  oversight. It was dropped to `--fill-quaternary` first, and rendered: at 0.045
+  against `--bg-hover`'s 0.055 the machine under the pointer had a **stronger**
+  plate than the machine actually chosen, so the row answered the wrong question
+  for as long as a cursor was over it. A selection cannot be quieter than a
+  hover. So the weight is what was added and the tint is what was left alone.
+
+  The weight is `.settings-scope`'s, which marks its chosen button the same way
+  and pays the same price — a bold label is a wider label, so the row shifts a
+  pixel or two when the choice moves. The **accent** is not taken from it, for
+  the reason written above this rule: the accent means *this is the thing to
+  press*, and a control that is always on screen never is. That sheet uses it
+  because everything on it is one colour and a grey pill would be the last
+  stacked grey in the window; a terminal's paper is not that sheet.
+*/
 .cp-machine[data-chosen] {
   background: var(--fill-tertiary);
   color: var(--text-primary);
+  font-weight: var(--w-semibold);
 }
 
 /*
