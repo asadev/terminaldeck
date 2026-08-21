@@ -190,6 +190,7 @@ describe('a seam nobody has wired yet', () => {
       '!canConfigure || capture === null ? (',
       '!canConfigure || assets === null ? (',
       '!canConfigure || checks === null ? (',
+      '!blockCaptureAvailable(api) ? (',
       '!storeAvailable(api) ? (',
     ]) {
       expect(onScreen, `no gate for ${gate}`).toContain(gate)
@@ -197,7 +198,18 @@ describe('a seam nobody has wired yet', () => {
   })
 
   it('says so once at the top as well, so the panel is not read as broken', () => {
-    expect(onScreen).toContain('This build has no scraping engine behind it')
+    expect(onScreen).toContain('This build has no scraping configuration behind it')
+  })
+
+  it('does not claim nothing can be set when one control can', () => {
+    /*
+     * The banner used to read "nothing on this screen can be set", which stopped
+     * being true the day the block camera got a seam of its own — and the switch
+     * it was wrong about governs a feature with no visible output, so the banner
+     * would have been the only thing on screen about it, and wrong.
+     */
+    expect(onScreen).not.toContain('nothing on this screen can be set')
+    expect(onScreen).toContain('the exception is the block camera under Checks')
   })
 })
 

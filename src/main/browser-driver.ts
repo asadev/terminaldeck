@@ -404,6 +404,21 @@ export interface DriveHost {
    * than arming something that writes nowhere.
    */
   captureFolder?(input: { viewId: string; runId: string }): string | null
+  /**
+   * Where this page's block screenshots go, and whether it may take any.
+   *
+   * The same shape and the same argument as {@link DriveHost.captureFolder}
+   * directly above: both answers depend on which browser *profile* the tab was
+   * built in, `browser-tab.ts` stamps that at creation, and this module has no
+   * business looking it up.
+   *
+   * Null when there is no such tab. Absent in a build with no browser wiring —
+   * in which case the watcher falls back to the shared folder with the camera
+   * on, which is what this did before there was a switch. It is not a build
+   * where the panel offers one either: the switch and this member are wired in
+   * the same file, so a build that cannot answer also draws no control.
+   */
+  blockCapture?(viewId: string): { dir: string; on: boolean } | null
 }
 
 /**
@@ -1045,9 +1060,22 @@ export class BrowserDrive {
      * argument, including why it refuses to take a picture while the person
      * holds the baton.
      */
+    /*
+     * Asked afresh on each event rather than resolved once here. The switch is
+     * per profile and somebody can click it while this page is open, and a
+     * watcher holding the answer from attach time would go on photographing a
+     * profile that had said stop until the tab was closed.
+     */
+    const shelf = (): { dir: string; on: boolean } =>
+      this.host.blockCapture?.(slot.viewId ?? '') ?? {
+        dir: blockShotDir(app.getPath('userData')),
+        on: true,
+      }
+
     attachBlockWatch(wc, {
       state: () => slot.state,
-      dir: () => blockShotDir(app.getPath('userData')),
+      enabled: () => shelf().on,
+      dir: () => shelf().dir,
       // Bounded inside the page by `TEXT_SCRIPT`; a challenge page is a few
       // hundred characters and this is what tells one from an ordinary 200.
       text: async () => {

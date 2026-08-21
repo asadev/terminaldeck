@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { app, type IpcMain } from 'electron'
+import { readBlockCapture, setBlockCapture } from './browser-block-capture'
 import { captureDir } from './browser-capture-store'
+import { blockShotDirFor } from './browser-scrape-paths'
 import { browserTabContents, browserTabProfile } from './browser-tab'
 import { BLANK_URL } from './browser-url'
 import type { DriveStatus } from './browser-drive'
@@ -129,6 +131,24 @@ export const DRIVE_CLOSED_CHANNEL = 'browser:drive-closed'
 export const DRIVE_SHOW_CHANNEL = 'browser:drive-show'
 /** Renderer → main: that request id found the window and showed it. */
 export const DRIVE_SHOWN_CHANNEL = 'browser:drive-shown'
+
+/**
+ * The Scraping panel's *"Screenshot the page when a request is blocked"*.
+ *
+ * Here, in the drive's wiring, because the drive is what attaches the camera:
+ * `BrowserDrive.watch` calls `attachBlockWatch` on every drivable page, and the
+ * switch is read back out through {@link DriveHost.blockCapture} a few lines
+ * below. A separate `browser-block-ipc.ts` would be a second file registering a
+ * second handler about one object, and `src/main/index.ts` would grow two lines
+ * to say so.
+ *
+ * `ipcMain`, so it is reachable from this app's own renderer and from nowhere
+ * else — not from a guest page, and not from an agent, which talks to this
+ * process over `deck-control` and gets a catalogue of tools rather than
+ * channels. Turning somebody's evidence camera off is a person's decision.
+ */
+export const BLOCK_CAPTURE_READ_CHANNEL = 'browser:block-capture'
+export const BLOCK_CAPTURE_SET_CHANNEL = 'browser:block-capture-set'
 
 /**
  * How long the window is given to close a tab and answer.
@@ -408,6 +428,24 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
       if (profileId === null) return null
       return captureDir(app.getPath('userData'), profileId === '' ? 'isolated' : profileId, runId)
     },
+    /*
+     * Where a page's block screenshots go, and whether it may take any.
+     *
+     * `isolated` for a throwaway tab, exactly as `captureFolder` above does it
+     * and for the same reason: what is throwaway about an isolated tab is its
+     * cookies, and a picture of the challenge that stopped a run must outlive
+     * the tab that provoked it. The switch is read under that same name, so
+     * turning the camera off for an isolated tab is a thing somebody can do —
+     * even though no panel offers it, because a folder with an answer and no
+     * way to give one is better than a folder that ignores the file.
+     */
+    blockCapture: (viewId) => {
+      const profileId = browserTabProfile(viewId)
+      if (profileId === null) return null
+      const id = profileId === '' ? 'isolated' : profileId
+      const userData = app.getPath('userData')
+      return { dir: blockShotDirFor(userData, id), on: readBlockCapture(userData, id) }
+    },
     publish: (status: DriveStatus) => deps.send(DRIVE_STATE_CHANNEL, status),
     now: () => Date.now(),
     ...(deps.openForSession
@@ -448,6 +486,28 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
   })
 
   ipcMain.handle(DRIVE_READ_CHANNEL, () => drive?.status() ?? null)
+
+  /*
+   * The two ends of one switch.
+   *
+   * The setter answers with the value that is now *stored* rather than with a
+   * boolean success, so the panel draws what was kept and not what was clicked.
+   * That is the rule the whole Scraping panel is built on and it is not
+   * decoration here: the thing being switched has no visible output when it
+   * works, so a control that confirmed itself would be the only evidence
+   * anything happened, and it would be evidence of nothing.
+   */
+  ipcMain.handle(BLOCK_CAPTURE_READ_CHANNEL, (_event, profileId: unknown) =>
+    typeof profileId === 'string' && profileId !== ''
+      ? readBlockCapture(app.getPath('userData'), profileId)
+      : null,
+  )
+
+  ipcMain.handle(BLOCK_CAPTURE_SET_CHANNEL, (_event, profileId: unknown, on: unknown) =>
+    typeof profileId === 'string' && profileId !== '' && typeof on === 'boolean'
+      ? setBlockCapture(app.getPath('userData'), profileId, on)
+      : null,
+  )
 
   ipcMain.on(DRIVE_RESUME_CHANNEL, (_event, carryOn: unknown) => {
     drive?.resume(carryOn === true)

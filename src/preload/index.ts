@@ -2089,6 +2089,21 @@ const api = {
     return () => ipcRenderer.off('browser:downloads', handler)
   },
 
+  /* ------------------------------------------ block screenshots -- */
+
+  /*
+   * *"Screenshot the page when a request is blocked"*, both ends of it.
+   *
+   * Two invokes and no push: nothing but this panel changes the answer, so a
+   * push channel would be wiring that never fires. The setter answers with the
+   * value now stored rather than a boolean, because the thing it governs is
+   * invisible when it works — see `browser-drive-ipc.ts`.
+   */
+  browserBlockCapture: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser:block-capture', profileId),
+  browserBlockCaptureSet: (profileId: string, on: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('browser:block-capture-set', profileId, on),
+
   /* --------------------------------------------- browser tools store -- */
 
   /*

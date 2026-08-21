@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  blockCaptureAvailable,
   liftAvailable,
   liftRequestsAvailable,
   readCount,
@@ -59,6 +60,26 @@ describe('binding whatever this build has', () => {
 })
 
 describe('what a half-wired build is allowed to offer', () => {
+  it('needs both ends of the block camera before it draws that switch', () => {
+    /*
+     * The one control on this panel with a real engine behind it, and the one
+     * that must never be drawn on a build that can only write it. What it
+     * governs produces nothing visible when it is on — no window, no count — so
+     * a switch that could be set and not read back would show whichever position
+     * it was last clicked into and be the only evidence of a state nobody can
+     * see.
+     */
+    expect(blockCaptureAvailable({})).toBe(false)
+    expect(blockCaptureAvailable({ browserBlockCapture: async () => true })).toBe(false)
+    expect(blockCaptureAvailable({ browserBlockCaptureSet: async () => true })).toBe(false)
+    expect(
+      blockCaptureAvailable({
+        browserBlockCapture: async () => true,
+        browserBlockCaptureSet: async () => true,
+      }),
+    ).toBe(true)
+  })
+
   it('needs the read and the write before it shows a setting at all', () => {
     expect(scrapingConfigAvailable({ browserScrapingConfig: async () => ({}) })).toBe(false)
     expect(
