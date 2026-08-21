@@ -1,5 +1,4 @@
-import { net } from 'electron'
-import { partitionFor, sessionForPartition } from './browser-profiles'
+import { assetFetchFor, cancelBody, type AssetHeaders } from './browser-asset-session'
 import type { RenditionProbe } from './browser-asset-rendition'
 
 /**
@@ -18,10 +17,12 @@ import type { RenditionProbe } from './browser-asset-rendition'
  * name a profile, and the probe goes out of that profile's own partition with
  * its own cookie jar, which is the same jar the page and the download use.
  *
- * `partitionFor` is what stops that being a way to reach anything else: it
- * accepts the default profile or a UUID and nothing shaped differently, for the
- * reason it gives in `browser-profiles.ts` — `fromPartition` will happily mint a
- * directory for any string it is handed.
+ * Which jar, exactly, is `browser-asset-session.ts`'s answer and not this file's
+ * — because `browser-asset-fetch.ts` asks the same question about the same URL a
+ * moment later, and a probe and a fetch that disagree about the cookies produce
+ * a run where every `HEAD` says `200` and every `GET` says `403`. One function,
+ * one answer, and it refuses an id that is not a profile rather than quietly
+ * making the request with nobody's cookies.
  *
  * ## HEAD first, then one byte
  *
@@ -37,7 +38,7 @@ import type { RenditionProbe } from './browser-asset-rendition'
 /** Long enough for a slow CDN, short enough that 60,000 of them are not a night. */
 export const PROBE_TIMEOUT_MS = 8_000
 
-function contentTypeOf(headers: Headers): string {
+function contentTypeOf(headers: AssetHeaders): string {
   const raw = headers.get('content-type') ?? ''
   return raw.split(';')[0].trim().toLowerCase()
 }
@@ -49,7 +50,7 @@ function contentTypeOf(headers: Headers): string {
  * response states no length at all. Every caller treats `null` as "not
  * comparable" rather than as zero; see `acceptsRendition`.
  */
-function lengthOf(headers: Headers, ranged: boolean): number | null {
+function lengthOf(headers: AssetHeaders, ranged: boolean): number | null {
   if (ranged) {
     const range = headers.get('content-range') ?? ''
     const total = /\/(\d+)\s*$/.exec(range)
@@ -86,11 +87,18 @@ export async function probeAsset(
 ): Promise<RenditionProbe | null> {
   if (!/^https?:\/\//i.test(url)) return null
   const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS
-  const partition = options.profileId === undefined ? null : partitionFor(options.profileId)
-  const fetcher =
-    partition === null
-      ? (input: string, init: RequestInit) => net.fetch(input, init)
-      : (input: string, init: RequestInit) => sessionForPartition(partition).fetch(input, init)
+  let fetcher: ReturnType<typeof assetFetchFor>
+  try {
+    fetcher = assetFetchFor(options.profileId)
+  } catch {
+    /*
+     * A profile id that is not one of ours. `null` is "this candidate did not
+     * hold", which walks the caller down to the original URL — the safe
+     * direction. The tools refuse the id at the door long before this, so this
+     * branch is the second guard rather than the message anybody reads.
+     */
+    return null
+  }
 
   const once = async (ranged: boolean): Promise<RenditionProbe | null> => {
     const controller = new AbortController()
@@ -107,7 +115,7 @@ export async function probeAsset(
        * cancelled, or the socket stays open until it is collected. Cancelled
        * rather than read: nothing here wants the byte.
        */
-      if (ranged) await response.body?.cancel().catch(() => undefined)
+      if (ranged) await cancelBody(response)
       return {
         // 206 is a success for a ranged request and every caller here is asking
         // "did this answer", so it is reported as the 200 it stands for.

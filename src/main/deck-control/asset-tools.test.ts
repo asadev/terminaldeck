@@ -1,9 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { digestOf } from '../browser-asset-digest'
 import type { RenditionProbe } from '../browser-asset-rendition'
+import type { AssetOpen, AssetResponse } from '../browser-asset-session'
 import { blockShotDir, coveragePath, ledgerPath } from '../browser-scrape-paths'
 import { captureBlock, classifyBlock, type BlockEvidence } from '../browser-block-watch'
 import { ActionLog } from './action-log'
@@ -14,12 +16,15 @@ import { SESSION_TOOLS } from './session-tools'
 import { ALL_TIERS, NO_TIERS, type Caller, type DeckSurface } from './surface'
 
 /**
- * The four asset tools, through the real dispatcher.
+ * The five asset tools, through the real dispatcher.
  *
  * Driven through `DeckControl` rather than by calling the handlers, because the
  * things worth asserting are the ones the dispatcher owns: who may call them,
  * what reaches `actions.jsonl`, and that a refusal is a refusal rather than an
- * error. The arithmetic each one performs is tested in its own module's file.
+ * error. The arithmetic each one performs is tested in its own module's file —
+ * `assets.fetch` in particular is proved against a real socket and a real disk
+ * in `browser-asset-fetch.test.ts`, and what is asserted here is the door it is
+ * behind and the shape of what comes back through it.
  */
 
 let userData = ''
@@ -28,6 +33,14 @@ let files = ''
 
 /** A probe table, so the rendition tool can be exercised with no network. */
 let probes: Record<string, RenditionProbe> = {}
+
+/** Which profile each fetch was bound to, so a silent anonymous one is visible. */
+let askedAs: (string | null)[] = []
+
+/** One real file over one real socket, for `assets.fetch`. */
+let server: Server | null = null
+let origin = ''
+const ASSET = Buffer.from('a floor plan, 1920px, and every byte of it')
 
 function approving(): ConsentBroker {
   const broker: ConsentBroker = new ConsentBroker({
@@ -50,6 +63,29 @@ function control(): DeckControl {
     extraTools: assetTools({
       userData: () => userData,
       probe: async (url) => probes[url] ?? null,
+      /*
+       * The real request, and the real refusal.
+       *
+       * `assetFetchFor` itself needs Electron, so what stands in for it here is
+       * the one behaviour the tools depend on: a profile id that is not a
+       * profile throws instead of quietly answering without cookies. `default`
+       * and a UUID are accepted, everything else is not — which is
+       * `partitionFor`'s rule, and the test below asserts the tool refuses on
+       * it.
+       */
+      open: (profileId) => {
+        if (
+          profileId !== null &&
+          profileId !== '' &&
+          profileId !== 'default' &&
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(profileId)
+        ) {
+          throw new Error(`${profileId} is not a profile in this browser.`)
+        }
+        askedAs.push(profileId)
+        return ((url, init) =>
+          fetch(url, init as RequestInit) as unknown as Promise<AssetResponse>) as AssetOpen
+      },
       now: () => 1_700_000_000_000,
     }),
   })
@@ -67,14 +103,36 @@ async function call(
   return deck.call(tool, args, { caller })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   userData = mkdtempSync(join(tmpdir(), 'asset-tools-data-'))
   logDir = mkdtempSync(join(tmpdir(), 'asset-tools-log-'))
   files = mkdtempSync(join(tmpdir(), 'asset-tools-files-'))
   probes = {}
+  askedAs = []
+  server = createServer((request, response) => {
+    if ((request.url ?? '') !== '/plan.jpg') {
+      response.writeHead(404, { 'content-type': 'text/plain' })
+      response.end('no')
+      return
+    }
+    response.writeHead(200, {
+      'content-type': 'image/jpeg',
+      'content-length': String(ASSET.length),
+    })
+    if (request.method === 'HEAD') response.end()
+    else response.end(ASSET)
+  })
+  await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('no port')
+  origin = `http://127.0.0.1:${address.port}`
 })
 
-afterEach(() => {
+afterEach(async () => {
+  if (server !== null) {
+    await new Promise<void>((resolve) => server?.close(() => resolve()))
+    server = null
+  }
   for (const path of [userData, logDir, files]) rmSync(path, { recursive: true, force: true })
 })
 
@@ -88,11 +146,17 @@ describe('the grant', () => {
     for (const name of ASSET_TOOL_NAMES) expect(SESSION_TOOLS.has(name)).toBe(true)
   })
 
-  it('refuses a paired device at every one of the four', async () => {
+  it('refuses a paired device at every one of the five', async () => {
     const deck = control()
     const calls: [string, Record<string, unknown>][] = [
       ['assets.rendition', { url: 'https://x.test/a.jpg' }],
       ['assets.ledger', { runId: 'r', op: 'summary' }],
+      /*
+       * `assets.fetch` most of all. It writes files into a folder on this
+       * machine, out of this machine's own cookie jar; the device that would be
+       * calling it is on the far side of a relay and has neither.
+       */
+      ['assets.fetch', { runId: 'r', dir: '/tmp/x', urls: ['https://x.test/a.jpg'] }],
       ['assets.coverage', { runId: 'r', op: 'summary' }],
       ['assets.blocks', {}],
     ]
@@ -318,6 +382,133 @@ describe('assets.coverage', () => {
     const summary = await call(control(), 'assets.coverage', { runId: 'quiet', op: 'summary' })
     expect(summary.value).toMatchObject({ ok: false })
     expect((summary.value as { line: string }).line).toContain('No coverage check was made')
+  })
+})
+
+describe('assets.fetch', () => {
+  const url = (): string => `${origin}/plan.jpg`
+
+  it('writes the file, byte for byte, and records it in the run ledger', async () => {
+    const deck = control()
+    const answer = await call(deck, 'assets.fetch', {
+      runId: 'portal',
+      dir: files,
+      urls: [url()],
+    })
+
+    expect(answer.ok).toBe(true)
+    const value = answer.value as {
+      empty: boolean
+      tally: { fetched: number; failed: number }
+      results: { outcome: string; path: string; digest: string; fetchedUrl: string }[]
+    }
+    expect(value.tally).toMatchObject({ fetched: 1, failed: 0 })
+    expect(value.empty).toBe(false)
+    expect(value.results[0].outcome).toBe('fetched')
+    expect(value.results[0].fetchedUrl).toBe(url())
+    // The bytes, not "about the right size".
+    expect(readFileSync(value.results[0].path).equals(ASSET)).toBe(true)
+    expect(value.results[0].digest).toBe(digestOf(ASSET))
+    expect(readdirSync(files)).toEqual(['plan.jpg'])
+
+    // And the second call is a skip, off the same ledger, without a request.
+    const again = await call(deck, 'assets.fetch', { runId: 'portal', dir: files, urls: [url()] })
+    const second = again.value as { empty: boolean; emptyReason: string; tally: { skipped: number } }
+    expect(second.tally.skipped).toBe(1)
+    /*
+     * It produced nothing, and the reason says which kind of nothing. This is
+     * `empty-result.ts`'s shape rather than a second one invented here: a run
+     * that had nothing to do and a run that got nothing are the same boolean and
+     * opposite facts.
+     */
+    expect(second.empty).toBe(true)
+    expect(second.emptyReason).toContain('already on')
+    expect(second.emptyReason).toContain('refetch')
+  })
+
+  it('does not report a batch that fetched nothing as an ordinary empty answer', async () => {
+    const answer = await call(control(), 'assets.fetch', {
+      runId: 'portal',
+      dir: files,
+      urls: [`${origin}/missing.jpg`],
+    })
+    const value = answer.value as { empty: boolean; emptyReason: string; tally: { failed: number } }
+    expect(value.tally.failed).toBe(1)
+    expect(value.empty).toBe(true)
+    expect(value.emptyReason).toContain('not an empty result')
+    expect(readdirSync(files)).toEqual([])
+  })
+
+  it('refuses a relative folder rather than writing sixty thousand files somewhere nobody chose', async () => {
+    const answer = await call(control(), 'assets.fetch', {
+      runId: 'portal',
+      dir: 'downloads',
+      urls: [url()],
+    })
+    expect(answer.ok).toBe(false)
+    expect(answer.error).toContain('absolute')
+  })
+
+  it('refuses anything that is not an http address', async () => {
+    for (const bad of ['file:///etc/passwd', 'data:image/png;base64,AAAA', 'javascript:1']) {
+      const answer = await call(control(), 'assets.fetch', { runId: 'p', dir: files, urls: [bad] })
+      expect(answer.ok).toBe(false)
+      expect(answer.error).toContain('http')
+    }
+  })
+
+  it('refuses an empty list rather than reporting a clean run over nothing', async () => {
+    const answer = await call(control(), 'assets.fetch', { runId: 'p', dir: files, urls: [] })
+    expect(answer.ok).toBe(false)
+    expect(answer.error).toContain('nothing to fetch')
+  })
+
+  it('refuses a profile that is not a profile, instead of fetching without cookies', async () => {
+    /*
+     * The failure that succeeds. A cookie-less fetch of a signed URL comes back
+     * `200` with the logged-out copy, which lands on disk and reports success —
+     * so this has to be a refusal at the door and not a fall-through.
+     */
+    const answer = await call(control(), 'assets.fetch', {
+      runId: 'p',
+      dir: files,
+      urls: [url()],
+      profileId: '../../etc',
+    })
+    expect(answer.ok).toBe(false)
+    expect(answer.refusal).toBe('not-permitted')
+    expect(answer.error).toContain('not a profile')
+    expect(askedAs).toEqual([])
+  })
+
+  it('fetches out of the profile it was given', async () => {
+    await call(control(), 'assets.fetch', {
+      runId: 'p',
+      dir: files,
+      urls: [url()],
+      profileId: 'default',
+    })
+    expect(askedAs).toContain('default')
+  })
+
+  it('keeps the presigned signature out of the log', async () => {
+    const deck = control()
+    await call(deck, 'assets.fetch', {
+      runId: 'p',
+      dir: files,
+      urls: [`${origin}/plan.jpg?X-Amz-Signature=deadbeef&keep=this`],
+    })
+    const written = readFileSync(join(logDir, 'actions.jsonl'), 'utf8')
+    expect(written).not.toContain('deadbeef')
+    expect(written).toContain('keep=this')
+  })
+
+  it('is refused for a caller that may read but not act', async () => {
+    const answer = await call(control(), 'assets.fetch', { runId: 'p', dir: files, urls: [url()] }, {
+      kind: 'local',
+      tiers: { read: true, act: false, alter: false },
+    })
+    expect(answer.ok).toBe(false)
   })
 })
 

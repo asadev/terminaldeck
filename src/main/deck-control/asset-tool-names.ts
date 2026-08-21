@@ -5,7 +5,7 @@
  * this list to put on a session's allow-list, and `session-tools.ts` is loaded
  * on the launch path of every session in the app. Importing it out of
  * `asset-tools.ts` would drag `catalogue.ts` — and through it the binding, the
- * fleet diff and half the surface — into that path to read eight strings.
+ * fleet diff and half the surface — into that path to read ten strings.
  *
  * Both spellings of each, because the wire name and the dotted id are two names
  * for one tool and a caller picks which to send. `server.ts` gates `tools/list`
@@ -17,6 +17,8 @@ export const ASSET_TOOL_NAMES: readonly string[] = Object.freeze([
   'assets_rendition',
   'assets.ledger',
   'assets_ledger',
+  'assets.fetch',
+  'assets_fetch',
   'assets.coverage',
   'assets_coverage',
   'assets.blocks',

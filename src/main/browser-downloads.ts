@@ -12,6 +12,7 @@ import {
 } from 'electron'
 import { BRAND } from '../shared/brand'
 import { digestFile } from './browser-asset-digest'
+import { downloadName, freeDownloadPath } from './browser-download-names'
 
 /**
  * Downloads in the built-in browser: fetching a file, listing it, and — when the
@@ -109,7 +110,6 @@ export interface DownloadDestination {
  * set on the wire, one layer out.
  */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
-const CONTROL_CHARS_G = /[\u0000-\u001f\u007f]/g
 
 /** Every state a row can be in. Five, and each of them is drawn differently. */
 export type DownloadState =
@@ -391,63 +391,15 @@ function save(): void {
 /* ------------------------------------------------------------------ names -- */
 
 /**
- * One path component, safe on both platforms, never empty.
+ * The naming rules live in `browser-download-names.ts` and are re-exported here.
  *
- * Deliberately not `safeName` from `remote/uploads.ts`: that one is about a name
- * off a network and this one is about a name off an HTTP header. The failure
- * they prevent is the same, so if either grows a case the other should be read
- * at the same time.
- *
- * `Content-Disposition` is attacker input. `../../.ssh/authorized_keys` is a
- * perfectly valid string for it, which is why the separators go before anything
- * else does.
+ * They moved when `browser-asset-fetch.ts` arrived, because that is a second
+ * place where bytes come off a socket and land in a folder, and it needs the
+ * same answer to *"is `../../.ssh/authorized_keys` a filename"*. Re-exported
+ * rather than merely moved, so every caller that already imported them from
+ * this module — and the tests that assert the rules — is unchanged.
  */
-export function downloadName(suggested: string): string {
-  const flat = suggested
-    .replace(CONTROL_CHARS_G, '')
-    .replace(/[\\/]/g, ' ')
-    // Reserved on Windows, and meaningless in a filename on either platform.
-    .replace(/[:*?"<>|]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    // A leading dot hides the file on Unix; a trailing dot or space is silently
-    // dropped by Windows, which turns "a." and "a" into the same file. Spaces
-    // go with the dots at the front, or `../../x` — whose separators became
-    // spaces two lines up — would come out with one still leading.
-    .replace(/^[. ]+/, '')
-    .replace(/[. ]+$/, '')
-  if (flat === '') return 'download'
-  return flat.length > 120 ? flat.slice(0, 120) : flat
-}
-
-/**
- * A path in `dir` that nothing is using, given the name the server suggested.
- *
- * `report.pdf`, then `report (2).pdf` — Chrome's own rule, and the same shape
- * `attach-bring-in.ts` uses one folder over.
- *
- * Exported, and taking its own `exists`, so the rule can be tested without a
- * disk: it is the one piece of this module a mistake in would overwrite
- * somebody's file.
- */
-export function freeDownloadPath(
-  dir: string,
-  suggested: string,
-  exists: (path: string) => boolean,
-  taken: ReadonlySet<string> = new Set(),
-): string {
-  const name = downloadName(suggested)
-  const dot = name.lastIndexOf('.')
-  const stem = dot > 0 ? name.slice(0, dot) : name
-  const extension = dot > 0 ? name.slice(dot) : ''
-  for (let n = 1; n <= MAX_DOWNLOAD_ROWS; n += 1) {
-    const candidate = join(dir, n === 1 ? name : `${stem} (${n})${extension}`)
-    if (!exists(candidate) && !taken.has(candidate)) return candidate
-  }
-  // Every ordinary variant is taken. A stamped name always terminates, and a
-  // download that lands under an ugly name is better than one that is refused.
-  return join(dir, `${stem} (${Date.now()})${extension}`)
-}
+export { downloadName, freeDownloadPath, MAX_NAME_VARIANTS } from './browser-download-names'
 
 /**
  * The folder a fetch goes into.
