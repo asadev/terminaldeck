@@ -87,7 +87,7 @@ import {
   toCopilotSessions,
   watchRunChat,
 } from './remote/copilot-wiring'
-import { registerMachinesIpc } from './remote/machines/ipc'
+import { registerMachinesIpc, type MachinesIpc } from './remote/machines/ipc'
 import { registerServersIpc, type ServersIpc } from './servers/ipc'
 import { registerServerReachIpc, type ServerReachIpc } from './servers/reach'
 import { ServerStore } from './servers/store'
@@ -162,6 +162,7 @@ import { appendCopilotAction, copilotPaths } from './copilot-home'
 import { COPILOT_HOME_SETTING, registerCopilotFolderIpc } from './copilot-folder'
 import { registerCopilotInspectIpc } from './copilot-inspect'
 import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
+import { createSessionTools, type SessionTools } from './deck-control/session-tools'
 import { registerDeckignoreIpc } from './deckignore'
 import { defaultContext, registerHooksIpc, syncInstalledHooks } from './hooks'
 import { hookConfigPath, registerHookServer, stopHookServer } from './hook-server'
@@ -367,22 +368,73 @@ function send(channel: string, ...args: unknown[]): boolean {
  * a push about browser windows would be a push about windows that no longer
  * exist.
  */
+/**
+ * Which machine a session is running on, in the vocabulary the binding key uses:
+ * `''` for this computer, a machine id for a paired device, a server id for a
+ * shell on a server — and `null` for an id this app has never started.
+ *
+ * ## Why one function rather than three checks at each call site
+ *
+ * Two different questions used to be answered by the same wrong assumption.
+ * `knowsSession` asked *"is this one of ours"* of the local `PtyManager` alone,
+ * so a session on his PC was never known, `resolve` took its
+ * `known === false` branch and answered `system`, and the URL went to this Mac's
+ * Chrome — which is the behaviour he filmed and called his biggest problem:
+ *
+ *   > *"If I tell a remote session to open a browser, they open the browser
+ *   > inside wherever they are actually in the main machine, not in here in this
+ *   > one."*
+ *
+ * And every caller that could not name a machine wrote `''`, which does not mean
+ * "unknown" — it means "this computer" — so a window opened for a remote
+ * session was filed under a key that session can never name.
+ *
+ * Both are the same missing fact, so it is looked up once, here, where all three
+ * registries are in scope. The order is the order of authority: a pty this
+ * process spawned is this machine's by construction, and only then are the two
+ * remote registries asked. An id that two machines minted alike resolves to the
+ * local one, which is the conservative direction — the local answer is the one
+ * this process can verify.
+ */
+function machineOfSession(sessionId: string): string | null {
+  if (sessionId === '') return null
+  if (ptys.list().some((meta) => meta.id === sessionId)) return ''
+  for (const link of machinesIpc?.view().links ?? []) {
+    if (link.sessions.some((session) => session.id === sessionId)) return link.id
+  }
+  return servers?.serverOfShell(sessionId) ?? null
+}
+
 const bindingDeps = {
   send: (channel: string, payload: unknown): void => {
     send(channel, payload)
   },
   window: (): BrowserWindow | null => mainWindow,
   /*
-   * A session this app started, exited ones included.
+   * A session this app started, exited ones included — **on the machine the
+   * caller named**.
    *
-   * `ptys.list()` rather than a live-only check: a session whose process has
-   * ended keeps its tab, its scrollback and its browser windows, and a URL can
-   * still arrive from something it left running. What this excludes is the case
-   * that matters — an id from a shell this app never started, whose hook fires
-   * anyway because the hook is installed for the whole machine.
+   * `ptys.list()` rather than a live-only check, inside {@link machineOfSession}:
+   * a session whose process has ended keeps its tab, its scrollback and its
+   * browser windows, and a URL can still arrive from something it left running.
+   * What this excludes is the case that matters — an id from a shell this app
+   * never started, whose hook fires anyway because the hook is installed for the
+   * whole machine.
+   *
+   * The machine is compared rather than ignored, which it was until this round.
+   * Ignoring it meant a session on a paired device was never known, so `resolve`
+   * refused to mint it a window and every URL it opened went to this Mac's own
+   * browser. Comparing it also closes the other direction: an id that happens to
+   * match a local pty cannot be claimed by a caller naming somebody else's
+   * machine.
    */
-  knowsSession: (sessionId: string): boolean =>
-    ptys.list().some((meta) => meta.id === sessionId),
+  knowsSession: (sessionId: string, machineId: string): boolean =>
+    machineOfSession(sessionId) === machineId,
+  /*
+   * The same lookup, for the callers that were handed a session and no machine.
+   * See {@link BindingIpcDeps.machineOfSession}.
+   */
+  machineOfSession,
   /*
    * Disconnecting a window ends whatever the copilot was doing in it.
    *
@@ -461,6 +513,15 @@ let copilotRuns: CopilotRuns | null = null
 let deckControl: DeckControlHandle | null = null
 
 /**
+ * The per-session tool tokens, once there is an endpoint to mint them against.
+ *
+ * Null until `deck-control` comes up, and null forever in a run where it did
+ * not: a session is then launched with no `--mcp-config` of ours and simply has
+ * the tools it always had. See `deck-control/session-tools.ts`.
+ */
+let sessionTools: SessionTools | null = null
+
+/**
  * The server room, once the window has been built.
  *
  * At module scope for the same reason `copilotRuns` is: `before-quit` has to be
@@ -471,6 +532,17 @@ let deckControl: DeckControlHandle | null = null
  * app is *running*, and there is no reason to abandon it on the way out.
  */
 let servers: ServersIpc | null = null
+
+/**
+ * The paired-device half of Machines, for the one question asked outside its
+ * own panel: which machine is a given session running on.
+ *
+ * At module scope for the reason `servers` above it is — `bindingDeps` is built
+ * here, before `registerIpc` has assembled anything — and read through the
+ * variable rather than captured, so a build with no remote layer answers "not a
+ * session I know" instead of throwing.
+ */
+let machinesIpc: MachinesIpc | null = null
 
 /**
  * The listeners this machine holds on a server's behalf, so they go on quit.
@@ -532,6 +604,16 @@ export const WSL_DISTRO_KEY = 'wsl.distro'
 const core = createHostCore({
   storageDir: remoteStorageDir(),
   userData: app.getPath('userData'),
+  /*
+   * The browser verbs, on every session's own command line — *"driving other
+   * browsers should be for all of the sessions."*
+   *
+   * Read through the variable rather than captured, because this object is
+   * built at module scope and the endpoint comes up a few hundred milliseconds
+   * later. A session started in that window is launched without them, which is
+   * the honest answer and the one this app already gives for the `open` shim.
+   */
+  sessionTools: { prepare: () => sessionTools?.prepare() ?? null },
   /*
    * Where the machine's WSL distribution is remembered.
    *
@@ -620,6 +702,10 @@ const core = createHostCore({
     // The other half of the pair above: this is the app letting go of the
     // session entirely, so its rows go and its binding colour is free again.
     sessionRemoved(id)
+    // And the token that let it drive its own windows. A session that is gone
+    // must not leave a bearer token on the table pointing at a session id
+    // nothing can resolve.
+    sessionTools?.release(id)
     presence.refresh()
     send(SESSION_REMOVED_CHANNEL, id)
   },
@@ -1887,7 +1973,7 @@ function registerIpc(): void {
   // It shares the pairing desk with the host half above, because there is one
   // code on screen at a time whether a phone or a second desktop is about to
   // read it.
-  const machines = registerMachinesIpc(ipcMain, {
+  machinesIpc = registerMachinesIpc(ipcMain, {
     storageDir: remoteStorageDir(),
     desk: remote.desk,
     status: () => remote.server.status(),
@@ -2009,7 +2095,7 @@ function registerIpc(): void {
     // A guest link that slept through a suspend is as dead as a host one, and
     // for the same reason: TCP will not admit it for minutes. One event, both
     // halves.
-    machines.wake()
+    machinesIpc?.wake()
     /*
      * And a schedule that came due while the lid was shut.
      *
@@ -3157,6 +3243,18 @@ app.whenReady().then(() => {
      * on a link in a terminal makes, which is what stops the two entrances
      * drifting apart.
      */
+    /*
+     * No machine is named, and that is the request rather than an omission.
+     *
+     * The shim that made this call was written by *this* app instance into
+     * *this* machine's data directory and put on the PATH of sessions this
+     * instance spawned, so an id arriving here belongs to a pty on this
+     * computer — or to nothing at all. Writing `machineId: ''` would say the
+     * same thing, and would say it in a way that survives a session on his PC
+     * arriving here one day through some other door. Leaving it out asks
+     * `machineOfSession`, which answers `''` for a local pty and the right
+     * machine for anything else. See `openForSession`.
+     */
     onOpen: ({ url, sessionId }) => openForSession(bindingDeps, { url, sessionId }),
     /*
      * What the agent is told at the start of its turn, so that it knows where it
@@ -3199,9 +3297,9 @@ app.whenReady().then(() => {
       MID_TURN_EVENTS.has(event)
         ? sessionId === null
           ? null
-          : takeAnnouncement(sessionId)
-        : hookContext(sessionId, '', {
-            known: sessionId !== null && bindingDeps.knowsSession(sessionId),
+          : takeAnnouncement(sessionId, machineOfSession(sessionId) ?? '')
+        : hookContext(sessionId, sessionId === null ? '' : (machineOfSession(sessionId) ?? ''), {
+            known: sessionId !== null && machineOfSession(sessionId) !== null,
             opensInApp: currentOpenShim() !== null,
           }),
   })
@@ -3329,6 +3427,17 @@ app.whenReady().then(() => {
   })
     .then((handle) => {
       deckControl = handle
+      /*
+       * And the per-session half of the same endpoint.
+       *
+       * Its own directory under `<userData>` rather than the copilot's folder:
+       * the copilot's is a folder a person opens and reads, and one directory
+       * per session in it would be a pile of machinery in the middle of their
+       * files. Everything in here is a secret with a lifetime of one session.
+       */
+      sessionTools = createSessionTools(handle.endpoint, {
+        dir: join(app.getPath('userData'), 'session-tools'),
+      })
     })
     .catch((err) => console.error('[deck-control] failed to start, copilot tools disabled:', err))
   /*
@@ -3642,6 +3751,16 @@ app.on('before-quit', (event) => {
    */
   servers?.stop()
   serverReach?.stop()
+  /*
+   * Every token minted for a session, and the file holding it.
+   *
+   * Here and not in `goBackground`, deliberately. Closing the last window on
+   * macOS leaves every session running — that is the whole point of that
+   * function — and a session whose token had been revoked underneath it would
+   * lose its browser verbs the first time he closed the window, with nothing on
+   * screen to say why.
+   */
+  sessionTools?.stop()
   updates?.stop()
   lidAwake?.stop()
   void stopHookServer()

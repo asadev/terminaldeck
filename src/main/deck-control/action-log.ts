@@ -220,7 +220,7 @@ export interface ActionRow {
    * a reader can tell "before the field existed" from "local". A row with no
    * `caller` is a row from an older build, not a local call.
    */
-  caller?: { kind: 'local' | 'remote'; deviceId?: string }
+  caller?: { kind: 'local' | 'remote' | 'session'; deviceId?: string }
   /** Wall-clock duration of the call, including any time spent waiting on a human. */
   ms: number
   /**

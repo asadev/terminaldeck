@@ -261,6 +261,34 @@ describe('when it lets go', () => {
     expect(await call('servers:shell:write', opened.shellId, 'ls\n')).toEqual({ written: false })
   })
 
+  it('says which server a shell is on, so a browser window can be bound to it', async () => {
+    /*
+     * A shell on a server is a *session* to the session↔browser map, which keys
+     * its bindings `<machineId>\0<sessionId>` with the server standing in for
+     * the machine. Nothing outside this file can answer which server a shell is
+     * on — the id happens to begin with the server's, and a reader that split on
+     * the space would be one server name with a space in it away from binding a
+     * window to a machine that does not exist.
+     */
+    const shell: ServerShell = {
+      onData: () => () => undefined,
+      onClose: () => () => undefined,
+      write: () => undefined,
+      resize: () => undefined,
+      close: () => undefined,
+    }
+    const { ipc, call } = harness({ openShell: async () => shell })
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
+
+    expect(ipc.serverOfShell(opened.shellId)).toBe('s1')
+    expect(ipc.serverOfShell('nothing this app opened')).toBeNull()
+
+    // And it stops answering the moment the shell is gone, rather than pointing
+    // a binding at a channel that has been closed.
+    await call('servers:shell:close', opened.shellId)
+    expect(ipc.serverOfShell(opened.shellId)).toBeNull()
+  })
+
   it('says so plainly on a build with no terminal, rather than drawing one that does nothing', async () => {
     const { call } = harness({ openShell: undefined })
     expect(await call('servers:shell:open', 's1', 100, 40)).toMatchObject({

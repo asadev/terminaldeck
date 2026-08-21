@@ -113,9 +113,15 @@ export class GrantRefused extends Error {
   }
 }
 
-/** Who is asking for the grant. Mirrors `Caller.kind` in `deck-control/surface.ts`. */
+/**
+ * Who is asking for the grant. Mirrors `Caller.kind` in `deck-control/surface.ts`.
+ *
+ * `session` is here so the two types stay assignable, and for no other reason:
+ * `servers/tools.ts` refuses every one of its tools for a caller that is not
+ * `local`, so an ordinary session never reaches a grant question at all.
+ */
 export interface GrantAsker {
-  kind: 'local' | 'remote'
+  kind: 'local' | 'remote' | 'session'
 }
 
 export interface ServerGrantsOptions {

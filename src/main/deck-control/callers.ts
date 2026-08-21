@@ -86,6 +86,44 @@ export interface TokenGrant {
    */
   caller(): Caller
   /**
+   * The only tool ids this token may see or call, or absent for the whole
+   * catalogue.
+   *
+   * ## Why the list travels with the token
+   *
+   * Asad said two things on one page of the 2026-08-21 review that pull in
+   * opposite directions, and both are requirements:
+   *
+   *   > *"driving other browsers should be for all of the sessions, regardless
+   *   > of even they are Commander, they are not Commander, they are from remote
+   *   > channel, they are from server."*
+   *
+   *   > *"Driving tool is only for commanders, and it should not be with for the
+   *   > other sessions, and they should not be able to find it also."*
+   *
+   * So an ordinary session gets the browser verbs and must not get — or be able
+   * to *discover* — `sessions.start`, `sessions.send`, `report` or `brief`. A
+   * tier cannot express that: those tools sit at the same tiers the browser ones
+   * do. A per-tool gate written inside each tool could, and would be twenty
+   * places to keep in step, with the one that gets forgotten being the one
+   * nobody is looking at.
+   *
+   * So it is a positive list, carried by the same thing that already carries who
+   * the caller is, and enforced in the one place every token-bearing call passes
+   * through — `createMcpServer` in `server.ts`, at both `tools/list` and
+   * `tools/call`. Listing and calling are gated by the same set on purpose: a
+   * tool that were merely hidden would still answer if its name were guessed,
+   * and "should not be able to find it" is a weaker property than "cannot use
+   * it", not a stronger one.
+   *
+   * Both ids and wire names are accepted in the set, so a caller cannot get past
+   * it by spelling `sessions.send` the other way. See `sessionToolAllowList`.
+   *
+   * Absent means the whole catalogue, which is what the copilot, the routine
+   * runner and a granted device have always had.
+   */
+  tools?: ReadonlySet<string>
+  /**
    * Aborted when whoever this token belongs to goes away.
    *
    * Handed to `DeckControl.call`, which hands it to the consent broker, which

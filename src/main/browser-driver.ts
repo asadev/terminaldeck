@@ -323,7 +323,21 @@ export interface DriveHost {
   openForSession?(input: {
     url: string
     sessionId: string
-    machineId: string
+    /** Ask for a window of its own rather than the one it already holds. */
+    newWindow?: boolean
+    /**
+     * Which machine that session is on, when the caller knows.
+     *
+     * Left out by a caller that does not, which is the ordinary case here: a
+     * tool is handed a session id by a model and has no way to know where it
+     * runs. The wiring in `src/main/index.ts` resolves it — see
+     * `BindingIpcDeps.machineOfSession`. It used to be a required field that
+     * `browser-tools.ts` filled with the empty string, which is not "unknown"
+     * but a claim that the session is on this computer, and it made every
+     * window opened for a session on a paired device unreachable by the session
+     * it was opened for.
+     */
+    machineId?: string
   }): Promise<{ line: string; attached: boolean }>
   /**
    * Close a browser window the person can see, by its shell tab id.
@@ -836,7 +850,8 @@ export class BrowserDrive {
   async openForSession(input: {
     url: string
     sessionId: string
-    machineId: string
+    newWindow?: boolean
+    machineId?: string
   }): Promise<{ line: string; attached: boolean }> {
     if (!this.host.openForSession) {
       throw new DriveRefused('this build cannot open a window for a session')

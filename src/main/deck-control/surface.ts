@@ -108,10 +108,49 @@ export const ALL_TIERS: TierGrant = Object.freeze({ read: true, act: true, alter
  * one, and constructing one means answering the tier question.
  */
 export interface Caller {
-  /** `local` is the copilot session on this machine. `remote` came over the relay. */
-  kind: 'local' | 'remote'
+  /**
+   * `local` is the copilot session on this machine. `remote` came over the
+   * relay. `session` is an ordinary session in this app — one of the rows in
+   * the sidebar — calling about **its own** browser windows.
+   *
+   * ## Why a third kind rather than a flag on `local`
+   *
+   * Because every gate in this codebase is written `caller.kind !== 'local'`,
+   * and a third kind is refused by all of them without a line being changed.
+   * That is the direction the default has to fall: an ordinary session must not
+   * inherit the copilot's reach over the app — Asad on the same page of the same
+   * review, about driving *sessions*:
+   *
+   *   > *"Driving tool is only for commanders, and it should not be with for the
+   *   > other sessions, and they should not be able to find it also."*
+   *
+   * What a session does get is the browser half, and it gets it by being named
+   * on an allow-list carried by its own token (`callers.ts`) — a positive list
+   * of tool ids, not an exemption from a check. So the two halves of what he
+   * asked for on that page cannot loosen each other: opening browser driving to
+   * every session (T29) adds ids to one list, and session-driving (T28) is not
+   * on it and is not listable.
+   */
+  kind: 'local' | 'remote' | 'session'
   /** The paired device, when the call came from one. Recorded in the action log. */
   deviceId?: string
+  /**
+   * Which session is calling, for `kind: 'session'`, and the machine it runs on
+   * — `''` for this computer, a machine id for a paired device, a server id for
+   * a shell on a server. The same pair `browser-binding.ts` keys its map with.
+   *
+   * It is the *whole* of what such a caller may act on. A session names a window
+   * by its slot (`B1`), the slot is resolved inside that session's own binding,
+   * and a window belonging to the session next door is not found — which is the
+   * argument `windowNamed` already makes for the copilot, applied to a caller
+   * that cannot even name another session.
+   *
+   * Absent means there is no session behind this token yet: a token is
+   * registered a moment before the pty is created, so that a CLI which calls a
+   * tool in its first breath is refused rather than attributed to nothing.
+   */
+  sessionId?: string
+  machineId?: string
   /** Which tiers this caller may reach. */
   tiers: TierGrant
 }

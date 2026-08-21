@@ -209,7 +209,23 @@ export function RemoteTerminal({
    * object and listing it below would detach and re-attach this session — a
    * round trip to another machine — on every keystroke into the find field.
    */
-  const { attach: attachFind, bar: findBar } = useTerminalFind()
+  /*
+   * With this session's identity, which it was called without.
+   *
+   * `TerminalView` passes `{ sessionId }` and this passed nothing, so a URL
+   * clicked in a session on another machine reached the main process as a bare
+   * address: `resolve(null, …)` answered `system` and `link:open` handed it to
+   * `shell.openExternal` — Chrome on **this** Mac. Asad, on the same
+   * behaviour arriving from the other entrance:
+   *
+   *   > *"as soon as I tell them open a browser, they just directly go inside my
+   *   > PC and they opens."*
+   *
+   * Both halves are needed and neither is optional here. The binding is keyed
+   * `<machineId>\0<sessionId>`, so a session on his PC carrying only its id
+   * would be looked up under this computer's key and found to be nobody's.
+   */
+  const { attach: attachFind, bar: findBar } = useTerminalFind({ sessionId, machineId })
 
   useEffect(() => {
     const host = hostRef.current

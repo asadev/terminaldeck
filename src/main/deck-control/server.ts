@@ -262,18 +262,41 @@ function toolResult(value: unknown, error: string | null): {
  * that decision differently would be a second gate to keep in step with the
  * first.
  */
+/**
+ * What the client is told this server is *for*, which has to match what this
+ * token can actually reach.
+ *
+ * The full sentence describes sessions, projects, git state, alerts and
+ * settings. Handing that to an ordinary session — which holds a token that can
+ * reach the browser verbs and nothing else — would be a paragraph in every one
+ * of that session's turns describing tools it does not have and cannot list, and
+ * a model that believed it would spend a turn discovering otherwise. A tool
+ * surface and its own description are the same fact said twice, and the two must
+ * not be able to disagree.
+ */
+function instructionsFor(grant: TokenGrant): string {
+  if (grant.tools !== undefined) {
+    return (
+      `Browser windows in ${BRAND.name}. A window attached to this session is named B1, B2 — open one with ` +
+      'browser_open, then browser_read to see what is on it and browser_step to act on it. You can only ' +
+      'reach windows attached to this session; being attached is the whole of the permission, and it lasts ' +
+      'until the person disconnects it. The first change on a public website is put to them as a ' +
+      'confirmation. Every call you make here is written to the action log they can read.'
+    )
+  }
+  return (
+    `Tools for seeing and driving ${BRAND.name} itself: the sessions running in it, the projects it has ` +
+    'open, their git state, its alerts and its settings. Reading is always allowed. Starting a session or ' +
+    'typing into one you started is allowed and recorded. Changing a setting, or acting on a session the ' +
+    'person started, is put to them as a confirmation first and refused if they do not answer. Every call ' +
+    'you make here is written to the action log they can read.'
+  )
+}
+
 export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_ATTENDED): Server {
   const server = new Server(
     { name: SERVER_NAME, version: '1.0.0' },
-    {
-      capabilities: { tools: {} },
-      instructions:
-        `Tools for seeing and driving ${BRAND.name} itself: the sessions running in it, the projects it has ` +
-        'open, their git state, its alerts and its settings. Reading is always allowed. Starting a session or ' +
-        'typing into one you started is allowed and recorded. Changing a setting, or acting on a session the ' +
-        'person started, is put to them as a confirmation first and refused if they do not answer. Every call ' +
-        'you make here is written to the action log they can read.',
-    },
+    { capabilities: { tools: {} }, instructions: instructionsFor(grant) },
   )
 
   /*
@@ -284,11 +307,42 @@ export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_
    * pinned against a listing that is not the one the model receives. One
    * function, used by the transport and by the measurement.
    */
+  /**
+   * Which of the catalogue this token may see and call.
+   *
+   * One predicate for both handlers, because listing and calling have to answer
+   * the same question. A tool that were merely hidden from the list would still
+   * run for a caller that guessed its name — and the requirement here is *"they
+   * should not be able to find it also"*, which is the weaker half of "may not
+   * use it", not a replacement for it.
+   *
+   * Both spellings are checked because the wire name and the dotted id are two
+   * spellings of one tool and a caller chooses which to send.
+   */
+  const allowed = (spec: { id: string; wire: string }): boolean =>
+    grant.tools === undefined || grant.tools.has(spec.id) || grant.tools.has(spec.wire)
+
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: control.tools().map(advertiseTool),
+    tools: control.tools().filter(allowed).map(advertiseTool),
   }))
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    /*
+     * The allow-list, before the dispatcher and before the name is resolved
+     * against anything.
+     *
+     * Ahead of `control.call` deliberately: a refusal that came back out of the
+     * dispatcher would have written a row into the action log naming a tool this
+     * caller is not supposed to know exists, and would have said in its sentence
+     * which one. What it gets instead is the answer an unknown name gets, which
+     * is the same answer `windowNamed` gives for a window belonging to somebody
+     * else and for the same reason — the difference between "no such tool" and
+     * "not for you" is exactly what must not be learnable by trying.
+     */
+    const name = request.params.name
+    if (grant.tools !== undefined && !grant.tools.has(name)) {
+      return toolResult(null, `no tool called ${name}`)
+    }
     /*
      * Everything about *who this is* comes from which token the request carried,
      * and from nothing else the caller can influence.

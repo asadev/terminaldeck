@@ -1104,6 +1104,36 @@ function Workspace() {
   }, [linkedMachineSessions])
 
   /**
+   * The far end's id for each open server shell, by tab id.
+   *
+   * ## Why the window has to hold this at all
+   *
+   * Because the bar over a server terminal now carries the same model, effort
+   * and fast-mode cluster every other session gets — *"I don't see it in server
+   * sessions and in the remote sessions both"* — and that cluster addresses a
+   * server shell by the id the main process holds its SSH channel under. That id
+   * is minted on the far side of `servers:shell:open`, which only `ServerTerminal`
+   * calls, so until it was reported upwards it lived and died inside that
+   * component's effect.
+   *
+   * It is deliberately *not* `ServerSession.shellKey`. The key is this window's
+   * handle, minted before anything is opened so a tab can exist while the shell
+   * is still being asked for; this is the handle the channel actually has. Two
+   * ids for one shell is not a design anybody would choose, but the alternative
+   * — waiting for the far end before drawing a tab — is a tab that appears a
+   * second after the click that made it.
+   *
+   * Absent while a shell is opening, which is the honest state: there is nothing
+   * to read a screen off yet, and the cluster simply has no session id until
+   * there is.
+   */
+  const [serverShellIds, setServerShellIds] = useState<Record<string, string>>({})
+
+  const serverShellOpened = useCallback((tabId: string, shellId: string) => {
+    setServerShellIds((current) => (current[tabId] === shellId ? current : { ...current, [tabId]: shellId }))
+  }, [])
+
+  /**
    * The shells open on servers, as tabs.
    *
    * A third list for the same reason `machineTabs` is a second one: `tabs` is
@@ -1117,7 +1147,7 @@ function Workspace() {
    * Built by `serverTabs` rather than here so that what a server tab *is* can be
    * asserted without a window around it.
    */
-  const serverSessionTabs: WorkspaceTab[] = serverTabs(serverSessions)
+  const serverSessionTabs: WorkspaceTab[] = serverTabs(serverSessions, serverShellIds)
 
   /**
    * Everything the strip and the rail list — this window's, the machines' and
@@ -2135,7 +2165,7 @@ function Workspace() {
    * bar rather than a second path that could drift from it.
    */
   const newBrowserTab = useCallback(
-    (target?: string) => {
+    (target?: string, hostMachineId?: string) => {
       /*
        * Only a string is an address, and this is the boundary that says so.
        *
@@ -2175,7 +2205,26 @@ function Workspace() {
        */
       tabSeq.current += 1
       const id = `browser:${Date.now()}:${tabSeq.current}`
-      setExtraTabs((prev) => [...prev, { id, kind: 'browser', label: 'New tab', closable: true, url }])
+      setExtraTabs((prev) => [
+        ...prev,
+        {
+          id,
+          kind: 'browser',
+          label: 'New tab',
+          closable: true,
+          url,
+          /*
+           * Which machine's network this page belongs on, when a session on
+           * another machine is what asked for it.
+           *
+           * Spread conditionally, because absent and empty have to be the same
+           * thing to every reader — see {@link WorkspaceTab.hostMachineId}.
+           */
+          ...(typeof hostMachineId === 'string' && hostMachineId !== ''
+            ? { hostMachineId }
+            : {}),
+        },
+      ])
       showTab(id)
       /*
        * Started while the window is split: the page belongs in the pane you are
@@ -2461,6 +2510,18 @@ function Workspace() {
     () =>
       window.deck.onOpenLinkTab((request) => {
         const { url, requestId } = request
+        /*
+         * And which machine asked, which this handler used to drop on the floor.
+         *
+         * `LinkTabRequest` has carried a machine id since the binding was built
+         * and nothing downstream of here read it, so a page opened by a session
+         * on his PC arrived as an ordinary tab on this Mac's network — the
+         * localhost it loaded was this computer's. It now travels to the pane,
+         * which points its machine picker there and reaches the address through
+         * that machine's tunnel. The window is still this window: *"keep the
+         * same one browser window for every device."*
+         */
+        const hostMachineId = typeof request.machineId === 'string' ? request.machineId : ''
         if (!features.on('browser')) {
           /*
            * Somebody waiting for an answer is told, rather than having the link
@@ -2482,7 +2543,7 @@ function Workspace() {
           openLinkExternally(url)
           return
         }
-        const tabId = newBrowserTab(url)
+        const tabId = newBrowserTab(url, hostMachineId)
         // Answered in the same handler, synchronously, because the id exists by
         // now and the caller is a process that is blocked. Every request that
         // carries an id is answered on every path through here — an unanswered
@@ -3008,36 +3069,6 @@ function Workspace() {
       delete next[tabId]
       return next
     })
-  }, [])
-
-  /**
-   * The far end's id for each open server shell, by tab id.
-   *
-   * ## Why the window has to hold this at all
-   *
-   * Because the bar over a server terminal now carries the same model, effort
-   * and fast-mode cluster every other session gets — *"I don't see it in server
-   * sessions and in the remote sessions both"* — and that cluster addresses a
-   * server shell by the id the main process holds its SSH channel under. That id
-   * is minted on the far side of `servers:shell:open`, which only `ServerTerminal`
-   * calls, so until it was reported upwards it lived and died inside that
-   * component's effect.
-   *
-   * It is deliberately *not* `ServerSession.shellKey`. The key is this window's
-   * handle, minted before anything is opened so a tab can exist while the shell
-   * is still being asked for; this is the handle the channel actually has. Two
-   * ids for one shell is not a design anybody would choose, but the alternative
-   * — waiting for the far end before drawing a tab — is a tab that appears a
-   * second after the click that made it.
-   *
-   * Absent while a shell is opening, which is the honest state: there is nothing
-   * to read a screen off yet, and the cluster simply has no session id until
-   * there is.
-   */
-  const [serverShellIds, setServerShellIds] = useState<Record<string, string>>({})
-
-  const serverShellOpened = useCallback((tabId: string, shellId: string) => {
-    setServerShellIds((current) => (current[tabId] === shellId ? current : { ...current, [tabId]: shellId }))
   }, [])
 
   /**
@@ -4429,6 +4460,10 @@ function Workspace() {
                       // Where a *link* asked this page to open, when one did.
                       // Empty for the globe, which goes to the start page.
                       initialUrl={pageTab.url}
+                      // And whose network to open it on. Empty for this
+                      // computer, which is every page until a session on
+                      // another machine opens one.
+                      initialMachineId={pageTab.hostMachineId}
                       // Which window this *is*, for the session ↔ browser
                       // binding. Passed at BOTH mount sites, and that is the
                       // point: this one keys the mount `${paneId}:${pageTab.id}`
@@ -5994,6 +6029,8 @@ function Workspace() {
                 // Where a *link* asked this page to open, when one did. Empty
                 // for the globe, which goes to the start page.
                 initialUrl={tab.url}
+                // And whose network to open it on. See the split mount.
+                initialMachineId={tab.hostMachineId}
                 // The other mount site. See the note beside the split one.
                 tabId={tab.id}
                 onStartUrl={(url) => {
