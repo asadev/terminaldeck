@@ -168,6 +168,25 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
+/**
+ * Wait for a row to stop moving, rather than for a number of ticks.
+ *
+ * The cross-machine path ends with a real `fs.unlink`, and two macrotasks was
+ * enough to get past it on this Mac and not on the Windows runner — where the
+ * assertion then read a file that was still one save behind and reported an
+ * empty list as a lost download. A budget with a condition says what the test
+ * is actually waiting for.
+ */
+async function stopsMoving(id: string, budgetMs = 5000): Promise<void> {
+  const until = Date.now() + budgetMs
+  for (;;) {
+    const row = downloadsView().items.find((held) => held.id === id)
+    if (row !== undefined && row.state !== 'downloading' && row.state !== 'delivering') return
+    if (Date.now() > until) throw new Error(`download ${id} never stopped moving`)
+    await settle()
+  }
+}
+
 /* ------------------------------------------------------------------ names -- */
 
 describe('the name a server suggested', () => {
@@ -475,6 +494,7 @@ describe('the list itself', () => {
     deliverAnswer = { ok: true, path: '/srv/a.bin' }
     item.finish('completed')
     await settle()
+    await stopsMoving(downloadsView().items[0].id)
 
     const written = JSON.parse(readFileSync(join(userData, 'browser-downloads.json'), 'utf8')) as {
       destination: { machineId: string }

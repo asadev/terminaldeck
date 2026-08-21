@@ -626,6 +626,18 @@ export function attachDownloads(ses: Session): void {
       message: '',
       startedAt: Date.now(),
     })
+    /*
+     * Written down as soon as it exists, rather than only when it ends.
+     *
+     * Every other branch below saves at its own ending, and the cross-machine
+     * one used to be the single path whose *first* save was after the far
+     * machine had answered and the local copy had been unlinked. Quitting in
+     * the middle of that — which is most of the wall-clock time of a large file
+     * going to another computer — lost every trace that the download had ever
+     * been asked for. `load()` reads a `downloading` row back as a failure,
+     * which is exactly right for a row this save leaves behind.
+     */
+    save()
 
     /*
      * `updated` also fires with `interrupted`, and that is not an ending — the
@@ -654,6 +666,9 @@ export function attachDownloads(ses: Session): void {
       }
       const landed = item.getSavePath() || savePath
       patch(id, { received: item.getReceivedBytes(), bytes: item.getTotalBytes(), path: landed })
+      // The same reason as the save above: the file is on this disk now, and
+      // that is worth knowing even if the delivery after it never returns.
+      save()
       /*
        * The destination is read as it was when the download *started*, not as it
        * is now. Changing where downloads go while one is in flight should decide
