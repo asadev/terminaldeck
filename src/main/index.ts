@@ -208,6 +208,10 @@ import {
 } from './settings-extra'
 import { registerBrowserSessionIpc } from './browser-session'
 import { registerBrowserProfileIpc } from './browser-profiles'
+import { leaseForCaller, registerBrowserWorkerIpc, workerOfView } from './browser-workers-ipc'
+import { releaseWorker, renewWorker, workerList, workerPace, workerStatus } from './browser-workers'
+import { injectionsFor } from './browser-session-lift'
+import { workerTools } from './deck-control/worker-tools'
 import {
   DOWNLOADS_CHANNEL,
   installDownloads,
@@ -1528,6 +1532,51 @@ function browserDriveTools(): ReturnType<typeof browserTools> {
   return drive === null ? [] : browserTools(drive)
 }
 
+/**
+ * The worker verbs, closing over the pool this process holds.
+ *
+ * Handed in rather than imported by `worker-tools.ts` for the reason
+ * `browserTools(drive)` is: the tool file states a surface and this file owns
+ * the wiring, so the whole of that surface is driven from a test with no
+ * Electron in the room.
+ *
+ * There is deliberately **no lift** in this list. The one action that copies a
+ * credential is an `ipcMain` channel behind a button, and `session-tools.ts`
+ * records at length why nothing here may reach it.
+ */
+function browserWorkerTools(): ReturnType<typeof workerTools> {
+  const dir = (): string => app.getPath('userData')
+  return workerTools({
+    /*
+     * The registry and the pool, joined here rather than through
+     * `workersView()`.
+     *
+     * That function also enumerates every `WebContents` in the process to say
+     * which pages are open in each jar, which is exactly right for a panel
+     * somebody opened and wasteful for a tool that is asked several times per
+     * call. The tool never uses the page list; it resolves a *window* through
+     * the binding instead.
+     */
+    list: () => {
+      const status = new Map(workerStatus(dir()).map((row) => [row.profileId, row]))
+      return workerList(dir()).map((worker) => ({
+        profileId: worker.profileId,
+        name: worker.name,
+        partition: worker.partition,
+        busy: status.get(worker.profileId)?.busy ?? false,
+        holder: status.get(worker.profileId)?.holder ?? '',
+        readyInMs: status.get(worker.profileId)?.readyInMs ?? 0,
+      }))
+    },
+    pace: () => workerPace(dir()),
+    workerOfView: (viewId) => workerOfView(viewId),
+    injectionsFor: (partition) => injectionsFor(partition),
+    take: (input) => leaseForCaller(input),
+    release: (input) => releaseWorker(dir(), input),
+    renew: (input) => renewWorker(dir(), input),
+  })
+}
+
 function registerIpc(): void {
   // Installed first so it wraps every handler registered below.
   // Off unless the user turned Debug mode on. Consulted per call rather than
@@ -2570,6 +2619,16 @@ function registerIpc(): void {
   // Profiles first: everything below asks which one is switched on, and
   // `registerBrowserSessionIpc` hardens that profile's session as its first act.
   registerBrowserProfileIpc(ipcMain, () => app.getPath('userData'))
+  /*
+   * Worker profiles and the session lift, immediately after profiles: a
+   * worker *is* a profile, and everything below reads the profile store.
+   *
+   * The lift half of this is the app's only channel that copies a live
+   * credential, and it is an `ipcMain` handler on purpose — reachable from
+   * the window and from nowhere else. `deck-control` gets the two worker
+   * verbs below and no way to lift. See `browser-session-lift.ts`.
+   */
+  registerBrowserWorkerIpc(ipcMain)
 
   /*
    * Downloads in the built-in browser, including the ones bound for a computer
@@ -3622,6 +3681,7 @@ app.whenReady().then(() => {
      */
     extraTools: [
       ...browserDriveTools(),
+      ...browserWorkerTools(),
       ...(servers === null ? [] : serverTools({ room: servers.room, grants: servers.grants })),
     ],
     /*

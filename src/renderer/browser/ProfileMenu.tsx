@@ -40,6 +40,16 @@ interface Props {
   onOpenProfile(profileId: string): void
   /** Reopen this page in the profile that was just switched to. */
   onReopen(): void
+  /**
+   * Open the Workers panel.
+   *
+   * A worker *is* a profile — its own cookie jar, its own storage — so the door
+   * to the pool belongs on the menu that is about profiles rather than in a
+   * corner of its own. Absent where the preload cannot answer about workers, in
+   * which case the row is simply not drawn: a row that opens an empty panel is
+   * the dead control this menu was rebuilt to be rid of.
+   */
+  onOpenWorkers?: () => void
   onClose(): void
 }
 
@@ -134,6 +144,7 @@ export function ProfileMenu({
   onSiteData,
   onOpenProfile,
   onReopen,
+  onOpenWorkers,
   onClose,
 }: Props) {
   const [view, setView] = useState<'profiles' | 'logins'>('profiles')
@@ -485,6 +496,23 @@ export function ProfileMenu({
         ) : (
           <button type="button" className="bw-menu-item" onClick={() => setNaming(true)}>
             New profile…
+          </button>
+        )}
+
+        {/* Several profiles at once, driven in parallel, and the one place a
+            signed-in session can be copied between them. Here rather than in
+            Settings because it is about the *set* of profiles rather than about
+            any one of them. */}
+        {onOpenWorkers && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            onClick={() => {
+              onOpenWorkers()
+              onClose()
+            }}
+          >
+            Workers…
           </button>
         )}
 

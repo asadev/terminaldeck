@@ -15,6 +15,8 @@ import { RecorderPanel } from './RecorderPanel'
 import { ScreenshotPopup } from './ScreenshotPopup'
 import { HistoryPanel } from './HistoryPanel'
 import { ProfileSettings } from './ProfileSettings'
+import { WorkersPanel } from './WorkersPanel'
+import { resolveWorkersApi, workersAvailable } from './workers-bridge'
 import { SessionModal } from './SessionModal'
 import { Toolbar } from './Toolbar'
 import {
@@ -652,6 +654,16 @@ export function BrowserWorkspace({
   const [offer, setOffer] = useState<{ id: string; origin: string; username: string } | null>(null)
   const [offerNote, setOfferNote] = useState('')
   const accounts = useMemo(() => resolveAccountsApi(), [])
+  /*
+   * Worker profiles, on a bridge of their own.
+   *
+   * Separate from `accounts` for the reason `accounts-bridge.ts` gives about
+   * itself: a preload older than this feature contributes what it has, and the
+   * panel simply is not offered. A name added to `BRIDGE_METHODS` would blank
+   * the whole browser panel on such a build instead.
+   */
+  const workersApi = useMemo(() => resolveWorkersApi(), [])
+  const [workersOpen, setWorkersOpen] = useState(false)
   const [focusToken, setFocusToken] = useState(0)
 
   /*
@@ -1119,6 +1131,18 @@ export function BrowserWorkspace({
        * opened at all, which the drive reports honestly rather than waiting.
        */
       onCreated?: (tabId: string | null) => void,
+      /*
+       * A **worker profile** to open this tab in, rather than the profile that
+       * is switched on.
+       *
+       * The last argument and optional, so every existing caller is unchanged.
+       * Only the Workers panel passes one, and the main process refuses every
+       * id that is not a registered worker — see `workerSession` in
+       * `browser-tab.ts`. It has to be decided before `browserCreate` for the
+       * same reason `isolationKey` does: a view's session is fixed when it is
+       * constructed and cannot be swapped afterwards.
+       */
+      profileId?: string,
     ): string => {
       if (!api) {
         onCreated?.(null)
@@ -1162,6 +1186,7 @@ export function BrowserWorkspace({
           // *loaded* page still gets white.
           background: appCanvasColor(),
           ...(isolationKey ? { isolationKey } : {}),
+          ...(profileId ? { profileId } : {}),
         })
         if (generation.current !== mine) {
           await api.browserClose(state.id).catch(() => undefined)
@@ -2994,12 +3019,34 @@ export function BrowserWorkspace({
             setSettingsFor(profileId)
           }}
           onReopen={reopenInActiveProfile}
+          /* Only where the preload can answer about workers. A row that opened
+             a panel with nothing in it would be the dead control this menu was
+             rebuilt to be rid of. */
+          onOpenWorkers={workersAvailable(workersApi) ? () => setWorkersOpen(true) : undefined}
           onClose={() => {
             setProfileOpen(false)
             readProfileName()
           }}
         />
       )}
+
+      {/*
+        Worker profiles, and the one control in this app that copies a login.
+
+        `viewId` is the page in front of the person, which is what makes the
+        lift a gesture *on a page they are looking at* rather than an action
+        against a site named in a field — see `WorkersPanel.tsx` and
+        `browser-session-lift.ts`. With no page open there is nothing to lift
+        and the button is absent rather than greyed.
+      */}
+      <WorkersPanel
+        open={workersOpen}
+        api={workersApi}
+        viewId={active?.id ?? ''}
+        pageUrl={active?.url ?? ''}
+        onOpenInWorker={(profileId: string) => openNewTab('', false, false, undefined, profileId)}
+        onClose={() => setWorkersOpen(false)}
+      />
 
       <SessionModal
         open={sessionOpen}
