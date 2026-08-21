@@ -220,6 +220,40 @@ export interface SessionMeta {
   originRoutineId?: string
   /** The individual run, so a session and the turn that spawned it link both ways. */
   originRunId?: string
+  /**
+   * Which *tab* this session is, in a name that outlives the process.
+   *
+   * ## The pair this exists for
+   *
+   * Two tabs, same agent, same folder, same account, neither of them typed
+   * into. Nothing about either one distinguishes it from the other, and until
+   * this field the app tried to anyway: the tab strip wrote its arrangement
+   * down as "the agent, the folder, the account, and which of that group you
+   * are by position" — see `renderer/browser/strip-arrangement.ts` — so the two
+   * siblings could come back the other way round after a restart, and closing
+   * the left one moved the right one's number, leaving the arrangement holding
+   * a name that resolved to nothing.
+   *
+   * Position is the only discriminator that can be *derived*, so the fix is to
+   * stop deriving it. The main process mints this once, at the moment it writes
+   * the session into `openSessions`, hands it back on the next launch, and the
+   * restored session is started carrying the same one. Nothing about it is
+   * readable — it names a tab and says nothing about it, which is the point: a
+   * key made of the folder and the agent would move again the moment either
+   * changed.
+   *
+   * ## Absent, and honestly absent
+   *
+   * Only a session that is genuinely written down gets one, and that is the
+   * whole of what its absence means. The copilot's own session, a session held
+   * inside a device's folder grant, a session on a paired machine, a shell on a
+   * server — none of those is restored at the next launch, so none of them has
+   * a tab to come back to, and stamping one would put a name in somebody's
+   * saved arrangement that could never resolve. `host-core.ts` mints it in the
+   * same breath as `ledger.note`, from the same condition, so the two cannot
+   * drift.
+   */
+  tabKey?: string
 }
 
 export interface CreateSessionInput {
@@ -266,6 +300,19 @@ export interface CreateSessionInput {
   origin?: SessionOrigin
   originRoutineId?: string
   originRunId?: string
+  /**
+   * The tab this session is coming back as, when it is coming back.
+   *
+   * Set by the two paths that continue a tab rather than open one: the restore
+   * at launch (`session-restore.ts`) and the Try-again on a session that did
+   * not start (`session-held.ts`). Everything else leaves it absent and
+   * `startSession` mints a fresh one — which is what "a new tab" means.
+   *
+   * A caller that made one up would put two tabs under one name; the strip
+   * keeps the first and leaves the second unarranged, which costs a drag and
+   * nothing else. It is a name, not a permission — see {@link SessionMeta.tabKey}.
+   */
+  tabKey?: string
 }
 
 export interface BrandInfo {

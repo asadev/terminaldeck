@@ -1186,6 +1186,64 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       confine !== undefined && confinementKind(platform) !== 'none' && target === null
 
     /*
+     * Whether this launch is one the *app* composed for its own purposes.
+     *
+     * Keyed on the arguments rather than on a flag the caller sets, because the
+     * arguments *are* the fact: they are main-process-only by construction (a
+     * renderer cannot compose argv — see the note where `extraArgs` is
+     * declared), so "was this launch composed by the app" and "did it carry
+     * these" are the same question. The copilot is the only caller of either
+     * today, and `host-core.copilot.test.ts` pins that a launch carrying them is
+     * not remembered.
+     */
+    const appComposed = fence !== undefined || (extraArgs !== undefined && extraArgs.length > 0)
+
+    /*
+     * The name of the *tab* this session is, or null when it is not one.
+     *
+     * ## Why it is minted here and not derived anywhere
+     *
+     * Because the thing it has to survive is the process, and everything
+     * derivable about a tab is shared with its sibling. Two tabs on the same
+     * agent, in the same folder, as the same account, neither typed into, are
+     * the same in every fact this file has — which is why the strip's
+     * arrangement used to number them by position and why closing one moved the
+     * other. A minted key is the only per-tab thing that can exist, so it is
+     * minted once and then only ever carried.
+     *
+     * ## Why null is the same question as `ledger.note`
+     *
+     * One condition, asked once, used twice — because a session that is *not*
+     * written into `openSessions` has no tab to come back to, and a key on one
+     * of those would put a name in somebody's saved arrangement that no launch
+     * could ever resolve. The two used to be able to drift; now the ledger write
+     * below is gated on this being non-null, so they cannot.
+     *
+     * ## Why an account switch keeps the key
+     *
+     * `replaces` is set by exactly one caller — the switch that restarts a
+     * session under another login *in the same tab* — and that is the same tab
+     * by anybody's reading of the word. Inheriting it means the bar does not
+     * reshuffle when somebody changes account, which the old anchor did on every
+     * switch: the account was part of the identity, so changing it renamed the
+     * tab.
+     *
+     * A switch starts the replacement before it stops the outgoing process, so
+     * for that moment two live sessions carry one name. That is survivable and
+     * deliberately not guarded against: the strip keeps the first tab it sees
+     * under a name and leaves the second unarranged, the outgoing session is
+     * gone a moment later, and the arrangement is rewritten on the render after
+     * that. `replaceWindowInStrip` is what actually holds the position across a
+     * switch, by id, and it does not depend on this.
+     */
+    const tabKey =
+      confined || appComposed
+        ? null
+        : (input.tabKey ??
+          (input.replaces !== undefined ? ledger.get(input.replaces)?.tabKey : undefined) ??
+          randomUUID())
+
+    /*
      * `HOME` and `TMPDIR` are part of the environment rather than an afterthought
      * because a confined session needs them *before* anything runs. The account's
      * home is outside the boundary, so a session left pointing at it cannot read
@@ -1579,6 +1637,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       // path that node-pty would resolve into a Windows directory that does not
       // exist.
       hostCwd: spec.spawn.hostCwd,
+      // Which tab this is, for a window that has to put its bar back after a
+      // quit. Absent for every session that is not written down — see where it
+      // is decided, above.
+      ...(tabKey !== null ? { tabKey } : {}),
     })
 
     /*
@@ -1673,16 +1735,12 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * enforced at the one place that could otherwise arrange it behind
      * everybody's back.
      *
-     * Keyed on the arguments rather than on a flag the caller sets, because the
-     * arguments *are* the fact: they are main-process-only by construction (a
-     * renderer cannot compose argv — see the note where `extraArgs` is
-     * declared), so "was this launch composed by the app" and "did it carry
-     * these" are the same question. The copilot is the only caller of either
-     * today, and `host-core.copilot.test.ts` pins that a launch carrying them is
-     * not remembered.
+     * Both of those questions are settled before the spawn, beside `confined`,
+     * because the answer is also what decides whether this session is a *tab* —
+     * see `tabKey` there. One condition, in one place, rather than two spellings
+     * of it that can drift.
      */
-    const appComposed = fence !== undefined || (extraArgs !== undefined && extraArgs.length > 0)
-    if (!confined && !appComposed) {
+    if (tabKey !== null) {
       ledger.note(meta.id, {
         cwd: input.cwd,
         provider: requested,
@@ -1690,6 +1748,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
         cols: input.cols,
         rows: input.rows,
         lastSeenAt: Date.now(),
+        // The one field here that is not "what to start again": it is *which
+        // tab* comes back, and it is on this record rather than beside it
+        // because it has to be written and read by the same `openSessions`.
+        tabKey,
       })
     }
 

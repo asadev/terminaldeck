@@ -52,6 +52,28 @@ describe('holding a session that did not start', () => {
     expect(held.saved()).toEqual([session({ profileId: 'work' })])
   })
 
+  it('holds the tab it was, so Try again is that tab coming back', () => {
+    /*
+     * `key` above names the *row* and is minted here; this names the tab and was
+     * minted by the launch that first wrote the session down. A retry that
+     * dropped it would start a session in the right folder under a new name, and
+     * the bar would put it on the end instead of where the person had it.
+     */
+    const held = new HeldSessions()
+    const entry = held.hold(session({ tabKey: 'k-left' }), 'the folder is not on this machine')
+
+    expect(entry.tabKey).toBe('k-left')
+    expect(savedFrom(entry).tabKey).toBe('k-left')
+  })
+
+  it('writes no name at all for an entry from before names existed', () => {
+    // `tabKey: undefined` and an absent key are the same to JSON and different
+    // to `Object.hasOwn`, and the retry checks the property before it spawns.
+    const entry = new HeldSessions().hold(session(), 'it could not be started again')
+    expect(Object.hasOwn(entry, 'tabKey')).toBe(false)
+    expect(Object.hasOwn(savedFrom(entry), 'tabKey')).toBe(false)
+  })
+
   it('keeps two tabs on one agent in one folder as two entries', () => {
     /*
      * A key derived from the folder and the agent would collapse these, and

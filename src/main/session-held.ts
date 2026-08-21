@@ -87,6 +87,18 @@ export interface HeldSession {
   rows: number
   lastSeenAt: number
   /**
+   * The tab it was, so Try again brings back *that* tab.
+   *
+   * Carried through the hold rather than re-minted on the retry, because a
+   * session that did not start is still somebody's tab in somebody's
+   * arrangement — and a retry that came back under a new name would put it on
+   * the end of the bar instead of where it was. See {@link SavedSession.tabKey}.
+   *
+   * Absent for the same one reason it is absent there: a list written by an
+   * older build.
+   */
+  tabKey?: string
+  /**
    * Why it did not start, in a sentence written for the person.
    *
    * The same sentence the app log carries, on purpose: the log is what somebody
@@ -116,6 +128,11 @@ export function savedFrom(held: HeldSession): SavedSession {
     cols: held.cols,
     rows: held.rows,
     lastSeenAt: held.lastSeenAt,
+    // Spread rather than assigned: an absent key means "this entry predates
+    // named tabs", and `tabKey: undefined` would be written into `openSessions`
+    // as an absent key anyway — but only one of the two reads as absent to a
+    // caller checking the property before it spawns.
+    ...(held.tabKey !== undefined ? { tabKey: held.tabKey } : {}),
   }
 }
 
@@ -158,6 +175,9 @@ export class HeldSessions {
       cols: session.cols,
       rows: session.rows,
       lastSeenAt: session.lastSeenAt,
+      // The tab it was. `key` above names the *row*, which is minted here and
+      // dies with the row; this names the tab, which outlives the app.
+      ...(session.tabKey !== undefined ? { tabKey: session.tabKey } : {}),
       reason,
       at: Date.now(),
     }

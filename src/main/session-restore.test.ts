@@ -602,6 +602,33 @@ describe('restoreOpenSessions', () => {
     expect(harness.announced).toHaveLength(2)
   })
 
+  it('brings each tab back as the tab it was, not as another one like it', async () => {
+    /*
+     * The pair nothing else can tell apart: two Claude sessions in one folder,
+     * same account, neither typed into. Every other field on both records is
+     * identical — that is the premise, not the fixture being lazy — so the key
+     * is the only thing that says which tab is which, and it has to reach the
+     * spawn or the window is back to matching on the order these finish in.
+     */
+    const both = [
+      { session: saved({ cwd: '/w', tabKey: 'k-left' }), outcome: 'resume' as const, reason: 'r' },
+      { session: saved({ cwd: '/w', tabKey: 'k-right' }), outcome: 'fresh' as const, reason: 'f' },
+    ]
+    const harness = driver(both)
+    await harness.run()
+    expect(harness.spawned.map((s) => s.input.tabKey)).toEqual(['k-left', 'k-right'])
+  })
+
+  it('asks for a fresh name for a session written down before names existed', async () => {
+    // An `openSessions` list from an older build. It still restores; it simply
+    // arrives with no key, `startSession` mints one, and it is a named tab from
+    // that launch on. `tabKey: undefined` would not do — a caller checking the
+    // property has to see it absent.
+    const harness = driver([{ session: saved({ cwd: '/old' }), outcome: 'fresh', reason: 'f' }])
+    await harness.run()
+    expect(Object.hasOwn(harness.spawned[0].input, 'tabKey')).toBe(false)
+  })
+
   it('carries the profile and the terminal size through unchanged', async () => {
     const harness = driver([
       {

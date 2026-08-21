@@ -128,16 +128,10 @@ import { isLinuxPath } from './wsl'
  * ever sets the folder's basename. Persisting one here would freeze a name the
  * renderer is about to recompute anyway.
  *
- * That first sentence is now load-bearing outside this file as well. The window
- * arranges its tab strip by hand and that arrangement is a list of session ids,
- * so it means nothing after a quit — the strip therefore writes itself down in
- * *this* identity instead, the agent and the folder and the profile, and
- * matches it against the tabs this module brings back. See
- * `renderer/browser/strip-arrangement.ts`. Nothing crosses the bridge for it:
- * all three fields are already on `SessionMeta`, and a fourth carrying the
- * joined string would be a copy that can disagree with the folder beside it.
- * What the two ends do share is the *rule*, so changing what a restored session
- * is keyed on here changes where somebody's tabs come back.
+ * That is the identity of a *session*: everything needed to start this one
+ * again. It is deliberately not the identity of a **tab**, and the difference is
+ * {@link SavedSession.tabKey}, which is the field beside it and the only one
+ * here that says nothing about how to launch anything.
  */
 export interface SavedSession {
   cwd: string
@@ -146,6 +140,45 @@ export interface SavedSession {
   profileId: string | null
   cols: number
   rows: number
+  /**
+   * Which tab this was — the one thing here that no amount of looking at the
+   * session could work out.
+   *
+   * ## The pair
+   *
+   * Two tabs, same agent, same folder, same account, neither typed into. The
+   * fields above are identical for both, by construction and in fact, and the
+   * window still has to put them back where they were. It used to do that by
+   * counting: the strip wrote "the third Claude in `/w`" and matched it against
+   * the third Claude this launch happened to announce — so the pair could come
+   * back the other way round, and closing the first one moved the second one's
+   * number and left the arrangement holding a name for nobody.
+   *
+   * Position is the only thing derivable, so this stops deriving. `host-core.ts`
+   * mints one the first time a session is written into `openSessions`, it is
+   * stored here, `restoreOpenSessions` hands it straight back to the spawn, and
+   * `SessionMeta.tabKey` carries it into the window — where
+   * `renderer/browser/strip-arrangement.ts` uses it and nothing else. A tab's
+   * name therefore does not change when its neighbour closes, when its account
+   * changes, or when its own process is replaced.
+   *
+   * ## Why it is not a number, a path or a title
+   *
+   * Because every one of those moves. A count moves when a sibling closes; a
+   * path moves when a folder is renamed; a title is the renderer's and is
+   * recomputed from the session's own output on every run. The only name that
+   * survives all three is one that means nothing on its own.
+   *
+   * ## Absent
+   *
+   * For a list written by a build older than this one, which is the only way it
+   * happens: every session written from here on carries one. Such a session
+   * still restores exactly as it always did — it is simply given a fresh key on
+   * the way back, and is a named tab from that launch onwards. The cost is one
+   * launch in which an arrangement saved under the old, counted names does not
+   * resolve; nothing is lost but the drag that made it.
+   */
+  tabKey?: string
   /**
    * Epoch ms this session was last used. Breaks the tie when two tabs share a
    * conversation store — see `conversationScope`, which is narrower than sharing
@@ -674,6 +707,18 @@ export async function restoreOpenSessions(deps: RestoreDeps): Promise<RestoreRes
         provider: decision.session.provider,
         profileId: decision.session.profileId,
         resume: decision.outcome === 'resume',
+        /*
+         * And come back as the *same tab*, not as another one like it.
+         *
+         * The whole of what `SavedSession.tabKey` is for is this line: without
+         * it a restored session is a new tab that happens to hold the same
+         * conversation, and the window has nothing to match its saved
+         * arrangement against but the order these spawns happen to finish in.
+         * Spread rather than passed, because an absent key means "mint one" and
+         * `tabKey: undefined` would too — but only one of the two survives a
+         * reader who checks for the property.
+         */
+        ...(decision.session.tabKey !== undefined ? { tabKey: decision.session.tabKey } : {}),
       })
       started.push(meta)
       deps.announce(meta)

@@ -1008,3 +1008,140 @@ describe('what a navigation writes down', () => {
     expect(allVisits(USER_DATA)[0].profileId).toBe('default')
   })
 })
+
+/**
+ * Pressing Split, from the side that would have destroyed the page.
+ *
+ * ## What this is standing in for
+ *
+ * A screenshot nobody can take here. The complaint was *"if this link is
+ * loaded, page is loaded, I go to session. If I come back, this is all gone, so
+ * it refreshes"* — and the last route left to it was the split: the window used
+ * to mount the panel *inside* whichever pane was holding the page, which is a
+ * remount, and an unmounting `BrowserWorkspace` closes its `WebContentsView`
+ * for real. The pane draws an empty hole now and the panel is given its
+ * rectangle instead. That change is one of layout, and its correctness was
+ * argued from construction rather than measured.
+ *
+ * It can be measured here, because the thing that used to break is in *this*
+ * file. Whatever the renderer does about panes, the only two messages a layout
+ * change may send are a rectangle and a visibility, and the only message that
+ * loses a page is `browser:close`. So the press is driven as the sequence it
+ * actually is and the page is asked, afterwards, whether it is still the page:
+ * same view, same address, never reloaded.
+ *
+ * ## The counterfactual matters as much as the case
+ *
+ * A test that only asserts "the page survived" passes just as well against a
+ * module where nothing can ever destroy a page. The last case here presses the
+ * button the old arrangement pressed — a close, then a fresh create, which is
+ * what a remount is — and pins the loss: a different view, and `about:blank`
+ * where somebody's address used to be. That is the difference the geometry is
+ * buying, stated in the same units.
+ */
+describe('a split is a move, not a close', () => {
+  /** The whole window, before anybody splits anything. */
+  const FULL = { x: 0, y: 96, width: 1200, height: 704 }
+  /** The right-hand pane of a 50/50 split, with a terminal in the left one. */
+  const PANE = { x: 604, y: 96, width: 596, height: 704 }
+
+  const READING = 'https://docs.example.com/guide'
+
+  /** A page somebody is reading, in a window that is not split. */
+  async function reading(): Promise<{ id: string; view: FakeWebContentsView }> {
+    const { state, view } = await openTab({ url: READING })
+    emit('browser:bounds', { sender: host }, state.id, FULL)
+    emit('browser:visible', { sender: host }, state.id, true)
+    expect(view.visible, 'the fixture never showed the page').toBe(true)
+    expect(view.webContents.getURL()).toBe(READING)
+    return { id: state.id, view }
+  }
+
+  it('keeps the same view, at the same address, through a split and back', async () => {
+    const { id, view } = await reading()
+    const before = view.webContents
+    const opened = created.length
+
+    // Press Split. The panel does not move in the React tree, so nothing closes
+    // and nothing is created; the pane measures its hole and the page is given
+    // it. Both messages, in the order the renderer sends them.
+    emit('browser:bounds', { sender: host }, id, PANE)
+    emit('browser:visible', { sender: host }, id, true)
+
+    expect(created.length, 'a second view was constructed — that is a remount').toBe(opened)
+    expect(view.webContents, 'the page was replaced').toBe(before)
+    expect(before.destroyed, 'the page was closed by a layout change').toBe(false)
+    expect(view.bounds, 'the page was not moved into the pane').toEqual(PANE)
+    expect(view.visible).toBe(true)
+    // The address bar draws this, and this is what a reload would have reset.
+    expect(before.getURL()).toBe(READING)
+    expect((await invoke('browser:state', {}, id)) as TabState).toMatchObject({ url: READING })
+
+    // And leaving the split, which used to reload it a second time.
+    emit('browser:bounds', { sender: host }, id, FULL)
+    emit('browser:visible', { sender: host }, id, true)
+
+    expect(created.length).toBe(opened)
+    expect(view.webContents).toBe(before)
+    expect(before.destroyed).toBe(false)
+    expect(view.bounds).toEqual(FULL)
+    expect(before.getURL()).toBe(READING)
+    expect((await invoke('browser:state', {}, id)) as TabState).toMatchObject({ url: READING })
+  })
+
+  it('never takes the view out of the window while it is only being moved', async () => {
+    // `removeChildView` is what actually un-composites a page, and it belongs to
+    // teardown alone. A layout path that reached it would leave a live tab whose
+    // view is a child of nothing — visible in no window, still holding the site.
+    const { id } = await reading()
+    emit('browser:bounds', { sender: host }, id, PANE)
+    emit('browser:visible', { sender: host }, id, false)
+    emit('browser:visible', { sender: host }, id, true)
+
+    expect(fakeWindow.removed).toEqual([])
+  })
+
+  it('parks a page whose pane has no rectangle yet, without losing it', async () => {
+    /*
+     * The one frame between a layout change and the re-measure. The page has no
+     * hole to be drawn into, so the renderer says `visible: false` rather than
+     * leaving an in-flow panel to land underneath the split — hidden for a
+     * frame, which is what parking is for, and emphatically not closed.
+     */
+    const { id, view } = await reading()
+    emit('browser:visible', { sender: host }, id, false)
+
+    expect(view.visible).toBe(false)
+    expect(view.webContents.destroyed).toBe(false)
+    expect((await invoke('browser:state', {}, id)) as TabState).toMatchObject({ url: READING })
+
+    emit('browser:bounds', { sender: host }, id, PANE)
+    emit('browser:visible', { sender: host }, id, true)
+    expect(view.visible).toBe(true)
+    expect(view.webContents.getURL()).toBe(READING)
+  })
+
+  it('loses the page when it is closed and opened again, which is what a remount is', async () => {
+    /*
+     * The old arrangement, and the measurement that makes the three cases above
+     * mean something. Moving a panel between two subtrees unmounts it; the
+     * unmount closes the view; the mount that follows creates a new one at the
+     * start address, because a fresh panel has no idea what was on screen a
+     * frame ago.
+     */
+    const { id, view } = await reading()
+    const before = view.webContents
+    const opened = created.length
+
+    await invoke('browser:close', {}, id)
+    expect(before.destroyed).toBe(true)
+    expect(await invoke('browser:state', {}, id)).toBeNull()
+
+    // And what comes back in its place: a different view, showing nothing.
+    const fresh = await openTab({})
+    expect(created.length).toBe(opened + 1)
+    expect(fresh.guest).not.toBe(before)
+    expect(fresh.guest.getURL()).not.toBe(READING)
+    expect(fresh.state.url).toBe('')
+  })
+})

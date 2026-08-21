@@ -51,7 +51,7 @@ beforeAll(() => {
    * whether a shell tolerates a folder that is not there, so the fixture makes
    * the folders and the assertions stay about the thing they are about.
    */
-  for (const name of ['copilot', 'fenced', 'live-project']) {
+  for (const name of ['copilot', 'fenced', 'live-project', 'two-tabs', 'restored']) {
     mkdirSync(join(dir, name), { recursive: true })
   }
   installPaths(nodePaths({ platform: 'linux', env: { XDG_DATA_HOME: dir }, home: dir, appRoot: dir }))
@@ -77,6 +77,10 @@ afterAll(async () => {
 
 /** Every folder currently written down as having been open. */
 const remembered = (): string[] => store().getOpenSessions().map((session) => session.cwd)
+
+/** What is written down for one folder, in the order it was written. */
+const rememberedIn = (folder: string) =>
+  store().getOpenSessions().filter((session) => session.cwd === folder)
 
 describe('a session this app composed for itself', () => {
   it('is not written down as a session somebody had open', async () => {
@@ -175,5 +179,99 @@ describe('the order the list is written in', () => {
       'it could not be started again',
     )
     expect(store().getOpenSessions().map((s) => s.cwd)).toContain('/home/asad/ClaudeSpace')
+  })
+})
+
+/**
+ * Which *tab* a session is, which is the one thing about it nothing can work
+ * out by looking.
+ *
+ * Two tabs on the same agent, in the same folder, as the same account, neither
+ * of them typed into, are identical in every field a `SavedSession` carries —
+ * that is the premise, not a gap in the fixture. So the tab strip's arrangement
+ * used to be written as those fields plus *which of that group you are by
+ * position*, and position is exactly what a restart is allowed to change: the
+ * pair could come back the other way round, and closing one of them moved the
+ * other's number. The name below is minted once, kept on disk, and handed back
+ * to the spawn, so neither is possible any more.
+ *
+ * Pinned here rather than in the renderer because here is where it is decided:
+ * the same condition settles whether a session is written into `openSessions` at
+ * all and whether it is a tab, and the tests above this one are about the other
+ * half of that condition.
+ */
+describe('the name of a tab', () => {
+  it('is minted per session, so two identical siblings are two tabs', async () => {
+    const folder = join(dir, 'two-tabs')
+    const left = await core.startSession({ cwd: folder, cols: 80, rows: 24, provider: 'shell' })
+    const right = await core.startSession({ cwd: folder, cols: 80, rows: 24, provider: 'shell' })
+
+    expect(left.tabKey, 'a tab with no name cannot be put back on the bar').toBeTruthy()
+    expect(right.tabKey).toBeTruthy()
+    expect(right.tabKey).not.toBe(left.tabKey)
+
+    // And the same names go to disk, on the records that come back next launch.
+    expect(rememberedIn(folder).map((session) => session.tabKey)).toEqual([
+      left.tabKey,
+      right.tabKey,
+    ])
+  })
+
+  it('is the one it was told, when a restore is putting a tab back', async () => {
+    // `restoreOpenSessions` hands the saved key straight to this call. Minting a
+    // fresh one here instead would make every launch a new set of tabs that
+    // merely resemble the old ones.
+    const folder = join(dir, 'restored')
+    const meta = await core.startSession({
+      cwd: folder,
+      cols: 80,
+      rows: 24,
+      provider: 'shell',
+      tabKey: 'k-from-last-launch',
+    })
+
+    expect(meta.tabKey).toBe('k-from-last-launch')
+    expect(rememberedIn(folder).map((session) => session.tabKey)).toEqual(['k-from-last-launch'])
+  })
+
+  it('follows the tab through an account switch, which replaces the process', async () => {
+    /*
+     * A switch restarts the session under another login *in the same tab*, and
+     * `replaces` is the only caller that says so. The tab keeps its name, so a
+     * bar arranged before somebody changed account is the same bar afterwards —
+     * where the old anchor, which had the account in it, renamed the tab on
+     * every switch.
+     */
+    const folder = join(dir, 'two-tabs')
+    const before = await core.startSession({ cwd: folder, cols: 80, rows: 24, provider: 'shell' })
+    const after = await core.startSession({
+      cwd: folder,
+      cols: 80,
+      rows: 24,
+      provider: 'shell',
+      replaces: before.id,
+    })
+
+    expect(after.tabKey).toBe(before.tabKey)
+  })
+
+  it('is absent on a session this app composed for itself', async () => {
+    /*
+     * The same refusal as the tests above, seen from the other side. A launch
+     * carrying flags the app composed is not written into `openSessions`, so no
+     * launch brings it back, so it has no tab to come back to — and a name on it
+     * would put an entry in somebody's saved arrangement that could never
+     * resolve. One condition decides both, which is why this cannot drift.
+     */
+    const meta = await core.startSession(
+      { cwd: join(dir, 'copilot'), cols: 80, rows: 24, provider: 'shell' },
+      undefined,
+      undefined,
+      undefined,
+      ['--mcp-config', join(dir, 'deck-control.json'), '--strict-mcp-config'],
+    )
+
+    expect(meta.tabKey).toBeUndefined()
+    expect(Object.hasOwn(meta, 'tabKey')).toBe(false)
   })
 })

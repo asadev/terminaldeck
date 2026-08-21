@@ -3498,6 +3498,11 @@ function registerIpc(): void {
           cols: input.cols,
           rows: input.rows,
           lastSeenAt: Date.now(),
+          // Only when the request carried one, which means this was itself a
+          // tab coming back. A start that failed before `startSession` could
+          // mint a key has no tab to be held as, and inventing one here would
+          // put a name in the arrangement for a session that never existed.
+          ...(input.tabKey !== undefined ? { tabKey: input.tabKey } : {}),
         },
         `it could not be started: ${why}`,
       )
@@ -3556,6 +3561,9 @@ function registerIpc(): void {
         provider: held.provider,
         profileId: held.profileId,
         resume: decision.outcome === 'resume',
+        // As the same tab it was before it failed, not as a new one on the end
+        // of the bar. See `SavedSession.tabKey`.
+        ...(held.tabKey !== undefined ? { tabKey: held.tabKey } : {}),
       })
       ledger.held.release(held.key)
       send(SESSION_CREATED_CHANNEL, meta)

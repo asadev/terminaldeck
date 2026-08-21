@@ -49,6 +49,27 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   still not offered — nothing on this side can ask a server to forget a login it
   holds — and the pane says so rather than drawing a control for it.
 
+### Fixed
+
+- **Two identical tabs no longer come back swapped, and closing one no longer
+  renames the other.** Same agent, same folder, same account, neither typed
+  into: every fact the app had about that pair was one string, so the tab strip
+  wrote its arrangement down as those facts plus *which of the group you are by
+  position* — and position is exactly what a restart is allowed to change. The
+  main process now names a tab when it first writes the session down, keeps the
+  name on disk, and hands it back to the spawn on the next launch, so a tab's
+  name does not move when its neighbour closes, when its account changes, or
+  when its own process is replaced. A tab that no launch brings back — the
+  copilot's own session, a session held inside a device's folder grant, a shell
+  on a server — is given no name and is honestly left out of the arrangement,
+  which the window used to have to guess at. One consequence, once: a bar
+  arranged before this update comes back unarranged on the first launch after
+  it, because the names it was saved under no longer exist.
+- **The panel that says the browser is not connected now stays inside its
+  pane.** It is the same in-flow block as the wired one and was drawn without
+  the pane's rectangle, so on a half-wired build it covered the terminal beside
+  it in a split.
+
 ## [0.9.1] — 2026-08-21
 
 Two things he hit within an hour of installing 0.9.0.

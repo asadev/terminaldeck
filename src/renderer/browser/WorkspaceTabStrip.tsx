@@ -451,6 +451,21 @@ export function WorkspaceTabStrip({
    */
   const arrangement = useRef<string[] | null>(null)
 
+  /**
+   * Every name this window has ever had a tab for.
+   *
+   * The anchor-shaped half of {@link seen}, and it has to be its own set rather
+   * than a lookup through the current tabs: the question `nextArrangement` asks
+   * of it is *"has this name ever turned up here"*, and the tabs are only the
+   * ones that are open now. Derived from them, a name went back to "not seen
+   * yet" the moment its tab closed and was carried in the saved arrangement for
+   * ever — the stale entry a closed sibling used to leave behind.
+   *
+   * Grows only, like `seen`, and dies with the strip for the same reason it
+   * does — see `forgetWindowInStrip` for what covers that on the id side.
+   */
+  const seenAnchors = useRef<Set<string>>(new Set())
+
   useEffect(() => {
     if (tabs.length === 0) return
     const storage = arrangementStorage()
@@ -471,6 +486,7 @@ export function WorkspaceTabStrip({
     const seeded = seedArrangement(order, arrangement.current, anchors, arriving)
 
     for (const tab of tabs) seen.current.add(tab.id)
+    for (const anchor of anchors.values()) seenAnchors.current.add(anchor)
     const pruned = pruneOrder(seeded, tabs, seen.current)
 
     /*
@@ -481,7 +497,7 @@ export function WorkspaceTabStrip({
      * rebuilt by `App.tsx` each time — and an unguarded `setItem` here is a disk
      * write per line of terminal output.
      */
-    const next = nextArrangement(pruned, anchors, arrangement.current, seen.current)
+    const next = nextArrangement(pruned, anchors, arrangement.current, seenAnchors.current)
     if (!sameArrangement(next, arrangement.current)) {
       arrangement.current = next
       writeArrangement(storage, next)
