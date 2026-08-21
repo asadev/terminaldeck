@@ -360,6 +360,18 @@ export async function createHeadlessHost(
   const remote = registerRemoteIpc(desk, {
     sessions: core.sessions,
     folders: core.grants,
+    /*
+     * And the same login-choice store the endpoint's account filter closes over.
+     *
+     * Handed in even though this build has no screen that writes it, for the
+     * reason `kinds` below is handed in: the headless daemon serves the same
+     * protocol from the same fanout, and a rule a shell has to remember to
+     * install is a rule the other shell forgets. An empty store shares every
+     * login, which is exactly what this build did before it existed — so the
+     * only thing this line changes is that a grant written by anything else is
+     * honoured here too.
+     */
+    accountGrants: core.accountGrants,
     // The same store the reach rule closes over. The headless daemon serves the
     // same protocol from the same fanout, so it enforces the same two kinds —
     // and a build where this was the missing argument would be a build where

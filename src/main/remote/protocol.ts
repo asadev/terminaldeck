@@ -399,6 +399,48 @@ export const PROTOCOL_VERSION = 1
  * reason: a menu that looks live and is not is worse than one that says what it
  * knows.
  */
+/**
+ * `logins` is that machine's account list **without a session**, and signing one
+ * of them in over there.
+ *
+ * ## Why it is not part of `account`
+ *
+ * Because `account` is session-scoped in its bones: both its frames carry an
+ * `id`, both are authorised by {@link mayTouch} against that session, and the
+ * question they answer is *whose login is this terminal running as*. That is the
+ * right shape for a chip on a bar and the wrong shape for a settings pane, which
+ * is looking at a **machine** and has no session to name — and asking one anyway
+ * would make a machine's logins unreadable at the exact moment somebody most
+ * wants to see them, which is when nothing is running over there. Asad,
+ * 2026-08-21, of the Coding AI pane:
+ *
+ *   > *"So we can click and manage what accounts are there, what we want to
+ *   > login, logout, things, access. All of this we can just manage from this."*
+ *
+ * The second reason is authorisation. A session verb is answered for anybody who
+ * may touch that session, guest included; these are answered for **one of the
+ * owner's own devices and nobody else**, because listing every login a machine
+ * has and starting a login flow on it are acts on the *machine* rather than on a
+ * folder somebody was lent. `server.ts` holds that gate; the frame carries no
+ * device id, for the reason `CreateRequest.deviceId` gives.
+ *
+ * ## What is deliberately not here
+ *
+ * **Sign out.** Nothing in this app signs an agent out on *any* machine — there
+ * is no measured command for it in `agent-catalog.ts`, and the local Accounts
+ * pane offers none either — so a verb here would be a frame whose only possible
+ * answer is an apology. It goes in when the local one does, and both need the
+ * same missing thing: an agent's own logout command, measured rather than
+ * guessed.
+ *
+ * ## What an older host does
+ *
+ * Never advertises it, so the pane says the far build cannot answer and falls
+ * back to reading the logins through a running session — which is what it could
+ * always do. The same degrade `controls` and `account` have, for the same
+ * reason: a host that has never heard of a frame answers it by closing the
+ * channel, so nothing may be sent hopefully.
+ */
 export const CAPABILITY = {
   localhost: 'localhost',
   create: 'create',
@@ -412,6 +454,7 @@ export const CAPABILITY = {
   usage: 'usage',
   send: 'send',
   account: 'account',
+  logins: 'logins',
   /**
    * The conversation, as a chat rather than as a terminal.
    *
@@ -453,6 +496,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.usage,
   CAPABILITY.send,
   CAPABILITY.account,
+  CAPABILITY.logins,
   CAPABILITY.chat,
 ]
 
@@ -2018,6 +2062,38 @@ export type ClientMessage =
    * answer: every path ends in an `account.switched`.
    */
   | { t: 'account.switch'; rid: string; id: string; accountId: string }
+  /* ---- capability `logins`. Refused when it is not advertised. ----------- */
+  /**
+   * Which logins does that **machine** have?
+   *
+   * No session id, and that absence is the whole reason this frame exists beside
+   * `account.read`: a settings pane is looking at a computer rather than at a
+   * terminal, and a machine with nothing running is exactly when somebody wants
+   * to see what is signed in on it.
+   *
+   * Passive — a state file and, per login, that machine's own memoised sign-in
+   * probe — so it may be sent on a mount. Answered only for one of the owner's
+   * own devices: the list is a fact about the machine, not about a folder a
+   * guest was lent.
+   */
+  | { t: 'logins.read'; rid: string }
+  /**
+   * Sign one of that machine's logins in, over there.
+   *
+   * **This starts a session on that machine.** The agent CLIs authenticate
+   * interactively — they print a URL and wait — so there is nothing here that
+   * could be done silently, and the honest act is the one the window at that
+   * desk performs: open a terminal under that account's configuration directory
+   * and let the person finish the login in it. The id of that session comes back
+   * on {@link ServerMessage} `logins.signedin`, so the asking window can open it
+   * and read the URL rather than being told to walk to the other machine.
+   *
+   * It is not a claim that the account ends up signed in. Whether the login
+   * succeeded is a question for the next `logins.read`, which reads that
+   * machine's own probe — and this frame deliberately does not pretend to know
+   * the answer before the person has typed anything.
+   */
+  | { t: 'logins.signin'; rid: string; accountId: string }
   /* ---- capability `send`. Refused when it is not advertised. ------------- */
   /**
    * Put text into that session **without subscribing to it**.
@@ -2539,6 +2615,33 @@ export type ServerMessage =
    * one place to look for the outcome.
    */
   | { t: 'account.switched'; rid: string; id: string; ok: boolean; message: string; session: string | null }
+  /* ---- capability `logins` ------------------------------------------------ */
+  /**
+   * The answer to one `logins.read`, and only ever to one.
+   *
+   * The machine's whole list and no `current`: there is no session in the
+   * question, so there is nothing here that could be running. A pane that wants
+   * to say which login a terminal is on asks `account.read` about that terminal,
+   * which is a different question with a different door.
+   *
+   * An **empty** list is a real answer and means that machine reported no
+   * logins. It is not "the read failed" — that arrives as an `error` frame — and
+   * a client must not draw the two the same way, because one is a machine with
+   * nothing signed in and the other is a machine that was not reached.
+   */
+  | { t: 'logins.state'; rid: string; accounts: AccountWire[] }
+  /**
+   * What happened to one `logins.signin`, in the far machine's own words.
+   *
+   * `session` is the terminal that machine opened for the login, when it opened
+   * one — the thing to attach to in order to finish the flow — and null when it
+   * did not, which is every refusal and every host that could not start one.
+   *
+   * There is no `logins.failed`. A refusal is this frame with `ok: false` and
+   * the sentence, for the reason `account.switched` gives: the asking side has
+   * one place to look for the outcome.
+   */
+  | { t: 'logins.signedin'; rid: string; ok: boolean; message: string; session: string | null }
   /**
    * The answer to one `chat.read`, and only ever to one.
    *
@@ -3299,6 +3402,31 @@ export function parseClientMessage(raw: unknown): ParseResult {
        */
       if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(accountId)) return bad('account.switch with an unusable account id')
       return { ok: true, message: { t: 'account.switch', rid: requestId, id: sessionId, accountId } }
+    }
+
+    /* ---- capability `logins` --------------------------------------------- */
+    // Shape only, like `account.read` above. Whether this desktop keeps an
+    // account store at all, and whether this device is one of the owner's own,
+    // are the server's questions — it is the only thing that knows which device
+    // the socket belongs to.
+    case 'logins.read': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('logins.read without a request id')
+      // No session id, deliberately: this is the machine's list. A frame that
+      // carried one would be `account.read` with a different name.
+      return { ok: true, message: { t: 'logins.read', rid: requestId } }
+    }
+    case 'logins.signin': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('logins.signin without a request id')
+      const accountId = parsed.accountId
+      if (typeof accountId !== 'string' || accountId === '') return bad('logins.signin without an account')
+      if (accountId.length > MAX_ACCOUNT_ID_LENGTH) return tooLarge('logins.signin with an oversized account id')
+      // The same class `account.switch` checks, and for the same reason: past
+      // this line the value selects a configuration directory on somebody else's
+      // computer. One rule for both frames rather than two that can drift.
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(accountId)) return bad('logins.signin with an unusable account id')
+      return { ok: true, message: { t: 'logins.signin', rid: requestId, accountId } }
     }
 
     /* ---- capability `chat` ----------------------------------------------- */
@@ -4798,6 +4926,36 @@ export function parseServerFrame(parsed: unknown): ServerParse {
           t: 'account.switched',
           rid: requestId,
           id: sessionId,
+          ok: parsed.ok === true,
+          message: typeof parsed.message === 'string' ? parsed.message : '',
+          session: id(parsed.session),
+        },
+      }
+    }
+    /* ---- capability `logins` ----------------------------------------------- */
+    /*
+     * A machine's whole login list, read totally and clipped rather than
+     * rejected — the same reader `account.state` uses, so a row a chip can draw
+     * is a row a settings pane can draw.
+     */
+    case 'logins.state': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'logins.state without a request id' }
+      return { ok: true, message: { t: 'logins.state', rid: requestId, accounts: parseAccounts(parsed.accounts) } }
+    }
+    /*
+     * The outcome of one sign-in. `ok` must be the literal `true`, for the
+     * reason `account.switched`'s must: a garbled frame read as success is a
+     * window that opens a session id that was never created.
+     */
+    case 'logins.signedin': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'logins.signedin without a request id' }
+      return {
+        ok: true,
+        message: {
+          t: 'logins.signedin',
+          rid: requestId,
           ok: parsed.ok === true,
           message: typeof parsed.message === 'string' ? parsed.message : '',
           session: id(parsed.session),

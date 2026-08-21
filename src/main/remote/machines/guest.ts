@@ -161,6 +161,25 @@ const ACCOUNT_READ_TIMEOUT_MS = 20_000
 const ACCOUNT_SWITCH_TIMEOUT_MS = 90_000
 
 /**
+ * How long a `logins.read` may go unanswered. The same twenty seconds
+ * `account.read` gets, because it is the same work over there — a state file and
+ * a handful of thirty-second-memoised probes — with the session left out of the
+ * question.
+ */
+const LOGINS_READ_TIMEOUT_MS = 20_000
+
+/**
+ * And how long a `logins.signin` may.
+ *
+ * It starts a session over there: resolving the agent binary, a login shell's
+ * PATH and a pty. That is seconds rather than the minute and a half a *switch*
+ * can take — nothing is being waited out for survival and nothing is being
+ * killed — but it is the same class of work, so it gets a ceiling well above a
+ * read and well below the switch's.
+ */
+const LOGINS_SIGNIN_TIMEOUT_MS = 45_000
+
+/**
  * How long a `session.send` may go unanswered.
  *
  * The far end's work is one synchronous write into a pty — it does not read a
@@ -445,6 +464,26 @@ export interface MachineLink {
     sessionId: string,
     accountId: string,
   ): Promise<{ ok: boolean; message: string; session: string | null }>
+  /**
+   * Which logins that **machine** has, with no session in the question.
+   *
+   * `null` means the question could not be asked — the link is down, or that
+   * machine's build never advertised `logins`, or this desktop is a guest on it.
+   * Deliberately not an empty array: a pane handed an empty list could not tell
+   * "that machine has no logins" from "nobody answered", and those want opposite
+   * things drawn.
+   */
+  readLogins(): Promise<AccountWire[] | null>
+  /**
+   * Start signing one of that machine's logins in, over there.
+   *
+   * Always answers with a sentence, on every path including the two that never
+   * leave this machine, for the reason {@link switchAccount} does. `session` is
+   * the terminal that machine opened so the login can be finished in it — null
+   * on every refusal — and it is the whole reason this answers with more than a
+   * boolean: an interactive login nobody can see is a login nobody can complete.
+   */
+  signInLogin(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
   /**
    * Put text into a session over there **without attaching to it**, and report
    * what the far end said about it.
@@ -1143,6 +1182,8 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       case 'usage.reading':
       case 'account.state':
       case 'account.switched':
+      case 'logins.state':
+      case 'logins.signedin':
       case 'session.sent':
         /*
          * The answer to one question this end asked, handed to whoever asked it.
@@ -1570,6 +1611,69 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         return {
           ok: false,
           message: 'That machine did not answer, so it is not known whether the account was changed.',
+          session: null,
+        }
+      }
+      return { ok: answer.ok, message: answer.message, session: answer.session }
+    },
+    async readLogins() {
+      /*
+       * Null on all three absences that never leave this machine, for the reason
+       * `readAccount` above answers null: a pane that is handed an empty list
+       * draws "that machine has no logins", which is a claim about somebody's
+       * computer, and two of the three cases would make it a false one. The
+       * sentence belongs on the thing somebody presses, which is the sign-in
+       * below.
+       *
+       * The third absence is new here and is not a version: this desktop may be
+       * a *guest* over there, in which case the capability was never sent and
+       * this is the same answer as an old build — which is right, because the
+       * remedy is somebody at that keyboard either way.
+       */
+      if (current.state !== 'online') return null
+      if (!current.capabilities.includes(CAPABILITY.logins)) return null
+      const answer = await ask({ t: 'logins.read', rid: randomUUID() }, LOGINS_READ_TIMEOUT_MS, CAPABILITY.logins)
+      if (answer === null || answer.t !== 'logins.state') return null
+      return answer.accounts
+    },
+    async signInLogin(accountId) {
+      /*
+       * The two refusals that never leave this machine, each with its own
+       * sentence, because they have different remedies — the same split
+       * `switchAccount` makes. A link that is down is waited out; a machine that
+       * does not offer this is either running an older build or does not know
+       * this desktop as one of its own, and the second is not something this end
+       * can tell apart from the first. So the sentence names the remedy that
+       * covers both: somebody at that keyboard.
+       */
+      if (current.state !== 'online') {
+        return { ok: false, message: 'This desktop is not connected to that machine right now.', session: null }
+      }
+      if (!current.capabilities.includes(CAPABILITY.logins)) {
+        return {
+          ok: false,
+          message:
+            'That machine does not manage its logins from here — it is running an older build, or this desktop is a guest on it.',
+          session: null,
+        }
+      }
+      const answer = await ask(
+        { t: 'logins.signin', rid: randomUUID(), accountId },
+        LOGINS_SIGNIN_TIMEOUT_MS,
+        CAPABILITY.logins,
+      )
+      if (answer === null || answer.t !== 'logins.signedin') {
+        /*
+         * The honest sentence for no answer is the one that does not claim it
+         * failed — the same position `switchAccount` takes. The far end starts
+         * the terminal before it sends anything back, so a channel that died in
+         * between leaves a session open over there that this end was not told
+         * about; saying "it failed" is the guess that makes somebody press again
+         * and open a second one.
+         */
+        return {
+          ok: false,
+          message: 'That machine did not answer, so it is not known whether a terminal was opened for the login.',
           session: null,
         }
       }

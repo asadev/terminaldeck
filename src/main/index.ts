@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   app,
@@ -11,7 +12,7 @@ import {
   shell,
 } from 'electron'
 import { BRAND } from '../shared/brand'
-import type { CreateSessionInput, SessionMeta } from '../shared/types'
+import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
 import { createHostCore } from './host-core'
 import { detectProviders } from './providers'
 import { lookupCommand, registerCustomAgentsIpc } from './custom-agents'
@@ -661,6 +662,71 @@ const core = createHostCore({
    * attached to the old session and has to follow, or it is looking at a pty that
    * no longer exists. `meta.id` is the id the session has afterwards.
    */
+  /*
+   * Signing one of this machine's logins in, from a pane on one of his own
+   * machines.
+   *
+   * Asad, 2026-08-21, looking at Settings → Coding AI with a paired PC in the
+   * rail beside it: *"So we can click and manage what accounts are there, what
+   * we want to login, logout, things, access. All of this we can just manage
+   * from this."*
+   *
+   * ## Why this opens a terminal instead of running a command
+   *
+   * Because that is what signing in *is* for every agent this app ships with.
+   * `agent-catalog.ts` carries `signInArgs` and `provider-accounts.ts` only ever
+   * turns it into a sentence to print, because the flow is interactive: the CLI
+   * writes a URL, waits, and finishes when a person has been to it. So the honest
+   * act is the one this app's own Accounts pane performs — start a session under
+   * that account's configuration directory and let the login happen in it — and
+   * the id of that session travels back so the window that asked can open it and
+   * read the URL, rather than being told to walk to the other machine.
+   *
+   * ## Why it is not confined, and why that is safe to say
+   *
+   * A session a *guest* asks for is held inside its granted folder with a home
+   * of its own, which is exactly wrong here: a login writes into `~/.claude` or
+   * the account's own directory, so a confined one would complete and leave
+   * nothing behind. It does not widen anything, because this verb is served to
+   * one of the owner's own devices and to nobody else — `CAPABILITY.logins` is
+   * stripped for a guest before the frame is ever read (`capabilitiesFor` in
+   * `remote/server.ts`), and refused again at the door. *"My device — full
+   * access. It's you at another keyboard."*
+   */
+  signInAccount: async (accountId) => {
+    const profile = findProfile(profilesState(), accountId)
+    if (profile === null) {
+      // The far pane listed this machine's logins a moment ago, so a miss is an
+      // account deleted in between — said as what it is rather than as a failure
+      // of the sign-in.
+      return { ok: false, message: 'There is no such login on this computer any more.', session: null }
+    }
+    try {
+      const meta = await startSession({
+        // The person's own home directory, which is where a login belongs: it
+        // touches the agent's configuration and nothing in any project, and a
+        // folder chosen from over there would be this machine opening a terminal
+        // somewhere the person did not ask for.
+        cwd: homedir(),
+        cols: 80,
+        rows: 24,
+        provider: profile.provider as ProviderId,
+        profileId: profile.id,
+      })
+      announceSession(meta)
+      return {
+        ok: true,
+        // What actually happened, and what to do next. Never "signed in": nobody
+        // has typed anything yet, and whether the login succeeds is a question
+        // for the next read of this machine's own probe.
+        message: `A terminal is open on this computer for ${profile.name}. Finish the login in it.`,
+        session: meta.id,
+      }
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : 'That login could not be started.'
+      return { ok: false, message, session: null }
+    }
+  },
   switchAccount: async (sessionId, accountId) => {
     const perform = performSwitchAccount
     if (perform === null) {
@@ -1810,6 +1876,12 @@ function registerIpc(): void {
     // against, or it ticks a copy and the phone keeps a session the user just
     // unticked until the next launch.
     sessionGrants: core.sessionGrants,
+    // And the same login-choice store the endpoint's account filter closes
+    // over, for the reason one line up: the approval screen and the panel write
+    // what every `account.read` is filtered against, or they write a copy and
+    // the machine over there keeps a login its owner just unticked until the
+    // next launch.
+    accountGrants: core.accountGrants,
     // And the same kind store the reach rule closes over, for the same reason
     // one line up: the approval screen decides what a device is, and every
     // connection is checked against it, so two copies would agree until the

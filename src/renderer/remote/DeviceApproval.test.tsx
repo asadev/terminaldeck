@@ -46,6 +46,12 @@ function view(overrides: Partial<DeviceApprovalProps> = {}): string {
     device: DEVICE,
     platform: 'mac',
     folders: [],
+    logins: [
+      { id: 'system', label: 'imzapremium@gmail.com', provider: 'claude' },
+      { id: 'p-work', label: 'work@example.com', provider: 'claude' },
+    ],
+    accountMode: 'all',
+    accounts: [],
     step: 'check',
     kind: null,
     busy: false,
@@ -54,6 +60,8 @@ function view(overrides: Partial<DeviceApprovalProps> = {}): string {
     onKind: () => {},
     onAddFolder: () => {},
     onRemoveFolder: () => {},
+    onAccountMode: () => {},
+    onToggleAccount: () => {},
     onApprove: () => {},
     onCancel: () => {},
     ...overrides,
@@ -72,8 +80,8 @@ function text(html: string): string {
 }
 
 describe('the order of the questions', () => {
-  it('puts the folder step in a guest’s flow and leaves it out of your own', () => {
-    expect(stepsFor('guest')).toEqual(['check', 'kind', 'folders', 'confirm'])
+  it('puts the folder and account steps in a guest’s flow and leaves them out of your own', () => {
+    expect(stepsFor('guest')).toEqual(['check', 'kind', 'folders', 'accounts', 'confirm'])
     // Not a skipped step — an absent one. A person approving their own laptop is
     // not making a security decision, and a picker in front of that is a form
     // standing between somebody and their own files.
@@ -81,19 +89,20 @@ describe('the order of the questions', () => {
   })
 
   it('shows the longer flow before the kind is answered', () => {
-    // Three dots that become four would read as the app having added work; four
-    // that become three read as a step having been saved.
-    expect(stepsFor(null)).toHaveLength(4)
+    // Dots that grow would read as the app having added work; dots that shrink
+    // read as a step having been saved.
+    expect(stepsFor(null)).toHaveLength(5)
   })
 
   it('walks forwards and back without falling off either end', () => {
     expect(nextStep('check', null)).toBe('kind')
     expect(nextStep('kind', 'mine')).toBe('confirm')
     expect(nextStep('kind', 'guest')).toBe('folders')
+    expect(nextStep('folders', 'guest')).toBe('accounts')
     expect(nextStep('confirm', 'guest')).toBe('confirm')
     expect(previousStep('check', null)).toBeNull()
     expect(previousStep('confirm', 'mine')).toBe('kind')
-    expect(previousStep('confirm', 'guest')).toBe('folders')
+    expect(previousStep('confirm', 'guest')).toBe('accounts')
   })
 })
 
@@ -206,5 +215,79 @@ describe('one of the owner’s own machines', () => {
     expect(said).toContain('full access')
     expect(said).toContain('use the copilot')
     expect(said).not.toContain('Add a folder')
+  })
+})
+
+/**
+ * The fourth question — *"he can choose if he wants to give multiple or one or
+ * whatever"* — and the three answers it has to be able to express.
+ *
+ * The one worth pinning hardest is the third. A tick list alone has two states,
+ * some and all; *none* only exists because Selected-with-nothing-ticked is a
+ * real answer, and the step has to say what that answer does before somebody
+ * presses Continue past it.
+ */
+describe('choosing logins', () => {
+  it('offers this machine’s logins by their addresses, never by the profile key', () => {
+    const said = text(view({ step: 'accounts', kind: 'guest' as DeviceKind, accountMode: 'selected' }))
+    expect(said).toContain('work@example.com')
+    expect(said).toContain('imzapremium@gmail.com')
+    // The keys `profiles.ts` mints are the same on every machine and name
+    // nobody. They must never reach a screen where somebody is choosing.
+    expect(said).not.toContain('Default')
+  })
+
+  it('draws no tick list under All, because All means all', () => {
+    const said = text(view({ step: 'accounts', kind: 'guest' as DeviceKind, accountMode: 'all' }))
+    expect(said).not.toContain('work@example.com')
+  })
+
+  it('says what nothing ticked means, on the step where it is being chosen', () => {
+    const said = text(
+      view({ step: 'accounts', kind: 'guest' as DeviceKind, accountMode: 'selected', accounts: [] }),
+    )
+    expect(said).toContain('no account chip at all')
+  })
+
+  it('summarises the login choice as a count, and says nothing when it is everything', () => {
+    const some = text(
+      view({
+        step: 'confirm',
+        kind: 'guest' as DeviceKind,
+        folders: ['/Users/asad/proj'],
+        accountMode: 'selected',
+        accounts: ['p-work'],
+      }),
+    )
+    expect(some).toContain('one login')
+
+    const none = text(
+      view({
+        step: 'confirm',
+        kind: 'guest' as DeviceKind,
+        folders: ['/Users/asad/proj'],
+        accountMode: 'selected',
+        accounts: [],
+      }),
+    )
+    expect(none).toContain('none of your logins')
+
+    const all = text(
+      view({
+        step: 'confirm',
+        kind: 'guest' as DeviceKind,
+        folders: ['/Users/asad/proj'],
+        accountMode: 'all',
+      }),
+    )
+    // The ordinary case says it in one short line rather than in a clause on the
+    // end of the folder sentence.
+    expect(all).toContain('any login')
+  })
+
+  it('asks one of the owner’s own machines nothing about logins', () => {
+    const said = text(view({ step: 'confirm', kind: 'mine' as DeviceKind }))
+    expect(said).not.toContain('login')
+    expect(stepsFor('mine')).not.toContain('accounts')
   })
 })

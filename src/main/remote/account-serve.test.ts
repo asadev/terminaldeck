@@ -23,7 +23,7 @@ import { installPaths, resetPaths } from '../platform/paths'
 import { createProfile, resetProfilesCache } from '../profiles'
 import { configureSessionAccounts } from '../session-account'
 import type { SessionMeta } from '../../shared/types'
-import { createAccountServe } from './account-serve'
+import { createAccountServe, createLoginsServe } from './account-serve'
 import type { SignInReport } from '../profiles-signin'
 
 /**
@@ -241,6 +241,81 @@ describe('what a paired machine is told about a session’s account', () => {
       ok: false,
       message: 'That account has never signed in.',
       session: SESSION,
+    })
+  })
+})
+
+/**
+ * The machine-scoped half, which exists because the session-scoped one could not
+ * be asked without a session.
+ *
+ * The pane on the other machine used to say so in a sentence — *"its logins are
+ * read through a session running on it, and it has none open"* — which is
+ * exactly backwards from what somebody wants, since a machine with nothing
+ * running is when they open a settings pane to look at it.
+ */
+describe('what a paired machine is told about this machine’s logins', () => {
+  it('lists every login with no session in the question', async () => {
+    const work = createProfile('work@example.com')
+    const serve = createLoginsServe({
+      readSignIn: SILENT,
+      signIn: () => Promise.resolve({ ok: false, message: '', session: null }),
+    })
+
+    const accounts = await serve.read()
+    expect(accounts.map((row) => row.name)).toContain('work@example.com')
+    // The machine's own install is here too — it is a login, and the pane is a
+    // list of what this computer has rather than of what somebody added.
+    expect(accounts.some((row) => row.system)).toBe(true)
+    expect(accounts.find((row) => row.id === work.id)?.color).toBe(work.color)
+  })
+
+  it('reports who each login is, so the pane never has to fall back to the key', async () => {
+    createProfile('work@example.com')
+    const serve = createLoginsServe({
+      readSignIn: () => Promise.resolve(report()),
+      signIn: () => Promise.resolve({ ok: false, message: '', session: null }),
+    })
+
+    const accounts = await serve.read()
+    // The same field the chip reads, from the same probe. Without it the row for
+    // this machine's own install has nothing to print but `Default`, which is a
+    // key `profiles.ts` mints on every install and names nobody.
+    expect(accounts.every((row) => row.signIn?.account === 'sherzod.davlatov@gmail.com')).toBe(true)
+    // Never the command line: it names paths on *this* disk and could only be
+    // offered to somebody who cannot run it.
+    expect(JSON.stringify(accounts)).not.toContain('claude auth status')
+  })
+
+  it('hands the sign-in straight to the shell’s own, and passes its answer back unchanged', async () => {
+    /*
+     * The same property the switch above has, for the same reason: there is one
+     * thing on a machine that starts a session — the login shell's PATH, the
+     * fallback when a CLI is missing, the profile's redirected config directory
+     * — and a second arrangement of it written on the remote side is a session
+     * that is subtly not the same kind of session.
+     */
+    const calls: string[] = []
+    const serve = createLoginsServe({
+      readSignIn: SILENT,
+      signIn: (accountId) => {
+        calls.push(accountId)
+        return Promise.resolve({
+          ok: true,
+          message: 'A terminal is open on this computer for work@example.com. Finish the login in it.',
+          session: 'sess-new',
+        })
+      },
+    })
+
+    const answer = await serve.signIn('p-work')
+    expect(calls).toEqual(['p-work'])
+    // The session travels, because an interactive login nobody can see is one
+    // nobody can complete.
+    expect(answer).toEqual({
+      ok: true,
+      message: 'A terminal is open on this computer for work@example.com. Finish the login in it.',
+      session: 'sess-new',
     })
   })
 })

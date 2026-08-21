@@ -752,6 +752,60 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   )
 
   /**
+   * Which logins another machine has, with no session in the question.
+   *
+   * `null` when the question could not be asked — not a machine, not paired, a
+   * link that is down, a build over there that predates the capability, or this
+   * desktop being a guest on it. The pane draws the sentence for "nobody
+   * answered" rather than an empty list, because an empty list would be a claim
+   * about somebody's computer that three of those five cases make false.
+   *
+   * Deliberately **not** `machines:account:read` with the session argument left
+   * out. That channel asks about a terminal and is authorised as one; this asks
+   * about a machine and is served only to one of its owner's own devices — two
+   * questions, two doors, and a shared channel would have had to pick one.
+   */
+  ipcMain.handle('machines:logins:read', async (_event, id: unknown): Promise<unknown> => {
+    if (typeof id !== 'string') return null
+    return (await links.get(id)?.readLogins()) ?? null
+  })
+
+  /**
+   * Start signing one of another machine's logins in, over there.
+   *
+   * Always answers with a sentence, on every path, for the reason
+   * `machines:account:switch` does: somebody pressed a button, and a press that
+   * produces nothing is indistinguishable from a control that does not work.
+   *
+   * The answer carries the session that machine opened, because the agent CLIs
+   * authenticate interactively — the pane offers to open that terminal, which is
+   * where the URL to visit is printed. A sign-in that reported only `ok` would be
+   * a button that starts something invisible.
+   */
+  ipcMain.handle(
+    'machines:logins:signin',
+    async (
+      _event,
+      id: unknown,
+      accountId: unknown,
+    ): Promise<{ ok: boolean; message: string; session: string | null }> => {
+      if (typeof id !== 'string') {
+        return { ok: false, message: 'That is not a machine.', session: null }
+      }
+      // Shape-checked here as well as on the wire, for the reason
+      // `machines:account:switch` narrows its account id: everything past this
+      // line selects a configuration directory on somebody else's computer, and
+      // an `ipcMain.handle` argument is whatever the renderer put in it.
+      if (typeof accountId !== 'string' || accountId === '') {
+        return { ok: false, message: 'That is not an account.', session: null }
+      }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.', session: null }
+      return link.signInLogin(accountId)
+    },
+  )
+
+  /**
    * Put text into a session on another machine, without opening it here.
    *
    * ## Why this is not `machines:input`

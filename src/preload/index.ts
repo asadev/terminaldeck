@@ -319,18 +319,40 @@ const api = {
   startRemotePairing: (): Promise<unknown> => ipcRenderer.invoke('remote:pair'),
   cancelRemotePairing: (): Promise<unknown> => ipcRenderer.invoke('remote:pair:cancel'),
   /**
-   * Let a device in, saying in the same call what it is and what it may reach.
+   * Let a device in, saying in the same call what it is, what it may reach, and
+   * which of this machine's logins it may use.
    *
-   * Three arguments and no overload that omits them, which is the security fix
+   * Five arguments and no overload that omits them, which is the security fix
    * rather than an API preference. It used to take an id alone: approval
    * admitted the device and the folder choice lived in a separate block further
    * down the settings page that nobody had to visit, so the ordinary path let a
-   * phone in with every open project reachable. The handler writes the kind and
-   * the folders **before** it approves, so there is no instant in which a device
-   * is admitted with nothing decided about it.
+   * phone in with every open project reachable. The handler writes the kind, the
+   * folders and the logins **before** it approves, so there is no instant in
+   * which a device is admitted with nothing decided about it.
+   *
+   * The last two arrived on 2026-08-21 and follow the same rule: an *absent*
+   * account record means every login, so a guest approved without an answer must
+   * get a written one. A signature that cannot be called without one is the only
+   * version of that which cannot regress.
    */
-  approveRemoteDevice: (deviceId: string, kind: string, folders: string[]): Promise<unknown> =>
-    ipcRenderer.invoke('remote:device:approve', deviceId, kind, folders),
+  approveRemoteDevice: (
+    deviceId: string,
+    kind: string,
+    folders: string[],
+    accountMode: string,
+    accounts: string[],
+  ): Promise<unknown> =>
+    ipcRenderer.invoke('remote:device:approve', deviceId, kind, folders, accountMode, accounts),
+  /**
+   * Which of this machine's logins each device may use, and the one write.
+   *
+   * The third grant axis, beside `remoteFolders`/`remoteSessions`. Both answer
+   * with the whole list for the reason every channel on this screen does: the
+   * panel renders what the main process says rather than what it just asked for.
+   */
+  listAccountGrants: (): Promise<unknown> => ipcRenderer.invoke('remote:accounts'),
+  setAccountGrants: (deviceId: string, mode: string, accounts: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('remote:accounts:set', deviceId, mode, accounts),
   /**
    * Which devices are yours and which are guests.
    *
@@ -582,6 +604,27 @@ const api = {
     ipcRenderer.invoke('machines:account:read', id, sessionId),
   switchMachineAccount: (id: string, sessionId: string, accountId: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:account:switch', id, sessionId, accountId),
+  /*
+   * And the same two questions asked about the **machine** rather than about one
+   * of its terminals: every login it has, and signing one of them in over there.
+   *
+   * Two more channels rather than a flag on the two above, because the pair above
+   * cannot express either one. `account.read` carries a session id — the wire
+   * refuses one without — so a machine with nothing running had no readable
+   * logins at all, which is exactly when somebody opens a settings pane to look
+   * at it. And a sign-in is not a switch: nothing is being replaced, a terminal is
+   * being opened for a person to finish an interactive login in.
+   *
+   * The read answers `null` when the question could not be asked — a link that is
+   * down, an older build, or this desktop being a *guest* over there, which is
+   * the one absence the session pair does not have. The sign-in always answers
+   * with a sentence and with the id of the terminal that machine opened, which is
+   * the thing to put on screen: a login flow nobody can see is one nobody can
+   * complete.
+   */
+  readMachineLogins: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:logins:read', id),
+  signInMachineLogin: (id: string, accountId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:logins:signin', id, accountId),
   /*
    * The copilot on one of his other machines.
    *

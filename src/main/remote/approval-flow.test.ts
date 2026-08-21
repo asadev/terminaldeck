@@ -43,6 +43,7 @@ import {
 } from './server'
 import type { RemoteSession } from './protocol'
 import { FolderGrants } from './folder-grants'
+import { AccountGrants } from './account-grants'
 import { DeviceKinds, type DeviceKindRecord } from './device-kind'
 
 function tempDir(): string {
@@ -79,12 +80,14 @@ function harness(): {
   order: string[]
   kinds: DeviceKinds
   grants: FolderGrants
+  accounts: AccountGrants
 } {
   const handlers = new Map<string, (...args: unknown[]) => unknown>()
   const dir = tempDir()
   const order: string[] = []
   const kinds = new DeviceKinds(dir)
   const grants = new FolderGrants(dir)
+  const accounts = new AccountGrants(dir)
 
   // Wrapped rather than subclassed, so the real stores do the real writing and
   // this only watches. A stub would let the assertion pass against a store that
@@ -105,10 +108,30 @@ function harness(): {
     order.push('folders:cleared')
     return grants.forget(id)
   }
+  /*
+   * And the third store, watched the same way and for the same reason.
+   *
+   * The ordering matters here exactly as much as it does for the folders: an
+   * *absent* account record means every login on this machine, so a device
+   * admitted before its record is written is a device that reaches every login
+   * for as long as that interval lasts — and `RemoteAuth.verify` starts
+   * answering yes the moment the approval lands.
+   */
+  const watchedAccounts = Object.create(accounts) as AccountGrants
+  watchedAccounts.set = (id: string, mode: unknown, chosen: readonly unknown[]) => {
+    const kept = accounts.set(id, mode, chosen)
+    order.push(`accounts:${kept.mode}:${kept.accounts.length}`)
+    return kept
+  }
+  watchedAccounts.forget = (id: string): boolean => {
+    order.push('accounts:cleared')
+    return accounts.forget(id)
+  }
 
   const deps: RemoteIpcDeps = {
     sessions: fakeSessions(),
     folders: watchedGrants,
+    accountGrants: watchedAccounts,
     kinds: watchedKinds,
     webRoot: join(dir, 'nowhere'),
     storageDir: dir,
@@ -140,6 +163,7 @@ function harness(): {
     order,
     kinds,
     grants,
+    accounts,
   }
 }
 
@@ -149,13 +173,13 @@ describe('nothing is reachable before the choice is made', () => {
     // The device row is created by a redeem over the socket, which this harness
     // has no socket for — so the ordering is asserted against the handler's own
     // writes, which happen whether or not the id names a real pending device.
-    await h.call('remote:device:approve', 'dev-1', 'guest', ['/Users/apple/Projects/alpha'])
-    expect(h.order).toEqual(['kind:guest', 'folders:1'])
+    await h.call('remote:device:approve', 'dev-1', 'guest', ['/Users/apple/Projects/alpha'], 'all', [])
+    expect(h.order).toEqual(['kind:guest', 'folders:1', 'accounts:all:0'])
   })
 
   it('records an empty list for a guest approved without choosing a folder', async () => {
     const h = harness()
-    await h.call('remote:device:approve', 'dev-2', 'guest', [])
+    await h.call('remote:device:approve', 'dev-2', 'guest', [], 'selected', [])
     // The *record* is what matters, not the emptiness. An absent record used to
     // mean "everything this desktop has open"; an empty one means nowhere, and
     // that distinction is the entire fix.
@@ -165,12 +189,15 @@ describe('nothing is reachable before the choice is made', () => {
 
   it('leaves no folder list behind for one of the owner’s own machines', async () => {
     const h = harness()
-    await h.call('remote:device:approve', 'dev-3', 'mine', ['/Users/apple/Projects/alpha'])
+    await h.call('remote:device:approve', 'dev-3', 'mine', ['/Users/apple/Projects/alpha'], 'selected', ['p-work'])
     expect(h.kinds.kindOf('dev-3')).toBe('mine')
     // Cleared rather than stored: the reach rule never consults it for a `mine`
     // device, and a stale list is one mis-read away from coming back to life.
     expect(h.grants.granted('dev-3')).toBeNull()
-    expect(h.order).toEqual(['kind:mine', 'folders:cleared'])
+    // The same for the logins, including the ones a stale window sent: *"My
+    // device — full access. It's you at another keyboard."*
+    expect(h.accounts.granted('dev-3')).toBeNull()
+    expect(h.order).toEqual(['kind:mine', 'folders:cleared', 'accounts:cleared'])
   })
 
   it('approves nothing when the kind is missing or unknown', async () => {
@@ -184,13 +211,56 @@ describe('nothing is reachable before the choice is made', () => {
 
   it('refuses to change a kind that is already decided', async () => {
     const h = harness()
-    await h.call('remote:device:approve', 'dev-5', 'guest', [])
-    await h.call('remote:device:approve', 'dev-5', 'mine', [])
+    await h.call('remote:device:approve', 'dev-5', 'guest', [], 'all', [])
+    await h.call('remote:device:approve', 'dev-5', 'mine', [], 'all', [])
     expect(h.kinds.kindOf('dev-5')).toBe('guest')
     // The second attempt stops at the kind. Nothing after it runs, so a stale
-    // window cannot re-approve a guest as an owner and hand it a folder list on
-    // the way past.
-    expect(h.order).toEqual(['kind:guest', 'folders:0', 'kind:mine:refused'])
+    // window cannot re-approve a guest as an owner and hand it a folder list —
+    // or every login on this machine — on the way past.
+    expect(h.order).toEqual(['kind:guest', 'folders:0', 'accounts:all:0', 'kind:mine:refused'])
+  })
+
+  /*
+   * The account step, and the state it has to be able to reach.
+   *
+   * Asad: *"he can choose if he wants to give multiple or one or whatever."*
+   * Three answers, and the third one — none — is the one a store without a
+   * *record* cannot express, because an absent record is how every device paired
+   * before this step reaches every login.
+   */
+  it('records exactly the logins a guest was given', async () => {
+    const h = harness()
+    await h.call('remote:device:approve', 'dev-7', 'guest', ['/Users/apple/Projects/alpha'], 'selected', [
+      'p-work',
+    ])
+    expect(h.accounts.granted('dev-7')).toEqual({
+      deviceId: 'dev-7',
+      mode: 'selected',
+      accounts: ['p-work'],
+    })
+    expect(h.accounts.shares('dev-7', 'p-work')).toBe(true)
+    expect(h.accounts.shares('dev-7', 'system')).toBe(false)
+  })
+
+  it('records "none" as a written answer for a guest given no logins', async () => {
+    const h = harness()
+    await h.call('remote:device:approve', 'dev-8', 'guest', [], 'selected', [])
+    // The record is the point, not the emptiness — the same argument the folder
+    // half makes one test above. An absent record means every login here; this
+    // one means none, and `any()` is what turns it into a withheld capability
+    // rather than an empty menu.
+    expect(h.accounts.granted('dev-8')).toEqual({ deviceId: 'dev-8', mode: 'selected', accounts: [] })
+    expect(h.accounts.any('dev-8')).toBe(false)
+  })
+
+  it('reads a missing account answer as "none", never as everything', async () => {
+    const h = harness()
+    // A window a version behind, calling the channel with three arguments. The
+    // handler must not read the absence as consent: that is precisely the defect
+    // the folder half of this flow was written to close.
+    await h.call('remote:device:approve', 'dev-9', 'guest', [])
+    expect(h.accounts.granted('dev-9')).toEqual({ deviceId: 'dev-9', mode: 'selected', accounts: [] })
+    expect(h.accounts.any('dev-9')).toBe(false)
   })
 })
 

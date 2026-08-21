@@ -73,6 +73,8 @@ const NOTHING: RemoteActions = {
   approvalStep: () => {},
   approvalKind: () => {},
   approvalAddFolder: () => {},
+  approvalAccountMode: () => {},
+  approvalToggleAccount: () => {},
   approvalRemoveFolder: () => {},
   deny: () => {},
   revoke: () => {},
@@ -1899,15 +1901,56 @@ describe('approving and refusing', () => {
       approveRemoteDevice: [{ id: 'dev-1', name: 'Asad’s iPhone', status: 'approved' }],
     })
     const h = harness(bridge)
-    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'])
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'], 'all', [])
     await h.settled()
-    // The kind and the folders travel with the approval, in the same call. A
-    // channel that took only an id is the arrangement in which a device was let
-    // in with the folder question unanswered — and unanswered used to mean yes.
+    // The kind, the folders **and the logins** travel with the approval, in the
+    // same call. A channel that took only an id is the arrangement in which a
+    // device was let in with the folder question unanswered — and unanswered
+    // used to mean yes. The account question has the same shape and the same
+    // trap: an absent record means every login.
     expect(calls).toEqual([
-      'approveRemoteDevice(dev-1, guest, /Users/apple/Projects/alpha)',
+      'approveRemoteDevice(dev-1, guest, /Users/apple/Projects/alpha, all, )',
     ])
     expect(h.notices).toEqual([{ ok: true, text: 'Asad’s iPhone can open one folder.' }])
+  })
+
+  /*
+   * The account choice, read back in the sentence — and only when it is not
+   * *everything*.
+   *
+   * *"He can choose if he wants to give multiple or one or whatever."* The two
+   * narrowed answers are the ones somebody chose deliberately, so they are the
+   * ones worth being told about; putting "and can use any login" on the ordinary
+   * case is the noise this panel keeps having removed.
+   */
+  it('carries the login choice, and reads back the narrowed ones', async () => {
+    const { bridge, calls } = fakeBridge({
+      approveRemoteDevice: [{ id: 'dev-1', name: 'Asad’s iPhone', status: 'approved' }],
+    })
+    const h = harness(bridge)
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'], 'selected', ['p-work'])
+    await h.settled()
+    expect(calls).toEqual([
+      'approveRemoteDevice(dev-1, guest, /Users/apple/Projects/alpha, selected, p-work)',
+    ])
+    expect(h.notices).toEqual([
+      { ok: true, text: 'Asad’s iPhone can open one folder, with one of your logins.' },
+    ])
+  })
+
+  it('says out loud when a device was let in with none of the logins', async () => {
+    const { bridge } = fakeBridge({
+      approveRemoteDevice: [{ id: 'dev-1', name: 'Asad’s iPhone', status: 'approved' }],
+    })
+    const h = harness(bridge)
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'], 'selected', [])
+    await h.settled()
+    // Not silence. None is a real answer and the person who chose it has to see
+    // that it landed, because what it produces on the other machine is an
+    // *absence* — no account chip at all — which is hard to tell from a bug.
+    expect(h.notices).toEqual([
+      { ok: true, text: 'Asad’s iPhone can open one folder, with none of your logins.' },
+    ])
   })
 
   it('denies through the revoke channel, and never through the approve one', async () => {
@@ -1944,7 +1987,7 @@ describe('approving and refusing', () => {
       approveRemoteDevice: [{ id: 'dev-1', name: 'Asad’s iPhone', status: 'revoked' }],
     })
     const h = harness(bridge)
-    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'])
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'], 'all', [])
     await h.settled()
     expect(h.notices).toEqual([{ ok: false, text: expect.stringContaining('did not take') }])
   })
@@ -1952,7 +1995,7 @@ describe('approving and refusing', () => {
   it('falls back to what it asked for when the answer is not a device list', async () => {
     const { bridge } = fakeBridge({ approveRemoteDevice: { ok: true } })
     const h = harness(bridge)
-    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'])
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'], 'all', [])
     await h.settled()
     expect(h.notices).toEqual([{ ok: true, text: 'Asad’s iPhone can open one folder.' }])
     expect(deviceStateAfter({ ok: true }, 'dev-1')).toBeUndefined()
@@ -2039,7 +2082,7 @@ describe('a channel this build does not have', () => {
     h.actions.enable(true)
     h.actions.pair()
     h.actions.closePairing()
-    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'])
+    h.actions.approve(PENDING_DEVICE, 'guest', ['/Users/apple/Projects/alpha'], 'all', [])
     h.actions.deny(PENDING_DEVICE)
     h.actions.revoke(PENDING_DEVICE)
     h.actions.disconnect(CONNECTION)
