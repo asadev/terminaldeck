@@ -474,6 +474,17 @@ describe('what a public host offers', () => {
        */
       CAPABILITY.account,
       /*
+       * `logins` is the same decision one step further, and the step matters.
+       *
+       * That one is a stranger reading a session's login and moving that session
+       * onto another. This is a stranger reading **every login the box has** with
+       * no session in the question, and asking it to open a terminal running an
+       * agent's own sign-in flow — on hardware they do not own. Withheld three
+       * times over on the demo box: this list, the absent `signInAccount` seam,
+       * and `ownDevice`, which no visitor could ever satisfy.
+       */
+      CAPABILITY.logins,
+      /*
        * `chat` is withheld, and it is the plainest one on this list.
        *
        * It hands over **what the owner said to their agent**, in words, read off

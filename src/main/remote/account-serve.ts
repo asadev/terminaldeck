@@ -49,7 +49,7 @@ import { listProfiles, type Profile } from '../profiles'
 import { readSignIn, type SignInReport } from '../profiles-signin'
 import { sessionAccount } from '../session-account'
 import type { AccountWire } from './protocol'
-import type { RemoteAccountAccess } from './server'
+import type { RemoteAccountAccess, RemoteLoginsAccess } from './server'
 
 export interface AccountServeOptions {
   /**
@@ -115,9 +115,7 @@ export function createAccountServe(options: AccountServeOptions): RemoteAccountA
        * the `catch` is for the seam rather than for it: a probe that threw would
        * otherwise take the whole answer down and leave the chip with no list.
        */
-      const accounts = await Promise.all(
-        listProfiles().map(async (profile) => toWire(profile, await probe(profile).catch(() => null))),
-      )
+      const accounts = await everyAccount(probe)
       const session = options.describeSession(sessionId)
       if (session === null) return { current: null, accounts }
       /*
@@ -201,5 +199,78 @@ function toWire(profile: Profile, signIn: SignInReport | null): AccountWire {
             detail: signIn.detail,
           },
         }),
+  }
+}
+
+/**
+ * Every login on this machine, each with what its own CLI said about it.
+ *
+ * One reader for both seams below, which is the property worth having: the chip
+ * over a session and the pane listing a machine are then two callers of one
+ * list, and there is no arrangement in which they disagree about what this
+ * computer has.
+ *
+ * In parallel because they are independent processes and a person has a handful
+ * of accounts; each answer is memoised for thirty seconds inside `readSignIn`,
+ * so a second read — the one that happens when somebody opens a menu — spawns
+ * nothing at all. `readSignIn` never rejects, and the `catch` is for the seam
+ * rather than for it: a probe that threw would otherwise take the whole answer
+ * down and leave the caller with no list.
+ */
+async function everyAccount(probe: (profile: Profile) => Promise<SignInReport>): Promise<AccountWire[]> {
+  return Promise.all(listProfiles().map(async (profile) => toWire(profile, await probe(profile).catch(() => null))))
+}
+
+export interface LoginsServeOptions {
+  /** The same seam {@link AccountServeOptions.readSignIn} is, for the same reason. */
+  readSignIn?: (profile: Profile) => Promise<SignInReport>
+  /**
+   * Start signing one of this machine's logins in, here.
+   *
+   * Handed in rather than built, exactly as {@link AccountServeOptions.switchAccount}
+   * is and for the same reason: starting a session is a lifecycle operation that
+   * belongs to the shell that owns it — the login shell's PATH, the fallback when
+   * the CLI is not installed, the profile's redirected configuration directory —
+   * and a second arrangement of those written here would be a session that is
+   * subtly not the same kind of session.
+   *
+   * Its absence is what stops this machine advertising `CAPABILITY.logins`, so a
+   * host that can list logins and start nothing offers no sign-in rather than
+   * one that is refused after the press. See `SessionAccess.logins`.
+   */
+  signIn(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
+}
+
+/**
+ * The machine-scoped login seam a paired machine reaches.
+ *
+ * ## Why it is beside the session-scoped one rather than inside it
+ *
+ * Because the two answer different questions with different doors, and the
+ * settings pane could not ask the first one at all. `account.read` carries a
+ * session id — the parser refuses one without — so a machine's logins were
+ * readable only *through* something running on it, and the pane said so in a
+ * sentence: *"its logins are read through a session running on it, and it has
+ * none open."* That is precisely backwards from what somebody wants, which is to
+ * look at a machine when nothing is happening on it. Asad, 2026-08-21:
+ *
+ *   > *"So we can click and manage what accounts are there, what we want to
+ *   > login, logout, things, access. All of this we can just manage from this."*
+ *
+ * ## What is not here, and where it would go
+ *
+ * **Sign out.** Nothing in this app signs an agent out on any machine: there is
+ * no logout command in `agent-catalog.ts` — `signInArgs` has no counterpart —
+ * and the Accounts pane at this desk offers no such control either. A verb here
+ * would therefore be a frame whose only possible answer is an apology, which is
+ * the shape of defect this app keeps being reviewed for. It goes in when the
+ * local one does, and both need the same missing thing first: each agent's own
+ * logout command, measured rather than guessed, in the catalogue.
+ */
+export function createLoginsServe(options: LoginsServeOptions): RemoteLoginsAccess {
+  const probe = options.readSignIn ?? ((profile: Profile) => readSignIn(profile))
+  return {
+    read: () => everyAccount(probe),
+    signIn: (accountId) => options.signIn(accountId),
   }
 }

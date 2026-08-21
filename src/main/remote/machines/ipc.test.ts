@@ -227,6 +227,12 @@ function rig(
         readAccount: (_id: string) => Promise.resolve(null),
         switchAccount: (_id: string, _accountId: string) =>
           Promise.resolve({ ok: false, message: 'That machine cannot change an account from here.', session: null }),
+        // The machine's own login list, and starting a sign-in over there. Null
+        // and a sentence, the same split the account pair above makes and for the
+        // same reason.
+        readLogins: () => Promise.resolve(null),
+        signInLogin: (_accountId: string) =>
+          Promise.resolve({ ok: false, message: 'That machine does not manage its logins from here.', session: null }),
         // Typing into a session over there without attaching to it. Recorded
         // rather than answered `true`, because the argument that has to survive
         // this channel is the text: a handler that dropped it would look
@@ -330,6 +336,16 @@ describe('launching', () => {
         'machines:forget',
         'machines:input',
         'machines:list',
+        /*
+         * The machine's own logins, and starting a sign-in on it. Two channels
+         * beside the two session ones above rather than a flag on them, because
+         * neither could express this: `account.read` carries a session id, so a
+         * machine with nothing running had no readable logins at all — which is
+         * exactly when somebody opens a settings pane to look at it. See
+         * `CAPABILITY.logins`.
+         */
+        'machines:logins:read',
+        'machines:logins:signin',
         // The two that make remote localhost work in both directions. `ports`
         // is the refresh — the link asks once per welcome and pushes the answer,
         // so this is the button for "I have just started a dev server over
@@ -780,6 +796,14 @@ describe('waking', () => {
             readAccount: (_id: string) => Promise.resolve(null),
             switchAccount: (_id: string, _accountId: string) =>
               Promise.resolve({ ok: false, message: 'That machine cannot change an account from here.', session: null }),
+            // And the same two asked about the machine rather than a session.
+            readLogins: () => Promise.resolve(null),
+            signInLogin: (_accountId: string) =>
+              Promise.resolve({
+                ok: false,
+                message: 'That machine does not manage its logins from here.',
+                session: null,
+              }),
             send: () => Promise.resolve({ ok: true, message: 'Sent.' }),
           }
         },

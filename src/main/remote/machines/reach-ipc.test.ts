@@ -186,6 +186,12 @@ function rig(options: { online: boolean }): Rig {
         readAccount: (_id: string) => Promise.resolve(null),
         switchAccount: (_id: string, _accountId: string) =>
           Promise.resolve({ ok: false, message: 'That machine cannot change an account from here.', session: null }),
+        // The machine's own login list, and starting a sign-in over there. Null
+        // and a sentence, the same split the account pair above makes and for the
+        // same reason.
+        readLogins: () => Promise.resolve(null),
+        signInLogin: (_accountId: string) =>
+          Promise.resolve({ ok: false, message: 'That machine does not manage its logins from here.', session: null }),
       }
     },
   })

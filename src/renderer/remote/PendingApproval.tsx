@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Notice } from '../settings/controls'
 import { errorText } from '../settings/settings-bridge'
 import { detectPlatform, type UiPlatform } from '../platform'
-import { DeviceApproval, useApprovalFlow, type DeviceKind } from './DeviceApproval'
+import { DeviceApproval, useApprovalFlow, useApprovalLogins, type DeviceKind } from './DeviceApproval'
 import { deviceStateAfter, toRemoteDevices, type RemoteDevice } from './RemoteSection'
 
 /**
@@ -51,7 +51,13 @@ import { deviceStateAfter, toRemoteDevices, type RemoteDevice } from './RemoteSe
 /** Everything this flow calls. Narrow on purpose — see the class comment. */
 export interface PendingApprovalBridge {
   listRemoteDevices(): Promise<unknown>
-  approveRemoteDevice(deviceId: string, kind: string, folders: string[]): Promise<unknown>
+  approveRemoteDevice(
+    deviceId: string,
+    kind: string,
+    folders: string[],
+    accountMode: string,
+    accounts: string[],
+  ): Promise<unknown>
   pickProjectFolder(): Promise<string | null>
 }
 
@@ -232,8 +238,25 @@ export function PendingApproval({
     }
   }, [flow, host, onPicking])
 
+  /*
+   * This machine's logins, for the accounts step.
+   *
+   * Read here rather than inside the flow component, which is pure — see
+   * `useApprovalLogins`. It is a probe per account, and it is paid only once the
+   * roster has confirmed there is really a device waiting: this flow is opened
+   * from an alert that may be a minute old, and an alert about a device that has
+   * already been let in must not spawn three CLIs on the way to saying so.
+   */
+  const logins = useApprovalLogins(load.at === 'ready')
+
   const approve = useCallback(
-    async (device: RemoteDevice, kind: DeviceKind, folders: string[]): Promise<void> => {
+    async (
+      device: RemoteDevice,
+      kind: DeviceKind,
+      folders: string[],
+      accountMode: string,
+      accounts: string[],
+    ): Promise<void> => {
       if (!host) return
       setBusy('approve')
       setProblem(null)
@@ -247,7 +270,7 @@ export function PendingApproval({
          * at a closed sheet and a phone that never comes in.
          */
         const outcome = approvalOutcome(
-          await host.approveRemoteDevice(device.id, kind, folders),
+          await host.approveRemoteDevice(device.id, kind, folders, accountMode, accounts),
           device,
         )
         if (!alive.current) return
@@ -301,6 +324,9 @@ export function PendingApproval({
       device={device}
       platform={platform}
       folders={flow.folders}
+      logins={logins}
+      accountMode={flow.accountMode}
+      accounts={flow.accounts}
       step={flow.step}
       kind={flow.kind}
       busy={busy !== null}
@@ -309,7 +335,11 @@ export function PendingApproval({
       onKind={flow.pickKind}
       onAddFolder={() => void addFolder()}
       onRemoveFolder={flow.removeFolder}
-      onApprove={() => void approve(device, flow.kind ?? 'guest', flow.folders)}
+      onAccountMode={flow.setAccountMode}
+      onToggleAccount={flow.toggleAccount}
+      onApprove={() =>
+        void approve(device, flow.kind ?? 'guest', flow.folders, flow.accountMode, flow.accounts)
+      }
       onCancel={onDone}
     />
   )

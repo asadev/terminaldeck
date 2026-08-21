@@ -16,9 +16,13 @@ import {
 import { asView, resolveBridge, type MachinesBridge, type MachinesView } from '../machines/types'
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
 import { DeviceSessions, type SessionDevice } from './DeviceSessions'
+import { DeviceLogins } from './DeviceLogins'
 import {
   DeviceApproval,
   nextStep,
+  useApprovalLogins,
+  type AccountShare,
+  type ApprovalLogin,
   type ApprovalStep,
   type DeviceKind,
 } from './DeviceApproval'
@@ -188,7 +192,13 @@ export interface RemoteBridge {
    * The main process now writes the kind and the folders *before* it approves,
    * so a caller that cannot answer both cannot let anything in.
    */
-  approveRemoteDevice(deviceId: string, kind: string, folders: string[]): Promise<unknown>
+  approveRemoteDevice(
+    deviceId: string,
+    kind: string,
+    folders: string[],
+    accountMode: string,
+    accounts: string[],
+  ): Promise<unknown>
   /** Which devices are yours and which are guests. Read-only; a kind never changes. */
   listRemoteDeviceKinds(): Promise<unknown>
   /** The app's own native folder chooser, the one Open Project uses. */
@@ -292,6 +302,10 @@ export interface ApprovalState {
   kind: DeviceKind | null
   /** Chosen so far. Empty is the starting state and a real answer. */
   folders: string[]
+  /** All of this machine's logins, or only the ticked ones. */
+  accountMode: AccountShare
+  /** Ticked login ids. Under `selected`, empty means none — a real answer. */
+  accounts: string[]
 }
 
 /**
@@ -1054,7 +1068,13 @@ export interface RemoteActions {
    * assembling a different argument list per kind is a caller that can assemble
    * the wrong one.
    */
-  approve(device: RemoteDevice, kind: DeviceKind, folders: string[]): void
+  approve(
+    device: RemoteDevice,
+    kind: DeviceKind,
+    folders: string[],
+    accountMode: AccountShare,
+    accounts: string[],
+  ): void
   /** Open the step-by-step flow for one pending device. */
   beginApproval(device: RemoteDevice): void
   /** Close it without letting anything in. The device stays pending. */
@@ -1064,6 +1084,9 @@ export interface RemoteActions {
   approvalKind(kind: DeviceKind): void
   approvalAddFolder(): void
   approvalRemoveFolder(folder: string): void
+  /** Choose how much of this machine's logins the device gets, and which. */
+  approvalAccountMode(mode: AccountShare): void
+  approvalToggleAccount(accountId: string, on: boolean): void
   deny(device: RemoteDevice): void
   revoke(device: RemoteDevice): void
   disconnect(connection: RemoteConnection): void
@@ -1103,6 +1126,15 @@ export interface RemoteViewProps {
   kinds?: Map<string, DeviceKind> | null
   /** The device whose approval flow is open, and where it has got to. */
   approving?: ApprovalState | null
+  /**
+   * This machine's logins, for the approval flow's accounts step.
+   *
+   * Data rather than a node, unlike `folders` below, and the difference is what
+   * each one is: that is a whole panel with its own store, this is a list the
+   * flow ticks. Passed in because reading it costs a probe per account and this
+   * view is a pure function of its props — see `useApprovalLogins`.
+   */
+  logins?: readonly ApprovalLogin[]
   /**
    * The outward half: the machines this desktop can reach, and the field a code
    * from one of them is typed into.
@@ -1216,6 +1248,7 @@ export function RemoteView({
   busy,
   kinds = null,
   approving = null,
+  logins = [],
   machines,
   folders = null,
   actions,
@@ -1554,6 +1587,9 @@ export function RemoteView({
               device={approving.device}
               platform={platform}
               folders={approving.folders}
+              logins={logins}
+              accountMode={approving.accountMode}
+              accounts={approving.accounts}
               step={approving.step}
               kind={approving.kind}
               busy={busy !== null}
@@ -1562,8 +1598,16 @@ export function RemoteView({
               onKind={actions.approvalKind}
               onAddFolder={actions.approvalAddFolder}
               onRemoveFolder={actions.approvalRemoveFolder}
+              onAccountMode={actions.approvalAccountMode}
+              onToggleAccount={actions.approvalToggleAccount}
               onApprove={() =>
-                actions.approve(approving.device, approving.kind ?? 'guest', approving.folders)
+                actions.approve(
+                  approving.device,
+                  approving.kind ?? 'guest',
+                  approving.folders,
+                  approving.accountMode,
+                  approving.accounts,
+                )
               }
               onCancel={actions.cancelApproval}
             />
@@ -2319,7 +2363,10 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
       void run('pair', () => invoke(bridge.cancelRemotePairing, 'cancel pairing'), null)
     },
     beginApproval: (device) =>
-      setApproving({ device, step: 'check', kind: null, folders: [] }),
+      // `all` to begin with, for the reason `useApprovalFlow` states: it is the
+      // behaviour every device paired before this step has, so the flow starts
+      // where the app already is and a person narrows from there.
+      setApproving({ device, step: 'check', kind: null, folders: [], accountMode: 'all', accounts: [] }),
     // The device stays pending. Cancelling is *not* denying — the person may
     // have walked away to read the fingerprint off the phone — and a cancel that
     // quietly revoked would be unrecoverable, because a revoked device can never
@@ -2338,6 +2385,10 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
         // would be a list nothing reads, and one that reappeared on switching
         // back would be the screen remembering a choice that was withdrawn.
         folders: kind === 'mine' ? [] : state.folders,
+        // And the login choice with them, on the same argument: one of your own
+        // machines reaches every login here, so there is nothing stored for it.
+        accountMode: kind === 'mine' ? 'all' : state.accountMode,
+        accounts: kind === 'mine' ? [] : state.accounts,
       })),
     approvalAddFolder: () =>
       void run(
@@ -2360,15 +2411,34 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
       ),
     approvalRemoveFolder: (folder) =>
       edit((state) => ({ ...state, folders: state.folders.filter((one) => one !== folder) })),
-    approve: (device, kind, folders) =>
+    approvalAccountMode: (mode) =>
+      edit((state) => ({
+        ...state,
+        accountMode: mode,
+        // Switching to *Selected* starts from nothing ticked — the fail-closed
+        // direction, and the same one the sessions panel takes: the press is
+        // being made to take something away.
+        accounts: mode === 'all' ? [] : state.accounts,
+      })),
+    approvalToggleAccount: (accountId, on) =>
+      edit((state) => ({
+        ...state,
+        accountMode: 'selected',
+        accounts: on
+          ? state.accounts.includes(accountId)
+            ? state.accounts
+            : [...state.accounts, accountId]
+          : state.accounts.filter((one) => one !== accountId),
+      })),
+    approve: (device, kind, folders, accountMode, accounts) =>
       settle(
         `device:${device.id}`,
         // Bound here rather than widening `settle`, which every other action on
-        // this panel calls with a bare id. One action needs three arguments; the
+        // this panel calls with a bare id. One action needs five arguments; the
         // helper that reads the roster back afterwards needs none of them.
         bridge.approveRemoteDevice === undefined
           ? undefined
-          : (id: string) => bridge.approveRemoteDevice!(id, kind, folders),
+          : (id: string) => bridge.approveRemoteDevice!(id, kind, folders, accountMode, accounts),
         'approve device',
         device,
         'approved',
@@ -2376,7 +2446,22 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
           ? `${device.name} has full access.`
           : folders.length === 0
             ? `${device.name} is in, and can open nothing until you choose a folder for it.`
-            : `${device.name} can open ${folders.length === 1 ? 'one folder' : `${folders.length} folders`}.`,
+            : /*
+               * The folder count, and the login count only when it is not
+               * *everything*.
+               *
+               * A sentence that named both every time would put "and can use any
+               * login" on the ordinary case, which is the noise this panel keeps
+               * having removed. The narrowed cases are the ones worth reading
+               * back, because they are the ones somebody chose.
+               */
+              `${device.name} can open ${folders.length === 1 ? 'one folder' : `${folders.length} folders`}${
+                accountMode === 'all'
+                  ? ''
+                  : accounts.length === 0
+                    ? ', with none of your logins'
+                    : `, with ${accounts.length === 1 ? 'one of your logins' : `${accounts.length} of your logins`}`
+              }.`,
         () => setApproving(null),
       ),
     // Deny is a revoke of something that was never approved. The registry has
@@ -2456,6 +2541,19 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
   const [now, setNow] = useState(() => Date.now())
   /** The approval flow on screen, or null. One at a time — see `ApprovalState`. */
   const [approving, setApproving] = useState<ApprovalState | null>(null)
+  /**
+   * This machine's logins, named as a person would recognise them.
+   *
+   * For the approval flow's accounts step — *"he can choose if he wants to give
+   * multiple or one or whatever"* — and for nothing else on this screen. The
+   * per-device editor below reads its own, because it is mounted whether or not
+   * anything is being approved.
+   *
+   * Passed `approving !== null` rather than `true`: naming a login costs a probe
+   * per account, and this panel is on screen every time somebody opens the
+   * Remote pane. Only a flow that is actually asking the question pays for it.
+   */
+  const logins = useApprovalLogins(approving !== null)
   /**
    * Device id → what it is, or null before the first read.
    *
@@ -2777,6 +2875,16 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       busy={busy}
       kinds={kinds}
       approving={approving}
+      /*
+        This machine's logins, for the approval flow's accounts step.
+
+        Read in the container rather than in the view, like every other fetch on
+        this screen: `RemoteView` is pinned by handing it props and calling
+        `renderToStaticMarkup`, which never runs an effect. It probes each
+        account's own CLI — see `useApprovalLogins` for why that cost is right
+        here and nowhere else.
+      */
+      logins={logins}
       machines={machinesHalf}
       actions={actions}
       now={now}
@@ -2817,6 +2925,25 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
               paired as one of his own.
             */}
             <DeviceSessions devices={sessionDevices(state.devices)} />
+            {/*
+              And the third axis, under the other two.
+
+              *"He can choose if he wants to give multiple or one or whatever."*
+              The approval flow asks it when a device is let in; this is where
+              the answer is changed afterwards, which is the half of *"login,
+              logout, things, access — all of this we can just manage from
+              this"* that this screen owns.
+
+              Every approved device, like the session panel and unlike the
+              folder one. The approval flow asks a *guest* the question and
+              leaves one of his own machines on everything — "full access, it's
+              you at another keyboard" — but both of the machines in his rail are
+              paired as his own, so a panel that listed guests alone is a panel he
+              would never see. Narrowing one of his own afterwards is a
+              deliberate act here rather than a promise broken on the approval
+              card, and `AccountGrants.shares` never asks what kind a device is.
+            */}
+            <DeviceLogins devices={sessionDevices(state.devices)} />
           </>
         ) : null
       }

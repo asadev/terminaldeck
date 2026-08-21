@@ -688,11 +688,32 @@ describe('the lists read sign-in answers rather than asking for them', () => {
     )
     expect(askers).toEqual([
       'renderer/copilot/CopilotSetup.tsx',
+      'renderer/remote/DeviceApproval.tsx',
+      'renderer/remote/DeviceLogins.tsx',
       'renderer/settings/sections/AccountsSection.tsx',
       'renderer/shell/AccountChip.tsx',
     ])
     expect(read('renderer/shell/AccountChip.tsx')).toContain('useAccounts(true, menu.open)')
     expect(read('renderer/copilot/CopilotSetup.tsx')).toContain('useAccounts(open, false)')
+    /*
+     * The two that arrived with the per-device login grant, and they pay
+     * opposite prices for opposite reasons.
+     *
+     * The approval flow probes, because its whole question is *which of my
+     * logins do I lend this computer* and two rows both reading "Your own Claude
+     * Code install" is not a choice. It probes only while a device is actually
+     * being approved — `useApprovalLogins(open)`, passed `approving !== null` by
+     * the settings panel that is mounted whenever the Remote pane is open.
+     *
+     * The per-device editor never probes. It is drawn every time somebody looks
+     * at their devices, and the cost of naming a login there is a spawn per
+     * account per look. The consequence is stated where it is taken: a row whose
+     * address has not been read this launch says which install it is instead,
+     * and `knownSignIns` fills it in for free once the Accounts pane has been
+     * opened.
+     */
+    expect(read('renderer/remote/DeviceApproval.tsx')).toContain('useAccounts(open, open)')
+    expect(read('renderer/remote/DeviceLogins.tsx')).toContain('useAccounts(true, false)')
   })
 })
 

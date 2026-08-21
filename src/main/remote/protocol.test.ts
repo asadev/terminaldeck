@@ -103,6 +103,8 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'session.send': true,
   'account.read': true,
   'account.switch': true,
+  'logins.read': true,
+  'logins.signin': true,
   'chat.read': true,
 }
 
@@ -147,6 +149,8 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'usage.reading': true,
   'account.state': true,
   'account.switched': true,
+  'logins.state': true,
+  'logins.signedin': true,
   'session.sent': true,
   'chat.rows': true,
 }
@@ -259,6 +263,11 @@ const VALID_CLIENT: ClientMessage[] = [
   // it. On every machine this app has ever run on, so a class that refused it
   // would refuse the one row that is always there.
   { t: 'account.switch', rid: 'acc-3', id: SESSION_ID, accountId: 'system:codex' },
+  // The machine's own list, with no session in the question — the frame a
+  // settings pane sends about a computer rather than about a terminal — and
+  // signing one of those logins in over there.
+  { t: 'logins.read', rid: 'lgn-1' },
+  { t: 'logins.signin', rid: 'lgn-2', accountId: 'system:codex' },
   // The conversation, and the same view asking what has changed since.
   { t: 'chat.read', rid: 'cht-1', id: SESSION_ID, tail: false },
   { t: 'chat.read', rid: 'cht-2', id: SESSION_ID, tail: true },
@@ -607,6 +616,23 @@ const VALID_SERVER: ServerMessage[] = [
     message: 'Running as work@example.com.',
     session: '9a2f77d7-c0a1-4b3e-8f1d-4f1c2ae08f1d',
   },
+  // The machine's list, with no `current` in it: there is no session in the
+  // question, so there is nothing that could be running.
+  {
+    t: 'logins.state',
+    rid: 'lgn-1',
+    accounts: [
+      { id: 'work-example-com', name: 'work@example.com', provider: 'claude', color: 'acct-3', system: false },
+    ],
+  },
+  // And the terminal that machine opened so the login can be finished on it.
+  {
+    t: 'logins.signedin',
+    rid: 'lgn-2',
+    ok: true,
+    message: 'A terminal is open on that machine; finish the login in it.',
+    session: '9a2f77d7-c0a1-4b3e-8f1d-4f1c2ae08f1d',
+  },
 ]
 
 /**
@@ -684,6 +710,38 @@ describe('the account capability', () => {
     expect(parseClientMessage({ t: 'account.read', id: SESSION_ID }).ok).toBe(false)
     expect(parseClientMessage({ t: 'account.read', rid: 'acc-1' }).ok).toBe(false)
     expect(parseClientMessage({ t: 'account.switch', rid: 'acc-1', id: SESSION_ID }).ok).toBe(false)
+  })
+
+  /*
+   * The machine-scoped pair, whose whole distinction from the two above is that
+   * they carry no session — so the thing worth pinning is that they are not
+   * quietly *required* to, and that the id they do carry goes through the same
+   * class a configuration directory has always gone through.
+   */
+  it('reads a machine’s logins with no session in the question, and still guards the account id', () => {
+    expect(parseClientMessage({ t: 'logins.read', rid: 'lgn-1' }).ok).toBe(true)
+    expect(parseClientMessage({ t: 'logins.read' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'logins.signin', rid: 'lgn-2' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'logins.signin', rid: 'lgn-2', accountId: 'system:codex' }).ok).toBe(true)
+    for (const bad of ['../escape', 'a/b', 'a\\b', '.hidden', '', 'x'.repeat(300)]) {
+      const result = parseClientMessage({ t: 'logins.signin', rid: 'lgn-2', accountId: bad })
+      expect(result.ok, `account id ${JSON.stringify(bad)} was accepted`).toBe(false)
+    }
+  })
+
+  it('reads an empty login list as an answer, and a sign-in that opened nothing as null', () => {
+    const empty = parseServerMessage(JSON.stringify({ t: 'logins.state', rid: 'lgn-1', accounts: [] }))
+    if (!empty.ok || empty.message.t !== 'logins.state') throw new Error('unreachable')
+    // A machine with nothing signed in, which is not the same fact as a read
+    // that failed — that one arrives as an `error` frame.
+    expect(empty.message.accounts).toEqual([])
+
+    const refused = parseServerMessage(
+      JSON.stringify({ t: 'logins.signedin', rid: 'lgn-2', ok: false, message: 'No such login here.' }),
+    )
+    if (!refused.ok || refused.message.t !== 'logins.signedin') throw new Error('unreachable')
+    expect(refused.message.ok).toBe(false)
+    expect(refused.message.session).toBeNull()
   })
 
   it('drops an account row a menu could not draw, and keeps the rest', () => {

@@ -107,6 +107,8 @@ export interface MachineAccountState {
 interface Bridge {
   readMachineAccount?(machineId: string, sessionId: string): Promise<unknown>
   switchMachineAccount?(machineId: string, sessionId: string, accountId: string): Promise<unknown>
+  readMachineLogins?(machineId: string): Promise<unknown>
+  signInMachineLogin?(machineId: string, accountId: string): Promise<unknown>
 }
 
 /**
@@ -259,6 +261,138 @@ export async function switchMachineAccount(
     return { ok: false, message: 'This build has no way to change that session’s account.', session: null }
   }
   const answer = await call.call(host, machineId, sessionId, accountId)
+  if (!isRecord(answer)) {
+    return { ok: false, message: 'That machine did not answer.', session: null }
+  }
+  return {
+    ok: answer.ok === true,
+    message: typeof answer.message === 'string' ? answer.message : '',
+    session: typeof answer.session === 'string' && answer.session !== '' ? answer.session : null,
+  }
+}
+
+/* ------------------------------------------------- the machine, not a session -- */
+
+/**
+ * Every login on another machine, asked about the **machine**.
+ *
+ * ## Why this is not `useMachineAccount` with the session left out
+ *
+ * Because the wire will not have it: `account.read` carries a session id and the
+ * parser refuses one without, so a machine's logins were readable only through
+ * something running on it. That is backwards from what a settings pane wants,
+ * which is to look at a computer *when nothing is happening on it* — and it is
+ * what the accounts pane had to say in a sentence:
+ *
+ *   > *"…its logins are read through a session running on it, and it has none
+ *   > open."*
+ *
+ * `CAPABILITY.logins` is the frame that has no session in it, and this is the
+ * window's end of it.
+ *
+ * ## Three states, and the third is not the second
+ *
+ * `answered: false` means the question could not be *asked* — the link is down,
+ * that machine runs an older build, or this desktop is a guest over there — and
+ * it is deliberately not an empty list. "That machine has no logins" is a claim
+ * about somebody's computer, and all three of those cases would make it a false
+ * one. An empty list with `answered: true` is the real thing: a machine that
+ * reported nothing.
+ */
+export interface MachineLoginsState {
+  accounts: MachineAccount[]
+  /** False when the far machine could not be asked at all. */
+  answered: boolean
+  /** False until an answer of any kind has landed. */
+  loaded: boolean
+  /** Ask again — after a sign-in, or when somebody opens the pane. */
+  reload(): void
+}
+
+export function useMachineLogins(machineId: string | null): MachineLoginsState {
+  const [state, setState] = useState<{ accounts: MachineAccount[]; answered: boolean; loaded: boolean }>({
+    accounts: [],
+    answered: false,
+    loaded: false,
+  })
+  const [tick, setTick] = useState(0)
+  /*
+   * Which read is the current one, for the reason `useMachineAccount` keeps a
+   * ticket: a reload started while another is in flight would otherwise be
+   * decided by whichever round trip came back last, and over a relay that is not
+   * the one asked most recently.
+   */
+  const ticket = useRef(0)
+
+  useEffect(() => {
+    if (machineId === null) {
+      setState({ accounts: [], answered: false, loaded: false })
+      return
+    }
+    const host = bridge()
+    const read = host?.readMachineLogins
+    if (typeof read !== 'function') {
+      // No channel in this build. Loaded, unanswered — which draws the sentence
+      // for "could not ask", and is the honest outcome: this window has no way
+      // to put the question.
+      setState({ accounts: [], answered: false, loaded: true })
+      return
+    }
+    const mine = ++ticket.current
+    void read
+      .call(host, machineId)
+      .then((answer) => {
+        if (ticket.current !== mine) return
+        if (!Array.isArray(answer)) {
+          setState({ accounts: [], answered: false, loaded: true })
+          return
+        }
+        const rows: MachineAccount[] = []
+        for (const entry of answer) {
+          const row = readAccount(entry)
+          if (row !== null) rows.push(row)
+        }
+        setState({ accounts: rows, answered: true, loaded: true })
+      })
+      .catch(() => {
+        if (ticket.current === mine) setState({ accounts: [], answered: false, loaded: true })
+      })
+  }, [machineId, tick])
+
+  useEffect(
+    () => () => {
+      // Anything still in flight is answering a question nobody is asking.
+      ticket.current += 1
+    },
+    [],
+  )
+
+  const reload = useCallback(() => setTick((n) => n + 1), [])
+  return { accounts: state.accounts, answered: state.answered, loaded: state.loaded, reload }
+}
+
+/**
+ * Start signing one of another machine's logins in, over there.
+ *
+ * Always answers with a sentence, on every path, for the reason
+ * {@link switchMachineAccount} does: somebody pressed a button, and a press that
+ * produces nothing is indistinguishable from a control that does not work.
+ *
+ * `session` is the terminal that machine opened so the login can be finished in
+ * it — the agent CLIs print a URL and wait — and null on every refusal. A caller
+ * that ignored it would leave somebody with a login flow running on a computer
+ * they cannot see.
+ */
+export async function signInMachineLogin(
+  machineId: string,
+  accountId: string,
+): Promise<{ ok: boolean; message: string; session: string | null }> {
+  const host = bridge()
+  const call = host?.signInMachineLogin
+  if (typeof call !== 'function') {
+    return { ok: false, message: 'This build has no way to sign a login in over there.', session: null }
+  }
+  const answer = await call.call(host, machineId, accountId)
   if (!isRecord(answer)) {
     return { ok: false, message: 'That machine did not answer.', session: null }
   }

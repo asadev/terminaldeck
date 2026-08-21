@@ -66,6 +66,10 @@ import type { DeviceFolderGrant, FolderGrants } from './folder-grants'
 // `host-core.ts` owns the one instance, because the session fanout's predicate
 // closes over it before this function is ever called.
 import type { DeviceSessionGrant, SessionGrants } from './session-grants'
+// The third grant store, type-only for the reason the two above are: `host-core.ts`
+// owns the one instance, because the endpoint's own filter closes over it before
+// this function is ever called.
+import type { AccountGrants, DeviceAccountGrant } from './account-grants'
 // `asDeviceKind` is a value because the approve handler has to narrow whatever
 // came across the bridge, and it is three comparisons over a string literal
 // union — importing it pulls in the store's module but not its file, and the
@@ -405,6 +409,56 @@ export interface SessionAccess {
    * one that could read and not switch is a label.
    */
   account?: RemoteAccountAccess
+  /**
+   * This machine's logins with no session in the question, and signing one of
+   * them in here. **Optional, and its absence is the switch**, exactly as
+   * {@link account}'s is.
+   *
+   * Separate from {@link account} because it is a different question with a
+   * different door. That one is *whose login is this terminal running as* and is
+   * answered for anybody who may touch the terminal; this one is *what logins
+   * does this computer have* and is answered only for one of the owner's own
+   * devices. A host can perfectly well have the first and not the second — the
+   * stub host has neither, and a build with an account store but no session
+   * lifecycle can list logins and start nothing.
+   */
+  logins?: RemoteLoginsAccess
+}
+
+/**
+ * The far end of `logins.read` and `logins.signin`.
+ *
+ * A courier's interface like {@link RemoteAccountAccess}, and one object for the
+ * same reason: a pane that could start a sign-in and not read the list would
+ * have nothing to offer the sign-in *for*, and one that could read and not sign
+ * in is the pane this replaces — which said, in a `Notice`, that it could only
+ * read.
+ *
+ * Neither method may throw for an ordinary refusal. An account this machine does
+ * not have, a session layer that would not start a terminal — those are answers
+ * with sentences in them, and `server.ts` turns a rejected promise into a bare
+ * `unavailable` that says nothing useful.
+ */
+export interface RemoteLoginsAccess {
+  /**
+   * Every login on this machine, as its own Accounts screen lists them.
+   *
+   * The same reader `RemoteAccountAccess.read` uses for its list half, so the
+   * pane and the chip cannot come to disagree about what this computer has.
+   */
+  read(): Promise<AccountWire[]>
+  /**
+   * Start signing that login in, on this machine.
+   *
+   * `session` is the terminal that was opened for it — the agent CLIs
+   * authenticate interactively, so there is nothing that could be done silently
+   * and the honest act is to open the same session the window at this desk
+   * opens — and null when none was, which is every refusal.
+   *
+   * It does not claim the login succeeded. Whether it did is a question for the
+   * next {@link read}, which reads this machine's own probe.
+   */
+  signIn(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
 }
 
 /**
@@ -775,6 +829,46 @@ export interface RemoteEndpointOptions {
    * roster that has changed.
    */
   copilotEligible?(deviceId: string): boolean
+  /**
+   * Which of this machine's coding logins this particular device may use.
+   *
+   * **Optional, and absent means every device may use every login** — which is
+   * what every host written before account grants existed does, and what
+   * `scripts/remote-host.ts` and the tests still supply. A desktop that keeps the
+   * store hands `AccountGrants` straight in.
+   *
+   * The two questions are separate on purpose and both are used here:
+   * {@link AccountGrants.any} decides whether the device is told the `account`
+   * capability exists at all, so a device granted **none** draws no chip rather
+   * than an empty one; {@link AccountGrants.shares} filters the list and refuses
+   * a switch, so a grant narrowed while a machine is connected takes effect on
+   * the next frame rather than on the next reconnection.
+   *
+   * A callback-shaped object rather than a snapshot, for the reason
+   * {@link copilotEligible} is one: the choice is made when a device is approved
+   * and edited afterwards from the settings panel, both of which can happen
+   * while that device is connected.
+   */
+  accountAccess?: {
+    shares(deviceId: string, accountId: string): boolean
+    any(deviceId: string): boolean
+  }
+  /**
+   * Is this device one of the owner's own, rather than a guest?
+   *
+   * **Optional, and absent means yes**, like {@link copilotEligible} — which is
+   * the same fact asked by a different feature, and they are deliberately two
+   * options rather than one shared predicate: folding them together would mean a
+   * host that wanted to withhold one had silently withheld the other, and the
+   * next person to add a third would have no way to tell which of the two
+   * meanings they were extending.
+   *
+   * It gates `CAPABILITY.logins`: listing every login a machine has, and
+   * starting a login flow on it, are acts on the **machine** rather than on a
+   * folder somebody was lent. A guest gets the session-scoped chip its account
+   * grant allows and nothing that manages the computer.
+   */
+  ownDevice?(deviceId: string): boolean
   /**
    * Open a page on this machine, and say whether a window took it.
    *
@@ -1678,6 +1772,19 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      */
     if (name === CAPABILITY.account) return options.sessions.account !== undefined
     /*
+     * And once more for the machine's own login list. Its own member rather than
+     * `account`'s, because the two are separable in both directions: a host can
+     * answer "whose login is this session on" without keeping anything that could
+     * start a login flow, and the demo box has neither.
+     *
+     * What this is *not* gated on is which devices may ask — that is
+     * `ownDevice`, stripped per device in `capabilitiesFor` beside `web`, for the
+     * reason `web`'s note gives: a capability says what the machine can do, a
+     * grant says who may ask, and there is no push frame here that could correct
+     * a welcome later.
+     */
+    if (name === CAPABILITY.logins) return options.sessions.logins !== undefined
+    /*
      * And once more for the chat view. Its own member for the same reason the
      * account chip has one: reading a transcript and reading a *screen* are
      * different acts against different files, and the headless build has one and
@@ -1727,6 +1834,62 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * Whether this device is one of the owner's own.
+   *
+   * Absent callback means yes, for every device — see
+   * {@link RemoteEndpointOptions.ownDevice}. Wrapped in a `try` for the reason
+   * {@link copilotEligible} is: it reaches a store on disk and is consulted on
+   * the read path of a socket, and the safe reading of "I do not know what kind
+   * of device this is" is the one that manages nothing.
+   */
+  function ownDevice(deviceId: string): boolean {
+    const ask = options.ownDevice
+    if (!ask) return true
+    try {
+      return ask(deviceId) === true
+    } catch (error) {
+      console.error('[remote] the device-kind rule threw; treating the device as a guest:', error)
+      return false
+    }
+  }
+
+  /**
+   * May this device use any of this machine's logins at all?
+   *
+   * Absent store means yes, for the reason every other absence here does: a host
+   * with no account grants is every host written before they existed, and the
+   * two machines already paired when they arrived had working account chips.
+   *
+   * Wrapped in a `try` like the two above it, and the safe reading here is the
+   * *narrow* one — unlike `folders`, whose file failing open is argued for at
+   * length in its own header, a store that **threw** is not a hand-edited
+   * preference, it is a bug, and answering "yes, everything" on the strength of
+   * an exception would be widening access because something broke.
+   */
+  function anyAccountFor(deviceId: string): boolean {
+    const ask = options.accountAccess
+    if (!ask) return true
+    try {
+      return ask.any(deviceId) === true
+    } catch (error) {
+      console.error('[remote] the account-grant rule threw; treating the device as granted none:', error)
+      return false
+    }
+  }
+
+  /** May this device use this one login? The same rule, one account at a time. */
+  function accountShared(deviceId: string, accountId: string): boolean {
+    const ask = options.accountAccess
+    if (!ask) return true
+    try {
+      return ask.shares(deviceId, accountId) === true
+    } catch (error) {
+      console.error('[remote] the account-grant rule threw; refusing the account:', error)
+      return false
+    }
+  }
+
+  /**
    * What *this* device is told this host can do.
    *
    * The list is computed once for the endpoint, above, because it describes the
@@ -1740,7 +1903,28 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    * answer than a client that never knew.
    */
   function capabilitiesFor(deviceId: string): string[] {
-    if (copilotEligible(deviceId)) return advertised
+    /*
+     * Two per-device narrowings now, and they are independent of each other.
+     *
+     * A device granted **none** of this machine's logins is not told the
+     * `account` capability exists, so the chip over a session here is absent on
+     * its screen rather than drawn and empty. Asad's third sentence about the
+     * accounts step is what this is: *"Untick all"* has to mean the feature is
+     * not there, and a menu that opens onto nothing is the shape of defect this
+     * app keeps being reviewed for. The refusal in `accountServe` is the other
+     * half — this decides what a client of ours draws, that decides what any
+     * client gets.
+     *
+     * And `logins` — the machine's own list, and starting a sign-in on it — goes
+     * to one of the owner's own devices only. It is stripped here rather than
+     * only refused for the reason `web` is: there is no push frame that could
+     * correct a welcome later, so a guest must never be told it exists.
+     */
+    const withheld: string[] = []
+    if (!anyAccountFor(deviceId)) withheld.push(CAPABILITY.account)
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.logins)
+    const narrowed = withheld.length === 0 ? advertised : advertised.filter((name) => !withheld.includes(name))
+    if (copilotEligible(deviceId)) return narrowed
     // `web` goes with it, and for the same reason: opening a page puts a window
     // on the owner's screen, which is driving the machine rather than reaching a
     // folder. One eligibility question behind both, so a device cannot be a
@@ -1753,7 +1937,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // guest is told the capability exists and is shown the ports its own grant
     // covers, which may be none; the narrowing is in the hub, where the same
     // list decides what is offered and what may be dialled.
-    return advertised.filter((name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web)
+    return narrowed.filter((name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web)
   }
 
   /**
@@ -3172,10 +3356,19 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     message: Extract<ClientMessage, { t: 'account.read' | 'account.switch' }>,
   ): Promise<void> {
     const account = options.sessions.account
-    if (!account || !advertised.includes(CAPABILITY.account)) {
-      // Refused here as well as withheld from the advertisement, for the reason
-      // `controlsServe` gives: the advertisement decides what a client of ours
-      // draws, and this decides what *any* client gets.
+    if (!account || !advertised.includes(CAPABILITY.account) || !anyAccountFor(deviceId)) {
+      /*
+       * Refused here as well as withheld from the advertisement, for the reason
+       * `controlsServe` gives: the advertisement decides what a client of ours
+       * draws, and this decides what *any* client gets.
+       *
+       * The third condition is the account grant, and it is the same refusal
+       * rather than its own: a device granted none of this machine's logins is
+       * in exactly the position of one talking to a host that has no account
+       * store — there is nothing here for it — and a distinct sentence would be
+       * this machine explaining its owner's choices to somebody who was not
+       * given them.
+       */
       send(connection, {
         t: 'error',
         code: 'unavailable',
@@ -3197,8 +3390,38 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         t: 'account.state',
         rid: message.rid,
         id: message.id,
+        /*
+         * `current` is *not* filtered, and the asymmetry is deliberate.
+         *
+         * The list is a fact about this **machine** — what logins it has — and
+         * that is the thing an owner shares or withholds. `current` is a fact
+         * about a **session** this device has already been given: it may attach
+         * to that terminal and read the CLI printing the very same address three
+         * lines into its banner. Withholding it there would put "No login" on a
+         * chip over a session that plainly has one, which is the untruth this
+         * whole area exists to remove — and it would hide nothing.
+         */
         current: state.current,
-        accounts: state.accounts,
+        accounts: state.accounts.filter((row) => accountShared(deviceId, row.id)),
+      })
+      return
+    }
+
+    if (!accountShared(deviceId, message.accountId)) {
+      /*
+       * The one refusal on this path that is not the far machine's own words,
+       * and it says what is true without naming what was withheld: the account
+       * may not even be in the list this device was sent, and a sentence like
+       * "that login is not shared with you" would confirm the id names something
+       * real here.
+       */
+      send(connection, {
+        t: 'account.switched',
+        rid: message.rid,
+        id: message.id,
+        ok: false,
+        message: 'That login is not one this machine offers here.',
+        session: message.id,
       })
       return
     }
@@ -3237,6 +3460,69 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    * this one bounds what leaves the machine, that one bounds what a hostile
    * frame can make a phone hold.
    */
+  /**
+   * Serve one `logins.read` or `logins.signin`.
+   *
+   * ## A different door from `accountServe`, and that is the point of the file
+   *
+   * The verbs next door carry a session id and go through {@link mayTouch},
+   * because they are about a terminal. These carry none: they are about the
+   * **machine** — every login it has, and starting a login flow on it — so there
+   * is no session to authorise against and the question becomes *whose device is
+   * asking*. The answer is `ownDevice`, the same fact the copilot turns on, and
+   * a guest is refused here as well as never being told the capability exists.
+   *
+   * The account grant narrows what a device sees inside `account.read`; it does
+   * **not** appear here, and the reason is that these are already restricted to
+   * the owner's own machines. A grant is how much of your machine you lend to
+   * somebody else; one of your own computers is you at another keyboard, which is
+   * the sentence the approval screen puts on that choice.
+   */
+  async function loginsServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'logins.read' | 'logins.signin' }>,
+  ): Promise<void> {
+    const logins = options.sessions.logins
+    if (!logins || !advertised.includes(CAPABILITY.logins) || !ownDevice(deviceId)) {
+      /*
+       * One sentence for three states — no store, an old build, a guest — for the
+       * reason the unauthorised-session refusal shares its wording with an
+       * unknown id: a distinct refusal for the guest case would tell a device
+       * that the machine *does* keep logins and is withholding them, which is a
+       * fact about somebody's computer that a guest was not given.
+       */
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} does not manage its logins from here.`,
+      })
+      return
+    }
+
+    if (message.t === 'logins.read') {
+      const accounts = await logins.read()
+      // The device can be gone by now: this reads a state file and up to a
+      // handful of memoised probes, which is milliseconds but is not nothing.
+      if (!live.has(connection.id)) return
+      send(connection, { t: 'logins.state', rid: message.rid, accounts })
+      return
+    }
+
+    const answer = await logins.signIn(message.accountId)
+    if (!live.has(connection.id)) return
+    send(connection, {
+      t: 'logins.signedin',
+      rid: message.rid,
+      ok: answer.ok,
+      // Passed through as written, for the reason `account.switched`'s is: this
+      // is this machine's own sentence about its own account, and the asking
+      // machine has no way to write a better one about a computer it is not on.
+      message: answer.message,
+      session: answer.session,
+    })
+  }
+
   async function chatServe(
     connection: LiveConnection,
     deviceId: string,
@@ -3850,6 +4136,21 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
             t: 'error',
             code: 'unavailable',
             message: 'That session’s account could not be reached.',
+          })
+        })
+        return
+      case 'logins.read':
+      case 'logins.signin':
+        // Not awaited, for the reason the account frames above are not: a
+        // sign-in starts an agent CLI on this machine, and a socket that stopped
+        // reading would freeze every session on the connection while it did.
+        void loginsServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] a logins request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'This machine’s logins could not be reached.',
           })
         })
         return
@@ -4938,6 +5239,21 @@ export interface RemoteIpcDeps {
    */
   sessionGrants?: SessionGrants
   /**
+   * Which of this machine's logins each device may use — the third axis.
+   *
+   * Passed in for exactly the reason `folders` and `sessionGrants` are: the
+   * filter every account frame goes through closes over this store, and it is
+   * built at assembly, before this function is called. A second one here would
+   * answer the approval screen from one copy of the file and every connection
+   * from another.
+   *
+   * **Optional, and its absence is the switch.** A host with no per-device
+   * account choice answers the panel's channels with nothing and shares every
+   * login with every paired device — which is what every host written before this
+   * store existed already does.
+   */
+  accountGrants?: AccountGrants
+  /**
    * Whether each device is one of the owner's own or a guest.
    *
    * Passed in for exactly the reason `folders` beside it is: `index.ts` needs
@@ -5301,6 +5617,36 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
      * is never told the capability exists, so nothing on its screen offers it.
      */
     copilotEligible: (deviceId) => deps.kinds.kindOf(deviceId) === 'mine',
+    /*
+     * And which of this machine's logins each device may use.
+     *
+     * Read live rather than snapshotted, for the reason `copilotEligible` above
+     * is: the choice is made when a device is approved and edited afterwards
+     * from the settings panel, both of which happen while other devices are
+     * connected.
+     *
+     * Spread, so a shell with no store shares everything — the state every host
+     * written before this file was in, and the state the two machines already
+     * paired when it arrived were in.
+     */
+    ...(deps.accountGrants
+      ? {
+          accountAccess: {
+            shares: (deviceId, accountId) => deps.accountGrants?.shares(deviceId, accountId) ?? true,
+            any: (deviceId) => deps.accountGrants?.any(deviceId) ?? true,
+          },
+        }
+      : {}),
+    /*
+     * And whether a device is one of his own, which decides whether it may
+     * manage this machine's logins at all.
+     *
+     * The same fact `copilotEligible` reads, deliberately asked again rather
+     * than shared: they are two features that happen to agree today, and a
+     * single predicate would mean the next person to change one had silently
+     * changed the other.
+     */
+    ownDevice: (deviceId) => deps.kinds.kindOf(deviceId) === 'mine',
     // Spread, so a shell with no window advertises no `web` capability at all —
     // the headless daemon is exactly that, and a page it could not open must
     // not appear as a button on somebody's phone.
@@ -5445,7 +5791,7 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
    */
   ipcMain.handle(
     'remote:device:approve',
-    (_event, id: unknown, kind: unknown, folders: unknown): Device[] => {
+    (_event, id: unknown, kind: unknown, folders: unknown, accountMode: unknown, accounts: unknown): Device[] => {
       if (typeof id !== 'string' || id === '') return auth.listDevices()
       const decided = asDeviceKind(kind)
       if (decided === null) return auth.listDevices()
@@ -5460,12 +5806,33 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
         // without choosing a folder now has a row saying so rather than a hole
         // that reads as consent.
         deps.folders.set(id, Array.isArray(folders) ? folders : [])
+        /*
+         * And which of this machine's logins it may use, written under the same
+         * rule and for the same reason.
+         *
+         * Asad, 2026-08-21: *"Maybe we can give one selection step when we give
+         * access to any remote device… If they wants to give access of the
+         * accounts too, so they can give it."* An absent record here means
+         * *every login*, exactly as an absent folder record used to mean every
+         * folder — so a guest approved without an answer must get a written one,
+         * and the written one is `selected` with nothing in it. That is the
+         * fail-closed direction, and it is the direction the folder half of this
+         * handler was fixed in after he watched a device paired with six digits
+         * reach every project on the machine.
+         */
+        deps.accountGrants?.set(id, accountMode === 'all' ? 'all' : 'selected', Array.isArray(accounts) ? accounts : [])
       } else {
         // One of your own has no list. `device-reach.ts` never consults it for a
         // `mine` device, and leaving a stale one behind would be a set of
         // folders in the file that nothing reads and that would come back to
         // life if the kind were ever mis-read.
         deps.folders.forget(id)
+        // And no login list, for the same reason and on the same argument.
+        // *"My device — full access. It's you at another keyboard."* There is
+        // nothing to choose, so there is nothing to store, and a row left behind
+        // would be a narrowing that nothing reads until somebody mis-reads a
+        // kind.
+        deps.accountGrants?.forget(id)
       }
       auth.approveDevice(id)
       /*
@@ -5505,6 +5872,8 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
       // And its session ticks, for the same reason and on the same argument:
       // the id can never be issued again, so the row could never be reached.
       deps.sessionGrants?.forget(id)
+      // And its login ticks, on the same argument once more.
+      deps.accountGrants?.forget(id)
       /*
        * Nothing to forget for the copilot any more, and that is worth a line
        * rather than a silence.
@@ -5588,6 +5957,47 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
    * and are not the same fact, and inventing a row here would make the panel
    * unable to tell them apart.
    */
+  /**
+   * Which of this machine's logins each device may use, and the one write that
+   * changes them.
+   *
+   * The third axis, asked for on 2026-08-21: *"he can choose if he wants to give
+   * multiple or one or whatever."* `account-grants.ts` holds the store; the
+   * enforcement is the filter and the refusal inside `accountServe`, which every
+   * account frame already goes through, so there is nothing new to lock here.
+   *
+   * Two channels rather than three: the panel draws its tick list from this
+   * machine's own accounts, which the settings window already reads through
+   * `profiles:list` for the pane six inches away. A second list served from here
+   * would be a second answer to "what logins does this computer have".
+   *
+   * Devices with no row simply do not appear, the same way the other two grant
+   * channels leave them out: "not narrowed" and "narrowed to everything" behave
+   * alike and are not the same fact.
+   *
+   * ## What a narrowing does to a device that is already connected
+   *
+   * The *rule* is live immediately — the filter is asked per frame, so a login
+   * unticked here is gone from the next read and refused on the next switch,
+   * with a sentence. What does **not** change until that device reconnects is
+   * the capability it was told about at `hello`: narrowing a device to no logins
+   * at all leaves its chip drawn until then, and every press on it refused. That
+   * is the same shape `web` has and is stated here rather than papered over,
+   * because the alternative — dropping a connected device's sockets to correct a
+   * capability — would take every terminal on it down to change a preference.
+   */
+  ipcMain.handle('remote:accounts', (): DeviceAccountGrant[] => deps.accountGrants?.list() ?? [])
+  ipcMain.handle(
+    'remote:accounts:set',
+    (_event, id: unknown, mode: unknown, accounts: unknown): DeviceAccountGrant[] => {
+      const store = deps.accountGrants
+      if (!store) return []
+      if (typeof id !== 'string' || id === '') return store.list()
+      store.set(id, mode, Array.isArray(accounts) ? accounts : [])
+      return store.list()
+    },
+  )
+
   ipcMain.handle('remote:sessions', (): DeviceSessionGrant[] => deps.sessionGrants?.list() ?? [])
   ipcMain.handle('remote:sessions:running', (): RemoteSession[] => deps.sessions.list())
   ipcMain.handle(

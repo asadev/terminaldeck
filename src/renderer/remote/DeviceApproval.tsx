@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Button, Notice } from '../settings/controls'
 import { thisMachine, type UiPlatform } from '../platform'
+import { profileLoginLabel, useAccounts } from '../accounts'
 import { folderName } from './DeviceFolders'
 import './DeviceApproval.css'
 
@@ -48,6 +49,20 @@ import './DeviceApproval.css'
  * box on this screen either. An unticked box still advertises a feature and
  * invites the ask.
  *
+ * ## The fourth question, and why it is not folded into the third
+ *
+ * *"Maybe we can give one selection step when we give access to any remote
+ * device… If they wants to give access of the accounts too, so they can give
+ * it"*, and *"he can choose if he wants to give multiple or one or whatever."*
+ *
+ * So a guest is asked a second thing: **which of this machine's coding logins**
+ * it may use. It is its own step rather than a section of the folder one because
+ * it is a different kind of decision — a folder is your work, a login is your
+ * subscription, and somebody who wants to lend one and not the other has to be
+ * able to see that they are two answers. All / Selected, and Selected with
+ * nothing ticked is *none*, which is the third answer he asked for and the one a
+ * tick list alone cannot express.
+ *
  * ## No kind can be changed afterwards, and the screen says so
  *
  * There is no toggle on the approved row. Changing what a device is means
@@ -83,13 +98,44 @@ export interface PendingDevice {
  * the two answers and an index would have to encode that as "skip 3 when mine",
  * which is a rule living in arithmetic. The names are what the screen is asking.
  */
-export type ApprovalStep = 'check' | 'kind' | 'folders' | 'confirm'
+export type ApprovalStep = 'check' | 'kind' | 'folders' | 'accounts' | 'confirm'
+
+/** How much of this machine's logins a device gets. Mirrors `AccountShare`. */
+export type AccountShare = 'all' | 'selected'
+
+/**
+ * One of this machine's logins, as this flow needs it.
+ *
+ * A label rather than the account's own `name`, because that name is a key for
+ * two of the three rows on every machine — `Default`, `Default (Codex CLI)` —
+ * and a person cannot choose between two rows that are both called Default. The
+ * caller builds it off the same ladder the account chip uses.
+ */
+export interface ApprovalLogin {
+  id: string
+  label: string
+  /** The agent it is a login of, for the mark. Null draws none. */
+  provider: string | null
+}
 
 export interface DeviceApprovalProps {
   device: PendingDevice
   platform: UiPlatform
   /** The folders chosen so far. Empty is the starting state and a real answer. */
   folders: string[]
+  /**
+   * This machine's logins, for the accounts step.
+   *
+   * Handed in rather than read here, for the reason the folders are: this
+   * component is rendered to a string in its own tests, where an effect never
+   * runs, and a component that fetched its own list would be testable in exactly
+   * one state — the empty one.
+   */
+  logins?: readonly ApprovalLogin[]
+  /** All of this machine's logins, or only the ticked ones. */
+  accountMode: AccountShare
+  /** Ticked login ids. Meaningful under `selected`; empty there means none. */
+  accounts: string[]
   step: ApprovalStep
   kind: DeviceKind | null
   /** True while a folder picker or the approval itself is in flight. */
@@ -100,6 +146,8 @@ export interface DeviceApprovalProps {
   onKind(kind: DeviceKind): void
   onAddFolder(): void
   onRemoveFolder(folder: string): void
+  onAccountMode(mode: AccountShare): void
+  onToggleAccount(accountId: string, on: boolean): void
   onApprove(): void
   onCancel(): void
 }
@@ -110,7 +158,11 @@ const ORDER: Record<DeviceKind, ApprovalStep[]> = {
   // there is nothing to choose, and a picker here would be a form standing
   // between somebody and their own files.
   mine: ['check', 'kind', 'confirm'],
-  guest: ['check', 'kind', 'folders', 'confirm'],
+  // Folders, then logins: what it may open, then what it may open them *as*.
+  // The second question only makes sense once the first is answered, and a guest
+  // granted no folders is being asked about logins it will not get to use — which
+  // the confirm step then says in one sentence rather than refusing the step.
+  guest: ['check', 'kind', 'folders', 'accounts', 'confirm'],
 }
 
 export function stepsFor(kind: DeviceKind | null): ApprovalStep[] {
@@ -136,6 +188,9 @@ export function DeviceApproval({
   device,
   platform,
   folders,
+  logins = [],
+  accountMode,
+  accounts,
   step,
   kind,
   busy,
@@ -144,6 +199,8 @@ export function DeviceApproval({
   onKind,
   onAddFolder,
   onRemoveFolder,
+  onAccountMode,
+  onToggleAccount,
   onApprove,
   onCancel,
 }: DeviceApprovalProps) {
@@ -254,6 +311,56 @@ export function DeviceApproval({
         </div>
       )}
 
+      {step === 'accounts' && (
+        <div className="da-body">
+          <p className="da-lede">Which of your logins can it use?</p>
+          <div className="settings-scope da-scope" role="group" aria-label="Logins it can use">
+            {(['all', 'selected'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                data-on={accountMode === mode ? '' : undefined}
+                aria-pressed={accountMode === mode}
+                disabled={busy}
+                onClick={() => onAccountMode(mode)}
+              >
+                {mode === 'all' ? 'All' : 'Selected'}
+              </button>
+            ))}
+          </div>
+          {/* The ticks, only under Selected — the same shape the sessions panel
+              uses, because it is the same choice about a different list and two
+              looks for one idea is what the review keeps catching. Nothing under
+              *All*: All means all, and a reader who can pair a device can read
+              two words. */}
+          {accountMode === 'selected' && logins.length > 0 && (
+            <ul className="da-logins">
+              {logins.map((login) => (
+                <li key={login.id}>
+                  <label className="da-login">
+                    <input
+                      type="checkbox"
+                      checked={accounts.includes(login.id)}
+                      disabled={busy}
+                      onChange={(event) => onToggleAccount(login.id, event.target.checked)}
+                    />
+                    <span className="da-login-name">{login.label}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          {accountMode === 'selected' && accounts.length === 0 && (
+            // The one line on this step, and it is a consequence rather than an
+            // explanation: nothing ticked is a real answer, and the person has to
+            // know which one it is before pressing Continue.
+            <p className="da-note">
+              Nothing ticked — {device.name} gets no account chip at all on sessions here.
+            </p>
+          )}
+        </div>
+      )}
+
       {step === 'confirm' && (
         <div className="da-body">
           <p className="da-lede">
@@ -272,10 +379,23 @@ export function DeviceApproval({
               ))}
             </ul>
           )}
+          {kind === 'guest' && (
+            // The second half of the summary, in the same place as the first.
+            // Said as a count rather than as a list of addresses: this pane is
+            // read over somebody's shoulder while a device waits, and the number
+            // is what the decision was.
+            <p className="da-note">
+              {accountMode === 'all'
+                ? `It can use any login on ${machine}.`
+                : accounts.length === 0
+                  ? 'It gets none of your logins, and no account chip at all.'
+                  : `It can use ${accounts.length === 1 ? 'one login' : `${accounts.length} logins`}.`}
+            </p>
+          )}
           <p className="da-note">
             {kind === 'mine'
               ? 'It can open any folder here, see every session, and use the copilot.'
-              : 'It will not be offered the copilot. You can change its folders later.'}
+              : 'It will not be offered the copilot. You can change its folders and logins later.'}
           </p>
           {/* Said here rather than on the approved row, because this is the
               moment it is a decision. There is no toggle afterwards on purpose:
@@ -332,20 +452,37 @@ export function useApprovalFlow(): {
   step: ApprovalStep
   kind: DeviceKind | null
   folders: string[]
+  accountMode: AccountShare
+  accounts: string[]
   setStep(step: ApprovalStep): void
   pickKind(kind: DeviceKind): void
   addFolder(path: string): void
   removeFolder(path: string): void
+  setAccountMode(mode: AccountShare): void
+  toggleAccount(accountId: string, on: boolean): void
   reset(): void
 } {
   const [step, setStep] = useState<ApprovalStep>('check')
   const [kind, setKind] = useState<DeviceKind | null>(null)
   const [folders, setFolders] = useState<string[]>([])
+  /*
+   * *All* to begin with, because that is what a device approved by a build
+   * without this step gets and what every device paired before it has — so the
+   * step starts on the behaviour it is replacing and a person narrows from
+   * there. The folder step starts empty for the opposite reason and both are
+   * right: an unanswered folder question used to mean *every* folder, which is
+   * the defect that flow was built to close, while an unanswered account
+   * question has never meant anything at all until now.
+   */
+  const [accountMode, setAccountMode] = useState<AccountShare>('all')
+  const [accounts, setAccounts] = useState<string[]>([])
 
   return {
     step,
     kind,
     folders,
+    accountMode,
+    accounts,
     setStep,
     pickKind: (next) => {
       setKind(next)
@@ -356,16 +493,80 @@ export function useApprovalFlow(): {
       setStep(nextStep('kind', next))
       // Folders chosen for a guest are dropped on switching to `mine`, because
       // they would then be a list nothing reads and that reappears if the person
-      // switches back — a screen remembering a choice they have withdrawn.
-      if (next === 'mine') setFolders([])
+      // switches back — a screen remembering a choice they have withdrawn. The
+      // login choice goes with them, and for the same reason: one of your own
+      // machines is you at another keyboard, and it reaches every login here.
+      if (next === 'mine') {
+        setFolders([])
+        setAccountMode('all')
+        setAccounts([])
+      }
     },
     addFolder: (path) =>
       setFolders((current) => (current.includes(path) ? current : [...current, path])),
     removeFolder: (path) => setFolders((current) => current.filter((one) => one !== path)),
+    setAccountMode: (mode) => {
+      setAccountMode(mode)
+      // Switching to *Selected* starts from nothing ticked — the fail-closed
+      // direction, and the same one `DeviceSessions` takes: somebody pressing
+      // Selected is pressing it to take something away, and pre-ticking
+      // everything would make the press a no-op that looks like a change.
+      if (mode === 'all') setAccounts([])
+    },
+    toggleAccount: (accountId, on) =>
+      setAccounts((current) =>
+        on
+          ? current.includes(accountId)
+            ? current
+            : [...current, accountId]
+          : current.filter((one) => one !== accountId),
+      ),
     reset: () => {
       setStep('check')
       setKind(null)
       setFolders([])
+      setAccountMode('all')
+      setAccounts([])
     },
   }
+}
+
+/**
+ * This machine's logins, named the way a person would recognise them.
+ *
+ * A hook rather than a prop for the two drivers, and a hook rather than a read
+ * inside the component: `DeviceApproval` is pure and is rendered to a string in
+ * its own tests, so anything that fetches has to sit outside it — the same split
+ * `RemoteSection` makes for the folder panel.
+ *
+ * **It probes, and `open` is what stops it probing all the time.** With `open`
+ * true, `useAccounts` asks each agent's own CLI who it is signed in as, which
+ * spawns one process per account — the cost the account chip's two-flag
+ * signature exists to control. That is the right trade at exactly one moment:
+ * somebody is deciding what to lend a computer, and the alternative is a choice
+ * between two rows both reading *Your own Claude Code install*. It is the wrong
+ * trade every other moment, and the settings panel that holds the flow is
+ * mounted whenever the Remote pane is open — so the caller passes whether a
+ * device is actually being approved, rather than this deciding for it.
+ *
+ * `readSignIn` memoises for thirty seconds in the main process, so the Accounts
+ * pane and this share one answer rather than paying twice.
+ */
+export function useApprovalLogins(open: boolean): ApprovalLogin[] {
+  const accounts = useAccounts(open, open)
+  const rows = accounts.snapshot.accounts
+  const signIn = accounts.signIn
+  return useMemo(
+    () =>
+      rows.map((account) => ({
+        id: account.id,
+        // The same ladder the chip and the accounts list use — the address the
+        // CLI named, then the name a person chose, then which install it is —
+        // and never the profile key, which is `Default` on every machine this
+        // app has ever run on.
+        label: profileLoginLabel(account, signIn[account.id]),
+        provider: account.provider,
+      })),
+    [rows, signIn],
+  )
 }

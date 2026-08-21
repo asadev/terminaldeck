@@ -54,7 +54,7 @@ import { accountFor } from './usage-ipc'
 import { createChatServe } from './remote/chat-serve'
 // And the account chip beside them, through the same kind of seam. See the
 // `account` entry on the `SessionFanout` below.
-import { createAccountServe } from './remote/account-serve'
+import { createAccountServe, createLoginsServe } from './remote/account-serve'
 // The connectors chip's list, which is three files on *this* machine resolved
 // for the session's own folder — the same read `mcp:list` performs for a window
 // at this desk. It rides the `controls` reading; see that seam below.
@@ -94,6 +94,7 @@ import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-s
 import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
 import { FolderGrants } from './remote/folder-grants'
 import { SessionGrants } from './remote/session-grants'
+import { AccountGrants } from './remote/account-grants'
 import { DeviceKinds } from './remote/device-kind'
 import { reachFor, type DeviceReach } from './remote/device-reach'
 import { guestGitDir, HELPER_FILE, type GuestGitEnv } from './remote/git-guest'
@@ -371,6 +372,23 @@ export interface HostCoreOptions {
     sessionId: string,
     accountId: string,
   ): Promise<{ ok: boolean; message: string; session: string | null }>
+  /**
+   * Start signing one of this machine's logins in, for a pane on another
+   * machine.
+   *
+   * **Optional, and its absence is the switch**, exactly as {@link switchAccount}'s
+   * is: a shell that does not supply it makes this core advertise no `logins`
+   * capability, and the pane over there says the far build cannot manage its
+   * logins rather than drawing a Sign in that would apologise.
+   *
+   * Handed in rather than composed here for the reason {@link switchAccount} is,
+   * and there is a second one. The agent CLIs authenticate **interactively** —
+   * they print a URL and wait — so signing in is not a command this core can run
+   * and report on; it is a terminal somebody has to see. The shell that owns
+   * sessions is the thing that can open one, and it is the same call its own
+   * Accounts pane makes when it adds an account.
+   */
+  signInAccount?(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
   platform?: Platform
 }
 
@@ -389,6 +407,15 @@ export interface HostCore {
    * against another.
    */
   sessionGrants: SessionGrants
+  /**
+   * Which of this machine's coding logins each paired device may use.
+   *
+   * On the core beside `sessionGrants` and for the same reason: the approval
+   * screen and the settings panel write through *this* instance, and a shell
+   * that built its own would tick logins in one copy of the file while every
+   * `account.read` was filtered against another.
+   */
+  accountGrants: AccountGrants
   /**
    * Whether each paired device is one of the owner's own or a guest.
    *
@@ -527,6 +554,18 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    * be the build where the rule is missing.
    */
   const sessionGrants = new SessionGrants(options.storageDir)
+
+  /**
+   * And which of this machine's logins each device may use.
+   *
+   * The third axis, beside the first two and here for the reason they are: one
+   * instance, because two would be two in-memory copies of one file — the
+   * approval screen writing to one while every account frame is filtered
+   * against the other. Built at assembly rather than by the Electron shell so
+   * that the headless daemon, which serves the same protocol from the same
+   * fanout, cannot be the build where the rule is missing.
+   */
+  const accountGrants = new AccountGrants(options.storageDir)
 
   /**
    * Whether each paired device is one of the owner's own or a guest.
@@ -1521,6 +1560,26 @@ export function createHostCore(options: HostCoreOptions): HostCore {
           }),
         }),
     /*
+     * This machine's logins with no session in the question, for a settings pane
+     * on another machine — and starting a sign-in here from one.
+     *
+     * The fourth seam, and the one that closes the gap the third could not: an
+     * account list was readable only *through* a running session, because
+     * `account.read` carries a session id, so a machine with nothing open had no
+     * logins as far as any other machine was concerned. Asad, of the Coding AI
+     * pane: *"So we can click and manage what accounts are there… All of this we
+     * can just manage from this."*
+     *
+     * Spread rather than assigned for the reason `account` above is: its absence
+     * is what stops this machine advertising `CAPABILITY.logins`, so the headless
+     * build — which has an account store and no way to open a terminal for a
+     * person to finish a login in — offers nothing rather than a control that is
+     * refused after the press.
+     */
+    ...(options.signInAccount === undefined
+      ? {}
+      : { logins: createLoginsServe({ signIn: options.signInAccount }) }),
+    /*
      * Ending a session from a device, which until tonight nothing could do.
      *
      * A session could be started from a phone and never stopped from one, so the
@@ -1805,6 +1864,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     sessions,
     grants,
     sessionGrants,
+    accountGrants,
     kinds,
     agents,
     credentials,
