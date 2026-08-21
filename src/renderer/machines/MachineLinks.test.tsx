@@ -781,3 +781,111 @@ describe('what the far machine is serving', () => {
     expect(state.view).toBe(before)
   })
 })
+
+describe('letting a machine act on browser windows here', () => {
+  /**
+   * The fourth grant axis, on the card.
+   *
+   * A browser window is a page in *this* app, holding this account's signed-in
+   * mail, bank and source control. That a machine was paired says nothing about
+   * whether its sessions may act on one — the host side of this app already
+   * keeps folders, sessions and coding logins on three separate axes for exactly
+   * that reason, and this is the fourth.
+   */
+  const withSwitch: MachineActions = { ...NOTHING, setDrivesWindows: () => {} }
+
+  it('is off until somebody says otherwise', () => {
+    const html = renderToStaticMarkup(
+      <MachineRow machine={machine()} link={link()} openSessionId={null} actions={withSwitch} />,
+    )
+    expect(html).toContain('act on browser windows here')
+    // An unchecked box, and it has to be *rendered* unchecked: a store that
+    // failed open here would be a browser reachable from another computer
+    // because two machines were once paired.
+    expect(html).not.toContain('checked=""')
+  })
+
+  it('draws it ticked when it has been allowed', () => {
+    const html = renderToStaticMarkup(
+      <MachineRow
+        machine={machine({ drivesWindows: true })}
+        link={link()}
+        openSessionId={null}
+        actions={withSwitch}
+      />,
+    )
+    expect(html).toContain('checked=""')
+  })
+
+  it('is not drawn at all when the press would land nowhere', () => {
+    /*
+     * `setMachineDrivesWindows` is deliberately off `BRIDGE_METHODS` — that list
+     * is an all-or-nothing gate and a grant added this round must not be able to
+     * blank a screen that works — so the action is optional and the control is
+     * absent rather than dead when it is missing. A control that cannot do
+     * anything is not drawn.
+     */
+    const html = renderToStaticMarkup(
+      <MachineRow machine={machine()} link={link()} openSessionId={null} actions={NOTHING} />,
+    )
+    expect(html).not.toContain('act on browser windows here')
+  })
+
+  it('says so when it is on and that machine cannot ask', () => {
+    // Stored and never used is the shape of a tick that lies. It is said only
+    // while the machine is connected, because an offline machine has published
+    // no capability list and "it did not say" would be a claim about silence.
+    const on = machine({ drivesWindows: true })
+    const said = renderToStaticMarkup(
+      <MachineRow machine={on} link={link()} openSessionId={null} actions={withSwitch} />,
+    )
+    expect(said).toContain('cannot ask')
+
+    const able = renderToStaticMarkup(
+      <MachineRow
+        machine={on}
+        link={link({ capabilities: ['create', 'windows'] })}
+        openSessionId={null}
+        actions={withSwitch}
+      />,
+    )
+    expect(able).not.toContain('cannot ask')
+
+    const away = renderToStaticMarkup(
+      <MachineRow
+        machine={on}
+        link={link({ state: 'offline', capabilities: [] })}
+        openSessionId={null}
+        actions={withSwitch}
+      />,
+    )
+    expect(away).not.toContain('cannot ask')
+    // And the switch itself is still there, because the grant outlives every
+    // connection — hiding it with the link would mean a machine could only be
+    // trusted while it happened to be awake.
+    expect(away).toContain('act on browser windows here')
+  })
+
+  it('writes the grant through the bridge and redraws from what came back', () => {
+    const calls: [string, boolean][] = []
+    const seen: MachinesView[] = []
+    const actions = machineActions({
+      bridge: {
+        ...NOOP_BRIDGE,
+        setMachineDrivesWindows: (id: string, allowed: boolean) => {
+          calls.push([id, allowed])
+          return Promise.resolve({ machines: [], links: [], here: '', blocked: null })
+        },
+      },
+      digits: '',
+      setDigits: () => {},
+      setView: (view) => seen.push(view),
+      setPairing: () => {},
+      setError: () => {},
+      setOpen: () => {},
+      isAlive: () => true,
+    })
+    actions.setDrivesWindows?.(machine(), true)
+    expect(calls).toEqual([['MACHINE1', true]])
+  })
+})

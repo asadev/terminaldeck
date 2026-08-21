@@ -228,6 +228,51 @@ describe('the rest of the list', () => {
     expect(store.list()[0].platform).toBe('darwin')
   })
 
+  it('lets no machine act on browser windows here until somebody says so', () => {
+    /*
+     * The fourth grant axis, and the only one that fails closed.
+     *
+     * Folders, sessions and logins all fail open, because each was added to a
+     * product that already worked without it and a store whose empty state
+     * silently took a working chip away would be the worse bug. Nothing has ever
+     * driven a browser window from another machine, so `false` is what every
+     * machine already does and there is nothing to preserve.
+     */
+    const dir = tempDir()
+    const store = new MachineStore(dir)
+    const machine = store.remember(candidate())
+    expect(store.list()[0].drivesWindows).toBe(false)
+    expect(store.drivesWindows(machine.id)).toBe(false)
+    // And an id nobody has ever heard of is not a machine that may drive.
+    expect(store.drivesWindows('someone-else')).toBe(false)
+
+    expect(store.setDrivesWindows(machine.id, true)).toBe(true)
+    expect(store.drivesWindows(machine.id)).toBe(true)
+    // It outlives the process, because it is a decision rather than a session.
+    expect(new MachineStore(dir).drivesWindows(machine.id)).toBe(true)
+
+    expect(store.setDrivesWindows(machine.id, false)).toBe(false)
+    expect(new MachineStore(dir).drivesWindows(machine.id)).toBe(false)
+    // A machine that is not there cannot be granted anything, and says so
+    // rather than answering with the value it was handed.
+    expect(store.setDrivesWindows('someone-else', true)).toBe(false)
+  })
+
+  it('grants on the literal true and on nothing else', () => {
+    // The whole of the permission is one boolean in a file. A truthy string in a
+    // hand-edited list must not be a browser opened to another machine — the
+    // same rule `credential.answer`'s `remember` is read by.
+    const dir = tempDir()
+    const store = new MachineStore(dir)
+    const machine = store.remember(candidate())
+    const parsed = JSON.parse(readFileSync(store.file, 'utf8')) as {
+      machines: Record<string, unknown>[]
+    }
+    parsed.machines[0].drivesWindows = 'yes'
+    writeFileSync(store.file, JSON.stringify(parsed))
+    expect(new MachineStore(dir).drivesWindows(machine.id)).toBe(false)
+  })
+
   it('mints a fresh guest identity per machine', () => {
     const store = new MachineStore(tempDir())
     const first = store.mintGuestKeys()

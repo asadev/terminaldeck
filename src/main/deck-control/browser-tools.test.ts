@@ -819,3 +819,144 @@ describe('a session driving its own windows', () => {
     expect(result.ok).toBe(false)
   })
 })
+
+describe('a session whose window is on another computer', () => {
+  /*
+   * The case Asad hit after 0.9.1, in one sentence: a browser window and a
+   * session that *are* attached to each other and cannot reach each other,
+   * because the relation was written in the app holding the window and the
+   * session's tools are on the machine holding the pty.
+   *
+   * > *"even if I open a browser in the same remote device and also browser is
+   * > in the remote device like the same machine and I select open a session
+   * > also in the remote device but they cannot even connect to each other if I
+   * > am driving them from another device as a remote"*
+   *
+   * The fix is that the *call* moves. What is pinned here is the part that
+   * decides whether it does, and the boundary it must not open on the way.
+   */
+  const away: Caller = { kind: 'session', sessionId: 'far-1', machineId: '', tiers: ALL }
+  const here: Caller = { kind: 'session', sessionId: 'mine-1', machineId: '', tiers: ALL }
+  const remoteDevice: Caller = { kind: 'remote', deviceId: 'phone-1', tiers: ALL }
+
+  function forwarded(drive: BrowserDrive, logDir: string): {
+    deck: DeckControl
+    sent: { session: unknown; tool: string; args: unknown }[]
+  } {
+    const sent: { session: unknown; tool: string; args: unknown }[] = []
+    const deck = new DeckControl({
+      surface: {} as DeckSurface,
+      log: new ActionLog({ dir: logDir }),
+      consent: approving(),
+      extraTools: browserTools(drive, {
+        // Exactly the rule `index.ts` wires: a session started by a paired
+        // device has its windows in that device's app, always.
+        elsewhere: (session) => session.sessionId === 'far-1',
+        send: async (session, tool, args) => {
+          sent.push({ session, tool, args })
+          return { value: { title: 'Example' }, summary: { forwardedTo: 'dev-1', tool } }
+        },
+      }),
+    })
+    return { deck, sent }
+  }
+
+  it('sends the verb away instead of refusing over a page it cannot see', async () => {
+    /*
+     * Without the forward this is the exact failure: `boundOf` resolves the slot
+     * in *this* app's map, finds nothing for a window that is real and on
+     * another screen, and answers "no window by that name" about a page the
+     * person is looking at.
+     */
+    const drive = fakeDrive('https://example.com')
+    const { deck, sent } = forwarded(drive, dir)
+    const result = await deck.call('browser_read', {}, { caller: away })
+    expect(result.ok).toBe(true)
+    expect(result.value).toEqual({ title: 'Example' })
+    expect(sent).toEqual([
+      { session: { sessionId: 'far-1', machineId: '' }, tool: 'browser.read', args: {} },
+    ])
+    // And this machine's browser was never touched.
+    expect(drive.calls).toHaveLength(0)
+  })
+
+  it('carries every one of the six, not the ones somebody remembered', async () => {
+    /*
+     * *"other sessions still cant see inside the browser window they opened they
+     * can just open."* A verb left off the forward is how that comes back: the
+     * one nobody added is the one nobody is looking at.
+     */
+    const { deck, sent } = forwarded(fakeDrive('https://example.com'), dir)
+    for (const [tool, args] of Object.entries(ARGS_BY_TOOL)) {
+      const result = await deck.call(tool, args, { caller: away })
+      expect([tool, result.ok]).toEqual([tool, true])
+    }
+    expect(sent.map((call) => call.tool).sort()).toEqual([
+      'browser.close',
+      'browser.handover',
+      'browser.open',
+      'browser.read',
+      'browser.screenshot',
+      'browser.step',
+    ])
+  })
+
+  it('leaves a session of this machine’s own on the local path', async () => {
+    const drive = fakeDrive('https://example.com')
+    const { deck, sent } = forwarded(drive, dir)
+    // No window attached here, so the local refusal is the honest one — and it
+    // is the local one, which is the point: nothing was sent anywhere.
+    const result = await deck.call('browser_read', {}, { caller: here })
+    expect(result.ok).toBe(false)
+    expect(sent).toHaveLength(0)
+  })
+
+  it('still refuses a paired device’s own token, forward or no forward', async () => {
+    /*
+     * The boundary this change must not open. A device's token carries
+     * `kind: 'remote'` and lands in `mayDrive`'s first branch whatever else is
+     * wired — *"Driving a browser from a paired device is not something this app
+     * does, and it will not be."* The forward is for a *session*, which is a
+     * different caller with a different reach.
+     */
+    const { deck, sent } = forwarded(fakeDrive('https://example.com'), dir)
+    const result = await deck.call('browser_read', {}, { caller: remoteDevice })
+    expect(result.ok).toBe(false)
+    expect(result.refusal).toBe('not-granted')
+    expect(sent).toHaveLength(0)
+  })
+
+  it('still refuses a run with nobody at the machine', async () => {
+    // A routine at 03:00 driving somebody's logged-in browser is the shape
+    // `not-permitted-unattended` was written from, and it does not become
+    // acceptable by happening on another computer.
+    const { deck, sent } = forwarded(fakeDrive('https://example.com'), dir)
+    const result = await deck.call('browser_read', {}, { caller: away, attended: false })
+    expect(result.ok).toBe(false)
+    expect(result.refusal).toBe('not-permitted-unattended')
+    expect(sent).toHaveLength(0)
+  })
+
+  it('records where it happened and not what the page said', async () => {
+    /*
+     * `ToolOutput.summary` is the audit row, not a second copy of the answer —
+     * and the answer here can be a whole page outline. What is worth writing
+     * down is that this app drove a browser it does not own.
+     */
+    const { deck } = forwarded(fakeDrive('https://example.com'), dir)
+    await deck.call('browser_read', {}, { caller: away })
+    const rows = readFileSync(join(dir, 'actions.jsonl'), 'utf8').trim().split('\n')
+    const last = JSON.parse(rows[rows.length - 1]) as { result?: Record<string, unknown> }
+    expect(last.result).toMatchObject({ forwardedTo: 'dev-1', tool: 'browser.read' })
+  })
+})
+
+/** Each verb's own minimal arguments. See the note above `ARGS`. */
+const ARGS_BY_TOOL: Record<string, Record<string, unknown>> = {
+  browser_open: { url: 'https://x.test' },
+  browser_read: {},
+  browser_step: { verb: 'click', selector: '#a' },
+  browser_screenshot: {},
+  browser_handover: { prompt: 'hi' },
+  browser_close: { sessionId: 'far-1', window: 'B1' },
+}

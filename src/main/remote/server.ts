@@ -70,6 +70,7 @@ import type { DeviceSessionGrant, SessionGrants } from './session-grants'
 // owns the one instance, because the endpoint's own filter closes over it before
 // this function is ever called.
 import type { AccountGrants, DeviceAccountGrant } from './account-grants'
+import type { WindowAskDesk } from './window-asks'
 // `asDeviceKind` is a value because the approve handler has to narrow whatever
 // came across the bridge, and it is three comparisons over a string literal
 // union — importing it pulls in the store's module but not its file, and the
@@ -762,6 +763,22 @@ export interface RemoteEndpointOptions {
    * without either module importing the other.
    */
   credentials?: CredentialProxy
+  /**
+   * The desk holding this machine's questions to a device about a browser
+   * window it is showing.
+   *
+   * **Absent is the switch**, as everywhere else here: with no desk the
+   * `windows` capability is not advertised, a device never says it can serve
+   * one, and a session started for a device is launched without the browser
+   * verbs and told why — rather than holding six tools whose every call would
+   * end in a timeout.
+   *
+   * Injected rather than constructed here because the same desk is what
+   * `deck-control`'s browser tools reach when they forward a verb: one desk, or
+   * the frame goes out on a socket and the answer is matched against a table
+   * nobody sent from.
+   */
+  windows?: WindowAskDesk
   /**
    * Starting a project's dev server. **Absent is the switch**, as everywhere else.
    *
@@ -1720,6 +1737,15 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // be asked for a GitHub login and then never ask, which is a screen in
     // somebody's app for a thing that cannot happen.
     if (name === CAPABILITY.credential) return options.credentials !== undefined
+    /*
+     * Same rule, running the same way round as `credential`: this one is a
+     * question *this* machine asks a device, so what it is gated on is having a
+     * desk to hold the question. Without one, a session here that tried to act
+     * on a window over there would send a frame nothing was waiting to answer,
+     * and the tool call would sit until the client's own timeout fired — which
+     * is the fifty-five second stall `window-asks.ts` exists to not have.
+     */
+    if (name === CAPABILITY.windows) return options.windows !== undefined
     /*
      * Three conditions, and all three are load-bearing.
      *
@@ -4246,6 +4272,26 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         desk.handle(message satisfies UploadMessage)
         return
       }
+      case 'window.result': {
+        /*
+         * A device answering a browser verb this machine asked it to run.
+         *
+         * The desk matches the id against a question it sent, so a frame naming
+         * anything else is dropped — but the id is not the authorisation and must
+         * not be read as one. What binds this answer to that question is that the
+         * desk only ever hands ids to `ask`, and `ask` only ever writes to the
+         * device the session belongs to; a second device replaying an id it
+         * observed cannot have observed one, because each channel is sealed.
+         *
+         * A frame nothing was waiting for is dropped in silence rather than
+         * refused. It is what a device sends when its answer and this end's
+         * deadline crossed on the wire, which is an ordinary race with an already
+         * correct outcome — the tool call has been answered — and closing the
+         * channel over it would turn a slow network into a dropped link.
+         */
+        options.windows?.answer(message.id, { ok: message.ok, body: message.body })
+        return
+      }
       case 'credential.ack':
       case 'credential.answer':
       case 'credential.deny': {
@@ -4416,6 +4462,18 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           // request would sit until a timer expired rather than failing the
           // moment the last way to reach that device disappeared.
           options.credentials?.connectionClosed(deviceId)
+          /*
+           * And every browser verb outstanding to that device, for the same
+           * reason and read from the other end: a tool call on this machine must
+           * not spend fifty-five seconds finding out that the computer holding
+           * the window hung up. `gone` settles them all with a sentence now.
+           *
+           * Unconditional rather than "only if this was the last channel". The
+           * desk is keyed by device, a device with two channels is a device that
+           * heard the ask twice, and settling early is the direction that cannot
+           * strand a turn.
+           */
+          options.windows?.gone(deviceId)
           announce()
         }
       },
@@ -4499,6 +4557,28 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   function canAnswer(connection: LiveConnection, deviceId: string): boolean {
     return connection.deviceId === deviceId && connection.capabilities.includes(CAPABILITY.credential)
   }
+
+  /*
+   * The same shape one capability along, and the same reason for it: the desk is
+   * built by the assembly, because `deck-control`'s browser tools forward
+   * through it, and the live connections belong here.
+   *
+   * `windows` rather than `credential` in the capability test, and it is not
+   * interchangeable: a device that can answer a git login has said nothing about
+   * whether it holds browser windows or knows the frame that asks about one.
+   */
+  options.windows?.serve({
+    ask(deviceId: string, message: ServerMessage): number {
+      let heard = 0
+      for (const connection of live.values()) {
+        if (connection.deviceId !== deviceId) continue
+        if (!connection.capabilities.includes(CAPABILITY.windows)) continue
+        send(connection, message)
+        heard += 1
+      }
+      return heard
+    },
+  })
 
   options.credentials?.serve({
     ask(deviceId: string, message: ServerMessage): number {
@@ -5353,6 +5433,22 @@ export interface RemoteIpcDeps {
    */
   credentials?: CredentialProxy
   /**
+   * The desk holding this machine's questions to a device about a browser
+   * window it is showing.
+   *
+   * **Absent is the switch**, as everywhere else here: with no desk the
+   * `windows` capability is not advertised, a device never says it can serve
+   * one, and a session started for a device is launched without the browser
+   * verbs and told why — rather than holding six tools whose every call would
+   * end in a timeout.
+   *
+   * Injected rather than constructed here because the same desk is what
+   * `deck-control`'s browser tools reach when they forward a verb: one desk, or
+   * the frame goes out on a socket and the answer is matched against a table
+   * nobody sent from.
+   */
+  windows?: WindowAskDesk
+  /**
    * The dev-server module, when this build has one.
    *
    * Passed in for the same reason `folders` and `credentials` are: `index.ts`
@@ -5656,6 +5752,15 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     certDir: deps.storageDir,
     ...(deps.uploadsDir ? { uploadsDir: deps.uploadsDir } : {}),
     ...(deps.credentials ? { credentials: deps.credentials } : {}),
+    /*
+     * The desk this machine's sessions ask a device through, when the browser
+     * window one of them is attached to is on that device's screen.
+     *
+     * Absent is the switch here too: with no desk the `windows` capability is
+     * not advertised, no device ever says it can serve one, and `host-core.ts`
+     * launches a device's session with no browser verbs and tells it why.
+     */
+    ...(deps.windows ? { windows: deps.windows } : {}),
     // Spread rather than passed as possibly-undefined, like everything else that
     // is a switch: absent means this host does not advertise `devserver` at all.
     ...(deps.devServers ? { devServers: deps.devServers } : {}),

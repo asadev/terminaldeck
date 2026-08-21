@@ -432,3 +432,29 @@
   line-height: var(--lh-body);
   color: var(--color-warning);
 }
+
+/*
+ * The one grant on a machine card.
+ *
+ * A checkbox and its sentence on one line, indented to the same rule the ports
+ * list and the session rows sit against, so the card reads as one column rather
+ * than as a form dropped into it. It is not in `.machines-actions` because that
+ * row is verbs — Connect, Forget — and this is a state somebody sets and leaves.
+ */
+.machines-grant {
+  margin: 8px 0 0;
+}
+
+.machines-grant-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--t-sm, 12px);
+  color: var(--text-2, inherit);
+  cursor: pointer;
+}
+
+.machines-grant-row input {
+  margin: 0;
+  flex: none;
+}

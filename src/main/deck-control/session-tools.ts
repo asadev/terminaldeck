@@ -46,23 +46,38 @@
  * window is the whole of the permission — *"if we connect any browser, they
  * should be able to drive it"*.
  *
- * ## What this does not reach, and where that piece would go
+ * ## What this reaches, and what it still does not
  *
- * A session on a paired machine or on a server runs its CLI on **that** box, and
- * this endpoint is loopback-only by construction (`hostIsLocal`, and the whole
- * argument at the top of `server.ts`). There is no reverse tunnel from a far
- * machine back to this one, so those sessions cannot be handed a config file
- * that points anywhere they can reach. Making them reach it means a new frame
- * pair on the remote protocol — the far host exposing a loopback MCP endpoint of
- * its own and proxying calls over the sealed channel, authenticated per session
- * the way `remote/copilot-runs.ts` authenticates a device's run — and that is
- * not built. Nothing here pretends otherwise: a session that cannot be given the
- * tools is simply launched without them, exactly as it was before — **and is
- * told so**, which is the half that was missing. `session-verbs.ts` holds the
- * reason `host-core.ts` wrote down and the one sentence the hook answer prints
- * beside the window list, because a session that has been told it owns `B1` and
- * has no verb for it goes looking for another way in rather than concluding
- * there is none.
+ * This endpoint is loopback-only by construction (`hostIsLocal`, and the whole
+ * argument at the top of `server.ts`), so it can only ever be handed to a
+ * session whose CLI runs on **this** box. That is not the same question as
+ * *where the window is*, and confusing the two is what made this section wrong
+ * until 2026-08-21.
+ *
+ * A session started here **by a paired device** is one of ours: it gets a token
+ * and a config file from this endpoint like any other. What is different is
+ * where its verbs land. Its browser window is in the app on that device's
+ * screen, so `browser-tools.ts` forwards every one of the six to that device
+ * over `window.call` — see `VerbForwarder` there, `remote/window-asks.ts` for
+ * the asking end and `remote/machines/window-serve.ts` for the end that decides.
+ * `host-core.ts`'s gate is where the two halves meet: it hands such a session
+ * the flags only when the assembly says that forwarder exists.
+ *
+ * A shell on a **server** is the case that is still not built, and the reason is
+ * different from the one this section used to give. There is no app on a server
+ * — no endpoint, no hook, no `open` shim — and the Mac starts that shell through
+ * `ssh2`, so the missing piece is not a protocol frame. It is a way to put a
+ * config file where that CLI will read it and a port there that reaches this
+ * machine; `ssh2`'s remote port forwarding gives the second and nothing gives
+ * the first, because `--mcp-config` is read once at exec and a person types
+ * `claude` into that shell themselves.
+ *
+ * Nothing here pretends otherwise: a session that cannot be given the tools is
+ * launched without them — **and is told so**, which is the half that was
+ * missing. `session-verbs.ts` holds the reason `host-core.ts` wrote down and the
+ * one sentence the hook answer prints beside the window list, because a session
+ * that has been told it owns `B1` and has no verb for it goes looking for
+ * another way in rather than concluding there is none.
  *
  * ## The trap this file cannot defend itself against, and where it is closed
  *
@@ -124,12 +139,23 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
  * site would fail instead of asking, which is the dead control this round is
  * about.
  */
-const SESSION_TIERS: TierGrant = Object.freeze({ read: true, act: true, alter: true })
+export const SESSION_TIERS: TierGrant = Object.freeze({ read: true, act: true, alter: true })
 
 /** A launch that has been given a token, before its session exists. */
 export interface PreparedSessionTools {
   /** Arguments to fold into the CLI's launch. */
   args: readonly string[]
+  /**
+   * The file those arguments name.
+   *
+   * The same path that is already inside `args`, handed over separately because
+   * one caller needs it as a *path* rather than as an argument: a confined
+   * launch has to name it in `DeviceConfinement.files` or the sandbox refuses
+   * the read, and `host-core.ts` builds that list before it builds the argv.
+   * Digging it back out of `args[1]` would be a second place that knows the
+   * shape of the flag pair.
+   */
+  file: string
   /**
    * The pty exists. Bind the token to it.
    *
@@ -287,6 +313,7 @@ export function createSessionTools(
          * order to add ours would be this app quietly editing their setup.
          */
         args: ['--mcp-config', file],
+        file,
         started(sessionId: string, machineId = ''): void {
           if (entry.claim !== null) clearTimeout(entry.claim)
           entry.claim = null

@@ -718,3 +718,123 @@ describe('what the far machine is serving', () => {
     link.disconnect()
   })
 })
+
+describe('a browser verb arriving from that machine', () => {
+  /**
+   * The one inbound *question* on this link.
+   *
+   * Everything else a paired machine sends is an answer to something this end
+   * asked, or an event. This is the far end saying *"a session of mine is
+   * attached to a window of yours — act on it"*, and the whole of the decision
+   * is on this side, where the browser is.
+   */
+  function link(
+    answer?: (call: { sessionId: string; tool: string; args: string }) => Promise<{
+      ok: boolean
+      body: string
+    }>,
+  ): { link: ReturnType<typeof createMachineLink>; rig: ReturnType<typeof harness> } {
+    const rig = harness()
+    const made = createMachineLink({
+      id: 'machine-1',
+      secrets: secrets(),
+      onState: () => undefined,
+      onOutput: () => undefined,
+      onWelcome: () => undefined,
+      dial: rig.dial,
+      baseBackoffMs: 5,
+      maxBackoffMs: 10,
+      ...(answer === undefined ? {} : { onWindowCall: answer }),
+    })
+    return { link: made, rig }
+  }
+
+  it('offers to serve them only when there is something behind the offer', async () => {
+    /*
+     * A build that listed the capability without a handler would have a far
+     * machine sending `window.call` into a socket that answers nothing — inside
+     * a tool call somebody's turn is blocked on, waiting out a deadline for a
+     * feature that was never there.
+     */
+    const bare = link()
+    bare.link.connect()
+    await settle()
+    expect(JSON.parse(bare.rig.fakes[0].sent[0])).not.toHaveProperty('capabilities')
+
+    const wired = link(async () => ({ ok: true, body: '{}' }))
+    wired.link.connect()
+    await settle()
+    expect(JSON.parse(wired.rig.fakes[0].sent[0])).toMatchObject({ capabilities: ['windows'] })
+  })
+
+  it('answers on the same socket, carrying the handler’s outcome', async () => {
+    const seen: unknown[] = []
+    const { link: made, rig } = link(async (call) => {
+      seen.push(call)
+      return { ok: true, body: '{"title":"Example"}' }
+    })
+    made.connect()
+    await settle()
+    rig.fakes[0].say(welcome())
+    rig.fakes[0].say({
+      t: 'window.call',
+      id: 'w-1',
+      session: 'sess-1',
+      tool: 'browser.read',
+      args: '{}',
+    })
+    await settle()
+
+    expect(seen).toEqual([{ sessionId: 'sess-1', tool: 'browser.read', args: '{}' }])
+    const last: unknown = JSON.parse(rig.fakes[0].sent.at(-1) ?? '{}')
+    expect(last).toEqual({ t: 'window.result', id: 'w-1', ok: true, body: '{"title":"Example"}' })
+  })
+
+  it('answers even when nothing here serves them, rather than going quiet', async () => {
+    /*
+     * Silence costs the far end a whole turn and produces the one thing
+     * `session-verbs.ts` was written to stop: an agent that concludes it has not
+     * found the way in yet and goes looking for another.
+     */
+    const { link: made, rig } = link()
+    made.connect()
+    await settle()
+    rig.fakes[0].say(welcome())
+    rig.fakes[0].say({
+      t: 'window.call',
+      id: 'w-2',
+      session: 'sess-1',
+      tool: 'browser.read',
+      args: '{}',
+    })
+    await settle()
+
+    const last = JSON.parse(rig.fakes[0].sent.at(-1) ?? '{}') as {
+      t: string
+      ok: boolean
+      body: string
+    }
+    expect(last.t).toBe('window.result')
+    expect(last.ok).toBe(false)
+    expect(String((JSON.parse(last.body) as { message: string }).message)).toMatch(/not set up/)
+  })
+
+  it('turns a handler that threw into a refusal rather than an unanswered call', async () => {
+    const { link: made, rig } = link(() => Promise.reject(new Error('the drive is not up')))
+    made.connect()
+    await settle()
+    rig.fakes[0].say(welcome())
+    rig.fakes[0].say({
+      t: 'window.call',
+      id: 'w-3',
+      session: 'sess-1',
+      tool: 'browser.read',
+      args: '{}',
+    })
+    await settle()
+
+    const last = JSON.parse(rig.fakes[0].sent.at(-1) ?? '{}') as { ok: boolean; body: string }
+    expect(last.ok).toBe(false)
+    expect((JSON.parse(last.body) as { message: string }).message).toBe('the drive is not up')
+  })
+})

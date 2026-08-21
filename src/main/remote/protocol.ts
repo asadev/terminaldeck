@@ -471,6 +471,36 @@ export const CAPABILITY = {
    * and this is a relay.
    */
   chat: 'chat',
+  /**
+   * A session on **this** machine driving a browser window in the app of the
+   * device that started it.
+   *
+   * Like `credential`, and unlike everything else here, it runs the other way
+   * round — so the string means two different things depending on which side
+   * sent it. A host lists it in `welcome.capabilities` to say *"I may ask you to
+   * act on a window for one of my sessions"*; a client lists it in
+   * `hello.capabilities` to say *"I hold windows and I will serve those asks"*.
+   * Both halves are needed and neither is optional: a host that asked a client
+   * which had never heard of `window.call` would sit there until a timer gave
+   * up, inside a tool call somebody's turn is blocked on.
+   *
+   * ## Why the browser verbs cross the wire at all
+   *
+   * A browser window lives in the renderer of the app a person is looking at.
+   * A session can live anywhere. Asad, 2026-08-21:
+   *
+   *   > *"i need full capability for all sessions to drive browsers the ones
+   *   > they open or the ones we connect to the session"*
+   *
+   * and, of the case he hit: a browser window and a session both belonging to
+   * his PC, attached to each other from his Mac, that *"cannot even connect to
+   * each other"*. They could not, because the relation was written in the Mac's
+   * map — where the window object is — and the session's tools were on the PC,
+   * where the window is not. This capability is the one wire that closes that
+   * gap, and it closes it in the direction that keeps the decision where the
+   * browser is: the PC forwards the verb, the Mac decides and acts.
+   */
+  windows: 'windows',
 } as const
 
 /**
@@ -498,6 +528,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.account,
   CAPABILITY.logins,
   CAPABILITY.chat,
+  CAPABILITY.windows,
 ]
 
 /**
@@ -739,6 +770,37 @@ export const SHA256_HEX_LENGTH = 64
  * path is the per-field caps below.
  */
 export const MAX_MESSAGE_BYTES = 64 * 1024
+
+/**
+ * How big one forwarded browser call, and one answer to it, may be.
+ *
+ * Two numbers rather than one because the two directions carry different
+ * things. A call is a tool's arguments — a URL, a CSS selector, a line of text
+ * to type — and sixteen kilobytes is already far past anything a model composes.
+ * An answer can be a page outline, which `browser-driver.ts` will happily build
+ * up to `MAX_OUTLINE_TEXT_CHARS` of, so the answer cap is the larger of the two
+ * and still inside {@link MAX_MESSAGE_BYTES} with room for the envelope.
+ *
+ * An answer that does not fit is **refused with a sentence**, never truncated.
+ * Half a page outline is worse than no page outline: the JSON would not parse,
+ * and if it did the model would act on a list of elements that stops in the
+ * middle. The sentence names the two things that make it fit — a `selector`, or
+ * a smaller `textChars` — because a refusal an agent cannot act on is a refusal
+ * that gets retried unchanged.
+ */
+/**
+ * Longest tool name a `window.call` may carry.
+ *
+ * The names it will really carry are `browser.open` and its five siblings, all
+ * under twenty characters. This is not a guess at a future name — it is a bound
+ * on a string that is about to be compared against an allow-list and written
+ * into an action log, and an unbounded one is a log line somebody else chose the
+ * length of.
+ */
+export const MAX_TOOL_NAME_LENGTH = 64
+
+export const MAX_WINDOW_ARGS_BYTES = 16 * 1024
+export const MAX_WINDOW_RESULT_BYTES = 48 * 1024
 
 /** Largest `input` payload. A paste, not a file upload. */
 export const MAX_INPUT_BYTES = 16 * 1024
@@ -1883,6 +1945,21 @@ export type ClientMessage =
    * `denied`, so a client that only ever refuses can send the bare frame.
    */
   | { t: 'credential.deny'; id: string; reason?: CredentialDenial }
+  /* ---- capability `windows`. Refused outright when it is not advertised. --- */
+  /**
+   * What that browser verb did, or why it did nothing.
+   *
+   * One frame for both outcomes rather than an answer and a refusal, because the
+   * caller does the same thing with either: it is inside an MCP tool call, and a
+   * tool error and a tool result are both results as far as the model on the
+   * other end is concerned. `ok` is what separates them and `body` is JSON text
+   * in both cases — the tool's value, or `{ "message": "…" }` for a refusal.
+   *
+   * There is no third shape for "the device is not there". Silence is that, and
+   * it is answered by the host's own deadline with a sentence composed there,
+   * because a device that has gone cannot send a frame saying so.
+   */
+  | { t: 'window.result'; id: string; ok: boolean; body: string }
   /* ---- capability `copilot`. Refused per-tier, per device. ---------------- */
   /**
    * ## The rule that makes this whole surface safe: **no tool name is on the wire**
@@ -2473,6 +2550,41 @@ export type ServerMessage =
       operation: CredentialOperation
       prompt: boolean
     }
+  /* ---- capability `windows` ---------------------------------------------- */
+  /**
+   * A session on this machine wants to act on a browser window in **your** app.
+   *
+   * The second frame in this protocol the host sends as a *question* — see
+   * `credential.request` for the first, and for why a question needs both ends
+   * to have advertised the capability before it may be asked.
+   *
+   * ## What travels, and what deliberately does not
+   *
+   * `tool` is one of the six browser verbs and `args` is its arguments as JSON
+   * text. No window id, no tab id, no view id and no page: the *only* thing this
+   * end may name is one of its own sessions, and which windows that session
+   * holds is a fact the answering end looks up in its own binding map. So a host
+   * cannot enumerate the windows on a device, cannot probe for one, and cannot
+   * reach a window that was never attached to the session it is asking about —
+   * the same property `browser-tools.ts`'s {@link boundOf} gives a session on
+   * one machine, kept across the wire by carrying no more than it already had.
+   *
+   * `session` is this host's own id for the session. The answering end pairs it
+   * with the machine id it knows this host by, which is exactly the
+   * `<machineId>\0<sessionId>` key the binding was written under when the person
+   * attached the window. Neither end has to be told the key; each holds half.
+   *
+   * ## Why JSON text rather than a typed argument object
+   *
+   * The six verbs have five schemas between them and they change. A typed union
+   * here would be a sixth copy of those schemas that has to be kept in step with
+   * `browser-tools.ts`, `catalogue.ts` and both ends of this wire, and the day
+   * one of them drifts is the day an argument is silently dropped — which is the
+   * failure `create`'s hand-off comment above already records once. The
+   * arguments are validated where they are acted on, by the tool's own
+   * `precheck`, which is the only place that can validate them correctly.
+   */
+  | { t: 'window.call'; id: string; session: string; tool: string; args: string }
   /* ---- capability `copilot` ---------------------------------------------- */
   /** Answer to `copilot.state`, and pushed whenever any of it changes. */
   | { t: 'copilot.state'; state: CopilotStateReport }
@@ -3604,6 +3716,33 @@ export function parseClientMessage(raw: unknown): ParseResult {
       // and the difference between those two taps is the entire consent model.
       if (parsed.remember === true) answer.remember = true
       return { ok: true, message: answer }
+    }
+    /* ---- capability `windows` ------------------------------------------- */
+    /*
+     * Shape-checked here and matched to a question nowhere near here. Whether
+     * this host asked anything, whether this device is the one it asked, and
+     * whether the answer is still wanted are `window-asks.ts`'s to answer,
+     * because only it is holding the request — the same split `credential.*`
+     * makes three cases above.
+     *
+     * `body` is not parsed. It is JSON text composed by a tool on the other
+     * machine and it is handed to the MCP client that asked, unread by anything
+     * here; parsing it would mean this file having an opinion about six tool
+     * schemas it does not own. What is checked is that it is a string, and that
+     * it is small enough to have crossed a relay honestly — see
+     * {@link MAX_WINDOW_RESULT_BYTES} for why an over-long one is refused rather
+     * than cut.
+     */
+    case 'window.result': {
+      const requestId = id(parsed.id)
+      if (!requestId) return bad('window.result without an id')
+      if (typeof parsed.ok !== 'boolean') return bad('window.result without an outcome')
+      const body = asString(parsed.body)
+      if (body === null) return bad('window.result without a body')
+      if (overBytes(body, MAX_WINDOW_RESULT_BYTES)) {
+        return tooLarge('window.result larger than the answer cap')
+      }
+      return { ok: true, message: { t: 'window.result', id: requestId, ok: parsed.ok, body } }
     }
     case 'credential.deny': {
       const requestId = id(parsed.id)
@@ -5130,6 +5269,35 @@ export function parseServerFrame(parsed: unknown): ServerParse {
       // for it has its own. Losing the frame would leave a progress line moving
       // for ever.
       return { ok: true, message: { t: 'upload.failed', id, message: asString(parsed.message) ?? '' } }
+    }
+    /* ---- capability `windows` ------------------------------------------- */
+    /*
+     * A browser verb, on its way in from the machine a session is running on.
+     *
+     * Nothing here decides whether it is allowed. The tool name is not checked
+     * against a list, the arguments are not read, and the session id is not
+     * looked up — all three belong to the end that holds the window, because
+     * that is the end that holds the grant, the binding map and the tool's own
+     * `precheck`. A parser that started refusing tool names would be a second
+     * allow-list, in the file least able to keep it in step with the first.
+     *
+     * What is checked is the shape and the size, which is what a parser is for.
+     */
+    case 'window.call': {
+      const requestId = id(parsed.id)
+      const session = id(parsed.session)
+      const tool = asString(parsed.tool)
+      const args = asString(parsed.args)
+      if (requestId === null) return { ok: false, reason: 'window.call without an id' }
+      if (session === null) return { ok: false, reason: 'window.call without a session' }
+      if (tool === null || tool === '' || tool.length > MAX_TOOL_NAME_LENGTH) {
+        return { ok: false, reason: 'window.call without a usable tool name' }
+      }
+      if (args === null) return { ok: false, reason: 'window.call without arguments' }
+      if (overBytes(args, MAX_WINDOW_ARGS_BYTES)) {
+        return { ok: false, reason: 'window.call larger than the argument cap' }
+      }
+      return { ok: true, message: { t: 'window.call', id: requestId, session, tool, args } }
     }
     case 'pong':
       return { ok: true, message: { t: 'pong' } }

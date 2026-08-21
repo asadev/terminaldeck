@@ -614,6 +614,34 @@ export interface MachineLinkOptions {
    * construction of a link compiles and behaves exactly as it did.
    */
   onUpload?(progress: UploadProgress): void
+  /**
+   * That machine has a session that wants to act on a browser window **here**.
+   *
+   * The one inbound *question* on this link, and the only one — everything else
+   * arriving from a paired machine is an answer to something this end asked, or
+   * an event. `credential.request` is the same shape one protocol out, and the
+   * comparison is worth keeping in mind: both are the far end saying *"you hold
+   * the thing, please act"*, and both are refused by default until somebody
+   * here says otherwise.
+   *
+   * ## Why the answer is a handler rather than a map read
+   *
+   * The window is a `WebContentsView` in this app's renderer and the verb has to
+   * go through `deck-control`'s dispatcher — prechecks, tiers, the confirmation
+   * broker, the budgets and `actions.jsonl` — because a call that skipped any of
+   * those would be a browser holding his logins driven by a path with no record
+   * of it. None of that can be reached from this file, and it must not be: this
+   * file is a socket and a state machine.
+   *
+   * Absent means this link never advertises the capability, so the far machine
+   * never asks, so a session over there is launched knowing it cannot drive
+   * rather than finding out mid-turn. See `CAPABILITY.windows`.
+   */
+  onWindowCall?(call: {
+    sessionId: string
+    tool: string
+    args: string
+  }): Promise<{ ok: boolean; body: string }>
   now?: () => number
   /** Seams for the tests, so nothing here dials the public internet. */
   dial?: (request: DialRequest) => Promise<GuestChannel>
@@ -1019,6 +1047,52 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         if (message.capabilities.includes(CAPABILITY.localhost)) send({ t: 'ports' })
         return
       }
+      case 'window.call': {
+        /*
+         * A browser verb, from a session on that machine, for a window here.
+         *
+         * Answered on this socket whatever happens, including when there is no
+         * handler and when the handler throws. The far end is inside an MCP tool
+         * call with a model waiting on it, so silence there costs a whole turn
+         * and produces the one thing `session-verbs.ts` was written to stop: an
+         * agent that concludes it has not found the way in yet and goes looking
+         * for another.
+         *
+         * The refusal for "no handler" is deliberately the same sentence a
+         * grant refusal gets, composed on the other side of `onWindowCall`. This
+         * file does not know which of the two it is and must not guess — see
+         * `window-serve.ts`, which holds both.
+         */
+        const answer = options.onWindowCall
+        if (answer === undefined) {
+          send({
+            t: 'window.result',
+            id: message.id,
+            ok: false,
+            body: JSON.stringify({
+              message:
+                'that machine is not set up to be driven from here. Say what you would have done on the ' +
+                'page and let the person do it.',
+            }),
+          })
+          return
+        }
+        void answer({ sessionId: message.session, tool: message.tool, args: message.args })
+          .then((result) => {
+            send({ t: 'window.result', id: message.id, ok: result.ok, body: result.body })
+          })
+          .catch((error: unknown) => {
+            send({
+              t: 'window.result',
+              id: message.id,
+              ok: false,
+              body: JSON.stringify({
+                message: error instanceof Error ? error.message : 'that could not be done here',
+              }),
+            })
+          })
+        return
+      }
       case 'sessions':
         publish({ sessions: message.sessions })
         return
@@ -1282,12 +1356,23 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     // channel that has completed the handshake has already proved the far end
     // holds the key this machine paired against, which is why sending a bearer
     // secret down it is safe.
+    /*
+     * What this end can *serve*, which on this link is exactly one thing.
+     *
+     * Every other capability string in this protocol is a verb the host serves
+     * and the guest sends; `windows` runs the other way, so it is advertised
+     * from here — and only when a handler was actually wired. A build that lists
+     * it without one would have a far machine sending `window.call` into a
+     * socket that answers nothing, which is a tool call somebody's turn is
+     * blocked on, waiting out a deadline for a feature that was never there.
+     */
     opened.send(
       serialize({
         t: 'hello',
         protocol: PROTOCOL_VERSION,
         token: options.secrets.credential,
         device: describeThisMachine(),
+        ...(options.onWindowCall === undefined ? {} : { capabilities: [CAPABILITY.windows] }),
       }),
     )
 

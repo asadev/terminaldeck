@@ -155,12 +155,36 @@ export interface MachinesIpcDeps {
   pair?: typeof pairWithCode
   /** Seam for the tests, so a link can be driven without a socket. */
   createLink?: typeof createMachineLink
+  /**
+   * Serve a browser verb that arrived from a session on that machine.
+   *
+   * Absent is the switch, as everywhere else: with no handler the link never
+   * advertises the `windows` capability, so a session over there is launched
+   * knowing it cannot drive rather than holding six verbs whose every call would
+   * time out. `index.ts` passes `remote/machines/window-serve.ts`, which is
+   * where the grant, the binding lookup and every tier check happen.
+   */
+  serveWindows?(
+    machineId: string,
+    call: { sessionId: string; tool: string; args: string },
+  ): Promise<{ ok: boolean; body: string }>
   now?: () => number
 }
 
 export interface MachinesIpc {
   /** Every machine and the state of its link, as the window would draw it. */
   view(): MachinesView
+  /**
+   * May sessions on that machine act on browser windows here? Read per call.
+   *
+   * Exposed rather than answered inside, because the thing that asks is a
+   * dispatcher in `index.ts` that has no business holding a `MachineStore` of
+   * its own — a second store is how a switch and the code reading it come to
+   * disagree. Read on every inbound verb for the reason `callers.ts` gives about
+   * `TokenGrant.caller`: an untick has to land on the next call, not on the next
+   * reconnection.
+   */
+  drivesWindows(machineId: string): boolean
   /** The machine woke up. Redial every link that is meant to be up. */
   wake(): void
   /** Drop every link and stop the beacon. For shutdown. */
@@ -306,6 +330,15 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
         deps.broadcast(MACHINES_COPILOT_CHAT_CHANNEL, { machineId: machine.id, chat })
       },
       onWelcome: (platform) => store.sawWelcome(machine.id, platform),
+      /*
+       * Spread rather than passed as possibly-undefined, because absence is what
+       * the link reads to decide whether to advertise the capability at all. A
+       * handler that was present and answered "no" would be a machine told it
+       * may ask, asking, and being refused on every call.
+       */
+      ...(deps.serveWindows === undefined
+        ? {}
+        : { onWindowCall: (call) => deps.serveWindows!(machine.id, call) }),
       now,
     })
     links.set(machine.id, link)
@@ -430,6 +463,26 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
      * computer this desktop had just been told to forget.
      */
     announce()
+    return view()
+  })
+
+  /**
+   * May sessions on that machine act on browser windows in this app?
+   *
+   * Its own channel rather than a field on a general "update machine" verb,
+   * because it is the only setting here that is a *grant* — everything else on
+   * a machine row is a label or an address. `MachineStore.drivesWindows` carries
+   * the argument for why windows are their own axis and why the axis starts
+   * closed.
+   *
+   * Answers the whole view, like `machines:rename` beside it, so the panel
+   * redraws from one truth rather than from what it thinks it just set.
+   */
+  ipcMain.handle('machines:drive-windows', (_event, id: unknown, allowed: unknown): MachinesView => {
+    // Only the literal `true` grants. See `asStoredMachine`: this is the whole
+    // of the permission, and a truthy value arriving from a bridge is not a
+    // person pressing a switch.
+    if (typeof id === 'string') store.setDrivesWindows(id, allowed === true)
     return view()
   })
 
@@ -1090,6 +1143,7 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
 
   return {
     view,
+    drivesWindows: (machineId: string): boolean => store.drivesWindows(machineId),
     sendFile,
     wake(): void {
       for (const link of links.values()) link.wake()

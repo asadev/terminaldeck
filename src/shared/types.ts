@@ -635,6 +635,7 @@ export interface DeckApi {
   pairMachine(code: string): Promise<unknown>
   forgetMachine(id: string): Promise<unknown>
   renameMachine(id: string, name: string): Promise<unknown>
+  setMachineDrivesWindows(id: string, allowed: boolean): Promise<unknown>
   connectMachine(id: string): Promise<unknown>
   disconnectMachine(id: string): Promise<unknown>
   attachMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>

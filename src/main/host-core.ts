@@ -88,6 +88,7 @@ import {
 } from './confine'
 import { forgetBoundary, noteBoundary } from './session-boundary'
 import { forgetNoVerbs, noteNoVerbs, type NoVerbsReason } from './session-verbs'
+import { forgetWindowOwner, noteWindowOwner } from './window-owner'
 import { currentOpenShim, prependShim } from './open-shim'
 import { currentAppContext } from './app-context'
 import { installDeviceHomes, installHomeScopes } from './transcript'
@@ -313,8 +314,31 @@ export interface HostCoreOptions {
      */
     prepare(): {
       args: readonly string[]
+      /**
+       * The config file the arguments name.
+       *
+       * Handed back so a **confined** launch can be given read access to it. It
+       * lives under `<userData>`, which `confine/plan.ts` keeps out of every
+       * read root on purpose, so without this line a device's session would be
+       * launched with `--mcp-config <a path the sandbox refuses>` — flags that
+       * are present, a file that is not readable, and an agent told it has six
+       * verbs that answer nothing. The same door `git-guest.ts`'s credential
+       * helper and the app's context documents already go through.
+       */
+      file: string
       started(sessionId: string, machineId?: string): void
     } | null
+    /**
+     * Can a session a **device** started act on the browser windows that device
+     * holds?
+     *
+     * A seam rather than a constant because the answer is a fact about the
+     * assembly: the desktop builds a `WindowAskDesk` and wires the forwarder
+     * that `deck-control`'s browser tools use, and the headless host does
+     * neither. Read at the gate below, where the reason a launch is given the
+     * verbs and the reason it is not are decided in one place.
+     */
+    reachesDeviceWindows?(): boolean
   }
   /** Everything remote access keeps on disk: the trust store, the identity, the grants. */
   storageDir: string
@@ -904,16 +928,28 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * rather than a capability — or, in the first case, a capability nobody
      * meant to hand out:
      *
-     *  - **Not a session a paired device asked for.** `guest` and `confine` are
-     *    set by exactly one caller, the device path, and such a session runs on
-     *    *this* machine under a guest git identity inside a granted folder. Give
-     *    it these verbs and a phone gains, through its own session, the thing
-     *    `browser-tools.ts` refuses it directly and says it always will: a way
+     *  - **A session a paired device asked for gets them only to reach that
+     *    device's own windows**, and this condition used to be a flat refusal.
+     *    The refusal's reasoning was right and is untouched: such a session runs
+     *    on *this* machine, and giving it the verbs over the windows *here*
+     *    would hand a phone, through its own session, the thing
+     *    `browser-tools.ts` refuses it directly and says it always will — a way
      *    to make this Mac open a page, click through it and raise a banner
      *    saying "type your password" inside the owner's trusted app chrome. The
-     *    caller kind on the token would be `session` rather than `remote`, so
-     *    that refusal would not fire — which is exactly how a boundary gets
-     *    walked around rather than removed.
+     *    caller kind on the token is `session` rather than `remote`, so that
+     *    refusal would not fire, which is exactly how a boundary gets walked
+     *    around rather than removed.
+     *
+     *    What changed is that there is now somewhere else for the verb to go.
+     *    `window-owner.ts` records which device asked for this session, and
+     *    `deck-control/browser-tools.ts`'s forwarder sends **every** verb from
+     *    such a session to that device — never to a window on this machine, not
+     *    even one attached here. So the boundary above holds word for word: the
+     *    windows on this screen are as unreachable from a device's session as
+     *    they were, and what the session gained is the ability to act on the
+     *    window the person attached to it *in their own app*, which is the whole
+     *    of what he asked for. `reachesDeviceWindows` is the assembly saying
+     *    that forwarder exists; without it this is the flat refusal it was.
      *  - **A caller that composed its own arguments owns the tool surface.**
      *    There is exactly one — the copilot, which passes `--mcp-config <its own
      *    file> --strict-mcp-config` — and adding a second `--mcp-config` beside
@@ -930,9 +966,9 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      *    headless host, a test harness — passes no seam and every session is
      *    launched the way it always was.
      */
+    const forDevice = guest !== undefined || confine !== undefined
     const sessionTools =
-      guest === undefined &&
-      confine === undefined &&
+      (!forDevice || options.sessionTools?.reachesDeviceWindows?.() === true) &&
       (extraArgs ?? []).length === 0 &&
       provider === 'claude' &&
       !addedRuns &&
@@ -953,7 +989,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     const noVerbs: NoVerbsReason | null =
       sessionTools !== null || (extraArgs ?? []).length > 0
         ? null
-        : guest !== undefined || confine !== undefined
+        : forDevice
           ? 'device'
           : target !== null
             ? 'wsl'
@@ -1343,11 +1379,31 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * like they worked, and one that did not. `session-boundary.ts` carries the
      * whole argument; this line is where the answer is captured.
      */
+    /*
+     * The confinement, plus the one file this launch was just handed.
+     *
+     * `confine/plan.ts` keeps `<userData>` out of every read root deliberately —
+     * it also holds transcripts, pairing credentials and `state.json` — and the
+     * session's MCP config lives inside it. Without this the flags would name a
+     * file the sandbox refuses to open, which is the worst of the three
+     * outcomes: not a session that fails to start and not a session with no
+     * tools, but a session holding six verbs that answer nothing, with the
+     * reason visible only in a seatbelt denial nobody is reading.
+     *
+     * Granted as a *file* rather than as its folder, exactly like the credential
+     * helper and the context documents a few hundred lines up, and for the
+     * stronger version of the same reason: the folder is `<userData>/session-tools`
+     * and it holds one bearer token per live session, including other devices'.
+     */
+    const held =
+      confine !== undefined && sessionTools !== null
+        ? { ...confine, files: [...confine.files, sessionTools.file] }
+        : confine
     const plan =
-      confined && confine
+      confined && held
         ? planFor({
             folder: input.cwd,
-            device: confine,
+            device: held,
             accountHome: homeDir(),
             path,
             // Absent for the system profile on purpose. `sessionEnv` returns
@@ -1963,6 +2019,17 @@ export function createHostCore(options: HostCoreOptions): HostCore {
             throw error
           }
           guest.started(meta.id)
+          /*
+           * And which device this session belongs to, which is the fact that
+           * decides where its browser verbs go.
+           *
+           * Written here because this is the only line in the app that has both
+           * the device id and the session id in scope: `input.deviceId` came
+           * from the authenticated socket and `meta.id` was minted a moment ago.
+           * `window-owner.ts` says why it cannot be inferred later from anything
+           * on the pty.
+           */
+          noteWindowOwner(meta.id, input.deviceId)
           // Whoever owns a screen has to be told, or the session is running on
           // this machine and only the phone knows about it.
           options.onSessionCreated?.(meta)
@@ -1988,6 +2055,11 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       // terms: ids are minted once, so an entry left behind answers a question
       // nothing will ever ask again. See `session-verbs.ts`.
       forgetNoVerbs(id)
+      // And which device it belonged to. Same terms again, and one more reason
+      // here: the entry is what sends a browser verb across a relay, and an
+      // entry outliving its session would be an id that could be asked about
+      // for as long as this app runs.
+      forgetWindowOwner(id)
       sessions.noteExit(id, exitCode)
       // The key that let this session ask a phone for a GitHub login stops
       // working the moment the session does. A key that outlived its session

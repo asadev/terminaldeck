@@ -116,6 +116,16 @@ export interface MachineActions {
   openPort(machine: Machine, port: number): void
   /** Ask that machine again what is listening on it. */
   refreshPorts(machine: Machine): void
+  /**
+   * Say whether sessions on that machine may act on browser windows here.
+   *
+   * Optional for the reason the removed `newSession` was, and the shape is worth
+   * keeping for the same reason: the press needs a bridge method that a build
+   * older than this round does not have, and a press that lands nowhere is the
+   * one thing a control on this card may not do. Absent means the switch is not
+   * drawn.
+   */
+  setDrivesWindows?(machine: Machine, allowed: boolean): void
 }
 
 /** The machines half of the merged section, as one bundle. */
@@ -378,6 +388,8 @@ export function MachineRow({
         />
       )}
 
+      <DriveWindows machine={machine} link={link} noun={noun} actions={actions} />
+
       <div className="machines-actions settings-chips">
         {/*
           Two buttons, and both of them are about this end's relationship with
@@ -421,6 +433,82 @@ export function MachineRow({
         control nobody can see is the wall of text this review was about.
       */}
     </li>
+  )
+}
+
+/**
+ * The one grant on this card, and the only setting here that is not a label.
+ *
+ * ## What it is for
+ *
+ * A browser window is a page in **this** app, holding this account's signed-in
+ * mail, bank and source control. A session on the machine this card is about can
+ * now act on one — that is the whole of what Asad asked for after 0.9.1:
+ *
+ * > *"i need full capability for all sessions to drive browsers the ones they
+ * > open or the ones we connect to the session"*
+ *
+ * — and it is not something a machine should have because it was paired. The
+ * host side of this app already keeps folders, sessions and coding logins on
+ * three separate axes for exactly that reason; windows are the fourth, and the
+ * one whose subject is on this screen rather than on that machine's disk.
+ *
+ * ## Why it starts off and why that is not a hidden feature
+ *
+ * The other three grants fail open, because they were added to a product that
+ * already worked without them and taking a working chip away would be the worse
+ * bug. Nothing has ever driven a window from another machine, so there is no
+ * behaviour to preserve — and the first thing anybody does after ticking this is
+ * watch it work.
+ *
+ * ## Why it is drawn while the machine is offline, and what it says when it is on
+ *
+ * The grant is stored here and outlives every connection, so hiding the switch
+ * with the link would mean a machine could only be trusted while it happened to
+ * be awake. What *is* conditional is the sentence under it: when that machine is
+ * connected and has not said it speaks this at all, the tick would be stored and
+ * never used, and the honest thing is to say which end is behind. It is a
+ * statement about the far machine, not an instruction, so it is one line.
+ */
+export function DriveWindows({
+  machine,
+  link,
+  noun,
+  actions,
+}: {
+  machine: Machine
+  link: MachineLinkState
+  noun: string
+  actions: MachineActions
+}) {
+  const set = actions.setDrivesWindows
+  // Not drawn rather than drawn dead. See {@link MachineActions.setDrivesWindows}.
+  if (set === undefined) return null
+  const on = machine.drivesWindows === true
+  /*
+   * Only while it is online. A machine that is not connected has published no
+   * capability list — the link clears it on the way down, deliberately, because
+   * a list from a connection that is over describes a machine that may have been
+   * updated since — so "it did not say it speaks this" would be a claim about
+   * silence.
+   */
+  const mute = on && link.state === 'online' && !link.capabilities.includes('windows')
+  return (
+    <div className="machines-grant">
+      <label className="machines-grant-row">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(event) => set(machine, event.currentTarget.checked)}
+        />
+        <span>Let its sessions act on browser windows here</span>
+      </label>
+      {mute && (
+        <p className="machines-note">
+          That {noun} is running a build that cannot ask, so nothing will use this yet.
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -828,6 +916,18 @@ export function machineActions(deps: MachineActionDeps): MachineActions {
       // written on this side would be the one somebody later mistook for the
       // real one.
       if (bridge) void bridge.openOnMachine(machine.id, `http://localhost:${String(port)}/`)
+    },
+    /*
+     * The grant, written where every other machine setting is written: in the
+     * main process, against the one store. Nothing is drawn from this promise —
+     * the handler answers the whole view and `settle` redraws from it — so the
+     * switch shows what was *stored* rather than what was pressed. A tick that
+     * moved before the store agreed would be a control reporting its own
+     * intention.
+     */
+    setDrivesWindows: (machine, allowed) => {
+      const set = bridge?.setMachineDrivesWindows
+      if (bridge && set) settle(set.call(bridge, machine.id, allowed))
     },
     refreshPorts: (machine) => {
       // Nothing is drawn from the answer: the far machine replies with a `ports`

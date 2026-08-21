@@ -93,6 +93,32 @@ export interface Machine {
   pairedAt: number
   /** Null until a `welcome` has arrived from it at least once. */
   lastConnectedAt: number | null
+  /**
+   * May sessions on that machine act on browser windows **in this app**?
+   *
+   * ## Why windows are their own axis
+   *
+   * The host side of this app already separates three grants a device can be
+   * given — folders (`folder-grants.ts`), running sessions
+   * (`session-grants.ts`) and coding logins (`account-grants.ts`) — for the
+   * reason `AccountGrants`'s header states: a device given one folder had
+   * silently been given every login on the machine to run it under. This is the
+   * same argument, one machine over. A machine this desktop paired with, and
+   * whose sessions it can start and read, has not thereby been handed the
+   * browser on **this** screen — the one holding this person's logged-in mail,
+   * bank and GitHub. Attaching a window and driving one are two different acts
+   * and the second is not implied by any of the first three.
+   *
+   * ## And why this one defaults closed while the other three default open
+   *
+   * The other three fail open because they were added to a product that already
+   * worked without them, and a store whose empty state silently took a working
+   * chip away would be a worse bug than the one it fixed. Nothing has ever been
+   * able to drive a window from another machine, so there is no working
+   * behaviour to preserve: `false` is what every machine already does, and the
+   * first thing a person does after ticking this is watch it work.
+   */
+  drivesWindows: boolean
 }
 
 /** Everything needed to dial one. Main-process only; see {@link Machine}. */
@@ -128,6 +154,8 @@ interface StoredMachine {
   platform: string
   pairedAt: number
   lastConnectedAt: number | null
+  /** See {@link Machine.drivesWindows}. Absent in every file written before it. */
+  drivesWindows?: boolean
 }
 
 interface StoredState {
@@ -199,6 +227,11 @@ function asStoredMachine(value: unknown): StoredMachine | null {
       typeof value.lastConnectedAt === 'number' && Number.isFinite(value.lastConnectedAt)
         ? value.lastConnectedAt
         : null,
+    // Only the literal `true` grants it. A truthy string or a `1` in a file
+    // somebody hand-edited would be a browser opened to another machine on the
+    // strength of a JSON quirk — the same rule `credential.answer`'s `remember`
+    // is read by, and here it is the whole of the grant.
+    drivesWindows: value.drivesWindows === true,
   }
 }
 
@@ -214,6 +247,10 @@ function toPublic(machine: StoredMachine): Machine {
     platform: machine.platform,
     pairedAt: machine.pairedAt,
     lastConnectedAt: machine.lastConnectedAt,
+    // Absent reads as `false`, which is the same answer a machine paired before
+    // this field existed already gives on the wire: this desktop never
+    // advertised `windows` to it, so nothing over there has ever asked.
+    drivesWindows: machine.drivesWindows === true,
   }
 }
 
@@ -308,6 +345,10 @@ export class MachineStore {
       platform: candidate.platform ?? '',
       pairedAt: this.now(),
       lastConnectedAt: null,
+      // Written explicitly rather than left off, so a row this run created and a
+      // row it read back off disk are the same shape. See
+      // {@link Machine.drivesWindows} for why the answer is no.
+      drivesWindows: false,
     }
 
     const next = this.machines.filter((existing) => existing.id !== machine.id)
@@ -335,6 +376,37 @@ export class MachineStore {
     machine.name = cleaned
     this.commit(next)
     return true
+  }
+
+  /**
+   * May sessions on that machine drive browser windows here?
+   *
+   * Read on **every** inbound `window.call` rather than captured when the link
+   * connected, for the reason `callers.ts` makes its grant a function: a person
+   * unticking this would otherwise be editing a store the live link no longer
+   * consults, and the untick would not land until the machine reconnected — a
+   * permission control that changes nothing.
+   */
+  drivesWindows(id: string): boolean {
+    return this.machines.find((machine) => machine.id === id)?.drivesWindows === true
+  }
+
+  /**
+   * Say whether it may, and hand back what is now true.
+   *
+   * Returns the value that was stored rather than a success flag, so a caller
+   * that asked about a machine this store has never heard of draws `false`
+   * instead of drawing the tick it just pressed. A control that shows a state
+   * nothing behind it holds is the defect this whole round is about.
+   */
+  setDrivesWindows(id: string, allowed: boolean): boolean {
+    const next = structuredClone(this.machines)
+    const machine = next.find((candidate) => candidate.id === id)
+    if (!machine) return false
+    if (machine.drivesWindows === allowed) return allowed
+    machine.drivesWindows = allowed
+    this.commit(next)
+    return allowed
   }
 
   /**

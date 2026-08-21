@@ -478,6 +478,16 @@ const api = {
   forgetMachine: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:forget', id),
   renameMachine: (id: string, name: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:rename', id, name),
+  /*
+   * May sessions on that machine act on browser windows in this app?
+   *
+   * Its own verb rather than a field on a general update, because it is the one
+   * setting on a machine row that is a *grant* — everything else there is a
+   * label or an address. It answers the whole view, like `renameMachine`, so the
+   * panel redraws from what was stored rather than from what it thinks it set.
+   */
+  setMachineDrivesWindows: (id: string, allowed: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('machines:drive-windows', id, allowed),
   connectMachine: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:connect', id),
   disconnectMachine: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:disconnect', id),
   attachMachineSession: (id: string, sessionId: string, cols: number, rows: number): Promise<unknown> =>

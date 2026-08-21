@@ -107,6 +107,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'logins.read': true,
   'logins.signin': true,
   'chat.read': true,
+  'window.result': true,
 }
 
 /** Same guard for the other direction. */
@@ -154,6 +155,7 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'logins.signedin': true,
   'session.sent': true,
   'chat.rows': true,
+  'window.call': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -281,6 +283,8 @@ const VALID_CLIENT: ClientMessage[] = [
   // The conversation, and the same view asking what has changed since.
   { t: 'chat.read', rid: 'cht-1', id: SESSION_ID, tail: false },
   { t: 'chat.read', rid: 'cht-2', id: SESSION_ID, tail: true },
+  { t: 'window.result', id: 'win-1', ok: true, body: '{"url":"https://example.com"}' },
+  { t: 'window.result', id: 'win-2', ok: false, body: '{"message":"no window by that name"}' },
 ]
 
 const SESSION: RemoteSession = {
@@ -338,6 +342,7 @@ const VALID_SERVER: ServerMessage[] = [
   // A folder with no transcript at all, which is not the same empty as a
   // session that has not spoken yet.
   { t: 'chat.rows', rid: 'cht-2', id: SESSION_ID, rows: [], reset: true, found: false },
+  { t: 'window.call', id: 'win-1', session: SESSION_ID, tool: 'browser.read', args: '{}' },
   { t: 'pong' },
   { t: 'created', session: SESSION },
   { t: 'closed', id: SESSION_ID },
