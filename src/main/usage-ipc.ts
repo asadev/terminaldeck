@@ -427,6 +427,68 @@ function pushAccountSiblings(source: Entry): void {
   }
 }
 
+/**
+ * The work `usage:watch` starts and deliberately does not wait for, held so
+ * that something else can.
+ *
+ * `usage:watch` has to answer in the same tick — a bar that waits on a disk is a
+ * bar that flashes empty first — so the reads below are fired off and forgotten.
+ * Forgotten by the *caller*: the promises still exist, they still finish, and
+ * what they do when they finish is write a reading into `claudeByAccount`, which
+ * is module state shared by every session on that login.
+ *
+ * That is correct in the app, where a login's directory outlives any one
+ * session, and it is a race everywhere else. A suite is the everywhere else: one
+ * test's watch starts a read, the test ends, `resetSharedUsage()` clears the
+ * pool for the next test, and *then* the read lands — putting the previous
+ * test's figure, stamped a moment ago, into a pool that was supposed to be
+ * empty. The next test asks whether a probe is worth starting, is told the login
+ * already has a figure from thirty seconds ago, and answers `cached` without
+ * asking anything. Reproduced deliberately in `usage-ipc-race.test.ts` by
+ * holding one `readFile`; observed in the wild as
+ * "goes and asks once the CLI would fetch again" failing under full-suite load
+ * with `probe.calls()` of 0, and passing every time it was run alone.
+ *
+ * So the promises are kept. {@link settleUsageWatch} is the join, and it is the
+ * only thing in this file that needs them.
+ */
+const backgroundWork = new Set<Promise<unknown>>()
+
+/**
+ * Keep hold of one piece of fire-and-forget work.
+ *
+ * Two details rather than a bare `add`. The `.catch`, because these are
+ * `void`ed at the call site precisely so that a failed disk read does not become
+ * an unhandled rejection, and holding the promise without one would reintroduce
+ * exactly that. And the `.finally`, so a set that is joined many times over a
+ * long-lived process does not grow: it runs as a microtask, which is what makes
+ * the assignment below guaranteed to have happened before it fires — the same
+ * ordering `TranscriptWatcher.drain` documents.
+ */
+function inBackground(work: Promise<unknown>): void {
+  const tracked = work
+    .catch(() => undefined)
+    .finally(() => {
+      backgroundWork.delete(tracked)
+    })
+  backgroundWork.add(tracked)
+}
+
+/**
+ * Wait until nothing `usage:watch` started is still running. Tests only.
+ *
+ * A loop rather than one `Promise.all`, because one of these pieces of work
+ * starts another: the account probe resolves and *then* reads the disk. Waiting
+ * on the set once would return with the second read still outstanding, which is
+ * the same race one layer down.
+ *
+ * Nothing in the app calls this. The app wants these reads to arrive whenever
+ * they arrive — that is what makes a bar fill in a moment after it appears.
+ */
+export async function settleUsageWatch(): Promise<void> {
+  while (backgroundWork.size > 0) await Promise.all([...backgroundWork])
+}
+
 function ensureEntry(sessionId: string, options: UsageOptions): Entry {
   const existing = entries.get(sessionId)
   if (existing) return existing
@@ -478,7 +540,7 @@ function ensureEntry(sessionId: string, options: UsageOptions): Entry {
    * been established has a name to put on a bar that a moment ago had a sentence
    * saying it had none.
    */
-  if (mayShareClaude(session)) void seedFromDisk(accountFor('claude', session))
+  if (mayShareClaude(session)) inBackground(seedFromDisk(accountFor('claude', session)))
 
   /*
    * And, for a session whose account is not this app's own spawn record,
@@ -496,14 +558,14 @@ function ensureEntry(sessionId: string, options: UsageOptions): Entry {
    * been established has a name to put on a bar that a moment ago carried a
    * sentence saying it had none.
    */
-  void sessionAccount(entry.sessionId)
-    .then((answer) => {
+  inBackground(
+    sessionAccount(entry.sessionId).then((answer) => {
       if (answer.kind !== 'known') return
       if (entries.get(entry.sessionId) !== entry) return
       push(entry)
       return seedFromDisk(accountFor('claude', session))
-    })
-    .catch(() => undefined)
+    }),
+  )
 
   if (entry.sources.codexHome !== null) {
     const watcher = new CodexUsageWatcher(
@@ -519,7 +581,7 @@ function ensureEntry(sessionId: string, options: UsageOptions): Entry {
     // `usage:watch` answers immediately with the screen reading rather than
     // waiting on a directory walk. A window that only ever gets the push is
     // still correct; one that waits for a slow disk is not.
-    void watcher.start()
+    inBackground(watcher.start())
   }
 
   return entry

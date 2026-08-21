@@ -17,6 +17,7 @@ import {
   registerUsageIpc,
   resetSharedUsage,
   resetUsageProbes,
+  settleUsageWatch,
   type UsageOptions,
   type UsageRefreshResult,
 } from './usage-ipc'
@@ -28,7 +29,26 @@ import type { UsageReport } from './usage-window'
  */
 const USER_DATA = join(tmpdir(), `terminaldeck-usage-test-${process.pid}`)
 
-beforeEach(() => {
+beforeEach(async () => {
+  /*
+   * Before anything is wiped: wait for the reads the *previous* test's
+   * `usage:watch` started and did not wait for.
+   *
+   * `usage:watch` answers in the same tick and lets its disk read land a few
+   * milliseconds later, which is the right behaviour for a bar and a race for a
+   * suite — the read finishes after `resetSharedUsage()` below has emptied the
+   * pool, and drops the previous test's figure, stamped seconds ago, into a pool
+   * this test believes is empty. The next refresh then finds a figure younger
+   * than the CLI's own five-minute write throttle, answers `cached`, and starts
+   * no probe. That is what made "goes and asks once the CLI would fetch again"
+   * fail with `probe.calls()` of 0 under full-suite load and pass every time it
+   * was run alone.
+   *
+   * A join and not a delay: `settleUsageWatch` waits for the work itself, so a
+   * loaded machine gets the same answer, just later. `usage-ipc-race.test.ts`
+   * holds one read open and pins both halves of that guarantee.
+   */
+  await settleUsageWatch()
   resetPaths()
   installPaths({
     userData: () => USER_DATA,
@@ -634,7 +654,12 @@ describe('refreshing the figure without touching a session', () => {
     expect(result.ok).toBe(true)
     // Which of the two calls won the race is not the claim — that something went
     // and asked at all is. See the note in the stale test below.
-    expect(probe.calls()).toBe(1)
+    //
+    // The outcome rides along in the message rather than in an assertion of its
+    // own: when this failed under load it failed here, with nothing on screen but
+    // "expected 0 to be 1", and `cached` is the single word that says which of
+    // the gates above let it through. See `usage-ipc-race.test.ts`.
+    expect(probe.calls(), `outcome was ${result.outcome}`).toBe(1)
 
     const report = invoke('usage:watch', fakeContents(), 'twelve-1') as UsageReport
     expect(report.readings.map((entry) => entry.used)).toContainEqual({ state: 'reported', fraction: 0.12 })
@@ -678,7 +703,7 @@ describe('refreshing the figure without touching a session', () => {
      * of exactly one says that, and says it whoever made the call.
      */
     expect(result.outcome === 'ok' || result.outcome === 'cached', result.outcome).toBe(true)
-    expect(probe.calls()).toBe(1)
+    expect(probe.calls(), `outcome was ${result.outcome}`).toBe(1)
 
     const report = invoke('usage:watch', fakeContents(), 'stale-1') as UsageReport
     expect(report.readings.map((entry) => entry.used)).toContainEqual({ state: 'reported', fraction: 0.12 })
