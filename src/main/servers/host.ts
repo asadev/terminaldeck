@@ -574,6 +574,9 @@ const CODE_CEILING_MS = 30 * 1000
 /** Not an exit status any shell reports, so it cannot be mistaken for one. */
 const NEVER_ANSWERED = -1
 
+/** Nor is this, and it means somebody pressed Stop rather than the server failing. */
+const STOPPED = -2
+
 /* ------------------------------------------------------------ the units -- */
 
 /**
@@ -700,6 +703,18 @@ interface Attempt {
   serverId: string
   /** Stop whatever this app started in the terminal. Null when nothing is. */
   stopRunning: (() => void) | null
+  /**
+   * End the wait this attempt is sitting in, now.
+   *
+   * Kept apart from `stopRunning` because the two are about different ends of
+   * the same rope. Ctrl-C stops the command on the server; this stops *this
+   * side* believing the command is still running. Without it, pressing Stop
+   * during an install took the terminal away and left the line underneath
+   * reading "Installing on box." for the twelve minutes the ceiling allows —
+   * which is a page describing work that has stopped, and the exact failure
+   * every ceiling in this file exists to prevent.
+   */
+  giveUp: (() => void) | null
 }
 
 /**
@@ -747,7 +762,7 @@ export class ServerHosts {
     serverName: string,
   ): Promise<HostState> {
     await this.cancel(serverId)
-    const attempt: Attempt = { serverId, stopRunning: null }
+    const attempt: Attempt = { serverId, stopRunning: null, giveUp: null }
     this.attempts.set(serverId, attempt)
 
     const done: string[] = []
@@ -806,8 +821,9 @@ export class ServerHosts {
     step('installing', `Installing on ${serverName}. This takes a minute or two.`)
     const line = `TERMINALDECK_PACKAGE=${shellQuote(tarball)} sh ${shellQuote(installer)}; echo ${DONE} $?`
     attempt.stopRunning = () => shell.write(INTERRUPT)
-    const code = await this.typeAndWait(shell, line, INSTALL_CEILING_MS)
+    const code = await this.typeAndWait(shell, line, INSTALL_CEILING_MS, attempt)
     attempt.stopRunning = null
+    if (code === STOPPED) return failed(`Stopped before ${serverName} had finished installing it.`)
     if (code !== 0) {
       return failed(
         `The host could not be installed on ${serverName}.`,
@@ -897,7 +913,7 @@ export class ServerHosts {
     command: string,
     done: readonly string[] = [],
   ): Promise<HostState> {
-    const attempt = this.attempts.get(serverId) ?? { serverId, stopRunning: null }
+    const attempt = this.attempts.get(serverId) ?? { serverId, stopRunning: null, giveUp: null }
     this.attempts.set(serverId, attempt)
 
     this.say(
@@ -907,7 +923,12 @@ export class ServerHosts {
       }),
     )
     attempt.stopRunning = () => shell.write(INTERRUPT)
-    const code = await this.watchFor(shell, `${shellQuote(command)} pair --kind mine\n`, CODE_CEILING_MS)
+    const code = await this.watchFor(
+      shell,
+      `${shellQuote(command)} pair --kind mine\n`,
+      CODE_CEILING_MS,
+      attempt,
+    )
     if (code === null) {
       this.attempts.delete(serverId)
       return this.say(
@@ -972,6 +993,10 @@ export class ServerHosts {
     } catch {
       /* The terminal has already gone, which is the ordinary way this ends. */
     }
+    // Then this side. The command may or may not have heard the Ctrl-C — the
+    // terminal it was typed into is usually already closing — but the line
+    // under it must stop claiming the work is still going either way.
+    attempt.giveUp?.()
     await Promise.resolve()
   }
 
@@ -995,19 +1020,26 @@ export class ServerHosts {
    * reading *Installing…* forever, which is the one thing worse than saying it
    * did not work.
    */
-  private typeAndWait(shell: HostShell, line: string, ceilingMs: number): Promise<number> {
+  private typeAndWait(
+    shell: HostShell,
+    line: string,
+    ceilingMs: number,
+    attempt: Attempt,
+  ): Promise<number> {
     return new Promise<number>((resolve) => {
       let seen = ''
       let settled = false
       const done = (code: number): void => {
         if (settled) return
         settled = true
+        attempt.giveUp = null
         clearTimeout(ceiling)
         stop()
         resolve(code)
       }
       const ceiling = setTimeout(() => done(NEVER_ANSWERED), ceilingMs)
       ceiling.unref?.()
+      attempt.giveUp = () => done(STOPPED)
       const stop = shell.onData((chunk) => {
         seen += chunk
         const match = DONE_PATTERN.exec(seen)
@@ -1026,19 +1058,26 @@ export class ServerHosts {
    * to exit would be waiting for the person to finish, with the code they need
    * to do that held back until they had.
    */
-  private watchFor(shell: HostShell, line: string, ceilingMs: number): Promise<string | null> {
+  private watchFor(
+    shell: HostShell,
+    line: string,
+    ceilingMs: number,
+    attempt: Attempt,
+  ): Promise<string | null> {
     return new Promise<string | null>((resolve) => {
       let seen = ''
       let settled = false
       const done = (code: string | null): void => {
         if (settled) return
         settled = true
+        attempt.giveUp = null
         clearTimeout(ceiling)
         stop()
         resolve(code)
       }
       const ceiling = setTimeout(() => done(null), ceilingMs)
       ceiling.unref?.()
+      attempt.giveUp = () => done(null)
       const stop = shell.onData((chunk) => {
         seen += chunk
         const match = CODE_PATTERN.exec(seen)

@@ -517,9 +517,31 @@ describe('installing it', () => {
     const started = hosts.install('s1', it_.shell, goodLook(), 'box')
     await hosts.cancel('s1')
     await started
-    // The cancel lands whether or not the run had reached the typing stage; what
-    // matters is that nothing else is used to stop it.
-    expect(it_.typed.every((one) => one === CTRL_C || one.includes('\n'))).toBe(true)
+    // Ctrl-C in the terminal the person is watching, and nothing else. The
+    // other writes are the lines this app typed, which all end in a newline.
+    expect(it_.typed.every((one) => one === CTRL_C || one.endsWith('\n'))).toBe(true)
+  })
+
+  /*
+   * The line under the terminal must stop claiming the install is running the
+   * moment somebody presses Stop. Before `giveUp` existed it kept saying
+   * "Installing on box." for the twelve minutes the ceiling allows, because the
+   * wait was still sitting on a shell that had already been taken away.
+   */
+  it('says it was stopped, rather than sitting on the ceiling', async () => {
+    const it_ = box()
+    const hosts = new ServerHosts(it_.deps)
+    // A shell that never answers, which is what a terminal that has been closed
+    // out from under a run looks like from here.
+    const deaf: HostShell = { onData: () => () => undefined, write: () => undefined }
+    const started = hosts.install('s1', deaf, goodLook(), 'box')
+    // Pressed while it is installing, which is when a person would press it —
+    // not before the run has reached the wait, where there is nothing to stop.
+    while (hosts.stateOf('s1').step !== 'installing') await Promise.resolve()
+    await hosts.cancel('s1')
+    const final = await started
+    expect(final.step).toBe('failed')
+    expect(final.line).toContain('Stopped before')
   })
 })
 
