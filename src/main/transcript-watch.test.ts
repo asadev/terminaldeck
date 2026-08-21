@@ -38,6 +38,27 @@ const WATCH_SLOW_MS = process.platform === 'win32' ? 45_000 : 15_000
 const WATCH_SLOWEST_MS = process.platform === 'win32' ? 60_000 : 20_000
 
 /**
+ * The ceiling on any one {@link until}, and it is deliberately below the
+ * *smallest* budget any `it()` in this file states.
+ *
+ * Whichever of the two fires first is the failure you get to read, and until
+ * today the wrong one always did: the helper's ceiling was thirty seconds and
+ * every case here is given at most twenty, so the message it exists to print —
+ * which condition, with the watcher's own numbers beside it — could never
+ * appear on any platform. What appeared instead was
+ * `Error: Test timed out in 20000ms`, which says nothing about what the watcher
+ * did, and cost an hour on 2026-08-21 working out that the answer was "nothing:
+ * the event was never delivered".
+ *
+ * Derived from `WATCH_MS` rather than written out, so a budget that moves takes
+ * this with it. Almost nothing goes anywhere near it: every wait that is about a
+ * number is now driven through `watcher.refresh()`, leaving a debounce and a
+ * file read. The two that still wait on a filesystem notification — named in
+ * {@link until} — are the ones this exists to speak for.
+ */
+const UNTIL_MS = WATCH_MS - (process.platform === 'win32' ? 5_000 : 2_000)
+
+/**
  * A scratch config directory, spelled the way the OS will spell it back.
  *
  * `os.tmpdir()` is `/var/folders/…` on macOS, which is a symlink to
@@ -141,26 +162,61 @@ function shellTranscript(id: string): string {
  * answer, just later. The ceiling is not a tuned timeout: it exists only so a
  * watcher that genuinely never fires reports a readable failure instead of
  * hanging until vitest kills the test.
+ *
+ * ## What it is *not* enough for, learned on 2026-08-21
+ *
+ * The paragraph above assumed the notification is slow. Twelve copies of this
+ * file run at once say otherwise: it can be **missing**. An `add` for a file
+ * created seconds after the watch was established went undelivered twice in ten
+ * runs, and a `change` for a file the watcher already had open once in
+ * thirty-six — no error logged, no fd limit anywhere near. A condition that is
+ * never going to become true is not helped by a longer wait, and both cases in
+ * this file that went red under that load went red exactly that way: each sat
+ * out its whole budget waiting for an event that was not coming, and the runner
+ * killed it before the thirty-second ceiling could say a word about what it had
+ * been waiting for.
+ *
+ * So the appends are now put in front of the watcher by `watcher.refresh()`,
+ * which re-reads the directory and cannot miss what is already on disk — the
+ * same call `index.ts` makes from the hook that says a session has appeared.
+ * What is left waiting on a real filesystem event is the two cases whose claim
+ * is *about* the watch rather than about a number, and they keep the budget and
+ * the readable message because for them a missing notification is the only way
+ * to go red without anything being wrong:
+ *
+ *  - `notices a device that starts its first session while the pane is open`,
+ *    whose second half says `refresh` started a watch rather than doing one
+ *    read — driving that append through `refresh()` would prove the opposite of
+ *    what it is for;
+ *  - `counts only this project, not another folder the device worked in or its
+ *    scratch`, whose second half says the *live* filter (`enqueueFromStore`,
+ *    matching on the encoded directory name) drops another project's append.
+ *    `refresh()` filters through `transcriptDirs` instead, which is a different
+ *    piece of code and would leave that one untested.
+ *
+ * The wiring both depend on is pinned at source in `the live watch is wired`,
+ * so a watch that is removed outright fails immediately rather than
+ * intermittently.
  */
 async function until(
   what: string,
   watcher: TranscriptWatcher,
   ready: (summary: ProjectSummary) => boolean,
   /*
-   * Thirty seconds, raised from eight after a release build failed on a
-   * `macos-latest` runner with "waited 8000ms for the third request … and it
-   * never happened".
+   * See {@link UNTIL_MS}: the ceiling is not a tuned timeout, it is the point at
+   * which this says what it was waiting for instead of leaving vitest to say
+   * "timed out" about the whole test. It is therefore below the test's own
+   * budget on purpose — a ceiling the runner reaches first is a ceiling that
+   * never speaks.
    *
-   * Raising it weakens nothing, and this file already says why: the ceiling is
-   * not a tuned timeout, it exists only so a watcher that *genuinely* never
-   * fires reports a readable failure instead of hanging until vitest kills the
-   * test. The loop waits on the condition, so a slow machine gets the same
-   * answer, just later — and a hosted runner sharing a host with other jobs is
-   * exactly the slow machine that sentence was written for. A watcher that is
-   * actually broken still fails here, thirty seconds later, with the same
-   * message.
+   * It was thirty seconds, raised from eight after a `macos-latest` release
+   * build failed with "waited 8000ms for the third request … and it never
+   * happened". Raising it fixed nothing, because the diagnosis in that sentence
+   * was already right: the event *never* arrived. Waiting longer for something
+   * that is not coming is the same bug with a longer fuse, and the appends that
+   * could go missing are now driven through `refresh()` instead.
    */
-  ceilingMs = 30_000,
+  ceilingMs = UNTIL_MS,
 ): Promise<ProjectSummary> {
   const deadline = Date.now() + ceilingMs
   for (;;) {
@@ -172,6 +228,47 @@ async function until(
           `requests=${summary.requests} sessions=[${summary.sessions
             .map((s) => s.sessionId)
             .join(' ')}]`,
+      )
+    }
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
+/**
+ * Wait for a report the watcher actually emitted, and hand it back.
+ *
+ * {@link until} reads `summary()`, which answers from whatever the watcher holds
+ * *at that instant* — including halfway through a drain. That is fine for a
+ * claim that only grows, like "three requests have been counted", and wrong for
+ * any claim about the cap: `prune` runs at the *end* of a drain, so a poll that
+ * lands between one file being consumed and the loop finishing sees every
+ * transcript resident at once and a cap that has not been applied yet.
+ *
+ * Not hypothetical. The cap test below asked `summary()` whether the third
+ * session had appeared and then asserted that only two were resident; with the
+ * drain reading three files it caught the middle of one and failed with three,
+ * five times in thirty-six loaded runs — a wrong answer about a state the
+ * watcher never reported to anybody.
+ *
+ * `onUpdate` is what the app is wired to and it fires after the drain, so a
+ * report taken from there is a state the watcher was willing to be judged on.
+ */
+async function emitted(
+  what: string,
+  updates: readonly ProjectSummary[],
+  ready: (summary: ProjectSummary) => boolean,
+  ceilingMs = UNTIL_MS,
+): Promise<ProjectSummary> {
+  const deadline = Date.now() + ceilingMs
+  for (;;) {
+    const found = updates.find((summary) => ready(summary))
+    if (found) return found
+    if (Date.now() >= deadline) {
+      const last = updates[updates.length - 1]
+      throw new Error(
+        `waited ${ceilingMs}ms for ${what} and no report said so; ` +
+          `${updates.length} report(s), last: requests=${last?.requests ?? 'none'} ` +
+          `sessions=[${last?.sessions.map((session) => session.sessionId).join(' ') ?? ''}]`,
       )
     }
     await new Promise((r) => setTimeout(r, 10))
@@ -204,16 +301,36 @@ describe('TranscriptWatcher against a live file', () => {
     expect(afterScan.scanning).toBe(false)
     expect(afterScan.activeSessionId).toBe('sess-live')
 
-    // Two more requests arrive while we watch, the second split across three
-    // lines the way a real multi-block response is. Each is waited for
-    // separately, which is also what makes them two distinct updates rather
-    // than one coalesced batch.
+    /*
+     * Two more requests arrive while we watch, the second split across three
+     * lines the way a real multi-block response is. Each is waited for
+     * separately, which is also what makes them two distinct updates rather
+     * than one coalesced batch.
+     *
+     * What is asserted here is the *tail* — that an append is read from where
+     * the last read stopped and added to what was already counted — so the file
+     * is put in front of the watcher by `refresh()` rather than by waiting for
+     * the operating system to mention it. That is not tidiness. This exact case
+     * failed a `macos-latest` release build with "waited 8000ms for the third
+     * request … and it never happened", the ceiling was raised to thirty
+     * seconds, and it failed again here under load with the same sentence: the
+     * `change` event for a file the watcher already had open was not late, it
+     * never arrived. Waiting longer for something that is not coming is the same
+     * bug with a longer fuse. `refresh` re-reads the directory, which cannot
+     * miss what is already on disk, and every byte of the incremental path below
+     * it runs exactly as it does in the app.
+     *
+     * The live watch itself is still waited on by the two cases {@link until}
+     * names, and pinned at source by `the live watch is wired`.
+     */
     appendFileSync(file, line('m2', 1_000_000))
+    await watcher.refresh()
     await until('the second request to be picked up', watcher, (s) => s.requests >= 2)
 
     appendFileSync(file, line('m3', 1_000_000))
     appendFileSync(file, line('m3', 1_000_000))
     appendFileSync(file, line('m3', 1_000_000))
+    await watcher.refresh()
     const final = await until('the third request to be picked up', watcher, (s) => s.requests >= 3)
     console.log('after appends:', final.requests, formatTokens(totalTokens(final.usage)))
     console.log('updates emitted:', updates.length)
@@ -270,23 +387,37 @@ describe('TranscriptWatcher against a live file', () => {
     appendFileSync(join(dir, 'sess-a.jsonl'), line('a1', 10, { timestamp: '2026-08-11T10:00:00.000Z' }))
     appendFileSync(join(dir, 'sess-b.jsonl'), line('b1', 10, { timestamp: '2026-08-11T11:00:00.000Z' }))
 
+    const updates: ProjectSummary[] = []
     const watcher = new TranscriptWatcher({
       cwd,
       configDir: config,
       debounceMs: 30,
       maxSessions: 2,
-      onUpdate: () => {},
+      onUpdate: (s) => updates.push(s),
     })
     await watcher.start()
     expect(watcher.summary().sessions).toHaveLength(2)
 
-    // A third session starts while we are watching. `prune` runs at the end of
-    // the same drain that reads the new file, so the moment sess-c is visible
-    // the cap has already been applied — there is no window in which all three
-    // are resident for this to race against.
+    /*
+     * A third session starts while we are watching. `prune` runs at the end of
+     * the same drain that reads the new file, so a *report* naming sess-c is one
+     * the cap has already been applied to — which is why this waits on
+     * {@link emitted} and not on `summary()`, whose answer mid-drain has all
+     * three resident and is a state the watcher never reported.
+     *
+     * Driven through `refresh()` for the reason the device test below gives at
+     * length, and it is not a convenience here either: this case failed under
+     * full-suite load by waiting out its whole budget for an `add` event that
+     * never came. Not late — missed, with no error logged to say why, on a watch
+     * `start()` had already waited to hear was ready. `refresh`
+     * reads the directory rather than waiting to be told about it, and it is
+     * what `index.ts` calls from the hook that says a session has appeared, so
+     * the test now drives the watcher the way the app does.
+     */
     appendFileSync(join(dir, 'sess-c.jsonl'), line('c1', 10, { timestamp: '2026-08-11T12:00:00.000Z' }))
+    await watcher.refresh()
 
-    const summary = await until('the third session to be picked up', watcher, (s) =>
+    const summary = await emitted('the third session to be picked up', updates, (s) =>
       s.sessions.some((session) => session.sessionId === 'sess-c'),
     )
     watcher.stop()
@@ -389,8 +520,17 @@ describe('TranscriptWatcher against a live file', () => {
     console.log('late device:', summary.requests, summary.sessions.map((s) => s.sessionId))
     expect(summary.sessions.map((s) => s.sessionId)).toEqual(['sess-late'])
 
-    // And it keeps tailing it, rather than reading it once on discovery. This is
-    // the half that proves `refresh` started a *watch* and not just a read.
+    /*
+     * And it keeps tailing it, rather than reading it once on discovery. This is
+     * the half that proves `refresh` started a *watch* and not just a read.
+     *
+     * One of the two waits in this file that still depend on a real filesystem
+     * event, and deliberate: driving this append through `refresh()` as the rest
+     * now do would re-list the directory and re-read the file, which is exactly
+     * the behaviour this exists to rule out. It keeps its budget and its
+     * message — see {@link until} — and a missing notification is the one way it
+     * can go red without anything being wrong.
+     */
     appendFileSync(join(device, 'sess-late.jsonl'), line('l2', 1_000_000))
     const grown = await until('the append to that session', watcher, (s) => s.requests >= 2)
     watcher.stop()
@@ -436,8 +576,16 @@ describe('TranscriptWatcher against a live file', () => {
     console.log('pruned scan:', afterScan.sessions.map((s) => s.sessionId))
     expect(afterScan.sessions.map((s) => s.sessionId)).toEqual(['sess-mine'])
 
-    // And the live watch is filtered the same way: an append to the other
-    // project must not arrive as this project's cost.
+    /*
+     * And the live watch is filtered the same way: an append to the other
+     * project must not arrive as this project's cost.
+     *
+     * The second of the two waits in this file that still depend on a real
+     * filesystem event, and deliberate for the reason {@link until} gives: the
+     * live path filters in `enqueueFromStore`, on the encoded directory name,
+     * and `refresh()` would filter in `transcriptDirs` instead — proving the
+     * claim about a different piece of code than the one it names.
+     */
     appendFileSync(join(other, 'sess-other.jsonl'), line('x3', 1_000_000))
     appendFileSync(join(mine, 'sess-mine.jsonl'), line('m2', 1_000_000))
     const grown = await until('the append to this project', watcher, (s) => s.requests >= 2)
@@ -594,7 +742,6 @@ describe('TranscriptWatcher against a live file', () => {
     })
     await watcher.start()
     expect(watcher.summary().requests).toBe(1)
-    const before = updates.length
 
     appendFileSync(
       join(dir, 'sess-abandoned.jsonl'),
@@ -609,14 +756,33 @@ describe('TranscriptWatcher against a live file', () => {
     )
 
     /*
-     * Waited on rather than slept through, and waited on the watcher's own
-     * report rather than on a file existing.
+     * Told about the new transcript, rather than waiting to be told.
      *
-     * The watcher emits at the end of the drain that reads the new file, and
-     * `prune` runs inside that same drain — so an update arriving after the
-     * append is proof that the cap has already been applied, and there is no
-     * window in which both transcripts are resident for this to race against.
+     * This is the half that raced, and it raced against the operating system
+     * rather than against a clock: under full-suite load the `add` event for a
+     * file created a moment after the watch was established was simply never
+     * delivered, and the test sat out its whole twenty seconds waiting for a
+     * drain that had no reason to run. Waiting longer would not have helped —
+     * nothing was coming. `refresh()` re-reads the directory, which cannot miss
+     * a file that is already on disk, and it is the path the app itself uses
+     * when it knows a session has started; the `add` event, if it does arrive,
+     * finds the file already queued and changes nothing.
+     *
+     * `before` is read *after* that call, so the update this waits for can only
+     * come from a drain that had the abandoned transcript in its queue: a drain
+     * already in flight consumes it too, because `drainOnce` loops over the live
+     * queue rather than a copy of it. Without that ordering an unrelated update
+     * could satisfy the wait and the assertions below would pass without the
+     * eviction ever having been possible — a test that looks like it works and
+     * does not.
+     *
+     * And the update is what is waited on rather than the file existing: the
+     * watcher emits at the end of the drain that reads the file, `prune` runs
+     * inside that same drain, so an update after the queue means the cap has
+     * already been applied.
      */
+    await watcher.refresh()
+    const before = updates.length
     await until('the abandoned transcript to be read', watcher, () => updates.length > before)
     const summary = watcher.summary()
     watcher.stop()
@@ -643,6 +809,54 @@ describe('TranscriptWatcher against a live file', () => {
     expect(summary.usageByModel).toEqual({})
     expect(totalTokens(summary.usage)).toBe(0)
   }, WATCH_MS)
+})
+
+describe('the live watch is wired', () => {
+  it('subscribes to both stores and waits until it is really watching', () => {
+    /*
+     * A source-level pin, in the shape the `unread` case below already uses
+     * here, and for a sharper version of the same reason: this claim cannot be
+     * provoked on demand *and cannot be waited for either*.
+     *
+     * Measured on this Mac on 2026-08-21, running twelve copies of this file at
+     * once to stand in for a full-suite release run: a `change` event for a file
+     * the watcher already had open went missing once in thirty-six runs, and an
+     * `add` event for a file created seconds after the watch was established
+     * went missing twice in ten. No error was logged and no fd limit was near —
+     * the notification simply never came. Every behavioural test in this file
+     * that waited on one is therefore driven through `refresh()` instead, which
+     * reads the directory rather than waiting to be told about it and is the
+     * path the app itself uses when it knows a session has started.
+     *
+     * That leaves nobody asserting the watch exists, which is what this is for.
+     * It is a weaker claim than "an append arrives" and it is an honest one: it
+     * fails if the subscription is dropped, and it does not pretend to know
+     * whether the operating system will deliver.
+     */
+    const source = readFileSync(new URL('./transcript.ts', import.meta.url), 'utf8')
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+
+    // The project's own directory: a new transcript and an append to one.
+    expect(code, 'the project watch no longer queues new transcripts').toMatch(
+      /watcher\.on\('add', \(path: string\) => this\.enqueue\(path\)\)/,
+    )
+    expect(code, 'the project watch no longer queues appends').toMatch(
+      /watcher\.on\('change', \(path: string\) => this\.enqueue\(path\)\)/,
+    )
+    // And every paired device's store, filtered to this project by name.
+    expect(code, 'the confined-store watch no longer queues anything').toMatch(
+      /stores\.on\('(add|change)', \(path: string\) => this\.enqueueFromStore\(path\)\)/,
+    )
+    /*
+     * And `start()` does not resolve until the watchers say they are watching.
+     * Dropping this is how an append written a moment after `start()` returns
+     * gets lost for good, which is the Windows CI failure the method's own
+     * comment records.
+     */
+    expect(code, 'start() no longer waits for the watchers to be ready').toMatch(
+      /each\.once\('ready', done\)/,
+    )
+  })
 })
 
 describe('what the cap counts as unread', () => {
