@@ -7,9 +7,12 @@ import {
   digestFile,
   digestOf,
   findByteTransforms,
+  findByteWriters,
   fingerprintFile,
+  listSourceFiles,
   NO_TRANSFORM_GUARANTEE,
   stripCommentsAndStrings,
+  writesBytesToDisk,
 } from './browser-asset-digest'
 
 /**
@@ -104,31 +107,136 @@ describe('the stripper', () => {
 
 describe('the guard over the download path', () => {
   /**
-   * The files scanned, and why exactly these.
+   * Who is scanned, and why it is nobody's list.
    *
-   * `browser-downloads.ts` is the only place in this app where bytes arrive from
-   * a socket and land on a disk. The asset modules are what a later pass would
-   * most plausibly be added to — "we already have the file open, we may as well
-   * make a thumbnail here".
+   * It used to be five file names typed into this file. `browser-capture-store.ts`
+   * writes response bodies to disk and was not one of them, so the guarantee had
+   * a hole in it for as long as that file existed — and no test could notice,
+   * because the list was the only statement of what the list should hold. That is
+   * the same failure as a hand-written count of tools sitting next to a
+   * hand-written list of them.
    *
-   * `browser-driver.ts` is deliberately **not** scanned, and the omission is the
-   * policy rather than a gap: it decodes an image and repaints it to mask
-   * password fields out of a screenshot. That is a derivative, made into its own
-   * file, from something that was never a download. The rule is about downloads.
+   * So the set is read off the files: **every module under `src/main` that puts
+   * bytes on a disk is scanned**, found by {@link findByteWriters}. A writer
+   * added tomorrow is inside the guarantee tomorrow, under any name, in any
+   * folder, with nobody having remembered anything.
    *
-   * `browser-asset-digest.ts` is not scanned either, for a duller reason: it
-   * contains the patterns themselves as regular-expression literals, and those
-   * are code.
+   * `src/main` and not `src/`: writing a file is a main-process act. A renderer
+   * and a preload have no `node:fs`, and the headless host in `src/headless`
+   * writes its own state and never a downloaded file — if that changes, the root
+   * here is the one line that moves.
+   *
+   * ## And a second rule, because a writer is not the first thing to arrive
+   *
+   * The asset modules are scanned whether or not they write anything today.
+   * *"We already have the file open, we may as well make a thumbnail here"* is
+   * how the transform gets added, and the transform is written before the write
+   * is: `browser-asset-rendition.ts` and `browser-asset-probe.ts` handle asset
+   * bytes and touch no disk at all, and dropping them the moment the rule became
+   * "writers" would have narrowed the guarantee while widening it.
+   *
+   * So: **everything that writes bytes, plus everything on the asset path.**
+   * Both halves are patterns rather than lists — a `browser-asset-fetch.ts`
+   * added next week is inside this guarantee under either one, having asked
+   * nobody.
    */
-  const GUARDED = [
-    'browser-downloads.ts',
-    'browser-asset-ledger.ts',
-    'browser-asset-rendition.ts',
-    'browser-asset-probe.ts',
-    'browser-asset-coverage.ts',
-  ]
+  const ASSET_PATH = /(?:^|\/)browser-asset-[^/]+\.ts$/
+  const WRITERS = findByteWriters(__dirname)
+  const SCANNED = [
+    ...new Set([...WRITERS, ...listSourceFiles(__dirname).filter((file) => ASSET_PATH.test(file))]),
+  ].sort()
 
-  for (const file of GUARDED) {
+  /**
+   * Writers that are not download paths, each with the reason it is out.
+   *
+   * Default-in is the whole point: this list can only ever *shrink* the scan, it
+   * is read out loud in the failure when a new writer needs judging, and every
+   * entry below is checked to still be a writer, so it cannot rot into a
+   * silent hole the way the old list did.
+   *
+   * The first three are the same case — an image this app *made*, written into
+   * its own file, from something that was never a download. That is the
+   * permitted half of the rule, stated in {@link NO_TRANSFORM_GUARANTEE} itself:
+   * *"derivatives are made afterwards, from the original, into a different
+   * file."* The fourth is not about images at all.
+   */
+  const NOT_DOWNLOADS: Record<string, string> = {
+    'browser-driver.ts':
+      'decodes a screenshot to mask password fields out of it. A screenshot is not a download, and the ' +
+      'masked copy is its own file.',
+    'browser-view.ts':
+      'writes screenshots and scales a preview for the panel. Both are pictures this app took; neither ' +
+      'is a file a server sent.',
+    'attach-outside.ts':
+      'writes an image off the clipboard so it can be handed to a session. The clipboard is not a socket.',
+    'servers/servers.electron-probe.ts':
+      'resizes a terminal — cols and rows, not pixels. Left in the patterns rather than carved out of ' +
+      'them: the scan is narrowed by naming a file, never by teaching the patterns to miss a spelling, ' +
+      'because a pattern with a hole in it is invisible and a named file is not.',
+  }
+
+  it('finds the writers by reading them, and is not quietly finding nothing', () => {
+    /*
+     * The test that makes every test below it mean something.
+     *
+     * A deriver that returned `[]` — a wrong root, a walk that threw, a stripper
+     * that blanked everything — would turn the whole guard into a loop over
+     * nothing that passes for ever. That is precisely the empty success this
+     * round of work exists to end, and a guard is not exempt from it.
+     */
+    expect(WRITERS.length).toBeGreaterThan(10)
+    for (const file of [
+      'browser-downloads.ts',
+      // The hole this rewrite exists to close: it has written response bodies
+      // to disk since the day it was added and was outside the old list.
+      'browser-capture-store.ts',
+      'browser-asset-ledger.ts',
+      'browser-asset-coverage.ts',
+      'browser-block-watch.ts',
+      // Not a browser file at all, and it downloads the application: the widened
+      // rule found it without anybody thinking of it, which is the point.
+      'updates/fetch-update.ts',
+    ]) {
+      expect(WRITERS).toContain(file)
+    }
+    // The asset path, in or out of the writer set. These two write nothing.
+    for (const file of ['browser-asset-rendition.ts', 'browser-asset-probe.ts']) {
+      expect(WRITERS).not.toContain(file)
+      expect(SCANNED).toContain(file)
+    }
+  })
+
+  it('reads the code and not the prose', () => {
+    // `browser-scrape-paths.ts` describes `mkdirSync(..., { recursive: true })`
+    // in its header and writes nothing at all. A membership rule that could not
+    // tell a document from a writer would sweep in every file in this folder.
+    expect(WRITERS).not.toContain('browser-scrape-paths.ts')
+    expect(writesBytesToDisk('// writeFileSync(path, bytes) is what a writer does')).toBe(false)
+    expect(writesBytesToDisk("const how = 'call writeFileSync(path, bytes)'")).toBe(false)
+    expect(writesBytesToDisk('writeFileSync(path, bytes)')).toBe(true)
+    expect(writesBytesToDisk('await writeFile(path, bytes)')).toBe(true)
+    expect(writesBytesToDisk('createWriteStream(path)')).toBe(true)
+    expect(writesBytesToDisk('item.setSavePath(path)')).toBe(true)
+    // A socket, a pty and a response all have a `write`. None of them is a file.
+    expect(writesBytesToDisk('socket.write(chunk)')).toBe(false)
+  })
+
+  it('has no exclusion that has stopped being a writer', () => {
+    /*
+     * An exclusion for a file that was renamed, deleted or no longer writes is a
+     * line that reads like a considered decision and defends nothing. Worse, it
+     * would go on looking like the reason a *new* file of that name is out.
+     */
+    for (const file of Object.keys(NOT_DOWNLOADS)) {
+      expect(WRITERS, `${file} is excluded but no longer writes bytes — delete the exclusion`).toContain(
+        file,
+      )
+    }
+  })
+
+  for (const file of SCANNED) {
+    const why = NOT_DOWNLOADS[file]
+    if (why !== undefined) continue
     it(`${file} does not rewrite the bytes it was handed`, () => {
       const source = readFileSync(join(__dirname, file), 'utf8')
       const found = findByteTransforms(source)

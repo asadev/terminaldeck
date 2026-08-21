@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { createReadStream, statSync } from 'node:fs'
+import { createReadStream, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
+import { join } from 'node:path'
 
 /**
  * The fingerprint of a file, and the rule that the file is never changed.
@@ -45,6 +46,13 @@ import { createReadStream, statSync } from 'node:fs'
  * Neither is decoration. (1) proves today's behaviour and cannot see code it did
  * not run; (2) sees all the code and cannot prove behaviour. Together they cover
  * the failure.
+ *
+ * **Which files (2) reads is not a list anybody keeps.** It was, and the list was
+ * missing `browser-capture-store.ts`, which writes response bodies to disk — so
+ * the guarantee was being quoted as whole while one of its writers was outside
+ * it. {@link findByteWriters} computes the set from the files themselves. See
+ * its own note for why a hand-written membership list is the same failure as a
+ * hand-written count.
  *
  * ## Why sha256 and not something faster
  *
@@ -420,4 +428,120 @@ export function describeByteTransforms(file: string, found: readonly ByteTransfo
   if (found.length === 0) return ''
   const lines = found.map((entry) => `  ${file}:${entry.line}  ${entry.text}\n    → ${entry.why}`)
   return `${NO_TRANSFORM_GUARANTEE}\n\n${lines.join('\n')}`
+}
+
+/* ------------------------------------------------- who has to be scanned -- */
+
+/**
+ * The idioms that put bytes on a disk.
+ *
+ * This list answers a different question from {@link TRANSFORMS} and the two
+ * must not be confused: that one asks *"does this line change bytes"*, this one
+ * asks *"does this file put bytes anywhere they persist"*. Only the second
+ * decides who gets scanned.
+ *
+ * Deliberately not `\.write\s*\(`: a socket, a pty and a response stream all
+ * have a `write`, and a rule that matched them would put half the relay inside
+ * the guarantee and teach whoever hit it that the guard is noise.
+ * `createWriteStream` is here instead, which is the line that turns an ordinary
+ * `write` into a file.
+ */
+const WRITE_IDIOMS: readonly RegExp[] = [
+  /\bwriteFileSync\s*\(/,
+  /\bwriteFile\s*\(/,
+  /\bappendFileSync\s*\(/,
+  /\bappendFile\s*\(/,
+  /\bcreateWriteStream\s*\(/,
+  /\bcopyFileSync\s*\(/,
+  /\bcopyFile\s*\(/,
+  /\bwriteFileAtomic\s*\(/,
+  /* Chromium's own download path: it takes the name and streams the response
+     onto it, so the file is written without this process ever holding it. */
+  /\bsetSavePath\s*\(/,
+]
+
+/**
+ * Does this source put bytes on a disk?
+ *
+ * Read off the *code*, through the same stripper the transform scan uses, for
+ * the same reason: `browser-scrape-paths.ts`'s header says the words
+ * "`mkdirSync(..., { recursive: true })`" in prose, and a header that describes
+ * writing is not a file that writes. A scanner that could not tell the two
+ * apart would put every document in this folder inside the guarantee.
+ */
+export function writesBytesToDisk(source: string): boolean {
+  const code = stripCommentsAndStrings(source)
+  return WRITE_IDIOMS.some((pattern) => pattern.test(code))
+}
+
+/**
+ * Every file under a root that writes bytes, found by reading them.
+ *
+ * ## Why this is computed and not written down
+ *
+ * Because the hand-written version had a hole in it, and a guarantee with a hole
+ * is worse than no guarantee: it gets quoted as though it were whole. Five files
+ * were listed by hand as *"the download path"*; `browser-capture-store.ts` had
+ * been writing response bodies to disk the whole time and was not among them,
+ * and nothing anywhere could notice, because the list was the only statement of
+ * what the list should contain. It is the same failure as a hand-written count
+ * of tools next to a hand-written list of them — two facts that have to agree
+ * and no machine checking that they do.
+ *
+ * So membership is a property of the file rather than of anybody's memory. A
+ * module added tomorrow that writes a byte is scanned tomorrow, whatever it is
+ * called and whichever folder it is put in, and the only way out is an exclusion
+ * written down with its reason at the call site.
+ *
+ * Paths come back relative to `root` with `/` separators on every platform, so
+ * an exclusion reads the same on Windows as it does here — the CI that runs this
+ * on both is `release.yml`, and a guard that passed on one and not the other
+ * would be turned off within a day.
+ */
+export function findByteWriters(root: string): string[] {
+  return listSourceFiles(root).filter((file) => {
+    try {
+      return writesBytesToDisk(readFileSync(join(root, file), 'utf8'))
+    } catch {
+      return false
+    }
+  })
+}
+
+/**
+ * Every non-test TypeScript module under a root, relative and sorted.
+ *
+ * Separate from {@link findByteWriters} so a caller can add a second rule of its
+ * own without re-walking or re-implementing the walk. `browser-asset-digest.test.ts`
+ * uses it for exactly that: the asset modules are scanned whether or not they
+ * write today, because *"we already have the file open, we may as well make a
+ * thumbnail here"* is how the transform gets added, and it gets added before the
+ * write does.
+ */
+export function listSourceFiles(root: string): string[] {
+  const out: string[] = []
+  const walk = (dir: string, prefix: string): void => {
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const path = join(dir, entry.name)
+      const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue
+        walk(path, relative)
+        continue
+      }
+      if (!entry.isFile()) continue
+      if (!entry.name.endsWith('.ts') || entry.name.endsWith('.d.ts')) continue
+      // A test writes fixtures by design; it ships nothing and downloads nothing.
+      if (entry.name.endsWith('.test.ts')) continue
+      out.push(relative)
+    }
+  }
+  walk(root, '')
+  return out
 }
