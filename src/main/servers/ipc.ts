@@ -112,6 +112,25 @@ import {
   whyNotInstall,
   type SetupState,
 } from './setup'
+/*
+ * The second program this app is allowed to install on a server, under the same
+ * §7 exception the agents go in under — and the one that turns a server into a
+ * machine you can open a session on. See `host.ts` for why the package travels
+ * with the app instead of being fetched from npm.
+ */
+import {
+  ServerHosts,
+  hostConsequence,
+  hostLine,
+  reachLine,
+  removeConsequence,
+  whyNotHost,
+  type HostLook,
+  type HostOnServer,
+  type HostRoom,
+  type HostState,
+} from './host'
+import { NO_PACKAGE, type HostPackage } from './host-package'
 import { NO_SECURE_STORE, credentialFromDraft, type ServerCredential, type SignInDraft } from './credentials'
 import { DEFAULT_GRANT_MS, MAX_GRANT_MS, GrantRefused, ServerGrants, type GrantState } from './grants'
 /*
@@ -136,6 +155,12 @@ export const SERVERS_SHELL_OUTPUT_CHANNEL = 'servers:shell:output'
 export const SERVERS_SHELL_CLOSED_CHANNEL = 'servers:shell:closed'
 /** Where a server's setup has got to. Pushed, because it changes without a press. */
 export const SERVERS_SETUP_CHANNEL = 'servers:setup:changed'
+/**
+ * Where a server's headless-host install has got to. Pushed for the same reason
+ * the setup channel is: an install that takes two minutes does not end at a
+ * moment this side could have asked about.
+ */
+export const SERVERS_HOST_CHANNEL = 'servers:host:changed'
 
 /**
  * One agent's row in the setup pane: what is there, and what could be.
@@ -155,6 +180,33 @@ export interface SetupRow {
   why: string | null
   consequence: string
   state: SetupState
+}
+
+/**
+ * What one server can say about the headless host: what is there, and what
+ * putting one there would cost.
+ *
+ * Every sentence on it is written in `host.ts`, beside the code that performs
+ * the work — §4.3 — including the two refusals. The renderer draws them and
+ * composes none of them, so a machine that cannot take a host says why in the
+ * words of the file that decided it could not.
+ */
+export interface HostOffer {
+  host: HostOnServer
+  room: HostRoom
+  /** True only when this build carries a package **and** the server can take it. */
+  canInstall: boolean
+  /** Why there is no Install button, or null when there is one. */
+  why: string | null
+  /** The standing line for the section. */
+  line: string
+  /** Whether it will still be there tomorrow, or null when there is no host. */
+  reach: string | null
+  /** The sentence shown before the press. */
+  consequence: string
+  /** What removing it would leave behind, for each answer to the data question. */
+  removes: { keepData: string; withData: string }
+  state: HostState
 }
 
 /** Whether an unknown off the wire names one of the three rows. */
@@ -338,6 +390,16 @@ export interface ServersIpcDeps {
    * a person who is looking straight at it on their own screen.
    */
   putFile?: PutFileOnServer
+  /**
+   * The headless-host package this build carries, or null when it carries none.
+   *
+   * Optional, and absent is a first-class answer rather than a gap: a build
+   * packaged before `out/headless-package` existed has none, and so does a
+   * checkout where nobody has run `npm run dist:headless`. The server page then
+   * draws **no** Install button and says why — §4.1 — rather than offering to
+   * fetch a package from a registry that holds a name reservation.
+   */
+  hostPackage?(): HostPackage | null
   /**
    * Copy a file off the server. **Absent today**, and its absence is a stated
    * fact rather than a gap: `connection.ts` exposes `run`, `runScript`, `probe`
@@ -1607,6 +1669,145 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
     },
   )
 
+  /* ------------------------------------------------- the host on a server -- */
+
+  /**
+   * The headless host, installed and removed from the page that is already
+   * looking at the server.
+   *
+   * A new set of steps on a screen that exists, deliberately — this is the same
+   * page, the same connection and the same terminal the agent setup uses. A
+   * second screen for "servers you can also run the host on" would have been a
+   * second list of the same machines.
+   */
+  const hosts = new ServerHosts({
+    runScript: (serverId, script) => deps.runScript(serverId, script),
+    /*
+     * Read once here rather than forwarded as a closure over `deps`, so that a
+     * host with no SFTP is `undefined` at construction — which is the shape
+     * `host.ts` refuses on, with a sentence, before it copies anything.
+     */
+    putFile: deps.putFile,
+    // Null when this build carries no package, which is answered as an absent
+    // button with a sentence rather than as a failure part-way through.
+    hostPackage: () => deps.hostPackage?.() ?? null,
+    broadcast: (next) => deps.broadcast(SERVERS_HOST_CHANNEL, next),
+  })
+
+  /** One offer, composed from one round trip and the sentences in `host.ts`. */
+  const hostOffer = (look: HostLook, serverId: string, serverName: string): HostOffer => {
+    const carried = deps.hostPackage?.() ?? null
+    const why = carried === null ? NO_PACKAGE : whyNotHost(look.room)
+    return {
+      host: look.host,
+      room: look.room,
+      canInstall: why === null,
+      why,
+      // Both written in `host.ts`, beside the work — §4.3. The renderer draws
+      // them and composes nothing.
+      line: hostLine(look.host),
+      reach: reachLine(look.host),
+      consequence: hostConsequence(serverName, look.room),
+      removes: {
+        keepData: removeConsequence(look.host, false),
+        withData: removeConsequence(look.host, true),
+      },
+      state: hosts.stateOf(serverId),
+    }
+  }
+
+  const nameOf = (serverId: string): string =>
+    deps.servers().find((server) => server.id === serverId)?.name ?? 'this server'
+
+  ipcMain.handle(
+    'servers:host:look',
+    async (_event, serverId: unknown): Promise<ServerResult<{ offer: HostOffer }>> => {
+      if (typeof serverId !== 'string') return { ok: false, sentence: 'No server was named.', detail: '' }
+      try {
+        const look = await hosts.look(serverId)
+        return { ok: true, offer: hostOffer(look, serverId, nameOf(serverId)) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'servers:host:state',
+    (_event, serverId: unknown): HostState | null =>
+      typeof serverId === 'string' ? hosts.stateOf(serverId) : null,
+  )
+
+  ipcMain.handle(
+    'servers:host:install',
+    async (_event, serverId: unknown, shellId: unknown): Promise<ServerResult<{ state: HostState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string') {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      try {
+        // Looked at again rather than trusted from the press: the button was
+        // drawn from an answer that may be minutes old, and installing on the
+        // strength of it would be acting on a machine that has since changed.
+        const look = await hosts.look(serverId)
+        return { ok: true, state: await hosts.install(serverId, shell, look, nameOf(serverId)) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'servers:host:pair',
+    async (_event, serverId: unknown, shellId: unknown): Promise<ServerResult<{ state: HostState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string') {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      try {
+        const look = await hosts.look(serverId)
+        if (look.host.command === '') {
+          return { ok: false, sentence: 'There is no host on this server to pair with.', detail: '' }
+        }
+        return { ok: true, state: await hosts.pair(serverId, shell, look.host.command) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'servers:host:remove',
+    async (_event, serverId: unknown, alsoData: unknown): Promise<ServerResult<{ state: HostState }>> => {
+      if (typeof serverId !== 'string') {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      try {
+        const look = await hosts.look(serverId)
+        // `true` and nothing else. An unknown off the wire that is not literally
+        // the answer "yes" is the answer "no" for a question whose wrong answer
+        // deletes somebody's pairings.
+        const next = await hosts.uninstall(serverId, look.host, alsoData === true)
+        forgetMeasurements(serverId)
+        return { ok: true, state: next }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle('servers:host:cancel', async (_event, serverId: unknown): Promise<{ cancelled: boolean }> => {
+    if (typeof serverId !== 'string') return { cancelled: false }
+    await hosts.cancel(serverId)
+    return { cancelled: true }
+  })
+
   return {
     serverOfShell: (shellId) => shellServers.get(shellId) ?? null,
     room,
@@ -1619,6 +1820,9 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
        * login running with nothing left to stop it.
        */
       void setups.cancelAll()
+      // And the host installs, for the same reason and in the same order: one
+      // of them may be sitting on a pairing prompt in a terminal about to go.
+      void hosts.cancelAll()
       for (const shellId of [...shells.keys()]) dropShell(shellId, true)
       for (const serverId of views.keys()) deps.release?.(serverId)
       views.clear()

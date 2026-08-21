@@ -941,6 +941,31 @@ const api = {
     return () => ipcRenderer.off('servers:setup:changed', handler)
   },
 
+  /*
+   * The headless host, installed onto a server from the page that is already
+   * looking at it.
+   *
+   * Keyed on a *shell* for the same two reasons the agent installs are, and one
+   * more that is not a preference: `terminaldeck pair` refuses to finish
+   * without a tty — it prints the code, says so, and stops — so the pairing has
+   * to happen in a real terminal rather than down an exec channel. `host.ts`
+   * carries the measurement.
+   */
+  serverHost: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:host:look', id),
+  serverHostState: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:host:state', id),
+  installHostOnServer: (id: string, shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:host:install', id, shellId),
+  pairHostOnServer: (id: string, shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:host:pair', id, shellId),
+  removeHostFromServer: (id: string, alsoData: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('servers:host:remove', id, alsoData),
+  cancelServerHost: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:host:cancel', id),
+  onServerHost: (cb: (state: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, state: unknown) => cb(state)
+    ipcRenderer.on('servers:host:changed', handler)
+    return () => ipcRenderer.off('servers:host:changed', handler)
+  },
+
   tailnetStatus: (force?: boolean): Promise<unknown> =>
     ipcRenderer.invoke('tailnet:status', force === true),
   tailnetCert: (dnsName: string): Promise<unknown> => ipcRenderer.invoke('tailnet:cert', dnsName),

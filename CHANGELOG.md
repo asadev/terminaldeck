@@ -10,6 +10,29 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **Install the headless host on a connected server, from the app.** *"instead
+  of going inside a server and doing some stuff there … from the main
+  application we can give some steps there for installation, they will click on
+  install and it will install."* Machines → the server → **Sessions on this
+  server**. Five steps, each reported as it happens: what the box has, copying
+  the package over SFTP, the install in the terminal on screen, making it start
+  on its own, and a pairing code with one press to link it to this computer. It
+  works on a bare rented server with no Node and no npm — measured end to end on
+  a Hetzner box, where the installer fetched and checksummed its own Node 22
+  before installing. A machine that cannot take one gets the reason and **no
+  button**, before anything is copied to it.
+- **Uninstall it from the same place**, and it says what it leaves: the service,
+  the unit, the program and the private Node runtime go; the paired devices and
+  their folder grants stay unless a box is ticked.
+- **Signing an agent in on a server now works from Settings.** The Coding agents
+  pane used to say *"Machines → the server → Set up is where that is done"*,
+  because the sign-in needs a terminal and a settings pane had none. It draws
+  the same panel the server's page draws now, terminal and all. Signing *out* is
+  still not offered — nothing on this side can ask a server to forget a login it
+  holds — and the pane says so rather than drawing a control for it.
+
 ## [0.9.1] — 2026-08-21
 
 Two things he hit within an hour of installing 0.9.0.

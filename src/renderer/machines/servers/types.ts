@@ -534,6 +534,28 @@ export interface ServersBridge {
   removeServerSetup?(id: string, agentId: string): Promise<unknown>
   /** `servers:setup:changed` — pushed, because a sixty-second install is not a press. */
   onServerSetup?(cb: (state: unknown) => void): () => void
+  /**
+   * `servers:host:look` — the headless host on that server, and what putting
+   * one there would cost.
+   *
+   * Optional and out of `BRIDGE_METHODS` for the same reason the setup channels
+   * are: a preload older than these would otherwise take the whole servers area
+   * away over one panel. Absent means the page draws no host section at all,
+   * which is a smaller screen rather than a broken one.
+   */
+  serverHost?(id: string): Promise<unknown>
+  /** `servers:host:state` — where an install already in flight has got to. */
+  serverHostState?(id: string): Promise<unknown>
+  /** `servers:host:install` — run in the terminal named by `shellId`. */
+  installHostOnServer?(id: string, shellId: string): Promise<unknown>
+  /** `servers:host:pair` — a code out of a host that is already installed. */
+  pairHostOnServer?(id: string, shellId: string): Promise<unknown>
+  /** `servers:host:remove` — the way back, and it says what it leaves. */
+  removeHostFromServer?(id: string, alsoData: boolean): Promise<unknown>
+  /** `servers:host:cancel` — stop what this app started in that terminal. */
+  cancelServerHost?(id: string): Promise<unknown>
+  /** `servers:host:changed` — pushed, because a two-minute install is not a press. */
+  onServerHost?(cb: (state: unknown) => void): () => void
 }
 
 const BRIDGE_METHODS = [
@@ -939,6 +961,148 @@ export function asSetupOffer(value: unknown): SetupOffer | null {
     })
   }
   return { rows }
+}
+
+/* ------------------------------------------------ the host on that server -- */
+
+/** Where one server's headless-host install has got to. */
+export type HostStep =
+  | 'idle'
+  | 'checking'
+  | 'uploading'
+  | 'installing'
+  | 'service'
+  | 'pairing'
+  | 'done'
+  | 'removing'
+  | 'failed'
+
+/**
+ * The install's own state, as the main process pushes it.
+ *
+ * Same rule as {@link SetupState}: every readable string on it was written
+ * beside the code that does the work, and this screen renders them unchanged.
+ * `done` is the part that answers the specific complaint — a list of the steps
+ * that have finished, so somebody who looked away comes back to what happened
+ * rather than only to what is happening.
+ */
+export interface HostState {
+  serverId: string
+  step: HostStep
+  line: string
+  detail: string
+  done: readonly string[]
+  /** The pairing code the host printed, exactly as it printed it. */
+  code: string | null
+  weInstalled: boolean
+}
+
+/** Whether the host on that server is up, as far as its own status will say. */
+export type HostRunning = 'yes' | 'no' | 'unknown'
+
+/** What is on that server now. */
+export interface HostOnServer {
+  command: string
+  version: string
+  running: HostRunning
+  /** The host's own status output, verbatim, or empty when there is none to ask. */
+  status: string
+  unit: string
+  linger: boolean
+  data: boolean
+  dataDir: string
+}
+
+/** What it would take to put one there. Only what this screen actually reads. */
+export interface HostRoom {
+  os: string
+  arch: string
+  node: string
+  npm: string
+  systemdUser: boolean
+}
+
+/** What one server can say about the headless host. */
+export interface HostOffer {
+  host: HostOnServer
+  room: HostRoom
+  canInstall: boolean
+  why: string | null
+  /** The standing line for the section, written where the work is. */
+  line: string
+  /** Whether it will still be there tomorrow. Null when there is no host. */
+  reach: string | null
+  consequence: string
+  /** The two answers to the data question, each written where the work is. */
+  removes: { keepData: string; withData: string }
+  state: HostState
+}
+
+const HOST_STEPS: readonly HostStep[] = [
+  'idle',
+  'checking',
+  'uploading',
+  'installing',
+  'service',
+  'pairing',
+  'done',
+  'removing',
+  'failed',
+]
+
+export function asHostState(value: unknown): HostState | null {
+  if (!isRecord(value)) return null
+  const serverId = text(value.serverId)
+  if (serverId === '') return null
+  return {
+    serverId,
+    step: HOST_STEPS.find((known) => known === value.step) ?? 'idle',
+    line: text(value.line),
+    detail: text(value.detail),
+    done: Array.isArray(value.done)
+      ? value.done.map((entry) => text(entry)).filter((entry) => entry !== '')
+      : [],
+    code: readText(value.code),
+    weInstalled: value.weInstalled === true,
+  }
+}
+
+export function asHostOffer(value: unknown): HostOffer | null {
+  if (!isRecord(value)) return null
+  const host = value.host
+  const room = value.room
+  const state = asHostState(value.state)
+  if (!isRecord(host) || !isRecord(room) || state === null) return null
+  const removes = isRecord(value.removes) ? value.removes : {}
+  const running = host.running
+  return {
+    host: {
+      command: text(host.command),
+      version: text(host.version),
+      running: running === 'yes' ? 'yes' : running === 'no' ? 'no' : 'unknown',
+      status: text(host.status),
+      unit: text(host.unit),
+      linger: host.linger === true,
+      data: host.data === true,
+      dataDir: text(host.dataDir),
+    },
+    room: {
+      os: text(room.os),
+      arch: text(room.arch),
+      node: text(room.node),
+      npm: text(room.npm),
+      systemdUser: room.systemdUser === true,
+    },
+    // A button is drawn only when the far end said yes. Anything unreadable is a
+    // no, which draws no button — never a hopeful one.
+    canInstall: value.canInstall === true,
+    why: readText(value.why),
+    line: text(value.line),
+    reach: readText(value.reach),
+    consequence: text(value.consequence),
+    removes: { keepData: text(removes.keepData), withData: text(removes.withData) },
+    state,
+  }
 }
 
 export function asView(value: unknown): ServerView | null {
