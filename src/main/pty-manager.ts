@@ -80,6 +80,15 @@ export interface SpawnSpec {
    * not about the session.
    */
   hostCwd?: string
+  /**
+   * The tab this session is, carried onto `SessionMeta` and no further.
+   *
+   * Decided by `startSession` rather than here, because the one condition that
+   * settles it — is this session written into `openSessions` at all — is the
+   * same condition that decides whether `ledger.note` is called, and it lives
+   * there. See {@link SessionMeta.tabKey}.
+   */
+  tabKey?: string
 }
 
 interface Session {
@@ -296,6 +305,11 @@ export class PtyManager {
       // Same spread, same reason: an absent id means the transcript has to be
       // inferred, and that has to be distinguishable from an id that is present.
       ...(spawnSpec.agentSessionId ? { agentSessionId: spawnSpec.agentSessionId } : {}),
+      // And again: absent means "this session is not one that comes back", which
+      // the tab strip reads as "not part of the saved arrangement". A key that
+      // survived JSON as `undefined` would be a tab claiming a place it can
+      // never be put back into.
+      ...(spawnSpec.tabKey ? { tabKey: spawnSpec.tabKey } : {}),
       /*
        * Who wanted this session, copied straight off the request.
        *

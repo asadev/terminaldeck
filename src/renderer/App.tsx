@@ -918,10 +918,12 @@ function Workspace() {
     label: session.title,
     status: session.status,
     projectPath: session.projectPath,
-    // What this tab is in terms that outlive its own pty, so the arrangement of
-    // the strip can be put back after a restart. `session.cwd` and not
-    // `projectPath`: the folder the process was actually spawned in is what the
-    // main process remembers and what it hands back next launch. See
+    // What this tab is called, in a name that outlives its own pty, so the
+    // arrangement of the strip can be put back after a restart. Read off the
+    // session rather than derived from it: the main process mints it when it
+    // writes the session down, which is the only place a *tab* can be told
+    // apart from an identical one beside it. Absent means this session is not
+    // one a launch brings back, and therefore not part of the arrangement. See
     // `browser/strip-arrangement.ts`.
     anchor: sessionAnchor(session),
     // The account this session actually runs as, filled in by the main

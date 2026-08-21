@@ -2424,7 +2424,17 @@ export function BrowserWorkspace({
   /* -- the unwired case, which is what a half-wired preload actually produces. */
   if (!api) {
     return (
-      <div className="bw bw-unwired" data-visible={visible}>
+      <div
+        className="bw bw-unwired"
+        data-visible={visible}
+        /* The pane's rectangle, on this panel too. It is the same in-flow block
+           as the wired one and would otherwise fill the whole pane area — so a
+           build whose preload is half-wired put "the browser is not connected"
+           over the terminal beside it in a split. The message is right; covering
+           the other pane with it is not. */
+        data-boxed={box !== undefined}
+        style={box}
+      >
         <p className="bw-unwired-title">The browser is not connected</p>
         <p className="bw-unwired-body">
           The preload bridge is missing {missing.length} method{missing.length === 1 ? '' : 's'} this

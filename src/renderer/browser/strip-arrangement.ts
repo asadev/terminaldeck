@@ -1,4 +1,3 @@
-import type { ProviderId } from '@shared/types'
 import { MAX_PROMOTED } from './workspace-strip'
 
 /**
@@ -18,57 +17,58 @@ import { MAX_PROMOTED } from './workspace-strip'
  * somebody made by hand is thrown away by quitting, which is the one thing this
  * app asks people not to have to redo.
  *
- * ## The identity, which is `session-restore.ts`'s and not this file's
+ * ## What a tab is called, and why the renderer does not decide
  *
- * `SavedSession` states it in one sentence: *"the identity that survives a
- * restart is an agent of this kind, in this folder, as this profile"* — which
- * is precisely what the main process writes into `openSessions` and precisely
- * what it hands back to `startSession` on the next launch. So that triple is
- * what an arrangement is written in, and the tab that comes back carrying it is
- * the tab the arrangement is about. Anything narrower (the folder alone) groups
- * tabs that are not the same tab; anything wider is a fact the restore does not
- * carry and could not put back.
+ * `SessionMeta.tabKey` — a name the main process mints once, when it first
+ * writes the session into `openSessions`, and hands back to the spawn on the
+ * next launch. This module reads it and derives nothing.
  *
- * The renderer derives it rather than being told it, because it already holds
- * all three off `SessionMeta` and a second copy crossing the bridge would be a
- * field that can disagree with the folder beside it. `conversationScope` in
- * `session-restore.ts` keys on the same three things for a different question,
- * and the NUL separator is chosen there for the reason it is chosen here.
+ * It used to derive everything, and that was the defect. The identity available
+ * to a window is the one `session-restore.ts` names in a sentence — *an agent
+ * of this kind, in this folder, as this profile* — and that is an identity of a
+ * **session**, not of a tab: two tabs can be all three of those things at once.
+ * The only discriminator a renderer can compute for such a pair is where they
+ * sit in the list, so the arrangement was written as "the agent, the folder,
+ * the account, and which of that group you are", and both halves of that failed
+ * in the running app:
  *
- * ## Why the occurrence number, and why it is positional
+ *  - **They swap.** Two identical siblings, neither typed into, are
+ *    indistinguishable in fact as well as in the string — so which of them
+ *    comes back as number 0 is whichever the restore happened to announce
+ *    first, and the pair can arrive the other way round.
+ *  - **Closing one moves the other.** Numbers are positions, so shutting the
+ *    left sibling makes the right one number 0 — under the name its neighbour
+ *    had — and leaves the saved arrangement holding a number nothing answers
+ *    to. Bounded and harmless on its own; it still costs a slot in a capped
+ *    list and it is still the bar quietly disagreeing with itself.
  *
- * Two tabs can be the same agent, in the same folder, as the same account —
- * `planRestore` has a whole case about that pair — so the triple alone is not
- * an identity, it is a *group*. Numbering them by their position in the tab list
- * is the only discriminator available on either side of a restart: the ledger
- * writes `openSessions` in tab order, `planRestore` keeps that order, and this
- * window builds its list in the order sessions are announced. Nothing finer is
- * knowable — two untouched tabs of the same agent in the same folder are
- * indistinguishable in fact as well as in this string, which
- * `SavedSession.lastSeenAt` says out loud about the same pair.
+ * Neither is fixable in this file, because neither is a computation that was
+ * done wrong. They are the two shapes of "there is nothing here to tell these
+ * apart", and the answer had to be a fact somebody else remembers. So a tab is
+ * now called what the main process called it, and that is the whole of it: no
+ * separator, no group, no number, nothing to recompute when the tabs around it
+ * change.
  *
- * ## Only local sessions carry one
+ * ## Only a tab that comes back has one
  *
  * A browser page is drawn in the strip whether or not anything promoted it (see
  * `shownTabs`), so it needs no arrangement to come back to. A session on a
- * paired machine or a shell on a server is not reopened at launch at all —
- * nothing brings one back to be positioned. A tab with no anchor is simply not
- * part of the saved arrangement, which is the honest answer rather than an id
- * that would resolve, next run, to a different window wearing the same number.
+ * paired machine, a shell on a server, the copilot's own session and a session
+ * held inside a device's folder grant are not restored at launch at all —
+ * nothing brings one back to be positioned, and `host-core.ts` mints no key for
+ * any of them, from the same condition that decides whether it writes the
+ * session down. So "has a key" and "is part of the saved arrangement" are one
+ * fact with one owner, rather than a rule this file applied by guessing which
+ * kinds of tab a restart returns.
  */
 
 /** Where the arrangement is kept. Local storage: the point is to outlive the run. */
 export const ARRANGEMENT_KEY = 'terminaldeck.strip.arrangement'
 
-/** The separator, spelled once. See the note above for why it is this character. */
-const SEP = '\u0000'
-
-/** As much of a session as the identity above is made of. */
+/** As much of a session as this file needs: the name the main process gave it. */
 export interface AnchorableSession {
-  provider: ProviderId
-  cwd: string
-  /** The account it runs as, absent when none applies. See `SessionMeta.profileId`. */
-  profileId?: string
+  /** See `SessionMeta.tabKey`. Absent for a session no launch brings back. */
+  tabKey?: string
 }
 
 /**
@@ -82,34 +82,37 @@ export interface AnchoredTab {
 }
 
 /**
- * The part of the identity that does not depend on which of the group this is.
+ * What this tab is called across a restart, or nothing.
  *
- * NUL as the separator, for `conversationScope`'s reason: it cannot occur in a
- * path, a provider id or a profile id on any platform this runs on, so no two
- * different triples can join into the same string. A `:` can — provider `a`
- * with folder `b/c` and provider `a/b` with folder `c` would collide.
+ * A pass-through, and deliberately still a function: it is the one place that
+ * says *which* field of a session the arrangement is written in, so a change of
+ * mind about that is a change in one place rather than a search for every
+ * spelling. It used to join three fields with a NUL and count the duplicates;
+ * the note above is why it no longer does either.
  */
-export function sessionAnchor(session: AnchorableSession): string {
-  return `${session.provider}${SEP}${session.cwd}${SEP}${session.profileId ?? ''}`
+export function sessionAnchor(session: AnchorableSession): string | undefined {
+  return session.tabKey
 }
 
 /**
- * Every tab that has one, keyed by tab id, carrying the full anchor — the base
- * plus its place among the tabs that share it.
+ * Every tab that has a name, keyed by tab id.
  *
- * Built over the whole tab list in one pass rather than per tab, because the
- * occurrence number is a fact about the list and not about the tab: asking a
- * tab for its own anchor is asking a question that has no answer until you know
- * what else is open.
+ * Over the whole list in one pass rather than per tab, for one reason left over
+ * from when the name depended on the list: two tabs must never end up under one
+ * name. They cannot — the main process mints a key per session — but a window
+ * is handed these over a bridge, and a duplicate arriving here would silently
+ * make one tab shadow the other in `tabsByAnchor`. First claim wins and the
+ * second tab is simply unarranged, which costs a drag; the alternative is a bar
+ * that puts a tab back into somebody else's place.
  */
 export function anchorsByTab(tabs: readonly AnchoredTab[]): Map<string, string> {
-  const counted = new Map<string, number>()
+  const claimed = new Set<string>()
   const out = new Map<string, string>()
   for (const tab of tabs) {
     if (tab.anchor === undefined || tab.anchor === '') continue
-    const nth = counted.get(tab.anchor) ?? 0
-    counted.set(tab.anchor, nth + 1)
-    out.set(tab.id, `${tab.anchor}${SEP}${nth}`)
+    if (claimed.has(tab.anchor)) continue
+    claimed.add(tab.anchor)
+    out.set(tab.id, tab.anchor)
   }
   return out
 }
@@ -138,6 +141,18 @@ export function tabsByAnchor(anchors: ReadonlyMap<string, string>): Map<string, 
  * out of it means the person folded it away, and both are current facts about a
  * window that is fully awake.
  *
+ * ## Why "seen" is a set of anchors and not of tabs
+ *
+ * Because a tab that is closed stops being a tab, and the question here is
+ * about the *name*, which outlives it. `seen` used to be the strip's set of
+ * session ids and the arrived set was derived from the tabs that are open right
+ * now — so closing a window took its anchor out of the derivation, the anchor
+ * fell back into "not seen yet", and it was carried over for ever after. That
+ * is the stale entry a closed sibling left behind: bounded by the cap, resolving
+ * to nothing on every launch, and occupying a slot a real tab could have used.
+ * An anchor this window has ever had a tab for is a fact that only ever grows,
+ * which is what the caller keeps and hands in.
+ *
  * ## Why the carried-over ones go last, and why there is a cap
  *
  * An anchor can fail to resolve for a whole run and be perfectly meaningful —
@@ -158,16 +173,13 @@ export function nextArrangement(
   order: readonly string[],
   anchors: ReadonlyMap<string, string>,
   previous: readonly string[],
-  seen: ReadonlySet<string>,
+  arrived: ReadonlySet<string>,
 ): string[] {
   const live: string[] = []
   for (const id of order) {
     const anchor = anchors.get(id)
     if (anchor !== undefined) live.push(anchor)
   }
-
-  const arrived = new Set<string>()
-  for (const [id, anchor] of anchors) if (seen.has(id)) arrived.add(anchor)
 
   const held = new Set(live)
   const waiting = previous.filter((anchor) => !held.has(anchor) && !arrived.has(anchor))
