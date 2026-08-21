@@ -348,16 +348,53 @@ function combine(sessionId: string | null, sources: Sources, session: SessionMet
   if (sources.plan?.reason) reason = sources.plan.reason
   else if (sources.codexHome !== null) reason = CODEX_SILENT
   /*
-   * Whose report this is, stated even when it is empty.
-   *
-   * The session's own agent and the login it resolved to at spawn — the same
-   * pair `accountFor` gives a reading, asked once more for the report as a
-   * whole. Without it a chrome bar showing "not reported" could not say who had
-   * not reported, which is most of this feature's life on screen: Claude Code
-   * prints nothing about limits until it is near one or is asked.
+   * Whose report this is, stated even when it is empty — see
+   * {@link sessionAccountRef}. Without it a chrome bar showing "not reported"
+   * could not say who had not reported, which is most of this feature's life on
+   * screen: Claude Code prints nothing about limits until it is near one or is
+   * asked.
    */
-  const account = session ? accountFor(session.provider, session) : null
-  return usageReport(sessionId, readings, reason, Date.now(), account)
+  return usageReport(sessionId, readings, reason, Date.now(), sessionAccountRef(session))
+}
+
+/**
+ * Whose report this is, stated even when it is empty — asked about the agent
+ * that is **running**, not the one this app launched.
+ *
+ * ## The disagreement this line used to cause
+ *
+ * It read `accountFor(session.provider, session)`, and for the commonest session
+ * this app has that is a question with no answer. `provider` is a record of the
+ * spawn, and *"Starting a session gives you a plain shell"* — the header of
+ * `renderer/shell/agent-presence.ts` — so every session where the agent was
+ * started by pressing Run Claude or by typing `claude` at the prompt carries
+ * `provider: 'shell'` for the rest of its life. There is no such thing as a
+ * shell account: `supportsProfiles('shell')` is false, no profile is ever a
+ * login of one, and {@link accountFor} correctly answers "nothing" for it.
+ *
+ * So the bar beside the account chip named nobody over exactly the sessions the
+ * chip had just been taught to name, and it named somebody again the moment a
+ * reading arrived — because a *reading* is stamped with
+ * `accountFor('claude', …)`, which does ask the right question. One control
+ * flickering between "no account" and an address while the chip forty pixels
+ * away holds one name is the disagreement Asad reported, and it is this line.
+ *
+ * ## The one place that answers it
+ *
+ * `establishedAccount` in `session-account.ts` — the same answer the account
+ * chip reads over `session:account`, and the same answer the plan readings are
+ * stamped with. It knows which agent is actually running because it read the
+ * process's own environment to find out, so its provider is the provider to ask
+ * about. A session with nothing established falls back to the spawn record's
+ * provider and gets the unattributed ref it had before, which every reader
+ * downstream already draws as "nothing was read" with a sentence.
+ *
+ * Exported so `usage-ipc.test.ts` can hold this and `readSessionAccount` to the
+ * same answer, which is the assertion that would have caught the divergence.
+ */
+export function sessionAccountRef(session: SessionMeta | null): UsageAccountRef | null {
+  if (session === null) return null
+  return accountFor(establishedAccount(session.id)?.provider ?? session.provider, session)
 }
 
 /**

@@ -2,7 +2,14 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccountChip, MENU_HEAD, runAgentCommand, runnableAgent } from './AccountChip'
+import {
+  AccountChip,
+  FIXED_ACCOUNT_NOTE,
+  fixedAccountNote,
+  MENU_HEAD,
+  runAgentCommand,
+  runnableAgent,
+} from './AccountChip'
 import { AGENT_CATALOG } from '../../shared/agent-catalog'
 import {
   chipMode,
@@ -806,5 +813,94 @@ describe('running this session as somebody else', () => {
      * prevent, one level down.
      */
     expect(source).toContain('{!switching && blocked && <p className="account-menu-blocked">')
+  })
+})
+
+/* -------------------------------------------- the mode that changed itself -- */
+
+/**
+ * The menu has two modes and one word for both, and it chooses between them
+ * silently.
+ *
+ * `switching` needs the session's *own* account off `SessionMeta`, and the
+ * commonest session this app has does not have one: Run Claude spawns
+ * `$SHELL -l` and the agent is typed into it, so `supportsProfiles('shell')` is
+ * false, no config directory was ever handed to the process and the record
+ * carries no account. `switchRefusal` in `main/session-switch.ts` refuses such a
+ * session for exactly that reason — and it is right to, because the replacement
+ * would be another shell and `sessionEnv(profile, 'shell')` exports nothing, so
+ * the switch would move the label and not the login.
+ *
+ * What the menu did with that was drop into start mode: same heading, same rows,
+ * the tick still on the account the session really is running as, and a press
+ * that opened a *second* session while the one in front of you carried on under
+ * the old login — still printing that login's limit warnings into its own
+ * terminal. Asad: *"after we switch it shows something else … all of them are
+ * not about one logged in account."*
+ *
+ * The decision is a pure function so it can be pinned here: this project has no
+ * DOM, and the menu is a portal that only exists once it is open.
+ */
+describe('a session whose account cannot be changed says so', () => {
+  const shell = {
+    hasSession: true,
+    showAccount: true,
+    switching: false,
+    sessionAgent: null,
+    sessionProvider: 'shell' as const,
+  }
+
+  it('says it over a live agent this app never handed an account to', () => {
+    expect(fixedAccountNote(shell)).toBe(FIXED_ACCOUNT_NOTE.shell)
+  })
+
+  /*
+   * Two ways a session ends up with no account, and they are two different
+   * facts. A shell had none exported into it; Gemini and every added agent were
+   * spawned by this app and still cannot be given one, because their login is
+   * not separable — `supportsProfiles` is the authority. One sentence for both
+   * would be false about whichever one it was not written for.
+   */
+  it('says the other thing for an agent whose login cannot be kept apart', () => {
+    expect(fixedAccountNote({ ...shell, sessionProvider: 'gemini' })).toBe(FIXED_ACCOUNT_NOTE.agent)
+    expect(FIXED_ACCOUNT_NOTE.agent).not.toMatch(/shell/i)
+  })
+
+  it('says what a press does instead, because a press still does something', () => {
+    // The rows are not dead — they open a new session — so the failure this is
+    // fixing is a control that does something other than what it looks like,
+    // and both sentences have to name the other thing.
+    for (const note of Object.values(FIXED_ACCOUNT_NOTE)) {
+      expect(note).toMatch(/opens a new session/i)
+      expect(note).toMatch(/keeps the login it has/i)
+    }
+  })
+
+  it('is silent when a row really does switch the session', () => {
+    expect(
+      fixedAccountNote({ ...shell, switching: true, sessionAgent: 'claude', sessionProvider: 'claude' }),
+    ).toBeNull()
+  })
+
+  it('is silent over a folder, where there is no session to be fixed', () => {
+    // `chipMode(null, …)` answers `account` for the two callers that ask which
+    // account a *new* session here would use, so `showAccount` alone is not
+    // enough to know there is a session under this chip.
+    expect(fixedAccountNote({ ...shell, hasSession: false })).toBeNull()
+  })
+
+  it('is silent over a shell with nothing running in it', () => {
+    // That slot draws the Run button, not the picker, and a note about switching
+    // an agent would be about a process that does not exist.
+    expect(fixedAccountNote({ ...shell, showAccount: false })).toBeNull()
+  })
+
+  /*
+   * A session that has an account and still is not switchable is a *caller* that
+   * passed no handler, not a session that cannot be moved — so this note, which
+   * says "this app cannot", would be a claim about the wrong thing.
+   */
+  it('is silent when the session has an account of its own', () => {
+    expect(fixedAccountNote({ ...shell, sessionAgent: 'claude', sessionProvider: 'claude' })).toBeNull()
   })
 })

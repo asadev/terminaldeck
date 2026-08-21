@@ -561,6 +561,34 @@ export function primaryReading(report: UsageReport | null): UsageWindowReading |
 }
 
 /**
+ * The login this report is about, or null when it names nobody.
+ *
+ * The reading's account when there is a reading and the report's otherwise —
+ * they are the same login, and the second exists because the state this bar is
+ * in most of the time has no readings at all.
+ *
+ * The `null` is the part worth having a function for. A `UsageAccountRef` is
+ * *always an object* — the main process sends one even for a session whose login
+ * it has not established, because the ref's whole job is to carry "which agent,
+ * and nobody yet" rather than to vanish — and the bar was handing that object
+ * straight to `accountIdentity` as `{ id: '', name: '' }`. That is not the
+ * machine's own install, so the generated-name rung does not catch it, and the
+ * ladder falls through to *the name*, which is the empty string. Two things came
+ * out of that, both on screen: an empty `<span>` where the login goes, and a
+ * hover label reading `Claude Code · ` with a separator and nothing after it.
+ *
+ * So an unnamed ref is answered as no ref, and the bar names nobody — which is
+ * what the design already intended and says in {@link UsageReport.account}: the
+ * bar names the agent and leaves the login to the chip beside it, which has an
+ * address this ref does not carry.
+ */
+export function reportedAccount(report: UsageReport | null): UsageAccountRef | null {
+  const ref = primaryReading(report)?.account ?? report?.account ?? null
+  if (ref === null) return null
+  return ref.id === null && ref.name === null ? null : ref
+}
+
+/**
  * A second window worth putting on the bar beside the first.
  *
  * Only ever one, and only when it is in trouble. A weekly limit at 100% behind

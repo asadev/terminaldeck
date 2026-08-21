@@ -416,6 +416,87 @@ export const MENU_HEAD = {
   switch: 'Account',
 } as const
 
+/**
+ * Why picking a row will not change the session in front of you, when it will
+ * not — and what it does instead.
+ *
+ * ## The state this exists for
+ *
+ * `switching` below needs the session's *own* account off `SessionMeta`, and the
+ * commonest session this app has does not have one. An agent started by pressing
+ * Run Claude, or by typing `claude` at a shell prompt, runs inside a pty this app
+ * spawned as `$SHELL -l` — `supportsProfiles('shell')` is false, so no config
+ * directory was ever handed to it and `SessionMeta` carries no account. The main
+ * process refuses to switch such a session for exactly that reason, in
+ * `switchRefusal`, and it is right to: the replacement would be another shell,
+ * and `sessionEnv(profile, 'shell')` exports nothing, so the "switch" would move
+ * the label and not the login.
+ *
+ * So the menu silently fell back to its other mode. Same heading — `MENU_HEAD`
+ * is deliberately one word for both — same rows, same tick on the account this
+ * session really is running as, and a press that opened *a second session* while
+ * the one in front of you carried on under the old login, still printing that
+ * login's limit warnings into its own terminal. Asad, on the account surfaces
+ * disagreeing:
+ *
+ *   > *"after we switch it shows something else … all of them are not about one
+ *   > logged in account, they are talking about different account."*
+ *
+ * ## Why this is a sentence and not a repair
+ *
+ * Because the restriction is real. A process's environment cannot be rewritten
+ * after it starts — the argument is at the top of this file — and this app never
+ * handed this one an account to begin with, so there is nothing for it to
+ * restart *as*. The honest thing is to say so where the choice is made, rather
+ * than to leave a menu whose two modes look identical and do different things.
+ *
+ * Behind the same dot `foreign` uses, which is the control he asked for when he
+ * asked for the paragraphs to go — *"give the i icon like other ones"* — and the
+ * two are mutually exclusive, so the heading never grows two.
+ */
+export const FIXED_ACCOUNT_NOTE = {
+  /**
+   * An agent somebody typed into a shell — Run Claude, or `claude` at the
+   * prompt. The pty is `$SHELL -l`, so no configuration directory was ever
+   * exported into it and there is nothing for a replacement to be started *as*.
+   */
+  shell:
+    'The agent here was started inside a shell, so this app never handed it an account and cannot restart it as another one. Picking an account opens a new session on it, and this one keeps the login it has.',
+  /**
+   * An agent this app *did* spawn, whose login it cannot keep apart from the
+   * machine's — Gemini, and every agent somebody added. `supportsProfiles` is
+   * the authority and `provider-accounts.ts` records why for each of them.
+   */
+  agent:
+    'This app cannot give this agent an account of its own, so this session cannot be restarted as another one. Picking an account opens a new session on it, and this one keeps the login it has.',
+} as const
+
+/**
+ * That sentence, or null — pure, so it can be pinned without a DOM.
+ *
+ * `sessionAgent` is the session's own account's agent, off `SessionMeta`, and
+ * null is the whole of what this is about: no account was attached at spawn.
+ * Two ways that happens and they are two different facts, so they get two
+ * sentences — `sessionProvider` tells them apart. A caller that simply passed no
+ * `onSwitchAccount` is a third absence and gets nothing, because "this app
+ * cannot" would then be a claim about the caller rather than about the session.
+ */
+export function fixedAccountNote(input: {
+  /** Is the chip drawn over a session at all? */
+  hasSession: boolean
+  /** Is an agent running in it — `chipMode` answering `account`? */
+  showAccount: boolean
+  /** Would a row switch this session? */
+  switching: boolean
+  sessionAgent: ProviderId | null
+  /** What this app launched, off `ChromeSession`. */
+  sessionProvider: ProviderId | null
+}): string | null {
+  if (!input.hasSession || !input.showAccount || input.switching) return null
+  if (input.sessionAgent !== null) return null
+  return input.sessionProvider === 'shell' ? FIXED_ACCOUNT_NOTE.shell : FIXED_ACCOUNT_NOTE.agent
+}
+
 /** The row being renamed, and what has been typed into it so far. */
 interface Editing {
   id: string
@@ -804,6 +885,19 @@ export function AccountChip({
    */
   const foreign = switching && rows.some((row) => row.provider !== sessionAgent)
   /*
+   * And the other half of the same question: this menu is over a live agent and
+   * a row will *not* switch it. See {@link FIXED_ACCOUNT_NOTE} — this is the
+   * state that made the account chip, the usage bar and the session's own limit
+   * warnings look like three claims about three different logins.
+   */
+  const fixed = fixedAccountNote({
+    hasSession: session !== null,
+    showAccount,
+    switching,
+    sessionAgent,
+    sessionProvider: session?.provider ?? null,
+  })
+  /*
    * Was the account picker away a moment ago?
    *
    * The swap is between two different elements, so there is nothing for a CSS
@@ -1036,6 +1130,12 @@ export function AccountChip({
                 <HoverNote label="Which accounts can run this session">
                   {`Only a ${agentLabel(sessionAgent) ?? 'matching'} account can run this session — an account is a login of one agent.`}
                 </HoverNote>
+              )}
+              {/* Mutually exclusive with the one above — `foreign` requires
+                  `switching` and this requires its absence — so the heading
+                  never carries two dots. */}
+              {fixed !== null && (
+                <HoverNote label="What picking an account does here">{fixed}</HoverNote>
               )}
             </p>
 

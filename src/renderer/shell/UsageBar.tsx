@@ -13,7 +13,7 @@ import {
   contextPanel,
   contextShare,
   contextSummary,
-  primaryReading,
+  reportedAccount,
   usageReadout,
   type ContextPanel,
   type ContextReading,
@@ -1507,17 +1507,31 @@ export function UsageBar({ sessionId, provider, fit = 'full', bridge, now, targe
    * forty pixels away says an email address, which is a disagreement this app
    * has already shipped once in the sidebar.
    *
-   * The reading's account when there is a reading, and the *report's* otherwise.
-   * They are the same login; the second exists because the state this bar is in
-   * most of the time has no readings at all, and "not reported" without a name
-   * on it is exactly the half-answer this was moved here to stop giving.
+   * `reportedAccount` picks the reading's account when there is a reading and
+   * the report's otherwise — they are the same login, and the second exists
+   * because the state this bar is in most of the time has no readings at all,
+   * and "not reported" without a name on it is exactly the half-answer this was
+   * moved here to stop giving. It also answers *null* for a ref that names
+   * nobody, which is the case this used to draw as an empty string; see there.
    */
-  const account = primaryReading(usage.report)?.account ?? usage.report?.account ?? null
+  const account = reportedAccount(usage.report)
   const signIn = useAccountIdentity(account?.id ?? null)
   const identity =
     account === null
       ? null
       : accountIdentity({ id: account.id ?? '', name: account.name ?? '' }, signIn)
+  /*
+   * And never the empty string, whatever arrives.
+   *
+   * `reportedAccount` refuses a ref that names nobody, which is the case this
+   * app produces; this is the same guard one step later, for a ref that reaches
+   * here with an id and no name — a payload from a build that spelled the field
+   * differently, which `readAccount` reads defensively and cannot repair.
+   * `accountIdentity`'s last rung is the name, so an empty one comes back as an
+   * empty label, and an empty label is drawn as an empty element and joined into
+   * a hover reading `Claude Code · ` with nothing after the separator.
+   */
+  const accountLabel = identity !== null && identity.label.trim() !== '' ? identity.label : null
 
   // After the hooks, never before: a component that returns early above a hook
   // is a component whose hook order changes with a setting.
@@ -1547,7 +1561,7 @@ export function UsageBar({ sessionId, provider, fit = 'full', bridge, now, targe
       report={usage.report}
       provider={provider}
       fit={fit}
-      accountLabel={identity?.label ?? null}
+      accountLabel={accountLabel}
       unwired={usage.unwired}
       withheld={usage.withheld}
       fetching={usage.checking}

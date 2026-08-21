@@ -9,6 +9,7 @@ import {
   primaryReading,
   readContextReading,
   readUsageReport,
+  reportedAccount,
   shortWindowName,
   usageReadout,
   type UsageWindowReading,
@@ -266,6 +267,85 @@ describe('which window is on the bar', () => {
       readings: [reading(), { ...week, used: { state: 'reported', fraction: 0.11 } }],
     })
     expect(alertReading(report, primaryReading(report), NOW)).toBeNull()
+  })
+})
+
+/* ------------------------------------------------ whose reading this is -- */
+
+/**
+ * The name beside the figure, and the state where there is none.
+ *
+ * The bar and the account chip sit forty pixels apart and are two statements
+ * about one thing, so a bar that names a *different* login — or one that draws
+ * a separator with nothing after it — is the disagreement Asad reported on
+ * 2026-08-21. The main process now answers the report's account from the same
+ * place the chip's channel does (`sessionAccountRef` in `main/usage-ipc.ts`);
+ * this is the other half, on the side that draws it.
+ */
+describe('whose reading this is', () => {
+  const named = {
+    provider: 'claude' as const,
+    id: 'work',
+    name: 'Work',
+    configDir: '/Users/apple/.claude-work',
+  }
+
+  it('is the reading’s account when there is a reading', () => {
+    const report = readUsageReport({
+      sessionId: 's',
+      assembledAt: NOW,
+      reason: null,
+      // Deliberately different, so it is visible which one won: a reading is a
+      // measurement of one login and outranks the report's summary of it.
+      account: { provider: 'claude', id: 'other', name: 'Other', configDir: '/x' },
+      readings: [reading({ account: named })],
+    })
+    expect(reportedAccount(report)?.name).toBe('Work')
+  })
+
+  it('is the report’s own account when there is nothing to show', () => {
+    // The ordinary state: Claude Code says nothing about its limits until it is
+    // near one, so this is what the bar spends most of its life drawing.
+    const report = readUsageReport({
+      sessionId: 's',
+      assembledAt: NOW,
+      reason: 'nothing yet',
+      account: named,
+      readings: [],
+    })
+    expect(reportedAccount(report)?.name).toBe('Work')
+  })
+
+  /*
+   * The case this function exists for.
+   *
+   * A `UsageAccountRef` is always an object — it carries "which agent, and
+   * nobody yet" — and the bar used to hand that straight to `accountIdentity` as
+   * `{ id: '', name: '' }`. Not a system id, so the generated-name rung does not
+   * catch it, and the ladder falls through to the name: the empty string. On
+   * screen that was an empty element where the login goes and a hover label
+   * reading `Claude Code · ` with nothing after the separator.
+   */
+  it('names nobody rather than the empty string when the ref names nobody', () => {
+    const report = readUsageReport({
+      sessionId: 's',
+      assembledAt: NOW,
+      reason: 'nothing yet',
+      account: { provider: 'shell', id: null, name: null, configDir: null },
+      readings: [],
+    })
+    expect(reportedAccount(report)).toBeNull()
+  })
+
+  it('names nobody for a build whose main process sends no account at all', () => {
+    const report = readUsageReport({
+      sessionId: 's',
+      assembledAt: NOW,
+      reason: 'nothing yet',
+      account: null,
+      readings: [],
+    })
+    expect(reportedAccount(report)).toBeNull()
   })
 })
 

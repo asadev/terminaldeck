@@ -5,7 +5,13 @@ import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { dropPlanSession, notePlanOutput } from './plan-limit'
 import { installPaths, resetPaths } from './platform/paths'
-import { createProfile, resetProfilesCache, systemProfileFor } from './profiles'
+import { createProfile, generatedSystemName, resetProfilesCache, systemProfileFor } from './profiles'
+import {
+  configureSessionAccounts,
+  readSessionAccount,
+  sessionAccount,
+  type SessionAccountDeps,
+} from './session-account'
 import type { SessionMeta } from '../shared/types'
 import type { AccountLimitMemory } from './account-limits'
 import type { AccountLimitFact } from './store'
@@ -14,6 +20,7 @@ import {
   accountFor,
   dropUsageSession,
   readUsage,
+  sessionAccountRef,
   registerUsageIpc,
   resetSharedUsage,
   resetUsageProbes,
@@ -72,6 +79,14 @@ beforeEach(async () => {
   // directory, and two tests using the system account would otherwise have the
   // first one's minute-long floor refuse the second one's refresh.
   resetUsageProbes()
+  /*
+   * And the established-account cache, which is module state in
+   * `session-account.ts` and is now read by `sessionAccountRef` on every
+   * report. A test that wires a fake `ps` would otherwise leave its answer
+   * standing for the next one, which would then see a session it never
+   * described running as an account it never created.
+   */
+  configureSessionAccounts(null)
 })
 
 afterAll(() => {
@@ -216,6 +231,140 @@ describe('which account a reading belongs to', () => {
 
   it('attributes to the machine when nothing describes the session', () => {
     expect(accountFor('claude', null).configDir).toBe(systemProfileFor('claude').configDir)
+  })
+})
+
+/* --------------------------------------------- one answer, every surface -- */
+
+/**
+ * Four surfaces name the account a session is running as, and they have to name
+ * the same one. Asad, 2026-08-21:
+ *
+ *   > *"sometimes we are logged in with different account, on top bar its
+ *   > showing something else, and after we switch it shows something else, and
+ *   > usage limit bar, and sometime a popup about a limit in terminal — all of
+ *   > them are not about one logged in account, they are talking about different
+ *   > account. They should be all aligned."*
+ *
+ * Three of them are answerable here, from one place — `sessionAccount` in
+ * `session-account.ts`, which reads the agent process's own environment:
+ *
+ *  1. the **account chip** on the top bar, answered over `session:account` by
+ *     `readSessionAccount`;
+ *  2. the **usage bar**, answered on `UsageReport.account` by
+ *     {@link sessionAccountRef};
+ *  3. the **limit line Claude Code prints into the terminal**, which `plan-limit.ts`
+ *     reads off that same screen and which arrives stamped with an account.
+ *
+ * The fourth — the process actually printing that line — is not a surface this
+ * app draws and cannot be asserted here. It is the reason the other three have
+ * to agree: they are all claims *about* it.
+ *
+ * The session below is the one this failed for, and it is the commonest one this
+ * app has. Run Claude spawns `$SHELL -l` and types `claude` into it, so
+ * `SessionMeta.provider` is `shell` for the rest of its life — see
+ * `runningProvider` in `renderer/shell/agent-presence.ts` — and the report used
+ * to ask `accountFor('shell', …)`, a question with no possible answer, while the
+ * chip and the reading both asked about Claude.
+ */
+describe('every surface names one account', () => {
+  /** A `ps` that reports one `claude` under the session's pty, on `dir`. */
+  function processOn(dir: string, meta: SessionMeta): SessionAccountDeps {
+    return {
+      pidOf: () => 4242,
+      describeSession: () => meta,
+      platform: 'darwin',
+      exec: async (_command, args) =>
+        args[0] === '-Ao'
+          ? ' 5000 4242 claude\n 4242    1 -zsh\n'
+          : `  PID   TT  STAT      TIME COMMAND\n 5000 s001  S+     0:01 claude ` +
+            `PATH=/usr/bin CLAUDE_CONFIG_DIR=${dir} HOME=${USER_DATA}\n`,
+    }
+  }
+
+  it('names, on the bar, the account the chip names — for an agent typed into a shell', async () => {
+    const work = createProfile('Work', { provider: 'claude' })
+    const meta = session({ id: 'sess-one-truth', provider: 'shell' })
+    configureSessionAccounts(processOn(work.configDir, meta))
+    // Establishing is asynchronous; every synchronous reader answers "not yet"
+    // until it has landed, which is the state the app spends its first tick in.
+    await sessionAccount(meta.id)
+
+    const chip = await readSessionAccount(meta.id)
+    expect(chip).toMatchObject({ kind: 'known', profileId: work.id, profileName: 'Work' })
+
+    const bar = sessionAccountRef(meta)
+    expect(bar).toEqual({
+      provider: 'claude',
+      id: work.id,
+      name: 'Work',
+      configDir: work.configDir,
+    })
+    // The whole point: one login, not two claims about it.
+    expect(bar?.configDir).toBe(chip.kind === 'known' ? chip.configDir : null)
+  })
+
+  it('stamps the limit line the terminal printed with that same account', async () => {
+    const work = createProfile('Work', { provider: 'claude' })
+    const meta = session({ id: 'sess-one-truth-panel', provider: 'shell' })
+    configureSessionAccounts(processOn(work.configDir, meta))
+    await sessionAccount(meta.id)
+
+    const seen: Pushed[] = []
+    const { invoke } = wire(() => meta)
+    invoke('usage:watch', fakeContents(seen), meta.id)
+    notePlanOutput(meta.id, `${USAGE_PANEL}\r\n`)
+    await settle()
+
+    const report = seen.at(-1)?.report
+    // The reading — read off the terminal Claude Code printed into — and the
+    // report as a whole. Both the account the process is genuinely running as.
+    expect(report?.readings[0]?.account.configDir).toBe(work.configDir)
+    expect(report?.account?.configDir).toBe(work.configDir)
+    expect(report?.account?.name).toBe('Work')
+
+    dropUsageSession(meta.id)
+    dropPlanSession(meta.id)
+  })
+
+  /**
+   * *"never default"*.
+   *
+   * `Default` is the key `generatedSystemName` makes for the machine's own
+   * install — an internal slug, not an identity, and the string that reached the
+   * one control whose whole job is saying which login a session runs as. The
+   * *ref* still carries it, because that is genuinely the account's stored name
+   * and the Accounts screen renames it there; what must never happen is a
+   * surface printing it. `accountIdentity` in `renderer/accounts.ts` is the gate
+   * — every generated name falls through to the sign-in state instead — and it
+   * is reached from a ref whose `id` says the account is a system one. So what
+   * is pinned here is that the id survives the trip, which is what that gate
+   * reads.
+   */
+  it('marks the machine’s own install as one, so no surface prints its generated name', async () => {
+    const system = systemProfileFor('claude')
+    const meta = session({ id: 'sess-one-truth-system', provider: 'shell' })
+    configureSessionAccounts(processOn(system.configDir, meta))
+    await sessionAccount(meta.id)
+
+    const bar = sessionAccountRef(meta)
+    expect(bar?.id).toBe(system.id)
+    expect(bar?.name).toBe(generatedSystemName('claude'))
+    // Which is exactly the string a surface may not print, and the id is how
+    // every one of them knows not to. See `isSystemAccountId`.
+    expect(bar?.id).toBe('system')
+  })
+
+  it('still withholds when nothing has established an account', () => {
+    const meta = session({ id: 'sess-one-truth-none', provider: 'shell' })
+    // No wiring, so nothing has read the process. Unattributed, as before — the
+    // fix names the agent that is running, it does not invent one.
+    expect(sessionAccountRef(meta)).toEqual({
+      provider: 'shell',
+      id: null,
+      name: null,
+      configDir: null,
+    })
   })
 })
 
