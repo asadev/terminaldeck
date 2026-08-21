@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-08-21
+
 Two things he hit within an hour of installing 0.9.0.
 
 ### Fixed
@@ -57,7 +59,6 @@ Two things he hit within an hour of installing 0.9.0.
 - **The picker and the address chip can still disagree**, because the tunnel
   state they read is per browser tab. Two tabs on one tunnel: moving one home
   closes the listener the other is reading.
-
 
 ## [0.9.0] — 2026-08-21
 
@@ -1858,7 +1859,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.9.1
 [0.9.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.9.0
 [0.8.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.8.1
 [0.8.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.8.0
