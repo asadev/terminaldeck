@@ -1005,6 +1005,7 @@ function createWindow(): void {
   // most, and `src/reachable.test.ts` opens by naming restore-on-launch as one
   // of five features that shipped with no way in.
   mainWindow.webContents.on('did-finish-load', () => {
+    void hydrateRenderer() // first: see session-restore.test.ts
     /*
      * A page that has just loaded has nothing open over it.
      *
@@ -1020,7 +1021,6 @@ function createWindow(): void {
       chromeDimmed = false
       syncTitleBarOverlay()
     }
-    void hydrateRenderer()
   })
   mainWindow.on('closed', () => {
     rendererGone()

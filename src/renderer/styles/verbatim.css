@@ -398,6 +398,12 @@
 .srvpick-path,
 .srvpick-window-path,
 .srvpick-input,
-.tooltip-label[data-mono] {
+.tooltip-label[data-mono],
+/* Added 2026-08-21 with the review's own screens: a login named on an
+   account row, the address a stored server lives at, and the folder each
+   Project page now says it is reporting on. All three are machine text. */
+.settings-addmenu-login,
+.settings-server-where,
+.page-scope-path {
   font-variant-ligatures: none;
 }

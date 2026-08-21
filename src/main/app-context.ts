@@ -248,7 +248,7 @@ export function mapText(input: { version: string; machineName: string; dir: stri
 const told = new Set<string>()
 
 function keyOf(sessionId: string, machineId: string): string {
-  return `${machineId} ${sessionId}`
+  return `${machineId}\0${sessionId}`
 }
 
 /**
