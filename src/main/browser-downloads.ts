@@ -11,6 +11,7 @@ import {
   type Session,
 } from 'electron'
 import { BRAND } from '../shared/brand'
+import { digestFile } from './browser-asset-digest'
 
 /**
  * Downloads in the built-in browser: fetching a file, listing it, and — when the
@@ -141,6 +142,33 @@ export interface DownloadRow {
   /** Why it failed, or what was cancelled. Empty in the ordinary good state. */
   message: string
   startedAt: number
+  /**
+   * `sha256:<hex>` of the bytes that landed on this disk.
+   *
+   * Empty means *not known* — the download has not finished, or the file could
+   * not be read back to hash it. It never means "no digest was needed".
+   *
+   * ## Why a row that already has a name, a URL, a size and a path needs this
+   *
+   * Because none of those four can tell a good file from a bad one. Asad's
+   * property pipeline kept a resume ledger of exactly those fields, keyed on the
+   * URL, and during a re-download that was started *because the files were
+   * wrong* it recognised all 48,473 of them, skipped every one, and exited
+   * reporting success. A ledger keyed on the URL answers *"did you ask for
+   * this?"*, and the question is *"do you have it?"*.
+   *
+   * So the digest is computed here, at the one place in the app where a file
+   * arrives from a socket, and it is what `browser-asset-ledger.ts` keys on. It
+   * is also the thing that makes the no-transform guarantee checkable after the
+   * fact rather than only in a test: the bytes were these bytes, and this is
+   * what they hashed to when they landed.
+   *
+   * Computed **before** a cross-machine delivery, so the digest describes what
+   * left this computer, and filled in asynchronously — the row goes to `done`
+   * the instant Chromium says the file is written, because a progress bar that
+   * waited on a hash of a 2GB file would be a download that looks stuck.
+   */
+  digest: string
 }
 
 export interface DownloadsView {
@@ -282,6 +310,7 @@ export function readDownloadsFile(raw: unknown): {
       onMachineName: text(record.onMachineName),
       message: wasMoving ? `${BRAND.name} closed while this was moving.` : text(record.message),
       startedAt: count(record.startedAt),
+      digest: text(record.digest),
     })
     if (read.length >= MAX_DOWNLOAD_ROWS) break
   }
@@ -476,6 +505,48 @@ function patch(id: string, change: Partial<DownloadRow>): void {
   put({ ...held, ...change })
 }
 
+/* ---------------------------------------------------------------- integrity -- */
+
+/**
+ * Fingerprint a file that has just landed, and put the answer on its row.
+ *
+ * ## The guarantee this is evidence of
+ *
+ * `browser-asset-digest.ts` states it in full and it is one sentence: a
+ * downloaded file is written exactly as the server sent it, and nothing in this
+ * app rewrites those bytes. This module is where that is either true or not —
+ * `will-download` hands Chromium a path and Chromium streams the response onto
+ * it, `.part` then rename, with no buffer in between that anything could
+ * transform. There is no step to add one to, and there must never be.
+ *
+ * Reading the file back and hashing it is not a check *on that* — a transform
+ * inserted above would be hashed just as happily. What it is, is the record that
+ * makes every later question answerable: whether a resume already has this file
+ * (`browser-asset-ledger.ts`), whether the copy on the far machine is the copy
+ * that left this one, and whether the thing on disk today is the thing that
+ * arrived. Asad has already lost 48,473 assets to a ledger that had every field
+ * but this one.
+ *
+ * ## Why it does not hold up the row
+ *
+ * The row reaches `done` the moment Chromium says the bytes are written, and the
+ * digest arrives afterwards. A hash of a two-gigabyte file takes seconds, and a
+ * downloads panel that sat at 100% for those seconds would be reporting a stall
+ * that is not happening. An empty digest on a finished row means *not known yet
+ * or not readable*, which the panel and the ledger both already have to handle.
+ */
+async function seal(id: string, path: string): Promise<string> {
+  if (path === '') return ''
+  const digest = await digestFile(path)
+  // The row may have been cleared, or the download re-listed, while the hash
+  // ran. `patch` on a row that has gone is a no-op, which is the right answer.
+  if (digest !== '') {
+    patch(id, { digest })
+    save()
+  }
+  return digest
+}
+
 /* --------------------------------------------------------------- delivery -- */
 
 /**
@@ -507,6 +578,21 @@ async function deliver(
     return
   }
   patch(id, { state: 'delivering', onMachine: '', onMachineName: '', path: localPath })
+  /*
+   * Hashed alongside the transfer, and joined before the unlink.
+   *
+   * It has to happen *some* time before the unlink, because that unlink is the
+   * last moment at which the bytes that were downloaded exist on this disk — a
+   * digest taken afterwards would describe whatever the far machine wrote, which
+   * is a different question about a file this process cannot see.
+   *
+   * Started rather than awaited, because the two are independent: reading a
+   * two-gigabyte file to hash it and pushing the same file down a socket have no
+   * ordering between them, and awaiting first would add the whole read to the
+   * time before a single byte leaves. The join is below, immediately before the
+   * only `unlink` in this module.
+   */
+  const sealing = seal(id, localPath)
 
   let outcome: DeliveryOutcome
   try {
@@ -542,6 +628,8 @@ async function deliver(
    * copy is still here.
    */
   let leftBehind = ''
+  // The join. After this line the local copy may go; before it, it may not.
+  await sealing
   try {
     await unlink(localPath)
   } catch {
@@ -607,6 +695,7 @@ export function attachDownloads(ses: Session): void {
           error instanceof Error ? error.message : 'unknown reason'
         }.`,
         startedAt: Date.now(),
+        digest: '',
       })
       save()
       return
@@ -625,6 +714,7 @@ export function attachDownloads(ses: Session): void {
       onMachineName: '',
       message: '',
       startedAt: Date.now(),
+      digest: '',
     })
     /*
      * Written down as soon as it exists, rather than only when it ends.
@@ -678,6 +768,8 @@ export function attachDownloads(ses: Session): void {
       if (bound.machineId === '') {
         patch(id, { state: 'done' })
         save()
+        // Not awaited: see `seal`. The row is already correct without it.
+        void seal(id, landed)
         return
       }
       void deliver(id, landed, bound)

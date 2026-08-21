@@ -85,6 +85,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { rmSync } from 'node:fs'
 import { writeSecretFile } from '../remote/secret-file'
+import { ASSET_TOOL_NAMES } from './asset-tool-names'
 import { SERVER_NAME, type DeckControlEndpoint } from './server'
 import { NO_TIERS, type Caller, type TierGrant } from './surface'
 
@@ -140,7 +141,24 @@ import { NO_TIERS, type Caller, type TierGrant } from './surface'
  * A `browser.lift` beside it would turn that gesture into a request an agent
  * can make in a retry loop, and a tool that copies a login between profiles is
  * a tool that exfiltrates one. The honest answer for that half of the feature
- * is that it is UI and a human gesture, and it is not on this list. */
+ * is that it is UI and a human gesture, and it is not on this list.
+ *
+ * ## Why the asset tools are on it
+ *
+ * The six browser verbs let a session open a page and read it. The four in
+ * `asset-tools.ts` are what let it know whether what it read was all of it —
+ * whether an image URL had a bigger copy behind it, whether a file it already
+ * has is the file it should have, whether the page said there were 340 when it
+ * captured 12, and which pages refused it. Handing a session the first six and
+ * withholding the second four would be handing it the half of the job that can
+ * silently succeed: every one of those four exists because a run without it
+ * reported success while losing data.
+ *
+ * They are no wider than the six in what they reach. `asset-tools.ts` refuses a
+ * paired device outright, and everything it touches — a file the session itself
+ * just downloaded, this app's own scrape folder — is already inside the reach of
+ * a session that has a shell.
+ */
 export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.open',
   'browser_open',
@@ -172,6 +190,7 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
    */
   'browser.network',
   'browser_network',
+  ...ASSET_TOOL_NAMES,
 ])
 
 /**
