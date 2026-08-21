@@ -211,6 +211,17 @@ import {
   registerBrowserStoreIpc,
 } from './browser-store-ipc'
 import { storeTools } from './deck-control/store-tools'
+import { extensionTools } from './deck-control/extension-tools'
+import {
+  currentProfileId as currentBrowserProfileId,
+  installBrowserExtensions,
+  installedExtensionsFor,
+  isLoaded as isExtensionLoaded,
+  loadInstalledExtensions,
+  profileNameFor as browserProfileNameFor,
+  registerBrowserExtensionIpc,
+  setExtensionEnabled,
+} from './browser-extensions-ipc'
 import { browserTools, type VerbForwarder } from './deck-control/browser-tools'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
@@ -3293,6 +3304,20 @@ function registerIpc(): void {
   registerBrowserStoreIpc(ipcMain)
 
   /*
+   * The extension store, and the replay that makes it mean anything.
+   *
+   * Electron does not remember a loaded extension across boots — its own note on
+   * `loadExtension` is that it *"must be called on every boot of your app"* — so
+   * what is installed lives on this app's disk and is loaded from there at every
+   * launch. Not awaited: `registerIpc` is synchronous and a slow extension must
+   * not hold the first window shut. Every failure is kept and shown on the row
+   * rather than swallowed. See `browser-extensions-ipc.ts`.
+   */
+  installBrowserExtensions({ userData: () => app.getPath('userData') })
+  registerBrowserExtensionIpc(ipcMain)
+  void loadInstalledExtensions()
+
+  /*
    * Downloads in the built-in browser, including the ones bound for a computer
    * that is not this one.
    *
@@ -4362,6 +4387,22 @@ app.whenReady().then(() => {
         open: (profileId) => assetFetchFor(profileId),
       }),
       ...browserStoreTools(),
+      /*
+       * What is running in the browser the session drives, and the switch for it.
+       *
+       * Unconditional, unlike the two browser lists above, because it closes over
+       * nothing a wiring order can take away: every dependency is a function in
+       * `browser-extensions-ipc.ts` that answers honestly — an empty list — when
+       * the store was never built. `extension-tools.ts` has the argument for why
+       * this is two verbs and not one tool per extension.
+       */
+      ...extensionTools({
+        installed: (profileId) => installedExtensionsFor(profileId),
+        isLoaded: (profileId, id) => isExtensionLoaded(profileId, id),
+        currentProfileId: () => currentBrowserProfileId(),
+        profileName: (profileId) => browserProfileNameFor(profileId),
+        setEnabled: (profileId, id, on) => setExtensionEnabled(profileId, id, on),
+      }),
       ...(servers === null ? [] : serverTools({ room: servers.room, grants: servers.grants })),
     ],
     /*

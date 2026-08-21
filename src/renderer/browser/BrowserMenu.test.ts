@@ -65,10 +65,16 @@ describe('the everyday rows he named, and only the ones that exist', () => {
    * block below, which is where its rows are pinned.
    *
    * The absences below are the deliberate half and the reason this block exists:
-   * a Saved-passwords section and Extensions are not in this release, and a menu
-   * entry that opens a page nobody built is the exact defect the whole review is
-   * made of. Adding one of these rows means building the thing first — and then
-   * this test is what tells you to come back and change it.
+   * a menu entry that opens a page nobody built is the exact defect the whole
+   * review is made of. Adding one of these rows means building the thing first —
+   * and then this test is what tells you to come back and change it.
+   *
+   * **Extensions was one of those absences and is not any more.** It is a row
+   * now because there is a store behind it: `browser-extensions.ts` fetches,
+   * verifies and unpacks into a profile, `browser-extensions-ipc.ts` loads it
+   * into that profile's session, and `ExtensionsPanel.tsx` draws it. The bargain
+   * this block describes was kept rather than waived — the row arrived *after*
+   * the thing did.
    */
   it('draws History', () => {
     expect(onScreen).toContain('onHistory')
@@ -76,13 +82,24 @@ describe('the everyday rows he named, and only the ones that exist', () => {
   })
 
   it('draws no row for a feature this release does not have', () => {
-    // Extensions and a saved-passwords section are not in this release, and a
-    // menu entry that opens a page nobody built is the exact defect the whole
-    // review is made of. Downloads was left unasserted here on the grounds that
-    // if it landed it would arrive with its own store and its own row rather
-    // than by copying Chrome's list. It did, and it did — the block below.
-    expect(onScreen).not.toContain('Extensions')
+    // A saved-passwords section is not in this release, and a menu entry that
+    // opens a page nobody built is the exact defect the whole review is made of.
+    // Downloads and Extensions were both left unasserted here on the grounds
+    // that if either landed it would arrive with its own store and its own row
+    // rather than by copying Chrome's list. Both did, and both did.
     expect(onScreen).not.toContain('Saved passwords')
+  })
+
+  it('draws Extensions, because there is now a store behind it', () => {
+    expect(onScreen).toContain('onExtensions')
+    expect(onScreen).toMatch(/>\s*Extensions\s*</)
+  })
+
+  it('leaves Extensions out entirely on a build whose preload cannot answer', () => {
+    // Absent, not disabled — the same bargain History and Settings make, and
+    // `extensions-bridge.ts` says what counts as answerable: a list, an install,
+    // a remove and the switch. Anything less and the row does not appear.
+    expect(onScreen).toContain('{onExtensions && (')
   })
 
   it('leaves History out entirely on a build whose preload cannot answer', () => {

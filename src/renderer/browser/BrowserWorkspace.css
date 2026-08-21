@@ -2441,3 +2441,53 @@
   font-size: var(--t-caption);
   line-height: var(--lh-body);
 }
+
+/*
+  The extension store's two controls that the tools store next door has no need
+  for.
+
+  `.bw-ext-switch` is a real switch over a real effect: off calls
+  `removeExtension`, which stops the program immediately. It sits beside Remove
+  rather than replacing it because off and gone are different things — see
+  `ExtensionsPanel.tsx`. Sized like `.bw-store-version` so the row does not
+  change height when an extension goes from available to installed.
+*/
+.bw-ext-switch {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  cursor: pointer;
+}
+
+.bw-ext-switch input:disabled {
+  cursor: default;
+}
+
+/*
+  Which profile the panel is talking about.
+
+  A control rather than prose, because "installed" is never a global fact here —
+  an extension is loaded into one session and reads every page in it — and a
+  panel that could only ever answer about whichever profile happened to be
+  switched on is the dead end `profileSession` was written to fix.
+*/
+.bw-ext-profile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.bw-ext-profile select {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-caption);
+}

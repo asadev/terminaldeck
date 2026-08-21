@@ -17,11 +17,20 @@
  *
  * Electron has `session.loadExtension`, for *unpacked* extensions, with a
  * partial API surface and no Web Store — no `chrome.*` beyond a fraction, no
- * update channel, no signature, no reviews. A store built on it would promise
- * the extension ecosystem and deliver a subset nobody can predict from the
- * outside, which is the shape of half-feature `BrowserMenu.tsx` already refuses
- * to draw a row for. There is no extension loading in this build and the store
- * says so in one sentence rather than implying parity it does not have.
+ * update channel, no signature, no reviews.
+ *
+ * This file used to go on to say that the subset was one *"nobody can predict
+ * from the outside"*, and that therefore there was no extension loading in this
+ * build. The first half had one word wrong in it — nobody on the *outside*, but
+ * the subset is entirely measurable from the inside, and it has since been
+ * measured: see `browser-extension-support.ts`, which loaded a probe extension
+ * into this app's own Electron and wrote down every namespace that answered.
+ * The second half is simply no longer true. Extensions have a store of their
+ * own, in `browser-extensions.ts`, and it lists what was measured working, what
+ * was measured failing, and why.
+ *
+ * The two stores stay separate, and the reason is the sentence below rather than
+ * a filing decision: a tool here is **not a program**.
  *
  * What this app *does* have is a tool surface with an allow-list as its security
  * model (`deck-control/`), and a page-reading engine whose whole design is that

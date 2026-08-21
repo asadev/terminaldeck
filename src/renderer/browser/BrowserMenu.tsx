@@ -72,6 +72,14 @@ interface Props {
    * *"not at all"*.
    */
   onTools?: () => void
+  /**
+   * Open the browser extension store.
+   *
+   * Absent rather than disabled when the preload does not carry the channels,
+   * for the same reason `onTools` is — see `extensions-bridge.ts` for what
+   * counts as wired.
+   */
+  onExtensions?: () => void
   onClose(): void
 }
 
@@ -136,6 +144,7 @@ export function BrowserMenu({
   onCookies,
   onDownloads,
   onTools,
+  onExtensions,
   onClose,
 }: Props) {
   const isStartPage = url !== '' && url === startUrl
@@ -224,6 +233,33 @@ export function BrowserMenu({
             }}
           >
             Tools
+          </button>
+        )}
+
+        {/*
+          Extensions, and the store behind them.
+
+          *"extensions store needs to be a proper store from where we can see
+          most famous open source tools to attach to the browser and use there
+          with session ai."*
+
+          A separate row from Tools rather than a section inside it, because they
+          install different kinds of thing and the difference matters to whoever
+          presses one: a tool is selectors this app runs, an extension is a
+          program somebody else wrote that runs on every page of a profile. One
+          panel holding both would have to keep saying which half it was talking
+          about.
+        */}
+        {onExtensions && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            onClick={() => {
+              onExtensions()
+              onClose()
+            }}
+          >
+            Extensions
           </button>
         )}
 

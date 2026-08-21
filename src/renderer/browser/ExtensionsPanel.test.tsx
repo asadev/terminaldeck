@@ -1,0 +1,196 @@
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import { ExtensionRow } from './ExtensionsPanel'
+import type { StoreExtension } from './extensions-bridge'
+
+/**
+ * An extension row, actually rendered.
+ *
+ * The row is where this feature can most easily start lying, so it is the thing
+ * that gets rendered and read. Three ways it could:
+ *
+ *  - **A button over something that cannot work.** A row this app measured
+ *    failing has no download pinned, so an Install could only ever refuse.
+ *  - **A switch over something that is not running.** "On" is the live session's
+ *    answer, not the disk's, and a checked box above a program that threw at
+ *    load is exactly the control this app's brief forbids.
+ *  - **A reach nobody was shown before pressing Install.** What an extension may
+ *    read is the whole of what somebody is agreeing to, so it cannot arrive after
+ *    the agreement. It is safe for the row to state the catalogue's answer only
+ *    because `browser-extensions.ts` refuses any release whose manifest reaches
+ *    wider than the row said — so the two are the same thing or neither happens.
+ *
+ * There is no DOM in this project's test setup, so this renders through
+ * `react-dom/server` the way `ToolsPanel.test.tsx` does. The panel around this
+ * row loads through an effect, which SSR never runs, so the row is where
+ * everything worth asserting lives.
+ */
+
+function row(over: Partial<StoreExtension> = {}): StoreExtension {
+  return {
+    id: 'dark-reader',
+    name: 'Dark Reader',
+    summary: 'Turns every site dark.',
+    homepage: 'https://github.com/darkreader/darkreader',
+    licence: 'MIT',
+    version: '4.9.129',
+    works: 'works',
+    measured: 'Watched working: a white page came back with background rgb(24, 26, 27).',
+    url: 'https://example.com/a.zip',
+    sha256: 'a'.repeat(64),
+    bytes: 100,
+    state: 'available',
+    installedVersion: '',
+    installedAt: 0,
+    enabled: false,
+    reach: [],
+    everywhere: false,
+    missing: [],
+    popup: '',
+    staticRulesets: false,
+    message: '',
+    ...over,
+  }
+}
+
+function render(over: Partial<StoreExtension> = {}, props: Partial<Parameters<typeof ExtensionRow>[0]> = {}) {
+  return renderToStaticMarkup(
+    <ExtensionRow
+      extension={row(over)}
+      busy={false}
+      said=""
+      canOpenPopup
+      onAct={() => {}}
+      onEnable={() => {}}
+      onOpenPopup={() => {}}
+      {...props}
+    />,
+  )
+}
+
+describe('every row', () => {
+  it('shows what this app measured, whatever the verdict', () => {
+    // A verdict with no observation behind it is an opinion.
+    expect(render()).toContain('rgb(24, 26, 27)')
+  })
+
+  it('names the licence and where it comes from, so the row is not this app’s word for it', () => {
+    const html = render()
+    expect(html).toContain('MIT')
+    expect(html).toContain('github.com/darkreader/darkreader')
+  })
+})
+
+describe('a row this app measured failing', () => {
+  it('draws no button at all', () => {
+    /*
+     * Not a disabled one: a disabled Install with a tooltip is still a store
+     * offering something. There is no download pinned to this row, so the
+     * button could only ever refuse.
+     */
+    const html = render({
+      id: 'ublock-origin',
+      name: 'uBlock Origin',
+      works: 'no',
+      state: 'unavailable',
+      url: '',
+      sha256: '',
+      measured: 'It loads, and then blocks nothing.',
+    })
+    expect(html).not.toContain('<button')
+    expect(html).toContain('blocks nothing')
+  })
+
+  it('is still on screen, because "where is uBlock Origin" has a true answer', () => {
+    const html = render({ id: 'ublock-origin', name: 'uBlock Origin', works: 'no', state: 'unavailable' })
+    expect(html).toContain('uBlock Origin')
+  })
+})
+
+describe('a row that can be installed', () => {
+  it('offers Install and says so on the button', () => {
+    expect(render()).toContain('Install')
+  })
+
+  it('states what it reaches while Install is still the button on it', () => {
+    /*
+     * Reach is the single fact somebody is agreeing to when they press Install,
+     * so it cannot wait until afterwards. It is safe to print the catalogue's
+     * answer because `browser-extensions.ts` refuses any release whose manifest
+     * reaches wider than this line — the row and the program agree or neither
+     * happens.
+     */
+    const html = render({ reach: ['<all_urls>'], everywhere: true })
+    expect(html).toContain('every page you open in this profile')
+    expect(html).toContain('Install')
+  })
+})
+
+describe('a row that is installed', () => {
+  it('says what it actually reaches, in words rather than in patterns', () => {
+    const html = render({ state: 'installed', enabled: true, everywhere: true, reach: ['<all_urls>'] })
+    expect(html).toContain('every page you open in this profile')
+  })
+
+  it('draws the switch, and Remove beside it', () => {
+    // Off and gone are different things and a person means one of them.
+    const html = render({ state: 'installed', enabled: true })
+    expect(html).toContain('checkbox')
+    expect(html).toContain('Remove')
+  })
+
+  it('shows the switch unchecked when the browser did not load it', () => {
+    /*
+     * The one that matters most. The store writes `enabled: true` and the
+     * browser can still refuse; the main process folds the live answer in and
+     * the row draws that, with the reason.
+     */
+    const html = render({
+      state: 'installed',
+      enabled: false,
+      message: 'It is switched on but the browser did not load it: it threw.',
+    })
+    expect(html).not.toContain('checked=""')
+    expect(html).toContain('did not load it')
+  })
+
+  it('names the chrome.* it asks for that is not here', () => {
+    const html = render({ state: 'installed', enabled: true, missing: ['contextMenus', 'webNavigation'] })
+    expect(html).toContain('chrome.contextMenus')
+    expect(html).toContain('chrome.webNavigation')
+  })
+
+  it('says outright when its rules are static rulesets that are not in force', () => {
+    // Nothing else on the row would show it: the extension installs, loads,
+    // draws its button and blocks nothing.
+    const html = render({ state: 'installed', enabled: true, staticRulesets: true })
+    expect(html).toContain('not in force')
+  })
+})
+
+describe('the panel button', () => {
+  it('is drawn only for an extension that has one and is running', () => {
+    // A button opening the popup of a program that is not loaded has nothing to
+    // show, and one for an extension with no `default_popup` has no page at all.
+    expect(render({ state: 'installed', enabled: true, popup: 'popup.html' })).toContain('Open panel')
+    expect(render({ state: 'installed', enabled: false, popup: 'popup.html' })).not.toContain('Open panel')
+    expect(render({ state: 'installed', enabled: true, popup: '' })).not.toContain('Open panel')
+  })
+
+  it('is not drawn when the preload cannot open one', () => {
+    expect(
+      render({ state: 'installed', enabled: true, popup: 'popup.html' }, { canOpenPopup: false }),
+    ).not.toContain('Open panel')
+  })
+})
+
+describe('a damaged install', () => {
+  it('says what is wrong and offers Remove', () => {
+    const html = render({
+      state: 'damaged',
+      message: 'it was installed from a different release than this version of the app offers',
+    })
+    expect(html).toContain('different release')
+    expect(html).toContain('Remove')
+  })
+})

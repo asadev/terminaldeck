@@ -15,6 +15,7 @@ import { RecorderPanel } from './RecorderPanel'
 import { ScreenshotPopup } from './ScreenshotPopup'
 import { HistoryPanel } from './HistoryPanel'
 import { ToolsPanel } from './ToolsPanel'
+import { ExtensionsPanel } from './ExtensionsPanel'
 import { ProfileSettings } from './ProfileSettings'
 import { ScrapingPanel } from './ScrapingPanel'
 import { SessionModal } from './SessionModal'
@@ -43,6 +44,7 @@ import {
   type DownloadsView,
 } from './downloads-bridge'
 import { resolveStoreApi, storeAvailable } from './store-bridge'
+import { extensionsAvailable, resolveExtensionsApi } from './extensions-bridge'
 import { anchorInWindow, type Box } from './popup-anchor'
 import {
   historyAvailable,
@@ -752,7 +754,9 @@ export function BrowserWorkspace({
    * open. The panel loads its own list, the way `HistoryPanel` does.
    */
   const store = useMemo(() => resolveStoreApi(), [])
+  const extensions = useMemo(() => resolveExtensionsApi(), [])
   const [toolsOpen, setToolsOpen] = useState(false)
+  const [extensionsOpen, setExtensionsOpen] = useState(false)
 
   /*
    * ---------------------------------------------------------------------------
@@ -3099,6 +3103,11 @@ export function BrowserWorkspace({
              absent on a preload that cannot install or remove, rather than a row
              that opens a panel whose buttons could never work. */
           onTools={storeAvailable(store) ? () => openAt(null, () => setToolsOpen(true)) : undefined}
+          onExtensions={
+            extensionsAvailable(extensions)
+              ? () => openAt(null, () => setExtensionsOpen(true))
+              : undefined
+          }
           onClose={() => setMenuOpen(false)}
         />
       )}
@@ -3221,6 +3230,20 @@ export function BrowserWorkspace({
       />
 
       <ToolsPanel open={toolsOpen} api={store} onClose={() => setToolsOpen(false)} />
+
+      {/*
+        The extension store opens on the profile the browser is actually in, so
+        the first thing it says — what is installed *here* — is about the pages
+        in front of the person rather than about whichever profile came first in
+        a list. `browser-extensions.ts` has the argument for why an extension is
+        never a global fact.
+      */}
+      <ExtensionsPanel
+        open={extensionsOpen}
+        api={extensions}
+        profileId={activeProfileId}
+        onClose={() => setExtensionsOpen(false)}
+      />
     </div>
   )
 }

@@ -2177,6 +2177,27 @@ const api = {
   browserStoreRemove: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-store:remove', id),
 
+  /* ------------------------------------------ browser extension store -- */
+
+  /*
+   * The extension store, which is a different thing from the tools store above
+   * and stays one: that installs recipes this app's own code runs, this installs
+   * programs other people wrote that run inside the browser. Every call names a
+   * **profile**, because an extension is loaded into one session and reads every
+   * page in it — see `browser-extensions.ts` for why that could not be global
+   * even if it were wanted.
+   */
+  browserExtensions: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:list', profileId),
+  browserExtensionInstall: (profileId: string, id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:install', profileId, id),
+  browserExtensionRemove: (profileId: string, id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:remove', profileId, id),
+  browserExtensionEnable: (profileId: string, id: string, on: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:enable', profileId, id, on),
+  browserExtensionPopup: (profileId: string, id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:popup', profileId, id),
+
   browserPasswordsAvailable: (): Promise<unknown> =>
     ipcRenderer.invoke('browser-password:available'),
   browserPasswords: (profileId: string): Promise<unknown> =>

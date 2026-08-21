@@ -33,15 +33,18 @@ interface Props {
  * say, so what is on screen and what runs are the same thing or neither
  * happens.
  *
- * ## Why the row for a Chrome extension is a sentence and not a button
+ * ## Why browser extensions are not in this panel
  *
- * Electron can load an *unpacked* extension with a fraction of the `chrome.*`
- * surface, no store, no signature and no updates. A button offering that would
- * be promising the extension ecosystem and delivering something nobody can
- * predict from the outside — the exact half-feature `BrowserMenu.tsx` refuses to
- * draw a row for: *"a menu entry pointing at a page that does not exist is worse
- * than a menu that is short."* So this store says plainly what it is instead,
- * once, at the foot, with no control beside it.
+ * They were nowhere at all when this was written, and the foot of this panel
+ * said so. They have a store of their own now — `ExtensionsPanel.tsx` — and the
+ * sentence at the foot points at it rather than denying it exists.
+ *
+ * They stayed out of *this* panel deliberately. A tool here is selectors this
+ * app's own code runs, bounded by `browser.read`; an extension is a program
+ * somebody else wrote, running on every page of a profile, and none of this
+ * panel's safety argument transfers to it. One panel holding both would have to
+ * keep saying which half it was talking about — and the row that matters most,
+ * *what this reaches*, means something different in each.
  *
  * ## Why every failure lands on the row
  *
@@ -183,8 +186,8 @@ export function ToolsPanel({ open, api, onClose }: Props) {
             fingerprint built into this app before it is saved and again every time it is read.
           </p>
           <p className="bw-store-note">
-            Extensions written for other browsers do not run here and this store does not offer
-            them.
+            Browser extensions are a separate thing, in their own store: the ⋯ menu, under
+            Extensions.
           </p>
           {/* Where the files are, because Remove says a file is deleted and a
               person is entitled to go and look. */}
