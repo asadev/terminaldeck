@@ -448,3 +448,19 @@
 
 .cv-jump:active { transform: translateX(-50%) scale(0.985); }
 .cv-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The line above a conversation that was entered late.
+
+   Secondary text, no border, no icon: it is a caption on the reading rather
+   than a warning about it — nothing is wrong, the earlier part is simply on
+   somebody's server and was not brought across. See `ChatUpdate.startedMidFile`. */
+.cv-partial {
+  margin: 0 auto var(--sp-4);
+  max-width: var(--content-measure);
+  padding: 0 var(--sp-4);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  text-align: center;
+}

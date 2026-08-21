@@ -70,6 +70,26 @@ interface Props {
    * harness and every test that does not care. See `main/session-boundary.ts`.
    */
   sessionId?: string | null
+  /**
+   * Why a file cannot be attached from this box, or absent when one can.
+   *
+   * The third shape of the same rule the two props above are about: what goes
+   * into the box has to be something the thing on the other end can actually
+   * open. A shell needs a quoted path instead of a mention; a confined session
+   * cannot read outside its folder; and a session whose agent is running on
+   * **another computer** cannot read a path on this one at all —
+   * `renderer/session-transfer.ts` states it plainly, because it was reported:
+   * *"it will send the path of my current PC instead of the server where
+   * actually session is running. So in that case session will not be able to
+   * see the things that I have sent."*
+   *
+   * There is no form of the result that fixes that one — the file is not over
+   * there — so the menu is withdrawn and this sentence is drawn in its place.
+   * Withdrawn *with* a sentence, deliberately: a plus that quietly vanished is
+   * how the shell composer ended up as *"you actually removed everything rather
+   * than making it simple"*.
+   */
+  noAttachReason?: string
   /** Test seam for browse, drop and paste. Absent means the real bridge. */
   outsideBridge?: AttachOutsideBridge
   /**
@@ -163,6 +183,7 @@ export function ChatComposer({
   placeholder,
   shell = false,
   sessionId,
+  noAttachReason,
   outsideBridge,
   plain = false,
 }: Props) {
@@ -534,7 +555,14 @@ export function ChatComposer({
           <div className="cc-foot-left">
             {/* The only control on this side of the row, and drawn for a shell
                 as well as for an agent — the mode is what differs. See the
-                `shell` prop for the regression that rule exists to close. */}
+                `shell` prop for the regression that rule exists to close.
+
+                Absent in one case, and it says why rather than leaving a gap:
+                a session whose agent is on another computer cannot open a file
+                on this one. See `noAttachReason`. */}
+            {noAttachReason !== undefined ? (
+              <p className="cc-no-attach">{noAttachReason}</p>
+            ) : (
             <AttachMenu
               root={root}
               onAdd={addPicks}
@@ -550,6 +578,7 @@ export function ChatComposer({
               startIn={browseStart(boundary, root)}
               {...(outsideBridge ? { outsideBridge } : {})}
             />
+            )}
           </div>
           <div className="cc-foot-right">
             {/*

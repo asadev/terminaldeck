@@ -702,3 +702,190 @@ describe('servers:upload', () => {
     expect(await call('servers:upload', 's1', '')).toMatchObject({ ok: false })
   })
 })
+
+describe('the conversation a shell on a server is writing', () => {
+  const OPENED = 1_760_000_000_000
+
+  /** A shell that stays open, so the ids the chat channels take exist. */
+  function idleShell(): ServerShell {
+    return {
+      onData: () => () => undefined,
+      onClose: () => () => undefined,
+      write: () => undefined,
+      resize: () => undefined,
+      close: () => undefined,
+    }
+  }
+
+  /**
+   * One transcript on the far end, with a body and a first-line timestamp, and
+   * the two deps that read it.
+   *
+   * The script and the byte range are faked at the boundary `connection.ts`
+   * owns; everything above them — which file belongs to which shell, how a line
+   * becomes a bubble — is the real code. `servers/chat.test.ts` exercises those
+   * rules directly; what this file is for is the *wiring*.
+   */
+  function transcriptDeps(path: string, body: string, startedAt: number): Partial<ServersIpcDeps> {
+    return {
+      openShell: async () => idleShell(),
+      now: () => OPENED,
+      runScript: async () =>
+        cmd({
+          stdout: `now\t${Math.trunc(OPENED / 1000)}\nfile\t${new Date(startedAt).toISOString()}\t${path}\n`,
+        }),
+      readFileRange: async (_serverId, asked, from, length) => {
+        const whole = Buffer.from(asked === path ? body : '', 'utf8')
+        return { bytes: whole.subarray(from, from + length), size: whole.length }
+      },
+    }
+  }
+
+  it('reads the transcript that belongs to this shell and collapses it', async () => {
+    const line = (type: 'user' | 'assistant', text: string, id: string): string =>
+      type === 'user'
+        ? `${JSON.stringify({ type, uuid: id, timestamp: '2026-10-09T00:00:05Z', message: { content: text } })}\n`
+        : `${JSON.stringify({
+            type,
+            uuid: id,
+            timestamp: '2026-10-09T00:00:06Z',
+            message: { id, content: [{ type: 'text', text }] },
+          })}\n`
+
+    const { call } = harness(
+      transcriptDeps(
+        '/root/.claude/projects/p/live.jsonl',
+        line('user', 'deploy it', 'u1') + line('assistant', 'On it.', 'a1'),
+        OPENED + 1_000,
+      ),
+    )
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
+    const update = (await call('servers:chat:load', opened.shellId)) as {
+      found: boolean
+      transcriptPath: string
+      messages: Array<{ role: string; text: string }>
+    }
+    expect(update.found).toBe(true)
+    expect(update.transcriptPath).toBe('/root/.claude/projects/p/live.jsonl')
+    expect(update.messages).toEqual([
+      { id: 'you:u1', role: 'you', text: 'deploy it', at: Date.parse('2026-10-09T00:00:05Z') },
+      { id: 'agent:a1', role: 'agent', text: 'On it.', at: Date.parse('2026-10-09T00:00:06Z') },
+    ])
+  })
+
+  it('answers nothing at all rather than half a feature when the build cannot read a file', async () => {
+    /*
+     * `readFileRange` is optional on the deps and a build without it must not
+     * quietly draw an empty conversation — the window asks `serverChatWired`
+     * first and keeps the refusal it always had. Null is what that question is
+     * answered with here, and it is deliberately not an empty update: an empty
+     * update is a claim that there is nothing to say.
+     */
+    const { call } = harness({ openShell: async () => idleShell() })
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
+    expect(await call('servers:chat:load', opened.shellId)).toBeNull()
+    expect(await call('servers:chat:tail', opened.shellId)).toBeNull()
+  })
+
+  it('is keyed on the shell, so a second terminal on one server is a second reading', async () => {
+    const { call } = harness(
+      transcriptDeps('/root/.claude/projects/p/one.jsonl', '', OPENED + 1_000),
+    )
+    const first = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
+    const second = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
+    expect(first.shellId).not.toBe(second.shellId)
+
+    // Closing one reading leaves the other's alone. The main process holds them
+    // under the shell's id, which is why `closeChat` on the window's side
+    // ignores the transcript path it is handed.
+    await call('servers:chat:load', first.shellId)
+    expect(await call('servers:chat:close', first.shellId)).toEqual({ closed: true })
+    expect(await call('servers:chat:close', first.shellId)).toEqual({ closed: false })
+  })
+
+  it('refuses anything that is not a shell', async () => {
+    const { call } = harness(transcriptDeps('/x.jsonl', '', OPENED))
+    expect(await call('servers:chat:load', 7)).toBeNull()
+    expect(await call('servers:chat:close', 7)).toEqual({ closed: false })
+  })
+})
+
+describe('which login that server account signs in as', () => {
+  it('answers out of the probe rather than asking the server again', async () => {
+    /*
+     * Read from the measurement the server page already took — the same thing
+     * `setupRoom` does with the install room — so drawing a bar does not cost an
+     * SSH probe. A server nobody has looked at is measured once, here, and every
+     * later ask is free.
+     *
+     * It is deliberately **not** an account this app can switch. Nothing on the
+     * SSH side records which login a shell's agent is on; what this reports is a
+     * fact about the home the shell landed in, and the bar says so in those
+     * words rather than drawing a menu with nothing to act on.
+     */
+    const facts = serverFacts()
+    const withAgent: ServerFacts = {
+      ...facts,
+      agents: factYes(
+        [{ id: 'claude', path: '/usr/bin/claude', version: '2.0.0', signedIn: 'yes', account: 'me@example.test' }],
+        AT,
+        'looked for a coding assistant',
+      ),
+    }
+    let probes = 0
+    const { call } = harness({
+      facts: async () => {
+        probes += 1
+        return withAgent
+      },
+      openShell: async () => ({
+        onData: () => () => undefined,
+        onClose: () => () => undefined,
+        write: () => undefined,
+        resize: () => undefined,
+        close: () => undefined,
+      }),
+    })
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
+    expect(await call('servers:shell:account', opened.shellId)).toEqual({
+      agentId: 'claude',
+      account: 'me@example.test',
+      signedIn: 'yes',
+    })
+    await call('servers:shell:account', opened.shellId)
+    expect(probes).toBe(1)
+  })
+
+  it('says nothing at all when no agent there has a login to report', async () => {
+    // Absent rather than empty — the same silent degrade the connectors chip
+    // beside it makes. A chip drawn with nothing in it is worse than no chip.
+    const { call } = harness({
+      openShell: async () => ({
+        onData: () => () => undefined,
+        onClose: () => () => undefined,
+        write: () => undefined,
+        resize: () => undefined,
+        close: () => undefined,
+      }),
+    })
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
+    expect(await call('servers:shell:account', opened.shellId)).toBeNull()
+  })
+
+  it('says nothing when the server will not answer, rather than failing the bar', async () => {
+    const { call } = harness({
+      facts: async () => {
+        throw new ServerProblem('no-answer', 'That address did not answer.')
+      },
+      openShell: async () => ({
+        onData: () => () => undefined,
+        onClose: () => () => undefined,
+        write: () => undefined,
+        resize: () => undefined,
+        close: () => undefined,
+      }),
+    })
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { shellId: string }
+    expect(await call('servers:shell:account', opened.shellId)).toBeNull()
+  })
+})

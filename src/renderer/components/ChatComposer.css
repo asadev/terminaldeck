@@ -312,3 +312,19 @@
 .cc-send svg {
   display: block;
 }
+
+/* Where the attach menu would have been, when it cannot be offered.
+
+   Muted caption weight, no border and no button shape: it is an explanation
+   standing where a control used to be, and anything that looked pressable here
+   would be worse than the plus that quietly vanished. See `noAttachReason`. */
+.cc-no-attach {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-caption);
+  line-height: 1.3;
+  color: var(--text-muted);
+}

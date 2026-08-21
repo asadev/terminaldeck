@@ -216,14 +216,15 @@ declare module 'ssh2' {
   /**
    * The subsystem, opened over a connection that is already up.
    *
-   * Declared as narrowly as everything else in this file: eight calls, which is
-   * every call a folder picker and a file delivery make. `readdir` and
-   * `realpath` answer the two questions — *what is in here* and *what is `~`
-   * actually called* — `stat`, `mkdir`, `fastPut`, `rename` and `unlink` are the
-   * five a write takes to make its folder and then land a file under a name
-   * nothing else is using, and `end` closes the channel, which is not the
-   * connection: the pool below still owns that and still decides when the socket
-   * goes.
+   * Declared as narrowly as everything else in this file: eleven calls, which is
+   * every call a folder picker, a file delivery and a transcript read make.
+   * `readdir` and `realpath` answer the two questions — *what is in here* and
+   * *what is `~` actually called* — `stat`, `mkdir`, `fastPut`, `rename` and
+   * `unlink` are the five a write takes to make its folder and then land a file
+   * under a name nothing else is using, `open`, `read` and `close` are the three
+   * that read a byte range out of a file that is still being appended to, and
+   * `end` closes the channel, which is not the connection: the pool below still
+   * owns that and still decides when the socket goes.
    *
    * Count them if you change them. The number in this sentence has been wrong
    * twice already, both times because a lane added a call and left the prose
@@ -309,6 +310,47 @@ declare module 'ssh2' {
      * failure that has already been reported and has nothing left to report to.
      */
     unlink(path: string, callback: (err?: Error & { code?: number }) => void): void
+    /**
+     * The three calls that read a *range* of a file on the far end, rather than
+     * a whole one.
+     *
+     * Declared for one caller — `ServerConnections.readFileRange`, which the
+     * chat view over a server shell tails a transcript with — and declared as a
+     * range read rather than as `createReadStream` on purpose. A transcript is
+     * appended to while it is being read, so what this app wants is *the bytes
+     * after the offset it stopped at*, and `read` takes that offset as an
+     * argument. A stream would mean opening a new one per poll and skipping the
+     * front of the file by discarding it, which over SSH is the whole file on
+     * the wire every few seconds.
+     *
+     * The shape mirrors `fs.open` / `fs.read` / `fs.close` deliberately: the
+     * library models them on it, and a reader written against one reads
+     * correctly against the other. `bytesRead` can be **short** — a server is
+     * free to answer fewer bytes than were asked for, and a caller that treated
+     * the request length as the answer would parse whatever was left in the
+     * buffer from the previous read.
+     *
+     * `flags` is `'r'` at the one call site and nothing here ever opens a file
+     * on somebody's server for writing.
+     */
+    open(
+      path: string,
+      flags: string,
+      callback: (err: (Error & { code?: number }) | undefined, handle: Buffer) => void,
+    ): void
+    read(
+      handle: Buffer,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number,
+      callback: (
+        err: (Error & { code?: number }) | undefined,
+        bytesRead: number,
+        buffer: Buffer,
+      ) => void,
+    ): void
+    close(handle: Buffer, callback: (err?: Error & { code?: number }) => void): void
     end(): void
   }
 

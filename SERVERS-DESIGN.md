@@ -833,6 +833,67 @@ Pinned by `renderer/shell/server-session-wiring.test.ts`,
 `renderer/machines/servers/server-sessions.test.ts` and
 `renderer/machines/servers/terminal-is-a-session.test.ts`.
 
+### 5.5.2 It has a transcript after all, and it still has no account
+
+Two clauses of §5.5.1 have since been answered, one of them by finding out that
+the premise was wrong and the other by doing what the refusal described.
+
+**The control cluster is there.** *"A shell on a server has a channel, not a
+session id"* was the reason it was withdrawn, and it was arguing from the wrong
+half of the mechanism. What `agent-controls.ts` needs is not a session id — it is
+a **pty whose bytes arrive in this process**, and `connection.ts` opens exactly
+that with `client.shell({ term: 'xterm-256color' })`. So the cluster is the same
+two functions against a two-method seam that reaches an SSH channel, with
+`onThisMachine: false` switching off every source that describes *this* laptop,
+and the two refusals that stop `/model` reaching somebody's `sh` are unchanged:
+`refuseByProvider` finds no Claude Code markers on the screen, `refuseToType`
+finds no composer.
+
+**Chat is there, and *"it has no transcript"* was never true of the machine.** It
+was true of this app's reach. A `claude` running in that terminal writes a
+transcript the whole time, on a box this app is holding an SSH connection to. So
+the refusal — *"This app opens a terminal there, not a filesystem it reads
+conversations out of"* — described a hole rather than a reason, and the hole is
+closed: `servers/chat.ts` asks the server once for every transcript under
+`$HOME/.claude/projects` written since the shell opened, together with each
+one's own first-line timestamp, and `connection.ts` reads byte ranges out of the
+one it can claim over SFTP as the agent appends to it.
+
+Three things about that are worth stating so they are not "fixed" later:
+
+- **The rule for *which* file is the local one, over a fact that travels.** A
+  conversation that began before this shell opened cannot be this shell's, and
+  one that began before the *next* shell on the same server opened could not have
+  been written by that one. Locally the file's birth time answers that; over SSH
+  there is no portable way to ask for one, so the first line's own timestamp is
+  used — it is the same fact, written by the only witness that crosses. When
+  nothing can be claimed exclusively the answer is **"I cannot tell"**, not a
+  guess, and the pane says so.
+- **Two clocks are measured, never assumed.** The timestamp is the server's and
+  the opening moment is this computer's, so the survey answers the server's own
+  `date` in the same round trip and the offset is applied before anything is
+  compared.
+- **A large transcript is entered late and the pane says so.** There is no such
+  cap locally, and the difference is the wire: most of a transcript's weight is
+  tool results the chat view discards, and reading one whole is a disk read here
+  and the entire file over SSH there.
+
+**There is still no account chip, and that is a decision rather than a gap.**
+Nothing on the SSH side carries which login a shell's agent is on — a transcript
+line records `cwd`, `gitBranch`, `version` and its own `sessionId` and says
+nothing about an account, and this app did not spawn whatever somebody typed into
+that terminal. Nor is there a switch: changing which account a server's agent
+uses is `/login` over there, in a browser on that machine. A chip is a **menu**,
+so one here would be a picker with nothing to act on.
+
+What the bar draws instead is the one true neighbouring fact, stated as what it
+is: the sign-in of the agent installed in the home the shell landed in, which is
+what a `claude` started in that terminal will run as. A word, in the slot the
+account holds for a local session, with no menu behind it — and read out of the
+§3.2 probe the server page already runs, so drawing a bar costs no round trip. A
+server that has never been reached draws nothing at all rather than an empty
+chip.
+
 ---
 
 ## 6 · Where the copilot fits

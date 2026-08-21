@@ -133,7 +133,14 @@ describe('the pane is mounted for as long as its tab exists', () => {
      * asked in one place — see `remoteOnScreen` — because the copy that drifts
      * is always the one nobody has open.
      */
-    expect(panes).toContain('visible={remoteOnScreen(entry.tabId)}')
+    /*
+     * `!chatting` since the conversation existed. The terminal and the chat view
+     * are the same session in two views drawn in one rectangle, so exactly one
+     * of them is shown — and the terminal is *hidden* rather than unmounted
+     * while the other is up, for the reason the whole block is here.
+     */
+    expect(panes).toContain('visible={onScreen && !chatting}')
+    expect(panes).toContain('const onScreen = remoteOnScreen(entry.tabId)')
     const onScreen = /const remoteOnScreen = [\s\S]*?\n\n/.exec(APP)?.[0] ?? ''
     expect(onScreen, 'remoteOnScreen has changed shape').not.toBe('')
     // The layout while split, the window's own selection otherwise — and
@@ -145,6 +152,35 @@ describe('the pane is mounted for as long as its tab exists', () => {
     // Keyed on the tab id, so a second terminal on the same server is a
     // genuinely different pane rather than the same one re-rendered.
     expect(panes).toContain('key={entry.tabId}')
+  })
+
+  it('mounts the conversation beside the terminal, not instead of it', () => {
+    /*
+     * Chat mode over a server terminal is a second pane in the same rectangle,
+     * and both of these matter:
+     *
+     *  - It is in the always-mounted list rather than in `mainView`, so a trip
+     *    to Files does not unmount it. Locally that would cost a re-read off
+     *    disk; here it is the whole conversation across an SSH link again.
+     *  - It is drawn only once the server has answered with an id for the shell.
+     *    `shellId` is the handle the main process holds both the SSH channel and
+     *    the transcript reader under, and `shellKey` — this window's own — names
+     *    nothing over there. Before there is one, the mode switch refuses with a
+     *    sentence rather than opening an empty pane.
+     */
+    const panes = /<div className="panes" ref=\{panesHostRef\}>([\s\S]*?)\n {8}<\/div>/.exec(APP)?.[0] ?? ''
+    expect(panes, 'the panes block has changed shape').not.toBe('')
+    expect(panes).toContain('<ServerChatPane')
+    expect(panes).toContain('shellId={shellId}')
+    expect(panes).toMatch(/\{chatting && shellId !== undefined \? \(/)
+    /*
+     * `visible={onScreen}` and not `visible={onScreen && chatting}`: it is only
+     * mounted while the session is in chat mode, so `chatting` is already true
+     * here — and the pane has to be told whether it is being *looked at*
+     * separately, because that is what switches its timer off. A background tab
+     * in chat mode keeps everything it has read and asks the server nothing.
+     */
+    expect(panes).toContain('visible={onScreen}')
   })
 
   it('draws nothing at all from `mainView` while one fills the window', () => {
@@ -225,7 +261,7 @@ describe('the controls a shell can reach, and the ones it cannot', () => {
     expect(branch).toContain('provider: undefined')
   })
 
-  it('refuses chat with a reason, and no longer refuses split', () => {
+  it('offers chat, and refuses it only when something is genuinely missing', () => {
     /*
      * Terminal is exactly what a server terminal is already showing, so
      * withdrawing the whole switch took a working segment with it and left an
@@ -240,40 +276,93 @@ describe('the controls a shell can reach, and the ones it cannot', () => {
      * nothing about the scrollback changed. *"Like I cannot even split"*,
      * 2026-08-21.
      *
-     * **Chat is still refused, and the sentence is the honest description of a
-     * gap.** A server does not run this app: there is a pty over SSH and nothing
-     * that reads the far filesystem, so the transcript would have to be found and
-     * tailed over that channel. A session on a paired machine is not refused,
-     * because the machine reads its own file and the bubbles travel.
+     * **Chat was refused and is not any more either.** Its sentence read: *"Chat
+     * reads the agent's own transcript file, which is on that server's disk.
+     * This app opens a terminal there, not a filesystem it reads conversations
+     * out of."* Every clause of that was true and it described a hole rather
+     * than a reason — the transcript is a file on a machine this app holds an
+     * SSH connection to. `servers/chat.ts` finds which file belongs to this
+     * shell and `connection.ts` reads byte ranges out of it over SFTP.
+     *
+     * What is left are two refusals about things that are actually absent, and
+     * this test's job is that neither of them is a mode:
+     *
+     *  - a preload with no such channel, which is a question about *this build*
+     *    and is asked of the bridge rather than assumed;
+     *  - a terminal the server has not answered with an id for yet, which has
+     *    nothing to read a transcript out of.
      *
      * Keyed on `shownTabId` rather than on the window's `openServerSession`, so
      * the sentence and the `view` beside it come from the same place — they used
      * not to, and the switch could be live over a session it was refusing to act
      * on.
      */
-    const table = /const modesBlocked:[\s\S]*?\n {4}: undefined\n/.exec(APP)?.[0] ?? ''
+    const table = /const modesBlocked:[\s\S]*?\n {8}: undefined\n/.exec(APP)?.[0] ?? ''
     expect(table, 'modesBlocked has changed shape').not.toBe('')
     expect(table).toContain('shownIsServer')
-    expect(table).toMatch(/chat:\s*'Chat reads the agent[^']*server/)
+    // The build, asked rather than believed.
+    expect(table).toContain('!serverChatWired(serversBridge)')
+    // And the shell, which has to exist before there is anything to read.
+    expect(table).toContain('shownServerShellId === null')
+    // Neither refusal may be the old one: a sentence that says chat cannot read
+    // a file on a server is now false about this app.
+    expect(table).not.toMatch(/not a filesystem it reads conversations out of/)
     expect(table, 'split is refused again').not.toContain('split:')
-    // And the switch is drawn for one, or the sentence reaches nobody.
+    // And the switch is drawn for one, or the sentences reach nobody.
     const guard = /\{\(activeSession \|\| splitting[\s\S]*?\? \(/.exec(APP)?.[0] ?? ''
     expect(guard, 'the ModeSwitch guard has changed shape').not.toBe('')
     expect(guard).toContain('openServerSession !== null')
   })
 
-  it('gives the window bar a name and the server, and no folder or account chip', () => {
+  it('gives the window bar a name and the server, and no folder or account menu', () => {
     /*
      * A shell starts wherever that sign-in lands and this app has not asked
      * where that is, so there is nothing true to put on a chip that opens a path
      * on *this* computer — the same reason a remote session's heading hands
      * `FolderChip` a null.
+     *
+     * `account: null` stays, and it is load-bearing rather than left over.
+     * `AccountChip` is a **menu**, and every row of it acts on a login this app
+     * controls; which account an agent on somebody's server is on is not a fact
+     * the SSH side carries and there is no switch here that could change one.
+     * A chip fed a value would be a picker with nothing behind it.
      */
     const heading = /const heading = openServerTab\n {4}\? \{[\s\S]*?\n {6}\}/.exec(APP)?.[0] ?? ''
     expect(heading, 'the server heading has changed shape').not.toBe('')
     expect(heading).toContain('folder: null')
     expect(heading).toContain('account: null')
     expect(heading).toContain('tabLabel(openServerTab, openTabs)')
+  })
+
+  it('says which login that server account signs in as, as a word and not a control', () => {
+    /*
+     * The other half of the same decision. There is no per-session account here
+     * and there is one true neighbouring fact — the sign-in of the agent in the
+     * home the shell landed in, which is what a `claude` started in that
+     * terminal will run as — so the bar states that, as what it is.
+     *
+     * Three things are pinned, and each of them is a way this could go wrong:
+     *
+     *  - it is drawn only when there is one, so a server that has never been
+     *    reached shows nothing rather than an empty chip;
+     *  - it carries the subtitle with it, because `meta` *replaces* the subtitle
+     *    and losing which computer a session is on is worse than losing this;
+     *  - it is a `span`, not a button and not `AccountChip`. On this bar
+     *    anything that looks pressable is pressable.
+     */
+    const row =
+      /\) : headingServerTabId !== null && serverSignIn !== null \? \([\s\S]*?\n {20}<\/div>/.exec(
+        APP,
+      )?.[0] ?? ''
+    expect(row, 'the server sign-in row has changed shape').not.toBe('')
+    expect(row).toContain('className="toolbar-signin"')
+    expect(row).toContain('className="toolbar-subtitle"')
+    expect(row).not.toContain('<AccountChip')
+    expect(row).not.toContain('<button')
+    expect(row).not.toContain('onClick')
+    // And the fact itself is read from the main process rather than composed
+    // out of anything this window happens to know about the server.
+    expect(APP).toContain('const serverSignIn = useServerSignIn(')
   })
 })
 

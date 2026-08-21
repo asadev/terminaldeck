@@ -138,7 +138,14 @@ describe('a pane can hold a session on any of the three computers', () => {
      * always-mounted terminal is given its rectangle.
      */
     expect(APP).toContain('<div className="pane-remote-slot" {...{ [SLOT_ATTR]: elsewhere.tab.id }} />')
-    expect(APP).toContain('box={slotStyle(paneSlots[entry.tabId])}')
+    /*
+     * Measured once per server tab and handed to both of its panes. A terminal
+     * on a server has a conversation view drawn in the same rectangle now, and
+     * two `slotStyle` calls for one hole is two chances for the pair to be
+     * given different rectangles.
+     */
+    expect(APP).toContain('const box = slotStyle(paneSlots[entry.tabId])')
+    expect((APP.match(/\bbox=\{box\}/g) ?? []).length).toBe(2)
     expect(APP).toContain('style={slotStyle(paneSlots[machineTabId(pane.machineId, pane.sessionId)])}')
   })
 
@@ -206,21 +213,31 @@ describe('the window and the layout never both claim the frame', () => {
 })
 
 describe('what the mode switch still refuses, and what it no longer does', () => {
+  const table = (): string =>
+    /const modesBlocked:[\s\S]*?\n {8}: undefined\n/.exec(APP)?.[0] ?? ''
+
   it('no longer refuses split for either kind', () => {
-    const table = /const modesBlocked:[\s\S]*?\n {4}: undefined\n/.exec(APP)?.[0] ?? ''
-    expect(table, 'modesBlocked has changed shape').not.toBe('')
-    expect(table, 'split is refused again').not.toContain('split:')
+    expect(table(), 'modesBlocked has changed shape').not.toBe('')
+    expect(table(), 'split is refused again').not.toContain('split:')
   })
 
-  it('keeps one honest refusal, for the one thing that genuinely cannot travel', () => {
+  it('no longer refuses chat for a server either, and refuses only what is absent', () => {
     /*
-     * A server does not run this app: there is a pty over SSH and nothing that
-     * reads the far filesystem for a conversation. The sentence says what would
-     * have to travel, which is the honest description of a gap — and it is on
-     * the segment, where somebody presses, rather than in a release note.
+     * The sentence here used to read *"Chat reads the agent's own transcript
+     * file, which is on that server's disk. This app opens a terminal there,
+     * not a filesystem it reads conversations out of."* Every clause of it was
+     * true and it described a hole rather than a reason: the transcript is a
+     * file on a machine this app holds an SSH connection to, and
+     * `servers/chat.ts` now finds which file belongs to this shell while
+     * `connection.ts` reads byte ranges out of it.
+     *
+     * What is left refuses two things that really are missing — a build with no
+     * such channel, and a terminal the server has not answered for yet — and
+     * both are questions rather than a policy about a mode.
      */
-    const table = /const modesBlocked:[\s\S]*?\n {4}: undefined\n/.exec(APP)?.[0] ?? ''
-    expect(table).toMatch(/chat:\s*'Chat reads the agent[^']*server/)
-    expect(table).toContain('shownIsServer')
+    expect(table()).toContain('shownIsServer')
+    expect(table()).toContain('!serverChatWired(serversBridge)')
+    expect(table()).toContain('shownServerShellId === null')
+    expect(table()).not.toMatch(/not a filesystem it reads conversations out of/)
   })
 })
