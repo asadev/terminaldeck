@@ -26,6 +26,18 @@ interface Props {
   countSites?: (profileId: string) => Promise<number>
   /** Open the cookies-and-site-data dialog, for that profile's jar. */
   onSiteData(profileId: string): void
+  /**
+   * Open one profile's own settings section.
+   *
+   *   > *"And now profiles doesn't have any kind of settings, I think, so they
+   *   > should have proper settings, proper section, just like Google Chrome."*
+   *
+   * The row can hold what a profile *contains* — it does, in the two counts
+   * beside the name. What it cannot hold is anything with a field or a grid in
+   * it: renaming, the badge, the list of saved logins. Those are one level down,
+   * in `ProfileSettings.tsx`, which is the section this opens.
+   */
+  onOpenProfile(profileId: string): void
   /** Reopen this page in the profile that was just switched to. */
   onReopen(): void
   onClose(): void
@@ -115,7 +127,15 @@ interface Props {
  * now. A button that appears exactly when the situation arises is the sentence,
  * and it is also the fix.
  */
-export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onClose }: Props) {
+export function ProfileMenu({
+  api,
+  anchor,
+  countSites,
+  onSiteData,
+  onOpenProfile,
+  onReopen,
+  onClose,
+}: Props) {
   const [view, setView] = useState<'profiles' | 'logins'>('profiles')
   const [profiles, setProfiles] = useState<ProfileState | null>(null)
   /** Saved logins per profile id, so every row can carry its own count. */
@@ -255,9 +275,10 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
                 circle the toolbar and the rows behind this view draw, so "these
                 are Work's logins" is one glyph rather than a line of prose. */}
             <span className="bw-avatar" aria-hidden="true">
-              {profileInitial(
-                (profiles?.profiles ?? []).find((profile) => profile.id === loginsFor)?.name ?? '',
-              )}
+              {(() => {
+                const owner = (profiles?.profiles ?? []).find((item) => item.id === loginsFor)
+                return profileInitial(owner?.name ?? '', owner?.avatar ?? '')
+              })()}
             </span>
             <span className="bw-menu-title">Saved logins</span>
           </div>
@@ -325,7 +346,7 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
                   {/* The same badge the toolbar wears, so the button up there and
                       the row down here are recognisably one profile. */}
                   <span className="bw-avatar" aria-hidden="true">
-                    {profileInitial(profile.name)}
+                    {profileInitial(profile.name, profile.avatar)}
                   </span>
                   <span className="bw-menu-label">{profile.name}</span>
                 </button>
@@ -374,6 +395,24 @@ export function ProfileMenu({ api, anchor, countSites, onSiteData, onReopen, onC
                       onClick={() => void openLogins(profile.id)}
                     >
                       {saved > 0 ? `${saved} ${saved === 1 ? 'login' : 'logins'}` : 'Logins'}
+                    </button>
+                    {/*
+                      The third door, and the one that goes a level down rather
+                      than opening a list: the profile's own section — its name,
+                      its badge, its logins, its cookies and its history, all
+                      scoped to this row. *"they should have proper settings,
+                      proper section, just like Google Chrome."*
+
+                      It does not switch into the profile either. Nothing on this
+                      row does except the row itself.
+                    */}
+                    <button
+                      type="button"
+                      className="bw-text-button"
+                      aria-label={`Settings for ${profile.name}`}
+                      onClick={() => onOpenProfile(profile.id)}
+                    >
+                      Settings
                     </button>
                   </>
                 )}

@@ -74,6 +74,21 @@ export interface BrowserProfile {
   createdAt: number
   /** True for the one profile that cannot be deleted. */
   isDefault: boolean
+  /**
+   * The one character drawn in the profile's badge, or `''` for its initial.
+   *
+   * *"now profiles doesn't have any kind of settings … they should have proper
+   * settings, proper section, just like Google Chrome"*, with Chrome's own
+   * flyout on screen beside ours — and the first thing on every row of it is a
+   * picture. Chrome offers a gallery of drawings; this offers a character,
+   * because a character is a thing this app can store, draw at any size and
+   * hand to a screen reader without an asset pipeline or a download.
+   *
+   * Empty is not "unset waiting to be filled in": it is the badge
+   * `profile-badge.ts` has always drawn, the name's first letter, and it stays
+   * the default so a profile nobody has customised looks exactly as it did.
+   */
+  avatar: string
 }
 
 export interface ProfileState {
@@ -114,6 +129,26 @@ export function cleanProfileName(raw: unknown, fallback = 'Profile'): string {
 }
 
 /**
+ * One character for a badge, or `''`.
+ *
+ * A single code point rather than a string: the badge is a 20px circle, so the
+ * second character of a two-character "avatar" would be drawn outside it or not
+ * at all. `[...trimmed][0]` splits by code point for the reason
+ * `profileInitial` does — an emoji taken with `charAt(0)` is half a surrogate
+ * pair, which draws as a replacement box.
+ *
+ * Control characters and whitespace collapse to `''`, which is the same answer
+ * as "no avatar" and lands the badge back on the name's initial rather than on
+ * an empty circle.
+ */
+export function cleanAvatar(raw: unknown): string {
+  if (typeof raw !== 'string') return ''
+  const trimmed = raw.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+  if (trimmed === '') return ''
+  return [...trimmed][0] ?? ''
+}
+
+/**
  * A stored file, read defensively into a state that is always usable.
  *
  * Anything unrecognised collapses to "one default profile, active" rather than
@@ -143,6 +178,7 @@ export function readProfileState(raw: unknown): ProfileState {
       partition,
       createdAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
       isDefault: id === DEFAULT_PROFILE_ID,
+      avatar: cleanAvatar(record.avatar),
     })
   }
   if (!profiles.some((p) => p.id === DEFAULT_PROFILE_ID)) profiles.unshift(defaultProfile())
@@ -160,6 +196,7 @@ function defaultProfile(): BrowserProfile {
     partition: DEFAULT_PARTITION,
     createdAt: 0,
     isDefault: true,
+    avatar: '',
   }
 }
 
@@ -308,6 +345,7 @@ export function createProfile(userData: string, name: unknown): BrowserProfile {
     partition,
     createdAt: Date.now(),
     isDefault: false,
+    avatar: '',
   }
   current.profiles.push(profile)
   save(userData, current)
@@ -319,6 +357,23 @@ export function renameProfile(userData: string, id: unknown, name: unknown): Pro
   const profile = current.profiles.find((p) => p.id === id)
   if (profile) {
     profile.name = cleanProfileName(name, profile.name)
+    save(userData, current)
+  }
+  return current
+}
+
+/**
+ * Set — or clear — the character a profile is badged with.
+ *
+ * Clearing is a first-class answer rather than an absence: passing `''` puts the
+ * badge back on the name's initial, which is the only way out of an avatar
+ * somebody picked and no longer wants.
+ */
+export function setProfileAvatar(userData: string, id: unknown, avatar: unknown): ProfileState {
+  const current = ensure(userData)
+  const profile = current.profiles.find((p) => p.id === id)
+  if (profile) {
+    profile.avatar = cleanAvatar(avatar)
     save(userData, current)
   }
   return current
@@ -378,6 +433,7 @@ export async function deleteProfile(userData: string, id: unknown): Promise<Prof
  * - `browser-profile:list`     (invoke)             → {@link ProfileState}
  * - `browser-profile:create`   (invoke, name)       → {@link ProfileState}
  * - `browser-profile:rename`   (invoke, id, name)   → {@link ProfileState}
+ * - `browser-profile:avatar`   (invoke, id, avatar) → {@link ProfileState}
  * - `browser-profile:activate` (invoke, id)         → {@link ProfileState}
  * - `browser-profile:delete`   (invoke, id)         → {@link ProfileState}
  */
@@ -389,6 +445,9 @@ export function registerBrowserProfileIpc(ipcMain: IpcMain, userData: () => stri
   })
   ipcMain.handle('browser-profile:rename', (_event, id: unknown, name: unknown) =>
     renameProfile(userData(), id, name),
+  )
+  ipcMain.handle('browser-profile:avatar', (_event, id: unknown, avatar: unknown) =>
+    setProfileAvatar(userData(), id, avatar),
   )
   ipcMain.handle('browser-profile:activate', (_event, id: unknown) => activateProfile(userData(), id))
   ipcMain.handle('browser-profile:delete', (_event, id: unknown) => deleteProfile(userData(), id))

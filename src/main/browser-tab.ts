@@ -28,6 +28,7 @@ import { openGuestLink } from './link-open'
 import { showGuestContextMenu } from './browser-context-menu'
 import { cleanUserAgent } from './browser-user-agent'
 import { activeProfile, DEFAULT_PARTITION, sessionForPartition } from './browser-profiles'
+import { rememberVisit } from './browser-history'
 import {
   closePopupsWith,
   popupWindowOptions,
@@ -517,6 +518,37 @@ function push(tab: BrowserTab): void {
 }
 
 /**
+ * Write this page into the profile's browsing history.
+ *
+ * The URL and the title are read from the *view* rather than taken from the
+ * event wherever they can be, for the reason the login handlers above give: what
+ * Chromium committed is the fact, and an argument is what something claimed. The
+ * two parameters are for the events that carry a value the view has not caught
+ * up with yet — `page-title-updated` fires with the new title before
+ * `getTitle()` returns it, and `did-navigate` with the new URL.
+ *
+ * Everything about *which* pages are remembered lives in `browser-history.ts`,
+ * including the rule that an Isolated tab (`profileId === ''`) records nothing.
+ * This function knows only where to read the two strings.
+ */
+function recordVisit(tab: BrowserTab, title?: string, url?: string): void {
+  const wc = liveContents(tab)
+  if (!wc && url === undefined) return
+  const where = url ?? (wc ? wc.getURL() : '')
+  // Chromium's error document is a page with an address and a title of its own,
+  // and it titles itself a moment after it commits — so without this the
+  // `did-navigate` guard below would be undone by the `page-title-updated` that
+  // follows it, and a page that never loaded would be in the history under
+  // Chromium's own wording.
+  if (tab.failedUrl !== null && where === tab.failedUrl) return
+  rememberVisit(app.getPath('userData'), {
+    profileId: tab.profileId,
+    url: where,
+    title: title ?? (wc ? wc.getTitle() : ''),
+  })
+}
+
+/**
  * Something went wrong, but the page in the view is still the user's page.
  *
  * A refused pop-up, a blocked `file:` link, an unresponsive renderer: the
@@ -948,7 +980,20 @@ function wireGuestEvents(tab: BrowserTab): void {
 
   wc.on('did-start-loading', () => push(tab))
   wc.on('did-stop-loading', () => push(tab))
-  wc.on('page-title-updated', () => push(tab))
+  /*
+   * The title arrives after the navigation that carries it, so it is recorded
+   * here as well as below.
+   *
+   * `did-navigate` fires the instant Chromium commits the document, which is
+   * before the parser has reached `<title>` — so a history recorded only there
+   * would be a column of bare URLs. `noteVisit` in `browser-history.ts` counts
+   * the second write as the same row rather than a second visit, and never
+   * blanks a title it already has.
+   */
+  wc.on('page-title-updated', (_event: unknown, title: string) => {
+    recordVisit(tab, title)
+    push(tab)
+  })
   wc.on('did-navigate', (_event: unknown, url: string) => {
     // Only a navigation that landed somewhere ELSE clears the failure. The
     // error page Chromium commits after a failed load is itself a navigation,
@@ -957,14 +1002,26 @@ function wireGuestEvents(tab: BrowserTab): void {
     // leaving the raw Chromium page on screen with nothing explaining it. See
     // `BrowserTab.failedUrl`.
     if (tab.failedUrl !== null && url === tab.failedUrl) {
+      // And nothing is written down either: this "navigation" is the error
+      // document, and a history row for a page that never loaded is a row that
+      // fails again when it is clicked.
       push(tab)
       return
     }
+    // Where this browser has been, per profile — `browser-history.ts` says why
+    // an Isolated tab is not in it. A committed navigation only, which is the
+    // address a person can actually be sent back to.
+    recordVisit(tab, undefined, url)
     clearFailure(tab)
     push(tab)
   })
-  wc.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
-    if (isMainFrame) push(tab)
+  wc.on('did-navigate-in-page', (_event, url: string, isMainFrame: boolean) => {
+    if (!isMainFrame) return
+    // A single-page app changes the address without changing the document, and
+    // the place somebody wants back is the route they were on rather than the
+    // shell it was served from. Chrome records these for the same reason.
+    recordVisit(tab, undefined, url)
+    push(tab)
   })
 
   // Every document gets a fresh copy of the preload, so inspection has to be

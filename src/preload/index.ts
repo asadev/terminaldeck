@@ -1810,10 +1810,30 @@ const api = {
     ipcRenderer.invoke('browser-profile:create', name),
   browserProfileRename: (id: string, name: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-profile:rename', id, name),
+  browserProfileAvatar: (id: string, avatar: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-profile:avatar', id, avatar),
   browserProfileActivate: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-profile:activate', id),
   browserProfileDelete: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-profile:delete', id),
+
+  /*
+   * Where this browser has been, per profile.
+   *
+   * `browser-history.ts` keeps it in its own file rather than in `settings.json`
+   * — that store takes primitives only, and an agent holding the copilot's
+   * `settings.read` tool can read the whole of it. Nothing here can write a
+   * visit: the store is fed by committed navigations in the main process, so a
+   * renderer cannot put a page in somebody's history that they never opened.
+   */
+  browserHistory: (profileId: string, query?: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-history:list', profileId, query ?? ''),
+  browserHistorySuggest: (profileId: string, typed: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-history:suggest', profileId, typed),
+  browserHistoryForget: (profileId: string, url: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-history:forget', profileId, url),
+  browserHistoryClear: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-history:clear', profileId),
 
   browserPasswordsAvailable: (): Promise<unknown> =>
     ipcRenderer.invoke('browser-password:available'),

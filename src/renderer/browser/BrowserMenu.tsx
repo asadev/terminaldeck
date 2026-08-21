@@ -20,6 +20,14 @@ interface Props {
    * browser — see the note on the row itself.
    */
   onSettings?: () => void
+  /**
+   * Open this profile's browsing history.
+   *
+   * Absent on a preload that has not wired the four history channels, and then
+   * there is no row — see the note on the row itself for why it is not drawn
+   * disabled instead.
+   */
+  onHistory?: () => void
   /** Reopen the recorded flow. Absent when nothing has been recorded. */
   onFlow?: () => void
   /**
@@ -92,6 +100,7 @@ export function BrowserMenu({
   startUrl,
   onStartUrl,
   onSettings,
+  onHistory,
   onFlow,
   onCookies,
   onClose,
@@ -165,6 +174,38 @@ export function BrowserMenu({
         >
           Open in your browser
         </button>
+
+        {/*
+          History, which is the row he named out loud with Chrome's own ⋮ menu
+          open beside ours.
+
+            > *"I need most of them, and passwords history also."*
+            > *"Then I need proper downloads folder and all of this stuff,
+            > history, save passwords and all of this."*
+
+          Chrome's menu has eighteen rows and he asked for *"most of them"*. This
+          one is here because the feature behind it is here: `browser-history.ts`
+          keeps a real per-profile list and `HistoryPanel.tsx` opens it, clickable.
+          The rows for the things this release does not have — Downloads, Saved
+          passwords as a menu section, Extensions — are deliberately **not**
+          drawn, because a menu entry pointing at a page that does not exist is
+          worse than a menu that is short.
+
+          Absent rather than disabled when the preload has not wired history:
+          disabled says "not now", and the truth in that build is "not at all".
+        */}
+        {onHistory && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            onClick={() => {
+              onHistory()
+              onClose()
+            }}
+          >
+            History
+          </button>
+        )}
 
         {onCookies && (
           <button

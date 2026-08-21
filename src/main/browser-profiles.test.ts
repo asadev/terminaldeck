@@ -9,6 +9,7 @@ const {
   DEFAULT_PARTITION,
   DEFAULT_PROFILE_ID,
   MAX_PROFILE_NAME,
+  cleanAvatar,
   cleanProfileName,
   partitionFor,
   readProfileState,
@@ -101,5 +102,49 @@ describe('reading the stored list', () => {
 
   it('keeps the default undeletable by marking it', () => {
     expect(readProfileState(null).profiles[0].isDefault).toBe(true)
+  })
+})
+
+describe('the character a profile is badged with', () => {
+  /*
+   * *"now profiles doesn't have any kind of settings, I think, so they should
+   * have proper settings, proper section, just like Google Chrome."* Chrome's
+   * flyout, which he had open beside ours, leads every row with a picture. This
+   * app stores a character — see `BrowserProfile.avatar` for why that and not an
+   * image — and the rules below are what keeps it drawable in a 20px circle.
+   */
+  it('is one code point, not a word', () => {
+    expect(cleanAvatar('Work')).toBe('W')
+    expect(cleanAvatar('🦊')).toBe('🦊')
+  })
+
+  it('takes a whole code point rather than half a surrogate pair', () => {
+    // `charAt(0)` on an emoji gives a lone surrogate, which draws as a box.
+    expect(cleanAvatar('🧭 compass')).toBe('🧭')
+  })
+
+  it('is empty when there is nothing to draw, which means the name’s initial', () => {
+    expect(cleanAvatar('')).toBe('')
+    expect(cleanAvatar('   ')).toBe('')
+    expect(cleanAvatar('\n')).toBe('')
+    expect(cleanAvatar(null)).toBe('')
+  })
+
+  it('survives a stored file written before avatars existed', () => {
+    // Every profile on disk today has no `avatar` key at all. Reading one must
+    // land on the initial rather than on an empty circle.
+    const state = readProfileState({
+      profiles: [{ id: 'default', name: 'Default' }],
+      activeId: 'default',
+    })
+    expect(state.profiles[0].avatar).toBe('')
+  })
+
+  it('carries a stored avatar through a read', () => {
+    const state = readProfileState({
+      profiles: [{ id: 'default', name: 'Default', avatar: '🦊' }],
+      activeId: 'default',
+    })
+    expect(state.profiles[0].avatar).toBe('🦊')
   })
 })

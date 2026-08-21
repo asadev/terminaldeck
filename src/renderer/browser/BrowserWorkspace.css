@@ -829,15 +829,18 @@
   The profile menu is the one that is wider, and it is wider for a measured
   reason rather than a stylistic one.
 
-  Its rows carry three things the other menus' rows do not: the profile's name,
-  the two doors into what that profile holds, and a Delete. At the shared 19rem
-  the flexible element — the name — is the one that gives way, so a profile
-  called `Work` rendered as `W…` next to two counts. The name is the row's
-  identity; the counts are what stopped the row being *"just the name"*. Neither
-  can be the part that is dropped, so the popup takes the width instead.
+  Its rows carry four things the other menus' rows do not: the profile's name,
+  the two doors into what that profile holds, the door into its own settings
+  section, and a Delete. At the shared 19rem the flexible element — the name —
+  is the one that gives way, so a profile called `Work` rendered as `W…` next to
+  two counts. The name is the row's identity; the counts are what stopped the row
+  being *"just the name"*; and `Settings` is the answer to *"profiles doesn't
+  have any kind of settings"*, so none of them can be the part that is dropped.
+  The popup takes the width instead — 26rem since the section was added, up from
+  the 23 that fitted three.
 */
 .bw-popup:has(.bw-menu-profiles) {
-  width: min(23rem, calc(100vw - 2 * var(--sp-4)));
+  width: min(26rem, calc(100vw - 2 * var(--sp-4)));
 }
 
 .bw-menu {
@@ -1551,4 +1554,222 @@
   font-size: var(--t-footnote);
   line-height: var(--lh-body);
   word-break: break-word;
+}
+
+/* ------------------------------------------------- the address bar's list -- */
+
+/*
+  Earlier addresses, hanging under the address field.
+
+  `position: fixed` and placed from a rectangle measured in `Toolbar.tsx`,
+  because this list is portalled into `<body>`: a page here is a native
+  `WebContentsView` painted above the whole renderer, so a list inside the
+  toolbar's own tree would be underneath the website. `overlay-watch.ts` is the
+  standing note on why no z-index can fix that, and 60 is the same layer every
+  other floating surface in this panel uses.
+
+  The width comes from the field rather than from this rule — a drop-down
+  narrower or wider than the thing it belongs to reads as a different control.
+*/
+.bw-suggest {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: min(22rem, calc(100vh - 8rem));
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--sp-1);
+  border-radius: var(--radius-md);
+  background: var(--material-bg);
+  background-image: var(--material-sheen);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-md);
+  list-style: none;
+}
+
+.bw-suggest-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* Hover and the arrow keys land on the same paint, so moving between the mouse
+   and the keyboard does not change what "the one I am on" looks like. */
+.bw-suggest-row:hover,
+.bw-suggest-row[data-on] {
+  background: var(--bg-hover);
+}
+
+.bw-suggest-glyph {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* The title has the room to lose; the host is the part that identifies the row
+   and never ellipsises. */
+.bw-suggest-title {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.bw-suggest-host {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+/* ----------------------------------------------------------- the history -- */
+
+.bw-history-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
+}
+
+.bw-history-day + .bw-history-day {
+  margin-top: var(--sp-3);
+}
+
+/* A day, or a section of the profile panel. Space and weight rather than a
+   rule: "a lot of separations is not a good idea, it's not Apple style". */
+.bw-history-heading {
+  margin: 0 0 var(--sp-1);
+  padding: 0 var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+}
+
+.bw-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bw-history-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/* The whole row is the way back — *"navigable by clicking an entry"* — so it is
+   one button across the width rather than a link inside a label. */
+.bw-history-open {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  text-align: left;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.bw-history-open:hover {
+  background: var(--bg-hover);
+}
+
+.bw-history-title {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.bw-history-host {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.bw-history-time {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------- a profile's section -- */
+
+.bw-profile-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+/* The same badge the toolbar wears, at the size a section can afford — this is
+   the one place the profile's character is the subject rather than a marker. */
+.bw-avatar-lg {
+  width: 32px;
+  height: 32px;
+  font-size: var(--t-title3);
+}
+
+.bw-avatar-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-3);
+}
+
+.bw-avatar-choice {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font-size: var(--t-title3);
+  line-height: 1;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.bw-avatar-choice:hover {
+  background: var(--bg-hover);
+}
+
+.bw-avatar-choice[data-on] {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+.bw-profile-doors {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: var(--sp-3);
+}
+
+.bw-profile-danger {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: var(--sp-4);
 }
