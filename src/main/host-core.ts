@@ -302,6 +302,20 @@ export class OpenSessionLedger {
  */
 export interface WslPlacementSeam {
   argPath(file: string): string | null
+  /**
+   * Which way in that distribution proved it has, carried through this file
+   * without being opened.
+   *
+   * Declared rather than left off so that the value cannot be dropped in
+   * silence. `argPath` alone is assignable to what `session-tools.ts` accepts —
+   * `reach` is optional there — so a seam that did not mention it would keep
+   * typechecking on the day somebody rebuilt the object from its parts, and the
+   * session would quietly get an HTTP config for an endpoint it cannot reach.
+   * `wsl-reach.ts` builds the value; `deck-control/session-tools.ts` reads it.
+   */
+  readonly reach?:
+    | { readonly kind: 'direct' }
+    | { readonly kind: 'bridge'; readonly command: string; readonly script: string }
 }
 
 export interface HostCoreOptions {
@@ -1044,8 +1058,13 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      *    mirrored networking — and both are *measured*, by one command run
      *    inside the distribution, rather than assumed from a config file this
      *    side could read. `wsl-reach.ts` holds that and the security argument.
-     *    A distribution that did not answer is told why, in one sentence, and
-     *    launched exactly as it was before.
+     *    Since 2026-08-22 a distribution that cannot reach loopback — the
+     *    default NAT configuration, and therefore most machines — is not out of
+     *    luck either: it is handed a **stdio** server run through WSL's Windows
+     *    interop instead of a URL, which needs no `.wslconfig` edit, no firewall
+     *    rule and no restart. `wsl-bridge.ts` is that program. Only a
+     *    distribution that answered neither way is told why, in one sentence,
+     *    and launched exactly as it was before.
      *  - **The endpoint exists.** A build with no `deck-control` server — the
      *    headless host, a test harness — passes no seam and every session is
      *    launched the way it always was.

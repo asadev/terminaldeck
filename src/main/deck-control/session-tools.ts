@@ -120,6 +120,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { rmSync } from 'node:fs'
 import { writeSecretFile } from '../remote/secret-file'
+import { WSL_BRIDGE_ENV, writeWslBridge } from '../wsl-bridge'
 import { ASSET_TOOL_NAMES } from './asset-tool-names'
 import { SERVER_NAME, type DeckControlEndpoint } from './server'
 import { NO_TIERS, type Caller, type TierGrant } from './surface'
@@ -330,7 +331,28 @@ export const SESSION_TIERS: TierGrant = Object.freeze({ read: true, act: true, a
  */
 export interface LaunchPlacement {
   argPath(file: string): string | null
+  /**
+   * How the CLI over there reaches this endpoint, which decides what is in the
+   * file rather than only what it is called.
+   *
+   * Declared structurally here rather than imported from `wsl-reach.ts`, for the
+   * reason every seam in this file is a shape: this folder knows about loopback
+   * sockets, bearer tokens and MCP, and nothing in it has any business importing
+   * `wsl.exe`. `WslReach` is the one implementation and `host-core.ts` mirrors
+   * the same shape a third time, because it is the file that carries the value
+   * from one to the other without opening it.
+   *
+   * Optional, and absent means `direct` — the shape a caller that predates the
+   * bridge hands over, and the only shape a session on this side of any boundary
+   * has ever needed.
+   */
+  readonly reach?: LaunchReach
 }
+
+/** @see LaunchPlacement.reach */
+export type LaunchReach =
+  | { readonly kind: 'direct' }
+  | { readonly kind: 'bridge'; readonly command: string; readonly script: string }
 
 /** A launch that has been given a token, before its session exists. */
 export interface PreparedSessionTools {
@@ -429,6 +451,18 @@ export interface SessionTools {
    * here so that no caller can pick the wider set for itself.
    */
   prepareElsewhere(grant: { allowed(): boolean }): PreparedElsewhere | null
+  /**
+   * Put this app's WSL bridge on disk and answer where it went, or null.
+   *
+   * Here rather than in `wsl-reach.ts` because this object owns the folder: it
+   * wipes it at startup, protects it, and removes what is under it when a
+   * session ends. A second writer with its own idea of where `<userData>` is
+   * would be a second thing to keep in step with that.
+   *
+   * Null means there is no bridge to offer, and the probe then measures only the
+   * direct path — which is the honest behaviour and not a degraded one.
+   */
+  bridgeScript(): string | null
   /** A session has gone. Its token stops working and its file is removed. */
   release(sessionId: string): void
   /** Test seam: how many launches are still holding a token. */
@@ -445,22 +479,48 @@ export interface SessionTools {
  * always the endpoint's own: a shell on a server reaches this same server on a
  * port on **its** loopback, chosen by that server, which this process cannot
  * compose. Everything else — the transport, the header, the shape — is the same
- * file in both cases and must stay one function.
+ * file for a session here and a shell on a server, and must stay one function.
+ *
+ * There is exactly one launch that needs a different file and it is not a
+ * different *address*: a distribution that can reach no address of ours at all.
+ * {@link bridgeConfig} is that one, and the two share {@link serverConfig} so
+ * that the envelope cannot drift.
  */
 function configFor(url: string, token: string): string {
-  return `${JSON.stringify(
-    {
-      mcpServers: {
-        [SERVER_NAME]: {
-          type: 'http',
-          url,
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      },
-    },
-    null,
-    2,
-  )}\n`
+  return serverConfig({
+    type: 'http',
+    url,
+    headers: { Authorization: `Bearer ${token}` },
+  })
+}
+
+/**
+ * The other file, for a distribution that cannot reach loopback at all.
+ *
+ * Same endpoint, same tokens, same tool surface — a different transport, because
+ * the one thing that machine has is a pipe rather than a socket. The CLI starts
+ * this app's own executable as Node through WSL's Windows interop and speaks
+ * stdio MCP to it; `wsl-bridge.ts` is what is on the far end and holds the whole
+ * argument, including why `WSLENV` has to name the variable beside it.
+ *
+ * **No token in this file.** The one difference worth noticing from over there:
+ * the token is in a second file that only a Windows process reads, so a config a
+ * Linux process opens no longer carries a bearer secret. The paths in `args` are
+ * Windows paths on purpose — the bridge is a Windows process and nothing
+ * translates its arguments on the way across.
+ */
+function bridgeConfig(url: string, reach: { command: string; script: string }, tokenFile: string): string {
+  return serverConfig({
+    type: 'stdio',
+    command: reach.command,
+    args: [reach.script, url, tokenFile],
+    env: { ...WSL_BRIDGE_ENV },
+  })
+}
+
+/** One shape of file, whatever kind of server is in it. */
+function serverConfig(server: Record<string, unknown>): string {
+  return `${JSON.stringify({ mcpServers: { [SERVER_NAME]: server } }, null, 2)}\n`
 }
 
 /**
@@ -476,6 +536,15 @@ function configFor(url: string, token: string): string {
  * launch that is merely slow is never disarmed underneath itself.
  */
 const CLAIM_TTL_MS = 60_000
+
+/**
+ * The second file a bridged launch gets, beside `deck-control.json`.
+ *
+ * Named rather than inlined because two places have to agree about it — the
+ * writer here and the argument list the bridge is started with — and they are
+ * four lines apart today and will not always be.
+ */
+export const TOKEN_FILE = 'deck-control.token'
 
 export function createSessionTools(
   endpoint: DeckControlEndpoint,
@@ -494,6 +563,9 @@ export function createSessionTools(
   } catch {
     // A directory that will not go is not a reason to start without tools.
   }
+
+  /** The bridge script's path, once it has been written. See {@link SessionTools.bridgeScript}. */
+  let bridge: string | null | undefined
 
   /** launch id → what was minted for it, so it can be revoked either way. */
   const minted = new Map<
@@ -637,12 +709,29 @@ export function createSessionTools(
        * the permission model and this is a caller of it, not a second one.
        */
       const launch = mint(null, SESSION_TOOLS, launchId)
-      // Written through the one writer that knows how to keep a secret — 0600 on
-      // POSIX, an ACL naming this account alone on Windows. It holds a bearer
-      // token for a server on this machine, which is the same class of secret
-      // `deck-control.json` in the copilot's folder already goes through that
-      // door for.
-      writeSecretFile(launch.dir, file, configFor(endpoint.url, launch.token))
+      /*
+       * Written through the one writer that knows how to keep a secret — 0600 on
+       * POSIX, an ACL naming this account alone on Windows. It holds a bearer
+       * token for a server on this machine, which is the same class of secret
+       * `deck-control.json` in the copilot's folder already goes through that
+       * door for.
+       *
+       * Two files on the bridge path, and the split is the point: the config a
+       * Linux process opens carries no token, and the token sits in a file only
+       * the bridge — a Windows process, running as this account — ever reads.
+       * Both land in the same per-launch folder, so `forget()` removes them
+       * together and neither outlives the session. Confinement never sees the
+       * second one and never has to: `host-core.ts` refuses to claim a boundary
+       * around a process it launched through `wsl.exe`, so a confined launch and
+       * a bridged one cannot be the same launch.
+       */
+      if (inside?.reach?.kind === 'bridge') {
+        const tokenFile = join(launch.dir, TOKEN_FILE)
+        writeSecretFile(launch.dir, tokenFile, `${launch.token}\n`)
+        writeSecretFile(launch.dir, file, bridgeConfig(endpoint.url, inside.reach, tokenFile))
+      } else {
+        writeSecretFile(launch.dir, file, configFor(endpoint.url, launch.token))
+      }
       return {
         /*
          * Without `--strict-mcp-config`, and that absence is deliberate.
@@ -664,6 +753,20 @@ export function createSessionTools(
         file,
         started: launch.started,
       }
+    },
+    bridgeScript(): string | null {
+      /*
+       * Written once per run, on the first WSL session that needs asking about,
+       * rather than at startup. Most runs are on a Mac or in a Windows folder
+       * and never come near this; the ones that do pay for one small file.
+       *
+       * Memoised on the *answer*, including the null one: a folder this app
+       * cannot write is not going to become writable between two launches, and
+       * retrying would mean an `icacls` per session on a machine that has
+       * already said no.
+       */
+      if (bridge === undefined) bridge = writeWslBridge(options.dir)
+      return bridge
     },
     prepareElsewhere(grant: { allowed(): boolean }): PreparedElsewhere | null {
       if (endpoint.url === '') return null

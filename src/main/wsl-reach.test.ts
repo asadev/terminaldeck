@@ -20,6 +20,7 @@ import {
   wslMountPath,
 } from './wsl-reach'
 import type { WslRun, WslTarget } from './wsl'
+import { WSL_BRIDGE_ENV, WSL_BRIDGE_PROBE, writeWslBridge } from './wsl-bridge'
 
 /**
  * Whether a session inside WSL can be handed this app's browser verbs.
@@ -119,7 +120,10 @@ function fakeExec(stdout: string, seen: string[][] = []): {
   }
 }
 
-const REACHED = 'mount=/mnt/c/\n{"error":"refused"}'
+const REACHED = 'mount=/mnt/c/\nreach=direct'
+/** What a distribution answers when only the second way in worked. */
+const BRIDGED = 'mount=/mnt/c/\nexe=/mnt/c/Program Files/Terminal Deck/Terminal Deck.exe\nreach=bridge'
+const BRIDGE = { exe: 'C:\\Program Files\\Terminal Deck\\Terminal Deck.exe', script: 'C:\\d\\wsl-mcp-bridge.js' }
 
 beforeEach(() => {
   resetDistroReachForTests()
@@ -137,12 +141,58 @@ describe('asking the distribution whether it can reach the endpoint', () => {
     // length for the launch and it is the same argument here.
     expect(args).toContain('-e')
     expect(args).not.toContain('--')
-    // The URL is its own argv entry. A URL interpolated into the script would be
-    // caller data inside a shell string, which is the one thing this repository
-    // has decided never to do across this boundary.
-    expect(args.at(-1)).toBe(URL)
+    /*
+     * The URL is its own argv entry, and so is everything else the script reads.
+     * Data interpolated into a shell string is the one thing this repository has
+     * decided never to do across this boundary, and there are four of them now:
+     * the URL, the fingerprint to match, and the two halves of the bridge.
+     */
+    expect(args.slice(-4)).toEqual([URL, REFUSAL_FINGERPRINT, '', ''])
     expect(args).toContain(REACH_SCRIPT)
     expect(REACH_SCRIPT).not.toContain(URL)
+    expect(REACH_SCRIPT).not.toContain(REFUSAL_FINGERPRINT)
+  })
+
+  it('offers the bridge to the distribution as two arguments, and runs it as the probe does', async () => {
+    const runner = fakeExec(BRIDGED)
+    await distroPlacement(UBUNTU, URL, { exec: runner.exec, bridge: BRIDGE })
+    expect((runner.seen[0] ?? []).slice(-2)).toEqual([BRIDGE.exe, BRIDGE.script])
+    // The two spellings that have to agree with `wsl-bridge.ts`, pinned here
+    // because they live in a shell line rather than in a call it could typecheck.
+    expect(REACH_SCRIPT).toContain(WSL_BRIDGE_PROBE)
+    for (const [name, value] of Object.entries(WSL_BRIDGE_ENV)) {
+      expect(REACH_SCRIPT).toContain(`${name}=${value}`)
+    }
+  })
+
+  it('says which way in the distribution proved it has', async () => {
+    const direct = await distroPlacement(UBUNTU, URL, { exec: fakeExec(REACHED).exec })
+    expect(direct?.reach).toEqual({ kind: 'direct' })
+    resetDistroReachForTests()
+    const bridged = await distroPlacement(UBUNTU, URL, { exec: fakeExec(BRIDGED).exec, bridge: BRIDGE })
+    /*
+     * The command is the distribution's own reading of where this app's
+     * executable is — `wslpath`'s answer, echoed back — and the script is the
+     * Windows path, because the bridge is a Windows process and nothing
+     * translates its arguments on the way across. Getting those two the wrong
+     * way round produces a config file that looks right and starts nothing.
+     */
+    expect(bridged?.reach).toEqual({
+      kind: 'bridge',
+      command: '/mnt/c/Program Files/Terminal Deck/Terminal Deck.exe',
+      script: BRIDGE.script,
+    })
+  })
+
+  it('refuses a bridge verdict that named nothing to run', async () => {
+    // Cannot happen in the script — one `case` arm writes both lines — but a
+    // placement holding an empty command would write a config whose MCP server
+    // is the empty string, which is the dead control this file exists to avoid.
+    const half = await distroPlacement(UBUNTU, URL, {
+      exec: fakeExec('mount=/mnt/c/\nreach=bridge').exec,
+      bridge: BRIDGE,
+    })
+    expect(half).toBeNull()
   })
 
   it('omits -d when nobody has chosen a distribution', async () => {
@@ -162,31 +212,28 @@ describe('asking the distribution whether it can reach the endpoint', () => {
 
   it('uses the mount the distribution reported, not the one this side assumed', async () => {
     const placement = await distroPlacement(UBUNTU, URL, {
-      exec: fakeExec('mount=/windows/c/\n{"error":"refused"}').exec,
+      exec: fakeExec('mount=/windows/c/\nreach=direct').exec,
     })
     expect(placement?.argPath('C:\\x')).toBe('/windows/c/x')
   })
 
-  it('refuses a port that answered with something that is not this server', async () => {
+  it('refuses a distribution that reached this app neither way', async () => {
     /*
-     * The failure this closes, and it is a security one rather than a tidiness
-     * one. WSL forwards Windows' localhost into the distribution for services
-     * running there, and mirrored mode shares the port space both ways — so
-     * `127.0.0.1:<port>` seen from inside the distribution can perfectly well be
-     * a *different* server that happened to bind the number this app took.
-     * Treating a bare connection as proof would write a config file pointing a
-     * Claude CLI, with this app's bearer token in it, at whatever that is.
+     * `reach=none` is what the script prints when the fingerprint came back from
+     * nowhere, and the failure behind it is a security one rather than a
+     * tidiness one. WSL forwards Windows' localhost into the distribution for
+     * services running there, and mirrored mode shares the port space both ways
+     * — so `127.0.0.1:<port>` seen from inside the distribution can perfectly
+     * well be a *different* server that happened to bind the number this app
+     * took. Anything but this app's own refusal is read as somebody else, and
+     * the real script is what proves that below.
      */
-    const other = await distroPlacement(UBUNTU, URL, {
-      exec: fakeExec('mount=/mnt/c/\n<html>hello from something else</html>').exec,
-    })
+    const other = await distroPlacement(UBUNTU, URL, { exec: fakeExec('mount=/mnt/c/\nreach=none').exec })
     expect(other).toBeNull()
   })
 
-  it('refuses a distribution with no way to make an HTTP request', async () => {
-    const bare = await distroPlacement(UBUNTU, URL, {
-      exec: fakeExec('mount=/mnt/c/\nno-http-client\n').exec,
-    })
+  it('refuses a distribution that answered nothing at all', async () => {
+    const bare = await distroPlacement(UBUNTU, URL, { exec: fakeExec('').exec })
     expect(bare).toBeNull()
   })
 
@@ -301,14 +348,66 @@ describe('the probe script, run for real against a real endpoint', () => {
         )
       })
 
-    const placement = await distroPlacement(UBUNTU, url, { exec: run })
+    const placement = await distroPlacement(UBUNTU, url, {
+      exec: run,
+      // Offered, and deliberately unusable. The direct attempt answers first and
+      // the script stops there, so a distribution under mirrored networking
+      // never pays for a process across the interop boundary — and a broken
+      // bridge cannot take away a way in that already worked.
+      bridge: { exe: '/no/such/executable', script: '/no/such/script.js' },
+    })
     expect(
       placement,
       'the endpoint did not answer with the refusal the probe looks for, so no WSL session would ever be given the verbs',
     ).not.toBeNull()
+    expect(placement?.reach).toEqual({ kind: 'direct' })
     // No `wslpath` on this machine, so the default root is what is left — which
     // is also the answer a distribution nobody reconfigured gives.
     expect(placement?.mount).toBe(DEFAULT_AUTOMOUNT_ROOT)
+  })
+
+  it('falls through to the bridge on a distribution with no HTTP client, and proves that too', async () => {
+    /*
+     * The whole of this round, run for real on a machine with no WSL.
+     *
+     * `PATH` is emptied so that `command -v curl` and `command -v wget` both
+     * fail — which is what a distribution behind NAT looks like from this
+     * script's point of view: the direct attempt produces nothing. Everything
+     * after that is the second way in, performed rather than described: the
+     * `wslpath` fallback naming this app's executable, the executable starting
+     * `wsl-bridge.ts` as plain Node, the bridge fetching the live endpoint, and
+     * the fingerprint coming back through two processes into a verdict.
+     *
+     * The one step no machine here can perform is binfmt_misc executing a
+     * Windows PE from a Linux process. Everything either side of it is above.
+     */
+    if (!posix) return
+    const script = writeWslBridge(join(dir, 'bridge'))
+    expect(script).not.toBeNull()
+    const run = (args: readonly string[]): Promise<WslRun> =>
+      new Promise((resolve) => {
+        const text = args[args.indexOf('-c') + 1]
+        const rest = args.slice(args.indexOf('-c') + 2)
+        execFile(
+          '/bin/sh',
+          ['-c', text, ...rest],
+          // No PATH at all: no curl, no wget, and no `wslpath` either, which is
+          // also what the fallback in the script is for.
+          { encoding: 'buffer', env: { PATH: '' } },
+          (_error, stdout, stderr) =>
+            resolve({ ok: true, stdout: stdout as Buffer, stderr: stderr as Buffer, code: 0 }),
+        )
+      })
+
+    const placement = await distroPlacement(UBUNTU, url, {
+      exec: run,
+      bridge: { exe: process.execPath, script: script ?? '' },
+    })
+    expect(
+      placement,
+      'the bridge did not answer, so a distribution on default NAT networking would still be told to edit .wslconfig',
+    ).not.toBeNull()
+    expect(placement?.reach).toEqual({ kind: 'bridge', command: process.execPath, script })
   })
 
   it('is refused when it points at a port this app is not on', async () => {
@@ -412,7 +511,16 @@ describe('the gate that reads all of this', () => {
 
   it('is wired to the endpoint by the shell that has one', () => {
     const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-    expect(index).toContain('insideDistro: (target) => distroPlacement(target,')
+    expect(index).toContain('distroPlacement(target, deckControl?.endpoint.url')
+    /*
+     * And to the bridge, by the object that owns the folder it lives in.
+     *
+     * Worth pinning separately: a build that passed no bridge would still
+     * typecheck, still probe, still work under mirrored networking, and would
+     * quietly go back to a sentence about `.wslconfig` for everybody on the
+     * default networking mode — which is the failure this round removed.
+     */
+    expect(index).toContain('bridge: { exe: process.execPath, script: sessionTools?.bridgeScript() ?? ')
   })
 })
 
