@@ -38,6 +38,12 @@ export interface StoreExtension {
   reach: string[]
   everywhere: boolean
   missing: string[]
+  /** `chrome.*` this app fills in so the extension can start. */
+  provides: string[]
+  /** What stays inert even with that layer, in the words a row shows. */
+  inert: string[]
+  /** How many of its manifest declarativeNetRequest rulesets this app switched on. */
+  rulesetsSwitchedOn: number
   popup: string
   staticRulesets: boolean
   message: string
@@ -167,6 +173,9 @@ function readExtension(raw: unknown): StoreExtension | null {
     reach: words(record.reach, 40),
     everywhere: record.everywhere === true,
     missing: words(record.missing, 24),
+    provides: words(record.provides, 24),
+    inert: words(record.inert, 12),
+    rulesetsSwitchedOn: count(record.rulesetsSwitchedOn),
     popup: text(record.popup),
     staticRulesets: record.staticRulesets === true,
     message: text(record.message),

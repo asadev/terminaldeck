@@ -405,6 +405,26 @@ export function ExtensionRow({
             <dd>{extension.missing.map((api) => `chrome.${api}`).join(', ')}</dd>
           </div>
         )}
+        {/*
+          What this app had to add to the extension for it to start at all, and
+          what is still not there afterwards. Both on the row, because the layer
+          rewrote files inside a program somebody agreed to install: an app that
+          edits somebody's extension and does not say so is keeping a secret for
+          no reason, and one that says "works" without naming what is inert is
+          the store row version of a button that does nothing.
+        */}
+        {extension.provides.length > 0 && (
+          <div>
+            <dt>Filled in by this app</dt>
+            <dd>{extension.provides.map((api) => `chrome.${api}`).join(', ')}</dd>
+          </div>
+        )}
+        {extension.inert.length > 0 && (
+          <div>
+            <dt>Still not there</dt>
+            <dd>{extension.inert.join('; ')}</dd>
+          </div>
+        )}
       </dl>
 
       {/*
@@ -414,12 +434,30 @@ export function ExtensionRow({
       */}
       <p className="bw-store-said">{extension.measured}</p>
 
-      {extension.staticRulesets && extension.state === 'installed' && (
-        <p className="bw-error">
-          Its rules ship as manifest declarativeNetRequest rulesets, and this browser does not switch
-          those on, so they are not in force.
+      {/*
+        Manifest declarativeNetRequest rulesets are not switched on when an
+        extension loads here — `browser-extension-support.ts` measured
+        getEnabledRulesets() answering [] with "enabled": true on the resource.
+        This used to be the end of the sentence and a red line on the row. It is
+        now something this app does something about, once, after installing, and
+        the row says which of the two happened rather than keeping the older,
+        more alarming half.
+      */}
+      {extension.state === 'installed' && extension.rulesetsSwitchedOn > 0 && (
+        <p className="bw-store-said">
+          This browser does not switch manifest declarativeNetRequest rulesets on when an extension
+          loads. This app switched its {extension.rulesetsSwitchedOn} on, once, after installing —
+          and leaves them alone afterwards, so turning one off in the extension stays off.
         </p>
       )}
+      {extension.state === 'installed' &&
+        extension.rulesetsSwitchedOn === 0 &&
+        extension.staticRulesets && (
+          <p className="bw-error">
+            Its rules ship as manifest declarativeNetRequest rulesets that its own manifest leaves
+            off, and this browser does not switch those on, so they are not in force.
+          </p>
+        )}
       {extension.state === 'damaged' && <p className="bw-error">{extension.message}</p>}
       {extension.state === 'installed' && extension.message !== '' && (
         <p className="bw-error">{extension.message}</p>
