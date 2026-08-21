@@ -138,8 +138,14 @@ import { NO_PACKAGE, type HostPackage } from './host-package'
  * Both are wired here because this is the file that opens the shell, and the
  * `PATH` line has to be typed into it before anybody can type `claude`.
  */
-import { WHY_NOT, WindowDrives, type ArmOutcome } from './window-drive'
-import { openWindowReach, type ReachResult, type ReverseConnection } from './window-reach'
+import { WHY_NOT, WindowDrives, type ArmOutcome, type Belonging, type ReachKind } from './window-drive'
+import {
+  openWindowReach,
+  type LocalEnd,
+  type ReachResult,
+  type ReverseConnection,
+} from './window-reach'
+import type { RemoteAppContext } from '../app-context'
 import type { PreparedElsewhere } from '../deck-control/session-tools'
 import { NO_SECURE_STORE, credentialFromDraft, type ServerCredential, type SignInDraft } from './credentials'
 import { DEFAULT_GRANT_MS, MAX_GRANT_MS, GrantRefused, ServerGrants, type GrantState } from './grants'
@@ -553,6 +559,25 @@ export interface ServersIpcDeps {
    */
   controlPort?(): number
   /**
+   * This run's hook endpoint, or null when it has not started.
+   *
+   * The address a server's forward is joined to, and the token a `curl` over
+   * there has to present. Both come from the one place that has them, and both
+   * are read at the moment they are needed rather than captured: the endpoint
+   * binds a few hundred milliseconds after the window is built, and a terminal
+   * opened in that gap simply gets no belonging half.
+   */
+  hookEndpoint?(): { socketPath: string; token: string } | null
+  /**
+   * The documents and the map a session on a named server should be given.
+   *
+   * `app-context.ts` composes them; this file only knows which server a shell is
+   * on and what its arm managed to install. Optional for the reason every other
+   * capability here is: a build with none — the headless host — must register the
+   * same handlers and answer honestly.
+   */
+  remoteContext?(serverName: string, opensInApp: boolean): RemoteAppContext | null
+  /**
    * Mint a token and a caller for a session this process will never spawn.
    *
    * `deck-control/session-tools.ts`'s `prepareElsewhere`. Optional for the
@@ -700,6 +725,15 @@ export interface ServersIpc {
    * anything with it. `browser-binding-ipc.ts` puts this on the row.
    */
   whyNotDrive(shellId: string): string | null
+  /**
+   * What a session in this shell should be told about where it is, or null.
+   *
+   * Null for a shell this file never armed, and null for a shell whose belonging
+   * half could not be arranged — both mean the same thing to the one caller,
+   * `index.ts`'s `contextFor`, which then answers exactly as it did before this
+   * existed. See `servers/window-belong.ts` for what a non-null answer buys.
+   */
+  belongingOf(shellId: string): Belonging | null
   /** The room, for `tools.ts`. */
   room: ServerRoom
   /** The copilot's per-server permission, for `tools.ts` and for a settings screen. */
@@ -827,7 +861,22 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
    * server nobody has a terminal on has no connection, no listener and no
    * timer — §5.4, and his standing **events, not polling** rule.
    */
-  const reaches = new Map<string, { users: number; opening: Promise<ReachResult>; close(): void }>()
+  const reaches = new Map<
+    string,
+    { users: number; opening: Promise<ReachResult>; close(): void }
+  >()
+
+  /**
+   * One key per (server, endpoint), because there are now two endpoints.
+   *
+   * `deck-control` serves the browser verbs and the hook endpoint serves the
+   * `open` route and every answer an agent's own hooks are given — two separate
+   * listeners on this Mac, so two forwards on that server, each reference-counted
+   * on its own. A single key would have handed the second caller the first one's
+   * port, which is a tunnel to the wrong endpoint and would fail as a 404 at the
+   * far end of somebody's SSH connection.
+   */
+  const reachKey = (serverId: string, kind: ReachKind): string => `${serverId}\u0000${kind}`
 
   /** A promise somebody else settles. Two of them are what hold a reach open. */
   function deferred<T>(): { promise: Promise<T>; settle(value: T): void } {
@@ -843,7 +892,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
     return { promise, settle }
   }
 
-  function openReach(serverId: string, localPort: number): {
+  function openReach(serverId: string, local: LocalEnd): {
     opening: Promise<ReachResult>
     close(): void
   } {
@@ -853,7 +902,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
       try {
         await deps.withConnection?.(serverId, async (client) => {
           const result = await openWindowReach(client, {
-            localPort,
+            local,
             runScript: (script) => deps.runScript(serverId, script),
           })
           opened.settle(result)
@@ -878,30 +927,44 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
     return { opening: opened.promise, close: () => finished.settle() }
   }
 
-  async function reachFor(serverId: string): Promise<ReachResult> {
-    const localPort = deps.controlPort?.() ?? 0
-    if (localPort <= 0 || deps.withConnection === undefined) {
+  /** Which endpoint on this machine one kind of reach lands on, or null. */
+  function endpointFor(kind: ReachKind): LocalEnd | null {
+    if (kind === 'control') {
+      const port = deps.controlPort?.() ?? 0
+      return port > 0 ? { port } : null
+    }
+    // A path rather than a port, and there is no port to fall back to: the hook
+    // endpoint deliberately holds none. See `hook-server.ts`.
+    const socketPath = deps.hookEndpoint?.()?.socketPath ?? ''
+    return socketPath === '' ? null : { socketPath }
+  }
+
+  async function reachFor(serverId: string, kind: ReachKind): Promise<ReachResult> {
+    const local = endpointFor(kind)
+    if (local === null || deps.withConnection === undefined) {
       return { ok: false, message: WHY_NOT.endpoint }
     }
-    let held = reaches.get(serverId)
+    const key = reachKey(serverId, kind)
+    let held = reaches.get(key)
     if (held === undefined) {
-      held = { users: 0, ...openReach(serverId, localPort) }
-      reaches.set(serverId, held)
+      held = { users: 0, ...openReach(serverId, local) }
+      reaches.set(key, held)
     }
     held.users += 1
     const result = await held.opening
     // An open that failed hands its own reference back, so a caller never has to
     // remember to release something it was never given.
-    if (!result.ok) letGoOfReach(serverId)
+    if (!result.ok) letGoOfReach(serverId, kind)
     return result
   }
 
-  function letGoOfReach(serverId: string): void {
-    const held = reaches.get(serverId)
+  function letGoOfReach(serverId: string, kind: ReachKind): void {
+    const key = reachKey(serverId, kind)
+    const held = reaches.get(key)
     if (held === undefined) return
     held.users -= 1
     if (held.users > 0) return
-    reaches.delete(serverId)
+    reaches.delete(key)
     held.close()
   }
 
@@ -920,6 +983,26 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
     reach: reachFor,
     letGo: letGoOfReach,
     mint: (grant) => deps.mintSessionTools?.(grant) ?? null,
+    // Only the token crosses. The socket path is this side's business and is
+    // read straight out of `endpointFor` above; a path on this Mac written into
+    // a script on somebody's server would be a path that names nothing there.
+    hookEndpoint: () => {
+      const live = deps.hookEndpoint?.()
+      return live === undefined || live === null ? null : { token: live.token }
+    },
+    /*
+     * The name the person gave this server, because that is what the documents
+     * call the machine the session is running on.
+     *
+     * Read per call off the same list every other screen reads, never cached
+     * here: a server renamed between two terminals should not be described by
+     * the name it had when the first one opened.
+     */
+    remoteContext: (serverId, opensInApp) => {
+      const server = deps.servers().find((row) => row.id === serverId)
+      if (server === undefined) return null
+      return deps.remoteContext?.(server.name, opensInApp) ?? null
+    },
   })
 
   /**
@@ -2452,6 +2535,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
   return {
     serverOfShell: (shellId) => shellServers.get(shellId) ?? null,
     whyNotDrive: (shellId) => windowDrives.whyNot(shellId),
+    belongingOf: (shellId) => windowDrives.belonging(shellId),
     room,
     grants,
     stop: () => {

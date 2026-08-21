@@ -112,6 +112,34 @@ export interface AppContext {
 /** The directory inside the app's data directory. Stable across runs. */
 export const CONTEXT_DIR = 'context'
 
+/**
+ * Where the session reading these documents is, which decides which sentences
+ * about *how* this app reaches it are true.
+ *
+ * A session in this window and a session in an SSH shell on somebody's server
+ * are told the same three things — where they are, what a window is, what `B2`
+ * means — and are reached by two different mechanisms. The account-wide hook
+ * files this page names for a local session do not exist on that server and are
+ * not what carries its context; naming them there would be the exact defect this
+ * whole round is about, a page written by this app describing this app and being
+ * wrong.
+ *
+ * So the difference is a parameter rather than a second set of pages. One
+ * spelling of *"what a session is"* and *"what `B2` means"*, and a branch in the
+ * two paragraphs that are genuinely about the transport.
+ */
+export type ContextHome =
+  | { via: 'this-computer' }
+  /**
+   * An SSH shell on a server. `appMachineName` is the computer running the app —
+   * the one whose screen the person is looking at and whose browser windows
+   * these are — which is never the machine this session is running on.
+   */
+  | { via: 'ssh'; appMachineName: string }
+
+/** What a local session is told, and the default everywhere it is not stated. */
+const HERE: ContextHome = { via: 'this-computer' }
+
 /** The one file the injected map names by name. */
 export const INDEX_FILE = 'INDEX.md'
 
@@ -174,11 +202,7 @@ export function writeAppContext(input: AppContextInput): AppContext {
   const dir = contextDir(input.dir)
   mkdirSync(dir, { recursive: true })
 
-  const pages: Record<string, string> = {
-    [INDEX_FILE]: indexPage(input, dir, platform),
-    'sessions-and-machines.md': sessionsPage(input),
-    'browser-windows.md': browserPage(input, platform),
-  }
+  const pages = composePages(input, dir, platform, HERE)
 
   const files: string[] = []
   for (const [name, body] of Object.entries(pages)) {
@@ -264,21 +288,133 @@ function keyOf(sessionId: string, machineId: string): string {
  * the latch is stated rather than hidden: a Gemini session that clears its
  * context mid-life does not get the map back, because the one event that would
  * tell us it happened is the one this app refuses to answer for Gemini.
+ *
+ * ## `map`, and why the caller may hand one in
+ *
+ * A session on a server has its own documents, in a folder on **that** machine
+ * (`servers/window-belong.ts` writes them beside the wrapper). The map this run
+ * wrote names a path under `<userData>` on this Mac, which over there is a path
+ * that does not exist — so handing that text to a server session would be this
+ * app telling an agent to go and read a file it cannot open, which is a
+ * confident falsehood of exactly the kind these pages exist to avoid.
+ *
+ * So the *text* is the caller's when the caller has one, and the events and the
+ * latch stay here. Null keeps the ordinary local answer, which is the map this
+ * run wrote.
  */
-export function bootMapFor(event: string, sessionId: string | null, machineId = ''): string | null {
-  if (sessionId === null || current === null) return null
+export function bootMapFor(
+  event: string,
+  sessionId: string | null,
+  machineId = '',
+  map: string | null = null,
+): string | null {
+  const text = map ?? current?.map ?? null
+  if (sessionId === null || text === null) return null
   if (!MAP_EVENTS.has(event)) return null
-  if (!LATCHED_EVENTS.has(event)) return current.map
+  if (!LATCHED_EVENTS.has(event)) return text
   const key = keyOf(sessionId, machineId)
   if (told.has(key)) return null
   told.add(key)
-  return current.map
+  return text
 }
 
 /** Test seam. Nothing in the app calls this. */
 export function resetForTests(): void {
   current = null
   told.clear()
+}
+
+/* ------------------------------------------------- the same pages, elsewhere -- */
+
+/**
+ * What a session on **another machine** should be given, and the map naming it.
+ *
+ * ## Why this exists at all
+ *
+ * Asad, testing a session on one of his servers: *"[it] doesn't get to know
+ * about Terminal Deck until we talk about it."* A local session is told at boot;
+ * that one was told nothing, because the channel that does the telling — the
+ * CLI's own hooks — is installed into an account's settings file on **this**
+ * computer, and an SSH shell has neither our hooks nor our `open`.
+ * `servers/window-belong.ts` is the transport that fixes it; this is the thing
+ * it has to carry.
+ *
+ * ## Why the map is a function of the directory
+ *
+ * Because only the far end knows where the documents landed: the folder is made
+ * by `mktemp -d` on that server and is different for every terminal. So the
+ * pages are composed here, written there, and the map is composed once the
+ * answer comes back. {@link mapText} is the same one a local session gets, so
+ * there is one spelling of those three sentences and not two.
+ *
+ * Nothing about this writes a file. The caller is the only thing that can reach
+ * that machine, and this module has no business knowing how.
+ */
+export interface RemoteAppContext {
+  /** Filename → body, for whoever can put them where that session can read them. */
+  pages: Readonly<Record<string, string>>
+  /** The map to inject, once the pages have actually landed in `dir`. */
+  mapFor(dir: string): string
+}
+
+export interface RemoteContextInput {
+  /** The app's version. `app.getVersion()`. */
+  version: string
+  /** What the person calls this server in the app. */
+  serverName: string
+  /** The computer running the app — where the browser windows actually are. */
+  appMachineName: string
+  /**
+   * Whether this app's `open` is on that shell's PATH ahead of the machine's.
+   *
+   * The same gate the local pages apply to the same sentence, and here it is
+   * live rather than defensive: a server with no `curl` gets no shim, and a
+   * document telling an agent on it that `open <url>` lands in this app would be
+   * wrong on every invocation.
+   */
+  opensInApp: boolean
+}
+
+export function composeRemoteContext(input: RemoteContextInput): RemoteAppContext {
+  const home: ContextHome = { via: 'ssh', appMachineName: input.appMachineName }
+  const pages = composePages(
+    {
+      dir: '',
+      version: input.version,
+      machineName: input.serverName,
+      opensInApp: input.opensInApp,
+    },
+    null,
+    'linux',
+    home,
+  )
+  return {
+    pages,
+    mapFor: (dir) =>
+      mapText({ version: input.version, machineName: input.serverName, dir }),
+  }
+}
+
+/**
+ * Every page, for one place. The one composer both callers go through.
+ *
+ * `dir` is null when the documents are being composed for a machine that has not
+ * made the folder yet — see {@link composeRemoteContext} — and the index then
+ * leaves out the bullet naming it. {@link mapText} already argues that one path
+ * is enough and that an agent holding the index can list the folder it is in, so
+ * the omission costs nothing.
+ */
+function composePages(
+  input: AppContextInput,
+  dir: string | null,
+  platform: Platform,
+  home: ContextHome,
+): Record<string, string> {
+  return {
+    [INDEX_FILE]: indexPage(input, dir, platform, home),
+    'sessions-and-machines.md': sessionsPage(input, home),
+    'browser-windows.md': browserPage(input, platform, home),
+  }
 }
 
 /* -------------------------------------------------------------- the pages -- */
@@ -304,10 +440,30 @@ function platformNoun(platform: Platform): string {
   return platform === 'darwin' ? 'macOS' : 'Linux'
 }
 
-function indexPage(input: AppContextInput, dir: string, platform: Platform): string {
+function indexPage(
+  input: AppContextInput,
+  dir: string | null,
+  platform: Platform,
+  home: ContextHome,
+): string {
   const opener = input.opensInApp
     ? '`open <url>` inside a session opens a window in this app. See `browser-windows.md`.'
-    : "`open` inside a session is the machine's own opener; this build does not shim it here."
+    : home.via === 'ssh'
+      ? "`open` inside this session is this server's own opener; this app could not put its own on this shell's PATH."
+      : "`open` inside a session is the machine's own opener; this build does not shim it here."
+  /*
+   * The machine line, and why the server variant does not name a platform.
+   *
+   * A local install knows which platform it is on, because it *is* the platform.
+   * A server is measured through an SSH connection that answers about its shell
+   * and its `claude` and was never asked what it runs, so a noun here would be a
+   * guess printed as a fact in a document written to stop exactly that.
+   */
+  const machine =
+    home.via === 'ssh'
+      ? `${input.machineName} — a server this app is signed in to over SSH from ${home.appMachineName}`
+      : `${input.machineName} (${platformNoun(platform)})`
+  const where = dir === null ? '' : `\n- This directory: ${dir}`
   return `${preamble(input.version)}
 
 # ${BRAND.name} — what a session can look up about the app around it
@@ -323,8 +479,7 @@ is this" and "look at B2" mean something specific.
 ## This install
 
 - Version: ${input.version}
-- Machine: ${input.machineName} (${platformNoun(platform)})
-- This directory: ${dir}
+- Machine: ${machine}${where}
 - ${opener}
 
 ## The other files here
@@ -337,14 +492,45 @@ is this" and "look at B2" mean something specific.
 `
 }
 
-function sessionsPage(input: AppContextInput): string {
+function sessionsPage(input: AppContextInput, home: ContextHome): string {
   return `${preamble(input.version)}
 
 # Sessions and machines
 
 ## What a session is here
 
-One agent CLI, in one pseudo-terminal, in one folder, started by ${BRAND.name}.
+${home.via === 'ssh' ? sshWhatASessionIs() : localWhatASessionIs()}
+
+The agents this build starts are Claude Code, Codex CLI, Gemini CLI, a plain
+shell, and any other command the person added themselves.
+
+## How the app knows what a session is doing
+
+${home.via === 'ssh' ? sshHowItKnows() : localHowItKnows()}
+
+## Machines
+
+${BRAND.name} runs sessions on more than one machine: the computer it is running
+on, any machine paired with it, and any server it is signed in to over SSH. They
+are listed under Integrations in the app's sidebar, and a session started on one
+of them runs *there* — with that machine's filesystem, shell, network and logins.
+
+This matters most when it is least obvious. The person reading your output may be
+sitting at a different computer from the one you are running on. Their files are
+not the files you can see, their \`localhost\` is not your \`localhost\`, and a path
+they paste may not exist here.
+
+${
+  home.via === 'ssh'
+    ? `This session is running on ${input.machineName}, and the app — with its screen, its browser windows and the person reading this — is on ${home.appMachineName}.`
+    : `This session is running on ${input.machineName}.`
+}
+`
+}
+
+/** The local answer to *what is a session here*, unchanged since it was written. */
+function localWhatASessionIs(): string {
+  return `One agent CLI, in one pseudo-terminal, in one folder, started by ${BRAND.name}.
 Every session has an id, and a session's own id is in its environment as
 \`${BRAND.sessionEnvVar}\`.
 
@@ -352,14 +538,33 @@ That variable is also how this app tells its own sessions apart from everything
 else on the machine. The hooks below are installed for the whole account, so they
 fire for a \`claude\` somebody started in a plain terminal too — and that one is
 answered with nothing, deliberately. If you were given this map, you are inside
-the app.
+the app.`
+}
 
-The agents this build starts are Claude Code, Codex CLI, Gemini CLI, a plain
-shell, and any other command the person added themselves.
+/**
+ * And the server answer, which differs in the two facts an agent could act on.
+ *
+ * There is no pseudo-terminal this app started, because there is not one: SSH
+ * gives it a shell and a **person** types \`claude\` into it. And there is no
+ * session variable in the environment, because \`sshd\` on a default
+ * configuration accepts almost none — which is the first thing
+ * \`servers/window-drive.ts\` rejected and the reason everything here is on a
+ * PATH instead. An agent told to look for a variable that is not there would go
+ * looking, so it is not claimed.
+ */
+function sshWhatASessionIs(): string {
+  return `One agent CLI, in one SSH shell that ${BRAND.name} opened on this server, shown
+as a session in the app on the other end of that connection: its own tab, its own
+row in the rail, and browser windows of its own.
 
-## How the app knows what a session is doing
+There is no session id in this shell's environment, and there is nothing here to
+look one up in. What ties this shell to that tab is the folder this file is in,
+which the app made for this terminal alone and removes when it closes.`
+}
 
-Through the CLI's own hook file — \`~/.claude/settings.json\`,
+/** How a local session's events reach the app. Unchanged. */
+function localHowItKnows(): string {
+  return `Through the CLI's own hook file — \`~/.claude/settings.json\`,
 \`~/.codex/hooks.json\` or \`~/.gemini/settings.json\` — which this app writes one
 entry into per lifecycle event, each tagged \`# ${BRAND.id}-hook\`. Entries
 belonging to anything else are never touched.
@@ -372,38 +577,64 @@ on that session's tab.
 The reply to that same POST is how the context at the top of this session
 arrived. It reaches the model through the CLI's own hook output, so no character
 of it is typed into the terminal the person is looking at, and there is nothing
-for them to scroll back to.
-
-## Machines
-
-${BRAND.name} runs sessions on more than one machine: this one, and any machine
-paired with it. The machines are listed under Integrations in the app's sidebar,
-and a session started on one of them runs *there* — with that machine's
-filesystem, shell, network and logins.
-
-This matters most when it is least obvious. The person reading your output may be
-sitting at a different computer from the one you are running on. Their files are
-not the files you can see, their \`localhost\` is not your \`localhost\`, and a path
-they paste may not exist here.
-
-This session is running on ${input.machineName}.
-`
+for them to scroll back to.`
 }
 
-function browserPage(input: AppContextInput, platform: Platform): string {
+/**
+ * And how a server session's do, which is the same channel over a different
+ * road — and which is worth stating because the *way back* is part of it.
+ *
+ * Nothing was written into this account's home. `~/.claude/settings.json` on this
+ * server is exactly as its owner left it; what carries the hooks is a settings
+ * file in the folder this document is in, named on the command line by the
+ * \`claude\` wrapper that is first on this shell's PATH.
+ */
+function sshHowItKnows(): string {
+  return `Through this server's own \`claude\`, started by a small wrapper that is first on
+this shell's PATH. The wrapper adds two settings files from the folder this
+document is in: one that gives the agent this app's browser verbs, and one that
+installs three lifecycle hooks tagged \`# ${BRAND.id}-hook\`.
+
+Nothing was written into this account's home directory. \`~/.claude/settings.json\`
+on this server is exactly as its owner left it, and everything this app put here
+is inside one folder under \`/tmp\` that goes when this terminal closes, when the
+permission for this server is switched off, or when the app quits.
+
+Each hook POSTs the CLI's own event JSON back to the app over a port on this
+server's own loopback, which the app's SSH connection opened and which nothing off
+this machine can reach. The reply to that POST is how the context at the top of
+this session arrived, and how a browser window attached while you are working is
+announced at your next tool call. No character of any of it is typed into the
+terminal the person is looking at.`
+}
+
+function browserPage(input: AppContextInput, platform: Platform, home: ContextHome): string {
   const opening = input.opensInApp
     ? `## Opening a page
 
-\`open <url>\` is on this session's PATH ahead of the machine's own opener, so a
-\`http://\` or \`https://\` URL you open lands in a window in this app and the
+\`open <url>\` is on this session's PATH ahead of ${
+        home.via === 'ssh' ? "this server's" : "the machine's"
+      } own opener, so a
+\`http://\` or \`https://\` URL you open lands in a window in this app${
+        home.via === 'ssh' ? `, on ${home.appMachineName},` : ''
+      } and the
 command prints which one. If a window is already attached to this session, the
 page goes there. If none is, the app opens one, attaches it, and says so.
 
 Everything that is not a single http(s) URL — \`open .\`, \`open -a Xcode f.swift\`,
 \`open -R\`, a PDF, a bare \`open\` — is handed to the real opener untouched. So is
-every URL when this app is not running: the command falls through to the machine
+every URL when this app cannot be reached: the command falls through to ${
+        home.via === 'ssh' ? 'this server' : 'the machine'
+      }
 and says that it did, rather than exiting quietly having opened nothing.`
-    : `## Opening a page
+    : home.via === 'ssh'
+      ? `## Opening a page
+
+This app could not put its own opener on this shell's PATH, so \`open\` here is
+this server's own and a URL you open opens **on this server** rather than in the
+app. Windows already attached to this session are still yours to read about
+below; ask the person to open a page into one of them.`
+      : `## Opening a page
 
 This build does not put an opener on a session's PATH on ${platformNoun(platform)},
 so \`open\` here is the machine's own and a URL you open does not land in this
@@ -414,7 +645,9 @@ below.`
 
 # Browser windows
 
-${BRAND.name} has browser windows of its own, in the same window as the sessions.
+${BRAND.name} has browser windows of its own, in the same window as the sessions${
+    home.via === 'ssh' ? `, on ${home.appMachineName}` : ''
+  }.
 One of them can be attached to a session, and that relation is what gives "the
 browser" an address instead of leaving it a guess.
 
