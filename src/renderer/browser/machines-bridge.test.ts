@@ -416,6 +416,7 @@ describe('when the chosen machine goes', () => {
     noun: 'PC',
     ports: [],
     unreachable: null,
+    folders: null,
     detail: null,
   }
 

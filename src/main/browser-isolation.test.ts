@@ -133,6 +133,16 @@ describe('isolatedSession', () => {
     expect(ses).toBeDefined()
     expect(typeof ses?.permissionRequestHandler).toBe('function')
     expect(typeof ses?.permissionCheckHandler).toBe('function')
+    /*
+     * `will-download` used to be a refusal here and is now the downloads module
+     * taking the event — `browser-downloads.ts` explains why a download is not
+     * one of the permissions the two handlers above refuse. What this assertion
+     * has always pinned is the same either way and is the reason it exists: an
+     * isolated tab must behave like every other tab. A build where only the
+     * shared partition subscribed would download from an ordinary tab and do
+     * nothing at all from an isolated one, silently, which is the shape of
+     * defect the whole 2026-08-21 review is about.
+     */
     expect(ses?.events).toContain('will-download')
   })
 

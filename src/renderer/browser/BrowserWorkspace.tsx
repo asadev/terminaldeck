@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { hereName } from '../machines/types'
 import { AnchoredPopup } from './AnchoredPopup'
 import { BrowserMenu } from './BrowserMenu'
+import { DownloadsPanel } from './DownloadsPanel'
 import { ProfileMenu } from './ProfileMenu'
 import { CapturePopup } from './CapturePopup'
 import { DeviceBar } from './DeviceBar'
@@ -32,6 +33,13 @@ import {
   type DrawApi,
   type PageFrame,
 } from './draw-bridge'
+import {
+  downloadsAvailable,
+  downloadsBadge,
+  readDownloadsView,
+  resolveDownloadsApi,
+  type DownloadsView,
+} from './downloads-bridge'
 import { anchorInWindow, type Box } from './popup-anchor'
 import {
   historyAvailable,
@@ -645,6 +653,19 @@ export function BrowserWorkspace({
   const [focusToken, setFocusToken] = useState(0)
 
   /*
+   * Downloads.
+   *
+   * Held here, in the panel, rather than read when the popup opens: the button
+   * on the bar is drawn from the same list, and it has to appear the moment a
+   * file starts arriving — which is the whole of *"a downloads indicator
+   * appears"*. One subscription feeds both, so the bar and the popup cannot
+   * disagree about what has happened.
+   */
+  const downloads = useMemo(() => resolveDownloadsApi(), [])
+  const [downloadsView, setDownloadsView] = useState<DownloadsView>(() => readDownloadsView(null))
+  const [downloadsOpen, setDownloadsOpen] = useState(false)
+
+  /*
    * ---------------------------------------------------------------------------
    * The machine this address bar is talking to.
    *
@@ -780,6 +801,7 @@ export function BrowserWorkspace({
    */
   const menuButtonRef = useRef<HTMLButtonElement | null>(null)
   const profileButtonRef = useRef<HTMLButtonElement | null>(null)
+  const downloadsButtonRef = useRef<HTMLButtonElement | null>(null)
   const seq = useRef(0)
   /** Serialises create/claim so "the newest unclaimed view" stays unambiguous. */
   const queue = useRef<Promise<void>>(Promise.resolve())
@@ -1305,6 +1327,28 @@ export function BrowserWorkspace({
       off()
     }
   }, [machinesApi])
+
+  /*
+   * What has been downloaded, pushed rather than polled.
+   *
+   * One read for the list that already exists — a window opened after a
+   * download would otherwise show nothing until the next one — and then the push
+   * for everything after it, which is the same shape the machines effect above
+   * uses and for the same reason.
+   */
+  useEffect(() => {
+    if (!downloadsAvailable(downloads)) return
+    let alive = true
+    const take = (raw: unknown): void => {
+      if (alive) setDownloadsView(readDownloadsView(raw))
+    }
+    void downloads.browserDownloads?.().then(take).catch(() => undefined)
+    const off = downloads.onBrowserDownloads?.(take)
+    return () => {
+      alive = false
+      off?.()
+    }
+  }, [downloads])
 
   /*
    * The servers this app knows, read once.
@@ -2350,6 +2394,22 @@ export function BrowserWorkspace({
         actionsRef={actionsRef}
         menuRef={menuButtonRef}
         profileRef={profileButtonRef}
+        downloadsRef={downloadsButtonRef}
+        downloadsBadge={downloadsAvailable(downloads) ? downloadsBadge(downloadsView.items) : null}
+        downloadsOpen={downloadsOpen}
+        onDownloads={
+          downloadsAvailable(downloads)
+            ? () =>
+                openAt(downloadsButtonRef.current, () => {
+                  // One popup at a time on this bar, for the reason the ⋯ and the
+                  // profile menus already close each other: they are adjacent
+                  // buttons and two popups on one anchor stack invisibly.
+                  setMenuOpen(false)
+                  setProfileOpen(false)
+                  setDownloadsOpen((open) => !open)
+                })
+            : undefined
+        }
         menuOpen={menuOpen}
         onMenu={() =>
           openAt(menuButtonRef.current, () => {
@@ -2760,7 +2820,29 @@ export function BrowserWorkspace({
              in `BrowserMenu`. Site data belongs to a profile, and a build that
              cannot switch profiles still has to be able to clear its cookies. */
           onCookies={profilesAvailable(accounts) ? undefined : () => setSessionFor('')}
+          /*
+             The standing door. The button on the bar comes and goes with the
+             list — see `downloadsBadge` — so this is the one place downloads can
+             always be reached from, which is what makes the button's absence
+             acceptable rather than a feature that hides.
+          */
+          onDownloads={
+            downloadsAvailable(downloads)
+              ? () => openAt(menuButtonRef.current, () => setDownloadsOpen(true))
+              : undefined
+          }
           onClose={() => setMenuOpen(false)}
+        />
+      )}
+
+      {downloadsOpen && (
+        <DownloadsPanel
+          api={downloads}
+          anchor={menuAnchor}
+          view={downloadsView}
+          machines={machines}
+          here={here}
+          onClose={() => setDownloadsOpen(false)}
         />
       )}
 

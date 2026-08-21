@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app, session, type IpcMain, type Session } from 'electron'
+import { attachDownloads } from './browser-downloads'
 import { writeRecordPreload } from './browser-record-preload'
 
 /**
@@ -247,7 +248,15 @@ let recordPreloadPath: string | null = null
  * Deliberately the same list as `hardenedGuestSession()` in `browser-tab.ts`
  * and `harden()` in `browser-isolation.ts`. A page being looked at has no
  * business asking for the camera, the clipboard or a notification, and there is
- * no UI here to ask the user with; downloads are refused for the same reason.
+ * no UI here to ask the user with.
+ *
+ * Downloads used to be in that list — `ses.on('will-download', (event) =>
+ * event.preventDefault())`, right here — and they are not any more. They never
+ * belonged: the permissions above are things a page takes without being asked,
+ * and a download is something a person clicked. Refusing it silently was the
+ * whole of *"Then I need to have downloads option"*. `browser-downloads.ts`
+ * takes the event now, and it is called from **both** copies of this function or
+ * an isolated tab would behave differently from an ordinary one.
  *
  * The recorder's guest script is attached **per session**, so a profile that
  * skipped it would look like it was recording and capture nothing — the exact
@@ -256,7 +265,7 @@ let recordPreloadPath: string | null = null
 function harden(ses: Session): Session {
   ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
   ses.setPermissionCheckHandler(() => false)
-  ses.on('will-download', (event) => event.preventDefault())
+  attachDownloads(ses)
   if (recordPreloadPath === null) recordPreloadPath = writeRecordPreload(app.getPath('userData'))
   ses.registerPreloadScript({ type: 'frame', filePath: recordPreloadPath })
   return ses

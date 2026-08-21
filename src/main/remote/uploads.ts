@@ -18,17 +18,23 @@
  * names the platform — that is what `machineNoun()` in `platform/host.ts` is
  * for. Copy that crosses the wire names nothing.
  *
- * ## Why the desktop names the folder, and the phone names nothing
+ * ## Why the desktop names the folder, and the sender names at most a menu entry
  *
  * The obvious design lets the phone say where the file should go, and it is the
  * one thing this must not do. `upload.begin` arrives from the network, and a
  * `path` field on it is a `writeFile` at an attacker-chosen location — the same
  * class of hole as `create.cwd`, except that `create` at least resolves against
- * a list of folders the desktop is already offering, and a *new* file has no such
- * list to check against. So the phone sends a **name**, `safeName` reduces it to
- * one path component, and the directory is a constant this process was handed at
- * construction. There is no code path here that builds a path from two pieces of
- * network input.
+ * a list of folders the desktop is already offering. So the sender sends a
+ * **name**, `safeName` reduces it to one path component, and the directory is
+ * never built here out of what arrived.
+ *
+ * `upload.begin.dir` is the one thing that changed, and it changed *into* the
+ * shape the paragraph above envied. It is not a path this module trusts: it is
+ * handed to {@link UploadDeps.store}, which is the host's own function, and the
+ * host answers with a store or with `null` — meaning "that is not a folder this
+ * device may write to". Everything here does with a `null` what it does with any
+ * other refusal. There is still no code path in this file that builds a path out
+ * of two pieces of network input.
  *
  * ## Why the path is sent before the bytes
  *
@@ -103,7 +109,17 @@ export interface UploadStore {
 }
 
 export interface UploadDeps {
-  store: UploadStore
+  /**
+   * The store for a destination, or `null` when that destination is refused.
+   *
+   * A function rather than a value, and the argument is the whole reason: `null`
+   * means the folder the sender named is not one this device may write to, and
+   * only the host can answer that — it is the one that knows which folders it
+   * published to which device. `null` for `dir` is "wherever you normally put
+   * them", which is the phone's case and every case before 2026-08-21, and a
+   * host must always answer that one with a store.
+   */
+  store(dir: string | null): UploadStore | null
   /** Send a frame to the phone this desk belongs to. */
   send(message: ServerMessage): void
 }
@@ -117,7 +133,7 @@ export interface UploadDesk {
 
 /** The subset of `ClientMessage` this module answers. */
 export type UploadMessage =
-  | { t: 'upload.begin'; id: string; name: string; size: number }
+  | { t: 'upload.begin'; id: string; name: string; size: number; dir?: string }
   | { t: 'upload.data'; id: string; data: string }
   | { t: 'upload.end'; id: string; sha256: string }
   | { t: 'upload.cancel'; id: string }
@@ -184,7 +200,7 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
     deps.send({ t: 'upload.failed', id, message })
   }
 
-  async function begin(id: string, name: string, size: number): Promise<void> {
+  async function begin(id: string, name: string, size: number, dir: string | null): Promise<void> {
     if (live.has(id) || opening.has(id)) {
       deps.send({ t: 'upload.failed', id, message: 'That upload is already running.' })
       return
@@ -198,11 +214,29 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
       return
     }
 
+    /*
+     * Where it goes, decided by the host and not by this module.
+     *
+     * `null` is a refusal, not an error: the sender named a folder this device
+     * may not write to. Answered before anything is opened, so a refused
+     * destination never leaves a `.part` file behind, and answered on the
+     * upload's own id so the sender ends the right progress bar.
+     */
+    const store = deps.store(dir)
+    if (store === null) {
+      deps.send({
+        t: 'upload.failed',
+        id,
+        message: 'That machine will not put a file in that folder.',
+      })
+      return
+    }
+
     const pending = { cancelled: false }
     opening.set(id, pending)
     let opened: { path: string; sink: UploadSink }
     try {
-      opened = await deps.store.open(safeName(name))
+      opened = await store.open(safeName(name))
     } catch (error) {
       opening.delete(id)
       console.error('[upload] could not open a file:', error)
@@ -317,7 +351,7 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
     handle(message: UploadMessage): void {
       switch (message.t) {
         case 'upload.begin':
-          void begin(message.id, message.name, message.size)
+          void begin(message.id, message.name, message.size, message.dir ?? null)
           return
         case 'upload.data':
           data(message.id, message.data)

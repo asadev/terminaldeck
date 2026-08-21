@@ -437,3 +437,77 @@ describe('the actions that give way to the address bar', () => {
     expect(markup).toMatch(/aria-label="More"(?![^>]*data-fold)/)
   })
 })
+
+/**
+ * The downloads button, and the reason it is usually not there.
+ *
+ *   > *"Then I need to have downloads option"*
+ *
+ * Chrome's downloads button is absent until there is a download, and this is the
+ * same rule for the same reason: a control that is empty nine days in ten is a
+ * control people stop seeing. What makes that acceptable rather than a feature
+ * that hides is the standing row in the ⋯ menu — `BrowserMenu.test.ts` holds
+ * that half.
+ */
+function renderDownloads(
+  badge: { label: string; tone: 'busy' | 'bad' | 'done' } | null,
+  onDownloads?: () => void,
+): string {
+  return renderToStaticMarkup(
+    <Toolbar
+      tab={newTab('tab-1')}
+      progress={1}
+      resolution={{ kind: 'url', url: 'http://localhost:3000/', display: 'localhost:3000' }}
+      focusToken={0}
+      onDraft={() => {}}
+      onEditing={() => {}}
+      onSubmit={() => {}}
+      onBack={() => {}}
+      onForward={() => {}}
+      onReload={() => {}}
+      onStop={() => {}}
+      onHome={() => {}}
+      onInspect={() => {}}
+      onRecord={() => {}}
+      onScreenshot={() => {}}
+      onDevtools={() => {}}
+      devtoolsOpen={false}
+      recording={false}
+      drawing={false}
+      deviceOpen={false}
+      onToggleDevice={() => {}}
+      onMenu={() => {}}
+      menuOpen={false}
+      steps={0}
+      downloadsBadge={badge}
+      onDownloads={onDownloads}
+    />,
+  )
+}
+
+describe('the downloads button', () => {
+  it('is absent while nothing has been downloaded', () => {
+    expect(renderDownloads(null, () => {})).not.toContain('aria-label="Downloads"')
+  })
+
+  it('appears, named and counted, the moment something is happening', () => {
+    const markup = renderDownloads({ label: '2', tone: 'busy' }, () => {})
+    expect(markup).toContain('aria-label="Downloads"')
+    expect(markup).toContain('data-tone="busy"')
+    expect(markup).toContain('>2<')
+  })
+
+  it('is absent in a build that cannot open the panel, rather than drawn dead', () => {
+    // A button that opens nothing is the defect this whole review is about.
+    expect(renderDownloads({ label: '1', tone: 'done' })).not.toContain('aria-label="Downloads"')
+  })
+
+  it('never folds into the ⋯ menu, or its one moment would be when it is hidden', () => {
+    // `foldedActions` reads the bar for zero-width buttons carrying `data-fold`.
+    // A control that only exists while something is happening must not also be
+    // able to disappear at a narrow width.
+    const markup = renderDownloads({ label: '1', tone: 'busy' }, () => {})
+    const button = markup.slice(markup.indexOf('bw-downloads-btn'))
+    expect(button.slice(0, button.indexOf('</button>'))).not.toContain('data-fold')
+  })
+})

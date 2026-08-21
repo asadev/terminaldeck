@@ -452,10 +452,12 @@ function preloadPath(): string {
 /**
  * The session a new tab joins: whichever profile is switched on.
  *
- * The hardening — no camera, no clipboard, no notifications, no downloads —
- * moved into `browser-profiles.ts` so that every profile gets it rather than
- * only the first one, and so there is one copy of the list instead of two that
- * can drift. `sessionForPartition` is idempotent per partition.
+ * The hardening — no camera, no clipboard, no notifications — moved into
+ * `browser-profiles.ts` so that every profile gets it rather than only the first
+ * one, and so there is one copy of the list instead of two that can drift.
+ * Downloads were on that list and are not any more: `browser-downloads.ts` takes
+ * `will-download` there, for the reason written on `harden()` itself.
+ * `sessionForPartition` is idempotent per partition.
  *
  * The user agent is set here, on the session, and it is not cosmetic: with
  * Electron's own token in the string Google routes every sign-in down its

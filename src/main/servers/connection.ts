@@ -600,67 +600,124 @@ export class ServerConnections {
   /**
    * Put a file from this computer onto a server, and answer **its** path for it.
    *
-   * ## Why this exists
+   * ## Why this exists — two reasons, and neither one is spare
    *
-   * Because of the rule `renderer/session-transfer.ts` states in one sentence:
-   * whatever a session is handed must exist on the machine that session runs on,
-   * named by that machine's path. That was true for this computer and for a
-   * paired machine — which uploads over the relay — and was not true for a
-   * terminal on a server, so the browser's screenshot popup had nothing honest
-   * to hand one. Asad, 2026-08-20, describing exactly this case before the
-   * picker could even list a server's sessions:
+   * There were two of these for a day, one per lane, and this is what they were
+   * unified into. Both reasons are written down here because a reader who finds
+   * only one of them deletes this as *"the unused one"* and takes the other
+   * caller's feature with it.
+   *
+   * **One — the transfer rule.** `renderer/session-transfer.ts` states it in one
+   * sentence: whatever a session is handed must exist on the machine that
+   * session runs on, named by that machine's path. That was true for this
+   * computer and for a paired machine — which uploads over the relay — and was
+   * not true for a terminal on a server, so the browser's screenshot popup had
+   * nothing honest to hand one. Asad, 2026-08-20, describing exactly this case
+   * before the picker could even list a server's sessions:
    *
    *   > *"if I send those to the session which is in server but the browser was
    *   > in local, it will send the path of my current PC instead of the server
    *   > where actually session is running. So in that case session will not be
    *   > able to see the things that I have sent."*
    *
-   * ## Where it lands, and why not `~/Downloads`
+   * **Two — the download destination.** A download in the built-in browser is
+   * bound for a machine somebody picked, and a server is one of the machines
+   * that picker offers. Asad, 2026-08-21, with it pointed at his Office PC:
    *
-   * `<login directory>/<folder>`, where `folder` is this app's own name and the
-   * login directory is whatever the **server** resolved `.` to — never
-   * `/home/<username>` assembled here, which is wrong for `root`, wrong on macOS
-   * and wrong on any account whose home has been moved. A desktop puts these in
-   * `<downloads>/<app name>` because a desktop has a Downloads folder that a
-   * person opens; a server usually has no such folder and creating one would be
-   * this app deciding how somebody's server is laid out. One folder, named after
-   * the app that made it, is the smallest honest footprint.
+   *   > *"We should actually be able to maybe choose, if possible, it will bring
+   *   > the thing in that machine where we want to actually download."*
+   *
+   * The paired-machine half of that feature goes over the relay
+   * (`upload-send.ts`); this is the ssh half. There is no shared code between
+   * those two because there is no shared protocol — what is shared is the answer
+   * shape, so `browser-downloads.ts` cannot tell them apart. Between *these* two
+   * there was a shared protocol and there is now shared code, which is the whole
+   * point of this being one function.
+   *
+   * ## Why SFTP and not `cat > file`
+   *
+   * The same argument {@link listDirectory} makes about `ls`, in the other
+   * direction: a shell redirect needs the remote path to survive being written
+   * into a command line, and a folder called `my project` or one with a quote in
+   * it does not. SFTP takes the path as data. It is also the only way to get a
+   * useful failure — a full disk over `cat` is an exit status, and over SFTP it
+   * is a code this side already turns into a sentence.
+   *
+   * ## Where it lands
+   *
+   * One rule for both callers, and it is {@link remoteFolder}'s: an absolute
+   * `folder` is the server's own — it came back from {@link listDirectory}, or it
+   * is the path somebody uses on that machine — and anything else, `''`
+   * included, hangs off the account's login directory, which only the server can
+   * name. The transfer rule's caller passes this app's own name and lands in
+   * `<login directory>/<app name>`; the downloads caller passes the folder that
+   * was chosen on that machine.
+   *
+   * Not `~/Downloads`: a desktop has a Downloads folder that a person opens, a
+   * server usually does not, and creating one would be this app deciding how
+   * somebody's server is laid out. One folder named after the app that made it
+   * is the smallest honest footprint — and when the person names a folder
+   * themselves, that is the folder.
+   *
+   * The folder is made if it is not there, one level, which is the promise
+   * `diskUploadStore` already makes to a phone. A missing *parent* is a sentence
+   * rather than a tree of new folders on somebody else's machine.
+   *
+   * ## Why it lands as `.part` and is renamed
+   *
+   * The same promise `uploads.ts` makes to a phone, and for the same reason: a
+   * half-written file wearing the right name and the right extension is worse
+   * than no file, because the failure surfaces later, in whatever opens it. A
+   * failed put deletes its own partial rather than leaving it on somebody's
+   * server.
    *
    * ## What the free-name search does and does not promise
    *
    * `photo.jpg`, then `photo (2).jpg` — the same rule as every other landing
    * place in this app, because it is the same rule: `safeName` and the variants
-   * come from `remote/uploads.ts` and are not restated here. The name is chosen
-   * by asking whether it is taken, which is a **check and not a reservation**:
-   * `fastPut` truncates, and SFTP's own exclusive-create cannot be told from an
-   * ordinary failure on an SFTPv3 server, which is every server this has been
-   * pointed at. Two files racing for one name in this folder would need two
-   * desktops writing to one server in the same instant, into a folder nothing
-   * but this app writes to; the alternative is a code path that reads `4` as
-   * *taken* and silently gives up on a real failure.
+   * come from `remote/uploads.ts` and are not restated here. A file already at
+   * that name is left alone; overwriting is not a thing to do quietly on a
+   * machine the person is not looking at, and the answer carries whichever name
+   * was actually used so nothing has to guess.
    *
-   * Nothing is deleted, ever, and nothing is overwritten by name.
+   * The name is chosen by asking whether it is taken, which is a **check and not
+   * a reservation**: SFTP's own exclusive-create cannot be told from an ordinary
+   * failure on an SFTPv3 server, which is every server this has been pointed at.
+   * Two files racing for one name would need two desktops writing to one folder
+   * in the same instant; the alternative is a code path that reads `4` as *taken*
+   * and silently gives up on a real failure.
+   *
+   * Nothing is deleted, ever, other than this call's own partial, and nothing is
+   * overwritten by name.
    */
   async putFile(serverId: string, localPath: string, name: string, folder: string): Promise<string> {
     return this.withConnection(serverId, async (client) => {
       const sftp = await openSftp(client)
       try {
-        const home = await realpath(sftp, '.')
-        // SFTP paths are `/`-separated whatever the server runs, including a
-        // Windows OpenSSH server, whose `realpath` answers `/C:/Users/…`. This
-        // is the one place a path is assembled on this side, and it is assembled
-        // from an answer the server gave.
-        const dir = `${home.replace(/\/+$/, '')}/${folder}`
+        const dir = await remoteFolder(sftp, folder)
         await ensureDirectory(sftp, dir)
         for (const candidate of nameVariants(safeName(name))) {
-          const target = `${dir}/${candidate}`
+          const target = remoteJoin(dir, candidate)
           if (await exists(sftp, target)) continue
-          await fastPut(sftp, localPath, target)
+          // The partial is named after the name that was free, so two deliveries
+          // that raced to different names cannot land on each other's partial.
+          // `fastPut` truncates, which is what makes it safe to write over
+          // whatever an earlier failed attempt left at this name.
+          const partial = `${target}.part`
+          try {
+            await fastPut(sftp, localPath, partial)
+            await renameRemote(sftp, partial, target)
+          } catch (error) {
+            await unlinkRemote(sftp, partial)
+            throw error
+          }
           return target
         }
         throw new ServerProblem('lost', 'Every variant of that file name is taken on that server.')
       } finally {
-        // The channel, not the connection — the same as `listDirectory`.
+        // The channel, not the connection. The pool above still owns the socket
+        // and still decides when it goes, so a delivery that has finished does
+        // not hang up on the page holding the same server open.
         sftp.end()
       }
     })
@@ -920,6 +977,90 @@ function realpath(sftp: SFTPWrapper, path: string): Promise<string> {
   })
 }
 
+/**
+ * The folder a file is going into, as a path the **server** agrees with.
+ *
+ * One rule, because {@link ServerConnections.putFile} has two callers who name a
+ * folder two different ways and neither of them should have to know about the
+ * other:
+ *
+ * - An **absolute** path is already the server's own answer. It came back from
+ *   {@link listDirectory}, which resolved it over there, or it is the path
+ *   somebody types because it is the path they use on that machine. SFTP paths
+ *   are `/`-separated in the protocol itself whatever the server runs — a
+ *   Windows OpenSSH server answers `/C:/Users/…` — so the leading slash is a
+ *   fact about the protocol rather than a guess about the far end's operating
+ *   system, and `path.join` is deliberately not used here: on a Windows desktop
+ *   it would produce a backslash for a folder that is not on this machine at all.
+ * - **Anything else** hangs off the account's login directory, and `''` and `'.'`
+ *   *are* that directory. Only the server can say what it is: `/home/<username>`
+ *   is wrong for `root`, wrong on macOS, and wrong on any account whose home has
+ *   been moved.
+ *
+ * The join below is the one place a remote path is assembled on this side, and
+ * both halves of it came from the server.
+ */
+async function remoteFolder(sftp: SFTPWrapper, folder: string): Promise<string> {
+  // Trailing slashes are dropped so that the join below never doubles one, and
+  // `/` itself survives that as `/` rather than becoming the empty string —
+  // which would silently redirect a delivery bound for the root of a server into
+  // whoever's home directory happened to be signed in.
+  const trimmed = folder.endsWith('/') ? folder.replace(/\/+$/, '') || '/' : folder
+  if (trimmed.startsWith('/')) return trimmed
+  const home = (await realpath(sftp, '.')).replace(/\/+$/, '') || '/'
+  if (trimmed === '' || trimmed === '.') return home
+  return remoteJoin(home, trimmed)
+}
+
+/**
+ * A folder and a name, joined the way SFTP spells a path.
+ *
+ * Its whole job is that the root of a server is `/` and a file in it is
+ * `/report.pdf` rather than `//report.pdf`, which is a path POSIX leaves
+ * implementation-defined and which some servers resolve somewhere else entirely.
+ */
+function remoteJoin(dir: string, name: string): string {
+  return dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`
+}
+
+/**
+ * Copy a local file to a remote path, in parallel chunks over this channel.
+ *
+ * It **truncates** whatever is at `remotePath`, which is why every caller writes
+ * to a `.part` it has just picked rather than straight at the name somebody will
+ * read. See {@link ServerConnections.putFile}.
+ */
+function fastPut(sftp: SFTPWrapper, localPath: string, remotePath: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    sftp.fastPut(localPath, remotePath, (error) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, remotePath))
+        return
+      }
+      resolve()
+    })
+  })
+}
+
+function renameRemote(sftp: SFTPWrapper, from: string, to: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    sftp.rename(from, to, (error) => {
+      if (error !== undefined) {
+        reject(sftpProblem(error, to))
+        return
+      }
+      resolve()
+    })
+  })
+}
+
+/** Best-effort. It runs on a failure path and has nothing left to report to. */
+function unlinkRemote(sftp: SFTPWrapper, path: string): Promise<void> {
+  return new Promise<void>((resolve) => {
+    sftp.unlink(path, () => resolve())
+  })
+}
+
 function readdir(sftp: SFTPWrapper, path: string): Promise<FileEntry[]> {
   return new Promise<FileEntry[]>((resolve, reject) => {
     sftp.readdir(path, (error, list) => {
@@ -999,17 +1140,6 @@ async function ensureDirectory(sftp: SFTPWrapper, path: string): Promise<void> {
   })
 }
 
-function fastPut(sftp: SFTPWrapper, localPath: string, remotePath: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    sftp.fastPut(localPath, remotePath, (error) => {
-      if (error !== undefined) {
-        reject(sftpProblem(error, remotePath))
-        return
-      }
-      resolve()
-    })
-  })
-}
 
 function wrapShell(channel: Channel, release: () => void): ServerShell {
   let closed = false

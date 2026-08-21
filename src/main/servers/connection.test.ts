@@ -62,24 +62,39 @@ interface FakeOptions {
 interface FakeSftpOptions {
   /** What the server resolves `.` to. Never assembled on this side. */
   home?: string
-  /** Paths that already exist over there. */
+  /** Paths that already exist over there, for the collision rule. */
   present?: string[]
   /** Paths whose `stat` should fail with this RFC 4251 code instead. */
   refuse?: Record<string, number>
-  /** Make the subsystem itself unavailable, the way a server without it does. */
+  /**
+   * Make the subsystem itself unavailable, the way a server with
+   * `Subsystem sftp` commented out of its `sshd_config` does.
+   */
   absent?: boolean
+  /** A disk that will not take the file: `fastPut` fails with `4`. */
+  putFails?: boolean
 }
 
 /**
  * The SFTP subsystem, without a server.
  *
- * Narrow on purpose — the same six calls `ssh2.d.ts` declares — so that a test
+ * Narrow on purpose — the same eight calls `ssh2.d.ts` declares — so that a test
  * standing on it is standing on what this app actually asks for rather than on
  * a mock of the whole protocol.
+ *
+ * **One fake, because there is one implementation.** There were two of each for
+ * a day, one per lane, and a second fake is exactly how two `putFile`s would
+ * grow back without a failing test to say so. Everything the unified write does
+ * is here — the folder check, the `mkdir`, the partial, the rename and the
+ * delete of the partial — and `calls` records the order, because for a write the
+ * order *is* the promise.
  */
 class FakeSftp {
   put: [string, string][] = []
   made: string[] = []
+  renamed: { from: string; to: string }[] = []
+  unlinked: string[] = []
+  calls: string[] = []
   ends = 0
   private readonly present: Set<string>
 
@@ -88,14 +103,17 @@ class FakeSftp {
   }
 
   realpath(path: string, cb: (err: undefined, absolute: string) => void): void {
+    this.calls.push(`realpath ${path}`)
     setImmediate(() => cb(undefined, path === '.' ? this.options.home ?? '/home/imza' : path))
   }
 
-  readdir(_path: string, cb: (err: undefined, list: never[]) => void): void {
+  readdir(path: string, cb: (err: undefined, list: never[]) => void): void {
+    this.calls.push(`readdir ${path}`)
     setImmediate(() => cb(undefined, []))
   }
 
   stat(path: string, cb: (err: (Error & { code?: number }) | undefined, stats?: unknown) => void): void {
+    this.calls.push(`stat ${path}`)
     setImmediate(() => {
       const refused = this.options.refuse?.[path]
       if (refused !== undefined) {
@@ -108,14 +126,36 @@ class FakeSftp {
   }
 
   mkdir(path: string, cb: (err?: Error & { code?: number }) => void): void {
+    this.calls.push(`mkdir ${path}`)
     this.made.push(path)
     this.present.add(path)
     setImmediate(() => cb())
   }
 
   fastPut(localPath: string, remotePath: string, cb: (err?: Error & { code?: number }) => void): void {
+    this.calls.push(`put ${remotePath}`)
+    if (this.options.putFails === true) {
+      // `4` is `SSH_FX_FAILURE` — a full disk, a read-only mount, a quota.
+      setImmediate(() => cb(Object.assign(new Error('disk full'), { code: 4 })))
+      return
+    }
     this.put.push([localPath, remotePath])
     this.present.add(remotePath)
+    setImmediate(() => cb())
+  }
+
+  rename(from: string, to: string, cb: (err?: Error & { code?: number }) => void): void {
+    this.calls.push(`rename ${from} ${to}`)
+    this.renamed.push({ from, to })
+    this.present.delete(from)
+    this.present.add(to)
+    setImmediate(() => cb())
+  }
+
+  unlink(path: string, cb: (err?: Error & { code?: number }) => void): void {
+    this.calls.push(`unlink ${path}`)
+    this.unlinked.push(path)
+    this.present.delete(path)
     setImmediate(() => cb())
   }
 
@@ -177,6 +217,13 @@ class FakeClient extends EventEmitter {
     return true
   }
 
+  /**
+   * The SFTP subsystem, or the refusal a server with it switched off gives.
+   *
+   * A whole fake rather than a stub because the write path has five calls in it
+   * and the order is the thing worth pinning: the folder, a partial file, then a
+   * rename, and a delete of the partial if either of the last two fails.
+   */
   sftp(callback: (err: Error | undefined, sftp: FakeSftp) => void): boolean {
     if (this.options.sftp?.absent === true) {
       setImmediate(() => callback(new Error('no subsystem'), undefined as unknown as FakeSftp))
@@ -186,6 +233,11 @@ class FakeClient extends EventEmitter {
     this.sftpChannels.push(channel)
     setImmediate(() => callback(undefined, channel))
     return true
+  }
+
+  /** The last channel opened, for a test that only ever opens one. */
+  get sftpDesk(): FakeSftp | null {
+    return this.sftpChannels[this.sftpChannels.length - 1] ?? null
   }
 
   end(): this {
@@ -563,14 +615,29 @@ describe('the terminal', () => {
   })
 })
 
-
 /**
  * Putting a file on a server.
  *
- * The rule it serves is `renderer/session-transfer.ts`'s: whatever a session is
- * handed must exist on the machine that session runs on, named by that
- * machine's path. A terminal on a server is a session, and this is the only way
- * a file reaches one.
+ * One function, two callers, and both sets of checks are here on purpose:
+ * deleting either half is how a second `putFile` grows back.
+ *
+ * The first caller serves the rule `renderer/session-transfer.ts` states —
+ * whatever a session is handed must exist on the machine that session runs on,
+ * named by that machine's path. A terminal on a server is a session, and this is
+ * the only way a file reaches one. It names a folder relative to the login
+ * directory, and that folder is this app's own name.
+ *
+ * The second is *"it will bring the thing in that machine where we want to
+ * actually download"* — a download in the built-in browser bound for a machine
+ * that is not this one. A paired laptop is reached over the relay
+ * (`upload-send.ts`) and a server is reached over ssh, here; both answer the same
+ * shape so `browser-downloads.ts` cannot tell them apart. It names an absolute
+ * folder somebody chose on that machine, or `''` for their login directory.
+ *
+ * What is pinned hardest is the order of the write, because the order is the
+ * promise: a partial file, then a rename, and a delete of the partial if
+ * anything went wrong. A half-written file wearing the right name and the right
+ * extension is worse than no file — the failure surfaces later, somewhere else.
  */
 describe('putting a file on a server', () => {
   const LOCAL = '/Users/apple/Pictures/Terminal Deck/shot.png'
@@ -581,10 +648,27 @@ describe('putting a file on a server', () => {
     return connections({ sftp: options }).putFile(server.id, LOCAL, name, 'Terminal Deck')
   }
 
+  /** The same, for the caller that names an absolute folder on that machine. */
+  function deliver(options: FakeSftpOptions, localPath: string, folder: string): Promise<string> {
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    const name = localPath.slice(localPath.lastIndexOf('/') + 1)
+    return connections({ sftp: options }).putFile(server.id, localPath, name, folder)
+  }
+
   it('answers the path the server knows it by, not the one it left with', async () => {
     const where = await put({ home: '/home/imza' })
     expect(where).toBe('/home/imza/Terminal Deck/shot.png')
-    expect(FakeClient.made[0].sftpChannels[0].put).toEqual([[LOCAL, '/home/imza/Terminal Deck/shot.png']])
+    // The bytes go to a partial and the rename is what gives them the name.
+    // Changed deliberately when the two SFTP writes were unified: this caller
+    // used to `fastPut` straight at the final name, and of the two the
+    // partial-then-rename is the one worth keeping — a `fastPut` truncates, so a
+    // failure halfway left a ruined file wearing a real name and a real
+    // extension, and the person found out about it in whatever opened it.
+    const sftp = FakeClient.made[0].sftpChannels[0]
+    expect(sftp.put).toEqual([[LOCAL, '/home/imza/Terminal Deck/shot.png.part']])
+    expect(sftp.renamed).toEqual([
+      { from: '/home/imza/Terminal Deck/shot.png.part', to: '/home/imza/Terminal Deck/shot.png' },
+    ])
   })
 
   it('asks the server where home is rather than assembling one', () => {
@@ -627,10 +711,13 @@ describe('putting a file on a server', () => {
     ).rejects.toMatchObject({ kind: 'not-allowed' })
   })
 
-  it('says so when the server has no SFTP subsystem at all', async () => {
+  it('says so in a sentence when the server has no SFTP subsystem at all', async () => {
     // A configuration on somebody's machine rather than a fault here, and it
-    // gets the same sentence the folder picker gets.
-    await expect(put({ absent: true })).rejects.toBeInstanceOf(ServerProblem)
+    // gets the same sentence the folder picker gets — which is also the sentence
+    // a downloads row prints when a delivery to a server cannot start.
+    const problem: unknown = await put({ absent: true }).catch((error: unknown) => error)
+    expect(problem).toBeInstanceOf(ServerProblem)
+    expect((problem as ServerProblem).message).toMatch(/folders/)
   })
 
   it('closes its own channel and leaves the socket to the pool', async () => {
@@ -652,5 +739,63 @@ describe('putting a file on a server', () => {
     expect(FakeClient.made).toHaveLength(1)
     expect(FakeClient.made[0].ended).toBe(0)
     pool.release(server.id)
+  })
+
+  /* ------------------- the same function, from the downloads caller -- */
+
+  it('writes a partial, renames it into place, and answers where it landed', async () => {
+    const landed = await deliver({}, '/here/report.pdf', '/srv/incoming')
+
+    expect(landed).toBe('/srv/incoming/report.pdf')
+    const sftp = FakeClient.made[0].sftpDesk
+    expect(sftp?.put).toEqual([['/here/report.pdf', '/srv/incoming/report.pdf.part']])
+    expect(sftp?.renamed).toEqual([
+      { from: '/srv/incoming/report.pdf.part', to: '/srv/incoming/report.pdf' },
+    ])
+    // The order, spelled out, because the order is the promise. Nothing wears
+    // the final name until every byte of it is on the far end.
+    expect(sftp?.calls).toEqual([
+      'stat /srv/incoming',
+      'mkdir /srv/incoming',
+      'stat /srv/incoming/report.pdf',
+      'put /srv/incoming/report.pdf.part',
+      'rename /srv/incoming/report.pdf.part /srv/incoming/report.pdf',
+    ])
+    // The channel closes; the pool still owns the socket and decides when *that*
+    // goes, which is the same bargain `listDirectory` makes.
+    expect(sftp?.ends).toBe(1)
+  })
+
+  it('asks the server what the folder really is rather than assembling one', async () => {
+    // '' means the account's own login directory, and only the server can say
+    // what that is — `/home/<username>` is wrong for root and wrong on macOS.
+    expect(await deliver({ home: '/home/asad' }, '/here/a.bin', '')).toBe('/home/asad/a.bin')
+    expect(FakeClient.made[0].sftpDesk?.calls[0]).toBe('realpath .')
+  })
+
+  it('leaves an absolute folder alone instead of hanging it off home', async () => {
+    // The one rule that lets both callers share this function: a leading slash
+    // means the path is already the server's own, so nothing is resolved and
+    // nothing is joined. A `realpath .` here would be a wasted round trip; a
+    // *join* here would put the download in `/home/asad/srv`.
+    await deliver({ home: '/home/asad' }, '/here/a.bin', '/srv')
+    expect(FakeClient.made[0].sftpDesk?.calls).not.toContain('realpath .')
+  })
+
+  it('lands beside a file of the same name in a chosen folder, too', async () => {
+    expect(
+      await deliver({ present: ['/srv', '/srv/report.pdf'] }, '/here/report.pdf', '/srv'),
+    ).toBe('/srv/report (2).pdf')
+  })
+
+  it('deletes its own partial when the write fails, and says why', async () => {
+    const failed: unknown = await deliver(
+      { present: ['/srv'], putFails: true },
+      '/here/a.bin',
+      '/srv',
+    ).catch((error: unknown) => error)
+    expect(failed).toBeInstanceOf(ServerProblem)
+    expect(FakeClient.made[0].sftpDesk?.unlinked).toEqual(['/srv/a.bin.part'])
+    expect(FakeClient.made[0].sftpDesk?.renamed).toEqual([])
   })
 })

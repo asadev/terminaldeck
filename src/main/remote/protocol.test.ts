@@ -13,6 +13,7 @@ import {
   MAX_PROVIDER_LENGTH,
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_DATA_CHARS,
+  MAX_UPLOAD_DIR_BYTES,
   MAX_UPLOAD_NAME_BYTES,
   NET_WINDOW_BYTES,
   SHA256_HEX_LENGTH,
@@ -185,6 +186,15 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'net.ack', ch: 'c1', bytes: 1448 },
   { t: 'net.close', ch: 'c1' },
   { t: 'upload.begin', id: 'up-1', name: 'IMG_4823.HEIC', size: 3_145_728 },
+  // The same frame with a destination on it: a browser download being delivered
+  // to a folder on the far machine rather than to its downloads folder.
+  {
+    t: 'upload.begin',
+    id: 'up-2',
+    name: 'report.pdf',
+    size: 4096,
+    dir: '/Users/asad/Projects/site',
+  },
   { t: 'upload.data', id: 'up-1', data: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64') },
   { t: 'upload.end', id: 'up-1', sha256: 'e'.repeat(SHA256_HEX_LENGTH) },
   { t: 'upload.cancel', id: 'up-1' },
@@ -1870,6 +1880,55 @@ describe('upload', () => {
     ]) {
       refused(frame, String(frame.t))
     }
+  })
+
+  /*
+   * `dir` — the one field on this frame that names a place.
+   *
+   * The parser's job here is shape and nothing more. Whether the folder may
+   * actually be written to is the host's question, answered against the list it
+   * published to that device — `storeForFolder` in `server.ts`, pinned in
+   * `server.test.ts`. A parser that decided it would be the most dangerous kind
+   * of wrong, which is the argument `create.cwd` and the name above already make.
+   */
+  it('carries a destination folder, and treats absent and empty as the same answer', () => {
+    expect(accepted(begin({ dir: '/srv/incoming' }))).toEqual({
+      t: 'upload.begin',
+      id: 'up-1',
+      name: 'photo.jpg',
+      size: 1024,
+      dir: '/srv/incoming',
+    })
+    // Absent is every phone and every desktop before this field existed; empty
+    // is a sender that chose nothing. Both mean the host's own folder, and both
+    // come out of here as a frame with no `dir` on it at all.
+    expect(accepted(begin({}))).not.toHaveProperty('dir')
+    expect(accepted(begin({ dir: '' }))).not.toHaveProperty('dir')
+  })
+
+  it('refuses a folder that is not a string, is oversized, or hides a control byte', () => {
+    refused(begin({ dir: 42 }), 'numeric folder')
+    expect(refused(begin({ dir: `/${'x'.repeat(MAX_UPLOAD_DIR_BYTES)}` }), 'long folder').code).toBe(
+      'too-large',
+    )
+    // Stripped would turn a hostile value into a different legal-looking path,
+    // which is the worse failure — the same argument the name check makes.
+    expect(refused(begin({ dir: '/srv/in\u0000coming' }), 'NUL in folder').code).toBe('bad-message')
+  })
+
+  it('reads the folder once, so a getter cannot swap it after the checks', () => {
+    let reads = 0
+    const frame = {
+      t: 'upload.begin',
+      id: 'up-1',
+      name: 'photo.jpg',
+      size: 1024,
+      get dir(): string {
+        reads += 1
+        return reads === 1 ? '/srv/incoming' : `/${'x'.repeat(MAX_UPLOAD_DIR_BYTES)}`
+      },
+    }
+    expect(accepted(frame)).toMatchObject({ dir: '/srv/incoming' })
   })
 
   it('reads the name once, so a getter cannot swap it after the checks', () => {

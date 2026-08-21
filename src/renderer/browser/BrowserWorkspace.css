@@ -1672,6 +1672,58 @@
   min-width: 0;
 }
 
+/* ---------------------------------------------------------- downloads -- */
+
+/*
+  The downloads button on the bar, and its badge.
+
+  It is only ever rendered while `downloadsBadge` has something to say — see the
+  prop in `Toolbar.tsx` — so there is no empty state to style. `data-tone` is
+  the one thing it says without being opened: a failure is the accent this app
+  reserves for failures, and everything else is quiet.
+*/
+.bw-downloads-btn {
+  position: relative;
+}
+
+.bw-dl-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 9px;
+  font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums;
+  line-height: 13px;
+  text-align: center;
+}
+
+.bw-downloads-btn[data-tone='bad'] .bw-dl-badge {
+  background: var(--color-critical);
+}
+
+.bw-downloads-btn[data-tone='done'] .bw-dl-badge {
+  background: var(--text-muted);
+}
+
+/* Wider than the ⋯ menu, for the reason the profile menu is: every row carries
+   a name, a place and up to two verbs, and at 19rem the place — which is the
+   fact somebody opens this to read — is the part that gives way. */
+.bw-popup:has(.bw-downloads) {
+  width: min(26rem, calc(100vw - 2 * var(--sp-4)));
+}
+
+.bw-downloads {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
 /* The whole row is the way back — *"navigable by clicking an entry"* — so it is
    one button across the width rather than a link inside a label. */
 .bw-history-open {
@@ -1772,4 +1824,222 @@
   align-items: center;
   gap: var(--sp-1);
   margin-top: var(--sp-4);
+}
+
+/* The destination line. A button, because the fact and the way to change it are
+   the same thing; the gutter keeps its first line clear of the popup's own
+   close button, the same 22px `.bw-menu-gutter` uses and for the same reason. */
+.bw-dl-dest {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  padding-right: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-footnote);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.bw-dl-dest:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.bw-dl-dest-where {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bw-dl-dest-verb {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.bw-dl-chooser {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2) var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+
+.bw-dl-machines,
+.bw-dl-folder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.bw-dl-machine,
+.bw-dl-act {
+  padding: 2px var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-footnote);
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.bw-dl-machine:hover:not(:disabled),
+.bw-dl-act:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.bw-dl-machine[data-on],
+.bw-dl-act[data-on] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.bw-dl-machine:disabled,
+.bw-dl-act:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.bw-dl-machine-state {
+  color: var(--text-muted);
+}
+
+.bw-dl-act[data-tone='critical'] {
+  color: var(--color-critical);
+}
+
+.bw-dl-typed {
+  display: flex;
+  gap: var(--sp-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.bw-dl-typed input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-footnote);
+}
+
+.bw-dl-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  /* A cap rather than a full-height popup: a hundred rows is the store's own
+     limit and a popup that tall would run off a laptop screen. `.bw-popup`
+     already caps its own height; this keeps the destination line and Clear
+     reachable above and below the scroll. */
+  overflow-y: auto;
+  max-height: 22rem;
+  min-width: 0;
+}
+
+/* A row is a grid so the name and the place line up down the list whatever the
+   verbs on the right happen to be. Three columns: what it is, where it is, and
+   what can be done about it. */
+.bw-dl-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.bw-dl-row:hover {
+  background: var(--bg-hover);
+}
+
+.bw-dl-name {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bw-dl-line {
+  grid-column: 1;
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A failure says so in the colour failures are said in here, on the line that
+   carries the reason. The row is not tinted whole: the file's name is still the
+   name of a file, and colouring it would read as the name being wrong. */
+.bw-dl-row[data-state='failed'] .bw-dl-line {
+  color: var(--color-critical);
+}
+
+.bw-dl-bar {
+  display: block;
+  grid-column: 1 / -1;
+  height: 2px;
+  margin-top: 3px;
+  border-radius: 1px;
+  background: var(--bg-hover);
+}
+
+.bw-dl-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--accent);
+  transition: width var(--dur) var(--ease);
+}
+
+.bw-dl-acts {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  gap: var(--sp-1);
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.bw-dl-empty,
+.bw-dl-problem {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.bw-dl-problem {
+  color: var(--color-critical);
+}
+
+.bw-dl-clear {
+  align-self: flex-start;
+  padding: 2px var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.bw-dl-clear:hover {
+  background: var(--bg-hover);
 }

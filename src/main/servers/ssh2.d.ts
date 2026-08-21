@@ -216,12 +216,24 @@ declare module 'ssh2' {
   /**
    * The subsystem, opened over a connection that is already up.
    *
-   * Declared as narrowly as everything else in this file: six calls, which is
-   * every call a folder picker and a file handover make. `readdir` and
+   * Declared as narrowly as everything else in this file: eight calls, which is
+   * every call a folder picker and a file delivery make. `readdir` and
    * `realpath` answer the two questions — *what is in here* and *what is `~`
-   * actually called* — `stat`, `mkdir` and `fastPut` are the three a handover
-   * takes, and `end` closes the channel, which is not the connection: the pool
-   * below still owns that and still decides when the socket goes.
+   * actually called* — `stat`, `mkdir`, `fastPut`, `rename` and `unlink` are the
+   * five a write takes to make its folder and then land a file under a name
+   * nothing else is using, and `end` closes the channel, which is not the
+   * connection: the pool below still owns that and still decides when the socket
+   * goes.
+   *
+   * Count them if you change them. The number in this sentence has been wrong
+   * twice already, both times because a lane added a call and left the prose
+   * alone.
+   *
+   * `fastPut` is the library's parallel-read upload rather than a stream: it
+   * opens several reads against the local file and writes them at offsets, which
+   * is what makes an ordinary file cross in one round of latency rather than in
+   * one per 32 KB. Its callback is the only completion signal — there is no
+   * event to wait for afterwards.
    *
    * The errors carry a numeric `code` from RFC 4251 §7 (`3` is permission
    * denied, `2` is no such file), and that number is the only thing that
@@ -273,9 +285,30 @@ declare module 'ssh2' {
      *
      * It creates or **truncates** the remote path. There is no `wx` here, so the
      * caller is responsible for choosing a name that is free — see `putFile` in
-     * `connection.ts`, which says what that does and does not guarantee.
+     * `connection.ts`, which says what that does and does not guarantee. It is
+     * also why `putFile` writes to a `.part` and renames: a truncate that then
+     * fails halfway would otherwise leave a ruined file wearing a real name.
      */
     fastPut(localPath: string, remotePath: string, callback: (err?: Error & { code?: number }) => void): void
+    /**
+     * Move a path on the far end, which is how a finished `.part` becomes the
+     * file somebody reads.
+     *
+     * Atomic within one filesystem, which is the only case this app creates —
+     * the partial is written into the same folder the final name is in, never a
+     * temporary directory elsewhere on the server, precisely so that this
+     * rename cannot degrade into a copy that can itself fail halfway.
+     */
+    rename(from: string, to: string, callback: (err?: Error & { code?: number }) => void): void
+    /**
+     * Delete one path. Used on exactly one thing: this app's own `.part`, on the
+     * failure path, so that a delivery that did not finish leaves nothing behind.
+     *
+     * Nothing else in this app deletes anything on somebody else's server, and
+     * the error is deliberately ignored at the call site — it runs after a
+     * failure that has already been reported and has nothing left to report to.
+     */
+    unlink(path: string, callback: (err?: Error & { code?: number }) => void): void
     end(): void
   }
 

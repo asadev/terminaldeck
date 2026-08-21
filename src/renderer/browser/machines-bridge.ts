@@ -151,6 +151,21 @@ export interface MachineChoice {
    */
   unreachable: string | null
   /**
+   * Folders that machine has said it will take a file into, or null.
+   *
+   * `null` and `[]` are different answers, exactly as they are on
+   * `MachineLinkState.folders`, which this is copied straight off: `null` is
+   * *that machine never said* — a server, or a build older than the field — and
+   * `[]` is *somebody chose no folders for this device*, which is a real state
+   * with a real remedy on the other keyboard.
+   *
+   * It is here for the downloads destination picker, which offers these as the
+   * folders a download may be delivered into. The far machine decides for itself
+   * whether to accept one — `storeForFolder` in `remote/server.ts` — so this list
+   * is what to *offer*, never a claim about what will be allowed.
+   */
+  folders: string[] | null
+  /**
    * The longer reason, when there is one that the label cannot carry — the
    * relay's own words for an `error`, a server's own words for a refusal.
    *
@@ -236,6 +251,7 @@ export function machineChoices(view: MachinesView): MachineChoice[] {
       noun,
       ports: asDevPorts(link?.ports ?? []),
       unreachable: unreachableFor(link),
+      folders: link?.folders ?? null,
       // Only an `error` has anything to add: the other four states are fully
       // described by their label, and repeating one in a tooltip would be the
       // sentence coming back through a different door.

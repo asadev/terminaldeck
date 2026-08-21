@@ -42,6 +42,15 @@ interface Props {
    * stays true.
    */
   onCookies?: () => void
+  /**
+   * Open the downloads panel.
+   *
+   * Absent only when the preload cannot list downloads at all — see
+   * `downloadsAvailable`. A row here that opened a panel which could never list
+   * anything would be the shape of half-feature this whole review is about, so
+   * the row goes with the thing behind it rather than being drawn disabled.
+   */
+  onDownloads?: () => void
   onClose(): void
 }
 
@@ -103,6 +112,7 @@ export function BrowserMenu({
   onHistory,
   onFlow,
   onCookies,
+  onDownloads,
   onClose,
 }: Props) {
   const isStartPage = url !== '' && url === startUrl
@@ -143,6 +153,29 @@ export function BrowserMenu({
             {action.label}
           </button>
         ))}
+
+        {/*
+          Downloads, first among the rows about this browser rather than about
+          this page, and the standing door into the panel.
+
+          *"Then I need to have downloads option"* — said with Chrome's ⋮ menu
+          open and the pointer resting on its `Downloads ⌥⌘L`. It is a row here
+          and not only a button on the bar because the button is absent while
+          nothing is happening, and a feature reachable only while it is busy is
+          not reachable.
+        */}
+        {onDownloads && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            onClick={() => {
+              onDownloads()
+              onClose()
+            }}
+          >
+            Downloads
+          </button>
+        )}
 
         {/* Disabled with a reason rather than hidden. There is always a page or
             there is not, and a row that disappears when nothing is open reads as

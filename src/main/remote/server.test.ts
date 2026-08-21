@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer, request, type Server } from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import type { AddressInfo, Socket } from 'node:net'
@@ -655,6 +655,71 @@ describe('a paired device', () => {
     const done = await client.until((m) => m.t === 'upload.done', 'the finish')
     expect(done.t === 'upload.done' && done.bytes).toBe(payload.length)
     expect(readFileSync(join(dir, 'clip.mov'))).toEqual(payload)
+  })
+
+  /*
+   * `upload.begin.dir` — a destination the *sender* named, and the one field on
+   * this wire that names a place.
+   *
+   * `uploads.ts` opens by refusing to build a path out of two pieces of network
+   * input, and that promise is kept by this layer rather than by that one: the
+   * folder is resolved against the list **this host published to this device**,
+   * exactly as `create` resolves its `cwd`. These three tests are the whole of
+   * that rule, and they exist because the failure they prevent is a `writeFile`
+   * at a location chosen across a network.
+   */
+  it('takes a file into a folder inside one it offered this device', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'deck-uploads-'))
+    const shared = mkdtempSync(join(tmpdir(), 'deck-shared-'))
+    roots.push(dir, shared)
+    // Containment rather than equality, for the reason `device-reach.ts` gives:
+    // somebody who shared a project shared what is under it.
+    const inside = join(shared, 'incoming')
+    const harness = await serve({ uploadsDir: dir }, creatingSessions([shared]))
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'upload.begin', id: 'up-1', name: 'a.bin', size: 3, dir: inside })
+    const ready = await client.until((m) => m.t === 'upload.ready', 'the path')
+    expect(ready.t === 'upload.ready' && ready.path).toBe(join(inside, 'a.bin'))
+  })
+
+  it('refuses a folder it never offered, before anything is created', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'deck-uploads-'))
+    const shared = mkdtempSync(join(tmpdir(), 'deck-shared-'))
+    roots.push(dir, shared)
+    const harness = await serve({ uploadsDir: dir }, creatingSessions([shared]))
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'upload.begin', id: 'up-1', name: 'a.bin', size: 3, dir: '/etc' })
+    const refusal = await client.until((m) => m.t === 'upload.failed', 'a refusal')
+    // On the upload's own id, so the sender ends the right progress bar — the
+    // same rule every other refusal on this verb follows.
+    expect(refusal.t === 'upload.failed' && refusal.id).toBe('up-1')
+    expect(existsSync(join('/etc', 'a.bin'))).toBe(false)
+  })
+
+  it('lets one of your own machines name any folder, as it may start a session anywhere', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'deck-uploads-'))
+    const elsewhere = mkdtempSync(join(tmpdir(), 'deck-elsewhere-'))
+    roots.push(dir, elsewhere)
+    const harness = await serve(
+      // What the Electron shell answers for a device approved as `mine` —
+      // `reachFor`'s own rule, and the reason the offered list is not the
+      // ceiling for such a device: for it that list is only suggestions.
+      { uploadsDir: dir, unrestrictedFolders: () => true },
+      creatingSessions(['/tmp/somewhere-else']),
+    )
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'upload.begin', id: 'up-1', name: 'a.bin', size: 3, dir: elsewhere })
+    const ready = await client.until((m) => m.t === 'upload.ready', 'the path')
+    expect(ready.t === 'upload.ready' && ready.path).toBe(join(elsewhere, 'a.bin'))
   })
 
   it('answers a port list, and will not tunnel to a port nothing is serving', async () => {

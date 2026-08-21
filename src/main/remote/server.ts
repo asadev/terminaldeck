@@ -114,7 +114,7 @@ import {
 // Windows a folder visibly on the list being refused over a drive letter's case.
 // `session-create.ts`'s only runtime dependency in this direction is a type, so
 // there is no cycle.
-import { sameFolder } from './session-create'
+import { isAbsoluteFolder, sameFolder, withinFolder } from './session-create'
 /*
  * The scheme gate, from `browser-url.ts` and deliberately **not** from
  * `link-open.ts`.
@@ -143,6 +143,7 @@ import {
   diskUploadStore,
   type UploadDesk,
   type UploadMessage,
+  type UploadStore,
 } from './uploads'
 // Type-only, like `FolderGrants` above and for the same reason: the proxy is
 // built by `index.ts`, which needs it before this function is called — the
@@ -869,6 +870,28 @@ export interface RemoteEndpointOptions {
    * grant allows and nothing that manages the computer.
    */
   ownDevice?(deviceId: string): boolean
+  /**
+   * May this device name any folder on this machine, or only the ones offered?
+   *
+   * **Optional, and absent means no** — which is the fail-closed answer every
+   * host written before this existed gets, and the right one: a host that cannot
+   * tell its own laptop from a stranger's phone should treat both as the phone.
+   * A desktop that knows about device kinds answers `kind === 'mine'`, which is
+   * `reachFor`'s rule in `device-reach.ts` and not a second idea of it.
+   *
+   * It exists for one field, `upload.begin.dir`. {@link SessionAccess.folders}
+   * is the enforced list for a guest and only a list of *suggestions* for one of
+   * your own — `device-reach.ts` says so in as many words — so enforcing
+   * containment against it for every device would mean a second laptop of your
+   * own could only ever receive a file into a folder that happened to have a
+   * project open in it. That is not a boundary, it is an accident of what was on
+   * screen.
+   *
+   * A callback rather than a set, for the reason {@link copilotEligible} is: a
+   * kind is decided when a device is approved, which can happen while that
+   * device is connected.
+   */
+  unrestrictedFolders?(deviceId: string): boolean
   /**
    * Open a page on this machine, and say whether a window took it.
    *
@@ -2220,11 +2243,46 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     const dir = options.uploadsDir
     if (dir === undefined || dir === '') return null
     const desk = createUploadDesk({
-      store: diskUploadStore(dir),
+      /*
+       * `deviceId` is null only on a connection that has not authenticated, and
+       * `deskFor` is reached only from the authenticated branch — so the null
+       * arm is unreachable and is a refusal rather than a cast. A folder check
+       * that fell back to "no device, therefore allow" would be the one bug in
+       * this file worth having a compiler.
+       */
+      store: (wanted) =>
+        wanted === null
+          ? diskUploadStore(dir)
+          : connection.deviceId === null
+            ? null
+            : storeForFolder(connection.deviceId, wanted),
       send: (message) => send(connection, message),
     })
     connection.uploads = desk
     return desk
+  }
+
+  /**
+   * A store for a folder the sender named, or null because it may not have it.
+   *
+   * The whole of `upload.begin.dir`'s safety, and it is deliberately the same
+   * shape as `create`'s: the answer is decided against the list **this host**
+   * published to **this device**, read now rather than at hello, so an untick in
+   * Settings lands on the next frame. Containment rather than equality, for the
+   * reason `device-reach.ts` gives about the same asymmetry — a person who
+   * shared `~/work/site` shared what is under it, and a downloads folder inside
+   * a shared project is the ordinary case rather than an edge one.
+   *
+   * Absolute, because a relative path would be resolved against this process's
+   * working directory, which is a folder nobody chose and which differs between
+   * a packaged app and a `npm start`.
+   */
+  function storeForFolder(deviceId: string, wanted: string): UploadStore | null {
+    if (!isAbsoluteFolder(wanted)) return null
+    if (options.unrestrictedFolders?.(deviceId) === true) return diskUploadStore(wanted)
+    const offered = options.sessions.folders?.(deviceId) ?? []
+    if (!offered.some((folder) => withinFolder(folder, wanted))) return null
+    return diskUploadStore(wanted)
   }
 
   function detachAll(connection: LiveConnection): void {
@@ -5647,6 +5705,13 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
      * changed the other.
      */
     ownDevice: (deviceId) => deps.kinds.kindOf(deviceId) === 'mine',
+    /*
+     * `reachFor`'s own rule, spelled here because this is the layer that has the
+     * device kinds. One of your own machines may be handed a file anywhere on
+     * this disk, exactly as it may start a session anywhere; a guest may only be
+     * handed one inside a folder somebody chose for it.
+     */
+    unrestrictedFolders: (deviceId) => deps.kinds.kindOf(deviceId) === 'mine',
     // Spread, so a shell with no window advertises no `web` capability at all —
     // the headless daemon is exactly that, and a page it could not open must
     // not appear as a button on somebody's phone.

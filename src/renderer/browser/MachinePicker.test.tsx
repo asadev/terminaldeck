@@ -32,6 +32,7 @@ const OFFICE: MachineChoice = {
   noun: 'PC',
   ports: [{ port: 5173, process: 'node', guessed: false, ours: false }],
   unreachable: null,
+  folders: null,
   detail: null,
 }
 

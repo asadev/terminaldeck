@@ -58,15 +58,17 @@ describe('the everyday rows he named, and only the ones that exist', () => {
    *   > passwords history also."*
    *
    * Chrome's ⋮ menu (f_0098/f_0100) has eighteen rows. He asked for *"most of
-   * them"* and named two out loud. History is the one this release built, and it
-   * is here because the store and the panel behind it are real —
-   * `browser-history.ts` and `HistoryPanel.tsx`.
+   * them"* and named two out loud. History and Downloads are the two this
+   * release built, and they are here because the stores and panels behind them
+   * are real — `browser-history.ts` with `HistoryPanel.tsx`, and
+   * `browser-downloads.ts` with `DownloadsPanel.tsx`. Downloads has its own
+   * block below, which is where its rows are pinned.
    *
    * The absences below are the deliberate half and the reason this block exists:
-   * Downloads, a Saved-passwords section and Extensions are not in this release,
-   * and a menu entry that opens a page nobody built is the exact defect the
-   * whole review is made of. Adding one of these rows means building the thing
-   * first — and then this test is what tells you to come back and change it.
+   * a Saved-passwords section and Extensions are not in this release, and a menu
+   * entry that opens a page nobody built is the exact defect the whole review is
+   * made of. Adding one of these rows means building the thing first — and then
+   * this test is what tells you to come back and change it.
    */
   it('draws History', () => {
     expect(onScreen).toContain('onHistory')
@@ -76,9 +78,9 @@ describe('the everyday rows he named, and only the ones that exist', () => {
   it('draws no row for a feature this release does not have', () => {
     // Extensions and a saved-passwords section are not in this release, and a
     // menu entry that opens a page nobody built is the exact defect the whole
-    // review is made of. Downloads is deliberately not asserted either way here:
-    // it is a separate item in this same release, and if it lands it arrives
-    // with its own store and its own row rather than by copying Chrome's list.
+    // review is made of. Downloads was left unasserted here on the grounds that
+    // if it landed it would arrive with its own store and its own row rather
+    // than by copying Chrome's list. It did, and it did — the block below.
     expect(onScreen).not.toContain('Extensions')
     expect(onScreen).not.toContain('Saved passwords')
   })
@@ -87,5 +89,42 @@ describe('the everyday rows he named, and only the ones that exist', () => {
     // Absent, not disabled: disabled says "not now", and the truth there is
     // "not at all". Same bargain the Settings row above makes.
     expect(onScreen).toContain('{onHistory && (')
+  })
+})
+
+/**
+ * Downloads, the standing door.
+ *
+ *   > *"Then I need to have downloads option"*
+ *   > *"Then I need proper downloads folder and all of this stuff, history, save
+ *   > passwords and all of this."*
+ *
+ * Said with Chrome's ⋮ open and the pointer resting on its `Downloads ⌥⌘L`. The
+ * button on the toolbar comes and goes with the list — see `downloadsBadge` —
+ * so this row is the one place downloads can always be reached from. Its absence
+ * would make the button's absence a feature that hides.
+ */
+describe('the browser can reach its downloads', () => {
+  it('draws a row that says the word', () => {
+    expect(onScreen).toContain('Downloads')
+    expect(onScreen).toContain('onDownloads()')
+  })
+
+  it('takes the panel as a prop rather than opening it itself', () => {
+    // The panel is anchored to a rectangle only the workspace can measure, and
+    // one popup at a time on this bar is the workspace's rule to keep.
+    expect(onScreen).toContain('onDownloads?: () => void')
+  })
+
+  it('goes with the thing behind it rather than being drawn disabled', () => {
+    // A row that opened a panel which could never list anything is the shape of
+    // half-feature this review is about. `downloadsAvailable` decides, and the
+    // row is conditional on the prop.
+    expect(onScreen).toContain('{onDownloads && (')
+  })
+
+  it('closes the menu behind it, like every other row here', () => {
+    const row = onScreen.slice(onScreen.indexOf('onDownloads()'))
+    expect(row.slice(0, row.indexOf('</button>'))).toContain('onClose()')
   })
 })
