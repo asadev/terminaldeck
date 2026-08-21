@@ -88,6 +88,7 @@ import {
 } from './confine'
 import { forgetBoundary, noteBoundary } from './session-boundary'
 import { currentOpenShim, prependShim } from './open-shim'
+import { currentAppContext } from './app-context'
 import { installDeviceHomes, installHomeScopes } from './transcript'
 import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-session'
 import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
@@ -1670,7 +1671,26 @@ export function createHostCore(options: HostCoreOptions): HostCore {
           const confine: DeviceConfinement = {
             home: prepareDeviceHome(deviceHomesRoot(options.storageDir), key),
             writable: [guestGitDir(guestRoot, key)],
-            files: [join(guestRoot, HELPER_FILE)],
+            /*
+             * The credential helper, and the app's own context documents.
+             *
+             * The second entry is here because of where the first one taught us
+             * to put things. `confine/plan.ts` keeps `<userData>` out of every
+             * read root on purpose — it also holds transcripts, pairing
+             * credentials and `state.json` — and the context documents live
+             * inside it. Without this line the map handed to a remote session at
+             * boot would name a directory that session cannot open, which is
+             * precisely the session type Asad was filming when he asked for the
+             * map in the first place.
+             *
+             * Granted as *files* rather than as their folder, exactly like the
+             * helper above and for a weaker version of the same reason: the
+             * folder is inside `<userData>`, so opening it would be one small
+             * step towards opening the thing this boundary exists to keep shut.
+             * They are read-only, they are regenerated from code at every start,
+             * and they contain nothing this session was not already told.
+             */
+            files: [join(guestRoot, HELPER_FILE), ...(currentAppContext()?.files ?? [])],
           }
           let meta: SessionMeta
           try {

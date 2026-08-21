@@ -1,7 +1,16 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { contextDir, INDEX_FILE } from '../main/app-context'
+import { attach } from '../main/browser-binding'
+import {
+  currentHookEndpoint,
+  SESSION_HEADER,
+  TOKEN_HEADER,
+  type HookEndpoint,
+} from '../main/hook-server'
 import { installPaths, nodePaths, resetPaths } from '../main/platform/paths'
 import { REMOTE_CONNECTIONS_CHANNEL } from '../main/remote/server'
 import { store } from '../main/store'
@@ -254,6 +263,88 @@ describe.skipIf(process.platform !== 'darwin')('a session started for a device',
     host.core.ptys.kill(meta.id)
   }, 30_000)
 })
+
+describe('a session on this host is told what it is running inside', () => {
+  /**
+   * The gap Asad filmed, and it was here rather than near the feature.
+   *
+   * A session on his Office PC, asked *"which app are you running now, are you
+   * told in the boot"*, answered out of `CLAUDE_CODE_ENTRYPOINT` and a `which
+   * claude` and never named this app. The window has had the context channel
+   * since 2026-08-19; this host started the same endpoint with no `contextFor`
+   * at all, so every knock from every session on it was answered `204`.
+   *
+   * A browser window is attached rather than a pty started, and that is not a
+   * shortcut around the check it looks like: `hookContext` treats a window bound
+   * to an id as its own proof that this app started that session — the renderer
+   * only ever binds one to a session it is running — so this exercises the same
+   * branch a real session takes, in milliseconds instead of seconds.
+   */
+  it('answers a hook knock with the app, its version and where to read more', async () => {
+    const endpoint = currentHookEndpoint()
+    expect(endpoint).not.toBeNull()
+
+    attach({ sessionId: 'headless-1', browserTabId: 'b:1', title: 'Orders' })
+    const answer = await knock(endpoint as HookEndpoint, 'claude', 'SessionStart', 'headless-1')
+
+    expect(answer.status).toBe(200)
+    expect(answer.context).toContain('Terminal Deck')
+    expect(answer.context).toContain(INDEX_FILE)
+    // And the documents the map names are on this host's disk, not only on the
+    // machine that will read the answer.
+    expect(existsSync(join(contextDir(dir), INDEX_FILE))).toBe(true)
+  })
+
+  it('tells a shell somebody started over ssh on this box nothing at all', async () => {
+    const endpoint = currentHookEndpoint()
+    // The hook is installed for the whole account, so it fires for a `claude`
+    // run in a plain ssh session too. That one is not inside this app.
+    const answer = await knock(endpoint as HookEndpoint, 'claude', 'SessionStart', 'not-ours')
+    expect(answer.status).toBe(204)
+  })
+})
+
+/** One hook call, exactly as an installed command makes it. */
+function knock(
+  endpoint: HookEndpoint,
+  provider: string,
+  event: string,
+  sessionId: string,
+): Promise<{ status: number; context: string | null }> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  headers[TOKEN_HEADER] = endpoint.token
+  headers[SESSION_HEADER] = sessionId
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        socketPath: endpoint.socketPath,
+        method: 'POST',
+        path: `/hook/${provider}/${event}`,
+        headers,
+      },
+      (res) => {
+        let text = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => {
+          text += chunk
+        })
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            context:
+              text === ''
+                ? null
+                : ((JSON.parse(text) as { hookSpecificOutput?: { additionalContext?: string } })
+                    .hookSpecificOutput?.additionalContext ?? null),
+          }),
+        )
+      },
+    )
+    req.on('error', reject)
+    req.write('{}')
+    req.end()
+  })
+}
 
 /** Written outside the granted folder. Its contents must never reach a session. */
 const SECRET = 'headless-canary-b71fe9-do-not-leak'

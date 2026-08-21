@@ -33,6 +33,7 @@ import {
   detectIndent,
   hookCommand,
   installHooks,
+  installHooksWhereConfigured,
   isOurs,
   ownerOf,
   powershellPath,
@@ -948,5 +949,75 @@ describe('syncInstalledHooks', () => {
     const result = installHooks(context, 'claude')
 
     expect(result.status.state).toBe('complete')
+  })
+})
+
+/**
+ * The pass a machine with no Settings pane needs.
+ *
+ * A headless host starts the same endpoint the desktop does and, until this
+ * existed, nothing on that machine was ever pointed at it: installing is a
+ * button, and there is no button on a server. So an agent session on the Office
+ * PC fired hooks that were never installed — no status, and no boot context
+ * either, which is the half Asad filmed.
+ *
+ * It is a *larger* claim than `syncInstalledHooks` makes, so the cases that
+ * matter are the ones where it must still decline.
+ */
+describe('installHooksWhereConfigured', () => {
+  it('installs into a CLI that is set up on this machine', () => {
+    writeClaude()
+
+    const claude = installHooksWhereConfigured(context).find((status) => status.id === 'claude')
+
+    expect(claude?.state).toBe('complete')
+    expect(claude?.installedEvents.length).toBe(HOOK_PROVIDERS.claude.events.length)
+  })
+
+  it('creates nothing for a CLI that is not on the machine at all', () => {
+    writeClaude()
+
+    const statuses = installHooksWhereConfigured(context)
+
+    // The absence of `~/.gemini/settings.json` is the ordinary state of a server
+    // that does not have Gemini. Writing one would leave this app's config
+    // behind for a tool nobody has, on a machine nobody is looking at.
+    expect(statuses.find((status) => status.id === 'gemini')?.state).toBe('none')
+    expect(existsSync(join(root, '.gemini', 'settings.json'))).toBe(false)
+    expect(existsSync(join(root, '.codex', 'hooks.json'))).toBe(false)
+  })
+
+  it('does not take an install belonging to another copy of the app', () => {
+    // The same rule `syncInstalledHooks` follows, and it matters more here: a
+    // desktop and a daemon on one machine must not take the events off each
+    // other, and only one of them has a person in front of it to notice.
+    writeClaude()
+    installHooks({ ...context, endpoint: OTHER_COPY }, 'claude')
+    const before = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+
+    const claude = installHooksWhereConfigured(context).find((status) => status.id === 'claude')
+
+    expect(claude?.state).toBe('stale')
+    expect(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')).toBe(before)
+  })
+
+  it('never rewrites a config it could not parse', () => {
+    writeClaude('{ this is not json')
+
+    const claude = installHooksWhereConfigured(context).find((status) => status.id === 'claude')
+
+    expect(claude?.state).toBe('error')
+    expect(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')).toBe('{ this is not json')
+  })
+
+  it('backs the file up before the first time it touches it', () => {
+    writeClaude()
+    const before = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+
+    installHooksWhereConfigured(context)
+
+    // A startup pass writing into somebody's own config without a person
+    // present is exactly the case the backup was written for.
+    expect(readFileSync(backupPathFor(context, 'claude'), 'utf8')).toBe(before)
   })
 })
