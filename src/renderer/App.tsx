@@ -107,6 +107,7 @@ import {
 } from './shell/workspace-tabs'
 import { ServerSessionPane } from './machines/servers/ServerSessionPane'
 import { MachineSessions } from './machines/new-session-context'
+import { MachineSessionViews } from './machines/session-view-context'
 import { ServerSessions } from './machines/servers/session-context'
 import { asServers, resolveServersBridge } from './machines/servers/types'
 import {
@@ -3310,6 +3311,38 @@ function Workspace() {
   )
 
   /**
+   * What the Machines page is handed so that pressing a session on a machine's
+   * card lands on the window's session view — the only one there is now.
+   *
+   * That card used to draw the session's terminal itself, in the panel, under a
+   * title and a Close and with none of the bar: no controls, no usage, no
+   * account, no Terminal/Chat, no Split. It was the last second in-session view
+   * in the app, and the complaint it belongs to is the one
+   * `shell/session-view-parity.test.ts` is named for: *"every time I tell you I
+   * want exactly same identical view of every type of session inside, including
+   * remote session, including local session"*.
+   *
+   * `selectTab(machineTabId(...))` and nothing else, because that is the road
+   * every other route into "show me this" already takes — the rail, the pill,
+   * ⌘1–9, the palette — and it is the road that clears the panel, hands the far
+   * session the frame when the window is whole and the focused pane when it is
+   * split. A second expression here would be a second answer to those three
+   * questions, which is how this drifted in the first place.
+   *
+   * A context of its own rather than a second method on `machineSessionOpener`
+   * above, for the reason `machines/session-view-context.ts` gives at length:
+   * that opener carries a machine id and nothing else *on purpose*, and
+   * `shell/new-session-route.test.ts` counts its methods to keep it that way.
+   */
+  const machineSessionViewer = useMemo(
+    () => ({
+      show: (machineId: string, sessionId: string) =>
+        selectTab(machineTabId(machineId, sessionId)),
+    }),
+    [selectTab],
+  )
+
+  /**
    * Close, asking first. Always.
    *
    * `CloseSessionConfirm` was written, tested and left on the unreachable list
@@ -5678,6 +5711,15 @@ function Workspace() {
       take a dependency on the half it does not use.
     */}
     <MachineSessions.Provider value={machineSessionOpener}>
+    {/*
+      And the window's one view of a session on a paired machine, so that the
+      Machines page can send somebody to it rather than drawing a lesser copy.
+
+      A third nesting rather than a third key on either object above, for the
+      reason the second gives: three destinations reached from one page are not
+      one bundle. See `machines/session-view-context.ts`.
+    */}
+    <MachineSessionViews.Provider value={machineSessionViewer}>
     <div className="app" data-sidebar-peek={sidebar.peeking || undefined}>
       {/*
         The reveal strip: eight pixels of window edge that peek the rail out.
@@ -6951,6 +6993,7 @@ function Workspace() {
       */}
       <Tooltips />
     </div>
+    </MachineSessionViews.Provider>
     </MachineSessions.Provider>
     </ServerSessions.Provider>
   )

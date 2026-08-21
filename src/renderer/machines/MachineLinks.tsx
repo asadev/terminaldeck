@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Group, Notice } from '../settings/controls'
 import { thisMachine, type UiPlatform } from '../platform'
 import { useAppSettings } from '../settings/useAppSettings'
@@ -71,14 +71,45 @@ import './machines.css'
  * that said so when it could not. A row does not get to keep an explanation of a
  * control it no longer draws.
  *
- * ## Pure, apart from the terminal
+ * ## The terminal this page used to draw
  *
- * `MachineLinks` and every row under it take what they draw. The one component
- * that cannot is {@link MachineSessionPane}, which builds an xterm and needs a
- * DOM — so it is passed *into* the view as a node. That is the same split
- * `RemoteSection` and `DeviceFolders` already use, and the reason is that
- * `renderToStaticMarkup` never runs an effect: a list that read its own machines
- * would be testable in exactly one state, the empty one.
+ * It drew one. A machine's card lists the sessions running on it, and pressing
+ * a row opened that session's terminal **here**, in a `.machines-pane` under a
+ * head with a title, a folder and a Close — and nothing else. No controls, no
+ * model, no effort, no usage, no connectors, no account, no Terminal/Chat
+ * switch, no Split. The window has all of those over the same session, reached
+ * by clicking the same session in the rail.
+ *
+ * Two doors onto one session, and the one that opened onto less was the one
+ * somebody reaches by going to look at the machine it is running on. That is
+ * the thing Asad has asked to stop happening for as long as there have been
+ * remote sessions: *"every time I tell you I want exactly same identical view
+ * of every type of session inside, including remote session, including local
+ * session"*. `shell/session-view-parity.test.ts` made the window's view one
+ * view across all three kinds of session; this panel was the surface that pass
+ * could not reach from `App.tsx`, and it is the last of the drift.
+ *
+ * So the press leaves rather than the row: {@link MachineActions.open} now asks
+ * the window to show that session in its own view — `session-view-context.ts`
+ * carries how, and why it is a context — and `machines/one-session-view.test.ts`
+ * pins that this file grows no terminal of its own again.
+ *
+ * {@link MachineSessionPane} is still here, and still exported, because it is
+ * still the component that mounts a far machine's terminal; what changed is who
+ * mounts it. `App.tsx` does, once, in the list of panes it keeps mounted for the
+ * whole life of the window — deliberately, because unmounting one detaches from
+ * the far machine and is answered with the entire scrollback replayed on the way
+ * back. A copy in this panel was a second mount of the same session that came
+ * and went with a Close button.
+ *
+ * ## Pure, all of it now
+ *
+ * `MachineLinks` and every row under it take what they draw, and since the pane
+ * left there is no longer an exception to carve out. That matters for the reason
+ * `RemoteSection` and `DeviceFolders` give for the same shape: this repository's
+ * test environment has no DOM and `renderToStaticMarkup` never runs an effect, so
+ * a list that read its own machines would be testable in exactly one state, the
+ * empty one.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -110,8 +141,31 @@ export interface MachineActions {
    * be optional for the same reason, and must be absent rather than dead when it
    * is not there. `new-session-context.ts` still carries the whole argument.
    */
-  open(machineId: string, sessionId: string): void
-  close(): void
+  /**
+   * Show that session — in the window's one session view, not here.
+   *
+   * Optional, and absent rather than dead when the window is not there: the
+   * press has to travel up to `App.tsx` through a context, and a page rendered
+   * outside a window gets `null` from it. A session row with no `open` draws its
+   * title, its folder and its status as plain text instead of as a button that
+   * swallows the press. `session-view-context.ts` carries that rule and why it
+   * is the one this file follows rather than a no-op default.
+   *
+   * It used to mean something else, and the difference is the whole point: it
+   * set this panel's own `open` state, and the panel drew the terminal itself.
+   * See the header.
+   */
+  open?(machineId: string, sessionId: string): void
+  /*
+   * A `close()` stood here, and it went with the terminal that needed closing.
+   *
+   * It emptied this panel's `open` state, which is what the Close button over
+   * the embedded pane pressed and what a second press on an already-open session
+   * row pressed. Neither control exists now: a row opens the session in the
+   * window, and what closes a session on a far machine is the ✕ on its pill or
+   * on its rail row, which is a real close on the far machine rather than a
+   * pane being put away. `App.tsx`'s `closeTab` carries that argument.
+   */
   /** Open `http://localhost:<port>/` **on that machine**, in its own browser. */
   openPort(machine: Machine, port: number): void
   /** Ask that machine again what is listening on it. */
@@ -156,9 +210,17 @@ export interface MachinesHalf {
   /** Ask for the list again, for the button beside {@link error}. */
   retry?: () => void
   entry: CodeEntryState
-  open: { machineId: string; sessionId: string } | null
-  /** The live terminal for {@link open}, or nothing in a static render. */
-  pane?: ReactNode
+  /*
+   * An `open` and a `pane` were here — which session this panel had a terminal
+   * open for, and the terminal itself, handed in as a node because it needs a
+   * DOM this repository's tests do not have.
+   *
+   * Both are gone with the second in-session view. Nothing on this half needs to
+   * know which session the window happens to be showing: the row is a way *in*,
+   * and the thing that says what is on screen is the window's own rail and
+   * strip, which highlight it. A copy of that answer here would be a second
+   * place for it to be wrong.
+   */
   actions: MachineActions
 }
 
@@ -238,13 +300,6 @@ export function linkFor(view: MachinesView, id: string): MachineLinkState {
 
 export function MachineLinks({ half, platform }: { half: MachinesHalf; platform?: UiPlatform }) {
   const { view, actions } = half
-  const open = half.open
-
-  const openSession =
-    open === null
-      ? null
-      : (linkFor(view, open.machineId).sessions.find((session) => session.id === open.sessionId) ??
-        null)
 
   return (
     <Group title="Machines you can reach">
@@ -290,23 +345,18 @@ export function MachineLinks({ half, platform }: { half: MachinesHalf; platform?
               machine={machine}
               link={linkFor(view, machine.id)}
               platform={platform}
-              openSessionId={open?.machineId === machine.id ? open.sessionId : null}
               actions={actions}
             />
           ))}
         </ul>
       )}
+      {/*
+        No terminal under the list.
 
-      {open !== null && openSession !== null && (
-        <div className="machines-pane">
-          <div className="machines-pane-head">
-            <span className="machines-pane-title">{openSession.title}</span>
-            <span className="machines-pane-path">{openSession.cwd}</span>
-            <Button onClick={actions.close}>Close</Button>
-          </div>
-          {half.pane}
-        </div>
-      )}
+        There was one, and taking it out is the change this file exists to
+        record — see the header. A session row now opens the session in the
+        window's own view, which is the view it has always had for a local one.
+      */}
     </Group>
   )
 }
@@ -316,13 +366,11 @@ export function MachineLinks({ half, platform }: { half: MachinesHalf; platform?
 export function MachineRow({
   machine,
   link,
-  openSessionId,
   actions,
   platform,
 }: {
   machine: Machine
   link: MachineLinkState
-  openSessionId: string | null
   actions: MachineActions
   platform?: UiPlatform
 }) {
@@ -370,9 +418,14 @@ export function MachineRow({
             <SessionRow
               key={session.id}
               session={session}
-              open={session.id === openSessionId}
-              onOpen={() => actions.open(machine.id, session.id)}
-              onClose={actions.close}
+              /* Null when there is no window to show it in, so the row draws no
+                 button at all rather than one that does nothing. See
+                 `MachineActions.open`. */
+              onOpen={
+                actions.open === undefined
+                  ? null
+                  : () => actions.open?.(machine.id, session.id)
+              }
             />
           ))}
         </ul>
@@ -512,29 +565,45 @@ export function DriveWindows({
   )
 }
 
+/**
+ * One session on that machine, as a way into the window's view of it.
+ *
+ * It was a *toggle* — `aria-pressed`, pressed again to close — because pressing
+ * it opened a terminal in this panel and pressing it again put that terminal
+ * away. Neither half of that is true now: the press hands the session to the
+ * window, which is where every other route to a session lands, and a second
+ * press on a session already on screen would have nothing to undo. So it is a
+ * plain button, and it says so.
+ *
+ * `onOpen` is nullable rather than defaulted, and the row genuinely changes
+ * shape: with no window to open the session in there is no button here, only the
+ * three facts it would have carried. A `<button>` with a no-op handler would
+ * look identical, keep its hover and its focus ring, and do nothing — which is
+ * the one thing a control in this app may not do.
+ */
 export function SessionRow({
   session,
-  open,
   onOpen,
-  onClose,
 }: {
   session: RemoteSession
-  open: boolean
-  onOpen(): void
-  onClose(): void
+  onOpen: (() => void) | null
 }) {
+  const facts = (
+    <>
+      <span className="machines-session-title">{session.title}</span>
+      <span className="machines-session-path">{shortPath(session.cwd)}</span>
+      <span className="machines-session-status">{session.status}</span>
+    </>
+  )
   return (
     <li className="machines-session">
-      <button
-        type="button"
-        className="machines-session-open"
-        onClick={() => (open ? onClose() : onOpen())}
-        aria-pressed={open}
-      >
-        <span className="machines-session-title">{session.title}</span>
-        <span className="machines-session-path">{shortPath(session.cwd)}</span>
-        <span className="machines-session-status">{session.status}</span>
-      </button>
+      {onOpen === null ? (
+        <span className="machines-session-line">{facts}</span>
+      ) : (
+        <button type="button" className="machines-session-open" onClick={onOpen}>
+          {facts}
+        </button>
+      )}
     </li>
   )
 }
@@ -787,7 +856,22 @@ export interface MachineActionDeps {
   setView(view: MachinesView): void
   setPairing(busy: boolean): void
   setError(message: string | null): void
-  setOpen(next: { machineId: string; sessionId: string } | null): void
+  /**
+   * Ask the window to show a session on a far machine — or null, if there is no
+   * window around this page.
+   *
+   * A `setOpen` stood here instead, writing this panel's own "which session has
+   * a terminal open below the list" state. That terminal is gone; the header
+   * says why, and `session-view-context.ts` says how the press gets to the
+   * window now.
+   *
+   * Null is not a convenience for tests. It is what a page rendered outside a
+   * window genuinely has, and it is carried all the way down: with no way to
+   * show a session, {@link MachineActions.open} is *absent* from the object this
+   * function returns and the row draws no button. A no-op here would have made
+   * that impossible to distinguish from a working one.
+   */
+  showSession: ((machineId: string, sessionId: string) => void) | null
   /** False once the section has gone, so nothing writes to a dead component. */
   isAlive(): boolean
   /*
@@ -829,7 +913,7 @@ export interface MachineActionDeps {
  * the fact that a call returned.
  */
 export function machineActions(deps: MachineActionDeps): MachineActions {
-  const { bridge, setView, setPairing, setError, setOpen, isAlive } = deps
+  const { bridge, setView, setPairing, setError, showSession, isAlive } = deps
 
   const reread = async (): Promise<void> => {
     if (!bridge) return
@@ -907,8 +991,13 @@ export function machineActions(deps: MachineActionDeps): MachineActions {
      * So: nothing here talks to a far machine to start a session, and nothing
      * here ever should again. The dialog's Start is what does that.
      */
-    open: (machineId, sessionId) => setOpen({ machineId, sessionId }),
-    close: () => setOpen(null),
+    /*
+     * Spread rather than written as a property, so that "there is no window"
+     * comes out as a *missing* method rather than one that is present and
+     * refuses. `MachineRow` reads `actions.open === undefined` and draws the
+     * session as text; a present-but-inert `open` would have drawn a button.
+     */
+    ...(showSession === null ? {} : { open: showSession }),
     openPort: (machine, port) => {
       // The address is composed here from a row that is on screen, so nothing
       // arbitrary is ever sent — and the far machine checks it anyway, through
