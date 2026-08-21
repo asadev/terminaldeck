@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, nativeImage, type WebContents } from 'electron'
+import { attachBlockWatch } from './browser-block-watch'
 import { screenCommand, type DriveState } from './browser-cdp'
 import {
   EMPTY_DRIVE_STATUS,
@@ -21,6 +22,7 @@ import {
   withArgs,
 } from './browser-drive-script'
 import { copilotPaths } from './copilot-home'
+import { blockShotDir } from './browser-scrape-paths'
 import { navigatePage, type SteerablePage } from './browser-route'
 import { normalizeUrl, shortLabel } from './browser-url'
 import { onWebContentsDestroyed } from './web-contents-teardown'
@@ -985,6 +987,41 @@ export class BrowserDrive {
     wc.debugger.on('detach', () => {
       slot.attached = false
     })
+
+    /*
+     * Photograph the pages that refuse us, without being asked.
+     *
+     * Here, in `watch`, because this is the one function every drivable page
+     * passes through exactly once — the copilot's own tab, a window a session
+     * attached, a window opened for a session — and a block that was only caught
+     * on one of those three routes would be missing from the run that mattered.
+     *
+     * A tool cannot do this job. By the time an agent has read a page, decided
+     * it was refused and called `browser.screenshot`, the challenge has usually
+     * rotated and the picture is of something else; and an agent that is looping
+     * on retries is not calling anything. `browser-block-watch.ts` has the whole
+     * argument, including why it refuses to take a picture while the person
+     * holds the baton.
+     */
+    attachBlockWatch(wc, {
+      state: () => slot.state,
+      dir: () => blockShotDir(app.getPath('userData')),
+      // Bounded inside the page by `TEXT_SCRIPT`; a challenge page is a few
+      // hundred characters and this is what tells one from an ordinary 200.
+      text: async () => {
+        const read = await this.run<{ text?: string }>(TEXT_SCRIPT, { limit: 2_000 }, slot)
+        return typeof read.text === 'string' ? read.text : null
+      },
+      shot: async () => {
+        try {
+          // One attempt. The window has not been revealed and must not be — see
+          // `maskedPng`. No picture is a recorded outcome, not a failure.
+          return (await this.maskedPng(slot, wc, 1)).png
+        } catch {
+          return null
+        }
+      },
+    })
   }
 
   /* -------------------------------------------------------------- reading -- */
@@ -1572,7 +1609,34 @@ export class BrowserDrive {
     target?: DriveTarget | null,
   ): Promise<{ path: string; width: number; height: number; masked: number }> {
     const { slot, wc } = await this.hold(target, { reveal: true })
+    const shot = await this.maskedPng(slot, wc, 12)
+    const dir = join(copilotPaths(app.getPath('userData')).root, 'screenshots')
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, `page-${Date.now()}.png`)
+    writeFileSync(path, shot.png)
+    return { path, width: shot.width, height: shot.height, masked: shot.painted }
+  }
 
+  /**
+   * A picture of the page with every secret field painted out, as bytes.
+   *
+   * Split out of {@link screenshot} so the automatic block capture
+   * (`browser-block-watch.ts`) uses the *same* masking rather than a second
+   * copy of it. Two spellings of "paint the password fields out" is how one of
+   * them comes to be missing a case, and the automatic one is the copy nobody
+   * is watching when it runs.
+   *
+   * `attempts` is the one difference between the two callers and it is
+   * deliberate. `screenshot` has just revealed the window and can afford to wait
+   * about a second for the compositor. The block watcher has revealed nothing —
+   * it must not, it fires off a navigation the person did not ask about — so it
+   * takes what is on screen or nothing, and records that there is no picture.
+   */
+  private async maskedPng(
+    slot: Slot,
+    wc: WebContents,
+    attempts: number,
+  ): Promise<{ png: Buffer; width: number; height: number; painted: number }> {
     const secrets = await this.run<{
       rects: Array<{ x: number; y: number; width: number; height: number }>
       viewport: { width: number; height: number }
@@ -1598,7 +1662,7 @@ export class BrowserDrive {
      */
     let image
     let failure = 'it has no visible surface right now'
-    for (let attempt = 0; attempt < 12; attempt++) {
+    for (let attempt = 0; attempt < Math.max(1, attempts); attempt++) {
       if (attempt > 0) await sleep(80)
       try {
         const shot = await wc.capturePage()
@@ -1613,13 +1677,8 @@ export class BrowserDrive {
     }
     if (!image) throw new Error(`the page could not be photographed: ${failure}`)
     const size = image.getSize()
-
     const masked = maskRects(image, secrets.rects ?? [], secrets.viewport)
-    const dir = join(copilotPaths(app.getPath('userData')).root, 'screenshots')
-    mkdirSync(dir, { recursive: true })
-    const path = join(dir, `page-${Date.now()}.png`)
-    writeFileSync(path, masked.png)
-    return { path, width: size.width, height: size.height, masked: masked.painted }
+    return { png: masked.png, width: size.width, height: size.height, painted: masked.painted }
   }
 
   /* ------------------------------------------------------------- handover -- */

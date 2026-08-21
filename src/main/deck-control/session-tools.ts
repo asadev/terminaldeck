@@ -85,6 +85,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { rmSync } from 'node:fs'
 import { writeSecretFile } from '../remote/secret-file'
+import { ASSET_TOOL_NAMES } from './asset-tool-names'
 import { SERVER_NAME, type DeckControlEndpoint } from './server'
 import { NO_TIERS, type Caller, type TierGrant } from './surface'
 
@@ -93,10 +94,25 @@ import { NO_TIERS, type Caller, type TierGrant } from './surface'
  * because the wire name and the dotted id are two names for one tool and a
  * caller picks which to send.
  *
- * Six ids, and the list is written out rather than derived from
- * `browserTools()` on purpose: derivation would mean a seventh tool added to
- * that file one day silently becoming something every session on the machine
- * could call. A grant is a thing somebody writes down.
+ * Written out rather than derived from `browserTools()` on purpose: derivation
+ * would mean a tool added to that file one day silently becoming something every
+ * session on the machine could call. A grant is a thing somebody writes down.
+ *
+ * ## Why the asset tools are on it
+ *
+ * The six browser verbs let a session open a page and read it. The four in
+ * `asset-tools.ts` are what let it know whether what it read was all of it —
+ * whether an image URL had a bigger copy behind it, whether a file it already
+ * has is the file it should have, whether the page said there were 340 when it
+ * captured 12, and which pages refused it. Handing a session the first six and
+ * withholding the second four would be handing it the half of the job that can
+ * silently succeed: every one of those four exists because a run without it
+ * reported success while losing data.
+ *
+ * They are no wider than the six in what they reach. `asset-tools.ts` refuses a
+ * paired device outright, and everything it touches — a file the session itself
+ * just downloaded, this app's own scrape folder — is already inside the reach of
+ * a session that has a shell.
  */
 export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.open',
@@ -111,6 +127,7 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser_handover',
   'browser.close',
   'browser_close',
+  ...ASSET_TOOL_NAMES,
 ])
 
 /**

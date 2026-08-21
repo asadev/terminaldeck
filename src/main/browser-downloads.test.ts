@@ -384,6 +384,14 @@ describe('a download that does not finish', () => {
 
 /* ------------------------------------------------------------------ the move -- */
 
+/**
+ * Waited on with {@link stopsMoving} rather than a tick count, throughout.
+ *
+ * This path is now three real asynchronous steps — hash the file, hand it over,
+ * unlink the local copy — and a fixed number of macrotasks is a guess about how
+ * long those take on the machine the suite happens to be running on. The file
+ * already learned that once, on the Windows runner; see {@link stopsMoving}.
+ */
 describe('delivering to another machine', () => {
   it('moves the file — it is not on this disk afterwards', async () => {
     setDownloadDestination({ machineId: 'mach-1', machineName: 'Office PC', folder: '/srv/incoming' })
@@ -393,7 +401,7 @@ describe('delivering to another machine', () => {
     writeFileSync(item.savePath, 'abcd')
     deliverAnswer = { ok: true, path: '/srv/incoming/a.bin' }
     item.finish('completed')
-    await settle()
+    await stopsMoving(downloadsView().items[0].id)
 
     expect(delivered).toEqual([
       { machineId: 'mach-1', localPath: item.savePath, folder: '/srv/incoming' },
@@ -420,7 +428,7 @@ describe('delivering to another machine', () => {
     writeFileSync(item.savePath, 'abcd')
     deliverAnswer = { ok: false, message: 'That machine will not put a file in that folder.' }
     item.finish('completed')
-    await settle()
+    await stopsMoving(downloadsView().items[0].id)
 
     const row = downloadsView().items[0]
     expect(row.state).toBe('failed')
@@ -439,7 +447,7 @@ describe('delivering to another machine', () => {
     writeFileSync(item.savePath, 'abcd')
     deliverAnswer = { ok: true, path: '' }
     item.finish('completed')
-    await settle()
+    await stopsMoving(downloadsView().items[0].id)
 
     expect(downloadsView().items[0].state).toBe('failed')
     expect(existsSync(item.savePath)).toBe(true)
@@ -455,7 +463,7 @@ describe('delivering to another machine', () => {
     // be redirected to a machine nobody chose for it.
     setDownloadDestination({ machineId: 'mach-2', machineName: 'Other', folder: '/second' })
     item.finish('completed')
-    await settle()
+    await stopsMoving(downloadsView().items[0].id)
 
     expect(delivered[0].machineId).toBe('mach-1')
     expect(delivered[0].folder).toBe('/first')

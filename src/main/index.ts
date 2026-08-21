@@ -193,6 +193,8 @@ import { currentOpenShim, removeOpenShim, writeOpenShim } from './open-shim'
 import { bootMapFor, writeAppContext } from './app-context'
 import { describeThisMachine } from './remote/machines/guest'
 import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
+import { assetTools } from './deck-control/asset-tools'
+import { probeAsset } from './browser-asset-probe'
 import { browserTools } from './deck-control/browser-tools'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
@@ -3622,6 +3624,18 @@ app.whenReady().then(() => {
      */
     extraTools: [
       ...browserDriveTools(),
+      /*
+       * The four that tell a run whether it actually got what it went for.
+       *
+       * Unconditional, unlike the two lists either side of them, because they
+       * close over nothing a wiring order could take away: a userData path and
+       * one function that makes an HTTP request. `asset-tools.ts` has the four
+       * losses each of them was written from.
+       */
+      ...assetTools({
+        userData: () => app.getPath('userData'),
+        probe: (url, options) => probeAsset(url, options),
+      }),
       ...(servers === null ? [] : serverTools({ room: servers.room, grants: servers.grants })),
     ],
     /*
