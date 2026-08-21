@@ -639,6 +639,44 @@
   font-size: var(--t-callout);
 }
 
+/* What this machine has and a server cannot take: a name, and one line beside
+   it.
+
+   Deliberately not built from any of this window's control vocabulary. There is
+   no fill, no border, no height matched to a control and nothing that responds
+   to a pointer — because every one of those says "you can change this", and the
+   thing being drawn is precisely something that is not there to change. It reads
+   as the label-over-help pair a row already uses, which is the shape the copy
+   brief asked for: *"one liner or two liner descriptions"*. See `NotHere` in
+   `sections/ServerControl.tsx`. */
+.settings-absent {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-absent li {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-absent-name {
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+}
+
+.settings-absent-why {
+  max-width: 62ch;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
+  line-height: 1.45;
+}
+
 .settings-select:hover:not(:disabled),
 .settings-input:hover:not(:disabled) {
   background: var(--fill-secondary);

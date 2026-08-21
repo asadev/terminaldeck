@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { terminalTheme, useTerminalFind } from '../../components/TerminalView'
+import { copySelection, terminalTheme, useTerminalFind } from '../../components/TerminalView'
 import { subscribeTheme } from '../../theme'
 import { attachRenderer } from '../../terminal-renderer'
 import { asShellId, asShellOutput, type ServersBridge, type ShellOutput } from './types'
@@ -141,6 +141,21 @@ interface Props {
   fontSize?: number
   fontFamily?: string
   /**
+   * Copy on select, the Unix terminal idiom — `general.copyOnSelect`.
+   *
+   * A prop rather than a read of the setting here, because this component is
+   * built by three callers and only one of them is a session somebody works in.
+   * It was **missing entirely** until 2026-08-22: the setting reached every
+   * local terminal through `TerminalView` and the two remote ones, and a shell
+   * on a server was the one place in the app where selecting text quietly did
+   * not copy it. Nothing failed; the app simply behaved differently on one kind
+   * of machine, which is the shape of defect this round is about.
+   *
+   * Defaults to off, which is both the setting's own default and the honest
+   * answer for a caller that has not read it.
+   */
+  copyOnSelect?: boolean
+  /**
    * Whether this pane is the one on screen.
    *
    * The element stays mounted either way — that is the whole reason a shell on a
@@ -194,6 +209,7 @@ export function ServerTerminal({
   bridge,
   fontSize = DEFAULT_SERVER_FONT_SIZE,
   fontFamily = '',
+  copyOnSelect = false,
   visible = true,
   onEnded,
   onOpened,
@@ -212,6 +228,15 @@ export function ServerTerminal({
   /** The same ref treatment, for the same reason. See {@link endedRef}. */
   const openedRef = useRef(onOpened)
   openedRef.current = onOpened
+  /**
+   * And again, for the same reason `TerminalView` gives beside its own: xterm's
+   * selection callback is registered once for the life of the terminal, so a
+   * captured boolean would freeze at whatever the setting was when this shell
+   * was opened — and somebody who turns the setting on goes and selects
+   * something to check it.
+   */
+  const copyRef = useRef(copyOnSelect)
+  copyRef.current = copyOnSelect
   /*
    * Destructured, because the hook returns a fresh object every render and only
    * `attach` is stable enough for a dependency list. Listing the object itself
@@ -286,6 +311,18 @@ export function ServerTerminal({
     // Search, links and the three session chords — the same set a local session
     // gets, from the one hook that owns them.
     attachFind(term)
+
+    /**
+     * Copy on select, guarded on a non-empty selection.
+     *
+     * The same guard `TerminalView` states and for the same reason: xterm fires
+     * this when a selection is *cleared* as well, and writing '' to the
+     * clipboard on every click would wipe whatever was copied from somewhere
+     * else. `copySelection` is that file's, imported rather than re-typed.
+     */
+    const selectionDisposable = term.onSelectionChange(() => {
+      if (copyRef.current) copySelection(term)
+    })
 
     // The GPU, or deliberately not it: `terminal-renderer.ts` carries the
     // measurements and the four rules. After `open`, because a renderer can only
@@ -408,6 +445,7 @@ export function ServerTerminal({
       gone = true
       observer.disconnect()
       input.dispose()
+      selectionDisposable.dispose()
       offTheme()
       offData()
       offClosed()

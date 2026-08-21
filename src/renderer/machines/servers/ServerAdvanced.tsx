@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Button } from '../../settings/controls'
 import { howLong } from './words'
-import type { Fact, Server, ServerState, ServersBridge } from './types'
+import type { Fact, GrantState, Server, ServerState, ServersBridge } from './types'
 
 /**
  * Everything sharp about a server, behind one more click.
@@ -40,6 +40,14 @@ import type { Fact, Server, ServerState, ServersBridge } from './types'
  * The grant is for **this one server**, it covers the named actions only, and it
  * runs out. It never covers anything else at all: not the shell, not the
  * sign-in, not the identity, not forgetting it.
+ *
+ * It is now on Settings → Servers as well, and that is not a reversal of the
+ * paragraph above: what that paragraph rules out is granting control of a
+ * machine from a screen that shows nothing about it, and the Servers pane shows
+ * this server's name, address, identity, sign-in and coding logins around the
+ * control. Both screens render {@link ServerCopilotGrant} — one component, one
+ * sentence — because *two controls doing one thing is two things to keep true*,
+ * and that rule is about two implementations rather than about two doors.
  */
 
 interface Props {
@@ -105,6 +113,111 @@ function FactLine<T>({
 }
 
 /**
+ * What this computer is holding to get in, in a sentence, and never the thing
+ * itself.
+ *
+ * Pure and exported because two surfaces print it — this page and the Servers
+ * pane in Settings — and a second copy of a four-way conditional is a second
+ * place for *"nothing is kept"* and *"a password is kept"* to be swapped. The
+ * fourth case is the one that would be lost by a rewrite: `credential` is
+ * optional on the wire, and a build that did not say is a different answer from
+ * a server that keeps nothing.
+ */
+export function credentialLine(server: Server): string {
+  if (server.credential === undefined) return 'This build did not say.'
+  if (server.credential === 'none') return 'Nothing is kept. You will be asked again next time.'
+  if (server.credential === 'key') {
+    return 'A key, sealed by this computer and never shown on any screen.'
+  }
+  return 'A password, sealed by this computer and never shown on any screen.'
+}
+
+/** The identity a server answered with, or the honest sentence for not yet. */
+export function identityLine(server: Server): string {
+  return server.fingerprint ?? 'It has not told us one yet.'
+}
+
+/**
+ * The copilot's permission for one server: the sentence, and the one control.
+ *
+ * ## Why it is a component now
+ *
+ * Because it is on two screens, and the words are the permission. The header of
+ * this file argues that the place to hand an assistant control of a machine is
+ * the page that shows what is on it — that argument stands and this page keeps
+ * the control — but Settings grew a Servers pane whose whole subject is what
+ * one server is set to do, and a permission missing from it reads as a
+ * permission that does not exist. So both draw *this*, rather than one of them
+ * drawing a second copy that can come to say something else.
+ *
+ * The alternative was a **Grant it on the server's page** link, and it loses on
+ * the standing rule about doors: the control further from the reader is the one
+ * that rots, and a link is not a control at all.
+ */
+export function ServerCopilotGrant({
+  grant,
+  now,
+  disabled,
+  onGrant,
+  onRevoke,
+}: {
+  /** The permission this server holds, or null when it holds none. */
+  grant: GrantState | null
+  now: number
+  /** True when there is nothing behind the press — no bridge, no server reached. */
+  disabled: boolean
+  onGrant(forMs: number): void
+  onRevoke(): void
+}) {
+  const granted = grant !== null && grant.expiresAt > now
+  return (
+    <>
+      <h4 className="settings-group-title">Let the copilot use this server</h4>
+      {/*
+        Two paragraphs rather than one, and *"the buttons on the cards above"*
+        rather than what it said.
+
+        Both changed when this became a component. The one paragraph was 56
+        words, over the window's own 55-word ceiling for a standing paragraph,
+        and it was split exactly where it already had two subjects — what the
+        permission covers, and what the copilot can still do without it.
+
+        The phrase that had to go was worse than long: it was *false on one of
+        the two screens*. There are no cards above this on the Servers pane in
+        Settings, so a sentence pointing at them described a screen the reader
+        was not looking at. What the grant actually covers is the same either
+        way — `tools.ts`'s named actions, and nothing else — so the sentence now
+        names those instead of a place.
+      */}
+      <p className="settings-prose">
+        Off unless you turn it on, and then only for this one server and only for a while. It covers
+        the named actions on that server’s page and nothing else at all — not the terminal, not the
+        sign-in, not forgetting it.
+      </p>
+      <p className="settings-prose">
+        Without it the copilot can still look, and has to ask you before it changes anything.
+      </p>
+      <div className="servers-card-actions">
+        {granted && grant !== null ? (
+          <>
+            <span className="servers-grant">
+              Allowed for another {howLong(Math.max(0, Math.floor((grant.expiresAt - now) / 1000)))}
+            </span>
+            <Button onClick={onRevoke} disabled={disabled}>
+              Stop allowing it
+            </Button>
+          </>
+        ) : (
+          <Button onClick={() => onGrant(GRANT_MS)} disabled={disabled}>
+            Allow it for an hour
+          </Button>
+        )}
+      </div>
+    </>
+  )
+}
+
+/**
  * Whether an agent in a terminal on this server may act on the browser windows
  * somebody attached to that terminal.
  *
@@ -150,18 +263,28 @@ export function ServerDrivesWindows({
   return (
     <>
       <h4 className="settings-group-title">Let its terminals act on browser windows here</h4>
+      {/*
+        What this actually hands out, in the terms the person will recognise: a
+        window they attached, and only that. Deliberately not "let this server
+        control your browser" — the reach is bounded by the attaching, window by
+        window, and overstating it would make the honest answer sound like the
+        reckless one.
+
+        Split in two when this control reached a second screen. It was 63 words
+        in one block, over the settings window's 55-word ceiling for a standing
+        paragraph, and the break is where the subject already changed: what the
+        permission hands out, and then which agent can use it. Same words, same
+        order — `ServerHost` does the same thing to the sentences the main
+        process sends it, for the same reason.
+      */}
       <p className="settings-prose">
-        {/*
-          What this actually hands out, in the terms the person will recognise: a
-          window they attached, and only that. Deliberately not "let this server
-          control your browser" — the reach is bounded by the attaching, window
-          by window, and overstating it would make the honest answer sound like
-          the reckless one.
-        */}
         Off unless you turn it on. With it on, an agent in a terminal on this server can read and act
         on the browser windows <em>you</em> attach to that terminal — nothing else in the browser,
-        and nothing you did not hand it. It works with Claude Code; Codex and Gemini have no setting
-        this app can add to a command you type yourself.
+        and nothing you did not hand it.
+      </p>
+      <p className="settings-prose">
+        It works with Claude Code; Codex and Gemini have no setting this app can add to a command you
+        type yourself.
       </p>
       <div className="servers-drive">
         <label className="servers-drive-row">
@@ -194,7 +317,6 @@ export function ServerAdvanced({
   const [name, setName] = useState(server.name)
   const facts = state?.view?.facts
   const grant = state?.grant ?? null
-  const granted = grant !== null && grant.expiresAt > now
 
   if (!open) {
     return (
@@ -273,15 +395,7 @@ export function ServerAdvanced({
         </div>
         <div className="servers-fact">
           <span className="servers-fact-label">Kept on this computer</span>
-          <span className="servers-fact-value">
-            {server.credential === undefined
-              ? 'This build did not say.'
-              : server.credential === 'none'
-                ? 'Nothing is kept. You will be asked again next time.'
-                : server.credential === 'key'
-                  ? 'A key, sealed by this computer and never shown on any screen.'
-                  : 'A password, sealed by this computer and never shown on any screen.'}
-          </span>
+          <span className="servers-fact-value">{credentialLine(server)}</span>
         </div>
       </div>
       <p className="settings-prose">
@@ -302,34 +416,18 @@ export function ServerAdvanced({
             className="servers-fact-value"
             data-known={server.fingerprint === undefined ? 'unasked' : 'yes'}
           >
-            {server.fingerprint ?? 'It has not told us one yet.'}
+            {identityLine(server)}
           </span>
         </div>
       </div>
 
-      <h4 className="settings-group-title">Let the copilot use this server</h4>
-      <p className="settings-prose">
-        Off unless you turn it on, and then only for this one server and only for a while. It covers
-        the buttons on the cards above and nothing else at all — not the terminal, not the sign-in,
-        not forgetting it. Without it the copilot can still look, and has to ask you before it
-        changes anything.
-      </p>
-      <div className="servers-card-actions">
-        {granted ? (
-          <>
-            <span className="servers-grant">
-              Allowed for another {howLong(Math.max(0, Math.floor((grant.expiresAt - now) / 1000)))}
-            </span>
-            <Button onClick={onRevoke} disabled={bridge === null}>
-              Stop allowing it
-            </Button>
-          </>
-        ) : (
-          <Button onClick={() => onGrant(GRANT_MS)} disabled={bridge === null}>
-            Allow it for an hour
-          </Button>
-        )}
-      </div>
+      <ServerCopilotGrant
+        grant={grant}
+        now={now}
+        disabled={bridge === null}
+        onGrant={onGrant}
+        onRevoke={onRevoke}
+      />
 
       <ServerDrivesWindows
         server={server}

@@ -211,8 +211,16 @@ export function ServerAccounts() {
   )
 }
 
-/** Where one server's row has got to. Nothing at all until it is opened. */
-type ServerLook =
+/**
+ * Where one server's row has got to. Nothing at all until it is opened.
+ *
+ * Exported because {@link ServerLogins} is drawn by two panes now — this one,
+ * where a row is opened by pressing it, and Settings → Servers, where the pill
+ * decides — and the second of those composes this out of a `ServerState` rather
+ * than out of its own request. A type both of them can name is what keeps the
+ * list one component instead of two.
+ */
+export type ServerLook =
   | { state: 'looking' }
   | { state: 'ready'; view: ServerView }
   | { state: 'failed'; problem: string }
