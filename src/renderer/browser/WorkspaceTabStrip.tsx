@@ -37,6 +37,15 @@ import {
   usePromotedOrder,
   type ShownTab,
 } from './workspace-strip'
+import {
+  anchorsByTab,
+  arrangementStorage,
+  nextArrangement,
+  readArrangement,
+  sameArrangement,
+  seedArrangement,
+  writeArrangement,
+} from './strip-arrangement'
 import { useWindowMachines } from './window-machine'
 import './WorkspaceTabStrip.css'
 
@@ -398,7 +407,14 @@ export function WorkspaceTabStrip({
   const seen = useRef<Set<string>>(new Set())
 
   /*
-   * Persist the arrangement, minus the windows that have closed.
+   * Keep the arrangement current, in both of the places it is kept.
+   *
+   * Three things in one pass, because all three are answers to the same event —
+   * the tab list changed — and splitting them across effects means three passes
+   * that can disagree about which one ran first. In order: put back what the
+   * last run of the app arranged, for tabs seen here for the first time; drop
+   * the ids of windows this one has watched close; and write the result down as
+   * anchors, which is the form that survives a quit.
    *
    * Pruned on the way *out* rather than on the way in, because the result is
    * written straight through to storage and a wrong answer here is permanent.
@@ -407,16 +423,71 @@ export function WorkspaceTabStrip({
    * against it deleted the ids that had not arrived yet — five promoted tabs in,
    * four out, reproduced four times out of four. The `tabs.length === 0` guard
    * was written for that hazard and only covers its first frame; `seen` covers
-   * the rest of it.
+   * the rest of it, and `nextArrangement` covers the same hazard for the saved
+   * arrangement by carrying over every anchor whose tab has not turned up yet.
+   *
+   * This is not the *only* place the order shrinks, and it must not be: the
+   * strip is drawn behind `stripIsPresent`, so it is unmounted whenever nothing
+   * is open and cannot notice anything from there. See `forgetWindowInStrip`,
+   * which `App.tsx` calls on the two events that say a window is gone.
    *
    * The store writes through to storage itself and ignores a set that changes
    * nothing, which is what stops this effect from re-triggering on the array it
    * just produced.
    */
+  /**
+   * The arrangement the last run of the app left behind, and the one this run
+   * will leave.
+   *
+   * One ref holding both, because they are the same list at two moments and a
+   * second copy is a second thing to keep in step. Read lazily rather than in an
+   * initialiser so a window that never draws a tab never touches storage.
+   *
+   * `null` is *not yet read* and is different from `[]`, which is a window that
+   * genuinely had nothing arranged: re-reading on every render would undo this
+   * run's own writes, and treating unread as empty would throw the saved
+   * arrangement away on the first frame — which is the launch frame, before a
+   * single session has been announced.
+   */
+  const arrangement = useRef<string[] | null>(null)
+
   useEffect(() => {
     if (tabs.length === 0) return
+    const storage = arrangementStorage()
+    if (arrangement.current === null) arrangement.current = readArrangement(storage)
+    const anchors = anchorsByTab(tabs)
+
+    /*
+     * Put back what a restart took away, for the tabs that have just arrived.
+     *
+     * `seen` is what makes this the *first* sight of a tab and not every sight
+     * of it: a restored tab the person then folds off the bar must stay folded,
+     * and a pass that looked at every live tab would put it back on the next
+     * render. So the arriving set is computed before `seen` is updated, and the
+     * update below is what closes the door behind it.
+     */
+    const arriving = new Set<string>()
+    for (const tab of tabs) if (!seen.current.has(tab.id)) arriving.add(tab.id)
+    const seeded = seedArrangement(order, arrangement.current, anchors, arriving)
+
     for (const tab of tabs) seen.current.add(tab.id)
-    setOrder(pruneOrder(order, tabs, seen.current))
+    const pruned = pruneOrder(seeded, tabs, seen.current)
+
+    /*
+     * And write the arrangement down, in anchors rather than in ids.
+     *
+     * After the prune, so what is saved is what the bar actually holds. Guarded
+     * by `sameArrangement`, because this effect runs on every render — `tabs` is
+     * rebuilt by `App.tsx` each time — and an unguarded `setItem` here is a disk
+     * write per line of terminal output.
+     */
+    const next = nextArrangement(pruned, anchors, arrangement.current, seen.current)
+    if (!sameArrangement(next, arrangement.current)) {
+      arrangement.current = next
+      writeArrangement(storage, next)
+    }
+
+    setOrder(pruned)
   }, [order, setOrder, tabs])
 
   /*

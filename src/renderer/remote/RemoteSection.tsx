@@ -5,7 +5,7 @@ import { useAt, useEvery, useWhenActive } from '../schedule'
 import { withDeadline } from '../deadline'
 import { errorText } from '../settings/settings-bridge'
 import { detectPlatform, machineNoun, thisMachine, type UiPlatform } from '../platform'
-import { CODE_LENGTH, normaliseCode } from '../../shared/short-code'
+import { normaliseCode } from '../../shared/short-code'
 import { CodeEntry } from '../machines/CodeEntry'
 import {
   MachineLinks,
@@ -81,10 +81,13 @@ import './RemoteSection.css'
  * and the failure lands a minute later on a different device, which has no way
  * to say which end was at fault.
  *
- * This file never states the format. `CODE_LENGTH` and `normaliseCode` come
- * from that module, because the format has already changed once — eight
- * Crockford characters with a hyphen — and every screen that had written its own
- * copy of it was wrong for a release.
+ * This file never states the format, and now does not state its length either.
+ * `normaliseCode` comes from that module, because the format has already changed
+ * once — eight Crockford characters with a hyphen — and every screen that had
+ * written its own copy of it was wrong for a release. The one place that counted
+ * the digits out loud was a sentence above a field that already counts them, in
+ * boxes, under a label that names them; it is gone with the rest of that
+ * paragraph, and `CODE_LENGTH` went with it.
  *
  * What is behind the switch is a shell. A device that gets in can type into any
  * running session, which is the same as sitting at this keyboard: the files, the
@@ -1897,10 +1900,17 @@ export function RemoteView({
           <div className="remote-pair">
             <div className="remote-pair-half">
               <h5 className="remote-pair-title">Let a device in</h5>
-              <p className="settings-prose">
-                Show a code here, then type it into the phone or computer you are adding.
-              </p>
+              {/*
+                No sentence under this heading.
 
+                It read "Show a code here, then type it into the phone or
+                computer you are adding", which is the heading, and then the
+                button, and then the other half of this row — three controls on
+                one screen already saying it. It stated no constraint: what is
+                true of a code and not obvious is that it is good for one device
+                and expires, and that is the line above this pair, where it
+                covers both halves.
+              */}
               {!pairing && (
                 <>
                   <Button tone="primary" onClick={actions.pair} disabled={busy !== null || !canPair}>
@@ -2090,10 +2100,18 @@ export function RemoteView({
 
             <div className="remote-pair-half">
               <h5 className="remote-pair-title">Add another computer</h5>
-              <p className="settings-prose">
-                Type the {CODE_LENGTH} digits the other machine is showing. You will then approve
-                this one over there, once.
-              </p>
+              {/*
+                One clause, and it is the one nothing else on screen can say.
+
+                It began "Type the six digits the other machine is showing",
+                above six empty boxes whose own label is "Pairing code from the
+                other machine" and beside a half of this row that is showing
+                exactly such a code. What survives is the part a person cannot
+                see from here and will otherwise wait for: the pairing is not
+                finished when the digits go in — there is a second step, and it
+                happens on the machine they were typed from.
+              */}
+              <p className="settings-prose">You approve this one over there, once.</p>
               <CodeEntry
                 state={machines.entry}
                 wired={machines.wired}

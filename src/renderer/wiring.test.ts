@@ -902,43 +902,69 @@ function propExpression(tag: string, prop: string): string | null {
  */
 describe('the browser panel is hidden per tab, parked per dialog', () => {
   /*
-   * There are two of these panels in `App.tsx` since 2026-08-17 and they answer
-   * `visible` differently, so the tag has to be found by *where* it is rather
-   * than by being the first one in the file.
+   * There is exactly **one** of these panels in `App.tsx`, and that is the
+   * claim rather than an incidental fact about the file.
    *
-   *  - inside a pane, put there by the split renderer: what makes it visible is
-   *    that its pane is on screen. There is no "active tab" involved — the pane
-   *    is showing this page whatever the strip's selection is, which is the
-   *    whole of the fix that let a pane hold a page at all;
-   *  - filling the window, from the flat list: visible only while its own tab
-   *    is the selected one, because every other page is mounted and hidden
-   *    behind it.
+   * There were two: one in the flat list beside the pane, and one the split
+   * renderer mounted inside whichever pane was holding the page. They answered
+   * `visible` differently and everything else identically, and the second one
+   * was the last route left to *"if this link is loaded, page is loaded, I go to
+   * session. If I come back, this is all gone, so it refreshes."* Moving a panel
+   * between two subtrees is a remount; a remount closes the `WebContentsView`;
+   * so pressing Split reloaded the page the pane was about to hold, and leaving
+   * the split reloaded it again on the way back.
    *
-   * Both must keep the dialog out of `visible`, which is the mistake this
-   * describe block was written for and the one that duplicates most easily.
+   * A second one appearing here is therefore a regression and not a style
+   * question, which is why this is counted.
    */
   const app = read('renderer/App.tsx')
-  const paned = openingTag(app, 'BrowserWorkspace') ?? ''
-  const flat = openingTag(app.slice(app.indexOf(paned) + paned.length), 'BrowserWorkspace') ?? ''
+  const flat = openingTag(app, 'BrowserWorkspace') ?? ''
 
-  it('finds both panels, so neither rule below is checked twice', () => {
-    expect(paned, 'the split renderer has no <BrowserWorkspace>').not.toBe('')
+  it('mounts every page exactly once, wherever it is being drawn', () => {
     expect(flat, 'the flat tab list has no <BrowserWorkspace>').not.toBe('')
+    expect(app.match(/<BrowserWorkspace/g)).toHaveLength(1)
   })
 
-  it('decides visibility from the tab alone, for the panel filling the window', () => {
+  it('draws a hole in the pane instead of moving the panel into it', () => {
+    // The arrangement `layout/pane-slots.ts` already gives a session on a paired
+    // machine and a shell on a server: the panel stays where it was mounted and
+    // is positioned over the pane's empty body.
+    const at = app.indexOf("const pageTab = paneTab?.kind === 'browser'")
+    expect(at, 'the split renderer has changed shape').toBeGreaterThan(-1)
+    const paneCell = app.slice(at, app.indexOf('Nothing in this pane yet', at))
+    expect(paneCell).toContain('[SLOT_ATTR]: pageTab.id')
+    expect(paneCell).not.toContain('<BrowserWorkspace')
+  })
+
+  it('gives the panel the pane’s rectangle, or nothing at all', () => {
+    // `undefined` is the unsplit window and has to stay undefined: it is what
+    // leaves the stylesheet's in-flow panel alone.
+    expect(propExpression(flat, 'box')).toMatch(/slotStyle\(paneSlots\[tab\.id\]\)/)
+  })
+
+  it('decides visibility from the tab, not from a dialog', () => {
     const visible = propExpression(flat, 'visible')
     expect(visible, '<BrowserWorkspace> has no visible={...}').not.toBeNull()
-    expect(visible).toMatch(/visiblePageId/)
+    // One expression for both arrangements, because "is this page on screen" is
+    // one question: `visiblePageId` answers it for the whole window and cannot
+    // answer it for a split, where a page can be in every pane.
+    expect(visible).toMatch(/pageOnScreen/)
     expect(visible, 'a dialog is not a tab switch — that belongs in parkPage').not.toMatch(
+      /Modal|Open\b/,
+    )
+    const at = app.indexOf('const pageOnScreen =')
+    expect(at, 'App.tsx has no pageOnScreen').toBeGreaterThan(-1)
+    const rule = app.slice(at, app.indexOf('\n\n', at))
+    expect(rule).toMatch(/visiblePageId/)
+    expect(rule, 'a pane draws what the pane holds').toMatch(/splitting/)
+    expect(rule, 'a dialog is not a tab switch — that belongs in parkPage').not.toMatch(
       /Modal|Open\b/,
     )
   })
 
   /**
-   * The panel filling the window is mounted **outside** `mainView`, and every
-   * view that used to take the frame by unmounting it has to be named in
-   * `visiblePageId` instead.
+   * The panel is mounted **outside** `mainView`, and every view that used to
+   * take the frame by unmounting it has to be named in `visiblePageId` instead.
    *
    * This is the price of the 2026-08-20 fix for *"if this link is loaded, page
    * is loaded, I go to session. If I come back, this is all gone, so it
@@ -973,48 +999,29 @@ describe('the browser panel is hidden per tab, parked per dialog', () => {
     const end = app.indexOf('\n  const splitHeldTabIds')
     expect(start, 'App.tsx has no mainView').toBeGreaterThan(-1)
     expect(end, 'App.tsx has no splitHeldTabIds').toBeGreaterThan(start)
-    expect(app.slice(start, end)).not.toContain('<BrowserWorkspace\n              key={tab.id}')
+    expect(app.slice(start, end)).not.toContain('<BrowserWorkspace')
   })
 
-  it('decides it from the pane, for the panel inside one', () => {
-    const visible = propExpression(paned, 'visible')
-    expect(visible, 'the paned <BrowserWorkspace> has no visible={...}').not.toBeNull()
-    // Not `activeTab`: a pane draws what the pane holds. Keying this off the
-    // strip's selection is how a page in the unfocused half of a split would go
-    // blank the moment you clicked the other half.
-    expect(visible).not.toMatch(/activeTab/)
-    expect(visible, 'a dialog is not a tab switch — that belongs in parkPage').not.toMatch(
-      /Modal|Open\b/,
-    )
-  })
-
-  it('parks the pages for whatever dialog is open, in both', () => {
+  it('parks the pages for whatever dialog is open', () => {
     expect(propExpression(flat, 'parkPage')).toMatch(/Modal/)
-    expect(propExpression(paned, 'parkPage')).toMatch(/Modal/)
   })
 
   /**
-   * And gives both of them the door to Settings → Browser.
+   * And gives it the door to Settings → Browser.
    *
    * *"Then settings we have."* — said over Chrome's own settings page, after
    * naming downloads, history and passwords. The section exists and is not
    * touched; what did not exist was any way into it from the browser panel, so
-   * the ⋯ menu draws a `Settings` row when it is handed one. Both mounts,
-   * because a page in a split is the same page and a menu that works in one half
-   * of the window and not the other is the shape of half-feature this round is
-   * about.
+   * the ⋯ menu draws a `Settings` row when it is handed one. It is one mount
+   * now, so a page in a split is the same page and the menu cannot work in one
+   * half of the window and not the other.
    */
-  it('opens Settings → Browser from the ⋯ menu, in both', () => {
-    for (const [where, tag] of [
-      ['the panel filling the window', flat],
-      ['the panel inside a pane', paned],
-    ] as const) {
-      const open = propExpression(tag, 'onSettings')
-      expect(open, `${where} has no onSettings={...}`).not.toBeNull()
-      expect(open, `${where} opens Settings somewhere other than Browser`).toMatch(
-        /openSettings\('browser'\)/,
-      )
-    }
+  it('opens Settings → Browser from the ⋯ menu', () => {
+    const open = propExpression(flat, 'onSettings')
+    expect(open, 'the browser panel has no onSettings={...}').not.toBeNull()
+    expect(open, 'it opens Settings somewhere other than Browser').toMatch(
+      /openSettings\('browser'\)/,
+    )
   })
 })
 

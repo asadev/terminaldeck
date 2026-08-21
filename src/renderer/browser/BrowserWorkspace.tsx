@@ -177,6 +177,33 @@ export interface BrowserWorkspaceProps {
    */
   visible?: boolean
   /**
+   * Where in the pane area to draw, when one pane of a split is holding this
+   * page rather than the whole window.
+   *
+   * ## Why the panel is positioned instead of being rendered inside the pane
+   *
+   * Because moving it in the React tree remounts it, and unmounting this
+   * component closes its `WebContentsView` for real — the page is gone, and it
+   * comes back at its start address. That is the whole of *"if this link is
+   * loaded, page is loaded, I go to session. If I come back, this is all gone,
+   * so it refreshes."* The flat mount list in `App.tsx` fixed it for every way
+   * of covering the window and left one: pressing Split moved the page from
+   * that list into the pane's own subtree, which is a remount by another name,
+   * so entering a split reloaded the page the pane was holding.
+   *
+   * So the pane draws an empty body carrying `SLOT_ATTR`, this panel stays
+   * exactly where it was mounted, and it is given the hole's rectangle. It is
+   * the arrangement `layout/pane-slots.ts` already describes for a session on a
+   * paired machine and a shell on a server, and its note is the long argument
+   * for it — including why a portal is not the answer.
+   *
+   * `undefined` is the unsplit window: no `data-boxed`, no inline geometry, and
+   * the stylesheet's in-flow panel exactly as it was. The native view follows on
+   * its own — the stage's `ResizeObserver` fires on the new rectangle and the
+   * bounds are pushed from there.
+   */
+  box?: Record<string, string>
+  /**
    * Park the pages but keep the panel.
    *
    * Separate from `visible` because a dialog is not a tab switch. The pages are
@@ -532,6 +559,7 @@ function without<T>(map: Record<string, T>, key: string): Record<string, T> {
  */
 export function BrowserWorkspace({
   visible = true,
+  box,
   parkPage = false,
   onTitle,
   tabId,
@@ -2576,7 +2604,16 @@ export function BrowserWorkspace({
   )
 
   return (
-    <div className="bw" ref={rootRef} data-visible={visible} onKeyDown={onKeyDown}>
+    <div
+      className="bw"
+      ref={rootRef}
+      data-visible={visible}
+      /* One pane of a split is holding this page, rather than the whole window.
+         See the `box` prop for why the panel is moved rather than re-parented. */
+      data-boxed={box !== undefined}
+      style={box}
+      onKeyDown={onKeyDown}
+    >
       <Toolbar
         tab={active}
         progress={active?.progress ?? 0}
