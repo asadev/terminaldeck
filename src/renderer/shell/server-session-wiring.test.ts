@@ -351,7 +351,7 @@ describe('the controls a shell can reach, and the ones it cannot', () => {
      *    anything that looks pressable is pressable.
      */
     const row =
-      /\) : headingServerTabId !== null && serverSignIn !== null \? \([\s\S]*?\n {20}<\/div>/.exec(
+      /\) : headingServerTabId !== null && serverWords !== null \? \([\s\S]*?\n {20}<\/div>/.exec(
         APP,
       )?.[0] ?? ''
     expect(row, 'the server sign-in row has changed shape').not.toBe('')

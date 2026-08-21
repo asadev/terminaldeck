@@ -413,6 +413,11 @@
    being enumerated, not prose — and the one list in this app where a font
    joining two characters could change what a permission appears to say. */
 .bw-scrape-reach,
+/* The pairing code the setup pane prints for a server, added 2026-08-22.
+   Same reason as the host code beside it: it exists to be read off this
+   screen and typed into another, so a ligature joining two characters is
+   the difference between a code that works and one that does not. */
+.servers-setup-code-value,
 .servers-host-code-value,
 .servers-host-status pre {
   font-variant-ligatures: none;
