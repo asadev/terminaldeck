@@ -63,6 +63,15 @@
  * `host-core.ts`'s gate is where the two halves meet: it hands such a session
  * the flags only when the assembly says that forwarder exists.
  *
+ * A session inside a **WSL distribution** is one of ours too, and was not until
+ * 2026-08-21. It runs on this box, its window is in the app on this screen, and
+ * the only two things that were in its way were mechanical: the config file is
+ * named `/mnt/c/…` from over there, and `127.0.0.1` means the host's loopback
+ * only under mirrored networking. Both are settled by one command run inside the
+ * distribution rather than assumed — `wsl-reach.ts` — and a distribution that
+ * cannot reach the endpoint gets no flags and the sentence, like any other
+ * launch that cannot be given them.
+ *
  * A shell on a **server** is the case that is still not built, and the reason is
  * different from the one this section used to give. There is no app on a server
  * — no endpoint, no hook, no `open` shim — and the Mac starts that shell through
@@ -236,6 +245,26 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
  */
 export const SESSION_TIERS: TierGrant = Object.freeze({ read: true, act: true, alter: true })
 
+/**
+ * Where the file this mints has to be *named*, when the CLI reading it is not on
+ * this side of a boundary.
+ *
+ * One caller: a session inside a WSL distribution. The file itself stays here —
+ * on Windows, under `<userData>`, with the ACL `remote/secret-file.ts` puts on
+ * it — and only the *name* on the command line changes, because a Linux process
+ * opens it as `/mnt/c/…`. `wsl-reach.ts` is what works that name out and why it
+ * is measured rather than assumed.
+ *
+ * Null from {@link LaunchPlacement.argPath} means the file cannot be named over
+ * there at all, and {@link SessionTools.prepare} then mints **nothing** — no
+ * token, no file, no table entry. A `--mcp-config` pointing at a path the CLI
+ * cannot open is six verbs that answer nothing, which is strictly worse than no
+ * verbs and the one sentence `session-verbs.ts` prints instead.
+ */
+export interface LaunchPlacement {
+  argPath(file: string): string | null
+}
+
 /** A launch that has been given a token, before its session exists. */
 export interface PreparedSessionTools {
   /** Arguments to fold into the CLI's launch. */
@@ -272,7 +301,7 @@ export interface SessionTools {
    * lands, that token resolves to a caller with no session and no tiers, so such
    * a call is refused rather than attributed to nothing.
    */
-  prepare(): PreparedSessionTools | null
+  prepare(inside?: LaunchPlacement): PreparedSessionTools | null
   /** A session has gone. Its token stops working and its file is removed. */
   release(sessionId: string): void
   /** Test seam: how many launches are still holding a token. */
@@ -352,7 +381,7 @@ export function createSessionTools(
   }
 
   return {
-    prepare(): PreparedSessionTools | null {
+    prepare(inside?: LaunchPlacement): PreparedSessionTools | null {
       // Nothing to point a session at. Answered rather than thrown, because a
       // launch must not fail over a feature that is merely absent.
       if (endpoint.url === '') return null
@@ -360,6 +389,17 @@ export function createSessionTools(
       const token = randomUUID().replaceAll('-', '') + randomUUID().replaceAll('-', '')
       const dir = join(options.dir, launchId)
       const file = join(dir, 'deck-control.json')
+      /*
+       * The name the CLI will be given, decided **before** anything is minted.
+       *
+       * Order matters here and nowhere else in this function: a placement that
+       * cannot name the file has to leave this run with no token registered and
+       * no secret on disk, rather than with a live entry nobody will ever
+       * present. The claim deadline below would eventually collect it, and
+       * "eventually" is not the same as "never existed".
+       */
+      const named = inside === undefined ? file : inside.argPath(file)
+      if (named === null) return null
       const entry = {
         token,
         dir,
@@ -407,7 +447,14 @@ export function createSessionTools(
          * servers they configured for their own work, and taking those away in
          * order to add ours would be this app quietly editing their setup.
          */
-        args: ['--mcp-config', file],
+        args: ['--mcp-config', named],
+        /*
+         * The Windows path, always — `named` is what the CLI is told and this is
+         * where the bytes are. The one caller of this field grants a **confined**
+         * launch read access to the file, and confinement and WSL never meet:
+         * `host-core.ts` refuses to claim a boundary around a process it launched
+         * through `wsl.exe`. So the two spellings cannot be confused by anyone.
+         */
         file,
         started(sessionId: string, machineId = ''): void {
           if (entry.claim !== null) clearTimeout(entry.claim)

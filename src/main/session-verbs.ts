@@ -63,7 +63,20 @@
 export type NoVerbsReason =
   /** Not a Claude CLI, which is the only one with a per-run MCP override. */
   | 'provider'
-  /** Inside a WSL distribution: the endpoint and the file are the Windows side's. */
+  /**
+   * Inside a WSL distribution that could not reach this app's tool endpoint.
+   *
+   * Narrower than it was, and the narrowing is the whole of the 2026-08-21 fix.
+   * This used to mean "inside WSL" flatly, on the reasoning that the endpoint
+   * and the config file are both the Windows side's. Half of that was a copy of
+   * the `open` shim's reasoning and did not apply: the shim cannot cross because
+   * the hook endpoint on Windows is a named pipe, and the verbs do not go
+   * through the pipe — `deck-control/server.ts` is plain HTTP on loopback, and
+   * the file can be named `/mnt/c/…`. What is left is one real question, asked
+   * of the distribution rather than assumed: does `127.0.0.1` there reach the
+   * host's loopback? It does under mirrored networking and does not under NAT.
+   * `wsl-reach.ts` measures it; this is the sentence for the answer that was no.
+   */
   | 'wsl'
   /**
    * A session a paired device asked for, on a device that cannot hold a browser
@@ -102,7 +115,7 @@ export type NoVerbsReason =
  */
 const BECAUSE: Readonly<Record<NoVerbsReason, string>> = Object.freeze({
   provider: 'this app can only add its browser verbs to a Claude session',
-  wsl: 'the verbs are on the Windows side and this session runs inside WSL',
+  wsl: 'this app’s endpoint is on the Windows side and this session could not reach it from inside WSL',
   device: 'the device that started this session cannot show a browser window',
   endpoint: 'this app’s control endpoint is not running here',
   early: 'this session started before this app’s control endpoint did, and the flag that carries them is ' +
@@ -112,17 +125,31 @@ const BECAUSE: Readonly<Record<NoVerbsReason, string>> = Object.freeze({
 /**
  * And what to do about it — which is not the same sentence in every case.
  *
- * Four of these are dead ends and say so, because an agent told merely that
+ * Three of these are dead ends and say so, because an agent told merely that
  * something did not work will try again in another way; the measured version is
- * an agent reaching for a CDP port. `early` is the one that is *not* a dead end:
- * a session started a moment later has the verbs, so the useful thing is to say
- * that rather than to close a door that is open. Telling him is the point — a
+ * an agent reaching for a CDP port. Two are not. `early` is a session that
+ * started a moment before the endpoint did, so the useful thing is to say that
+ * rather than to close a door that is open. `wsl` is a door the *person* can
+ * open — mirrored networking is a two-line edit in their own home directory —
+ * so it names the edit rather than only refusing, while still telling the agent
+ * not to go looking for another way in itself. Telling him is the point: a
  * session that quietly cannot see is exactly the thing he has been left to
  * discover twice.
  */
 const THEN: Readonly<Record<NoVerbsReason, string>> = Object.freeze({
   provider: 'Say what you would have done on the page and let the person do it; there is no other way in.',
-  wsl: 'Say what you would have done on the page and let the person do it; there is no other way in.',
+  /*
+   * The one dead end with a remedy the person can carry out themselves, so it
+   * says the remedy rather than only closing the door. Mirrored networking is a
+   * two-line edit to a file in their own home directory and needs no
+   * administrator; the alternative — opening the Windows firewall on the WSL
+   * adapter — does, which is why it is not the one named. `wsl-reach.ts` has the
+   * argument.
+   */
+  wsl:
+    'Tell the person to start this session again; if it still cannot, `networkingMode=mirrored` in ' +
+    'their `.wslconfig` and `wsl --shutdown` is what lets WSL reach this app. Until then say what you ' +
+    'would have done on the page and let them do it; there is no other way in.',
   device: 'Say what you would have done on the page and let the person do it; there is no other way in.',
   endpoint: 'Say what you would have done on the page and let the person do it; there is no other way in.',
   early:

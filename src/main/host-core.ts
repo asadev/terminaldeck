@@ -290,6 +290,19 @@ export class OpenSessionLedger {
 
 /* ---------------------------------------------------------------- options -- */
 
+/**
+ * Where a launch's config file has to be *named* for the process that will read
+ * it — the WSL case, and structurally the only one.
+ *
+ * Declared here rather than imported from `deck-control/` so that this file's
+ * seam stays a shape and not a dependency; `deck-control/session-tools.ts`
+ * declares the same shape as `LaunchPlacement` and `wsl-reach.ts` builds the one
+ * implementation.
+ */
+export interface WslPlacementSeam {
+  argPath(file: string): string | null
+}
+
 export interface HostCoreOptions {
   /**
    * How a session is given this app's browser verbs, or absent in a build that
@@ -312,7 +325,7 @@ export interface HostCoreOptions {
      * up, or failed to. A session is then launched exactly as it was before,
      * with no argument added and nothing said about tools it does not have.
      */
-    prepare(): {
+    prepare(inside?: WslPlacementSeam): {
       args: readonly string[]
       /**
        * The config file the arguments name.
@@ -356,6 +369,21 @@ export interface HostCoreOptions {
      * device's windows to reach.
      */
     reachesDeviceWindows?(deviceId: string | undefined): boolean
+    /**
+     * Can a Claude CLI **inside this distribution** reach the tool endpoint, and
+     * what is the config file called over there?
+     *
+     * A seam for the same reason `reachesDeviceWindows` is one: the answer is a
+     * fact about the assembly and about one machine's WSL, and this file has no
+     * business knowing what an MCP endpoint is. `null` means the session is
+     * launched exactly as it was before, with an honest sentence rather than
+     * flags naming a file the CLI cannot open. The headless host passes no seam
+     * at all and answers no by not being asked.
+     *
+     * Asked once per distribution and endpoint, not once per session:
+     * `wsl-reach.ts` remembers a crossing that costs a `wsl.exe` run.
+     */
+    insideDistro?(target: WslTarget): Promise<WslPlacementSeam | null>
   }
   /** Everything remote access keeps on disk: the trust store, the identity, the grants. */
   storageDir: string
@@ -978,21 +1006,39 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      *    Gemini configure MCP servers in files of their own with no per-run
      *    override this app can compose, so they are launched exactly as before;
      *    see `session-tools.ts` for what is missing rather than pretended.
-     *  - **Not inside WSL**, for the same reason the `open` shim is withheld
-     *    there: the process is a Linux one and the file path, and the loopback
-     *    address in it, are the Windows side's.
+     *  - **Inside WSL, only once the distribution has said it can reach the
+     *    endpoint.** This condition used to be a flat `target === null`, copied
+     *    from the `open` shim's reasoning — and the copy was wrong. The shim is
+     *    withheld there because this app's hook endpoint on Windows is a *named
+     *    pipe*, which no Linux process can open. The verbs do not go through the
+     *    pipe: `deck-control/server.ts` is plain HTTP on 127.0.0.1, and a socket
+     *    is a thing a distribution can be given an address for. So the two real
+     *    obstacles are mechanical — the config file has to be named `/mnt/c/…`
+     *    from over there, and `127.0.0.1` reaches the host's loopback only under
+     *    mirrored networking — and both are *measured*, by one command run
+     *    inside the distribution, rather than assumed from a config file this
+     *    side could read. `wsl-reach.ts` holds that and the security argument.
+     *    A distribution that did not answer is told why, in one sentence, and
+     *    launched exactly as it was before.
      *  - **The endpoint exists.** A build with no `deck-control` server — the
      *    headless host, a test harness — passes no seam and every session is
      *    launched the way it always was.
      */
     const forDevice = guest !== undefined || confine !== undefined
+    /*
+     * Asked of the distribution, once per distribution and port, and only for a
+     * session that is actually in one. `null` on this Mac and on a Windows
+     * folder, where there is no boundary to cross and nothing to ask.
+     */
+    const insideDistro =
+      target === null ? null : ((await options.sessionTools?.insideDistro?.(target)) ?? null)
     const sessionTools =
       (!forDevice || options.sessionTools?.reachesDeviceWindows?.(confine?.deviceId) === true) &&
       (extraArgs ?? []).length === 0 &&
       provider === 'claude' &&
       !addedRuns &&
-      target === null
-        ? (options.sessionTools?.prepare() ?? null)
+      (target === null || insideDistro !== null)
+        ? (options.sessionTools?.prepare(insideDistro ?? undefined) ?? null)
         : null
     /*
      * Why this launch has no verbs, in the vocabulary a session can be told in.
@@ -1010,23 +1056,30 @@ export function createHostCore(options: HostCoreOptions): HostCore {
         ? null
         : forDevice
           ? 'device'
-          : target !== null
-            ? 'wsl'
-            : provider !== 'claude' || addedRuns
-              ? 'provider'
-              : /*
-                 * A build with no seam at all and a run whose endpoint is not up
-                 * yet are two different sentences, and only one of them is a
-                 * dead end. The headless host passes no seam and never will
-                 * (`endpoint`); the desktop always passes one and answers null
-                 * only in the few hundred milliseconds before its control
-                 * server binds, which catches restored tabs (`early`). Telling
-                 * a restored tab there is no endpoint would be false a second
-                 * later and would leave him with a session that quietly cannot
-                 * see — which is the whole complaint.
-                 */
-                options.sessionTools === undefined
-                ? 'endpoint'
+          : provider !== 'claude' || addedRuns
+            ? 'provider'
+            : /*
+               * A build with no seam at all and a run whose endpoint is not up
+               * yet are two different sentences, and only one of them is a dead
+               * end. The headless host passes no seam and never will
+               * (`endpoint`); the desktop always passes one and answers null
+               * only in the few hundred milliseconds before its control server
+               * binds, which catches restored tabs (`early`). Telling a
+               * restored tab there is no endpoint would be false a second later
+               * and would leave him with a session that quietly cannot see —
+               * which is the whole complaint.
+               *
+               * Both are asked **before** `wsl`, and the order was rearranged on
+               * 2026-08-21 when `wsl` stopped meaning "inside a distribution"
+               * and started meaning the narrow thing it says: the distribution
+               * could not reach this endpoint. A headless host in a Linux folder
+               * would otherwise be told to reconfigure WSL's networking for an
+               * endpoint that does not exist in that build at all.
+               */
+              options.sessionTools === undefined
+              ? 'endpoint'
+              : target !== null
+                ? 'wsl'
                 : 'early'
     /*
      * Everything this app puts on the command line that the caller did not ask
