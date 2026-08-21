@@ -195,6 +195,7 @@ function rig(
           record.connected += 1
         },
         announceWindows: () => true,
+        announceSessions: () => true,
         askWindow: () => true,
         servesWindows: () => true,
         disconnect: () => {
@@ -881,6 +882,7 @@ describe('waking', () => {
             connect: () => {},
             disconnect: () => {},
             announceWindows: () => true,
+            announceSessions: () => true,
             askWindow: () => true,
             servesWindows: () => true,
             wake: () => {

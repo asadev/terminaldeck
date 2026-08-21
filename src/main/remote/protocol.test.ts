@@ -15,6 +15,7 @@ import {
   MAX_UPLOAD_DATA_CHARS,
   MAX_UPLOAD_DIR_BYTES,
   MAX_UPLOAD_NAME_BYTES,
+  MAX_ANNOUNCED_SESSIONS,
   MAX_WINDOW_HOLDS,
   NET_WINDOW_BYTES,
   SHA256_HEX_LENGTH,
@@ -113,6 +114,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'window.result': true,
   'window.holds': true,
   'window.call': true,
+  'sessions.mine': true,
 }
 
 /** Same guard for the other direction. */
@@ -299,6 +301,27 @@ const VALID_CLIENT: ClientMessage[] = [
   // And the mirror: a client with the pty asking the host, which is the one
   // holding the window. Same frame, opposite direction — see `WindowCallFrame`.
   { t: 'window.call', id: 'win-3', session: SESSION_ID, tool: 'browser.read', args: '{}' },
+  // And the list that makes that mirror reachable: what is running on the
+  // client's own computer, so the host can put a window beside one of them.
+  // Written out rather than referring to `SESSION` below, which is declared
+  // after this array and would be in its temporal dead zone here.
+  {
+    t: 'sessions.mine',
+    sessions: [
+      {
+        id: SESSION_ID,
+        title: 'terminaldeck',
+        cwd: '/Users/apple/Projects/terminaldeck',
+        provider: 'claude',
+        status: 'working',
+        exitCode: null,
+      },
+    ],
+  },
+  // Nothing running is a real answer and has exactly one spelling. It is also
+  // how a device that closed its last terminal takes its rows out of the
+  // picker.
+  { t: 'sessions.mine', sessions: [] },
 ]
 
 const SESSION: RemoteSession = {
@@ -2314,6 +2337,59 @@ describe('window.holds', () => {
   it('refuses a frame with no list at all', () => {
     expect(parseClientMessage({ t: 'window.holds' }).ok).toBe(false)
     expect(parseClientMessage({ t: 'window.holds', sessions: 'all of them' }).ok).toBe(false)
+  })
+})
+
+describe('sessions.mine', () => {
+  /**
+   * The mirror of the frame above, and the one that makes it able to say
+   * anything: the sessions on the *client's* computer, so the host can offer a
+   * row in its own attach menu. Same forgiveness for the same reason — a device
+   * describing its own screen must not be able to lose its link over the shape
+   * of one row.
+   */
+  const ROW = {
+    id: SESSION_ID,
+    title: 'terminaldeck',
+    cwd: '/Users/apple/Projects/terminaldeck',
+    provider: 'claude',
+    status: 'idle',
+    exitCode: null,
+  }
+
+  it('keeps the rows it can read and drops the ones it cannot', () => {
+    const parsed = parseClientMessage({
+      t: 'sessions.mine',
+      sessions: [ROW, { id: '' }, 'a terminal', null, { ...ROW, id: 'second' }],
+    })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) throw new Error('unreachable')
+    if (parsed.message.t !== 'sessions.mine') throw new Error('unreachable')
+    expect(parsed.message.sessions.map((row) => row.id)).toEqual([SESSION_ID, 'second'])
+  })
+
+  it('trims a list too long to hold rather than closing the link over it', () => {
+    const many = Array.from({ length: MAX_ANNOUNCED_SESSIONS + 20 }, (_, n) => ({
+      ...ROW,
+      id: `session-${n}`,
+    }))
+    const parsed = parseClientMessage({ t: 'sessions.mine', sessions: many })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) throw new Error('unreachable')
+    if (parsed.message.t !== 'sessions.mine') throw new Error('unreachable')
+    expect(parsed.message.sessions).toHaveLength(MAX_ANNOUNCED_SESSIONS)
+  })
+
+  it('reads an empty list as the answer it is, rather than as nothing said', () => {
+    const parsed = parseClientMessage({ t: 'sessions.mine', sessions: [] })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) throw new Error('unreachable')
+    expect(parsed.message).toEqual({ t: 'sessions.mine', sessions: [] })
+  })
+
+  it('refuses a frame with no list at all, which is not the same as none', () => {
+    expect(parseClientMessage({ t: 'sessions.mine' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'sessions.mine', sessions: 'all of them' }).ok).toBe(false)
   })
 })
 /**

@@ -283,6 +283,12 @@ export function useAgentTarget(
    *    terminal pane itself types through, addressed by the handle the server
    *    answered `servers:shell:open` with.
    *
+   * And one non-route, which is the fourth kind of row this picker grew: a
+   * session on a computer that dialled *in*. There is no verb pointing that way
+   * — `session.send` is a frame a client sends its host, and on that link this
+   * app is the host — so the row is listed for the thing it *can* do, which is
+   * take a browser window, and refused here with the sentence that says so.
+   *
    * Every one of the three is feature-detected rather than assumed. A window
    * running against a preload older than one of these channels must refuse with
    * a sentence, not throw `undefined is not a function` into a click handler and
@@ -302,6 +308,25 @@ export function useAgentTarget(
       if (target.machineId === '') {
         api.writeToSession(target.id, data)
         return { ok: true }
+      }
+      /*
+       * A computer that dialled **in** wears the same field and is not the same
+       * route. Its id was minted by the pairing store behind `remote/server.ts`,
+       * not by `MachineStore`, so `sendToMachineSession` would hand it to a desk
+       * that has never heard of it — a press answered by "not connected" about a
+       * machine sitting right there.
+       *
+       * `resolveTarget` already refuses these rows, so nothing should reach this
+       * line. It is here because the alternative to a second check is a silent
+       * mis-route the day either half of that rule is edited, and because the
+       * sentence a person would get from the wrong desk would be a lie about
+       * which thing was wrong.
+       */
+      if (target.dialledIn) {
+        return {
+          ok: false,
+          message: `${target.machineName} dialled in to this computer. Attach a window to that session instead, or send it from ${target.machineName}.`,
+        }
       }
       const remote = machineSend()
       if (!remote) {

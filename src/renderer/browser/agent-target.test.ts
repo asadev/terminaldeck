@@ -59,6 +59,41 @@ const MACHINES = {
   blocked: null,
 }
 
+/**
+ * One computer that dialled **in**, with two terminals of its own.
+ *
+ * The shape `remote:status` answers with: a roster of connections, each carrying
+ * whatever that device announced is running on its own machine. A phone is on
+ * the same roster and announces nothing, which is why one is here.
+ */
+const GUESTS = {
+  connections: [
+    {
+      id: 'c1',
+      deviceId: 'd1',
+      deviceName: 'Office PC',
+      platform: 'win32',
+      connectedAt: 100,
+      sessionIds: [],
+      tunnels: [],
+      sessions: [
+        { id: 'g1', title: 'terminaldeck', cwd: 'C:\\Users\\Imza\\Projects\\terminaldeck', provider: 'claude', status: 'idle', exitCode: null },
+        { id: 'g2', title: 'terminaldeck', cwd: 'C:\\Users\\Imza\\Projects\\terminaldeck', provider: 'shell', status: 'idle', exitCode: null },
+      ],
+    },
+    {
+      id: 'c2',
+      deviceId: 'd2',
+      deviceName: 'Asad’s iPhone',
+      platform: 'iOS',
+      connectedAt: 200,
+      sessionIds: [],
+      tunnels: [],
+      sessions: [],
+    },
+  ],
+}
+
 /** Two terminals this window has open on one server, plus one still opening. */
 const SHELLS: AgentServerShell[] = [
   { tabId: 't1', serverId: 's1', serverName: 'Office PC', shellId: 'sh-1', startIn: '', ended: false },
@@ -333,6 +368,69 @@ describe('resolveAgentSessions', () => {
       onMachinesState: () => () => undefined,
     })
     expect(readSessions(await api?.listSessions())).toHaveLength(3)
+  })
+
+  it('asks the roster too, so a computer that dialled in has rows at all', async () => {
+    const api = resolveAgentSessions({
+      ...complete,
+      listSessions: () => Promise.resolve(LIVE),
+      listMachines: () => Promise.resolve(MACHINES),
+      onMachinesState: () => () => undefined,
+      remoteStatus: () => Promise.resolve(GUESTS),
+      onRemoteConnections: () => () => undefined,
+    })
+    // Three here, three on the machine this desktop dialled, two on the computer
+    // that dialled this one.
+    expect(readSessions(await api?.listSessions())).toHaveLength(8)
+  })
+
+  it('keeps everything else when the roster fails, the way it does for machines', async () => {
+    // A remote layer that is off, starting, or mid-restart. The rows this window
+    // can actually act on must not go with it.
+    const api = resolveAgentSessions({
+      ...complete,
+      listSessions: () => Promise.resolve(LIVE),
+      remoteStatus: () => Promise.reject(new Error('remote access is off')),
+      onRemoteConnections: () => () => undefined,
+    })
+    expect(readSessions(await api?.listSessions())).toHaveLength(3)
+  })
+
+  it('adapts on the devices half alone, for a build with no machines half', async () => {
+    const api = resolveAgentSessions({
+      ...complete,
+      listSessions: () => Promise.resolve(LIVE),
+      remoteStatus: () => Promise.resolve(GUESTS),
+      onRemoteConnections: () => () => undefined,
+    })
+    expect(readSessions(await api?.listSessions())).toHaveLength(5)
+  })
+
+  it('refreshes when a device connects or says what it is running', () => {
+    /*
+     * A terminal opened on his PC arrives on `remote:connections` and nowhere
+     * else — the roster is pushed for every connect, disconnect and
+     * announcement. Left out, the attach menu would be a snapshot of the moment
+     * the window opened, which is the staleness this picker keeps being fixed
+     * for.
+     */
+    let devicePushes = 0
+    let unsubscribed = 0
+    const api = resolveAgentSessions({
+      ...complete,
+      remoteStatus: () => Promise.resolve(GUESTS),
+      onRemoteConnections: (cb: () => void) => {
+        devicePushes += 1
+        void cb
+        return () => {
+          unsubscribed += 1
+        }
+      },
+    })
+    const off = api?.onSessionCreated(() => undefined)
+    expect(devicePushes).toBe(1)
+    off?.()
+    expect(unsubscribed).toBe(1)
   })
 
   it('refreshes on a machines push as well as on a session starting', () => {
@@ -717,5 +815,102 @@ describe('attachableSessions', () => {
     // switched off at the menu.
     const rows = readSessions({ here: [], elsewhere: MACHINES })
     expect(attachableSessions(rows).map((row) => row.id)).toEqual(['r1', 'r2', 'r3'])
+  })
+})
+
+/**
+ * The fourth cell: a computer that dialled **in**.
+ *
+ * *"From any session from any device to any device's browser in one app."* Three
+ * of the four worked. The fourth — an agent on a computer that reached this one,
+ * driving a page on this screen — had every part built: the grant store, the
+ * `window.holds` this app sends that device, the `window.call` it sends back, and
+ * the filter in `index.ts` that answers which of its sessions have a window here.
+ * All of it was downstream of a menu with no row, because this picker was built
+ * from this machine's ptys plus the machines this desktop *dialled out to*, and a
+ * device that dialled in is in neither list.
+ */
+describe('computers that dialled in', () => {
+  it('lists what a device says is running on it, under that device’s name', () => {
+    const rows = readSessions({ here: LIVE, elsewhere: null, guests: GUESTS })
+    const guests = rows.filter((row) => row.dialledIn)
+    expect(guests.map((row) => row.label)).toEqual([
+      'Office PC · terminaldeck · Session 1',
+      'Office PC · terminaldeck · Session 2',
+    ])
+    // Numbered per folder per device. Sharing the counter with this computer
+    // would make the first one read `Session 3`, which matches nothing on either
+    // screen.
+    expect(rows.filter((row) => !row.dialledIn).map((row) => row.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('files them under the device id, which is the half of the binding key that was empty', () => {
+    /*
+     * `browser-binding.ts` keys a window `<machineId>\0<sessionId>`, and
+     * `windowsHeldFor(deviceId)` filters that map for exactly this id. Put
+     * anything else in the field — the empty string, the machine store's id for
+     * some other computer — and the filter is correct and always empty, which is what
+     * it was.
+     */
+    const rows = readSessions({ here: [], elsewhere: null, guests: GUESTS })
+    expect(rows.map((row) => row.machineId)).toEqual(['d1', 'd1'])
+    expect(rows.map((row) => row.machineName)).toEqual(['Office PC', 'Office PC'])
+    expect(rows.every((row) => row.serverId === '')).toBe(true)
+  })
+
+  it('offers them for attaching, which is the whole reason they are listed', () => {
+    const rows = readSessions({ here: [], elsewhere: null, guests: GUESTS })
+    expect(attachableSessions(rows).map((row) => row.id)).toEqual(['g1', 'g2'])
+  })
+
+  it('refuses to send to one, because no frame in this protocol carries a keystroke that way', () => {
+    /*
+     * `session.send` is a frame a *client* sends its host, and on a link somebody
+     * else dialled this app is the host. So the honest answer is a refusal that
+     * names the thing the row *can* do — not a press that reaches the machines
+     * desk with an id it has never heard of and comes back "not connected" about
+     * a computer sitting right there.
+     */
+    const rows = readSessions({ here: LIVE, elsewhere: null, guests: GUESTS })
+    expect(resolveTarget('g1', rows)).toBeNull()
+    const why = whyDisabled('g1', rows, true)
+    expect(why).toContain('Office PC')
+    expect(why).toContain('Attach a window')
+    // And the rows that can be sent to are untouched by the rule.
+    expect(resolveTarget('a', rows)?.id).toBe('a')
+    expect(whyDisabled('a', rows, true)).toBe('')
+  })
+
+  it('says nothing about a phone, which has no terminals to announce', () => {
+    const rows = readSessions({ here: [], elsewhere: null, guests: GUESTS })
+    expect(rows.some((row) => row.machineName.includes('iPhone'))).toBe(false)
+  })
+
+  it('takes the newest connection when one device holds two, rather than merging them', () => {
+    // A reconnect whose old socket has not been noticed yet. Merging would show a
+    // terminal that was closed on whichever list is stale.
+    const reconnected = {
+      connections: [
+        GUESTS.connections[0],
+        { ...GUESTS.connections[0], id: 'c3', connectedAt: 300, sessions: [GUESTS.connections[0].sessions[1]] },
+      ],
+    }
+    const rows = readSessions({ here: [], elsewhere: null, guests: reconnected })
+    expect(rows.map((row) => row.id)).toEqual(['g2'])
+  })
+
+  it('drops a device it cannot name, because a label is what somebody picks by', () => {
+    const nameless = { connections: [{ ...GUESTS.connections[0], deviceName: '' }] }
+    expect(readSessions({ here: [], elsewhere: null, guests: nameless })).toEqual([])
+  })
+
+  it('reads the roster as an array too, which is what the push carries', () => {
+    const rows = readSessions({ here: [], elsewhere: null, guests: GUESTS.connections })
+    expect(rows.map((row) => row.id)).toEqual(['g1', 'g2'])
+  })
+
+  it('leaves a device out of a build with no remote layer, without losing the rest', () => {
+    const rows = readSessions({ here: LIVE, elsewhere: null, guests: null })
+    expect(rows.map((row) => row.id)).toEqual(['a', 'b', 'c'])
   })
 })

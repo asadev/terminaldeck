@@ -47,6 +47,18 @@ import {
 import type { CopilotRemote, CopilotSink } from '../copilot-remote'
 import type { CopilotStateReport, RemoteSession, ServerMessage } from '../protocol'
 import { createMachineLink, type MachineLinkState } from './guest'
+/*
+ * The app's own binding map, not an imitation of it: the key `attach` files
+ * under is the fact this file's last test is about.
+ *
+ * The renderer's picker is deliberately *not* imported. It reads this roster and
+ * is the other half of the same chain, but `src/renderer` is not in this
+ * project's file list and dragging it in pulls a `.tsx` and a `window` into the
+ * main typecheck. `browser/guest-sessions.contract.test.ts` reads this file's
+ * `RemoteConnection` as text from the other side instead, which is the same
+ * guard the preload contract test uses across the same kind of seam.
+ */
+import { attach, resetForTests as resetBindings, view as bindingView } from '../../browser-binding'
 import { pairWithCode, lookupMachine } from './pair'
 import { offerFrom, rendezvousIdentity, startBeacon, type MachineOffer } from './rendezvous'
 
@@ -355,7 +367,22 @@ async function loopbackRelay(): Promise<string> {
  * a guest for one and an owner for another — and switching it on for every test
  * in this file would silently narrow what the older ones are talking to.
  */
-async function farMachine(options: { copilot?: boolean } = {}): Promise<{
+async function farMachine(
+  options: {
+    copilot?: boolean
+    /**
+     * The two halves of *this* machine holding a browser window for a session on
+     * the computer that dialled it.
+     *
+     * `serveWindows` is what makes the endpoint advertise `hostWindows` at all —
+     * see `capabilityOffered` in `server.ts` — and `windowsHeldFor` is the answer
+     * it sends on that capability. Both are optional so every other test in this
+     * file builds the machine it always built.
+     */
+    serveWindows?: (deviceId: string, call: { sessionId: string; tool: string; args: string }) => Promise<{ ok: boolean; body: string }>
+    windowsHeldFor?: (deviceId: string) => readonly string[]
+  } = {},
+): Promise<{
   relayUrl: string
   auth: RemoteAuth
   desk: ReturnType<typeof pairingDesk>
@@ -381,6 +408,8 @@ async function farMachine(options: { copilot?: boolean } = {}): Promise<{
     ...(options.copilot
       ? { copilot, copilotEligible: (deviceId: string): boolean => kinds.kindOf(deviceId) === 'mine' }
       : {}),
+    ...(options.serveWindows ? { serveWindows: options.serveWindows } : {}),
+    ...(options.windowsHeldFor ? { windowsHeldFor: options.windowsHeldFor } : {}),
   })
   const identity = loadHostIdentity(dir)
 
@@ -1010,6 +1039,167 @@ describe('pairing, and then being a guest', () => {
     await waitFor(
       () => link.state().sessions.every((row) => row.id !== 'started-at-that-desk'),
       'the ended session to leave on its own',
+    )
+
+    link.disconnect()
+  }, 30_000)
+
+  it('lets the computer being dialled attach a window to a session on the one dialling it', async () => {
+    /*
+     * The fourth cell of *"from any session from any device to any device's
+     * browser in one app"*, watched end to end rather than reasoned about.
+     *
+     * Every part of it existed before today and none of it could fire.
+     * `window-grants.ts` held the permission, `server.ts` sent the device
+     * `window.holds`, `window-serve.ts` decided its `window.call`, and
+     * `index.ts`'s `windowsHeldFor(deviceId)` filtered the binding map for it —
+     * and that filter was always empty, correctly, because nothing in the app
+     * could name a session on a computer that had dialled *in*, so no window was
+     * ever attached to one, so no binding was ever filed under a device's id.
+     *
+     * The direction here is the one this file usually runs backwards. `far` is
+     * the computer with the **screen and the browser window** — the endpoint —
+     * and `link` is the computer with the **ptys**, dialling in. So the roster on
+     * `far` is where the sessions have to arrive, the picker on `far` is what has
+     * to produce a row, and the announcement has to come back to `link` for its
+     * agent to have anywhere to send a browser verb.
+     *
+     * Nothing below asks for any of it. No `list()`, no poll: the link announces
+     * on its own welcome, and `far` announces back the moment a window is
+     * attached.
+     */
+    resetBindings()
+    const ptys: RemoteSession[] = [
+      {
+        id: 'pty-on-the-dialling-machine',
+        title: 'terminaldeck',
+        cwd: '/Users/apple/Projects/terminaldeck',
+        provider: 'claude',
+        status: 'idle',
+        exitCode: null,
+      },
+    ]
+
+    const served: Array<{ deviceId: string; sessionId: string; tool: string }> = []
+    const far = await farMachine({
+      // Its presence is what advertises `hostWindows`, which is the capability
+      // both halves of this conversation travel on — and it is also the end of
+      // the chain, so what reaches it is recorded rather than discarded.
+      serveWindows: (deviceId, call) => {
+        served.push({ deviceId, sessionId: call.sessionId, tool: call.tool })
+        return Promise.resolve({ ok: true, body: '{}' })
+      },
+      // The real read `index.ts` makes, against the real binding map.
+      windowsHeldFor: (deviceId) =>
+        bindingView()
+          .sessions.filter((binding) => binding.machineId === deviceId && binding.windows.length > 0)
+          .map((binding) => binding.sessionId),
+    })
+    const code = far.desk.create()
+    const beacon = startBeacon({ code: code.token, offer: far.offer, relayUrl: far.relayUrl })
+    closers.push(() => beacon?.stop())
+    expect(await beacon?.ready()).toBe(true)
+
+    const paired = await pairWithCode({ code: code.token, relayUrl: far.relayUrl })
+    if (!paired.ok) throw new Error(`pairing failed: ${paired.message}`)
+    beacon?.stop()
+
+    let heldThere: readonly string[] = []
+    const link = createMachineLink({
+      id: paired.offer.hostId,
+      secrets: {
+        hostId: paired.offer.hostId,
+        hostPublicKey: Buffer.from(paired.offer.publicKey, 'base64'),
+        relayUrl: paired.offer.relayUrl,
+        credential: paired.credential,
+        guestKeys: paired.guestKeys,
+      },
+      onState: () => {},
+      onOutput: () => {},
+      onWelcome: () => {},
+      // What is running on this machine, which the far one cannot derive.
+      ownSessions: () => ptys,
+      // And what it says back: which of these sessions has a window over there.
+      onWindowHolds: (sessions) => {
+        heldThere = sessions
+      },
+      baseBackoffMs: 20,
+      maxBackoffMs: 60,
+    })
+    closers.push(() => link.disconnect())
+    link.connect()
+
+    await waitFor(() => link.state().state === 'awaiting-approval', 'the pending refusal')
+    const deviceId = far.auth.listDevices()[0].id
+    far.auth.approveDevice(deviceId)
+    await waitFor(() => link.state().state === 'online', 'the link to come up after approval')
+
+    // 1. The announcement arrives with nothing on that side asking for it.
+    await waitFor(
+      () => far.endpoint.connections()[0]?.sessions.length === 1,
+      'the dialling machine to say what it is running',
+    )
+
+    // 2. And it arrives wearing the row the picker reads: the device's id, the
+    //    device's name, and that device's own sessions. Those four field names
+    //    are the seam, and `browser/guest-sessions.contract.test.ts` is what
+    //    stops them drifting apart from the reader on the other side.
+    const roster = far.endpoint.connections()[0]
+    expect(roster.deviceId).toBe(deviceId)
+    expect(roster.deviceName).not.toBe('')
+    expect(roster.sessions[0].id).toBe('pty-on-the-dialling-machine')
+
+    // 3. Somebody ticks it in the menu the picker built. The relation is filed
+    //    under the **device's** id, which is the half of
+    //    `<machineId>\0<sessionId>` that had never held one.
+    attach({
+      sessionId: roster.sessions[0].id,
+      machineId: roster.deviceId,
+      browserTabId: 'browser:1:1',
+      url: 'https://example.com',
+      title: 'Example',
+    })
+
+    // 4. Which is what `windowsHeldFor` has been answering emptily about all
+    //    along, and it is no longer empty.
+    expect(far.endpoint.windowsHeldChanged()).toBe(1)
+
+    // 5. And it lands on the machine the pty is on, so its agent's browser verbs
+    //    have somewhere to go.
+    await waitFor(
+      () => heldThere.includes('pty-on-the-dialling-machine'),
+      'the far machine to say it is holding a window for that session',
+    )
+
+    // 6. Which is what the agent in that pty has been waiting for. It asks, over
+    //    the same link, and the ask arrives at the computer whose browser it is —
+    //    named by the same device id the window was filed under. Everything past
+    //    this point is `window-serve.ts`'s grant and `deck-control`'s dispatcher,
+    //    both pinned elsewhere; what was never true before is that the frame had
+    //    anywhere to go.
+    expect(
+      link.askWindow({
+        t: 'window.call',
+        id: 'ask-1',
+        session: 'pty-on-the-dialling-machine',
+        tool: 'browser.read',
+        args: '{}',
+      }),
+    ).toBe(true)
+    await waitFor(() => served.length === 1, 'the browser verb to reach the machine with the window')
+    expect(served[0]).toEqual({
+      deviceId,
+      sessionId: 'pty-on-the-dialling-machine',
+      tool: 'browser.read',
+    })
+
+    // 7. A terminal closed over there leaves the picker on its own, which is how
+    //    the row stops being offered for a pty that has gone.
+    ptys.length = 0
+    expect(link.announceSessions()).toBe(true)
+    await waitFor(
+      () => far.endpoint.connections()[0]?.sessions.length === 0,
+      'the closed terminal to leave the roster',
     )
 
     link.disconnect()

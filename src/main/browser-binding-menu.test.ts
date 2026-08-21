@@ -447,6 +447,113 @@ describe('a row that would attach and then do nothing', () => {
     expect(rows.every((item) => item.enabled !== false)).toBe(true)
   })
 
+  /**
+   * And the one refusal in this menu that the menu can end itself.
+   *
+   * A session on a computer that dialled **in** is listed here so a window on
+   * this screen can be attached to it — that is the fourth cell of *"from any
+   * session from any device to any device's browser"*, and it was unreachable
+   * until this build. The grant that lets the agent over there act on the window
+   * defaults to off, so without a row here the first attach is always followed by
+   * a refusal on the other computer and a walk back to a Settings panel.
+   */
+  const GUEST = [
+    { sessionId: 's1', name: 'terminaldeck · Session 1' },
+    { sessionId: 'g1', machineId: 'dev-1', name: 'terminaldeck · Session 1', machineName: 'Office PC' },
+  ]
+
+  it('offers the tick in the menu somebody is already in', () => {
+    openWindow('browser:1:1')
+
+    const items = connectMenuItems({
+      browserTabId: 'browser:1:1',
+      sessions: GUEST,
+      windowGrantFor: (machineId) =>
+        machineId === 'dev-1' ? { name: 'Office PC', allowed: false } : null,
+      setWindowGrant: () => undefined,
+    })
+
+    const row = items.find(
+      (item) => typeof item.label === 'string' && item.label.startsWith('Let Office PC'),
+    )
+    expect(row?.type).toBe('checkbox')
+    // Unticked, and it says so rather than saying nothing: the next time this
+    // menu opens, the tick is the answer to "did that land".
+    expect(row?.checked).toBe(false)
+    expect(row?.enabled).toBe(true)
+  })
+
+  it('writes the tick when it is pressed, and turns it off again', () => {
+    openWindow('browser:1:1')
+    const written: Array<[string, boolean]> = []
+    const menu = (allowed: boolean) =>
+      connectMenuItems({
+        browserTabId: 'browser:1:1',
+        sessions: GUEST,
+        windowGrantFor: (machineId) => (machineId === 'dev-1' ? { name: 'Office PC', allowed } : null),
+        setWindowGrant: (machineId, next) => written.push([machineId, next]),
+      }).find((item) => typeof item.label === 'string' && item.label.startsWith('Let Office PC'))
+
+    menu(false)?.click?.(undefined as never, undefined, undefined as never)
+    menu(true)?.click?.(undefined as never, undefined, undefined as never)
+    expect(written).toEqual([
+      ['dev-1', true],
+      ['dev-1', false],
+    ])
+  })
+
+  it('offers one row per computer, not one per session', () => {
+    openWindow('browser:1:1')
+
+    const items = connectMenuItems({
+      browserTabId: 'browser:1:1',
+      sessions: [
+        ...GUEST,
+        { sessionId: 'g2', machineId: 'dev-1', name: 'terminaldeck · Session 2', machineName: 'Office PC' },
+      ],
+      windowGrantFor: () => ({ name: 'Office PC', allowed: false }),
+      setWindowGrant: () => undefined,
+    })
+
+    expect(
+      items.filter((item) => typeof item.label === 'string' && item.label.startsWith('Let Office PC')),
+    ).toHaveLength(1)
+  })
+
+  it('offers nothing for a machine this desktop dialled, or for this computer', () => {
+    // Three id spaces reach this menu and only one of them is a device. A row
+    // offered against the wrong one would be a tick that grants nothing.
+    openWindow('browser:1:1')
+
+    const items = connectMenuItems({
+      browserTabId: 'browser:1:1',
+      sessions,
+      windowGrantFor: () => null,
+      setWindowGrant: () => undefined,
+    })
+
+    expect(items.some((item) => typeof item.label === 'string' && item.label.startsWith('Let '))).toBe(
+      false,
+    )
+  })
+
+  it('draws the row disabled rather than hiding it when nothing can write the tick', () => {
+    // A build that can read the grant and not write it would otherwise show a
+    // permission that silently does nothing when pressed.
+    openWindow('browser:1:1')
+
+    const items = connectMenuItems({
+      browserTabId: 'browser:1:1',
+      sessions: GUEST,
+      windowGrantFor: () => ({ name: 'Office PC', allowed: false }),
+    })
+
+    const row = items.find(
+      (item) => typeof item.label === 'string' && item.label.startsWith('Let Office PC'),
+    )
+    expect(row?.enabled).toBe(false)
+  })
+
   it('changes nothing at all when nobody is asked', () => {
     openWindow('browser:1:1')
 
