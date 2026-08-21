@@ -404,6 +404,13 @@
    Project page now says it is reporting on. All three are machine text. */
 .settings-addmenu-login,
 .settings-server-where,
-.page-scope-path {
+.page-scope-path,
+/* Added 2026-08-21 with the tools store and the server host panel: a store
+   tool's version, the pairing code a freshly installed host prints, and the
+   host's own status output. All three are machine text and two of them are
+   read aloud off the screen to be typed somewhere else. */
+.bw-store-version,
+.servers-host-code-value,
+.servers-host-status pre {
   font-variant-ligatures: none;
 }
