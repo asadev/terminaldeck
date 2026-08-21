@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { NO_COPILOT, PairingCode, hostControls, linkedLine } from './ServerHost'
+import { NO_COPILOT, PairingCode, awayLine, hostControls, linkedLine } from './ServerHost'
 import { asHostOffer } from './types'
 import type { HostOffer } from './types'
 
@@ -40,6 +40,7 @@ const NOW_OFFER = {
   removes: { keepData: 'What it stored stays.', withData: 'It all goes.' },
   canLink: true,
   linkedAs: null,
+  linkedButNotConnected: false,
   state: { serverId: 's1', step: 'idle', line: '', detail: '', done: [], code: null, weInstalled: false },
 }
 
@@ -130,6 +131,52 @@ describe('which controls are drawn', () => {
     // And the promise the whole change was asked for: after linking it is a
     // machine like any other.
     expect(linkedLine('office-pc')).toContain('any other machine')
+  })
+
+  /*
+   * The state that had no sentence and no button, and had both of the wrong
+   * ones. Measured on his office PC: the host up two hours, on the relay, a
+   * device of his approved in its own list — and zero channels open. The panel
+   * said *"This computer is linked to it … sessions, folders and the terminal
+   * work there the way they do for any other machine"*, which was false in every
+   * clause, and offered nothing to press.
+   */
+  it('says nothing is reaching a host it has a row for, and offers the press', () => {
+    const controls = hostControls(offer({ linkedAs: 'office-pc', linkedButNotConnected: true }), false)
+    expect(controls.away).toBe(true)
+    expect(controls.linkedAs).toBe('office-pc')
+    // The button is back, because a row with nothing behind it is not "already
+    // linked" and a fresh pairing is the one press that fixes it.
+    expect(controls.link).toBe(true)
+    const said = awayLine('office-pc')
+    expect(said).toContain('office-pc')
+    expect(said).toContain('nothing is reaching it')
+    // Named, not described. The label on the button directly above it.
+    expect(said).toContain('Link this computer')
+    // And it must not be the other sentence, whose every clause is a claim
+    // about a machine this one can talk to.
+    expect(said).not.toContain('any other machine')
+  })
+
+  /*
+   * And it stays quiet about a link that is working, which is the ordinary case:
+   * a second sentence and a second button on every healthy panel would train
+   * somebody to ignore both.
+   */
+  it('says nothing about reaching a host that is reached', () => {
+    const controls = hostControls(offer({ linkedAs: 'office-pc' }), false)
+    expect(controls.away).toBe(false)
+    expect(controls.link).toBe(false)
+  })
+
+  /*
+   * A main process older than the field says nothing about it, and an absent
+   * field must not put a warning and a second button on a healthy panel. This is
+   * the one field here read in the quiet direction, and this is the claim.
+   */
+  it('reads a missing answer as connected rather than as trouble', () => {
+    const read = asHostOffer({ ...NOW_OFFER, linkedAs: 'office-pc', linkedButNotConnected: undefined })
+    expect(read?.linkedButNotConnected).toBe(false)
   })
 
   /*

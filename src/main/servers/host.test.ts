@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   HOST_PROBE,
   ServerHosts,
+  channelsOf,
   hostConsequence,
   hostIdOf,
   hostLine,
@@ -131,6 +132,48 @@ const RUNNING = [
   '  connected      wss://relay.terminaldeck.dev',
   '  host id        P5PCNBABHBBVFDBZZ2ECELNAZ7',
   '  fingerprint    A3PL-DGAB-3N6W-RK3Y-V4VS-MMHP',
+  '',
+].join('\n')
+
+/**
+ * Verbatim, from **his office PC** at 00:46 on 2026-08-22 — the measurement this
+ * lane exists for.
+ *
+ * A host that had been up for two hours, connected to the relay, with a device
+ * of his approved in its own list, and `channels 0`: nothing was connected to
+ * it. The panel over it said *"This computer is linked to it … sessions,
+ * folders and the terminal work there the way they do for any other machine."*
+ *
+ * Kept here in the host's own words rather than trimmed to the line under test,
+ * because the whole point is that this app was already looking at this text and
+ * not reading it.
+ */
+const NOBODY_ATTACHED = [
+  'os\tLinux',
+  'arch\tx86_64',
+  'libc\tgnu',
+  'node\tv18.19.1',
+  'npm\t/home/asad/.terminaldeck/runtime/bin/npm',
+  'tools\t',
+  'fetch\tcurl',
+  'hash\tsha256sum',
+  'tar\tyes',
+  'home_free_kb\t32439968',
+  'state_dir\t/home/asad/.local/share/terminaldeck',
+  'state\tyes',
+  'systemd_user\tyes',
+  'command\t/home/asad/.local/bin/terminaldeck',
+  'version\t0.9.1',
+  '--- status ---',
+  'Terminal Deck host 0.9.1 — running, idle',
+  '  pid 145995, up 2h',
+  '  state  /home/asad/.local/share/terminaldeck',
+  '',
+  'Relay',
+  '  connected      wss://relay.terminaldeck.dev',
+  '  host id        KZ2J9AWGK8BWGQUEZDYKW5RS22',
+  '  fingerprint    NW76-TCC7-DKFD-AGVD-MBGK-W28U',
+  '  channels       0',
   '',
 ].join('\n')
 
@@ -375,6 +418,8 @@ interface Box {
   typed: string[]
   put: Array<{ local: string; name: string }>
   states: HostState[]
+  /** Which machine the flow waited on before saying it was linked. */
+  waitedFor: string[]
   /** Every code this app handed to the Machines list, in order. */
   redeemed: string[]
   shell: HostShell
@@ -389,6 +434,14 @@ interface Box {
  * what the redemption said it dialled with. Two fixtures, so a test can make
  * them differ.
  */
+/**
+ * The id the redemption answers with, which is that host's own id at the relay.
+ *
+ * Carried back so the flow can wait for *that* machine's link to start carrying
+ * before it says it is linked — see {@link HostDeps.whenReaching}.
+ */
+const THAT_MACHINE = 'P5PCNBABHBBVFDBZZ2ECELNAZ7'
+
 const OURS = 'A3PL-DGAB-3N6W-RK3Y-V4VS-MMHP'
 const SOMEBODY_ELSE = 'ZZZZ-DGAB-3N6W-RK3Y-V4VS-MMHP'
 
@@ -407,6 +460,16 @@ function box(
     installExit?: number
     /** What redeeming the code answers. Ok with {@link OURS} unless a test says otherwise. */
     link?: LinkOutcome
+    /**
+     * What redeeming answers on each successive try, for the retry tests.
+     *
+     * A list rather than one answer, because the property being exercised is
+     * that a *first* miss is not the end — and a fake that gave the same reply
+     * every time could only ever prove the loop runs, never that it stops.
+     */
+    links?: LinkOutcome[]
+    /** The codes `pair` prints, one per run. One fresh code per try is the rule. */
+    codes?: string[]
     /** The fingerprint the *host* prints for the device that turned up. */
     hostShows?: string
     /** A build with no Machines list at all, which must fall back to showing the code. */
@@ -419,6 +482,13 @@ function box(
     offRelayFor?: number
     /** The relay wait's own ceiling. Zero everywhere but the test that exercises it. */
     relayWaitMs?: number
+    /**
+     * Whether this computer's link to the machine actually came up.
+     *
+     * Absent means the flow is not asked to wait at all, which is what a build
+     * with no machine channels does — see {@link HostDeps.whenReaching}.
+     */
+    reaches?: boolean
   } = {},
 ): Box {
   const scripts: string[] = []
@@ -446,7 +516,13 @@ function box(
       // its listener, which is what a real shell's round trip does anyway.
       queueMicrotask(() => {
         if (data.includes('install.sh')) say(`__terminaldeck_host ${over.installExit ?? 0}\n`)
-        else if (data.includes('pair --kind mine')) say('\n  Pairing code   904021\n  Valid for      60 seconds\n')
+        else if (data.includes('pair --kind mine')) {
+          // A fresh code per run, exactly as a real host mints one: the run that
+          // printed the last one has been interrupted and cannot be asked again.
+          const code = over.codes?.[minted] ?? over.codes?.at(-1) ?? '904021'
+          minted += 1
+          say(`\n  Pairing code   ${code}\n  Valid for      60 seconds\n`)
+        }
         // `renderApproved` and `renderNotApproved`, in the words `cli.ts` prints
         // them in — the two things that can follow the approval question.
         else if (data.trim() === 'y') {
@@ -461,6 +537,9 @@ function box(
   }
 
   let probes = 0
+  let minted = 0
+  let redemptions = 0
+  const waitedFor: string[] = []
   const deps: HostDeps = {
     /*
      * Zero unless a test says otherwise, so nothing here waits on a real clock.
@@ -510,7 +589,9 @@ function box(
             redeemed.push(code)
             over.whileRedeeming?.()
             const answer: LinkOutcome =
-              over.link ?? { ok: true, machineName: 'office-pc', deviceFingerprint: OURS }
+              over.links?.[redemptions] ??
+              over.link ?? { ok: true, machineId: THAT_MACHINE, machineName: 'office-pc', deviceFingerprint: OURS }
+            redemptions += 1
             if (answer.ok) {
               queueMicrotask(() =>
                 say(
@@ -522,12 +603,20 @@ function box(
             }
             return Promise.resolve(answer)
           },
+    ...(over.reaches === undefined
+      ? {}
+      : {
+          whenReaching: (machineId: string): Promise<boolean> => {
+            waitedFor.push(machineId)
+            return Promise.resolve(over.reaches === true)
+          },
+        }),
     broadcast: (next) => {
       states.push(next)
     },
   }
 
-  return { scripts, typed, put, states, redeemed, shell, deps }
+  return { scripts, typed, put, states, redeemed, waitedFor, shell, deps }
 }
 
 /** A look with nothing wrong with it, for the flow tests. */
@@ -546,9 +635,13 @@ describe('installing it', () => {
       'uploading',
       'installing',
       'service',
+      // Twice, and the second one is the honest half of the last step: the far
+      // end has approved this computer and the channel has not come up yet.
+      'pairing',
       'pairing',
       'done',
     ])
+    expect(it_.states.map((one) => one.line)).toContain('Approved. Waiting for this computer to reach it.')
     expect(final.line).toContain('linked to this computer')
     // Each finished step is a sentence somebody can come back to. Five of
     // them: what the machine had, what was copied, what was installed, how it
@@ -557,6 +650,44 @@ describe('installing it', () => {
     expect(final.done[1]).toContain('Copied the package to')
     expect(final.done[3]).toContain('keeps running when you log out')
     expect(final.done[4]).toContain('linked to this computer as office-pc')
+  })
+
+  /*
+   * Approved is not connected, and the gap between them is a second and a half.
+   *
+   * The first dial goes out while this device is still pending at the far end
+   * and is refused; the approval lands a moment later and the channel comes up
+   * after that. An install that announced a link at the `y` would have made the
+   * panel behind it — which now asks that host how many channels it has open —
+   * accuse a perfectly good install of not being connected.
+   */
+  it('waits for the channel to come up before saying it is linked', async () => {
+    const it_ = box({ reaches: true })
+    const final = await new ServerHosts(it_.deps).install('s1', it_.shell, goodLook(), 'box')
+    expect(final.step).toBe('done')
+    expect(final.line).toBe('It is running, and linked to this computer.')
+    expect(final.detail).toBe('')
+    // The machine it waited on is the one it just paired with, by that host's
+    // own id — never "some link came up".
+    expect(it_.waitedFor).toEqual([THAT_MACHINE])
+  })
+
+  /*
+   * And when it does not come up, the last thing on screen says so. This is the
+   * rule the whole round is built on: never a panel that looks finished over a
+   * host nothing is reaching. The install is **not** reported as a failure —
+   * the host is there, running, and approved this computer — but the sentence
+   * is honest and the press is named.
+   */
+  it('says the channel never came up rather than claiming a link', async () => {
+    const it_ = box({ reaches: false })
+    const final = await new ServerHosts(it_.deps).install('s1', it_.shell, goodLook(), 'box')
+    expect(final.step).toBe('done')
+    expect(final.line).toContain('has not reached it yet')
+    expect(final.detail).toContain('Link this computer')
+    // The work that did happen is still on the list. A panel that swallowed it
+    // would send somebody to reinstall a host that is fine.
+    expect(final.done.some((one) => one.includes('approved as your own device'))).toBe(true)
   })
 
   /*
@@ -652,11 +783,80 @@ describe('installing it', () => {
     const it_ = box({
       after: OFF_RELAY,
       relayWaitMs: 120,
+      codes: ['904021', '111111', '222222'],
       link: { ok: false, message: 'Nothing answered for that code at the relay.' },
     })
     const final = await new ServerHosts(it_.deps).install('s1', it_.shell, goodLook(), 'box')
-    expect(it_.redeemed).toEqual(['904021'])
+    // Three fresh codes, because a miss is retried — and then it stops, which
+    // is the other half of the property: a host that is genuinely not on the
+    // relay must not be asked forever.
+    expect(it_.redeemed).toEqual(['904021', '111111', '222222'])
     expect(final.detail).toContain('nothing at the relay to answer')
+  })
+
+  /*
+   * The failure this was measured against, as a property.
+   *
+   * His office PC: the install ran, the host came up, the relay said connected,
+   * and two hours later that host was still sitting there with nothing linked to
+   * it. One code was minted, one code went unanswered, and the app handed the
+   * retry back to him as a sentence. A miss at the relay is a timing accident —
+   * the rendezvous behind a code is published a beat after the code exists — so
+   * the second code is the app's job, not his.
+   */
+  it('mints another code when the first one is not answered, and links on it', async () => {
+    const it_ = box({
+      codes: ['904021', '551180'],
+      links: [
+        { ok: false, message: 'Nothing answered for that code at the relay.' },
+        { ok: true, machineId: THAT_MACHINE, machineName: 'office-pc', deviceFingerprint: OURS },
+      ],
+    })
+    const final = await new ServerHosts(it_.deps).install('s1', it_.shell, goodLook(), 'box')
+    expect(final.step).toBe('done')
+    expect(final.line).toContain('linked to this computer')
+    // Two codes, and the second is a different one: a code cannot be re-offered,
+    // and a tape read from the start would have handed back the spent one.
+    expect(it_.redeemed).toEqual(['904021', '551180'])
+    // And the run standing at the relay for a device that was not coming was
+    // stopped before the next was asked for, or the second `pair` would have
+    // been typed at a prompt.
+    expect(it_.typed).toContain(CTRL_C)
+  })
+
+  /*
+   * And it stops, saying so, in words naming the button underneath it. A retry
+   * loop with no end is a machine hammering somebody's server; a failure with no
+   * next step is the thing this whole round is against.
+   */
+  it('gives up after three codes and names the press that tries again', async () => {
+    const it_ = box({
+      codes: ['904021', '551180', '773301'],
+      link: { ok: false, message: 'Nothing answered for that code at the relay.' },
+    })
+    const final = await new ServerHosts(it_.deps).install('s1', it_.shell, goodLook(), 'box')
+    expect(final.step).toBe('failed')
+    expect(it_.redeemed).toEqual(['904021', '551180', '773301'])
+    expect(final.line).toContain('could not be linked to this computer')
+    expect(final.detail).toContain('3 times')
+    expect(final.detail).toContain('Link this computer')
+    // The steps that did work stay on screen: the host really is installed and
+    // running over there, and a panel that read like a failed install would send
+    // somebody to undo work that is fine.
+    expect(final.done.some((one) => one.includes('Installed'))).toBe(true)
+  })
+
+  /*
+   * Everything else the far end can say is an *answer*, and an answer is not
+   * retried. A host showing somebody else's fingerprint has told this app
+   * something; asking it again with a fresh code would be a loop that pairs a
+   * stranger three times over.
+   */
+  it('does not retry a host that answered, only one that did not', async () => {
+    const it_ = box({ hostShows: SOMEBODY_ELSE })
+    const final = await new ServerHosts(it_.deps).install('s1', it_.shell, goodLook(), 'box')
+    expect(final.step).toBe('failed')
+    expect(it_.redeemed).toHaveLength(1)
   })
 
   /*
@@ -895,6 +1095,27 @@ describe('reading a host status', () => {
     // Printed only when the relay is connected, and absent is not an empty
     // string that could match a row.
     expect(hostIdOf(readHostProbe(OFF_RELAY).host.status)).toBe('')
+  })
+
+  /*
+   * The number this app was printing and not reading. Zero is the one answer
+   * worth acting on: whatever else may be true, if nothing at all is connected
+   * to that host then this computer is not.
+   */
+  it('reads how many clients that host says are connected to it', () => {
+    expect(channelsOf(readHostProbe(NOBODY_ATTACHED).host.status)).toBe(0)
+    expect(channelsOf('Relay\n  connected      wss://x\n  channels       3')).toBe(3)
+  })
+
+  /*
+   * And absent is not zero. A host whose relay is off prints no channel line at
+   * all, and reading that silence as "nothing is connected" would turn a host
+   * that is deliberately not dialling out into a broken link on the panel.
+   */
+  it('says it does not know rather than zero when there is no channel line', () => {
+    expect(channelsOf(readHostProbe(OFF_RELAY).host.status)).toBeNull()
+    expect(channelsOf('Relay\n  off — this host is not dialling out.')).toBeNull()
+    expect(channelsOf('')).toBeNull()
   })
 })
 

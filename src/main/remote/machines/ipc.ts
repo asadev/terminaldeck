@@ -273,8 +273,8 @@ export interface MachinesIpc {
    */
   linkWithCode(code: string): Promise<MachineLinked>
   /**
-   * Is this desktop already paired to the machine behind that host id, and what
-   * does it call it?
+   * Is this desktop paired to the machine behind that host id, what does it
+   * call it, and is that link up **now**?
    *
    * Exposed so a screen that is looking at one machine from the *outside* — the
    * server connector, which knows a server's host id from its `status` output —
@@ -282,8 +282,43 @@ export interface MachinesIpc {
    * when there is no row for it. A name rather than a boolean because the panel
    * that asks then names it, and a second lookup for the name would be a second
    * chance to disagree with the first.
+   *
+   * `online` is here for the same reason, one step further on. A row is a claim
+   * about the past: it says this computer paired with that machine, not that
+   * anything is connected to it. The panel that asked only for the name printed
+   * *"This computer is linked to it"* over a host that had been sitting on the
+   * relay for two hours with nothing attached — a finished-looking panel over a
+   * link that did not exist, which is the exact defect this answers.
    */
-  linkedTo(hostId: string): string | null
+  linkStanding(hostId: string): { name: string; online: boolean } | null
+  /**
+   * Dial that machine now, and say whether there was one to dial.
+   *
+   * The remedy for the state {@link MachinesIpc.linkStanding} can see: a row
+   * this desktop holds and a machine nothing is reaching. Both halves, because
+   * they are different illnesses — a link that was disconnected has to be
+   * started, and a link that is sitting out a minute of backoff has to be woken,
+   * and doing the wrong one of the two is doing nothing.
+   *
+   * Safe to call on a machine that is perfectly fine: reconnecting costs one
+   * handshake, which is what {@link MachineLink.wake} already does after a
+   * laptop's lid comes up.
+   */
+  redial(hostId: string): boolean
+  /**
+   * Wait until one machine's link is carrying, and answer whether it got there.
+   *
+   * For the one caller that has just made a machine and needs to say something
+   * true about it in the next breath: the server connector, whose install ends
+   * by approving this computer at the far end. The channel comes up a beat after
+   * that approval — the first dial was refused because the device was still
+   * pending — so a panel that asked "is anything connected" the instant the
+   * install returned got "no" about a link that was seconds from working.
+   *
+   * Settled from `onState` rather than by asking in a loop: the link publishes
+   * every change it makes, so there is nothing here to poll.
+   */
+  whenReaching(machineId: string, ceilingMs: number): Promise<boolean>
   /**
    * May sessions on that machine act on browser windows here? Read per call.
    *
@@ -424,6 +459,22 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
    * paired, which is what makes a machine that has just been added start trying
    * immediately rather than after the next restart.
    */
+  /**
+   * Anybody waiting for one machine's link to come up, by machine id.
+   *
+   * Emptied the moment that link publishes `online`, and each entry carries its
+   * own ceiling so a machine that never comes back settles its waiters rather
+   * than collecting them. See {@link MachinesIpc.whenReaching}.
+   */
+  const reaching = new Map<string, Array<(carrying: boolean) => void>>()
+
+  function wokeUp(machineId: string): void {
+    const waiting = reaching.get(machineId)
+    if (waiting === undefined) return
+    reaching.delete(machineId)
+    for (const wake of waiting) wake(true)
+  }
+
   function linkFor(machine: Machine): MachineLink | null {
     const existing = links.get(machine.id)
     if (existing) return existing
@@ -443,6 +494,9 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
       id: machine.id,
       secrets,
       onState: (state) => {
+        // Anybody waiting for this one to start carrying, told by the link
+        // itself rather than by something asking it over and over.
+        if (state.state === 'online') wokeUp(machine.id)
         /*
          * A link that is no longer online takes its tunnels with it.
          *
@@ -1389,8 +1443,50 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
         deviceFingerprint: fingerprint(result.guestKeys.publicKey),
       }
     },
-    linkedTo: (hostId: string): string | null =>
-      store.list().find((machine) => machine.hostId === hostId)?.name ?? null,
+    linkStanding: (hostId: string): { name: string; online: boolean } | null => {
+      const machine = store.list().find((row) => row.hostId === hostId)
+      if (machine === undefined) return null
+      return { name: machine.name, online: links.get(machine.id)?.state().state === 'online' }
+    },
+    whenReaching: (machineId: string, ceilingMs: number): Promise<boolean> => {
+      const link = links.get(machineId)
+      if (link === undefined) return Promise.resolve(false)
+      if (link.state().state === 'online') return Promise.resolve(true)
+      return new Promise<boolean>((resolve) => {
+        const waiting = reaching.get(machineId) ?? []
+        let settled = false
+        const settle = (carrying: boolean): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(ceiling)
+          const at = waiting.indexOf(settle)
+          if (at >= 0) waiting.splice(at, 1)
+          resolve(carrying)
+        }
+        // A stated outcome rather than a safety net: without it the caller's
+        // panel sits on "waiting for this computer to reach it" for as long as
+        // the machine stays away, which is the one thing worse than saying so.
+        const ceiling = setTimeout(() => settle(false), ceilingMs)
+        ceiling.unref?.()
+        waiting.push(settle)
+        reaching.set(machineId, waiting)
+      })
+    },
+    redial: (hostId: string): boolean => {
+      const machine = store.list().find((row) => row.hostId === hostId)
+      if (machine === undefined) return false
+      const link = links.get(machine.id)
+      // No link at all is a machine this run has never dialled, and `linkFor`
+      // both makes one and starts it.
+      if (link === undefined) return linkFor(machine) !== null
+      // `connect` is the one that does nothing to a link that is already
+      // running, and `wake` is the one that does nothing to a link that is
+      // stopped. Which of the two applies is the link's own state, so it is
+      // asked rather than guessed.
+      if (link.state().state === 'offline') link.connect()
+      else link.wake()
+      return true
+    },
     drivesWindows: (machineId: string): boolean => store.drivesWindows(machineId),
     announceWindows(): void {
       for (const link of links.values()) link.announceWindows()

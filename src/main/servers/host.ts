@@ -102,6 +102,8 @@ export interface HostShell {
 export type LinkOutcome =
   | {
       ok: true
+      /** That machine's id here, which is its host id. For {@link HostDeps.whenReaching}. */
+      machineId: string
       /** What this app now calls that machine in its Machines list. */
       machineName: string
       /**
@@ -133,6 +135,28 @@ export interface HostDeps {
    * as {@link ServerHosts.pairDevice} does. Never a link step that pretends.
    */
   linkThisComputer?(code: string): Promise<LinkOutcome>
+  /**
+   * Wait until this computer's link to a machine it has just paired with is
+   * actually carrying, and answer whether it got there. `MachinesIpc.whenReaching`.
+   *
+   * The last unfinished sentence in this flow. Pairing ends at the far end's
+   * `y`; the channel comes up a beat later, because the first dial happens while
+   * that device is still **pending** over there and is refused — the flow's own
+   * header says so. Returning at the `y` therefore reports a link that is,
+   * for the next second or two, still nothing.
+   *
+   * That was harmless while nothing looked, and it stopped being harmless the
+   * moment the panel started asking whether anything was connected: an install
+   * that finished perfectly would have answered "nothing is reaching it" for a
+   * second and a half, which is a false alarm and a control that lies in the
+   * other direction.
+   *
+   * Optional, and absent means *do not wait*: a build with no machine channels
+   * never got here at all — {@link ServerHosts.link} falls back to showing the
+   * code — and a test that does not care about the channel should not sit out a
+   * ceiling for one.
+   */
+  whenReaching?(machineId: string, ceilingMs: number): Promise<boolean>
   /**
    * How long to give a host to reach the relay, in milliseconds.
    *
@@ -414,6 +438,36 @@ const HOST_ID_PATTERN = /^[^\S\n]*host id[^\S\n]+(\S+)/m
 
 export function hostIdOf(status: string): string {
   return HOST_ID_PATTERN.exec(status)?.[1] ?? ''
+}
+
+/**
+ * How many clients that host has open on the relay right now, or null when it
+ * will not say.
+ *
+ * The one fact on this screen that comes from the *far* side of the question
+ * "is this computer linked to it". Everything else about a link is read out of
+ * this desktop's own machine rows, and a row is a claim about the past: it says
+ * this computer paired, not that anything is connected. `renderStatus` prints
+ * this line only inside a connected `Relay` block, so a number here is that
+ * host counting its own live channels a second ago.
+ *
+ * Measured, and the reason this exists: his office PC, healthy, on the relay,
+ * with a device of his approved in its own list — and `channels 0`. The panel
+ * said *"This computer is linked to it"* over a host nothing was connected to,
+ * because nothing on this side had ever asked the host. Zero is the one answer
+ * that settles it in a direction worth acting on: if **nothing at all** is
+ * connected there, this computer certainly is not.
+ *
+ * Null rather than zero when the line is missing, and the difference matters —
+ * a host whose relay is off prints no channel count at all, and reading that
+ * absence as "nothing is connected" would turn a host that is deliberately not
+ * dialling out into a broken link.
+ */
+const CHANNELS_PATTERN = /^[^\S\n]*channels[^\S\n]+(\d+)/m
+
+export function channelsOf(status: string): number | null {
+  const said = CHANNELS_PATTERN.exec(status)?.[1]
+  return said === undefined ? null : Number(said)
 }
 
 /** Turn one probe's answer into the two records above. */
@@ -755,6 +809,44 @@ const VERDICT_CEILING_MS = 30 * 1000
 const RELAY_CEILING_MS = 20 * 1000
 const RELAY_ASK_MS = 2 * 1000
 
+/**
+ * How many fresh codes one press of **Link this computer** is allowed to spend.
+ *
+ * The wait above removes the race it can see; this covers the one it cannot.
+ * `waitForRelay` asks the host whether it has reached the relay, and a host
+ * that says yes has still only said so about the instant it was asked — the
+ * rendezvous behind a code is published when the code is minted, a beat later,
+ * and on a datacentre link that beat is where an install's very first code goes
+ * missing. Measured on his office PC: the host came up, the relay said
+ * connected, and nothing was ever linked to it.
+ *
+ * Three, and each one mints its own code, because a code cannot be re-offered:
+ * `pair` prints one per run and the run that printed the last one is
+ * interrupted before the next is asked for. Three tries cost about a second
+ * each on a healthy box and turn the commonest failure of this flow — one
+ * unlucky code — into something nobody ever sees. A *fourth* would not: past
+ * three, the failure is not timing, and the sentence at the end says so and
+ * names the button.
+ */
+const LINK_TRIES = 3
+
+/**
+ * How long the channel is given to come up after that host approves this
+ * computer.
+ *
+ * Measured on a real box: the first dial goes out while this device is still
+ * pending over there and is refused, and the guest link then waits a flat one to
+ * two seconds before trying again — flat, because that wait is for a person's
+ * finger and not for a machine that is off. So the honest number is a couple of
+ * seconds, and this is ten times that.
+ *
+ * What is on the other side of the ceiling is not a failure. The pairing
+ * happened, the device is approved, and the panel has a sentence and a press for
+ * a machine it holds a row for and cannot reach. Waiting here only makes sure
+ * that whichever of the two the panel draws, it draws the true one.
+ */
+const REACH_CEILING_MS = 20 * 1000
+
 /** Not an exit status any shell reports, so it cannot be mistaken for one. */
 const NEVER_ANSWERED = -1
 
@@ -933,6 +1025,20 @@ class Tape {
   /** Stop listening. Anything still waiting is left to its own ceiling. */
   close(): void {
     this.stop()
+  }
+
+  /**
+   * Throw away everything said so far, keeping the subscription.
+   *
+   * For the one flow that runs the same command twice. {@link Tape.next} scans
+   * the whole tape from the start — which is the point of it — so a second
+   * `pair` would match the *first* code and hand back a number that has already
+   * been spent and refused. The listener is deliberately not re-attached: the
+   * next run's output starts arriving before this side has finished asking for
+   * it, and that is the race the tape exists for.
+   */
+  forget(): void {
+    this.seen = ''
   }
 
   /**
@@ -1273,6 +1379,25 @@ export class ServerHosts {
    * is no argument to it naming a machine, and nothing here can be aimed at a
    * server somebody did not just open a connection to.
    *
+   * ## What one press is responsible for, and where that line moved to
+   *
+   * Twice now, and both times for the same measured failure — his office PC on
+   * 2026-08-22: the host installed, running, connected to the relay, up two
+   * hours, and **nothing linked to it**.
+   *
+   *  - **A missed code is not an answer.** The rendezvous behind a code is
+   *    published a beat after the code is minted, and a host that has just
+   *    started is exactly where that beat goes missing. One press now spends up
+   *    to {@link LINK_TRIES} fresh codes; only when all of them go unanswered
+   *    does a sentence come back, and it names the button rather than describing
+   *    it. Everything else the far end can say is an *answer* and is still final
+   *    on the first try.
+   *  - **Approved is not connected.** This used to return at the far end's `y`,
+   *    which is a second or two before the channel exists — the first dial goes
+   *    out while this device is still pending over there and is refused. So it
+   *    waits, through {@link HostDeps.whenReaching}, and the last sentence on
+   *    screen says which of the two actually happened.
+   *
    * ## What is deliberately unchanged
    *
    * The phone path, entirely. A phone has no SSH channel to this app, so none of
@@ -1330,48 +1455,84 @@ export class ServerHosts {
      * redemption had been asked for would miss that line by however long a
      * handshake takes: a race that passes on a fast box and hangs on a slow one.
      */
-    /*
-     * Give it a moment to reach the relay before asking it for a code. See
-     * {@link RELAY_CEILING_MS}: a code minted before the dial finishes was never
-     * published, so nothing could ever answer it — and an install reaches this
-     * line seconds after starting the daemon.
-     */
-    await this.waitForRelay(serverId, stopped)
-    if (stopped()) return failed('Stopped before it had asked for a pairing code.')
-
     const tape = new Tape(shell)
     try {
-      shell.write(`${shellQuote(command)} pair --kind mine\n`)
-      const code = await tape.next(CODE_PATTERN, CODE_CEILING_MS, attempt)
-      if (code === null) {
-        return stopped()
-          ? failed('Stopped before it had printed a pairing code.')
-          : failed('It did not print a pairing code.', 'Whatever it did print is in the terminal above.')
-      }
-
-      const linked = await linkThisComputer(code)
       /*
-       * Pressed while the redemption was in flight, which is the one gap no
-       * `giveUp` reaches — nothing is waiting on the terminal for those few
-       * seconds, so a Stop lands with no wait to wake. Answered here instead,
-       * because the alternative is sitting out a forty-five second ceiling for a
-       * prompt in a terminal the person has already taken away, and then blaming
-       * the server for not printing it.
+       * One code is an attempt; three is the press doing its job.
+       *
+       * What changed and why: this used to mint one code, and a code that
+       * nothing answered ended the whole thing with a sentence asking the
+       * person to press the button again. That is the app handing back its own
+       * retry — and it is the failure that was measured on his office PC, where
+       * a healthy host sat on the relay for two hours with nothing linked to it.
+       * A miss at the relay is a timing accident, not an answer, so this spends
+       * {@link LINK_TRIES} fresh codes before it accepts one.
+       *
+       * Every other way this can end is still final on the first try, and that
+       * is deliberate: a host that shows somebody else's fingerprint, or refuses
+       * the approval, has said something, and repeating a question that has been
+       * answered is how a retry loop turns into a machine hammering a stranger's
+       * server.
        */
-      if (stopped()) {
-        return failed(
-          'Stopped while linking.',
-          linked.ok
-            ? `This computer paired with that host as ${linked.machineName}, and nothing approved it, ` +
-              'so it can reach nothing yet. Link this computer again to finish it with a fresh code.'
-            : '',
-        )
-      }
-      if (!linked.ok) {
+      let linked: Extract<LinkOutcome, { ok: true }>
+      for (let go = 1; ; go += 1) {
+        /*
+         * Give it a moment to reach the relay before asking it for a code. See
+         * {@link RELAY_CEILING_MS}: a code minted before the dial finishes was
+         * never published, so nothing could ever answer it — and an install
+         * reaches this line seconds after starting the daemon.
+         *
+         * Asked again before every try rather than once before the first,
+         * because a host that was still dialling when the last code was minted
+         * is exactly the host worth waiting for now — and because the round trip
+         * is also the pause between tries, which keeps this from spending three
+         * codes inside one second on a box that has genuinely gone.
+         */
+        await this.waitForRelay(serverId, stopped)
+        if (stopped()) return failed('Stopped before it had asked for a pairing code.')
+
+        // Everything the last try said, thrown away before this one types. The
+        // tape is scanned from the start, so without this a second `pair` would
+        // hand back the first code — already spent, already refused.
+        tape.forget()
+        shell.write(`${shellQuote(command)} pair --kind mine\n`)
+        const code = await tape.next(CODE_PATTERN, CODE_CEILING_MS, attempt)
+        if (code === null) {
+          return stopped()
+            ? failed('Stopped before it had printed a pairing code.')
+            : failed('It did not print a pairing code.', 'Whatever it did print is in the terminal above.')
+        }
+
+        const outcome = await linkThisComputer(code)
+        /*
+         * Pressed while the redemption was in flight, which is the one gap no
+         * `giveUp` reaches — nothing is waiting on the terminal for those few
+         * seconds, so a Stop lands with no wait to wake. Answered here instead,
+         * because the alternative is sitting out a forty-five second ceiling for
+         * a prompt in a terminal the person has already taken away, and then
+         * blaming the server for not printing it.
+         */
+        if (stopped()) {
+          return failed(
+            'Stopped while linking.',
+            outcome.ok
+              ? `This computer paired with that host as ${outcome.machineName}, and nothing approved it, ` +
+                'so it can reach nothing yet. Link this computer again to finish it with a fresh code.'
+              : '',
+          )
+        }
+        if (outcome.ok) {
+          linked = outcome
+          break
+        }
+
         // The command is still sitting there waiting for a device that is not
         // coming. Stopped rather than left, or the panel would say this failed
-        // while a live code went on standing at the relay.
+        // while a live code went on standing at the relay — and the next try
+        // needs this terminal back to type into.
         shell.write(INTERRUPT)
+        if (go < LINK_TRIES) continue
+
         // Two sentences from two places, and both are wanted: the first is why
         // the redemption failed, the second is which of that refusal's two
         // causes this actually was. Either can be empty, and neither is padded.
@@ -1386,10 +1547,17 @@ export class ServerHosts {
         // this point the host is installed and running on that server and a
         // line that read like a failed install would send somebody to undo work
         // that is fine. The finished steps above it stay on screen for the same
-        // reason, and **Link this computer** is what to press next.
+        // reason, and the button is named rather than described — it is on this
+        // panel, under this sentence, and it says exactly this.
         return failed(
           'The host is installed and running, and could not be linked to this computer.',
-          [linked.message, why].filter((part) => part !== '').join(' '),
+          [
+            outcome.message,
+            why,
+            `A fresh code was minted and offered ${LINK_TRIES} times. Press Link this computer to try again.`,
+          ]
+            .filter((part) => part !== '')
+            .join(' '),
         )
       }
 
@@ -1436,15 +1604,50 @@ export class ServerHosts {
         )
       }
 
-      this.attempts.delete(serverId)
-      return this.say(
-        state(serverId, 'done', 'It is running, and linked to this computer.', {
-          done: [
-            ...done,
-            `It is linked to this computer as ${linked.machineName}, approved as your own device.`,
-          ],
+      /*
+       * Approved is not connected, and this is where the two used to be the same
+       * word.
+       *
+       * The first dial went out while this device was still pending over there
+       * and was refused; the approval has only just landed. So this waits for
+       * the channel rather than announcing one — see {@link REACH_CEILING_MS} —
+       * and the difference is not pedantry: the panel behind this now asks that
+       * host how many channels it has open, and an install that returned at the
+       * `y` would have made a perfectly good one accuse itself for a second and
+       * a half.
+       */
+      this.say(
+        state(serverId, 'pairing', 'Approved. Waiting for this computer to reach it.', {
+          done: [...done],
           weInstalled: true,
         }),
+      )
+      const reaching = (await this.deps.whenReaching?.(linked.machineId, REACH_CEILING_MS)) ?? true
+
+      this.attempts.delete(serverId)
+      return this.say(
+        state(
+          serverId,
+          'done',
+          reaching
+            ? 'It is running, and linked to this computer.'
+            : 'It is running and linked to this computer, and this computer has not reached it yet.',
+          {
+            done: [
+              ...done,
+              `It is linked to this computer as ${linked.machineName}, approved as your own device.`,
+            ],
+            // Said here rather than left to the panel, because this is the one
+            // moment somebody is actually watching. The panel says it too, from
+            // the host's own channel count, every time the page is opened.
+            detail: reaching
+              ? ''
+              : 'That host approved this computer, and no connection to it has come up since. It ' +
+                'usually takes a second or two. If the section above still says nothing is reaching ' +
+                'it, press Link this computer to pair again with a fresh code.',
+            weInstalled: true,
+          },
+        ),
       )
     } finally {
       tape.close()

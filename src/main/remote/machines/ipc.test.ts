@@ -84,6 +84,15 @@ interface Rig {
     connected: number
     disconnected: number
     woken: number
+    /**
+     * The state this fake reports, mutable, so a case can put a link online.
+     *
+     * The real one publishes this from a socket. Everything that reads it from
+     * the outside — `linkStanding`, and the panel that asks it whether a machine
+     * row has anything behind it — is answering a question about *now*, and a
+     * fake stuck on one answer could only ever exercise half of it.
+     */
+    state: MachineLinkState
     /** Everything `machines:send` handed the link, in order. Empty is the assertion. */
     sends: Array<{ sessionId: string; data: string }>
     /** And everything the four copilot channels handed it. Empty is the assertion again. */
@@ -155,19 +164,6 @@ function rig(
       ? {}
       : { windowsUnreachable: options.windowsUnreachable }),
     createLink: (linkOptions): MachineLink => {
-      const record = {
-        options: linkOptions,
-        connected: 0,
-        disconnected: 0,
-        woken: 0,
-        sends: [] as Array<{ sessionId: string; data: string }>,
-        // What the copilot channels asked this link to do. Counted rather than
-        // answered `true`, because the property those channels have to have is
-        // that the press reaches the link at all — a handler that resolved a
-        // cheerful sentence and sent nothing would look identical from outside.
-        copilot: { attached: 0, started: 0, refreshed: 0, said: [] as string[] },
-      }
-      links.push(record)
       const state: MachineLinkState = {
         id: linkOptions.id,
         state: 'offline',
@@ -180,6 +176,20 @@ function rig(
         hostPlatform: '',
         retryAt: null,
       }
+      const record = {
+        options: linkOptions,
+        connected: 0,
+        disconnected: 0,
+        woken: 0,
+        state,
+        sends: [] as Array<{ sessionId: string; data: string }>,
+        // What the copilot channels asked this link to do. Counted rather than
+        // answered `true`, because the property those channels have to have is
+        // that the press reaches the link at all — a handler that resolved a
+        // cheerful sentence and sent nothing would look identical from outside.
+        copilot: { attached: 0, started: 0, refreshed: 0, said: [] as string[] },
+      }
+      links.push(record)
       return {
         connect: () => {
           record.connected += 1
@@ -583,6 +593,92 @@ describe('the rest of the list', () => {
     const app = rig({ dir })
     const view: unknown = await app.invoke('machines:rename', hostId, 'The loud one')
     expect(view).toMatchObject({ machines: [{ name: 'The loud one' }] })
+  })
+
+  /**
+   * The question a screen outside this file asks about one machine, and the two
+   * halves it has to answer.
+   *
+   * The server panel knows a host id out of that server's own `status` and needs
+   * to know what this desktop calls it — and, since 2026-08-22, whether the link
+   * behind that row is up. Measured that morning: his office PC held a row here,
+   * the panel said *"This computer is linked to it"*, and the host had been
+   * counting zero open channels for two hours.
+   */
+  it('says what it calls a machine and whether anything is reaching it', () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+
+    expect(app.ipc.linkStanding(hostId)).toEqual({ name: 'Studio PC', online: false })
+    app.links[0].state.state = 'online'
+    expect(app.ipc.linkStanding(hostId)).toEqual({ name: 'Studio PC', online: true })
+    // And a host nothing here has ever paired with is null rather than a row
+    // with a false in it: "not linked" and "linked and unreachable" are two
+    // different sentences with two different buttons under them.
+    expect(app.ipc.linkStanding(hostIdFor(Buffer.alloc(32, 99)))).toBeNull()
+  })
+
+  /*
+   * And the remedy, which is two remedies: `connect` does nothing to a link that
+   * is already running and `wake` does nothing to one that is stopped, so which
+   * of them applies is read off the link rather than guessed.
+   */
+  it('dials a machine again, by whichever of the two ways applies', () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+
+    // Stopped: it has to be started. One from launch, one from this.
+    expect(app.ipc.redial(hostId)).toBe(true)
+    expect(app.links[0].connected).toBe(2)
+    expect(app.links[0].woken).toBe(0)
+
+    // Running: it has to be woken, which redials now and forgets the backoff.
+    app.links[0].state.state = 'online'
+    expect(app.ipc.redial(hostId)).toBe(true)
+    expect(app.links[0].woken).toBe(1)
+    expect(app.links[0].connected).toBe(2)
+  })
+
+  /*
+   * The wait the server connector's last sentence depends on. Settled from the
+   * link's own `onState`, so a machine that comes up answers immediately rather
+   * than at the end of some interval nobody chose.
+   */
+  it('waits for a link to start carrying, and answers when it does', async () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+
+    const waiting = app.ipc.whenReaching(hostId, 5_000)
+    app.links[0].state.state = 'online'
+    app.links[0].options.onState(app.links[0].state)
+    expect(await waiting).toBe(true)
+
+    // And a link that is already carrying answers without waiting at all.
+    expect(await app.ipc.whenReaching(hostId, 5_000)).toBe(true)
+  })
+
+  /*
+   * A stated outcome rather than a safety net: without it the panel that asked
+   * sits on "waiting for this computer to reach it" for as long as the machine
+   * stays away, which is worse than saying so.
+   */
+  it('gives up on its own ceiling rather than waiting forever', async () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+    expect(await app.ipc.whenReaching(hostId, 10)).toBe(false)
+    // And a machine this desktop does not hold is answered at once, not waited
+    // out — there is nothing that could ever come up.
+    expect(await app.ipc.whenReaching(hostIdFor(Buffer.alloc(32, 99)), 60_000)).toBe(false)
+  })
+
+  it('says there was nothing to dial for a machine it does not hold', () => {
+    const app = rig()
+    expect(app.ipc.redial(hostIdFor(Buffer.alloc(32, 99)))).toBe(false)
+    expect(app.links).toEqual([])
   })
 
   it('connects and disconnects one by hand', async () => {
