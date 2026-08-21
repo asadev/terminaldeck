@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   liftAvailable,
-  liftLine,
   readInjectAnswer,
   readLift,
   readLiftAnswer,
   readPace,
   readWorkersView,
   resolveWorkersApi,
-  workerLine,
   workersAvailable,
   type WorkersApi,
 } from './workers-bridge'
@@ -101,62 +99,5 @@ describe('reading what the main process sent', () => {
     })
     expect(answer.ok && answer.reports).toHaveLength(1)
     expect(readInjectAnswer({ ok: false }).ok).toBe(false)
-  })
-})
-
-describe('what a row says about itself', () => {
-  const base = {
-    profileId: 'w1',
-    name: 'Worker 1',
-    partition: 'persist:w1',
-    busy: false,
-    holder: '',
-    heldMs: 0,
-    readyInMs: 0,
-    lastReleasedAt: 0,
-    pages: [],
-    queued: [],
-  }
-
-  it('never says a worker is signed in when its keys are still waiting', () => {
-    /*
-     * Cookies land the instant Inject is pressed; stored keys cannot, because
-     * there is no way to write a renderer's storage from outside a page and the
-     * only alternative would be a hidden window. So the row says *waiting*, and
-     * keeps saying it until that worker opens the site. A row that claimed
-     * otherwise would be the resume ledger that skipped 48,473 assets and exited
-     * reporting success.
-     */
-    const line = workerLine({ ...base, queued: [{ origin: 'https://shop.example.com', keys: 3 }] })
-    expect(line).toContain('3 keys waiting for https://shop.example.com')
-    expect(line).not.toContain('signed in')
-  })
-
-  it('says free or in use, and how many pages are open in it', () => {
-    expect(workerLine(base)).toBe('free')
-    expect(workerLine({ ...base, busy: true, pages: [{ url: 'https://x/', title: 'X' }] })).toBe(
-      'in use · 1 page open',
-    )
-  })
-})
-
-describe('the line on the button that will use a lift', () => {
-  it('names the site, what is in it and where it came from — and no value', () => {
-    const line = liftLine({
-      id: 'l1',
-      takenAt: 0,
-      expiresAt: 0,
-      sourceProfileId: 'p',
-      sourceProfileName: 'Main',
-      host: 'shop.example.com',
-      origin: 'https://shop.example.com',
-      cookieCount: 2,
-      cookieNames: ['sessionid'],
-      cookieNamesTruncated: false,
-      localKeys: 1,
-      sessionKeys: 0,
-      storageTruncated: false,
-    })
-    expect(line).toBe('shop.example.com — 2 cookies, 1 stored key from Main')
   })
 })

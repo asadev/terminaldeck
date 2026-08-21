@@ -131,6 +131,18 @@ export interface StoreTool {
   /** `''` for a bundled tool, the exact URL for a fetched one. */
   url: string
   fetched: boolean
+  /**
+   * The hex sha256 this row is pinned to, out of the app's own bytes.
+   *
+   * On the row because a store that says "verified" and will not say *against
+   * what* is asking for the same trust it exists to replace. It is also the
+   * only thing a panel can use to tell a listing with a real signature from one
+   * carrying none — `digestMatches` refuses anything that is not 64 hex
+   * characters, so a row whose digest is not that can never install, and a
+   * screen that offered Install for it would be offering a control that cannot
+   * work.
+   */
+  sha256: string
   state: ToolState
   /** The version on disk, when there is one. */
   installedVersion: string
@@ -373,6 +385,7 @@ export function createToolStore(options: ToolStoreOptions): ToolStore {
           origins: entry.origins,
           url: entry.source.kind === 'fetched' ? entry.source.url : '',
           fetched: entry.source.kind === 'fetched',
+          sha256: entry.sha256,
         }
         if (loaded === null) {
           return { ...base, state: 'available' as const, installedVersion: '', installedAt: 0, message: '', reads: [] }

@@ -15,6 +15,7 @@ import {
   liftBlockedReason,
   liftLine,
   liftRequestLine,
+  mintPlan,
   reachLine,
   resourceLabel,
   ruleChange,
@@ -183,13 +184,15 @@ describe('the workers list', () => {
 
 describe('the session lift', () => {
   it('refuses until both ends are named', () => {
-    expect(liftBlockedReason('', ['w1'])).toContain('Choose the profile')
-    expect(liftBlockedReason('default', [])).toContain('at least one worker')
-    expect(liftBlockedReason('default', ['w1'])).toBe('')
+    expect(liftBlockedReason(true, '', ['w1'])).toContain('Choose the profile')
+    expect(liftBlockedReason(true, 'default', [])).toContain('at least one worker')
+    expect(liftBlockedReason(true, 'default', ['w1'])).toBe('')
+    // The page is the source, so it is the first thing said when it is missing.
+    expect(liftBlockedReason(false, 'default', ['w1'])).toContain('page in front of you')
   })
 
   it('refuses a profile lifted into itself', () => {
-    expect(liftBlockedReason('default', ['w1', 'default'])).toContain('into itself')
+    expect(liftBlockedReason(true, 'default', ['w1', 'default'])).toContain('into itself')
   })
 
   it('names both ends on the control that does it, never a count', () => {
@@ -315,5 +318,27 @@ describe('whose setting is this', () => {
 
   it('falls back to a phrase rather than an empty label before profiles load', () => {
     expect(scopeLabel('profile', '')).toBe('This profile')
+  })
+})
+
+describe('making workers, which only ever adds', () => {
+  it('draws no button when pressing it would do nothing', () => {
+    // A total, not a delta: a field that adds four every time it is pressed is
+    // a field somebody presses twice. With four already there, four is a press
+    // whose effect is nothing, so there is no press.
+    expect(mintPlan('4', 4).total).toBeNull()
+    expect(mintPlan('4', 4).line).toContain('only ever adds')
+    expect(mintPlan('', 0).total).toBeNull()
+    expect(mintPlan('-3', 0).total).toBeNull()
+  })
+
+  it('says how many it would make', () => {
+    const plan = mintPlan('8', 3)
+    expect(plan.total).toBe(8)
+    expect(plan.line).toBe('3 workers now, so this makes 5 more.')
+  })
+
+  it('counts what is there through the helper that can say "not measured"', () => {
+    expect(mintPlan('2', 1).line).toContain('1 worker now')
   })
 })

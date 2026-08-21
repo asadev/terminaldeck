@@ -8,6 +8,13 @@
  * whole browser panel on every build whose preload predates it. This is the
  * fourth feature to take that shape.
  *
+ * **There is no worker panel of its own any more.** This file is now the
+ * narrowing layer under `scraping-adapter.ts`, which answers the Scraping
+ * panel's Workers and Session sections out of these methods — one door to the
+ * job, inside the ⋯ menu, which is where he asked for it. What used to be this
+ * bridge's phrasing lives in `scraping-view.ts` with the rest of what that
+ * panel is allowed to say.
+ *
  * **Nothing here returns a cookie value or a stored key.** A lift answers with
  * counts, cookie *names* and the host it was taken from; the values stay in the
  * main process and are never written to disk at all. That is the rule
@@ -299,39 +306,4 @@ export function readInjectAnswer(raw: unknown): InjectAnswer {
     })
   }
   return { ok: true, reports, line: str(value, 'line') }
-}
-
-/* ---------------------------------------------------------------- phrasing -- */
-
-/**
- * What one worker's row says about itself.
- *
- * Written here rather than in the component so the sentence can be tested
- * without mounting anything, and so "busy" means one thing on every surface
- * that prints it.
- */
-export function workerLine(row: WorkerRow): string {
-  const bits: string[] = []
-  bits.push(row.busy ? 'in use' : 'free')
-  if (row.pages.length > 0) {
-    bits.push(`${row.pages.length} page${row.pages.length === 1 ? '' : 's'} open`)
-  }
-  if (row.queued.length > 0) {
-    const keys = row.queued.reduce((sum, seed) => sum + seed.keys, 0)
-    // Never "signed in". The keys have not been written yet and will not be
-    // until this worker opens the site — saying otherwise would be a row that
-    // claims something that has not happened.
-    bits.push(`${keys} key${keys === 1 ? '' : 's'} waiting for ${row.queued[0].origin}`)
-  }
-  return bits.join(' · ')
-}
-
-/** How a lift describes itself on the button that will use it. */
-export function liftLine(summary: LiftSummary): string {
-  const bits = [`${summary.cookieCount} cookie${summary.cookieCount === 1 ? '' : 's'}`]
-  if (summary.localKeys > 0) bits.push(`${summary.localKeys} stored key${summary.localKeys === 1 ? '' : 's'}`)
-  if (summary.sessionKeys > 0) {
-    bits.push(`${summary.sessionKeys} session key${summary.sessionKeys === 1 ? '' : 's'}`)
-  }
-  return `${summary.host} — ${bits.join(', ')} from ${summary.sourceProfileName}`
 }
