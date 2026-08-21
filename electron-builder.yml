@@ -63,12 +63,33 @@ files:
   # failure than a slow one — a partial bundle looks like a build. Naming these
   # keeps the walk out of them entirely, so packaging no longer depends on
   # whether someone happens to be compiling for a phone at the same moment.
+  # The headless host, which the desktop app carries as a *resource* rather than
+  # inside the asar. `out/headless` is the vite build and `out/headless-package`
+  # is the tarball plus installer that `extraResources` copies in below — both
+  # are already selected by `out/**/*`, and both would otherwise be duplicated
+  # into app.asar where nothing can read them: `host.ts` streams the tarball off
+  # disk over SFTP, and a path inside an archive is not a file.
+  - '!out/headless/**'
+  - '!out/headless-package/**'
   - '!ios/**'
   - '!android/**'
   # Server-side; deployed to the relay host, never bundled into the desktop app.
   - '!relay/**'
   # The npm name-claim placeholder. Published separately, ships nothing.
   - '!packages/**'
+
+# The headless host, beside the asar rather than inside it.
+#
+# Not a packaging preference: `src/main/servers/host.ts` hands the tarball to
+# `putFile`, which streams it off disk over SFTP, and a path inside app.asar is
+# not a file anything can stream. `scripts/build-headless.mjs` writes both files,
+# and `dist:mac`/`dist:win` run it before electron-builder — if it has not run,
+# this entry matches nothing, the app builds, and the server page draws no
+# Install button with a sentence saying this build carries no package. That is
+# the honest failure, but it is a quiet one, so the build step is not optional.
+extraResources:
+  - from: out/headless-package
+    to: headless
 
 asar: true
 # electron-builder detects native modules and unpacks them on its own; naming
@@ -105,6 +126,10 @@ mac:
     - '!**/node_modules/node-pty/prebuilds/darwin-x64/**'
     - '!**/node_modules/node-pty/prebuilds/**/*.pdb'
     - '!**/node_modules/node-pty/prebuilds/win32-*/**'
+    # The headless host: carried as a resource, never inside the asar. See the
+    # top-level list for why.
+    - '!out/headless/**'
+    - '!out/headless-package/**'
     - '!ios/**'
     - '!android/**'
     - '!relay/**'
@@ -214,6 +239,10 @@ win:
     # either. The mirror of the `win32-*` exclusion in the `mac:` block.
     - '!**/node_modules/node-pty/prebuilds/darwin-*/**'
     - '!**/node_modules/node-pty/prebuilds/**/*.pdb'
+    # The headless host: carried as a resource, never inside the asar. See the
+    # top-level list for why.
+    - '!out/headless/**'
+    - '!out/headless-package/**'
     - '!ios/**'
     - '!android/**'
     - '!relay/**'
@@ -249,6 +278,10 @@ win:
   extraResources:
     - from: native/win-confine/tdconfine.exe
       to: tdconfine.exe
+    # Restated for the same reason the `files` list is: a platform
+    # `extraResources` REPLACES the top-level one rather than adding to it.
+    - from: out/headless-package
+      to: headless
 
 nsis:
   # Both targets emit .exe, so each needs its own name. The inherited pattern

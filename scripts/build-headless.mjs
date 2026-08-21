@@ -24,7 +24,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { chmodSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -156,6 +156,45 @@ const demoSource = readFileSync(demo, 'utf8')
 if (!demoSource.startsWith('#!')) writeFileSync(demo, `#!/usr/bin/env node\n${demoSource}`, 'utf8')
 chmodSync(demo, 0o755)
 console.log('  (demo host, not published) -> ./demo.mjs')
+
+/* ------------------------------------------------------- what ships with the app -- */
+
+/*
+ * A tarball and the installer, in one folder, for the desktop app to carry.
+ *
+ * This is what "install it on a server from the connector" is made of. The npm
+ * name is a **reservation** — `install-headless.sh` even has a refusal for the
+ * package it currently resolves to, *"npm installed terminaldeck and it provided
+ * no `terminaldeck` command"* — so a server install has to be handed real bytes,
+ * and `src/main/servers/host.ts` puts these two files there over SFTP.
+ *
+ * `npm pack` rather than a hand-rolled tar, because the manifest above already
+ * says exactly what may ship (`files`), and packing any other way would be a
+ * second answer to that question — the one that shipped `demo.mjs` the day it
+ * was added.
+ *
+ * The names are fixed rather than versioned. electron-builder copies this whole
+ * folder into `Resources/headless`, and a versioned filename would mean the
+ * lookup in `host-package.ts` had to know a version string that lives in three
+ * other places. The version travels inside the tarball, where npm reads it.
+ */
+const SHIP = join(ROOT, 'out', 'headless-package')
+rmSync(SHIP, { recursive: true, force: true })
+mkdirSync(SHIP, { recursive: true })
+
+execFileSync('npm', ['pack', '--silent', '--pack-destination', SHIP], { cwd: OUT, stdio: 'inherit' })
+const packed = readdirSync(SHIP).filter((name) => name.endsWith('.tgz'))
+if (packed.length !== 1) {
+  console.error(`Expected one tarball in ${SHIP} and found ${packed.length}.`)
+  process.exit(1)
+}
+renameSync(join(SHIP, packed[0]), join(SHIP, 'terminaldeck-host.tgz'))
+copyFileSync(join(ROOT, 'scripts', 'install-headless.sh'), join(SHIP, 'install.sh'))
+chmodSync(join(SHIP, 'install.sh'), 0o755)
+
+console.log(`\nFor the desktop app to carry: ${SHIP}`)
+console.log(`  terminaldeck-host.tgz  (was ${packed[0]})`)
+console.log('  install.sh')
 
 console.log(`\nPackage written to ${OUT}`)
 console.log(`  dependencies: ${needed.join(', ') || 'none'}`)

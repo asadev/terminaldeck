@@ -11,6 +11,16 @@ import {
   type ServerView,
 } from '../../machines/servers/types'
 import { useServers } from '../../machines/servers/useServers'
+import { ServerSetup } from '../../machines/servers/ServerSetup'
+/*
+ * The setup panel's own styles, imported here as well as by `MachinesPanel`.
+ *
+ * Not belt and braces: Settings is a separate entry point, so a stylesheet that
+ * is only ever imported by the machines panel is a stylesheet this window does
+ * not necessarily load — and the failure mode is an unstyled install panel
+ * rather than an error. The bundler dedupes the second import.
+ */
+import '../../machines/servers/servers.css'
 import { RUN_TITLE, type AccountRun } from './AccountsSection'
 
 /**
@@ -47,18 +57,28 @@ import { RUN_TITLE, type AccountRun } from './AccountsSection'
  * somebody opened Settings, or prints "probably fine" beside a machine it has
  * not spoken to.
  *
- * ## What it cannot do, and does not pretend to
+ * ## Signing in happens here now, and how
  *
- * Signing an agent in on a server happens by typing into a terminal on that
- * server: `servers:setup:signin` takes a **shell id**, because the login is an
- * interactive device-code flow the person completes with their own eyes on it.
- * A settings pane has no terminal, so it draws no Sign in — it says where the
- * one that works lives. That is the whole of the gap between this and
- * *"login, logout, things, access… all of this we can just manage from this"*,
- * and it is a gap in the wiring rather than in this screen: nothing in
- * `src/main/servers/` exposes a sign-out at all, and a server session runs as
- * whatever login that server's own home directory holds, so there is no
- * per-session account to switch either.
+ * It used to not. This pane drew a notice saying *"Machines → the server → Set
+ * up is where that is done"*, and the reason was real: `servers:setup:signin`
+ * takes a **shell id**, because two of the three logins are interactive flows
+ * that finish in a terminal — one shows a one-time code, one runs its whole
+ * sign-in inside its own full-screen interface. A settings pane has no
+ * terminal, so there was nothing honest to point a Sign in button at.
+ *
+ * The answer was not to build a second sign-in. It was to notice that the panel
+ * which already does this — `ServerSetup` — needs a server, a bridge and a
+ * connection, and this pane opens all three the moment somebody expands a row.
+ * So the row draws that panel, terminal and all. One flow, one set of
+ * sentences, one place to fix it, and *"login, logout, things, access… all of
+ * this we can just manage from this"* is true of the pane rather than delegated
+ * out of it.
+ *
+ * What is still genuinely absent is a **sign-out**: nothing in
+ * `src/main/servers/` exposes one, and a server session runs as whatever login
+ * that server's own home directory holds, so there is no per-session account to
+ * switch either. That absence is a gap in the wiring, and this pane states it
+ * rather than drawing a control for it.
  */
 export function ServerAccounts() {
   const { wired, missing, servers, bridge, reading, problem } = useServers()
@@ -135,11 +155,12 @@ export function ServerAccounts() {
 
   return (
     <>
-      {/* Said once, at the top, rather than as a dead button per row — see the
-          header for why there is no Sign in here. */}
+      {/* Said once, at the top, about the one thing this pane genuinely cannot
+          do — see the header. Never a dead button per row. */}
       <Notice tone="info">
-        Signing an agent in on a server happens in a terminal on it. Machines → the server →
-        Set up is where that is done; this pane reads what is there.
+        Opening a server here connects to it and reads what it has. Setting an agent up and signing
+        it in both work from the row; signing one out does not, because nothing on this side can ask
+        a server to forget a login it holds.
       </Notice>
 
       {servers.map((server) => (
@@ -164,6 +185,17 @@ export function ServerAccounts() {
             </span>
           </summary>
           <ServerLogins name={server.name} look={looks[server.id]} />
+          {/*
+            The same panel the server's own page draws, not a copy of it.
+            `connected` is true only once this row's own round trip landed,
+            which is exactly the condition that panel already means by it —
+            nothing is asked of a server this pane has not reached.
+          */}
+          <ServerSetup
+            server={server}
+            bridge={bridge}
+            connected={looks[server.id]?.state === 'ready'}
+          />
         </details>
       ))}
     </>

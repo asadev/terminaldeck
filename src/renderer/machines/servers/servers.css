@@ -806,3 +806,120 @@ a.settings-btn {
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
+
+/*
+ * Running sessions on the server, under the section about running agents on it.
+ *
+ * It borrows `.servers-setup` wholesale rather than restating it, because the
+ * two really are the same shape: a line, a control, a reason where the control
+ * is absent, a confirmation, and one terminal. Two panels that do the same kind
+ * of work should not look like two different ideas.
+ *
+ * What is added here is only what the other one has no equivalent of — the list
+ * of finished steps, the code, and the host's own status behind a door.
+ */
+.servers-host {
+  margin-top: var(--sp-3);
+}
+
+/*
+ * The steps that have finished.
+ *
+ * A list rather than a paragraph, and it grows downward while an install runs.
+ * This is the whole answer to *"a long silent operation on somebody's server is
+ * the worst version of this"* — it costs nothing, it is true, and it is what a
+ * person who looked away for a minute needs to come back to.
+ *
+ * No numbers on the markers: the count is not information a reader wants, and
+ * `1.` beside a sentence makes five sentences read as instructions to follow
+ * rather than as things that already happened.
+ */
+.servers-host-steps {
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+}
+
+.servers-host-steps li::before {
+  content: '✓';
+  margin-right: var(--sp-2);
+  color: var(--text-muted);
+}
+
+/*
+ * The pairing code.
+ *
+ * Big, monospaced and selectable, because the two things anybody does with it
+ * are read it aloud to themselves while typing it into a phone, and copy it.
+ * `user-select` is stated rather than inherited: this window sets it off on
+ * chrome, and a code that cannot be selected is a code that has to be
+ * retyped.
+ */
+.servers-host-code {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-sunken);
+}
+
+.servers-host-code-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.servers-host-code-value {
+  font-family: var(--font-mono);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.12em;
+  color: var(--text-primary);
+  user-select: text;
+}
+
+.servers-host-also {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+}
+
+/*
+ * The host's own words, verbatim.
+ *
+ * Pre-wrapped and scrollable in its own box rather than allowed to widen the
+ * page: `renderStatus` lays its output out in columns, and a relay fingerprint
+ * is one long unbreakable string that would otherwise push this whole panel
+ * sideways.
+ */
+.servers-host-status {
+  margin-top: var(--sp-3);
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+}
+
+.servers-host-status summary {
+  cursor: pointer;
+}
+
+.servers-host-status pre {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  white-space: pre;
+  overflow-x: auto;
+  user-select: text;
+}

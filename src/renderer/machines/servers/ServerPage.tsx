@@ -4,6 +4,7 @@ import { ServerCard } from './ServerCard'
 import { ServerAdvanced } from './ServerAdvanced'
 import { ServerFolderPicker } from './ServerFolderPicker'
 import { ServerSetup } from './ServerSetup'
+import { ServerHost } from './ServerHost'
 import { groupReasons } from './group-notes'
 import { useServerSessionOpener } from './session-context'
 import { useServerRoom } from './useServers'
@@ -169,6 +170,13 @@ export function ServerPage({
               answer to the question somebody asks a minute after connecting:
               can I actually work on this one. */}
           <ServerSetup server={server} bridge={bridge} connected={link === 'ready'} />
+
+          {/* Directly under it, because it is the other half of the same
+              question. `ServerSetup` answers "can I work on this machine"; this
+              answers "can I reach it from somewhere else" — and the two are the
+              same shape, the same terminal and the same way back, which is why
+              they are two sections rather than two screens. */}
+          <ServerHost server={server} bridge={bridge} connected={link === 'ready'} />
 
           {link === 'failed' && (
             <Notice tone="error">

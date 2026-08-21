@@ -928,7 +928,7 @@ Named plainly, so nobody builds them by accident, and each with the reason.
 |---|---|
 | **Deleting anything** — a site, an app, a database, a file | §4.1: v1 ships no action without a way back, and these have none. |
 | **Installing operating system updates** | Cannot be undone. v1 shows the count in zone three. |
-| **Installing software** — a web server, a database, a runtime | This is *provisioning*, not control. It is a different product with a different failure mode: a half-installed server has no way back. **One narrow exception now ships — see §7.1.** |
+| **Installing software** — a web server, a database, a runtime | This is *provisioning*, not control. It is a different product with a different failure mode: a half-installed server has no way back. **Two narrow exceptions now ship — see §7.1 and §7.2.** |
 | **Editing files on the server** | An editor implies save, which implies overwrite. There is a terminal in zone three for people who want this and know what it means. |
 | **Following logs live** | §4.2: a stream that stays open is the polling-shaped thing rule 5 bans. Bounded fetch plus **Load more** in v1. |
 | **Uploading and downloading arbitrary files** | `sftp` is available and this is genuinely useful, but it is a file manager, and a file manager is its own surface with its own confirmation model. Backup (§4.2) is the one file transfer v1 has, because it only reads and goes one way. |
@@ -994,6 +994,58 @@ socket and is never read, stored, logged or typed by this app. The app must
 never read a code out of a browser and type it into a shell — `DRIVABLE-BROWSER.md`
 §7 forbids exactly that — and where a server will not carry the socket, a person
 finishes the sign-in themselves at the prompt that is already on their screen.
+
+### 7.2 · The second exception: putting the host itself on a server
+
+The same sentence, the same clauses, a different program — and it is written
+down here for the same reason §7.1 is.
+
+> **The headless host, into the account's own home folder, with no administrator
+> access, with a way back, and only when a person presses a button for it.**
+
+What makes it the *same* exception rather than a widening of it:
+
+- **One named program, and this one is ours.** There is no name field and no
+  registry lookup. The tarball is built by `scripts/build-headless.mjs`, carried
+  inside the app as a resource, and copied to the server over the SFTP channel
+  the page already has. It is deliberately **not** `npm install -g terminaldeck`:
+  that name is a reservation, and a package with no `bin` entry installs
+  perfectly and leaves a host that looks installed and answers nothing.
+- **Into the account's own home.** `scripts/install-headless.sh` does the work,
+  and it writes only under `$HOME` — `~/.local` for the package, and
+  `~/.terminaldeck/runtime` for a private Node when the machine has none.
+  Where root would genuinely help — `loginctl enable-linger`, which is what
+  keeps a user service alive after the last logout — the app **asks without
+  sudo, reads the answer, and says the command that would grant it**. It never
+  asks for administrator access and never escalates.
+- **With a way back.** The remove stops the service, deletes the unit file, the
+  program and the private runtime, and **leaves the host's own data folder
+  alone** unless the person ticks a box — because that folder holds the devices
+  paired to this host and the folders each may use, and removing the program to
+  install a newer one should not un-pair somebody's phone. Both answers state
+  what they leave, before the press.
+- **Driven by a person.** No entry in `tools.ts`, and `no-run-tool.test.ts`
+  still pins the copilot's tool list at three names.
+
+Two things about it are stated on screen rather than discovered:
+
+1. **Whether it will still be there tomorrow.** A systemd user service without
+   lingering stops when the last login ends, which is the WSL failure in
+   different clothes — *"a phone that was paired to it then finds nothing there,
+   which looks exactly like the app being broken."* A machine with no systemd at
+   all gets the host started directly and is told that it will not survive a
+   reboot. Neither is a failed install and neither is reported as one.
+2. **A device paired to a server gets no copilot.** `HEADLESS.md` has the
+   reason; what matters here is that on the wire *"this host has no copilot"*
+   and *"you were approved as a guest"* arrive as the same absence, so the pane
+   says it.
+
+The pairing is the one place a person still does something, and that is
+deliberate. The host prints a code, the app reads it out of the terminal and can
+redeem it into this computer's own Machines list with one press — but the
+`Approve it? [y/N]` question that follows carries the fingerprint, which is the
+only part of pairing a person can actually check. An app that answered it would
+have deleted the check while appearing to perform it.
 
 ---
 

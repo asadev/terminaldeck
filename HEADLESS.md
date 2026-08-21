@@ -178,6 +178,55 @@ Linux box, the second half runs. It compiles.
 
 ## Installing it
 
+There are two routes and they run the same script.
+
+### From the desktop app, on a server it is already connected to
+
+Machines → the server → **Sessions on this server** → *Set it up*. That is the
+route somebody who does not want to open an SSH session takes, and it is what
+Asad asked for on 2026-08-21: *"instead of going inside a server and doing some
+stuff there … from the main application we can give some steps there for
+installation, they will click on install and it will install."*
+
+What it does, as five steps it reports one at a time:
+
+1. **Checks** what the box has — Node, npm, a compiler, libc, room, systemd —
+   and refuses *before copying anything* when it cannot take a host, naming the
+   packages to install. `src/main/servers/host.ts` decides; the installer
+   re-checks all of it on the machine itself.
+2. **Copies** `terminaldeck-host.tgz` and `install.sh` over the SFTP channel the
+   page already has. The tarball travels with the app — see below — because the
+   npm name is a reservation.
+3. **Installs**, in the terminal on screen, by typing
+   `TERMINALDECK_PACKAGE=<tarball> sh install.sh`. Everything below about the
+   private Node runtime applies unchanged; it is the same script.
+4. **Starts** it: a systemd *user* unit where there is a user manager, `nohup`
+   where there is not — and says which, plus whether it survives a logout and
+   what would change that.
+5. **Pairs** it: runs `terminaldeck pair --kind mine` in that same terminal,
+   reads the code out of its output and offers to redeem it into this computer's
+   Machines list. It does **not** answer the `Approve it? [y/N]` question, which
+   carries the fingerprint.
+
+`pair` in a real terminal is not decoration. It refuses to finish without a tty
+— `if (!process.stdin.isTTY)` it prints the code, says so, and stops, because
+approving nothing after appearing to wait would leave a device paired and
+locked out. An exec channel is not a tty; a shell is.
+
+Removing it is the same screen: it stops the service, deletes the unit, the
+program and the private runtime, and leaves `~/.local/share/terminaldeck` — the
+paired devices and their folder grants — unless the box is ticked.
+
+**The package ships inside the app.** `npm run dist:headless` now also writes
+`out/headless-package/{terminaldeck-host.tgz,install.sh}`, and
+`electron-builder.yml` copies that folder to `Resources/headless`. A build where
+that step did not run carries no package, and the server page draws **no**
+Install button with a sentence saying so — never a registry install, because
+`terminaldeck` on npm is a name reservation and installs a package with no `bin`
+entry.
+
+### By hand, on the machine itself
+
 ```
 curl -fsSL https://terminaldeck.dev/install.sh | sh
 ```

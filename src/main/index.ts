@@ -90,6 +90,7 @@ import {
 } from './remote/copilot-wiring'
 import { registerMachinesIpc, type MachinesIpc } from './remote/machines/ipc'
 import { registerServersIpc, type ServersIpc } from './servers/ipc'
+import { findHostPackage } from './servers/host-package'
 import { registerServerReachIpc, type ServerReachIpc } from './servers/reach'
 import { ServerStore } from './servers/store'
 import { ServerCredentials } from './servers/credentials'
@@ -2263,6 +2264,20 @@ function registerIpc(): void {
     // — the SSH layer has no business knowing what this app is called.
     putFile: (serverId, localPath, name) =>
       serverConnections.putFile(serverId, localPath, name, BRAND.name),
+    /*
+     * The headless host this app would install on a server, or null.
+     *
+     * Two roots and no search: a packaged app carries it under `Resources`, and
+     * a checkout has it under `out/` once `npm run dist:headless` has been run.
+     * Null is a first-class answer — `host-package.ts` says why it must never
+     * fall back to `npm install -g terminaldeck`, which is a name reservation
+     * and would leave a host that looks installed and answers nothing.
+     */
+    hostPackage: () =>
+      findHostPackage(app.getVersion(), {
+        resources: app.isPackaged ? process.resourcesPath : null,
+        tree: app.isPackaged ? null : app.getAppPath(),
+      }),
     // §5.4 in one pair of lines: the page holds the connection while it is open
     // and lets go when it closes. There is no timer here and no keep-alive, and
     // a server nobody is looking at is not dialled at all.
