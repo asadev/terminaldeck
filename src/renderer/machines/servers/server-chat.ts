@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AGENT_CATALOG } from '../../../shared/agent-catalog'
 import { isProviderId } from '../../preferences'
 import type { ChatBridge, ChatMessage, ChatUpdate } from '../../components/ChatView'
@@ -142,6 +142,60 @@ export function serverChatBridge(bridge: ServersBridge, shellId: string): ChatBr
       void bridge.closeServerChat?.(shellId)
     },
   }
+}
+
+/* --------------------------------------------------------------- the push -- */
+
+/**
+ * How a server's conversation is being kept current. Mirrors `ChatFeed` in
+ * `main/servers/chat.ts`, narrowed off the wire rather than cast.
+ */
+export type ServerChatFeed = 'live' | 'polled'
+
+/**
+ * Ride the main process's push for one shell, and learn which feed it is on.
+ *
+ * ## Why a hook and not a prop on the pane
+ *
+ * Because two different things need the answer and they need it at different
+ * moments. `ChatView` needs the *event* — read what was appended, now — and the
+ * pane needs the *state*, both to say which feed is in use and to decide whether
+ * the three-second timer still has a job. Splitting them would mean two
+ * subscriptions to one channel.
+ *
+ * ## Why the feed starts as null and not as `polled`
+ *
+ * Because nothing has been claimed yet. The main process decides when it has
+ * tried to put a `tail -f` on the far end, and that is a round trip away; a pane
+ * that announced "on a timer" for the first half-second and then corrected
+ * itself would be a flicker of a sentence nobody can read. Null draws no line at
+ * all, which is the honest rendering of "not yet known".
+ *
+ * A build whose preload has no such channel never leaves null, and that is also
+ * right: it *is* on a timer, and it says so through `refreshMs` continuing to
+ * run rather than through a caption about a feature it does not have.
+ */
+export function useServerChatPush(
+  bridge: ServersBridge,
+  shellId: string,
+): { feed: ServerChatFeed | null; subscribe: (onChange: () => void) => (() => void) | null } {
+  const [feed, setFeed] = useState<ServerChatFeed | null>(null)
+  // Reset when the pane is pointed at a different terminal: the last shell's
+  // feed says nothing about this one's server.
+  useEffect(() => setFeed(null), [bridge, shellId])
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const on = bridge.onServerChatChanged
+      if (typeof on !== 'function') return null
+      return on((payload) => {
+        if (!isRecord(payload) || payload.shellId !== shellId) return
+        if (payload.feed === 'live' || payload.feed === 'polled') setFeed(payload.feed)
+        onChange()
+      })
+    },
+    [bridge, shellId],
+  )
+  return { feed, subscribe }
 }
 
 /** What a build with no such channel answers: nothing found, nothing claimed. */

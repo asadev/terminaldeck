@@ -163,11 +163,51 @@ describe('the pane the window mounts over a server terminal', () => {
     expect(PANE).toContain('noAttachReason=')
   })
 
-  it('stops asking the server anything while it is not being looked at', () => {
-    // A local conversation rides an `fs.watch`; a server has nothing to ride, so
-    // this is a timer — and a timer per far machine is the thing the servers
-    // design bans. `0` switches it off for a pane that is mounted and hidden.
-    expect(PANE).toContain('refreshMs={visible ? 3000 : 0}')
+  it('stops asking the server anything while it is not being looked at, or while it is live', () => {
+    /*
+     * A local conversation rides an `fs.watch`; a server rides a `tail -f`
+     * running over there, forwarded on `servers:chat:changed`. Two things
+     * switch the timer off and both are load-bearing:
+     *
+     *  - `visible`, so a pane mounted on a background tab keeps what it has read
+     *    and asks nothing — a timer per far machine is what the servers design
+     *    bans.
+     *  - `feed !== 'live'`, which is the whole of *"events, not polling"*. It
+     *    stays a timer while nothing has been attributed yet and on a server
+     *    whose `tail` will not follow, which are the two cases where the only
+     *    honest alternative is a stale pane.
+     */
+    expect(PANE).toContain("refreshMs={visible && feed !== 'live' ? 3000 : 0}")
+    expect(PANE).toContain('subscribe={subscribe}')
+  })
+
+  it('says which feed it is on rather than looking the same either way', () => {
+    // "As it is written" and "up to three seconds stale" are indistinguishable
+    // on screen right until somebody is waiting on a reply and wondering whether
+    // the machine has stopped.
+    expect(PANE).toContain("data-feed={feed ?? 'unknown'}")
+    expect(PANE).toContain('className="server-chat-feed"')
+    expect(PANE).toContain('Live — this server sends each reply as it is written.')
+    // And nothing is claimed before there is an answer: `null` draws no line at
+    // all, rather than a caption that corrects itself half a second later.
+    expect(PANE).toContain('{feed === null ? null : (')
+  })
+
+  it('tells the far end to stop streaming while nobody is looking', () => {
+    // The pane is mounted while it is hidden — unmounting drops the reader and
+    // coming back would be the whole tail window across the link again — and its
+    // promise has always been that a hidden one asks nothing. That now has to be
+    // said out loud, because the far end can talk first.
+    expect(PANE).toContain('void bridge.watchServerChat?.(shellId, visible)')
+    expect(PANE).toContain('}, [bridge, shellId, visible])')
+  })
+
+  it('rides the push through the same reader the timer used', () => {
+    // The payload is *that* the conversation moved, never the conversation. One
+    // reader, one dedupe set, one place a `/clear` is noticed — a push that
+    // carried its own bubbles would be a second way for a conversation to reach
+    // a pane, and the two would drift.
+    expect(VIEW).toContain('const stop = subscribe(tail)')
   })
 
   it('says “I cannot tell” ahead of “there is nothing”', () => {

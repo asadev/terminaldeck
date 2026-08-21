@@ -1,6 +1,6 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { ChatView } from '../../components/ChatView'
-import { serverChatBridge } from './server-chat'
+import { serverChatBridge, useServerChatPush } from './server-chat'
 import type { ServersBridge } from './types'
 
 /**
@@ -53,31 +53,76 @@ export function ServerChatPane({
   visible: boolean
 }) {
   const chat = useMemo(() => serverChatBridge(bridge, shellId), [bridge, shellId])
+  /*
+   * Which way this pane is being kept current, and the subscription that makes
+   * one of the two answers true. See `server-chat.ts`.
+   */
+  const { feed, subscribe } = useServerChatPush(bridge, shellId)
+
+  /*
+   * Tell the far end when nobody is looking, and when somebody is again.
+   *
+   * This pane is mounted while it is off screen — unmounting drops the reader in
+   * the main process and coming back would be the whole tail window across the
+   * link again — and its promise has always been that a hidden one *asks
+   * nothing*. That promise now needs saying out loud, because the far end can
+   * talk first: a `tail -f` sends a transcript's appends whether or not this
+   * side reads them, and a long tool result on a background tab is real traffic
+   * on somebody's server for something nobody can see.
+   *
+   * Coming back is one read, not a re-read: the main process reopens the follow
+   * and pushes immediately, which walks the file to the end in a single round
+   * trip.
+   */
+  useEffect(() => {
+    void bridge.watchServerChat?.(shellId, visible)
+  }, [bridge, shellId, visible])
 
   return (
-    <div className="server-chat-pane" data-visible={visible} data-boxed={box !== undefined} style={box}>
+    <div
+      className="server-chat-pane"
+      data-visible={visible}
+      data-boxed={box !== undefined}
+      /*
+       * On the element, so `app.where` and a test can read it off the screen
+       * rather than out of a state variable — the same reason `ChatView` writes
+       * its session id into an attribute.
+       */
+      data-feed={feed ?? 'unknown'}
+      style={box}
+    >
       <ChatView
         /*
-         * Asked again on a timer, and only while somebody is looking at it.
+         * The fallback, and only the fallback.
          *
-         * A local conversation rides a push: the main process already has an
-         * `fs.watch` on the transcript directory, so this pane costs nothing
-         * while the agent is quiet. A server has no such thing to ride — nothing
-         * over there knows this app exists — and the honest alternatives are a
-         * timer or a stale pane.
+         * A local conversation rides a push: the main process has an `fs.watch`
+         * on the transcript directory, so the pane costs nothing while the agent
+         * is quiet. A server has one now too — a `tail -f` running over there,
+         * forwarded on `servers:chat:changed` — so `feed === 'live'` switches
+         * this off entirely and the conversation arrives as it is written
+         * instead of up to three seconds later. His rule: *"events, not polling
+         * — they make the system heavier."*
          *
-         * So it is a timer, and it is kept to the narrowest shape his standing
-         * rule leaves room for. `0` switches it off entirely, which is what a
-         * pane that is mounted but not on screen gets: a chat view on a
-         * background tab keeps everything it has read and asks nothing. The
-         * pane is not unmounted in that case, because unmounting drops the
-         * reader in the main process and coming back would be the whole tail
-         * window across the link again.
+         * It stays for the two cases where that is not available and the only
+         * honest alternative is a stale pane: no transcript has been attributed
+         * to this terminal yet, so there is no file to follow, and a server
+         * whose `tail` will not follow one. The pane says which of the two it is
+         * on rather than looking identical in both.
          *
-         * A little slower than the local default, because each ask is a round
-         * trip over SSH rather than a message to a process on this machine.
+         * `0` also switches it off for a pane that is mounted but not on screen:
+         * a chat view on a background tab keeps everything it has read and asks
+         * nothing. It is not unmounted, because unmounting drops the reader in
+         * the main process and coming back would be the whole tail window across
+         * the link again.
          */
-        refreshMs={visible ? 3000 : 0}
+        refreshMs={visible && feed !== 'live' ? 3000 : 0}
+        /*
+         * And the push that makes the timer above unnecessary whenever the
+         * server can manage it. `null` from this — a preload with no such
+         * channel — leaves the timer running, which is the build this app had
+         * yesterday rather than a broken one.
+         */
+        subscribe={subscribe}
         /*
          * A handle, not a path. Which file on that server is this terminal's
          * conversation is decided in the main process out of the moment the
@@ -112,6 +157,22 @@ export function ServerChatPane({
           void bridge.writeToServerShell(shellId, `${text}\r`)
         }}
       />
+      {/*
+        * Which feed this pane is on, said rather than left to be guessed.
+        *
+        * "As it is written" and "up to three seconds stale" look identical on
+        * screen right until somebody is waiting on a reply and wondering whether
+        * the machine has stopped. One muted line, present only once there is an
+        * answer — a caption that appeared and then corrected itself half a
+        * second later would be a flicker nobody can read.
+        */}
+      {feed === null ? null : (
+        <p className="server-chat-feed" data-feed={feed}>
+          {feed === 'live'
+            ? 'Live — this server sends each reply as it is written.'
+            : 'Re-reading every 3 seconds — nothing on this server is streaming this conversation yet.'}
+        </p>
+      )}
     </div>
   )
 }

@@ -2860,6 +2860,19 @@ function registerIpc(): void {
     readFileRange: (serverId, path, from, length) =>
       serverConnections.readFileRange(serverId, path, from, length),
     /*
+     * And a command that is not expected to finish, for the one thing this app
+     * needs a server to *tell* it rather than be asked.
+     *
+     * Chat over a server terminal re-read the same transcript every three
+     * seconds — twelve hundred round trips an hour, almost all of them
+     * answering "nothing new", and still up to three seconds late when there
+     * was. His rule: *"events, not polling — they make the system heavier."*
+     * A `tail -f` on this channel is the same fact arriving instead of being
+     * asked for, and it costs nothing while the agent over there is quiet.
+     * `servers/chat.ts` is the caller and `connection.ts` the argument.
+     */
+    follow: (serverId, argv) => serverConnections.follow(serverId, argv),
+    /*
      * The headless host this app would install on a server, or null.
      *
      * Two roots and no search: a packaged app carries it under `Resources`, and

@@ -58,6 +58,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { StringDecoder } from 'node:string_decoder'
 import { Client, type Channel, type FileEntry, type SFTPWrapper } from 'ssh2'
 import { nameVariants, safeName } from '../remote/uploads'
 import type { ServerFacts } from './facts'
@@ -79,6 +80,16 @@ const COMMAND_TIMEOUT_MS = 30_000
  * gigabyte in this process's heap. The truncation is reported, never silent.
  */
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024
+
+/**
+ * The most a followed command may complain before the rest is dropped.
+ *
+ * Small on purpose. Nothing reads this except the sentence that decides whether
+ * a `tail -f` is working, and a command that has decided to print an error every
+ * second for an hour must not turn into this process's memory just because
+ * nobody closed the pane.
+ */
+const MAX_FOLLOW_STDERR_BYTES = 8 * 1024
 
 /* --------------------------------------------------------- what went wrong -- */
 
@@ -352,6 +363,34 @@ export interface TerminalSize {
  * wrong column, which reads as a rendering bug rather than as two swapped
  * arguments.
  */
+/**
+ * A command still running on a server, handing back what it prints as it prints
+ * it.
+ *
+ * Deliberately *not* a `ServerShell`. A shell is a pty — it echoes, it wraps
+ * lines at a column, it has a window size, and everything that comes out of it
+ * has been through a terminal driver. This has none of that: it is one command's
+ * standard output, byte for byte, which is what a caller reassembling a file
+ * needs and what a pty would quietly ruin.
+ *
+ * See {@link ServerConnections.follow} for why the chunks are `Buffer`s.
+ */
+export interface ServerFollow {
+  /** Standard output, undecoded. Chunk boundaries are TCP's, not the sender's. */
+  onBytes(listener: (chunk: Buffer) => void): () => void
+  /**
+   * The far end stopped, and what it complained about on the way.
+   *
+   * `code` is the exit status, or null when a signal ended it. `stderr` is what
+   * it printed there — which for the caller that matters is the difference
+   * between *"this server has no such command"* and *"the file went away"*, and
+   * is the sentence a fallback is chosen on rather than guessed at.
+   */
+  onEnd(listener: (why: { code: number | null; stderr: string }) => void): () => void
+  /** Stop it and let the connection go. Safe to call twice, and after `onEnd`. */
+  close(): void
+}
+
 export interface ServerShell {
   onData(listener: (chunk: string) => void): () => void
   onClose(listener: () => void): () => void
@@ -556,6 +595,72 @@ export class ServerConnections {
       const shell = wrapShell(channel, release)
       if (startIn !== undefined && startIn !== '') shell.write(`cd ${quote(startIn)}\n`)
       return shell
+    } catch (error) {
+      release()
+      throw problemFor(error)
+    }
+  }
+
+  /**
+   * A command that is not expected to finish, whose output arrives as it is
+   * produced.
+   *
+   * ## Why this exists beside `run`
+   *
+   * {@link run} is a question with an answer: it holds everything the far end
+   * prints until the channel closes, and a command that never closes is a
+   * command it never answers about. That is the right shape for `uptime` and
+   * exactly the wrong shape for the one thing this app needs a server to *tell*
+   * it: that a file over there just grew.
+   *
+   * The alternative was the one his standing rule rules out. Chat over a server
+   * terminal asked for the same bytes every three seconds — *"events, not
+   * polling; they make the system heavier"* — twelve hundred round trips an
+   * hour, almost all of them answering "nothing new", and still up to three
+   * seconds late when there was. A `tail -f` on this channel is the same fact
+   * arriving instead of being asked for, and it costs nothing while the agent
+   * over there is quiet. `servers/chat.ts` is the caller.
+   *
+   * ## What it hands over, and what it refuses to
+   *
+   * **Bytes.** Not text. A stream has no end to decode at, so the only two
+   * honest choices are a `StringDecoder` held across every chunk — see
+   * {@link wrapShell}, which needs exactly that because a terminal wants
+   * characters — or handing the caller what actually arrived. This does the
+   * second, because its caller is assembling a *file*, and a file's offsets are
+   * byte offsets: a decoder here would hand back a string whose length is not
+   * the number of bytes consumed, and the reader on the other side of it would
+   * lose its place in the file the first time somebody's transcript contained a
+   * non-ASCII character. Nothing is decoded, so nothing can be decoded wrongly.
+   *
+   * **stderr is separate and is text**, because its whole job is to be a
+   * sentence when the command turns out not to exist on that server. It is
+   * capped, since a command that fails once a second for an hour is a command
+   * whose complaints must not become this process's memory.
+   *
+   * ## Its life
+   *
+   * The connection is acquired here and released by {@link ServerFollow.close}
+   * or by the far end ending, whichever happens first — the same bargain
+   * {@link shell} makes, and for the same reason: this is a long-lived thing and
+   * it lives exactly as long as something is looking at it. There is no timeout.
+   * A command that runs for an hour without printing is what was asked for.
+   */
+  async follow(serverId: string, argv: readonly string[]): Promise<ServerFollow> {
+    if (argv.length === 0) throw new ServerProblem('lost', 'There was no command to run.')
+    await this.acquire(serverId)
+    let released = false
+    const release = (): void => {
+      if (released) return
+      released = true
+      this.release(serverId)
+    }
+    try {
+      const entry = this.live.get(serverId)
+      if (entry === undefined) throw new ServerProblem('lost', 'That connection is gone.')
+      const client = await entry.client
+      const channel = await openExec(client, argv.map(quote).join(' '))
+      return wrapFollow(channel, release)
     } catch (error) {
       release()
       throw problemFor(error)
@@ -909,8 +1014,34 @@ function exec(client: Client, command: string, stdin: string | null): Promise<Ru
         reject(problemFor(error))
         return
       }
-      let out = ''
-      let err = ''
+      /*
+       * Bytes, kept as bytes until the end.
+       *
+       * This used to be two strings with `chunk.toString('utf8')` appended to
+       * each, and that is wrong in a way that is invisible until it is somebody's
+       * data. TCP decides where a chunk ends, not UTF-8: a three-byte `\u00e9`
+       * whose first byte is the last byte of one chunk and whose remaining two
+       * open the next is decoded twice, as two replacement characters, and no
+       * later byte repairs it. It is not hypothetical here — `servers/chat.ts`
+       * asks the far end for **file paths**, one per line, and a folder named
+       * with anything outside ASCII comes back as a path that cannot be opened,
+       * which then reads as "the app cannot find a conversation that is right
+       * there."
+       *
+       * Concatenating and decoding once removes the boundary entirely rather
+       * than making it less likely, and it costs one `Buffer.concat` per command.
+       * A stream that cannot wait for a close — {@link ServerConnections.follow}
+       * — holds a `StringDecoder` across chunks instead, which is the same fix
+       * applied to a thing that has no end.
+       *
+       * The counters are also the *reason* the cap now means what it says.
+       * `out.length + err.length` was a count of **characters** compared against
+       * a constant named `MAX_OUTPUT_BYTES`, so output in any non-Latin script
+       * was allowed several times the bound it was supposed to be held to.
+       */
+      const out: Buffer[] = []
+      const err: Buffer[] = []
+      let bytes = 0
       let truncated = false
       let settled = false
 
@@ -926,17 +1057,17 @@ function exec(client: Client, command: string, stdin: string | null): Promise<Ru
         )
       }, COMMAND_TIMEOUT_MS)
 
-      const take = (into: 'out' | 'err', chunk: Buffer): void => {
-        if (out.length + err.length >= MAX_OUTPUT_BYTES) {
+      const take = (into: Buffer[], chunk: Buffer): void => {
+        if (bytes >= MAX_OUTPUT_BYTES) {
           truncated = true
           return
         }
-        if (into === 'out') out += chunk.toString('utf8')
-        else err += chunk.toString('utf8')
+        bytes += chunk.length
+        into.push(chunk)
       }
 
-      channel.on('data', (chunk: Buffer) => take('out', chunk))
-      channel.stderr.on('data', (chunk: Buffer) => take('err', chunk))
+      channel.on('data', (chunk: Buffer) => take(out, chunk))
+      channel.stderr.on('data', (chunk: Buffer) => take(err, chunk))
       channel.on('error', (channelError: Error) => {
         if (settled) return
         settled = true
@@ -950,8 +1081,8 @@ function exec(client: Client, command: string, stdin: string | null): Promise<Ru
         resolve({
           code: typeof code === 'number' ? code : null,
           signal: typeof signal === 'string' ? signal : null,
-          stdout: out,
-          stderr: err,
+          stdout: Buffer.concat(out).toString('utf8'),
+          stderr: Buffer.concat(err).toString('utf8'),
           truncated,
         })
       })
@@ -963,6 +1094,82 @@ function exec(client: Client, command: string, stdin: string | null): Promise<Ru
       }
     })
   })
+}
+
+/**
+ * One exec channel, opened and handed over still running.
+ *
+ * The counterpart of {@link openShell}: same shape, no pty. `exec` above owns
+ * the *finished command* case and does its own `client.exec`, because it has a
+ * timeout, a cap and a `stdin` to end; sharing an opener between the two would
+ * mean one function with a flag deciding which half of itself to be.
+ */
+function openExec(client: Client, command: string): Promise<Channel> {
+  return new Promise<Channel>((resolve, reject) => {
+    client.exec(command, (error, channel) => {
+      if (error !== undefined) {
+        reject(problemFor(error))
+        return
+      }
+      resolve(channel)
+    })
+  })
+}
+
+/**
+ * The channel, as {@link ServerFollow}.
+ *
+ * `close()` is idempotent and releases exactly once, which matters more here
+ * than it does for a shell: this is closed by the pane that opened it *and* by
+ * the far end exiting, and those two race every time somebody closes a chat pane
+ * on a server whose `tail` has just died.
+ */
+function wrapFollow(channel: Channel, release: () => void): ServerFollow {
+  let closed = false
+  let complaint = ''
+  const ended: ((why: { code: number | null; stderr: string }) => void)[] = []
+
+  channel.stderr.on('data', (chunk: Buffer) => {
+    if (complaint.length >= MAX_FOLLOW_STDERR_BYTES) return
+    complaint += chunk.toString('utf8')
+  })
+  const finish = (code: number | null, signal: string | null): void => {
+    if (closed) return
+    closed = true
+    release()
+    const why = { code: signal === null ? code : null, stderr: complaint.trim() }
+    for (const listener of ended.splice(0)) listener(why)
+  }
+  channel.on('close', (code?: number, signal?: string) =>
+    finish(typeof code === 'number' ? code : null, typeof signal === 'string' ? signal : null),
+  )
+  // A channel error is the far end going away by another name. Without this the
+  // caller waits forever for an `onEnd` that the library has decided to deliver
+  // as an `error` instead, and the pane never falls back.
+  channel.on('error', () => finish(null, null))
+
+  return {
+    onBytes(listener) {
+      const handler = (chunk: Buffer): void => listener(chunk)
+      channel.on('data', handler)
+      return () => {
+        channel.off('data', handler)
+      }
+    },
+    onEnd(listener) {
+      ended.push(listener)
+      return () => {
+        const at = ended.indexOf(listener)
+        if (at >= 0) ended.splice(at, 1)
+      }
+    },
+    close() {
+      if (closed) return
+      closed = true
+      release()
+      channel.close()
+    },
+  }
 }
 
 function openShell(client: Client, size: TerminalSize): Promise<Channel> {
@@ -1278,9 +1485,28 @@ async function ensureDirectory(sftp: SFTPWrapper, path: string): Promise<void> {
 
 function wrapShell(channel: Channel, release: () => void): ServerShell {
   let closed = false
+  /*
+   * One decoder for the life of the terminal, not one per chunk.
+   *
+   * A pty has no chunk boundaries of its own — TCP picks them — so a `é`, a box
+   * character in a `top` frame or any emoji in a prompt is free to arrive as one
+   * byte at the end of one packet and two at the start of the next. Decoding
+   * each chunk on its own turns that into two replacement characters on the
+   * screen, permanently: the terminal emulator has already been fed them and no
+   * later byte repairs a glyph that was written wrong.
+   *
+   * `StringDecoder` holds the incomplete sequence back and prepends it to the
+   * next chunk, which is exactly the missing state. Same fix, same reason, as
+   * {@link exec} above and {@link ServerConnections.follow} below — there are
+   * three ways bytes leave this file and all three now keep them whole.
+   */
+  const decoder = new StringDecoder('utf8')
   return {
     onData(listener) {
-      const handler = (chunk: Buffer): void => listener(chunk.toString('utf8'))
+      const handler = (chunk: Buffer): void => {
+        const text = decoder.write(chunk)
+        if (text !== '') listener(text)
+      }
       channel.on('data', handler)
       return () => {
         channel.off('data', handler)
