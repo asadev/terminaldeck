@@ -35,6 +35,7 @@ import {
   type CreateOutcome,
   type CreateRequest,
   type RemoteAuthenticator,
+  type RemoteConnection,
   type RemoteEndpoint,
   type SessionAccess,
   type SessionHandle,
@@ -4279,5 +4280,92 @@ describe('a browser window here, driven by a session on the device', () => {
       'the new holdings',
     )
     expect(next).toEqual({ t: 'window.holds', sessions: ['s3'] })
+  })
+
+  /**
+   * And the fact going the other way, which is what made every one of the tests
+   * above able to say anything at all.
+   *
+   * `windowsHeldFor` answered the empty set to every device for as long as this
+   * frame did not exist — correctly, because nothing in this app could name a
+   * session on a device that dialled in, so no window was ever attached to one,
+   * so no binding was ever filed under a device's id. The picker had two lists
+   * and neither of them was the guest's. This is the third.
+   */
+  const GUEST_ROW = {
+    id: 'guest-1',
+    title: 'terminaldeck',
+    cwd: '/Users/apple/Projects/terminaldeck',
+    provider: 'claude',
+    status: 'idle',
+    exitCode: null,
+  }
+
+  it('keeps what a device says is running on its own computer, and shows it on the roster', async () => {
+    const acting = server()
+    const seen: RemoteConnection[][] = []
+    const harness = await serve({
+      serveWindows: acting.serveWindows,
+      onConnections: (connections) => seen.push(connections),
+    })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['hostwindows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'sessions.mine', sessions: [GUEST_ROW] })
+    await new Promise((settle) => setTimeout(settle, 30))
+
+    const rows = harness.endpoint.connections()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].sessions).toEqual([GUEST_ROW])
+    // And it is pushed, not only readable: the browser's attach menu is built
+    // from the roster and nothing else would tell it a terminal had opened over
+    // there.
+    expect(seen.at(-1)?.[0]?.sessions).toEqual([GUEST_ROW])
+  })
+
+  it('replaces the list whole, so a terminal closed over there leaves the menu', async () => {
+    const acting = server()
+    const harness = await serve({ serveWindows: acting.serveWindows })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['hostwindows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'sessions.mine', sessions: [GUEST_ROW] })
+    await new Promise((settle) => setTimeout(settle, 20))
+    client.send({ t: 'sessions.mine', sessions: [] })
+    await new Promise((settle) => setTimeout(settle, 20))
+
+    expect(harness.endpoint.connections()[0]?.sessions).toEqual([])
+  })
+
+  it('drops the announcement on a host with no browser to attach, rather than closing the link', async () => {
+    /*
+     * No `serveWindows` means this host never advertised `hostWindows`, so a
+     * window could never be attached to one of these rows and the list would be a
+     * menu of dead entries. A client that sent it anyway is talking to an older
+     * desktop, and an announcement nobody asked for is dropped — never made a
+     * reason to close somebody's link.
+     */
+    const harness = await serve({})
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'sessions.mine', sessions: [GUEST_ROW] })
+    await new Promise((settle) => setTimeout(settle, 30))
+
+    expect(client.received.some((m) => m.t === 'error')).toBe(false)
+    expect(harness.endpoint.connections()[0]?.sessions).toEqual([])
+  })
+
+  it('is empty for a phone, which has no terminals to announce', async () => {
+    const acting = server()
+    const harness = await serve({ serveWindows: acting.serveWindows })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    expect(harness.endpoint.connections()[0]?.sessions).toEqual([])
   })
 })

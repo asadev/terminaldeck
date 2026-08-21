@@ -379,6 +379,29 @@ export interface MachineLink {
    */
   announceWindows(): boolean
   /**
+   * Tell that machine what is running **here**, so somebody sitting at it can
+   * put one of its browser windows beside one of these sessions.
+   *
+   * The mirror of {@link announceWindows} and the fact that machine cannot
+   * derive. It watches this desktop's sessions only in the direction it dialled;
+   * on a link *this* desktop opened, the far end has never been sent a list of
+   * this machine's ptys and its attach menu has no row to offer. `sessions.mine`
+   * is that list.
+   *
+   * Sent on every welcome and whenever a session starts or ends here. `false`
+   * means nothing was sent: the link is down, this build has no sessions to
+   * describe, or that machine never advertised `hostWindows` — and the last of
+   * those is the version check, because a build that has never parsed this frame
+   * answers it by closing the channel.
+   *
+   * It hands that machine nothing. There is no verb in this direction that can
+   * type into one of these sessions, start one or read one, and this frame adds
+   * none; what it enables is a row in a picker over there, and the browser verb
+   * that row leads to comes back *here* through `onWindowCall`, where the grant
+   * is read per call exactly as it was before.
+   */
+  announceSessions(): boolean
+  /**
    * Ask that machine to act on a browser window **it** is holding, for a session
    * running here.
    *
@@ -701,6 +724,24 @@ export interface MachineLinkOptions {
    */
   windowsHeld?(): readonly string[]
   /**
+   * What is running on **this** machine, asked whenever it has to be said.
+   *
+   * The other half of {@link onWindowCall} on the far machine's behalf, and the
+   * one without which nobody over there can ever attach a window to a session
+   * here: the picker in that app is built from its own ptys and from the
+   * machines *it* dialled, and this desktop is neither — it dialled *out*, so
+   * over there it is a device that dialled in. The list has to travel.
+   *
+   * A function rather than a list, read at the moment of sending, for the reason
+   * {@link windowsHeld} is one: the answer changes every time somebody opens or
+   * closes a terminal at this keyboard.
+   *
+   * Absent means this build has nothing to describe — a test harness, a host with
+   * no session manager — and absence is also the switch: a frame saying "none"
+   * from something that can never have any is noise on somebody's socket.
+   */
+  ownSessions?(): readonly RemoteSession[]
+  /**
    * That machine says it is holding a browser window for these sessions of
    * **ours**. The list replaces whatever it said last.
    *
@@ -896,6 +937,25 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     if (options.windowsHeld === undefined) return false
     if (!current.capabilities.includes(CAPABILITY.windows)) return false
     return send({ t: 'window.holds', sessions: [...options.windowsHeld()] })
+  }
+
+  /**
+   * See {@link MachineLink.announceSessions}. A function for the same reason
+   * `announceWindows` is one: the welcome handler sends it before the object
+   * carrying the method exists.
+   *
+   * Two gates, and they are not the same pair `announceWindows` uses. The
+   * capability here is `hostWindows`, not `windows`, and the difference is the
+   * whole direction of the frame: a machine that advertised `windows` said it may
+   * *ask about* windows this app holds, which is silence on whether it can hold
+   * one of its own. `servesWindows` is the same word `askWindow` sends on, and it
+   * has to be — this list exists so that somebody over there can attach a window
+   * and the ask can come back.
+   */
+  function announceSessions(): boolean {
+    if (options.ownSessions === undefined) return false
+    if (!servesWindows()) return false
+    return send({ t: 'sessions.mine', sessions: [...options.ownSessions()] })
   }
 
   /**
@@ -1181,6 +1241,17 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
          * channel.
          */
         announceWindows()
+        /*
+         * And the mirror of that list: what is running *here*, so the attach menu
+         * over there has this machine's sessions in it at all.
+         *
+         * On the welcome for the same reason as the line above — this socket is
+         * new after every reconnect and the far machine dropped whatever it knew
+         * with the old one — and gated on `hostWindows` inside `announceSessions`,
+         * which is the capability that says the far end can hold a window for a
+         * session it does not run.
+         */
+        announceSessions()
         return
       }
       case 'window.call': {
@@ -1668,6 +1739,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       return send(message)
     },
     announceWindows,
+    announceSessions,
     askWindow(call: WindowCallFrame): boolean {
       if (!servesWindows()) return false
       return send(call)

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { generateStatic } from '../../../shared/sealed'
 import { hostIdFor } from '../../../shared/relay-wire'
-import { serialize, type ServerMessage } from '../protocol'
+import { serialize, type RemoteSession, type ServerMessage } from '../protocol'
 import type { DialRequest, GuestChannel, GuestHandlers } from './dial'
 import { createMachineLink, describeThisMachine, type MachineLinkState } from './guest'
 import type { MachineSecrets } from './store'
@@ -919,6 +919,132 @@ describe('saying which windows are held here', () => {
     held = ['s1']
     expect(link.announceWindows()).toBe(true)
     expect(frames(rig.fakes[0]).at(-1)).toEqual({ t: 'window.holds', sessions: ['s1'] })
+    link.disconnect()
+  })
+})
+
+/**
+ * And telling that machine what is running **here**, which is the fact it cannot
+ * derive and the one the fourth arrangement was missing.
+ *
+ * A paired computer sees the sessions on the machine it dialled, because that
+ * host pushes them. It has never seen the sessions on a machine that dialled
+ * *it*: over there this desktop is a device that dialled in, and that app's
+ * session picker is built from its own ptys plus the machines it dialled out to.
+ * So nobody sitting at that computer could put one of its browser windows beside
+ * a session running here — the menu had no row — and every part of the return
+ * path built for exactly that was correct and unreachable.
+ */
+describe('saying what is running here', () => {
+  function linkRunning(running: () => readonly RemoteSession[]) {
+    const rig = harness()
+    const link = createMachineLink({
+      id: 'machine-1',
+      secrets: secrets(),
+      onState: () => undefined,
+      onOutput: () => undefined,
+      onWelcome: () => undefined,
+      onWindowCall: () => Promise.resolve({ ok: true, body: '{}' }),
+      ownSessions: running,
+      dial: rig.dial,
+      baseBackoffMs: 5,
+      maxBackoffMs: 10,
+    })
+    return { link, rig }
+  }
+
+  function frames(fake: Fake): unknown[] {
+    return fake.sent.map((text) => JSON.parse(text) as unknown)
+  }
+
+  const ROW: RemoteSession = {
+    id: 'here-1',
+    title: 'terminaldeck',
+    cwd: '/Users/apple/Projects/terminaldeck',
+    provider: 'claude',
+    status: 'idle',
+    exitCode: null,
+  }
+
+  it('says it on every welcome, so the far attach menu is right on first paint', async () => {
+    const { link, rig } = linkRunning(() => [ROW])
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['hostwindows'] }))
+    await settle()
+
+    expect(frames(rig.fakes[0])).toContainEqual({ t: 'sessions.mine', sessions: [ROW] })
+    link.disconnect()
+  })
+
+  it('says nothing to a machine that never advertised hostWindows', async () => {
+    /*
+     * `parseClientMessage` over there answers a frame it has never heard of by
+     * closing the channel, and `windows` is the wrong word to send on: it says
+     * that machine may *ask about* windows this app holds, which is silence on
+     * whether it can hold one of its own.
+     */
+    const { link, rig } = linkRunning(() => [ROW])
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['windows'] }))
+    await settle()
+
+    expect(frames(rig.fakes[0]).some((m) => (m as { t?: string }).t === 'sessions.mine')).toBe(false)
+    expect(link.announceSessions()).toBe(false)
+    link.disconnect()
+  })
+
+  it('re-reads the list, so a session started ten minutes later still arrives', async () => {
+    let running: RemoteSession[] = []
+    const { link, rig } = linkRunning(() => running)
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['hostwindows'] }))
+    await settle()
+
+    running = [ROW]
+    expect(link.announceSessions()).toBe(true)
+    expect(frames(rig.fakes[0]).at(-1)).toEqual({ t: 'sessions.mine', sessions: [ROW] })
+    link.disconnect()
+  })
+
+  it('sends the empty list, because that is how the last terminal closing travels', async () => {
+    const { link, rig } = linkRunning(() => [])
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['hostwindows'] }))
+    await settle()
+
+    expect(frames(rig.fakes[0])).toContainEqual({ t: 'sessions.mine', sessions: [] })
+    link.disconnect()
+  })
+
+  it('says nothing at all from a build with no sessions to describe', async () => {
+    // A headless host, a test harness. A frame saying "none" from something that
+    // can never have any is noise on somebody's socket.
+    const rig = harness()
+    const link = createMachineLink({
+      id: 'machine-1',
+      secrets: secrets(),
+      onState: () => undefined,
+      onOutput: () => undefined,
+      onWelcome: () => undefined,
+      dial: rig.dial,
+      baseBackoffMs: 5,
+      maxBackoffMs: 10,
+    })
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['hostwindows'] }))
+    await settle()
+
+    expect(link.announceSessions()).toBe(false)
+    expect(
+      rig.fakes[0].sent
+        .map((text) => JSON.parse(text) as { t?: string })
+        .some((m) => m.t === 'sessions.mine'),
+    ).toBe(false)
     link.disconnect()
   })
 })

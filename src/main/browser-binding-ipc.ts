@@ -203,6 +203,38 @@ export interface BindingIpcDeps {
    * both mean the same thing: say nothing.
    */
   whyNotDrive?(session: { sessionId: string; machineId: string }): string | null
+  /**
+   * For a computer that dialled **in**: what it is called here, and whether it
+   * has been allowed to act on browser windows in this app. Null for everything
+   * else.
+   *
+   * Null is the answer for a session in this window, for a machine this desktop
+   * dialled out to, and for a shell on a server — three id spaces this has no
+   * opinion about, and a row offered against the wrong one would be a tick that
+   * grants nothing.
+   *
+   * It exists because the grant it reports defaults to **off** and always will:
+   * a browser holds this account's signed-in mail, bank and source control, and
+   * nothing has ever been able to drive it from another computer. So the first
+   * time anybody attaches a window to a session on a computer that dialled in —
+   * which is the whole reason those rows are in this menu — the verb that
+   * follows is refused. Saying so afterwards, on the other machine, in the
+   * middle of an agent's turn, is a trip somebody has to make.
+   *
+   * Absent leaves the menu exactly as it was.
+   */
+  windowGrantFor?(machineId: string): { name: string; allowed: boolean } | null
+  /**
+   * Turn that grant on or off for one computer, from this menu.
+   *
+   * Here rather than only in Settings → Remote because this is where the person
+   * already is and it is the same keyboard — which is the whole of what that
+   * panel's argument protects. It is not a widening: the tick is explicit, it
+   * names the computer, and it is the same store the panel writes, read per call
+   * by `window-serve.ts`, so unticking it here stops the next verb rather than
+   * the next connection.
+   */
+  setWindowGrant?(machineId: string, allowed: boolean): void
 }
 
 /**
@@ -711,6 +743,10 @@ export function connectMenuItems(
     sessions: SessionChoice[]
     /** See {@link BindingIpcDeps.whyNotDrive}. Absent leaves every row as it was. */
     whyNotDrive?(session: { sessionId: string; machineId: string }): string | null
+    /** See {@link BindingIpcDeps.windowGrantFor}. Absent draws no grant rows. */
+    windowGrantFor?(machineId: string): { name: string; allowed: boolean } | null
+    /** See {@link BindingIpcDeps.setWindowGrant}. */
+    setWindowGrant?(machineId: string, allowed: boolean): void
   },
 ): MenuItemConstructorOptions[] {
   const entry = known.get(request.browserTabId)
@@ -808,6 +844,63 @@ export function connectMenuItems(
     }
   }
 
+  /*
+   * And the one permission this menu can hand over itself, at the bottom.
+   *
+   * ## Why it is here rather than only in Settings
+   *
+   * Because the sessions on a computer that dialled in are in this menu, and the
+   * grant that lets one of them act on the window is off by default and always
+   * will be. Without this row the sequence is: tick a session here, walk to the
+   * other computer, watch its agent be refused, read a sentence naming a panel,
+   * walk back, open Settings → Remote, find the device, tick it, walk back
+   * again. Every step of that is real and every step of it is somebody being
+   * told to go somewhere else.
+   *
+   * It is not a widening of who may grant it. That panel's argument is that the
+   * browser on this screen holds this account's signed-in mail, bank and source
+   * control, so the tick belongs to *this keyboard* — and this menu is popped
+   * from this keyboard. What it must not become is implicit: attaching does not
+   * grant, the row says the computer's name, and the tick is a tick.
+   *
+   * ## Why a checkbox rather than an action
+   *
+   * A row that says "Allow…" and closes leaves nothing behind that says it
+   * worked — the defect this round is about, wearing a helpful label. A checkbox
+   * carries the state it is in, so the next time this menu opens it is the
+   * answer to "did that land", and the same row turns it off again.
+   *
+   * ## Why one row per computer and only for computers with a row above
+   *
+   * The set is derived from the sessions this menu is already listing, so it
+   * cannot offer a permission for a machine nobody is looking at, and a computer
+   * running four sessions gets one row rather than four.
+   */
+  const grants = new Map<string, { name: string; allowed: boolean }>()
+  if (request.windowGrantFor) {
+    for (const session of request.sessions) {
+      const machineId = session.machineId ?? ''
+      if (machineId === '' || grants.has(machineId)) continue
+      const grant = request.windowGrantFor(machineId)
+      if (grant !== null) grants.set(machineId, grant)
+    }
+  }
+  if (grants.size > 0) {
+    items.push({ type: 'separator' })
+    for (const [machineId, grant] of grants) {
+      items.push({
+        type: 'checkbox',
+        checked: grant.allowed,
+        label: `Let ${grant.name} act on browser windows here`,
+        // Drawn even with no way to write it, and disabled rather than hidden:
+        // a build whose preload has the read and not the write would otherwise
+        // show a permission that silently does nothing when pressed.
+        enabled: request.setWindowGrant !== undefined,
+        click: () => request.setWindowGrant?.(machineId, !grant.allowed),
+      })
+    }
+  }
+
   return items
 }
 
@@ -822,7 +915,12 @@ export function showConnectMenu(
     // Taken from the deps here rather than sent up by the renderer, because the
     // only thing that can answer it is the main process — `servers/ipc.ts` knows
     // which terminals it armed and why the rest were not.
-    connectMenuItems({ ...request, ...(deps.whyNotDrive ? { whyNotDrive: deps.whyNotDrive } : {}) }),
+    connectMenuItems({
+      ...request,
+      ...(deps.whyNotDrive ? { whyNotDrive: deps.whyNotDrive } : {}),
+      ...(deps.windowGrantFor ? { windowGrantFor: deps.windowGrantFor } : {}),
+      ...(deps.setWindowGrant ? { setWindowGrant: deps.setWindowGrant } : {}),
+    }),
   ).popup({ window })
   return true
 }

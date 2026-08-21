@@ -86,6 +86,32 @@ import { machineChoices, readMachines } from './machines-bridge'
  * that said "Sent" about a line dropped on the floor is the thing this whole
  * file exists to not do.
  *
+ * ## Computers that dialled in, which were the fourth list and the dead corner
+ *
+ * His sentence for the whole browser feature is *"from any session from any
+ * device to any device's browser in one app."* Three of the four cells worked. A
+ * session here driving a window here, a session here driving a window on a
+ * machine this desktop dialled, a session on that machine driving a window here
+ * — all built, all tested. The fourth is a session on a computer that dialled
+ * **in** driving a window here, and every part of it was built too:
+ * `window-grants.ts` holds the permission, `server.ts` sends that device
+ * `window.holds`, `window-serve.ts` decides its `window.call`, and
+ * `index.ts`'s `windowsHeldFor(deviceId)` filters the binding map for it.
+ *
+ * It could never fire, and the reason was this file. `browser-binding.ts` keys a
+ * window `<machineId>\0<sessionId>`, and the only ids ever written into that
+ * field were the empty string and a `MachineStore` id — because those are the
+ * only two lists this picker had. A device that dialled in has ptys and nobody
+ * here could name one, so no window was ever attached to one, so the filter was
+ * correct and empty and the frame said "nothing here is holding a window for
+ * you". Four working parts downstream of a menu with no row.
+ *
+ * So {@link readSessions} takes a fourth list: the roster of connected devices,
+ * each carrying what it announced is running on its own computer
+ * (`sessions.mine` on the wire, because nothing on this side can derive it).
+ * They are rows for **attaching** and are refused for **sending**, and that is
+ * the protocol rather than a policy — see {@link AgentSession.dialledIn}.
+ *
  * ## Terminals on servers, which were the third of three lists
  *
  * `session:list` is this machine's ptys and `machines:list` is the machines
@@ -180,14 +206,46 @@ export interface AgentSession {
    */
   name: string
   /**
-   * The paired machine it runs on, or empty for this one.
+   * The computer it runs on, as this app names it, or empty for this one.
    *
    * Empty is not a missing value and never should be read as one: it is the
    * answer for every session on this computer. Since `session.send` landed on
    * the wire it no longer decides whether a row can be sent to — it decides
    * *how*, which is the routing in `useAgentTarget`.
+   *
+   * **Two id spaces wear this field, and {@link dialledIn} is which.** A machine
+   * this desktop dialled out to is named by `MachineStore`; a device that dialled
+   * in is named by the pairing store behind `remote/server.ts`. They are minted
+   * by different code and reached over different wires, and handing one to the
+   * desk that keeps the other addresses nothing.
+   *
+   * They share a field because there is one place that wants exactly this string
+   * and does not care which store minted it: `browser-binding.ts`, whose key is
+   * `<machineId>\0<sessionId>` and whose own header says the first half is *the
+   * computer the session runs on, from whichever store named it* — the same
+   * reading `deck-control`'s caller key and `windowsHeldFor` take. A second field
+   * for the binding to choose between would be a choice somebody has to get right
+   * at every call site; this way the attach menu passes the field it already
+   * passes and the relation is filed under the id the far end will be asked
+   * about.
    */
   machineId: string
+  /**
+   * That machine reached **this** one, rather than the other way round.
+   *
+   * True only for a session on a device that dialled in, and it is the difference
+   * between the two halves of {@link machineId} — which desk owns the id, and
+   * therefore what this app may do with the row.
+   *
+   * What it may do is **attach a browser window to it**, which is the whole point
+   * of listing it: the person is sitting at this screen, the page is here, and the
+   * agent is over there. What it may not do is send text to it, and that is not a
+   * policy this file could relax — there is no verb in the protocol pointing that
+   * way. `session.send` is a frame a *client* sends its host, and on this link
+   * this app is the host. So {@link resolveTarget} refuses these rows and
+   * {@link whyDisabled} says which of the two things the row can do.
+   */
+  dialledIn: boolean
   /**
    * What the computer it runs on is called here, or empty for this one.
    *
@@ -271,6 +329,35 @@ export interface AgentMachinesBridge {
 }
 
 /**
+ * The third half, and the one that closes the last of the four directions.
+ *
+ * `listMachines` above answers for the computers this desktop **dialled out to**.
+ * A computer that dialled *in* is not in it and never was: it is a paired
+ * *device*, kept by `remote/server.ts` on the other id space entirely, and it
+ * reaches this window on the connection roster rather than the machines view.
+ *
+ * Its sessions arrive there because that device announces them — `sessions.mine`
+ * on the wire — and they arrive nowhere else, because nothing on this side can
+ * derive what is running on somebody else's computer. Until that frame existed
+ * this list did not exist, so no window here could be attached to one of those
+ * sessions, so `windowsHeldFor` answered the empty set to every device and the
+ * return path built for it could never fire.
+ *
+ * Read through `remoteStatus` rather than a list call of its own because the
+ * roster is already on it, and subscribed through `onRemoteConnections` because
+ * that is the push it already has. A third channel for a fact two existing ones
+ * carry would be a third thing to keep in step.
+ *
+ * Optional exactly as the machines half is, and for the same reason: a preload
+ * without it must still get a working picker for everything else, rather than
+ * losing the send button because this build has no remote roster.
+ */
+export interface AgentDevicesBridge {
+  remoteStatus(): Promise<unknown>
+  onRemoteConnections(callback: (connections: unknown) => void): () => void
+}
+
+/**
  * Both answers, kept apart.
  *
  * Merged here rather than in the main process because the merge is a *labelling*
@@ -284,6 +371,16 @@ export interface AgentTargets {
   here: unknown
   /** Whatever `machines:list` answered, or null when there is no machines half. */
   elsewhere: unknown
+  /**
+   * Whatever `remote:status` answered, or null when there is no devices half.
+   *
+   * The roster of devices connected *to* this app, each carrying whatever it said
+   * is running on its own computer. Null and "a roster with nobody on it" are the
+   * same answer to this picker and are deliberately not distinguished: neither
+   * produces a row, and a build with no remote layer has no device sessions in
+   * exactly the way a desktop nobody has dialled has none.
+   */
+  guests: unknown
 }
 
 const SESSION_METHODS = [
@@ -297,6 +394,11 @@ const MACHINE_METHODS = [
   'listMachines',
   'onMachinesState',
 ] as const satisfies readonly (keyof AgentMachinesBridge)[]
+
+const DEVICE_METHODS = [
+  'remoteStatus',
+  'onRemoteConnections',
+] as const satisfies readonly (keyof AgentDevicesBridge)[]
 
 function hasAll(record: Record<string, unknown>, methods: readonly string[]): boolean {
   return methods.every((method) => typeof record[method] === 'function')
@@ -322,7 +424,8 @@ export function resolveAgentSessions(host: unknown): AgentSessionBridge | null {
   if (!hasAll(record, SESSION_METHODS)) return null
   const sessions = host as unknown as AgentSessionBridge
   const machines = hasAll(record, MACHINE_METHODS) ? (host as unknown as AgentMachinesBridge) : null
-  if (!machines) return sessions
+  const devices = hasAll(record, DEVICE_METHODS) ? (host as unknown as AgentDevicesBridge) : null
+  if (!machines && !devices) return sessions
   return {
     async listSessions(): Promise<AgentTargets> {
       const here = await sessions.listSessions()
@@ -330,16 +433,26 @@ export function resolveAgentSessions(host: unknown): AgentSessionBridge | null {
       // sessions on this computer are the ones that can actually be sent to, so
       // losing them because a link was mid-reconnect would be trading the
       // working half of the picker for the half that is only ever informative.
-      const elsewhere = await machines.listMachines().catch(() => null)
-      return { here, elsewhere }
+      const elsewhere = machines ? await machines.listMachines().catch(() => null) : null
+      // And the same bargain for the third: a remote layer that is off, starting
+      // or mid-restart answers with a rejection, and the rows this window can
+      // actually act on must not go with it.
+      const guests = devices ? await devices.remoteStatus().catch(() => null) : null
+      return { here, elsewhere, guests }
     },
     writeToSession: (id, data) => sessions.writeToSession(id, data),
     onSessionCreated(callback) {
-      const offSessions = sessions.onSessionCreated(callback)
-      const offMachines = machines.onMachinesState(callback)
+      const offs = [
+        sessions.onSessionCreated(callback),
+        machines?.onMachinesState(callback),
+        // A device connecting, disconnecting, or saying what it is running all
+        // arrive on this one channel — `remote:connections` is pushed for every
+        // one of them, including when a device's own session list changes. The
+        // argument attached is ignored by the one consumer, which re-reads.
+        devices?.onRemoteConnections(callback),
+      ]
       return () => {
-        offSessions()
-        offMachines()
+        for (const off of offs) off?.()
       }
     },
     onSessionExit: (callback) => sessions.onSessionExit(callback),
@@ -507,6 +620,7 @@ function sessionsHere(value: unknown, named: NameSource): AgentSession[] {
       name,
       label: labelFor(session.cwd, index, name),
       machineId: '',
+      dialledIn: false,
       machineName: '',
       serverId: '',
       shellId: '',
@@ -565,6 +679,9 @@ function sessionsElsewhere(value: unknown, named: NameSource): AgentSession[] {
         provider: session.provider,
         ended: session.exitCode !== null,
         machineId: link.id,
+        // This desktop dialled that machine. See `AgentSession.dialledIn`, which
+        // is the whole difference between this branch and the guests below.
+        dialledIn: false,
         machineName,
         serverId: '',
         shellId: '',
@@ -639,10 +756,135 @@ function sessionsOnServers(
       provider: '',
       ended: shell.ended,
       machineId: '',
+      dialledIn: false,
       machineName: shell.serverName,
       serverId: shell.serverId,
       shellId: shell.shellId,
     })
+  }
+  return out
+}
+
+/**
+ * One device on the remote roster, as this picker needs to see it.
+ *
+ * Declared here rather than imported from `remote/server.ts` for the reason
+ * {@link AgentSession} mirrors `SessionMeta`: this module has to stay readable
+ * from a test with no window and no main process around it.
+ */
+interface GuestDevice {
+  deviceId: string
+  deviceName: string
+  connectedAt: number
+  sessions: unknown
+}
+
+/**
+ * The roster, out of whatever `remote:status` answered.
+ *
+ * Two shapes are read and both are real. The status object is what the invoke
+ * returns and what the adapter above hands over; a bare array is the connection
+ * list on its own, which is what the push carries and what a test hands in. A
+ * third shape is not guessed at — anything else is no devices, which is the same
+ * answer a desktop nobody has dialled gives.
+ */
+function readGuests(value: unknown): GuestDevice[] {
+  const rows = Array.isArray(value)
+    ? value
+    : typeof value === 'object' && value !== null && Array.isArray((value as Record<string, unknown>).connections)
+      ? ((value as Record<string, unknown>).connections as unknown[])
+      : []
+  const out: GuestDevice[] = []
+  for (const entry of rows) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const record = entry as Record<string, unknown>
+    const deviceId = typeof record.deviceId === 'string' ? record.deviceId : ''
+    const deviceName = typeof record.deviceName === 'string' ? record.deviceName : ''
+    // A device this window cannot name is not a row, the rule `sessionsElsewhere`
+    // takes about a machine missing from the machines view. A label is what
+    // somebody picks by, and `undefined · Session 1` is not one.
+    if (deviceId === '' || deviceName === '') continue
+    out.push({
+      deviceId,
+      deviceName,
+      connectedAt: typeof record.connectedAt === 'number' ? record.connectedAt : 0,
+      sessions: record.sessions,
+    })
+  }
+  return out
+}
+
+/**
+ * Everything running on the devices that dialled **in** to this app.
+ *
+ * ## Why this list exists, and what it unblocks
+ *
+ * The two lists above answer for this computer and for the computers this
+ * desktop dialled out to. A computer that dialled *in* was in neither, and the
+ * consequence was not a missing row — it was a whole direction of the browser
+ * feature that could never fire. `windowsHeldFor(deviceId)` in `index.ts` reads
+ * the binding map for windows filed under that device, `window.holds` carries the
+ * answer back to it, and its agent's browser verbs come here as `window.call`.
+ * Every one of those parts is built and every one of them was correct. They were
+ * all downstream of a menu that had no row to tick, so the answer was always the
+ * honest empty set.
+ *
+ * ## The newest connection wins, and nothing is merged
+ *
+ * A device can hold more than one socket for a moment — a reconnect whose old
+ * connection has not yet been noticed — and each carries its own announcement.
+ * Merging them would show a terminal that was closed on whichever list is stale.
+ * The newest is the one whose `sessions.mine` was sent most recently, so it is
+ * the whole answer for that device; a fresh connection that has not announced yet
+ * shows nothing for the round trip it takes, which is true rather than tidy.
+ *
+ * ## What listing one does *not* do
+ *
+ * It grants the guest nothing. Attaching a window here to a session over there
+ * files a relation in this app's own binding map and puts an id in a frame that
+ * device already receives; the verb it can then send is refused unless
+ * `WindowGrants.drives` says yes, which is read per call and defaults to no. The
+ * rows are also not send targets — see {@link AgentSession.dialledIn} for why
+ * that is the protocol rather than a policy.
+ */
+function sessionsOnDevices(value: unknown, named: NameSource): AgentSession[] {
+  const newest = new Map<string, GuestDevice>()
+  for (const device of readGuests(value)) {
+    const held = newest.get(device.deviceId)
+    if (held === undefined || device.connectedAt >= held.connectedAt) newest.set(device.deviceId, device)
+  }
+  const counts = new Map<string, number>()
+  const out: AgentSession[] = []
+  for (const device of newest.values()) {
+    if (!Array.isArray(device.sessions)) continue
+    for (const entry of device.sessions) {
+      const session = readSession(entry)
+      if (!session) continue
+      // Numbered per folder per device, the rule both lists above state: a
+      // terminal on his PC that read `Session 3` because two are open here would
+      // be a number matching nothing on either screen.
+      const key = `${device.deviceId}\u0000${session.cwd}`
+      const index = (counts.get(key) ?? 0) + 1
+      counts.set(key, index)
+      // That device's own word for it, which rode here in the announcement. This
+      // window's `named` map holds nothing about another computer's sessions and
+      // is passed rather than forked into a second rule, exactly as the machines
+      // branch does with the same argument.
+      const name = nameOf(session.id, session.cwd, session.title, named)
+      out.push({
+        id: session.id,
+        cwd: session.cwd,
+        name,
+        label: `${device.deviceName} · ${labelFor(session.cwd, index, name)}`,
+        provider: session.provider,
+        ended: session.ended,
+        machineId: device.deviceId,
+        dialledIn: true,
+        machineName: device.deviceName,
+        serverId: '',
+        shellId: '',
+      })
+    }
   }
   return out
 }
@@ -692,7 +934,8 @@ function distinctLabels(rows: readonly AgentSession[]): AgentSession[] {
  * than being thrown in with the first project's, because it belongs to none.
  *
  * This machine's sessions come first, then the ones on paired machines, then the
- * shells open on servers — grouped by the computer they run on. Same order as
+ * ones on devices that dialled in, then the shells open on servers — grouped by
+ * the computer they run on. Same order as
  * the machine picker beside it, where "this machine" is always the first row and
  * the servers are last, and the useful order besides.
  *
@@ -715,6 +958,11 @@ export function readSessions(
   return distinctLabels([
     ...sessionsHere(envelope.here, named),
     ...sessionsElsewhere(envelope.elsewhere, named),
+    // The computers that dialled **this** one, between the machines it dialled
+    // and the servers it holds shells on. Grouped by computer like the two
+    // around it, and last of the two remote kinds because a device is somebody
+    // else's machine reaching in rather than one of his this app went and got.
+    ...sessionsOnDevices(envelope.guests, named),
     ...servers,
   ])
 }
@@ -743,6 +991,16 @@ export function readSessions(
  *    far end knows, and its `machineId` is empty, which the binding map reads as
  *    *this computer* — so the relation would be filed under a key naming a
  *    session that does not exist on the machine it claims.
+ *
+ * ## And one kind of row that is in this list and not in the send list, which is
+ * the opposite trade
+ *
+ * A session on a computer that **dialled in**. It cannot be typed into from here
+ * and {@link resolveTarget} refuses it, but attaching is exactly what it is for:
+ * the person is at this screen, the page is in this app, the agent is over there,
+ * and until that row existed `windowsHeldFor` answered every device the empty set
+ * and the whole return path built for it could never fire. So the two filters are
+ * not one filter with a sign on it, and neither is derived from the other.
  *
  * A pure function rather than a filter written at the one call site, because
  * "which rows may be attached to" is a rule and the call site is a menu. The day
@@ -782,6 +1040,12 @@ export function resolveTarget(
   const found = sessions.find((session) => session.id === chosenId)
   if (!found || found.ended) return null
   if (found.serverId !== '' && found.shellId === '') return null
+  // And a fifth, which is a *direction* rather than a state and does not clear:
+  // a session on a computer that dialled in. It is listed because a browser
+  // window here can be attached to it — that is the whole reason the list exists
+  // — and it is refused here because no frame in this protocol carries a
+  // keystroke that way. See {@link AgentSession.dialledIn}.
+  if (found.dialledIn) return null
   return found
 }
 
@@ -839,6 +1103,23 @@ export function whyDisabled(
   // works a second later with no explanation of why it did not before.
   if (found.serverId !== '' && found.shellId === '') {
     return `That terminal on ${found.machineName} is still opening.`
+  }
+  /*
+   * And the one refusal on this list that names the *other* thing the row can do.
+   *
+   * A session on a computer that dialled in is here to be attached to a window,
+   * which is a press away in this same browser's Session menu, and that is what
+   * the sentence has to say — a person reading "cannot" about a row the app is
+   * offering them will read it as broken rather than as pointed the other way.
+   *
+   * It is not a gate that could be opened here. `session.send` is a frame a
+   * client sends its host, and on a link somebody else dialled this app is the
+   * host; there is no verb going the other way, and inventing one would be
+   * handing this keyboard every terminal on a computer that only ever asked to
+   * reach this one.
+   */
+  if (found.dialledIn) {
+    return `${found.machineName} dialled in to this computer. Attach a window to that session instead, or send it from ${found.machineName}.`
   }
   /*
    * Two sentences about machines used to live here — one for a list that was

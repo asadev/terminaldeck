@@ -683,6 +683,22 @@ export interface RemoteConnection {
   /** Sessions this phone is currently watching. */
   sessionIds: string[]
   /**
+   * Sessions running on **that device's** own computer, as it announced them.
+   *
+   * Empty for every phone, and that is the ordinary case rather than a gap: a
+   * browser tab has no ptys and nothing to announce. Non-empty only for another
+   * desktop running this app, which sends `sessions.mine` on `hostWindows`.
+   *
+   * Here rather than on its own channel because it changes exactly when the rest
+   * of this row does and travels on the push that already exists — and because
+   * the one screen that needs it, the browser's attach menu, needs the device's
+   * *name* in the same breath to label the rows with.
+   *
+   * Never confuse it with {@link sessionIds} above, which is this machine's
+   * sessions that device is watching. Opposite computers, opposite directions.
+   */
+  sessions: RemoteSession[]
+  /**
    * Ports on this Mac this phone currently has a page open on.
    *
    * Listed for the same reason the sessions are: while a tunnel is live, a
@@ -1621,6 +1637,18 @@ interface LiveConnection {
    * request that times out instead of one that was never asked.
    */
   capabilities: string[]
+  /**
+   * What that device says is running on its own computer, from `sessions.mine`.
+   *
+   * Replaced whole every time the frame arrives, never merged: the frame is the
+   * device's whole answer, so a merge would keep a terminal it has closed. Empty
+   * until one arrives, which for a phone is forever.
+   *
+   * Held per connection rather than per device, like `capabilities` above and for
+   * the same reason: it describes a running app, and a device that has gone has
+   * nothing running. The list leaves with the socket.
+   */
+  sessions: RemoteSession[]
   handles: Map<string, SessionHandle>
   /**
    * Made on the first `localhost` verb and not before.
@@ -2152,6 +2180,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         address: connection.address,
         connectedAt: connection.connectedAt,
         sessionIds: [...connection.handles.keys()],
+        sessions: [...connection.sessions],
         tunnels: connection.tunnels?.list() ?? [],
       })
     }
@@ -4436,6 +4465,53 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         options.windows?.held(connection.deviceId, message.sessions)
         return
       }
+      case 'sessions.mine': {
+        /*
+         * A device saying what is running on **its** computer, so this app can
+         * offer one of those sessions in its own attach menu.
+         *
+         * ## Why this frame is the whole of the fourth case
+         *
+         * `windowsHeldFor` in `index.ts` filters the binding map for bindings
+         * whose machine is this device, and for as long as this frame did not
+         * exist that filter was correct and always empty. The picker that mints
+         * bindings — `renderer/browser/agent-target.ts` — is built from this
+         * machine's own ptys and from the machines this desktop *dialled out to*,
+         * and a device that dialled *in* is in neither list. So nobody at this
+         * keyboard could attach a window to one of its sessions, so no binding
+         * was ever filed under its id, so the `window.holds` this app sends it
+         * was the honest empty set, so its agent's browser verbs had nowhere to
+         * go. Three of the four directions worked; this was the fourth.
+         *
+         * ## What accepting it does and does not do
+         *
+         * It writes a list of rows on this socket and pushes the roster. That is
+         * all. It is not a grant, it authorises nothing, and it cannot: there is
+         * no verb in this protocol by which this host types into, starts, reads or
+         * closes a session on a device, and none is added here. The one thing it
+         * unlocks is a row in a menu on this screen, and the browser verb that row
+         * leads to arrives as `window.call` — refused unless `WindowGrants.drives`
+         * says yes, read per call, defaulting to no.
+         *
+         * A device naming sessions it does not have has arranged for its own
+         * frames to come back refused, exactly as `window.holds` above: the verb
+         * is resolved over there, inside that session's own binding.
+         *
+         * ## Why it is dropped rather than refused when this host cannot use it
+         *
+         * `serveWindows` absent means this build has no browser to drive, so a
+         * window could never be attached to one of these rows and the list would
+         * be a menu of dead entries. A client only sends this after this host
+         * advertised `hostWindows`, which is advertised on the same dep — so a
+         * frame arriving without it is a client talking to an older desktop, and
+         * an announcement nobody asked for is dropped rather than made a reason to
+         * close somebody's link.
+         */
+        if (options.serveWindows === undefined) return
+        connection.sessions = message.sessions
+        announce()
+        return
+      }
       case 'window.result': {
         /*
          * A device answering a browser verb this machine asked it to run.
@@ -4659,6 +4735,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       platform: '',
       peerPublicKey: peerPublicKey ?? null,
       capabilities: [],
+      sessions: [],
       handles: new Map(),
       tunnels: null,
       uploads: null,

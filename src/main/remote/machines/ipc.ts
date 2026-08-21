@@ -31,7 +31,14 @@
  */
 
 import { createRemoteReach, type ReachAnswer, type RemoteReach } from '../../localhost-reach'
-import { CONTROL_IDS, MAX_URL_LENGTH, USAGE_WANTS, emptyUsageReading, type WindowCallFrame } from '../protocol'
+import {
+  CONTROL_IDS,
+  MAX_URL_LENGTH,
+  USAGE_WANTS,
+  emptyUsageReading,
+  type RemoteSession,
+  type WindowCallFrame,
+} from '../protocol'
 import { DEFAULT_RELAY_URL } from '../../../shared/relay-wire'
 import type { InvokeRegistrar } from '../../ipc-seam'
 import type { PairingToken } from '../device-auth'
@@ -195,6 +202,21 @@ export interface MachinesIpcDeps {
    */
   windowsHeld?(machineId: string): readonly string[]
   /**
+   * What is running on **this** machine, for every link to say to its machine.
+   *
+   * Not keyed by machine, unlike {@link windowsHeld} above, and the asymmetry is
+   * the point rather than an oversight. That one answers *which of your sessions
+   * I hold a window for*, which is a different set per machine and must be: one
+   * paired computer does not get to hear about another's terminals. This one is
+   * this desktop describing its own screen, and a paired machine already sees
+   * every session on the machine it dialled — `sessions` carries exactly this
+   * list in the other direction. There is nothing per-machine to decide.
+   *
+   * Absent means this build has no sessions to describe, and absence is the
+   * switch: a link with no source never sends the frame at all.
+   */
+  ownSessions?(): readonly RemoteSession[]
+  /**
    * That machine has said which of **this** one's sessions it is holding a
    * browser window for.
    *
@@ -330,6 +352,23 @@ export interface MachinesIpc {
    * which is the moment the far machine's table is empty anyway.
    */
   announceWindows(): void
+  /**
+   * A session was started or ended at **this** keyboard. Tell every machine this
+   * desktop dialled what is running here now.
+   *
+   * The mirror of `RemoteEndpoint.sessionsChanged`, which does the same job for
+   * the devices that dialled *in*, and the two are called together for the same
+   * reason: a list that is a snapshot from the moment a link came up is a picker
+   * that is wrong for as long as the link stays up. Measured once already on the
+   * other direction — a far machine went 2 → 5 → 7 sessions while the reaching
+   * one said 2 for sixty seconds.
+   *
+   * Every link rather than the one that changed, because the fact is about this
+   * computer rather than about any of them. A link that is down, or on a machine
+   * too old to know the frame, sends nothing and re-announces on its next
+   * welcome, which is the moment the far machine's list is empty anyway.
+   */
+  announceSessions(): void
   /** The machine woke up. Redial every link that is meant to be up. */
   wake(): void
   /** Drop every link and stop the beacon. For shutdown. */
@@ -524,6 +563,12 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
       ...(deps.windowsHeld === undefined
         ? {}
         : { windowsHeld: () => deps.windowsHeld!(machine.id) }),
+      /*
+       * And what is running here, for that machine's own attach menu. Spread on
+       * the same rule: absence is what the link reads to decide whether to send
+       * the frame at all.
+       */
+      ...(deps.ownSessions === undefined ? {} : { ownSessions: () => deps.ownSessions!() }),
       /*
        * And the mirror pair: what that machine says it is holding for *us*, and
        * where its answers land.
@@ -1394,6 +1439,9 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     drivesWindows: (machineId: string): boolean => store.drivesWindows(machineId),
     announceWindows(): void {
       for (const link of links.values()) link.announceWindows()
+    },
+    announceSessions(): void {
+      for (const link of links.values()) link.announceSessions()
     },
     askWindow(machineId: string, call: WindowCallFrame): number {
       const link = links.get(machineId)

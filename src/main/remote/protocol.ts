@@ -865,6 +865,22 @@ export const MAX_WINDOW_RESULT_BYTES = 48 * 1024
  */
 export const MAX_WINDOW_HOLDS = 128
 
+/**
+ * How many sessions one client may say are running on **its** computer.
+ *
+ * The mirror of {@link MAX_WINDOW_HOLDS}, one frame over, and the same bargain:
+ * the list arrives from another computer and is kept in a `Map` on this one, so
+ * the size of it must not be somebody else's to choose. Trimmed rather than
+ * refused, for the same reason — a person with a hundred and twenty-ninth
+ * terminal open on their PC should lose the hundred and twenty-ninth row in a
+ * picker, not the link that carries their terminals.
+ *
+ * The same number as the window cap on purpose. They bound the two halves of one
+ * relation — a session that can be listed and a window that can be attached to
+ * it — and two numbers would be a pair somebody has to keep in step.
+ */
+export const MAX_ANNOUNCED_SESSIONS = 128
+
 /* ------------------------------------------------ the three window frames -- */
 
 /**
@@ -2136,6 +2152,40 @@ export type ClientMessage =
    * that session's own binding by `deck-control`.
    */
   | WindowCallFrame
+  /**
+   * The sessions running on **that device's** computer, so this host can put one
+   * of its browser windows beside one of them.
+   *
+   * Capability `hostWindows`, and the fact without which that capability could
+   * never fire. `window.holds` below is this host saying *which of your sessions
+   * I am holding a window for*; the answer was always the empty set, because
+   * nothing in this app could name a session on a device that dialled in. A
+   * window is attached from a menu, and a menu is built from a list, and this
+   * host had no list: `list` and `sessions` carry **this** machine's ptys to the
+   * device, and nothing carried the device's back.
+   *
+   * It cannot be derived here and it is not a thing to ask for. It is a `Map` in
+   * the other app's process that changes whenever somebody opens a terminal over
+   * there, so it is *said* — the same argument {@link WindowHoldsFrame} makes
+   * about the relation going the other way, and the same shape of answer: the
+   * whole set every time, empty included, so a device that closed its last
+   * terminal is correct by sending and a link that dropped is correct by
+   * reconnecting.
+   *
+   * ## What it is not
+   *
+   * Not a grant and not a request. Nothing on this host may type into these
+   * sessions, start one, read one or close one — there is no verb in this
+   * direction that could, and none is added by this frame. The one thing it
+   * enables is a row in a picker on the screen the person is sitting at, and the
+   * verb that row leads to is `window.call` **from that device**, which is gated
+   * where it always was: `window-grants.ts`, read per call, defaulting to no.
+   *
+   * Trimmed to {@link MAX_ANNOUNCED_SESSIONS} and unreadable rows dropped, never
+   * refused. A device describing its own screen must not be able to lose its link
+   * over the shape of one row.
+   */
+  | { t: 'sessions.mine'; sessions: RemoteSession[] }
   /**
    * Which of **this host's** sessions that device is holding a browser window
    * for. Capability `windows`.
@@ -4040,6 +4090,24 @@ export function parseClientMessage(raw: unknown): ParseResult {
      */
     case 'window.call':
       return fromWindowRead(readWindowCall(parsed))
+    /*
+     * And the list that makes the mirror reachable: the sessions on that
+     * device's own computer.
+     *
+     * Bad rows are dropped and a long list is trimmed rather than refused, the
+     * rule `readWindowHolds` states one function down and for the same reason:
+     * the frame is a peer describing its own screen, and a link that closes over
+     * the shape of one row costs somebody every terminal on it.
+     *
+     * A frame with no `sessions` array at all is refused, because that is not a
+     * peer with nothing running — that is a peer sending something else. "Nothing
+     * running" has a spelling, and it is `[]`.
+     */
+    case 'sessions.mine': {
+      const rows = sessionRows(parsed.sessions)
+      if (rows === null) return bad('sessions.mine without a session list')
+      return { ok: true, message: { t: 'sessions.mine', sessions: rows.slice(0, MAX_ANNOUNCED_SESSIONS) } }
+    }
     case 'credential.deny': {
       const requestId = id(parsed.id)
       if (!requestId) return bad('credential.deny without an id')

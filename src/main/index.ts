@@ -526,9 +526,56 @@ const bindingDeps = {
    * a session in this window has its windows here, and a session on a paired
    * machine reaches them over `window.call`.
    */
-  whyNotDrive: (session: { sessionId: string }): string | null =>
-    servers?.whyNotDrive(session.sessionId) ?? null,
+  whyNotDrive: (session: { sessionId: string; machineId: string }): string | null =>
+    servers?.whyNotDrive(session.sessionId) ?? guestWindows?.refusal(session.machineId) ?? null,
+  /*
+   * And the tick that clears that refusal, offered in the menu it appears in.
+   *
+   * Read through `guestWindows` rather than captured for the reason `endDrive`
+   * and `whyNotDrive` are: this object is built at module scope and the trust
+   * store is created inside `registerIpc`. Null before then draws no row, which
+   * is right — nothing can have dialled in yet.
+   */
+  windowGrantFor: (machineId: string) => guestWindows?.grant(machineId) ?? null,
+  setWindowGrant: (machineId: string, allowed: boolean) => {
+    guestWindows?.set(machineId, allowed)
+  },
 }
+
+/**
+ * Why a session on a device that dialled **in** would attach to a window here
+ * and then be refused, or null.
+ *
+ * Set inside `registerIpc`, where the trust store and the grant store are, for
+ * the reason `servers` above is read late: this object is built at module scope
+ * and neither exists yet. Null until then, which is the honest answer for a menu
+ * popped before the remote layer is assembled.
+ *
+ * ## Why the menu says it rather than the refusal
+ *
+ * Because the refusal happens on the other computer, some minutes later, in the
+ * middle of an agent's turn. `window-serve.ts` writes a good sentence and names
+ * this exact switch — but a person who ticked a row here and walked to the other
+ * machine has already spent the trip. The grant defaults to off and always will,
+ * so this is the ordinary path rather than an edge, and the place to say it is
+ * the moment somebody is choosing the session.
+ *
+ * ## Why it answers null for everything it is not certain about
+ *
+ * The id it is given is the computer the session runs on, and three different
+ * stores mint those. It answers only for an id the pairing store knows — a
+ * device — and null for a machine this desktop dialled, a server, and this
+ * computer. A warning printed against the wrong id space would be a row that
+ * says it cannot drive a window it can drive, which is worse than the trip.
+ */
+let guestWindows: {
+  /** The sentence, or null when there is nothing to warn about. */
+  refusal(machineId: string): string | null
+  /** The device's name and whether it may drive, or null when the id is not a device. */
+  grant(machineId: string): { name: string; allowed: boolean } | null
+  /** Write the tick. The same store the Settings panel writes. */
+  set(machineId: string, allowed: boolean): void
+} | null = null
 
 /**
  * Latest status per live session. PtyManager only pushes status through its
@@ -863,6 +910,10 @@ const core = createHostCore({
     // The other end of the same push: a row this Mac dropped has to leave the
     // phone's list too, not sit there until it reconnects.
     remoteLayer?.server.sessionsChanged()
+    // And the paired machines, for the same reason and in the same breath: a
+    // session that has gone must leave their attach menus, or somebody over there
+    // ticks a row whose pty this process dropped.
+    machinesIpc?.announceSessions()
     // The other half of the pair above: this is the app letting go of the
     // session entirely, so its rows go and its binding colour is free again.
     sessionRemoved(id)
@@ -889,6 +940,10 @@ const core = createHostCore({
     // carries the measurement. Guarded because a session restored at launch can
     // exist before the remote layer is assembled.
     remoteLayer?.server.sessionsChanged()
+    // And every machine this desktop dialled, which is the same staleness one
+    // wire over: over there this Mac is a device that dialled in, and its attach
+    // menu is built from what this line sends. See `MachinesIpc.announceSessions`.
+    machinesIpc?.announceSessions()
   },
   // The window has to be told, or a session a phone started is running on this
   // Mac and only the phone knows about it.
@@ -2569,6 +2624,35 @@ function registerIpc(): void {
   // Held for the core's session hooks, which are written at module scope and
   // run long after this. See `remoteLayer`.
   remoteLayer = remote
+  /*
+   * And the connect menu's warning for a session on a device that dialled in.
+   *
+   * Both halves are here and nowhere else: `remote.auth` is the only list of
+   * paired devices, and `core.windowGrants` is the store the tick writes to. Read
+   * per call rather than captured, the rule every window grant in this app is
+   * read by — a person who ticks the box and pops the menu again must see the row
+   * change, not the state it was in when the app launched.
+   */
+  guestWindows = {
+    grant: (machineId) => {
+      if (machineId === '') return null
+      const device = remote.auth.listDevices().find((known) => known.id === machineId)
+      if (device === undefined) return null
+      return { name: device.name || 'that device', allowed: core.windowGrants.drives(machineId) }
+    },
+    refusal: (machineId) => {
+      const grant = guestWindows?.grant(machineId) ?? null
+      if (grant === null || grant.allowed) return null
+      // Names the row directly below it rather than a panel across the app,
+      // because that row is now in this menu. The panel is still where the whole
+      // list lives and still says the same thing; this sentence is for the one
+      // computer somebody is looking at.
+      return `${grant.name} has not been allowed to act on browser windows here — the tick is at the bottom of this menu.`
+    },
+    set: (machineId, allowed) => {
+      core.windowGrants.set(machineId, allowed)
+    },
+  }
   // Re-dial the relay the instant the machine wakes, rather than polling the
   // clock to work out that it did. A socket that slept through a suspend is
   // usually dead and TCP will not admit it for minutes — minutes in which a
@@ -2627,6 +2711,22 @@ function registerIpc(): void {
       bindingView()
         .sessions.filter((binding) => binding.machineId === machineId && binding.windows.length > 0)
         .map((binding) => binding.sessionId),
+    /*
+     * And the mirror of that fact, which is what makes the *fourth* arrangement
+     * possible at all: what is running **here**, told to every machine this
+     * desktop dialled.
+     *
+     * A paired computer sees the sessions on the machine it dialled, because the
+     * host pushes them. It has never seen the sessions on a machine that dialled
+     * *it* — over there this desktop is a device that dialled in, and its session
+     * picker is built from its own ptys plus the machines it dialled out to. So a
+     * person sitting at that computer could not put one of its browser windows
+     * beside a session running here, however much they wanted to.
+     *
+     * The same list the devices get, off the same fanout, so `hidden-sessions.ts`
+     * applies once and in one place: a session unlisted here is unlisted there.
+     */
+    ownSessions: () => remoteSessions.list(),
     serveWindows: (machineId, call) =>
       serveWindowCall(
         {

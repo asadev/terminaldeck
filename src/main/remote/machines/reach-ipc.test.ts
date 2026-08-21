@@ -137,6 +137,7 @@ function rig(options: { online: boolean }): Rig {
         connect: () => undefined,
         disconnect: () => undefined,
         announceWindows: () => true,
+        announceSessions: () => true,
         askWindow: () => true,
         servesWindows: () => true,
         wake: () => undefined,
