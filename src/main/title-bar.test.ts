@@ -120,9 +120,20 @@ const SHARED = declarations(TOKENS, RULES.shared)
 type Rgb = [number, number, number]
 
 function parseColour(value: string): { rgb: Rgb; alpha: number } {
-  const hex = /^#([0-9a-f]{6})$/i.exec(value)
+  // Both hex lengths, because the sheets use both: the palette writes six
+  // digits, and `Modal.css` writes the scrim's black as `#000`. A parser that
+  // knew only one of them threw `cannot read the colour #000` — a message that
+  // names a colour and says nothing about the shorthand it could not read.
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value)
   if (hex) {
-    const n = Number.parseInt(hex[1], 16)
+    const digits =
+      hex[1].length === 3
+        ? hex[1]
+            .split('')
+            .map((digit) => digit + digit)
+            .join('')
+        : hex[1]
+    const n = Number.parseInt(digits, 16)
     return { rgb: [(n >> 16) & 255, (n >> 8) & 255, n & 255], alpha: 1 }
   }
   const rgba = /^rgba?\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\s*\)$/.exec(value)
@@ -297,6 +308,133 @@ describe('the Windows overlay is painted in the colours of the bar it sits in', 
     // A dark strip on a light header is a visible bug, and the theme can be
     // changed at any moment from Settings.
     expect(overlayFor('win32', 'dark')).not.toEqual(overlayFor('win32', 'light'))
+  })
+})
+
+describe('a dialog over the window takes the window buttons down with it', () => {
+  /*
+   * *"when I click on settings in the windows side the buttons for minimise
+   * maximise and close on the right corner comes stays light so they should
+   * also get dull just like anything else"* — the Windows pass, 2026-08-21.
+   *
+   * `.modal-overlay` dims every pixel the renderer draws and cannot touch the
+   * three the OS draws, because they are painted above the page. So the scrim
+   * is composited here instead, and — exactly like the two colours above — the
+   * result is a hand-copy of tokens that has to be checked against them rather
+   * than trusted. `Modal.css` is the second sheet the main project cannot
+   * import and can only read as text.
+   */
+  const MODAL = lf(
+    readFileSync(join(ROOT, 'src', 'renderer', 'components', 'Modal.css'), 'utf8'),
+  )
+  const SCRIM: Record<Appearance, Map<string, string>> = {
+    light: declarations(MODAL, RULES.light),
+    dark: declarations(MODAL, RULES.dark),
+  }
+
+  /**
+   * `--modal-scrim` as a colour and an alpha.
+   *
+   * Both appearances write it as `color-mix(in srgb, X <pct>%, transparent)`,
+   * which in sRGB is exactly "X at that alpha": premultiplying X by the
+   * percentage and un-premultiplying by the resulting alpha returns X unchanged.
+   * `X` is a hex in the dark theme and `var(--text-primary)` in the light one,
+   * so the token is resolved out of `tokens.css` rather than copied again here.
+   */
+  function scrim(appearance: Appearance): { rgb: Rgb; alpha: number } {
+    const value = SCRIM[appearance].get('--modal-scrim') ?? ''
+    const mix = /^color-mix\(in srgb, (.+) ([\d.]+)%, transparent\)$/.exec(value)
+    expect(mix, `--modal-scrim is no longer a color-mix in the ${appearance} theme: ${value}`)
+      .not.toBeNull()
+    const [, colour, percent] = mix as RegExpExecArray
+    const token = /^var\((--[\w-]+)\)$/.exec(colour)
+    const resolved = token ? (THEME[appearance].get(token[1]) ?? '') : colour
+    expect(resolved, `${colour} does not resolve in the ${appearance} theme`).not.toBe('')
+    return { rgb: parseColour(resolved).rgb, alpha: Number(percent) / 100 }
+  }
+
+  for (const appearance of ['dark', 'light'] as const) {
+    it(`${appearance}: the strip is the bar with the scrim over it`, () => {
+      const bright = overlayFor('win32', appearance)
+      const dim = overlayFor('win32', appearance, true)
+      expect(
+        dim?.color,
+        `The window buttons are painted ${dim?.color} while a dialog is open, but the bar ` +
+          `beside them is ${hex(composite(scrim(appearance), parseColour(bright?.color ?? '').rgb))} ` +
+          'under the same scrim. The OS paints that strip outside the page, so it cannot read ' +
+          'Modal.css — update the copy in title-bar.ts, and the arithmetic in the comment above it.',
+      ).toBe(hex(composite(scrim(appearance), parseColour(bright?.color ?? '').rgb)))
+    })
+
+    it(`${appearance}: the symbols go down with the strip they are drawn on`, () => {
+      /*
+       * The half that is easy to forget. Dimming only the background paints
+       * full-strength glyphs on a dimmed field — higher contrast than they had
+       * before the dialog opened, which is the defect getting *worse* rather
+       * than fixed. A scrim over a strip covers the marks on it too.
+       */
+      const bright = overlayFor('win32', appearance)
+      expect(overlayFor('win32', appearance, true)?.symbolColor).toBe(
+        hex(composite(scrim(appearance), parseColour(bright?.symbolColor ?? '').rgb)),
+      )
+    })
+
+    it(`${appearance}: dimming does not resize the strip`, () => {
+      // The height is the toolbar's, whatever is open over it. A different one
+      // here would make the buttons jump a band the moment Settings opened.
+      expect(overlayFor('win32', appearance, true)?.height).toBe(OVERLAY_HEIGHT)
+    })
+  }
+
+  it('is the same null on every platform that has no overlay to dim', () => {
+    // The guard has to come first in both readings, or a dimmed dialog on macOS
+    // calls a method that does not exist there.
+    expect(overlayFor('darwin', 'dark', true)).toBeNull()
+    expect(overlayFor('linux', 'light', true)).toBeNull()
+  })
+
+  it('brightens again, and to the theme that is on rather than the one it dimmed from', () => {
+    // One function reads both inputs for this reason: a "dim" that forgot the
+    // theme would hand a light window back its dark hex on the way out.
+    expect(overlayFor('win32', 'light', false)).toEqual(overlayFor('win32', 'light'))
+    expect(overlayFor('win32', 'dark', true)).not.toEqual(overlayFor('win32', 'light', true))
+  })
+
+  it('defaults to the bright strip, which is what a window is built with', () => {
+    // `titleBarChrome` runs before anything can be open over the window.
+    expect(titleBarChrome('win32', 'dark').titleBarOverlay).toEqual(overlayFor('win32', 'dark'))
+  })
+
+  it('is actually reached from index.ts, with the renderer as the trigger', () => {
+    /*
+     * The claim that the wiring exists at all — the shape of failure that has
+     * bitten this seam three times (`preload/contract.test.ts` opens with the
+     * list). There is no Electron here to open a dialog in, so what can be
+     * checked is that the channel the preload sends on is handled, and that the
+     * handler is the one that repaints the strip.
+     */
+    const INDEX = lf(readFileSync(join(ROOT, 'src', 'main', 'index.ts'), 'utf8'))
+    expect(INDEX).toContain("ipcMain.on('window:dimmed'")
+    expect(INDEX).toContain('chromeDimmed')
+    expect(INDEX).toContain('overlayFor(process.platform, appearance(), chromeDimmed)')
+  })
+
+  it('lets go of the dim when the renderer holding it is replaced', () => {
+    /*
+     * The one door the renderer cannot close behind itself. A reload throws the
+     * page away without unmounting anything, so the counter on that side
+     * restarts at zero while this side is still holding `true` — dim caption
+     * buttons over a window with no dialog in it, which is this defect
+     * inside out. Both places a renderer can be replaced have to clear it.
+     */
+    const INDEX = lf(readFileSync(join(ROOT, 'src', 'main', 'index.ts'), 'utf8'))
+    const resets = [...INDEX.matchAll(/^\s*chromeDimmed = false$/gm)]
+    expect(
+      resets.length,
+      'a new page has nothing open over it. Clear the flag where the window is built and where ' +
+        'its contents finish loading, or a reload with Settings open leaves the window buttons dim.',
+    ).toBe(2)
+    expect(INDEX).toContain("mainWindow.webContents.on('did-finish-load'")
   })
 })
 

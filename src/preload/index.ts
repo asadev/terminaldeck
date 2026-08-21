@@ -34,6 +34,23 @@ const api = {
   setPreferences: (patch: Record<string, unknown>): Promise<Record<string, unknown>> =>
     ipcRenderer.invoke('prefs:set', patch),
 
+  /*
+   * A dialog is over the window, or is not.
+   *
+   * The one piece of pure layout state that has to cross this bridge, because
+   * on Windows three of the window's controls are not drawn by the window: the
+   * OS paints minimise, maximise and close into a strip above the page, where a
+   * scrim laid over `document.body` cannot reach them. Settings opened onto a
+   * dimmed app with those three still at full brightness.
+   *
+   * `send`, not `invoke`: there is no answer to wait for, and a dialog must not
+   * be gated on a round trip. Fire-and-forget on every platform — the main side
+   * is a no-op wherever there is no overlay to repaint.
+   */
+  setChromeDimmed: (dimmed: boolean): void => {
+    ipcRenderer.send('window:dimmed', dimmed)
+  },
+
   /* --------------------------- stored values changed from somewhere else -- */
   /*
    * The two channels that close the gap between *saved* and *applied*.

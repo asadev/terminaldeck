@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { chromeDim } from '../shell/chrome-dim'
 import './Modal.css'
 
 /**
@@ -114,6 +115,27 @@ export function Modal({
   useEffect(() => {
     if (!open || hidden) return
     panelRef.current?.focus()
+  }, [open, hidden])
+
+  /*
+   * Take the window's own buttons down with the rest of the chrome.
+   *
+   * The scrim below dims every pixel the renderer draws. On Windows it does not
+   * dim the three the OS draws — minimise, maximise and close are painted into
+   * the strip above the page, outside anything a stylesheet can reach — so
+   * opening Settings left them at full brightness in the corner of a dimmed
+   * window. `shell/chrome-dim.ts` counts the surfaces and the main process
+   * repaints the strip; this is every dialog in the app, so it is one effect
+   * here rather than one per caller.
+   *
+   * `open && !hidden`, not `open`. `hidden` is the dialog stepping aside for a
+   * native panel, and it steps aside by `display: none` — there is no scrim on
+   * the window while a system file picker owns it, so there is nothing for the
+   * buttons to be dim with. They come back down when the dialog does.
+   */
+  useEffect(() => {
+    if (!open || hidden) return
+    return chromeDim.dim()
   }, [open, hidden])
 
   // Escape is bound on the window, not the panel, so it still fires if focus

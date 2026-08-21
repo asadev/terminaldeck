@@ -198,11 +198,20 @@
   /*
     Aligned to the traffic lights, not to this box.
 
-    `main/index.ts` places the lights at `{ x: 14, y: 12 }` and they are 14px
-    across, so their centre line is at y = 19. Centring a 28px control in a 44px
-    gutter puts its centre at 22 — three pixels low, which is exactly the kind
-    of miss that reads as "something is slightly off" without anyone being able
-    to name it. Starting the control at 5 puts its centre on 19 with them.
+    `main/title-bar.ts` places the lights at `{ x: 14, y: 12 }` and they are 14px
+    across, so their centre line is at y = 19. Centring a 28px control in this
+    gutter puts its centre at 24 — five pixels low, which is exactly the kind of
+    miss that reads as "something is slightly off" without anyone being able to
+    name it. Starting the control at 5 puts its centre on 19 with them.
+
+    (The gutter was 44px tall when that was first written and the sentence said
+    22 and "three pixels". It is `--toolbar-h` now, for the hairline reason
+    above, so the arithmetic has been corrected in place: superseded *reasoning*
+    is worth keeping, a superseded number is just wrong.)
+
+    On Windows there are no lights and nothing else is on 19 —
+    `:root[data-window-controls] .sidebar-gutter` below puts this back to centre
+    there, the same way it undoes the 82px on the left.
   */
   align-items: flex-start;
   /* Horizontally: immediately right of the traffic lights, not at the rail's
@@ -1092,20 +1101,6 @@
      which reads as a layout that overflowed rather than one that was set. */
   padding: 0 var(--sp-3) 0 var(--sp-4);
   /*
-    And on Windows, the room the OS takes for its own window buttons.
-
-    They are drawn *over* the page, in the top-right corner of this bar, so
-    nothing in the document knows they are there — the mode switch would sit
-    underneath the close button, three words that cannot be clicked. The number
-    is measured and published by `window-controls.ts`; it is deliberately a
-    custom property with a zero fallback so that every platform that has no
-    overlay resolves this to exactly the padding it had before.
-
-    Not a constant: the caption buttons are one width on Windows 10, another on
-    Windows 11, another again maximised, and they scale with the display.
-  */
-  padding-right: calc(var(--sp-3) + var(--window-controls-inset, 0px));
-  /*
     The bar is what you drag the window by, which is the whole job the title bar
     used to do. Every control on it opts back out — `.toolbar-btn`,
     `.toolbar-chips` and `.toolbar-actions` below — and that is not politeness:
@@ -1147,6 +1142,51 @@
      dissolving into a pale page, and a dark one from floating over a black
      terminal with no edge at all. */
   box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+
+/*
+  On Windows, the room the OS takes for its own window buttons — and only when
+  this bar is the one they are in.
+
+  They are drawn *over* the page, in the top-right corner of the window's **top
+  band**, so nothing in the document knows they are there and whatever that band
+  puts on its right-hand side ends up underneath them. The number is measured and
+  published by `window-controls.ts`; it is deliberately a custom property with a
+  zero fallback so that every platform that has no overlay resolves this to
+  exactly the padding it already had.
+
+  Not a constant: the caption buttons are one width on Windows 10, another on
+  Windows 11, another again maximised, and they scale with the display.
+
+  ## `:not([data-under-strip])` — 2026-08-21
+
+  This used to be a declaration inside `.toolbar` above, applied whether this
+  bar was the top band or not, and it was wrong for the case that is on screen
+  most of the time. `main/title-bar.ts` sets the overlay `OVERLAY_HEIGHT` tall
+  and that is `--toolbar-h` — *one* band. With a tab strip open the strip is that
+  band and this bar is the one below it, entirely clear of the buttons, so the
+  reserve was holding empty room against nothing.
+
+  Measured on his PC at 1920×1080: the session bar's controls — the model, the
+  effort, chat, split — stopped 160px short of the window's right edge, with a
+  clean unused strip beside them, while the same controls sit flush right on the
+  Mac. *"the spacing in the windows is not better and all the buttons like
+  switch mode and all of these are not in the extreme right corner … buttons
+  should go extreme right according to the screen size it should utilize the
+  whole space."*
+
+  The strip keeps its own copy of this (`.strip` in `WorkspaceTabStrip.css`),
+  because when there is a strip the buttons really are in it. So the reserve
+  follows the band the OS is drawing into, and every other row of the window
+  uses the window's full width.
+
+  Written into the selector rather than as a `padding-right` override on
+  `.toolbar[data-under-strip]` below, for the reason the lights-reserve rules
+  further down give: a state this bar has two answers for reads as two rules
+  with one reason each, not as one rule and a correction.
+*/
+.toolbar:not([data-under-strip]) {
+  padding-right: calc(var(--sp-3) + var(--window-controls-inset, 0px));
 }
 
 /*
@@ -1293,6 +1333,24 @@
 */
 :root[data-window-controls] .sidebar-gutter {
   padding-left: var(--sp-2);
+  /*
+    And back to centre, for the same reason.
+
+    The rule above pads 5px from the top and turns centring off, so that the
+    arrow's centre line lands on 19 — the traffic lights' centre line. Windows
+    has no traffic lights and nothing else in this window is on 19: the band
+    beside this gutter is `--toolbar-h` with `align-items: center`, so its tabs
+    and its buttons are all on 24, and the rail's arrow sat five pixels above
+    every one of them across the top of the window.
+
+    Only the horizontal half of that rule was answered here when it was written,
+    which is why the sweep in `shell.test.ts` could not catch it: five pixels is
+    not one of the numbers it looks for. So the vertical half is answered too,
+    and the arrow is centred in its own box — which on this platform is the same
+    line as everything beside it.
+  */
+  align-items: center;
+  padding-top: 0;
 }
 
 :root[data-window-controls] .toolbar-reveal {

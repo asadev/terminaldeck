@@ -807,7 +807,26 @@ function appearance(): Appearance {
 let watchingAppearance = false
 
 /**
- * Repaint the Windows window-controls overlay for the theme that is on now.
+ * Whether a dialog's scrim is lying over the window at this moment.
+ *
+ * Renderer state that the main process has to know, which is unusual enough to
+ * say why. On Windows the minimise/maximise/close buttons are painted by the OS
+ * into a strip *above* the page — so when `.modal-overlay` dims every pixel the
+ * renderer draws, those three are untouched, and Settings opened onto a dimmed
+ * window with the brightest thing on screen in its top-right corner. There is no
+ * CSS that reaches them; the only lever is `setTitleBarOverlay`, and it is on
+ * this side of the bridge. `window:dimmed` is the renderer saying which of the
+ * two the strip should be wearing (see `renderer/shell/chrome-dim.ts`).
+ *
+ * A boolean rather than a count: the renderer keeps the count, because it is the
+ * side that knows how many surfaces are open, and a count kept here would drift
+ * the first time a window reloaded with a dialog up.
+ */
+let chromeDimmed = false
+
+/**
+ * Repaint the Windows window-controls overlay for the theme that is on now, and
+ * for whether the window is dimmed under a dialog.
  *
  * Without this the strip keeps whatever colour it was given at launch: switch
  * to the light theme and the top-right corner of a white window stays a dark
@@ -815,9 +834,14 @@ let watchingAppearance = false
  * the stacked title bars this replaced. It is a no-op on every platform that
  * has no overlay — `overlayFor` returns null there, and `setTitleBarOverlay` is
  * not a method that exists on macOS, so the guard has to come first.
+ *
+ * One function for both inputs, rather than one per input. The strip wears a
+ * single colour, so the theme and the scrim cannot each own half of it: a
+ * "dim the buttons" call that did not also read the theme would brighten a
+ * light-theme window back to the dark hex the moment a dialog closed.
  */
 function syncTitleBarOverlay(): void {
-  const overlay = overlayFor(process.platform, appearance())
+  const overlay = overlayFor(process.platform, appearance(), chromeDimmed)
   if (!overlay || !mainWindow || mainWindow.isDestroyed()) return
   mainWindow.setTitleBarOverlay(overlay)
 }
@@ -869,6 +893,17 @@ function createWindow(): void {
    */
   leaveBackground()
   const saved = store().getState().windowBounds
+  /*
+   * A fresh window has nothing open over it, whatever the last one had.
+   *
+   * `chromeDimmed` is renderer state held on this side, and the renderer is
+   * about to be replaced — macOS re-creates the window on `activate`, and a
+   * reload replaces the page. Quitting a window with Settings open and leaving
+   * the flag set would construct the next one with `titleBarChrome`'s bright
+   * strip and then repaint it dim on the first theme event, for a dialog that
+   * is not there. The renderer re-announces the truth as soon as one opens.
+   */
+  chromeDimmed = false
   mainWindow = new BrowserWindow({
     width: saved?.width ?? 1440,
     height: saved?.height ?? 900,
@@ -956,6 +991,21 @@ function createWindow(): void {
   // most, and `src/reachable.test.ts` opens by naming restore-on-launch as one
   // of five features that shipped with no way in.
   mainWindow.webContents.on('did-finish-load', () => {
+    /*
+     * A page that has just loaded has nothing open over it.
+     *
+     * `chromeDimmed` is a fact about the *renderer*, kept here because only this
+     * side can repaint the OS's window buttons — and a reload throws that
+     * renderer away without unmounting anything, so a reload with Settings open
+     * would leave the caption buttons dim over a window with no dialog in it.
+     * That is the same defect this flag exists to fix, arriving through the one
+     * door the renderer cannot close behind itself. The count on the other side
+     * starts at zero too, so the two agree from here.
+     */
+    if (chromeDimmed) {
+      chromeDimmed = false
+      syncTitleBarOverlay()
+    }
     void hydrateRenderer()
   })
   mainWindow.on('closed', () => {
@@ -1406,6 +1456,21 @@ function registerIpc(): void {
       }),
     )
     return { ...builtin, ...Object.fromEntries(added) }
+  })
+
+  /*
+   * A dialog opened or closed over the window, so the OS's own buttons have to
+   * follow it down and back up. See `chromeDimmed`.
+   *
+   * `on`, not `handle`: nothing waits for an answer, and a dialog opening must
+   * not be gated on a round trip through this process. Idempotent, because the
+   * renderer sends the state rather than a toggle — two "dimmed" in a row is a
+   * second dialog over the first, and it is still one strip in one colour.
+   */
+  ipcMain.on('window:dimmed', (_e, dimmed: boolean) => {
+    if (chromeDimmed === dimmed) return
+    chromeDimmed = dimmed
+    syncTitleBarOverlay()
   })
 
   ipcMain.handle('projects:list', () => store().getProjects())
